@@ -16,9 +16,17 @@ const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ATHLETE_ROWS = 60;
 
 export const CENTRAL_CALENDAR_EXPECT_LABELS = Object.freeze({
-  rpe: "RPE from the athletes",
+  rpe: "Athletes' RPE",
   device_data: "GPS / device data",
   test_result: "A test result (a wellness check-in counts as a test)",
+});
+// The same words inside a sentence ("Collects: athletes' RPE, a test result.").
+export const CENTRAL_CALENDAR_EXPECT_SHORT = Object.freeze({ rpe: "athletes' RPE", device_data: "GPS / device data", test_result: "a test result" });
+// Why the type of an edited event cannot be changed here (the form's hint).
+const TYPE_HINTS = Object.freeze({
+  support: "The type is changed in the event's own workspace.",
+  not_offered: "This type is no longer offered here, so the event keeps it.",
+  types_failed: "The event types could not be read. Close and open Edit again to change the type.",
 });
 
 function blankDraft() {
@@ -72,7 +80,6 @@ export function newCentralCalendarCreateForm({ day, owner, types, targets = [] }
 export function centralCalendarFormTypesLoaded(form, types) {
   form.loading = false;
   if (form.mode === "create" && !form.draft.eventTypeId && types?.length) applyCentralCalendarEventType(form, types[0]);
-  if (form.mode === "edit" && form.original && !(types || []).some((type) => type.id === form.original.eventTypeId)) form.readOnlyType = true;
 }
 
 // Edit, while GET /api/calendar/events/:id is read: the card it came from.
@@ -86,7 +93,9 @@ export function newCentralCalendarEditForm(item) {
 // `names` resolves the owner's name from what the screen holds (the
 // workspace's label, the answer's teams[]); a target's own name is the
 // fallback.
-export function centralCalendarEditFormFromEvent(form, event, { types, readOnly = false, names = {} } = {}) {
+// `typesFailed`: the types could not be read - the type stays as it is, and
+// the hint says so (never that it belongs to another workspace).
+export function centralCalendarEditFormFromEvent(form, event, { types, readOnly = false, typesFailed = false, names = {} } = {}) {
   const draft = {
     eventTypeId: event.eventTypeId || "",
     title: event.title || "",
@@ -111,7 +120,9 @@ export function centralCalendarEditFormFromEvent(form, event, { types, readOnly 
   form.titleAuto = false;
   form.owner = ownerOfEvent(event, names);
   form.readOnlyTargets = readOnly;
-  form.readOnlyType = readOnly || !(types || []).some((type) => type.id === draft.eventTypeId);
+  const offered = (types || []).some((type) => type.id === draft.eventTypeId);
+  form.readOnlyType = readOnly || typesFailed || !offered;
+  form.typeHint = readOnly ? "support" : typesFailed ? "types_failed" : offered ? "" : "not_offered";
   form.eventTypeLabel = event.eventTypeLabel || "";
   return form;
 }
@@ -297,7 +308,8 @@ function checkHtml({ checked, attrs, label, focus, note = "" }) {
 
 function typeFieldHtml(form, types) {
   if (form.readOnlyType) {
-    return `<div class="cc-field"><span class="cc-field-label">Type</span><p class="cc-field-static">${escapeHtml(form.eventTypeLabel || "")}</p>${form.mode === "edit" ? `<span class="cc-field-hint">The type can be changed in the event's own workspace.</span>` : ""}</div>`;
+    const hint = TYPE_HINTS[form.typeHint] || "";
+    return `<div class="cc-field"><span class="cc-field-label">Type</span><p class="cc-field-static">${escapeHtml(form.eventTypeLabel || "")}</p>${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}</div>`;
   }
   return `<label class="cc-field" for="${fieldId("eventTypeId")}">
       <span class="cc-field-label">Type</span>
@@ -309,18 +321,24 @@ function typeFieldHtml(form, types) {
     </label>`;
 }
 
+// What the event collects (D19): the type's defaults pre-ticked. Ticking a
+// box asks nobody - it marks what is still missing after the event (the K2a
+// plan's 3.2: the channels come from what is attached, K2a-1b).
 function expectsHtml(form, types) {
   const type = (types || []).find((entry) => entry.id === form.draft.eventTypeId);
   const defaults = type ? CENTRAL_CALENDAR_EVENT_EXPECTS.filter((expect) => (type.defaultExpects || []).includes(expect)) : [];
   const fromType = type && sameSet(defaults, form.draft.expects)
-    ? `As every ${type.label} event; change it for this event only.`
-    : type ? `Changed for this event (a ${type.label} event usually expects ${defaults.length ? defaults.map((e) => CENTRAL_CALENDAR_EXPECT_LABELS[e].split(" (")[0]).join(", ") : "nothing"}).` : "";
-  return `<fieldset class="cc-fieldset">
-      <legend>What do you expect after it?</legend>
+    ? `As for every ${type.label} event; change it for this event only.`
+    : type ? `Changed for this event (a ${type.label} event usually collects ${defaults.length ? defaults.map((e) => CENTRAL_CALENDAR_EXPECT_SHORT[e]).join(", ") : "nothing"}).` : "";
+  return `<fieldset class="cc-fieldset"${form.errors?.expects ? ` aria-describedby="${fieldId("expects")}-error"` : ""}>
+      <legend>What should this event collect?</legend>
+      <span class="cc-field-hint">Ticking a box does not ask anyone: it marks what is still missing after the event. Ask for RPE or a test the usual way.</span>
       ${CENTRAL_CALENDAR_EVENT_EXPECTS.map((expect) => checkHtml({
         checked: form.draft.expects.includes(expect), attrs: `data-cc-event-expect="${expect}"`, label: CENTRAL_CALENDAR_EXPECT_LABELS[expect], focus: `expect:${expect}`,
+        note: expect === "device_data" ? "(linking an imported activity to an event comes later; until then a past event shows Awaiting device data)" : "",
       })).join("")}
       <span class="cc-field-hint">${escapeHtml(fromType || "Nothing ticked: nothing is waited for after this event.")}</span>
+      ${errorHtml(form, "expects")}
     </fieldset>`;
 }
 
@@ -349,21 +367,16 @@ function targetsHtml(form, { teams, roster }) {
   const rosterIds = new Set((roster || []).map((athlete) => targetKey({ kind: "athlete", id: athlete.id })));
   const extras = form.draft.targets.filter((target) => (target.kind === "athlete" ? !rosterIds.has(targetKey(target)) : !listed.has(targetKey(target))));
   const chosenAthletes = form.draft.targets.filter((target) => target.kind === "athlete").length;
-  const query = form.athleteQuery.trim().toLowerCase();
-  const matches = (roster || []).filter((athlete) => !query || String(athlete.name || "").toLowerCase().includes(query));
-  const shown = matches.slice(0, ATHLETE_ROWS);
+  // The search never submits the form (Enter is stopped by the actions
+  // module; "search" is the phone keyboard's word for it).
   const athletesList = form.athletesOpen
     ? `<div class="cc-athlete-picker" id="ccEventAthletes">
         <label class="cc-field cc-athlete-search" for="${fieldId("athleteSearch")}">
           <span class="cc-field-label">Find an athlete</span>
-          <input id="${fieldId("athleteSearch")}" type="search" value="${escapeAttr(form.athleteQuery)}" data-cc-event-athlete-search data-cc-focus="athlete-search" autocomplete="off">
+          <input id="${fieldId("athleteSearch")}" type="search" enterkeyhint="search" value="${escapeAttr(form.athleteQuery)}" data-cc-event-athlete-search data-cc-focus="athlete-search" autocomplete="off">
         </label>
         ${owner.scope === "user" ? `<div class="cc-form-row"><button type="button" class="plain-button cc-form-small" data-action="central-calendar-event-all-athletes">Choose all my athletes</button>${chosenAthletes ? `<button type="button" class="plain-button cc-form-small" data-action="central-calendar-event-no-athletes">Clear athletes</button>` : ""}</div>` : ""}
-        ${shown.length ? `<div class="cc-check-list" role="group" aria-label="Athletes">${shown.map((athlete) => checkHtml({
-          checked: chosen.has(targetKey({ kind: "athlete", id: athlete.id })), attrs: `data-cc-event-target="athlete" data-target-id="${escapeAttr(athlete.id)}" data-target-name="${escapeAttr(athlete.name || "")}"`,
-          label: athlete.name || "Athlete", focus: `target:athlete:${athlete.id}`,
-        })).join("")}</div>` : `<p class="cc-field-hint">${(roster || []).length ? "No athlete matches." : "No athletes in this workspace's list."}</p>`}
-        ${matches.length > shown.length ? `<p class="cc-field-hint">${matches.length - shown.length} more - type a name to find them.</p>` : ""}
+        <div class="cc-athlete-picker-list" id="ccEventAthleteList">${renderCentralCalendarAthleteListHtml(form, roster)}</div>
       </div>`
     : "";
   return `<fieldset class="cc-fieldset"${form.errors?.targets ? ` aria-describedby="${fieldId("targets")}-error"` : ""}>
@@ -377,6 +390,21 @@ function targetsHtml(form, { teams, roster }) {
       })).join("")}</div>` : ""}
       ${errorHtml(form, "targets")}
     </fieldset>`;
+}
+
+// The roster's rows the search matches (the first ATHLETE_ROWS); the actions
+// module redraws only this part while the coach types, so the search input
+// (and a phone's keyboard) stays where it is.
+export function renderCentralCalendarAthleteListHtml(form, roster) {
+  const chosen = new Set(form.draft.targets.map(targetKey));
+  const query = form.athleteQuery.trim().toLowerCase();
+  const matches = (roster || []).filter((athlete) => !query || String(athlete.name || "").toLowerCase().includes(query));
+  const shown = matches.slice(0, ATHLETE_ROWS);
+  return `${shown.length ? `<div class="cc-check-list" role="group" aria-label="Athletes">${shown.map((athlete) => checkHtml({
+      checked: chosen.has(targetKey({ kind: "athlete", id: athlete.id })), attrs: `data-cc-event-target="athlete" data-target-id="${escapeAttr(athlete.id)}" data-target-name="${escapeAttr(athlete.name || "")}"`,
+      label: athlete.name || "Athlete", focus: `target:athlete:${athlete.id}`,
+    })).join("")}</div>` : `<p class="cc-field-hint">${(roster || []).length ? "No athlete matches." : "No athletes in this workspace's list."}</p>`}
+    ${matches.length > shown.length ? `<p class="cc-field-hint">${matches.length - shown.length} more - type a name to find them.</p>` : ""}`;
 }
 
 function unconfirmedHtml(form) {
@@ -399,6 +427,12 @@ function headHtml(title) {
     </header>`;
 }
 
+function spanDays(form) {
+  const span = form.span;
+  if (!span?.from || !span?.to || span.to <= span.from) return 1;
+  return daysBetween(span.from, span.to) + 1;
+}
+
 function spanText(form, longDate) {
   const span = form.span;
   if (span && span.to && span.to !== span.from) return `${longDate(span.from)} - ${longDate(span.to)}`;
@@ -414,7 +448,8 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
     return `${headHtml("Cancel this event?")}
       <form class="cc-event-form" data-cc-event-form novalidate>
         <p class="cc-cancel-name"><strong>${escapeHtml(form.eventTitle || "Event")}</strong><br><span class="cc-panel-note">${escapeHtml(spanText(form, ctx.longDate || ((iso) => iso)))}</span></p>
-        <p class="cc-panel-note">The event stays in the calendar, struck through, for you and for its athletes. A cancelled event cannot be changed again.</p>
+        ${spanDays(form) > 1 ? `<p class="cc-panel-note"><strong>${escapeHtml(`This cancels all ${spanDays(form)} days.`)}</strong> To drop only some days, use Edit and change its dates instead.</p>` : ""}
+        <p class="cc-panel-note">The event stays in the calendar, struck through. OptiMove does not tell the athletes: let them know yourself. A cancelled event cannot be changed again.</p>
         <fieldset class="cc-form-fields"${locked ? " disabled" : ""}>
           <label class="cc-field" for="${fieldId("reason")}">
             <span class="cc-field-label">Reason <span class="cc-field-optional">(optional, coaches only)</span></span>

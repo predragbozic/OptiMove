@@ -1,5 +1,5 @@
 import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS } from "./central-calendar-data.js";
-import { CENTRAL_CALENDAR_EXPECT_LABELS, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
+import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
 import { renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -18,13 +18,14 @@ import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMond
 // The Types chips (choice 9.10 of the K2a plan: `external` is "RPE requests"
 // now that events have their own chip; the Builder's sessions are "Planned
 // training" beside an event of type Training).
-export const CENTRAL_CALENDAR_KIND_LABELS = Object.freeze({ event: "Events", planned: "Planned training", activity: "Activities", external: "RPE requests", test: "Tests" });
+// The Tests module's cards are "Scheduled tests", beside an event of type Test.
+export const CENTRAL_CALENDAR_KIND_LABELS = Object.freeze({ event: "Events", planned: "Planned training", activity: "Activities", external: "RPE requests", test: "Scheduled tests" });
 // The Event types chips: an event's kind (D2), in the seeded types' words.
 export const CENTRAL_CALENDAR_EVENT_KIND_LABELS = Object.freeze({ training: "Training", match: "Match", test: "Test", travel: "Travel", meeting: "Meeting", day_off: "Day off", camp: "Camp" });
 // One icon of icon-library.js per type: an event by its kind (the base-kind
 // defaults; K2b makes a type's icon editable), every other card by its kind.
 export const CENTRAL_CALENDAR_EVENT_KIND_ICONS = Object.freeze({ training: "run", match: "trophy", test: "clipboard", travel: "route", meeting: "team", day_off: "bed", camp: "mountain" });
-export const CENTRAL_CALENDAR_KIND_ICONS = Object.freeze({ event: "calendar-event", planned: "barbell", activity: "activity", external: "gauge", test: "clipboard" });
+export const CENTRAL_CALENDAR_KIND_ICONS = Object.freeze({ event: "calendar-event", planned: "barbell", activity: "activity", external: "gauge", test: "stopwatch" });
 // Eight fixed colours by the team's position in the answer's teams[] (D11:
 // the club picks its own in K2). Their values are the --cc-team-N tokens
 // in styles.css; a card or a chip only names the index.
@@ -175,7 +176,11 @@ function athleteCountLabel(count) {
 // The small word under the title: what kind of thing the card is.
 export function centralCalendarKindLabel(item) {
   const count = Number(item.athleteCount) || 0;
-  if (item.kind === "event") return `Event · ${eventKindWord(item)}${count ? ` · ${athleteCountLabel(count)}` : ""}`;
+  if (item.kind === "event") {
+    // The type's word only when the title is not that word already.
+    const word = eventKindWord(item);
+    return `Event${item.title && item.title !== word ? ` · ${word}` : ""}${count ? ` · ${athleteCountLabel(count)}` : ""}`;
+  }
   if (item.kind === "planned") return `Planned training · ${athleteCountLabel(count)}`;
   if (item.kind === "activity") {
     const word = item.origin === "api_import" || item.origin === "source_import" ? "Imported activity" : "Activity";
@@ -185,7 +190,7 @@ export function centralCalendarKindLabel(item) {
     const type = eventTypeLabel(item.eventType);
     return `RPE request${type && type !== "Event" && type !== item.title ? ` · ${type}` : ""}${count ? ` · ${athleteCountLabel(count)}` : ""}`;
   }
-  if (item.kind === "test") return `Test${count ? ` · ${athleteCountLabel(count)}` : ""}`;
+  if (item.kind === "test") return `Scheduled test${count ? ` · ${athleteCountLabel(count)}` : ""}`;
   return "";
 }
 
@@ -228,7 +233,8 @@ export function centralCalendarStatusBadge(item, today = "") {
       if (item.kind === "event" && expects.includes("device_data")) return { label: "Awaiting device data", tone: "awaiting" };
       return { label: "Awaiting entry", tone: "awaiting" };
     case "planned":
-      return { label: "Planned", tone: "planned" };
+      // An imported activity of today is recorded, not planned (no pill, as K1b).
+      return item.kind === "activity" ? null : { label: "Planned", tone: "planned" };
     case "none":
       return item.kind === "event" && !item.cancelled && today && item.date >= today ? { label: "Planned", tone: "planned" } : null;
     case "missed":
@@ -273,7 +279,7 @@ export function centralCalendarStatusSentence(item) {
       if (item.attendance && item.attendance.needsState > 0) {
         return `Attendance is not complete: ${plural(item.attendance.needsState, "athlete still needs", "athletes still need")} a state.`;
       }
-      if (item.kind === "event" && expects.includes("device_data")) return "The day has passed and the GPS / device data of this event is not in OptiMove yet.";
+      if (item.kind === "event" && expects.includes("device_data")) return "The day has passed and no imported activity is linked to this event yet.";
       return "The day has passed and an entry is still missing.";
     case "missed":
       return "The day has passed and the missing entries can no longer be made.";
@@ -285,7 +291,7 @@ export function centralCalendarStatusSentence(item) {
       // An imported activity of today is recorded, not planned.
       return item.kind === "activity" ? "Nothing is due yet: the day has not passed." : "Planned: nothing is due yet.";
     case "none":
-      if (item.kind === "event") return expects.length ? "Nothing can be waited for yet: see the note below." : "Nothing is expected after this event.";
+      if (item.kind === "event") return expects.length ? "Nothing is being collected: see the note below." : "Nothing is expected after this event.";
       return "Nothing was asked for this item, so there is nothing to wait for.";
     default:
       return "";
@@ -595,13 +601,14 @@ function renderStripHtml(days, byDate, cal, today, teams) {
         const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
         const count = items.length;
         const isSelected = date === selected;
-        const dotIds = centralCalendarDayTeamIds(items, teams, 4);
-        const names = dotIds.map((id) => teamName(id, teams)).join(", ");
+        const allIds = centralCalendarDayTeamIds(items, teams);
+        const dotIds = allIds.slice(0, 4);
+        const names = allIds.map((id) => teamName(id, teams)).join(", ");
         return `<button type="button" class="cc-strip-day${isSelected ? " is-selected" : ""}${date === today ? " is-today" : ""}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${isSelected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(`${centralCalendarLongDate(date)}${date === today ? ", today" : ""}${count ? `, ${count} item${count === 1 ? "" : "s"}` : ""}${names ? `, ${names}` : ""}`)}">
           <span class="cc-strip-name">${escapeHtml(weekdayShort(date))}</span>
           <span class="cc-strip-number">${dayNumber(date)}</span>
           ${count ? `<span class="cc-strip-count" aria-hidden="true">${count}</span>` : ""}
-          ${dotIds.length ? `<span class="cc-strip-dots" aria-hidden="true">${dotIds.map((id) => `<span class="cc-team-dot"${teamColorStyle(id, teams)}></span>`).join("")}</span>` : ""}
+          ${dotIds.length ? `<span class="cc-strip-dots" aria-hidden="true">${dotIds.map((id) => `<span class="cc-team-dot"${teamColorStyle(id, teams)}></span>`).join("")}${allIds.length > dotIds.length ? `<span class="cc-strip-more">+${allIds.length - dotIds.length}</span>` : ""}</span>` : ""}
         </button>`;
       }).join("")}
     </div>`;
@@ -609,10 +616,11 @@ function renderStripHtml(days, byDate, cal, today, teams) {
 
 // The selected day's row per team (the owner's design): "U19 · 1 item",
 // "U13 · 0 items" over the day's visible cards; the chosen teams only while
-// the Groups chips choose some.
+// the Groups chips choose some. One team alone would only repeat the day's
+// count: no row then.
 function renderDayTeamsHtml(items, cal, teams) {
   const shown = cal.filters.teamIds.length ? teams.filter((team) => cal.filters.teamIds.includes(team.teamId)) : teams;
-  if (!shown.length) return "";
+  if (shown.length < 2) return "";
   return `<ul class="cc-day-teams" role="list" aria-label="Per group on this day">
       ${shown.map((team) => {
         const count = items.filter((item) => (item.teamIds || []).includes(team.teamId)).length;
@@ -766,7 +774,7 @@ function renderEventFactsHtml(item) {
   const multiDay = item.span?.from && item.span?.to && item.span.to !== item.span.from;
   return `${multiDay ? `<p class="cc-panel-note">${escapeHtml(`${eventDatesText(item)} (${centralCalendarSpanLabel(item).toLowerCase()})`)}</p>` : ""}
       ${item.location ? `<p class="cc-panel-place">${renderIconSvg("map-pin", { size: 16 })}<span>${escapeHtml(item.location)}</span></p>` : ""}
-      <p class="cc-panel-note">${escapeHtml(expects.length ? `Expected after it: ${expects.map((expect) => CENTRAL_CALENDAR_EXPECT_LABELS[expect]?.split(" (")[0] || expect).join(", ")}.` : "Nothing is expected after it.")}</p>
+      ${expects.length ? `<p class="cc-panel-note">${escapeHtml(`Collects: ${expects.map((expect) => CENTRAL_CALENDAR_EXPECT_SHORT[expect] || expect).join(", ")}.`)}</p>` : ""}
       ${gaps.map((note) => `<p class="cc-panel-note cc-panel-gap">${escapeHtml(note)}</p>`).join("")}
       ${item.notes ? `<div class="cc-panel-notes"><h4 class="cc-panel-subtitle">Notes <span class="cc-field-optional">(coaches only)</span></h4><p class="cc-panel-notes-text">${escapeHtml(item.notes)}</p></div>` : ""}`;
 }

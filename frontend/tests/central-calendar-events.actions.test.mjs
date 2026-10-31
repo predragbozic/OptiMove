@@ -28,6 +28,7 @@ const {
   handleCentralCalendarAction,
   handleCentralCalendarBeforeUnload,
   handleCentralCalendarInput,
+  handleCentralCalendarKeydown,
   submitCentralCalendarEventForm,
 } = await import("../central-calendar-actions.js");
 const { loadCentralCalendar, resetCentralCalendarForWorkspaceChange } = await import("../central-calendar-data.js");
@@ -126,10 +127,17 @@ const NOT_FOUND = { status: 404, body: { error: "notFound", message: "Not found.
 
 // The fake server: the calendar read, the types, one event, and the writes
 // (`writes` decides per call; default: a created / saved / cancelled event,
-// which the next calendar read then serves as the real API would).
-function server({ items = ITEMS, workspace, types = TYPES, event = eventView(), writes = null } = {}) {
+// which the next calendar read then serves as the real API would). The
+// default writes keep the service's requestKey contract (runEventCommand):
+// the same key with the same body (and resource) replays the saved answer
+// with `replayed: true` and writes nothing; the same key with another body is
+// 409 request_key_reused. `loseFirstAnswer` saves the first write and then
+// drops its answer (a lost answer after a COMMIT).
+function server({ items = ITEMS, workspace, types = TYPES, event = eventView(), writes = null, loseFirstAnswer = false } = {}) {
   const live = items.map((item) => ({ ...item }));
-  return (call) => {
+  const keys = new Map();
+  let lose = loseFirstAnswer;
+  const responder = (call) => {
     const path = call.url.split("?")[0];
     if (path === "/api/calendar" && call.method === "GET") return { status: 200, body: rangeAnswer(call.url, live, workspace) };
     if (path === "/api/calendar/events/types" && call.method === "GET") return typeof types === "function" ? types(call) : { status: 200, body: { types } };
@@ -139,6 +147,22 @@ function server({ items = ITEMS, workspace, types = TYPES, event = eventView(), 
     }
     if (path.startsWith("/api/calendar/events")) {
       if (writes) return writes(call);
+      const { requestKey, ...rest } = call.body || {};
+      const hash = JSON.stringify({ method: call.method, path, rest });
+      const saved = keys.get(requestKey);
+      if (saved) return saved.hash === hash ? { status: saved.status, body: { ...saved.body, replayed: true } } : { status: 409, body: { error: "request_key_reused", message: "This requestKey was already used for a different request." } };
+      const answer = write(call, path);
+      if (answer.status < 300) keys.set(requestKey, { hash, ...answer });
+      if (lose) {
+        lose = false;
+        return { throwNetworkError: true };
+      }
+      return answer;
+    }
+    return { status: 404, body: { error: "unexpected", message: call.url } };
+  };
+  function write(call, path) {
+    {
       if (call.method === "POST" && path === "/api/calendar/events") {
         const from = call.body.day;
         const to = call.body.endDay || from;
@@ -155,7 +179,9 @@ function server({ items = ITEMS, workspace, types = TYPES, event = eventView(), 
       }
     }
     return { status: 404, body: { error: "unexpected", message: call.url } };
-  };
+  }
+  responder.live = live;
+  return responder;
 }
 
 let rendered = "";
@@ -232,6 +258,12 @@ test("1c. the status pill: Planned for a planned item and for an event expecting
   assert.equal(badge(eventItem(E_CAMP, "2026-11-04", { status: "none" })), null, "after its day nothing is waited for");
   assert.equal(badge(eventItem(E_CAMP, "2026-11-06", { status: "none", cancelled: true })), null);
   assert.equal(badge(baseItem({ kind: "activity", status: "none" })), null, "only an event reads Planned on `none`");
+  assert.equal(badge(baseItem({ kind: "activity", status: "planned", origin: "api_import" })), null, "an activity of today is recorded, not planned");
+  assert.equal(badge(baseItem({ kind: "planned", status: "planned" })), "Planned");
+  // The type's word only when the title is not that word already.
+  assert.equal(view.centralCalendarKindLabel(eventItem(E_MATCH, DAY(1), { title: "Match", eventKind: "match", eventTypeLabel: "Match", athleteCount: 3 })), "Event · 3 athletes");
+  assert.equal(view.centralCalendarKindLabel(eventItem(E_MATCH, DAY(1), { title: null, eventKind: "match", eventTypeLabel: "Match" })), "Event");
+  assert.equal(view.centralCalendarKindLabel(baseItem({ kind: "test", athleteCount: 16 })), "Scheduled test · 16 athletes");
   assert.equal(badge(eventItem(E_MATCH, "2026-11-01", { status: "awaiting_entry", expects: ["device_data"] })), "Awaiting device data");
   assert.equal(badge(eventItem(E_MATCH, "2026-11-01", { status: "done", expects: ["rpe"] })), "Done");
 });
@@ -258,6 +290,8 @@ test("2a. the Filters panel starts collapsed with one summary line; the chips ar
   await act({ action: "central-calendar-toggle-team", teamId: U13 });
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "match" });
   await act({ action: "central-calendar-toggle-kind", kind: "planned" });
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · Planned training, Match", "Match turned Events off");
+  await act({ action: "central-calendar-toggle-kind", kind: "activity" });
   assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · 3 types");
   assert.equal(rangeReads(calls).length, 1, "no chip sends a request");
 });
@@ -286,7 +320,7 @@ test("2b. All groups and All types count every card and clear their row; the Typ
   assert.deepEqual(state.centralCalendar.filters, { teamIds: [], kinds: [], eventKinds: [] });
 });
 
-test("2c. the Event types chips: one per kind on the displayed days with its icon and count; Events or a kind lets an event through (union)", async () => {
+test("2c. the Event types chips: one per kind on the displayed days with its icon and count; Events and the event types exclude each other, so every pressed chip changes the list", async () => {
   installFetchMock(server());
   await loadCentralCalendar({ render });
   let doc = dom();
@@ -302,8 +336,13 @@ test("2c. the Event types chips: one per kind on the displayed days with its ico
   assert.deepEqual(keys(), ["planned:batch-1", `event:${E_MATCH}:${DAY(1)}`], "a kind and an event kind add up");
   await act({ action: "central-calendar-toggle-kind", kind: "event" });
   assert.equal(keys().filter((key) => key.startsWith("event:")).length, 5, "Events lets every event through");
+  assert.deepEqual(state.centralCalendar.filters.eventKinds, [], "Events clears the event types it covers");
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
+  assert.deepEqual(state.centralCalendar.filters.kinds, ["planned"], "an event type turns Events off");
+  assert.deepEqual(keys(), ["planned:batch-1", ...[2, 3, 4].map((offset) => `event:${E_CAMP}:${DAY(offset)}`)]);
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "bogus" });
-  assert.deepEqual(state.centralCalendar.filters.eventKinds, ["match"], "an unknown kind is ignored");
+  assert.deepEqual(state.centralCalendar.filters.eventKinds, ["camp"], "an unknown kind is ignored");
+  assert.equal(dom().querySelector('[data-kind="test"] .cc-chip-label').textContent, "Scheduled tests");
   // A chosen kind keeps its chip even on a week without it.
   state.centralCalendar.filters = { teamIds: [], kinds: [], eventKinds: ["travel"] };
   render();
@@ -335,9 +374,13 @@ test("3a. a phone's day: the per-team row (every team, 0 included), the timed ca
   const list = doc.querySelector(".cc-day-list");
   const order = [...list.querySelectorAll(".cc-card, .cc-day-section")].map((node) => (node.classList.contains("cc-day-section") ? `[${node.textContent}]` : node.dataset.key));
   assert.deepEqual(order, ["planned:batch-1", "[No time]", `event:${E_MEETING}:${DAY(0)}`, "activity:act-1"], "a slot counts as a time; the untimed keep their order");
-  // The Groups chips choose the teams the row names.
+  // The Groups chips choose the teams the row names; one team alone would
+  // only repeat the day's count.
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
-  assert.deepEqual([...dom().querySelectorAll(".cc-day-teams .cc-team-pill-name")].map((node) => node.textContent), ["U17 · 0 items"]);
+  await act({ action: "central-calendar-toggle-team", teamId: U13 });
+  assert.deepEqual([...dom().querySelectorAll(".cc-day-teams .cc-team-pill-name")].map((node) => node.textContent), ["U17 · 0 items", "U13 · 0 items"]);
+  await act({ action: "central-calendar-toggle-team", teamId: U13 });
+  assert.equal(dom().querySelector(".cc-day-teams"), null);
 });
 
 test("3b. the strip: one team-colour dot per team with a visible card that day, named in the day's label", async () => {
@@ -353,6 +396,14 @@ test("3b. the strip: one team-colour dot per team with a visible card that day, 
   assert.equal(day(5).querySelector(".cc-strip-dots"), null, "an empty day has no dots");
   assert.deepEqual(view.centralCalendarDayTeamIds([{ teamIds: [U13, U19] }, { teamIds: [U17] }], TEAMS), [U19, U17, U13], "in teams[] order");
   assert.deepEqual(view.centralCalendarDayTeamIds([{ teamIds: [U13, U19, U17] }], TEAMS, 2), [U19, U17]);
+  // More than four teams on a day: four dots and "+N"; the label names them all.
+  const six = Array.from({ length: 6 }, (_, index) => ({ teamId: `t${index}`, name: `G${index}` }));
+  state.centralCalendar.data = { ...state.centralCalendar.data, teams: six, days: state.centralCalendar.data.days.map((day) => (day.date === DAY(5) ? { ...day, items: [baseItem({ key: "p:six", date: DAY(5), teamIds: six.map((team) => team.teamId) })] } : day)) };
+  render();
+  const busy = dom().querySelector(`.cc-strip-day[data-date="${DAY(5)}"]`);
+  assert.equal(busy.querySelectorAll(".cc-strip-dots .cc-team-dot").length, 4);
+  assert.equal(busy.querySelector(".cc-strip-more").textContent, "+2");
+  assert.match(busy.getAttribute("aria-label"), /G0, G1, G2, G3, G4, G5$/);
 });
 
 // --- 4. Who sees New event, Edit and Cancel --------------------------------------
@@ -379,13 +430,14 @@ test("4b. Edit and Cancel event only on an event whose card says canManage and t
   assert.ok(doc.querySelector('.cc-panel [data-action="central-calendar-edit-event"]'));
   assert.ok(doc.querySelector('.cc-panel [data-action="central-calendar-cancel-event"]'));
   assert.equal(doc.querySelector(".cc-panel-place").textContent, "City stadium");
-  assert.match(doc.querySelector(".cc-panel").textContent, /Expected after it: RPE from the athletes\./);
+  assert.match(doc.querySelector(".cc-panel").textContent, /Collects: athletes' RPE\./);
   assert.match(doc.querySelector(".cc-panel-gap").textContent, /RPE is expected, but nothing attached to this event asks the athletes for it yet\./);
   assert.equal(doc.querySelector(".cc-panel-notes-text").textContent, "Bring both kits");
   await act({ action: "central-calendar-open-item", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
   doc = dom();
   assert.equal(doc.querySelector('[data-action="central-calendar-edit-event"]'), null, "a reader's event: no write control");
-  assert.match(doc.querySelector(".cc-panel").textContent, /Nothing is expected after it\./);
+  assert.match(doc.querySelector(".cc-panel").textContent, /Nothing is expected after this event\./);
+  assert.doesNotMatch(doc.querySelector(".cc-panel").textContent, /Collects:/, "said once, not twice");
   assert.match(doc.querySelector(".cc-panel").textContent, /\(day 2 of 3\)/);
   await act({ action: "central-calendar-open-item", key: `event:${E_MEETING}:${DAY(0)}`, date: DAY(0) });
   assert.equal(dom().querySelector('[data-action="central-calendar-cancel-event"]'), null, "a cancelled event: nothing to change");
@@ -646,6 +698,94 @@ test("6e. the types cannot be read: a forbidden workspace says so without a retr
   assert.equal(calls.filter((call) => call.url === "/api/calendar/events/types").length, 2);
 });
 
+test("6f. a create saved but its answer lost: Check result replays the SAME key, the server writes nothing twice (one event), the panel opens on it", async () => {
+  const fake = server({ loseFirstAnswer: true });
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.form.unconfirmed, true);
+  assert.equal(fake.live.filter((item) => item.eventId === E_NEW).length, 1, "the first write landed");
+  await act({ action: "central-calendar-event-check-result" });
+  const [first, second] = writesOf(calls);
+  assert.equal(second.body.requestKey, first.body.requestKey);
+  assert.equal(fake.live.filter((item) => item.eventId === E_NEW).length, 1, "the replay wrote nothing");
+  assert.equal(state.centralCalendar.notice, "Checked: “Training” was created.");
+  assert.equal(state.centralCalendar.panel.key, `event:${E_NEW}:${TODAY}`, "the event's panel, from the calendar read again");
+  // The fake keeps the contract: the same key with another body is refused.
+  assert.equal(fake({ url: "/api/calendar/events", method: "POST", body: { ...first.body, title: "Other" } }).status, 409);
+});
+
+test("6g. leaving a result not confirmed reads the calendar again at once and says to look for the event before creating it again", async () => {
+  const fake = server({ loseFirstAnswer: true });
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  input({ ccEventField: "title" }, { value: "Cup final" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  const reads = rangeReads(calls).length;
+  confirmAnswer = true;
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  assert.match(questions.at(-1), /not confirmed/);
+  assert.equal(state.centralCalendar.form, null);
+  assert.equal(rangeReads(calls).length, reads + 1, "read again, never the cached answer from before the write");
+  assert.equal(state.centralCalendar.notice, "The result of “Cup final” was not checked. The calendar was read again: look for it before creating it again.");
+  assert.ok(dom().querySelector(`.cc-card[data-key="event:${E_NEW}:${TODAY}"]`), "the event that landed is on screen");
+});
+
+test("6h. an answer that arrives after the coach left the saving form reads the calendar again", async () => {
+  let release;
+  const calls = installFetchMock(server({ writes: () => new Promise((resolve) => { release = resolve; }) }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  fillValid();
+  const sending = submitCentralCalendarEventForm({ render });
+  confirmAnswer = true;
+  closeCentralCalendarPanel(render);
+  await tick();
+  const reads = rangeReads(calls).length;
+  release({ status: 201, body: { event: eventView({ id: E_NEW, title: "Training", day: TODAY }) } });
+  await sending;
+  await tick();
+  assert.equal(rangeReads(calls).length, reads + 1, "the late success is read, not dropped");
+  assert.equal(state.centralCalendar.form, null);
+});
+
+test("6i. Enter in the athlete search never submits the form; elsewhere Enter is left alone", () => {
+  const prevented = (target) => {
+    const event = { key: "Enter", target, preventDefault() { this.done = true; } };
+    handleCentralCalendarKeydown(event);
+    return Boolean(event.done);
+  };
+  assert.equal(prevented({ matches: (selector) => selector === "[data-cc-event-athlete-search]" }), true);
+  assert.equal(prevented({ matches: () => false }), false, "Enter in the title still saves, as in every form");
+  const other = { key: "a", target: { matches: () => true }, preventDefault() { this.done = true; } };
+  handleCentralCalendarKeydown(other);
+  assert.equal(other.done, undefined);
+});
+
+test("6j. typing in the athlete search redraws only the list: the input itself is never replaced", async () => {
+  await openCreate();
+  await act({ action: "central-calendar-event-athletes" });
+  const list = { innerHTML: "" };
+  const original = globalThis.document.querySelector;
+  globalThis.document.querySelector = (selector) => (selector === "#ccEventAthleteList" ? list : null);
+  const before = rendered;
+  try {
+    input({ ccEventAthleteSearch: "" }, { value: "luk" });
+  } finally {
+    globalThis.document.querySelector = original;
+  }
+  assert.equal(rendered, before, "no full repaint while typing");
+  assert.match(list.innerHTML, /Luka Test/);
+  assert.doesNotMatch(list.innerHTML, /Ana Test/);
+  assert.equal(state.centralCalendar.form.athleteQuery, "luk");
+  assert.match(rendered, /enterkeyhint="search"/);
+});
+
 // --- 7. Edit -----------------------------------------------------------------------------
 
 async function openEdit(options) {
@@ -728,6 +868,15 @@ test("7d. in the platform workspace (support) the type and the targets are read-
   assert.deepEqual(body, { expectedRevision: 2, location: "Away ground" });
 });
 
+test("7e. a failed types read on Edit keeps the type as it is and says why, never that it belongs to another workspace", async () => {
+  await openEdit({ types: () => ({ throwNetworkError: true }) });
+  const form = state.centralCalendar.form;
+  assert.equal(form.readOnlyType, true);
+  const text = dom().querySelector(".cc-event-form").textContent;
+  assert.match(text, /The event types could not be read\. Close and open Edit again to change the type\./);
+  assert.doesNotMatch(text, /own workspace/);
+});
+
 // --- 8. Cancel ------------------------------------------------------------------------------
 
 test("8a. Cancel event asks first, naming the event and its day; the POST carries requestKey, expectedRevision and the reason", async () => {
@@ -765,15 +914,26 @@ test("8b. Keep event closes the confirmation and the event's panel is there agai
   assert.equal(state.centralCalendar.notice, "This event is no longer available in this workspace.");
 });
 
-test("8c. a refusal naming a field the form does not show (a cancel's targets, a support edit's type) is the form's own line", async () => {
-  installFetchMock(server({ writes: () => ({ status: 400, body: { error: "target_not_available", message: "x" } }) }));
-  await loadCentralCalendar({ render });
-  await act({ action: "central-calendar-cancel-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+test("8c. a refusal naming a field the form does not show is the form's own line: a support edit that moves the day, whose targets the server judges again", async () => {
+  state.currentUser.activeWorkspace = { type: "platform", scopeId: null, label: "Platform administration" };
+  // updateEvent re-judges the existing targets on a new day (calendarEventService.js): reachable.
+  await openEdit({ workspace: { type: "platform", scopeId: null }, writes: () => ({ status: 400, body: { error: "target_not_available", message: "x" } }) });
+  input({ ccEventField: "day" }, { value: DAY(2) });
   await submitCentralCalendarEventForm({ render });
   const form = state.centralCalendar.form;
-  assert.deepEqual(form.errors, {});
+  assert.deepEqual(form.errors, {}, "the targets are read-only here: nothing to mark");
   assert.equal(form.error, "One of the chosen groups or athletes is not available in this workspace on that day. Nothing was saved.");
   assert.doesNotMatch(dom().querySelector(".cc-panel").textContent, /Check the marked fields/);
+});
+
+test("8d. cancelling a multi-day event from one day's card says that every day is cancelled; never that the athletes are told", async () => {
+  installFetchMock(server({ items: ITEMS.map((item) => (item.eventId === E_CAMP ? { ...item, canManage: true } : item)) }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-cancel-event", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
+  const text = dom().querySelector(".cc-panel").textContent;
+  assert.match(text, /This cancels all 3 days\. To drop only some days, use Edit and change its dates instead\./);
+  assert.match(text, /OptiMove does not tell the athletes: let them know yourself\./);
+  assert.match(text, new RegExp(`${view.centralCalendarLongDate(DAY(2))} - ${view.centralCalendarLongDate(DAY(4))}`));
 });
 
 // --- 9. Leaving --------------------------------------------------------------------------------
@@ -815,6 +975,18 @@ test("9b. a save in flight and a result not confirmed ask with their own words",
   assert.match(questions.at(-1), /not confirmed/);
 });
 
+test("9c. a cancel confirmation with a typed reason asks before Escape; an untouched one leaves quietly", async () => {
+  installFetchMock(server());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-cancel-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  assert.equal(centralCalendarMayBeLeft(), true);
+  input({ ccEventField: "reason" }, { value: "Rain" });
+  confirmAnswer = false;
+  assert.equal(closeCentralCalendarPanel(render), true);
+  assert.ok(state.centralCalendar.form, "declined: the confirmation stays");
+  assert.deepEqual(questions, ["Discard the reason you have typed?"]);
+});
+
 // --- 10. The markup's rules ---------------------------------------------------------------------
 
 test("10a. no data-tab anywhere, every control a button or a labelled field; the form's fields are 16 px and the chips 13 px", async () => {
@@ -832,5 +1004,7 @@ test("10a. no data-tab anywhere, every control a button or a labelled field; the
   assert.match(block, /\.cc-event-form input:not\(\[type="checkbox"\]\),\n\.cc-event-form select,\n\.cc-event-form textarea \{[^}]*font-size: 16px;[^}]*min-height: 44px;|\.cc-event-form textarea \{[^}]*min-height: 44px;[^}]*font-size: 16px;/);
   assert.match(block, /\.cc-chip \{\n  gap: 6px;\n  padding: 0 10px;\n  font-size: 13px;\n\}/);
   assert.match(block, /\.cc-check \{[^}]*min-height: 44px;/);
+  assert.match(block, /\.cc-check-list \{\n  display: grid;\n\}/, "no scroller of its own inside the panel or the sheet");
+  assert.match(block, /\.cc-form-grid \{[^}]*align-items: start;/);
   assert.match(block, /@media \(min-width: 1024px\) and \(pointer: fine\) \{\n  \.cc-chip \{\n    min-height: 36px;/, "the compact chip only on a pointer screen");
 });

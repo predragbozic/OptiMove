@@ -21014,8 +21014,15 @@ body.exercise-header-pinned #viewToolbar {
 }
 
 .cc-chip-row-label {
-  min-width: 64px;
   font-size: 11px;
+}
+
+/* The row label's width only where the rows wrap; a phone's rows scroll
+   sideways and keep K1b's min-width: 0. */
+@media (min-width: 761px) {
+  .cc-chip-row-label {
+    min-width: 64px;
+  }
 }
 
 .cc-chip-icon {
@@ -21185,6 +21192,13 @@ body.exercise-header-pinned #viewToolbar {
   width: 6px;
   height: 6px;
   flex-basis: 6px;
+}
+
+.cc-strip-more {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 6px;
 }
 
 /* The selected day: the per-team row and the "No time" section. */
@@ -21388,9 +21402,12 @@ body.exercise-header-pinned #viewToolbar {
   overflow-wrap: anywhere;
 }
 
+/* Two columns in the 300 px side panel and on a phone; each field keeps its
+   input at the top when the other one of its row has a hint or an error. */
 .cc-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  align-items: start;
   gap: 10px;
 }
 
@@ -21442,11 +21459,10 @@ body.exercise-header-pinned #viewToolbar {
   font-style: italic;
 }
 
+/* No scroller of its own: the panel or the sheet scrolls (and keeps its
+   place across a repaint); the search shows 60 rows at most. */
 .cc-check-list {
   display: grid;
-  max-height: 320px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .cc-athlete-picker {
@@ -21490,6 +21506,13 @@ body.exercise-header-pinned #viewToolbar {
 .cc-cancel-name {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* The sheet scrolls a focused field clear of its sticky header. */
+@media (max-width: 1023px) {
+  .cc-panel.cc-sheet {
+    scroll-padding-block: 76px 16px;
+  }
 }
 
 @media (max-width: 760px) {

@@ -76,7 +76,7 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -494,6 +494,8 @@ function bindEvents() {
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("keydown", handleBuilderSearchKeydown);
   els.content.addEventListener("keydown", handleTemplateMetadataKeydown);
+  // Central calendar (K2a-2): Enter in the event form's athlete search never submits it.
+  els.content.addEventListener("keydown", handleCentralCalendarKeydown);
   // Text fields that grow with their text (textarea-autosize.js), wherever
   // they are rendered (the content area and the Builder's modals).
   document.addEventListener("input", (event) => {

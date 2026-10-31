@@ -25,6 +25,7 @@ import {
   newCentralCalendarCancelForm,
   newCentralCalendarCreateForm,
   newCentralCalendarEditForm,
+  renderCentralCalendarAthleteListHtml,
   setCentralCalendarFormExpect,
   setCentralCalendarFormField,
   setCentralCalendarFormTarget,
@@ -220,7 +221,7 @@ function ask(question) {
   return Boolean(globalThis.window?.confirm?.(question));
 }
 
-const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "" });
+const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?" });
 
 // Leaving the form (another item, Escape / Back, a workspace switch through
 // app.js): a save in flight, a result not confirmed or unsaved values are
@@ -263,12 +264,37 @@ function focusPanelStart(cal) {
 
 function closeEventForm(render, { asked = false } = {}) {
   const cal = state.centralCalendar;
-  if (!cal.form) return true;
+  const form = cal.form;
+  if (!form) return true;
   if (!asked && !centralCalendarMayBeLeft()) return false;
   cal.form = null;
   render?.();
   focusPanelStart(cal);
+  // A save in flight or not confirmed may have landed: the calendar is read
+  // again at once (never the cached answer from before it), so the coach can
+  // find the event before making it a second time.
+  if (form.busy || form.unconfirmed) void rereadAfterUncertainWrite(cal, render, form);
   return true;
+}
+
+function uncertainNotice(form) {
+  const title = form.mode === "create" ? oneLineTitle(form.draft.title) : form.eventTitle;
+  if (form.mode === "create") return `The result of “${title || "the new event"}” was not checked. The calendar was read again: look for it before creating it again.`;
+  if (form.mode === "cancel") return `The result of cancelling “${title || "the event"}” was not checked. The calendar was read again: look at the event before cancelling it again.`;
+  return `The result of the change to “${title || "the event"}” was not checked. The calendar was read again: look at the event before changing it again.`;
+}
+
+function oneLineTitle(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+async function rereadAfterUncertainWrite(cal, render, form) {
+  invalidateCentralCalendarCache();
+  if (state.centralCalendar !== cal) return;
+  await loadCentralCalendar({ render, forceRefresh: true });
+  if (state.centralCalendar !== cal) return;
+  if (form) cal.notice = uncertainNotice(form);
+  render?.();
 }
 
 // The types are read once per workspace (the slice is reset on a switch).
@@ -371,6 +397,7 @@ async function loadEditEvent(form, cal, render) {
   const label = state.currentUser?.activeWorkspace?.label || "";
   centralCalendarEditFormFromEvent(form, eventResult.event, {
     types: typesResult.types || [],
+    typesFailed: Boolean(typesResult.error),
     // The platform workspace edits as support: its lists are not the
     // event's own workspace's, so the type and the targets stay as they are.
     readOnly: ws.type === "platform",
@@ -474,14 +501,22 @@ async function sendEventForm(render) {
   try {
     data = await WRITES[form.mode](form);
   } catch (error) {
-    if (!current()) return;
+    if (!current()) return lateAnswer(cal, render);
     form.busy = false;
     await refused(form, centralCalendarErrorInfo(error), render, { check });
     return;
   }
-  if (!current()) return;
+  if (!current()) return lateAnswer(cal, render);
   form.busy = false;
   await saved(form, data, render, { check });
+}
+
+// The coach left the form while its write was in flight: whatever the answer
+// says, what is shown may be from before it - read the calendar again (the
+// workspace's own slice only; a switch has reset it already).
+async function lateAnswer(cal, render) {
+  if (state.centralCalendar !== cal) return;
+  await rereadAfterUncertainWrite(cal, render, null);
 }
 
 // The sentence of a stated refusal: nothing was saved.
@@ -520,7 +555,7 @@ function checkNoteText(info) {
   if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here.";
   if (info.status === 404) return "The check could not be done: this event is not available in this workspace now. The result is still not confirmed.";
   if (info.status === 403) return "The check could not be done: this workspace cannot change events now. The result is still not confirmed.";
-  if (info.code === "request_key_reused") return "The check could not be done: a save under this request is stored with other values. Close without checking and look for the event in the calendar.";
+  if (info.code === "request_key_reused") return "The check could not be done. Close without checking, then look for the event in the calendar before saving it again.";
   if (info.code === "try_again") return "The check could not be done: the server was busy. The result is still not confirmed; Check result again in a moment.";
   return "The check could not be done. The result is still not confirmed; Check result again in a moment.";
 }
@@ -624,10 +659,23 @@ export function handleCentralCalendarInput(target, { render } = {}) {
     const query = String(target.value ?? "");
     if (form.athleteQuery !== query) {
       form.athleteQuery = query;
-      render?.();
+      // Only the list is drawn again: the search input, its caret and a
+      // phone's keyboard (and an input method's composition) stay as they are.
+      const list = globalThis.document?.querySelector?.("#ccEventAthleteList");
+      if (list) list.innerHTML = renderCentralCalendarAthleteListHtml(form, centralCalendarEventRoster());
+      else render?.();
     }
     return true;
   }
+  return true;
+}
+
+// app.js's keydown on the content: Enter in the athlete search finds, it
+// never submits the event form (HTML's implicit submission would create or
+// save the event before the athletes are chosen).
+export function handleCentralCalendarKeydown(event) {
+  if (event?.key !== "Enter" || !event.target?.matches?.("[data-cc-event-athlete-search]")) return false;
+  event.preventDefault();
   return true;
 }
 
@@ -735,13 +783,22 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-toggle-kind") {
     const kind = action.dataset.kind || "";
-    if (CENTRAL_CALENDAR_KINDS.includes(kind)) toggleValue(cal.filters.kinds, kind);
+    if (CENTRAL_CALENDAR_KINDS.includes(kind)) {
+      toggleValue(cal.filters.kinds, kind);
+      // Events chosen: every event passes, so the event types are cleared.
+      if (kind === "event" && cal.filters.kinds.includes("event")) cal.filters.eventKinds = [];
+    }
     render?.();
     return true;
   }
   if (type === "central-calendar-toggle-event-kind") {
     const eventKind = action.dataset.eventKind || "";
-    if (CENTRAL_CALENDAR_EVENT_KINDS.includes(eventKind)) toggleValue(cal.filters.eventKinds, eventKind);
+    if (CENTRAL_CALENDAR_EVENT_KINDS.includes(eventKind)) {
+      toggleValue(cal.filters.eventKinds, eventKind);
+      // Narrowing to some event types turns Events off, so every pressed chip
+      // changes the list (Events would let every event through anyway).
+      if (cal.filters.eventKinds.length) cal.filters.kinds = cal.filters.kinds.filter((kind) => kind !== "event");
+    }
     render?.();
     return true;
   }
@@ -800,7 +857,15 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     if (!form || form.busy || form.unconfirmed) return true;
     form.athletesOpen = !form.athletesOpen;
     render?.();
-    if (form.athletesOpen) globalThis.document?.querySelector?.('[data-cc-focus="athlete-search"]')?.focus?.({ preventScroll: true });
+    // On a touch screen the keyboard would cover the list just opened: the
+    // search is focused only where a pointer and a real keyboard are.
+    let coarse = false;
+    try {
+      coarse = Boolean(globalThis.window?.matchMedia?.("(pointer: coarse)")?.matches);
+    } catch {
+      coarse = false;
+    }
+    if (form.athletesOpen && !coarse) globalThis.document?.querySelector?.('[data-cc-focus="athlete-search"]')?.focus?.({ preventScroll: true });
     return true;
   }
   if (type === "central-calendar-event-all-athletes" || type === "central-calendar-event-no-athletes") {

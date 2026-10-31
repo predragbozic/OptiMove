@@ -29,7 +29,8 @@ the type icons as data (K2b), the athlete's *Upcoming events* list (K2b).
   types** (a third row, only while an event is on the displayed days or a type is chosen): one chip per event kind
   with its icon and count — *Training, Match, Test, Travel, Meeting, Day off, Camp*.
 - Semantics (still decision A — whole cards, no request): a card passes the type filter when its kind is chosen, or
-  it is an event whose kind is chosen. *Events* + *Match* = every event; *Match* alone = the matches only.
+  it is an event whose kind is chosen. *Events* and the event types exclude each other (choosing *Match* turns
+  *Events* off, choosing *Events* clears the event types), so every pressed chip changes the list.
 - Counts: over the displayed days of the unfiltered answer, as K1b; *All groups* / *All types* count every card.
 - The chip text is 13 px (11 px counts), as the panel's team pills; a chip is 44 px tall on a phone, a tablet and a
   touch screen, 36 px on a pointer screen of 1024 px and up (K1b's compact-card rule).
@@ -38,11 +39,12 @@ the type icons as data (K2b), the athlete's *Upcoming events* list (K2b).
 
 - **Icons** by type — events by their kind (training `run`, match `trophy`, test `clipboard`, travel `route`,
   meeting `team`, day off `bed`, camp `mountain`), the other kinds by theirs (planned `barbell`, activity `activity`,
-  RPE request `gauge`, test `clipboard`) — from `icon-library.js` through `renderIconSvg`, never a stored value
+  RPE request `gauge`, scheduled test `stopwatch`) — from `icon-library.js` through `renderIconSvg`, never a stored value
   (K2b makes a type's icon editable).
 - A **team pill** (the first team's colour and name) on every card that names a team; further teams stay dots.
-- A **status pill**: *Planned* now shows (K1b showed nothing), and an event that expects nothing reads *Planned*
-  until its day; *Cancelled*, *Done*, *Awaiting RPE / result / attendance / device data*, *Missed* as before.
+- A **status pill**: *Planned* now shows (K1b showed nothing; an imported activity of today still shows none), and an
+  event that expects nothing reads *Planned* until its day; *Cancelled*, *Done*, *Awaiting RPE / result / attendance
+  / device data*, *Missed* as before.
 - An event card also shows its end time (`17:30–19:00`), its place, and *Day 2 of 3* on a multi-day event.
 - The selected day's list (a phone's week and month, the Day view): the cards with a time or a slot in the
   server's order, then a **No time** section with the cards that have neither (a stable split — nothing is
@@ -107,6 +109,37 @@ harness extended with the event routes, at 1280 and 375 px. Reviewers: `code-rev
 ## 8. For the owner (recorded, not blocking)
 
 - The per-team row's word: *item* (the screen's own word) instead of the screenshot's *event*, because a day also
-  holds planned trainings, activities, RPE requests and tests.
-- *Planned training* for the Builder's cards (to tell them from an event of type *Training*).
+  holds planned trainings, activities, RPE requests and tests. The row is hidden when it would name one team only.
+- *Planned training* for the Builder's cards and *Scheduled tests* for the Tests module's (to tell them from an
+  event of type *Training* or *Test*).
 - The panel starts collapsed on every screen; whether a computer should start it open is a one-line change.
+- The *GPS / device data* box: offered as D19 says, but nothing can meet it before K2a-1b (an imported activity
+  linked to the event); the form says so under the box, and a past event that ticks it reads *Awaiting device
+  data*. Hiding the box until K2a-1b is the alternative.
+
+## 9. Review round 1 (as built after it)
+
+`code-reviewer` READY WITH NON-BLOCKING NOTES (1 MEDIUM, 3 LOW), `ux-design-reviewer` NOT READY (2 HIGH, 6 MEDIUM,
+LOW), `mobile-qa` NOT READY (1 HIGH, 3 MEDIUM, LOW). Applied:
+
+- Leaving a save that is in flight or not confirmed (and an answer that lands after the coach left) reads the
+  calendar again at once and says to look for the event before making it again — never a duplicate from an old
+  cached answer.
+- Enter in the athlete search never submits the form (`enterkeyhint="search"`); typing redraws only the list, so the
+  input, its caret and a phone's keyboard stay; the search is not focused by itself on a touch screen.
+- The athlete list has no scroller of its own (the panel or the sheet scrolls and keeps its place); the date and time
+  pairs stay aligned; the chip-row label keeps K1b's phone width; the sheet scrolls a focused field clear of its
+  header; two date columns in the 300 px side panel.
+- Words: *What should this event collect?* with "Ticking a box does not ask anyone…", *Athletes' RPE*; the cancel
+  confirmation no longer says the athletes are told, and names every day of a multi-day event; the device-data
+  sentence; one line instead of two for an event that collects nothing; the type's word is left out of the kind line
+  when the title is that word; a failed types read on Edit says so; a typed cancel reason is asked about.
+- The Events chip and the event-type chips exclude each other, so every pressed chip changes the list.
+- An imported activity of today shows no *Planned* pill (as K1b).
+- The tests' fake server keeps the service's requestKey contract (replay, `request_key_reused`), and a lost-but-saved
+  create proves one event after Check result.
+
+Not done here, recorded: an end-to-end run against the real K2a-1a routes on a disposable database (the frontend's
+outcome rules are proven against a fake that keeps the service's contract; the code-reviewer's backend note — a
+committed write whose answer read fails afterwards is reported as a refusal — is for PR #298 / K2a-1b); a physical
+phone (iOS keyboard and pickers, native `confirm()`).
