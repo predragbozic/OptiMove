@@ -386,7 +386,7 @@ base kind.
 |---|---|---|---|
 | **K2a-1a** ★ | migration v49 (every table of 1.2, the seed, the lock function, the guards, the rollback script and a read-only preflight / post-check in `docs/runbooks/calendar-events-v49*.sql`); `GET …/types`; create, edit, cancel; the read extension (`event` cards, the athlete's answer, `canManage`); the fixture list appended (`GPEXE_TEST_MIGRATIONS`, `_gpexe-disposable-db.mjs:75`; every slicing suite uses `indexOf`, none the list's end — verified) | `db-reviewer` + `security-reviewer` + `code-reviewer` | **yes**: triggers 1 (migration), 2 (owner_scope, workspace, info-hiding), 4 (lock order, idempotency) |
 | **K2a-1b** | the links: attach / detach sessions with `alignSessions` (the toggle extracted into one shared function), attach / detach an activity, set / clear a schedule reference; the folding; `gaps` | `security-reviewer` + `code-reviewer` (+ `db-reviewer` only if the extracted toggle or a trigger changes) | **yes**: triggers 3 (linking) and 4 |
-| **K2a-2** | UI — **first item:** the deployed K1b screen gets a kind label and a chip for `kind: "event"` (LOW-8 of the K2a-1a independent review: the `event` cards this API already serves would otherwise render unlabelled there); then "New event" in the toolbar and on a day; the event card (type label, team stripe, time, location, status, counts, gap note); the panel with Edit / Cancel / Attach a training / Attach an activity / Detach for `canManage`; "Attach to event…" on a planned card's panel; the kind chips: `event` → **Events**, `external` → **RPE requests** (choice 9.10; today `external` is labelled "Events", `frontend/central-calendar-view.js:13`); a lost answer is *Result not confirmed · Check result* with the same `requestKey` (the roster and F3c3 pattern) | `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px on the K1b harness | no (the server decides; no access change) |
+| **K2a-2** | UI — **first item:** the deployed K1b screen gets a kind label and a chip for `kind: "event"` (LOW-8 of the K2a-1a independent review: the `event` cards this API already serves would otherwise render unlabelled there), and the chips' note that with `kinds=external` alone a schedule card folded under its event is not shown that day (by design; the owner's external review of PR #298, LOW 1); then "New event" in the toolbar and on a day; the event card (type label, team stripe, time, location, status, counts, gap note); the panel with Edit / Cancel / Attach a training / Attach an activity / Detach for `canManage`; "Attach to event…" on a planned card's panel; the kind chips: `event` → **Events**, `external` → **RPE requests** (choice 9.10; today `external` is labelled "Events", `frontend/central-calendar-view.js:13`); a lost answer is *Result not confirmed · Check result* with the same `requestKey` (the roster and F3c3 pattern) | `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px on the K1b harness | no (the server decides; no access change) |
 | **K2b** | Settings → Calendar: types CRUD with the archive rule, team colours (D11), locations (a catalog); the athlete's Upcoming events; v50 | `db-reviewer` + `security-reviewer` + `code-reviewer` + UI reviewers | yes (trigger 1) |
 
 **Why two backend slices and one migration:** the reviewers read one schema once; each PR stays reviewable
@@ -589,3 +589,24 @@ owner's external review (triggers 1, 2, 4).
   item recorded in section 7.
 - **Environment:** the shared-kind suites were not run (the local OPTIMOVE database is at v21, pre-existing); the
   open item is recorded in section 8.
+
+**The owner's external review of PR #298 (`9822273`; READY WITH NON-BLOCKING NOTES, one MEDIUM, 2026-10-31):**
+- **MEDIUM, fixed — a referenced schedule wider than the event.** The schedule's day card folded under the event
+  card whatever its athletes, so the event showed the schedule's numbers ("RPE 0/2") over a list of fewer athletes,
+  and the request of an athlete the event did not target disappeared from the coach's calendar. The manager's
+  option 3: a referenced external or test schedule's day card folds only when, **for that day and that viewer,
+  every athlete of the schedule's card is among the event's target athletes** on that day; otherwise both cards
+  stay, each with its own counts, and the event card carries `scheduleFold: { external | test: "separate" }`
+  (`"folded"` when folded, `null` without a schedule card that day) instead of the schedule's numbers — the
+  numbers on an event card come only from athletes the card lists, and a schedule beside the event is its
+  channel, never a gap. Per day and per viewer, so a membership change flips one day only and a wide range stays
+  the union of its days (test 30).
+- **LOW, recorded (no code):**
+  1. With `kinds=external` alone, a schedule card folded under its event is not shown on that day — by design
+     ("a folded thing is never emitted alone"); K2a-2 says so where the chips are explained (section 7).
+  2. A club archived before v49 has no seeded event types; a direct database reactivation would need
+     `calendar.seed_club_event_types` — no application route reactivates a club (the runbook says so).
+  3. Moving a club event's date re-validates every target on the new day, so an archived target team blocks a date
+     change (the cancel still works) — fail-closed, intended.
+  4. A team moved to another club takes its old events (their notes included) under the new club's admin — no
+     route moves a team today; a point for the owner when such a route is built.

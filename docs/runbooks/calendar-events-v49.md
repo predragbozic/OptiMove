@@ -47,6 +47,10 @@ K2b; every table refuses `TRUNCATE`. A type's or a schedule's reference is valid
 again on a later write: a test schedule the Tests module deleted, or a team moved to another club, never makes an
 event uncancellable (the calendar read then shows the event alone).
 
+**A club archived before v49** has no seeded event types (the seed copies the system set for every ACTIVE club). No
+application route reactivates a club; a direct database reactivation would also need
+`select calendar.seed_club_event_types(<club id>)` (idempotent by seed key), on the owner's order only.
+
 **A club's hard delete.** The application only archives clubs. A hard delete (maintenance; the shared test suites'
 cleanup) cascades the club's unused type copies; a club with events or with a type in use is stopped by the events'
 own `RESTRICT` foreign keys, as it is by its schedules today.

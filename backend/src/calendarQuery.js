@@ -518,19 +518,22 @@ export function deriveEventStatus(card, today) {
   const checks = [];
   let unmet = 0;
   let terminal = 0;
+  // A referenced schedule shown as its own card beside the event (it reaches
+  // athletes the event does not list) is the channel: its card carries the
+  // counts and the status, so the event shows no gap for it.
   if (expects.includes("rpe")) {
     if (card.rpe && card.rpe.asked > 0) {
       checks.push(card.rpe.submitted >= card.rpe.asked);
       unmet += Math.max(0, card.rpe.asked - card.rpe.submitted);
       terminal += card.rpe.missed || 0;
-    } else gaps.push("rpe");
+    } else if (card.scheduleFold?.external !== "separate") gaps.push("rpe");
   }
   if (expects.includes("test_result")) {
     if (card.results && card.results.expected > 0) {
       checks.push(card.results.completed >= card.results.expected);
       unmet += Math.max(0, card.results.expected - card.results.completed);
       terminal += card.results.missed || 0;
-    } else gaps.push("test_result");
+    } else if (card.scheduleFold?.test !== "separate") gaps.push("test_result");
   }
   if (expects.includes("device_data")) {
     checks.push(card.deviceData === true);
@@ -860,6 +863,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
           expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
           revision: row.revision, canManage, notes: canManage ? row.notes : undefined,
           athleteView: ctx.type === "athlete",
+          scheduleFold: { external: null, test: null },
           athletes: athletes.map((a) => ({ ...a, rpe: null, result: null })),
           links: {
             eventId: String(row.id), planIds: [], logicalSessionIds: [], activityIds: [],
@@ -882,10 +886,21 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
         // and stays its own card), and the athlete workspace folds nothing
         // either — the athlete's own RPE request stays visible beside the
         // reduced event card (plan section 5).
+        // It folds only when, for this day and this viewer, EVERY athlete of
+        // the schedule's card is among the event's target athletes (the
+        // owner's external review of PR #298, the manager's option 3): the
+        // numbers on an event card come only from athletes the card lists.
+        // A schedule that reaches wider than the event stays its own card
+        // beside it, and the event card says so (`scheduleFold`: separate)
+        // instead of taking the schedule's numbers.
         const folds = row.status === "planned" && ctx.type !== "athlete";
+        const listed = new Set(card.athletes.map((a) => String(a.athleteId)));
+        const covers = (other) => other.athletes.every((a) => listed.has(String(a.athleteId)));
         if (folds && row.external_schedule_id) {
           const ext = cards.get(`external:${row.external_schedule_id}:${day}`);
-          if (ext) {
+          if (ext && !covers(ext)) card.scheduleFold.external = "separate";
+          else if (ext) {
+            card.scheduleFold.external = "folded";
             card.rpe = ext.rpe;
             card.links.externalOccurrenceId = ext.links.externalOccurrenceId ?? null;
             card.links.activityIds.push(...(ext.links.activityIds || []));
@@ -896,7 +911,9 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
         }
         if (folds && row.test_schedule_id) {
           const tst = cards.get(`test:${row.test_schedule_id}:${day}`);
-          if (tst) {
+          if (tst && !covers(tst)) card.scheduleFold.test = "separate";
+          else if (tst) {
+            card.scheduleFold.test = "folded";
             card.results = tst.results;
             card.links.testOccurrenceId = tst.links.testOccurrenceId ?? null;
             const states = new Map(tst.athletes.map((a) => [String(a.athleteId), a.result]));
@@ -965,6 +982,10 @@ function publicCard(card, includeAthletes) {
     out.location = card.location;
     out.span = card.span;
     out.gaps = card.gaps || [];
+    // Whether the referenced schedule's day card is folded under this card
+    // or shown beside it (it reaches wider than the event's targets):
+    // "folded", "separate", or null (no schedule card that day).
+    out.scheduleFold = card.scheduleFold ?? { external: null, test: null };
     out.revision = card.revision;
     out.canManage = card.canManage === true;
     if (card.canManage) {

@@ -1716,3 +1716,67 @@ test("29. a referenced schedule belongs to the event's owner or its club, for ev
   assert.equal(own.status, 200, own.text, "the owner team's club's schedule is the owner's");
   assert.equal(own.body.event.externalScheduleId, schedClub);
 });
+
+test("30. a referenced schedule folds only when the event's targets cover its athletes, per day and per viewer: wider, both cards stay with their own counts and the event says so; covering, it folds; a membership change flips one day only; a wide range is the union of its days", async () => {
+  // The owner's external review of PR #298 (P1): the schedule targets team 1
+  // (a1, a2, both asked for RPE); the event targets a1 only.
+  const c = await clubFixture("cover");
+  const match = await typeOf(c.clubAdmin.cookie, "match");
+  const wider = await makeExternalSchedule({ owner: { scope: "club", clubId: c.clubId }, createdBy: c.clubAdmin.id, startDate: PAST, eventName: "Away RPE", targets: [{ kind: "team", id: c.team1 }] });
+  const occ = await makeExternalOccurrence(wider, PAST);
+  const asg1 = await makeExternalAssignment(occ, c.a1.athleteId, PAST, "completed");
+  await makeExternalAssignment(occ, c.a2.athleteId, PAST);
+  await externalFeedback(c.a1.athleteId, asg1, PAST);
+  const narrow = (await createEvent(c.clubAdmin.cookie, { eventTypeId: match.id, title: "Away", day: PAST, externalScheduleId: wider, targets: [{ kind: "athlete", id: c.a1.athleteId }] })).body.event;
+  for (const viewer of [c.coach1, c.clubAdmin]) {
+    const res = await calendar(viewer.cookie, { from: PAST, to: PAST, extra: "&include=athletes" });
+    const ev = eventCards(res, narrow.id)[0];
+    const ext = allItems(res).find((i) => i.key === `external:${wider}:${PAST}`);
+    assert.ok(ext, "the wider schedule stays its own card");
+    assert.deepEqual(ext.rpe, { asked: 2, submitted: 1, missed: 0 }, "with its own counts");
+    assert.ok(ext.athleteIds.includes(c.a2.athleteId), "a2's request is not lost");
+    assert.deepEqual(ev.scheduleFold, { external: "separate", test: null });
+    assert.equal(ev.rpe, null, "no number from an athlete the event card does not list");
+    assert.deepEqual(ev.athleteIds, [c.a1.athleteId]);
+    assert.deepEqual(ev.gaps, [], "the schedule beside it is the channel, not a gap");
+  }
+  // Covering: the event targets the whole team — it folds, its counts match its list.
+  const covering = await makeExternalSchedule({ owner: { scope: "club", clubId: c.clubId }, createdBy: c.clubAdmin.id, startDate: PAST, eventName: "Home RPE", targets: [{ kind: "team", id: c.team1 }] });
+  const occ2 = await makeExternalOccurrence(covering, PAST);
+  await makeExternalAssignment(occ2, c.a1.athleteId, PAST);
+  await makeExternalAssignment(occ2, c.a2.athleteId, PAST);
+  const whole = (await createEvent(c.clubAdmin.cookie, { eventTypeId: match.id, title: "Home", day: PAST, externalScheduleId: covering, targets: [{ kind: "team", id: c.team1 }] })).body.event;
+  let res = await calendar(c.coach1.cookie, { from: PAST, to: PAST, extra: "&include=athletes" });
+  const folded = eventCards(res, whole.id)[0];
+  assert.equal(allItems(res).some((i) => i.key === `external:${covering}:${PAST}`), false, "covered: folded");
+  assert.deepEqual(folded.scheduleFold, { external: "folded", test: null });
+  assert.deepEqual(folded.rpe, { asked: 2, submitted: 0, missed: 0 });
+  assert.deepEqual([...folded.athleteIds].sort(), [c.a1.athleteId, c.a2.athleteId].sort(), "the counts are the listed athletes'");
+  // Per day: a schedule over two days of team 1, an event naming a1 and a2;
+  // a leaver of team 1 is a member on the first day only (the leaving day
+  // counts) — the first day stays separate, the second folds.
+  const leaver = await makeAthlete("cover leaver", { clubId: c.clubId, teamId: c.team1 });
+  await archiveMembership(await teamMembershipId(leaver.athleteId, c.team1), `${FUTURE}T12:00:00Z`);
+  const day2 = addDays(FUTURE, 1);
+  const twoDays = (await q(
+    `insert into training_load.external_schedules (schedule_kind, timezone, start_date, end_date, recurrence_rule, opens_time, closes_time, status, event_name, event_type, created_by_user_id, owner_scope, owner_club_id)
+     values ('recurring','UTC',$1,$2,'{"version":1,"freq":"daily"}'::jsonb,'17:00','23:59','active','Camp RPE','match',$3,'club',$4) returning id`,
+    [FUTURE, day2, c.clubAdmin.id, c.clubId],
+  ))[0].id;
+  await q(`insert into training_load.external_schedule_targets (schedule_id, target_kind, target_team_id) values ($1, 'team', $2)`, [twoDays, c.team1]);
+  const camp = (await createEvent(c.clubAdmin.cookie, { eventTypeId: match.id, title: "Camp", day: FUTURE, endDay: day2, externalScheduleId: twoDays, targets: [{ kind: "athlete", id: c.a1.athleteId }, { kind: "athlete", id: c.a2.athleteId }] })).body.event;
+  res = await calendar(c.coach1.cookie, { from: FUTURE, to: day2 });
+  const byDay = Object.fromEntries(eventCards(res, camp.id).map((card) => [card.date, card.scheduleFold.external]));
+  assert.deepEqual(byDay, { [FUTURE]: "separate", [day2]: "folded" });
+  assert.ok(itemsOn(res, FUTURE).some((i) => i.key === `external:${twoDays}:${FUTURE}`), "the leaver's day keeps the schedule's card");
+  assert.equal(itemsOn(res, day2).some((i) => i.key === `external:${twoDays}:${day2}`), false);
+  // A wide range is the union of its days, for every viewer.
+  for (const viewer of [c.coach1, c.coach2, c.clubAdmin]) {
+    const wide = await calendar(viewer.cookie, { from: PAST, to: day2, extra: "&include=athletes" });
+    for (const day of [PAST, FUTURE, day2]) {
+      const single = await calendar(viewer.cookie, { from: day, to: day, extra: "&include=athletes" });
+      const shape = (items) => items.map((i) => `${i.key}|${[...(i.athleteIds || [])].sort().join(",")}|${JSON.stringify(i.rpe)}|${JSON.stringify(i.scheduleFold ?? null)}`).sort();
+      assert.deepEqual(shape(itemsOn(wide, day)), shape(itemsOn(single, day)), `wide == the day ${day}`);
+    }
+  }
+});
