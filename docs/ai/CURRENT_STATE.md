@@ -2471,6 +2471,9 @@ Technical details.
       PR-ove, uključujući korak 6 (Render deploy preko Rukovodioca)”, the owner typing „…” for the head; the executor
       reads it as `d5be8103`, the only head with both GOs and the PR's head since them), after the GO of the *Nezavisni revizor* (its turn `10e14ad9`) and the *Rukovodilac* (its turn
       `1debe65f`) on that head. Deployed with `be0fe1b` (below).
+    - **PR #302, the 7f-B facts record — merged (documents only).** Merged as `0c30e84` (parents `be0fe1b` and
+      `28d00c26`, 2026-10-31 00:03:31 UTC) by the executor under the standing merge order, exactly from `28d00c26`,
+      after the *Rukovodilac*'s GO on that head (its turn `ffcefe12`, 00:03:04 UTC). Deployed with `0117912`.
     - **7e-B, PR #303: the aggregate preview of a mapping version (J11, no migration) — merged and deployed.**
       - **What:** `GET /api/training-load/sources/metrics/mappings/:mappingId/versions/:versionId/preview?candidateId=…`
         for 7d's audience: over one saved GPEXE candidate, the count of athletes with a value and min / max in the
@@ -2483,9 +2486,12 @@ Technical details.
       - **Merge gate:** PR #298 (below) merged migration v49 at 00:22:52 UTC, so under section 2 of the plan nothing was
         merged before v49's post-check. The owner left the post-check to the *Rukovodilac* (owner turn `92025482`,
         01:40:21 UTC, typed „Ja ne radim post ček već ri”, read as „… već ti”), which ran
-        `docs/runbooks/calendar-events-v49-postcheck.sql` read-only, each of its seven blocks in
-        `begin transaction read only; … rollback;`, every block as expected, and then gave the merge order (its turn
-        `8ced4dea`, 01:42:04 UTC).
+        `docs/runbooks/calendar-events-v49-postcheck.sql` (sha256
+        `8b61a1a2240668fff20c25539ac357329adcc22d57c0e000755f0edceb5666e7` at `0117912` and at `e6ca433`, the same hash
+        its run printed) read-only, each of its seven blocks in `begin transaction read only; … rollback;` by its own
+        report, every block as expected, and then gave the merge order (its turn `8ced4dea`, 01:42:04 UTC). The
+        executor checked the file's hash and the order in the *Rukovodilac*'s transcript, not each wrapped call: step 5
+        of the plan's standing order is written for this plan's migration PRs, and PR #298 is another track.
       - **Merge** by the executor under the standing merge order: `e6ca433` (parents `0117912` and `ee873f53`, 01:42:32
         UTC), exactly from `ee873f53`.
       - **Deploy** by the *Rukovodilac* through the Render API (step 6): no migration path differs between the served
@@ -3378,8 +3384,9 @@ pre-existing; pass/fail counts don't belong in this file
   `--preset backend-fast` in `gpexe-client.test.mjs` and `gpexe-rest-v1-adapter-reads.test.mjs`; the latter is
   cancelled from B4.2 on before most of its tests run, so the note above that its "never answers" fakes pass on Node
   22 does not hold in this container. Its tests B7.5 and B7.8, run alone with `--test-name-pattern`, passed.
-  Reproduced again on a clean detached `0117912` on 2026-10-31 for the 7e-B runs: the same three files, with the same
-  counts as the branch's runs; B7.7, B7.7b, B7.8 and B8.2, run alone, passed.
+  Reproduced again on a clean detached `0117912` on 2026-10-31 for the 7e-B runs (`--preset gpexe`, Node 22.22.0): the
+  same three files, with the same counts as the branch's runs; on the branch, B7.7, B7.7b, B7.8 and B8.2 of the
+  adapter suite, run alone with `--test-name-pattern`, passed.
 - `backend/tests/source-hosts-server3.test.mjs` test 12 (no credential or token in any file of the change) failed on
   `main` from PR #264 on: two full 40-hex commit ids in this file read as a REST token's shape. They are shortened in
   the facts pull request of 2026-10-30.
@@ -3400,6 +3407,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **The 7e preview: a test that a candidate whose last check is another team's answers `409
+  candidate_source_mismatch`** (the *Nezavisni revizor*'s optional LOW-1 on PR #303, 2026-10-31; J11 section 12,
+  "After the external round"). It kills the mutation dropping `k.owner_team_id = s.owner_team_id` in
+  `backend/src/sourceMetricPreviewService.js`. The executor wrote it as a case of the route suite's test 13 and saw that
+  mutation fail it, but did not commit it (both GOs were on `ee873f53`); it goes with the next pull request that
+  touches the preview.
 - **A self-report activity has no roster — v44, merged and deployed** (owner decision 2026-10-29, option A; branch
   `fix/activity-roster-self-report-activities` from `cd0fce6`; PR #275, merge commit `835e462`, 2026-10-30 10:56:55
   UTC, merged from the owner's account in another session; deployed with `0592550`, and its migration record read on

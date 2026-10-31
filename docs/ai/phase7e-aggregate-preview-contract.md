@@ -443,6 +443,7 @@ role), so the suite's platform admin in club A's workspace holds that role and s
   no row with another path but the same family can exist.
 - **The *Nezavisni revizor*'s optional LOW-1:** no test pinned that the candidate's last check must be of its own team
   (its mutation dropping `k.owner_team_id = s.owner_team_id` survived; v22 ties the two by a plain foreign key only).
-  The test (a candidate whose last check is another team's: `409 candidate_source_mismatch`, the bundle left in the
-  database) was written and checked by the executor (the route suite 14/0, that mutation killed), and is kept as a
-  follow-up for the next pull request that touches the preview, since both GOs were on `ee873f53`.
+  The executor wrote the test (a candidate whose last check is another team's: `409 candidate_source_mismatch`, the
+  bundle left in the database), as a case of the route suite's test 13, and saw that mutation fail it; it was not
+  committed, since both GOs were on `ee873f53`, and it goes with the next pull request that touches the preview
+  (`CURRENT_STATE.md`, "Separate tasks").
