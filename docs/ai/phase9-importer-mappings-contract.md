@@ -7,9 +7,9 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 
 | | |
 |---|---|
-| Status | **Proposed** by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120`). **No code is written before this contract is accepted.** |
+| Status | **Proposed** by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
-| Mark | ★★ (triggers 1, 2, 3 and 4; the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
+| Mark | ★★ (triggers 1, 2, 3 and 4 — trigger 2 added by this contract for sections 4.1 and 6.1, the plan's phase 9 line naming 1, 3 and 4 (R3); the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
 | Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
 | Decides | The owner: O1–O16. The *Rukovodilac*: R1 and R3–R18 (section 12.1; R2 became O14). The *Nezavisni revizor* reviews this contract and 9-B (★★). |
 
@@ -47,8 +47,8 @@ One transaction on one pooled client:
 1. Refusals before any connection: a malformed hash, a non-boolean `acceptChanges`, the switch off (`409
    import_switch_off`, `:2161`; the switch is `process.env.GPEXE_IMPORT_APPLY_ENABLED === 'true'`, read on every call,
    `:41-43`). `pool.connect` at `:2163`.
-2. `begin`; `lock_gpexe_import_approver` (role, grant and user rows `FOR SHARE`, v23 `:33-57`; its order documented at
-   v23 `:16-23`); the candidate `FOR UPDATE` (`:2171-2184`); the existing refusals (`:2185-2212`), among them
+2. `begin` (`:2171`); `lock_gpexe_import_approver` (role, grant and user rows `FOR SHARE`, `:2173-2176`; v23 `:33-57`,
+   its order documented at v23 `:16-23`); the candidate `FOR UPDATE` (`:2179-2184`); the existing refusals (`:2185-2212`), among them
    `nothing_to_import` for a preview whose status is `no_changes` (`:2206`).
 3. `buildGpexeImportPlan(raw_bundle)` **before** the team lock (`:2217`); a mapping error stores a blocked preview and
    answers `409 preview_changed` (`:2218-2224`).
@@ -142,9 +142,9 @@ team or club row is locked during an approval.
 | PR | Content | Migration | Merge path (proposal; R1, R3) |
 |---|---|---|---|
 | **9-A** | This contract (docs only) and its pointers in the plan and the discovery document | — | The owner accepts the contract before any code (the plan's rule A1); the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs |
-| **9-0** | Switch conditions 2 and 3 (section 9), reserved since 7g (`metrics-core-plan.md:1075-1078`), and the same bounds on the check-time preview | none | Standing merge order after both GOs (trigger 4; it imports `gpexeImportService.js`, which `server.js` and `gpexeRetentionCli.js` load at start-up, so the PR body states that nothing new runs or writes at start-up) |
+| **9-0** | Switch conditions 2 and 3 (section 9), reserved since 7g (`metrics-core-plan.md:1075-1078`), and the same bounds on the check-time preview | none | Standing merge order after both GOs (trigger 4). It touches condition (b) of the order — `gpexeImportService.js` is a module `gpexeRetentionCli.js` and `startGpexeRetentionSchedule()` call — so it is covered only when its body says what then runs at start-up and on a schedule and why it writes nothing to production data, and the GO confirms that (`metrics-core-plan.md:193-211`) |
 | **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge** (O13): while Render's auto-deploy is on, a merge is a deploy (`metrics-core-plan.md:252-256`), and this one puts the new write path live and changes what a check shows for a bound team (section 7.3) |
-| **9-R** | The M6 runbook and the executor's prepared material (section 10.4): the Supabase backup procedure draft, the pre-switch and post-import SELECT files (each run by the executor only on a disposable `optimove_tests_*` database), the proposals for variables and mappings, the record-table row | none | M6 material, outside the green zone (`metrics-core-plan.md:1120`): the owner's word |
+| **9-R** | The M6 runbook and the executor's prepared material (section 10.4): the Supabase backup procedure draft, the pre-switch and post-import SELECT files (each run by the executor only on a disposable `optimove_tests_*` database), the proposals for variables and mappings, the record-table row | none | M6 material, outside the green zone (`metrics-core-plan.md:1120` at the base: „M6 follows phase 9. All of it is the owner's and outside the green zone, the standing merge order included.”): the owner's word |
 | **9-E** | Facts after each merge (CURRENT_STATE, the J M4 row "As built", the ADR-007 extension) | none | Standing merge order (facts only) |
 
 A migration is not planned (O14). Should one become necessary (for example C98's canonical-row guard), it is its own PR
@@ -170,6 +170,8 @@ steps 2a and 6b) and rolls back (R10).
      `sourceImportCredentialResolver.js:200-231`: the team active, its club active, the connection owned by that
      club). Archived or moved since the route's check → the identical `404` (R16). The archive writers are single
      statements and a team move takes the team lock as a try-lock, so this read cannot wait behind them in a cycle.
+     Taking the team and club `FOR SHARE` here, before the registry, departs from D, which lists club rows after every
+     registry row (`discovery:1216-1218`); no team or club writer holds a registry row or the team import lock (R5).
 3. **The binding `FOR SHARE`.** At an approval: the candidate's `last_seen_check_id` →
    `gpexe_import_checks.source_binding_id` (`gpexeImportService.js:898`), joined pinned to the route's team (as
    `candidateActionable` does, `:1901-1905`); it must be `active` and the team's one active GPEXE binding. A candidate
@@ -187,13 +189,15 @@ steps 2a and 6b) and rolls back (R10).
    (`source_system`, `api_family`, `source_metric_key`) and T2b (`value_shape`, `parameter_kind`, `source_unit`,
    state, `evidence_status`). Ordered by T5 id.
 5. **The registry locks and the re-check.** T2b → T3 → T4 → the canonical `metric_definitions` row → T5, each
-   `FOR SHARE`, ascending by id within a table (the D order, `discovery:1213-1218`; the 7d writers take the same order,
-   `sourceMetricActivationSteps.js:205-220`); then the rows are compared with step 4. Any difference (an ended
+   `FOR SHARE`, ascending by id within a table (the D order, `discovery:1213-1218`; the admin writers take the same
+   order, `sourceMetricMappingService.js:24-27, :1204-1208`, and T5 after T4, `sourceMetricActivationSteps.js:205-220`); then the rows are compared with step 4. Any difference (an ended
    activation, a disabled version, a retired revision, a changed definition) → `409 preview_changed`; the next check →
    `mapping_not_usable`.
 6. **The Metrics Core connection `FOR UPDATE`.** The team's **active** team-owned v11 row for `gpexe` (v20: at most one
    per team, `metric_source_connections_one_active_gpexe_per_team_idx`); an inactive row (ended by 7g) is never used
-   again and never reactivated (v50).
+   again and never reactivated (v50). D lists the connection `FOR SHARE` for a new T6 fact (`discovery:1215-1216`);
+   taking it `FOR UPDATE` here, before any identity, event or T6 row, is what C57 requires, since v11 / v12 take it
+   `FOR UPDATE` on every identity and event insert — never `FOR SHARE` first and a stronger lock later (R5).
    - The row read `FOR UPDATE` is re-checked `active` (the 7g prerequisite, `phase7g…:182-187`; a 7g end cannot run
      meanwhile, because it takes the team lock as a try-lock): otherwise `mapping_not_usable` (R6).
    - The T7 write runs in **its own savepoint** (`savepoint gpexe_source_instance`): no active row → one is inserted
@@ -252,9 +256,11 @@ steps 2a and 6b) and rolls back (R10).
    - no value at all to write → `blocked`, **`no_mapped_values`** (R4; never Ready, C17).
    Who reads which code is section 6.1; no refusal names another team, club, connection, instance or holder
    (`discovery:1892-1895`).
-9. **`savepoint gpexe_preview_import`, then the writes.** The identities `FOR UPDATE` (with the `team_session:<id>`
-   reservation), the event, the threshold-set binding, segments, participants, the materialized activity and drill
-   components — as today. **`ensureMetricDefinitions` is gone** (C46): every value uses the T4-pinned
+9. **`savepoint gpexe_preview_import`, then the writes.** Every source identity of the import inserted and locked
+   `FOR UPDATE` first (with the `team_session:<id>` reservation; today `gpexeImportWriter.js:468-484`), then the event,
+   the threshold-set binding, segments, participants, the materialized activity and drill components — as today. The
+   occasions follow per result with their values and T6 rows (step 10); every identity precedes the first T6 row, as
+   C57 asks, and the connection has been held `FOR UPDATE` since step 6. **`ensureMetricDefinitions` is gone** (C46): every value uses the T4-pinned
    `metric_definition_id` and `metric_definition_version_id`; a canonical definition lacks the needed scope capability
    (`session` or `component`) → `mapping_not_usable` before the savepoint (R11).
 10. **Values, then T6.** `value_numeric` is the decimal **string** `convertAtStorageScale` returns (never a JS double);
@@ -286,8 +292,14 @@ One source field may carry several mappings (the closed power zone serves 25–6
   `activationId`, `mappingVersionId`, the canonical `variableKey`, `label` and `unit`, the converted `value` (decimal
   string), the source `sourceMetricKey`, `sourceParameterFingerprint`, `sourceValue` (decimal string) and `sourceUnit`,
   `previous` and `change`. A "Left out" entry carries the activation and its reason. `METRIC_BY_KEY` and the spec
-  labels are no longer used for a mapped value. The top-level `changesToImported` array stays as it is: the v23 and
-  v33 approval triggers read it (`v23:108-109`, `v33:189`), which is one reason no migration is needed.
+  labels are no longer used for a mapped value. The top-level `changesToImported` array keeps its place and the
+  length the v23 and v33 approval triggers read (`v23:108-109`, `v33:189`), which is one reason no migration is needed;
+  its entries' `values` (`gpexeImportPreview.js:302-309`) take the v3 value shape and are projected per audience like
+  every value (section 6.1).
+- **Unmapped and unactivated source fields** (section F rows 1–2): each preview carries `unmappedSourceFields` (a count
+  of fields without a T2a identity) and `unactivatedSourceMetrics` (the source labels of known fields without an open
+  activation on the binding). The projection gives `club_admin` and `platform` both; `other` only the count of the
+  second and nothing of the first.
 - **The changed / same label** compares the normalized decimal strings exactly; `1e-9` stays only as the
   characterisation test's tolerance against today's doubles (R13).
 - **The Link athletes helper values** (Time, Distance, Top speed) no longer come from preview values, which an
@@ -331,7 +343,9 @@ One source field may carry several mappings (the closed power zone serves 25–6
   `METRIC_BY_KEY`, `SOURCE_ATHLETE_VALUE_KEYS` (section 4), the frontend key lists, and the writer's
   `isPureSupplement` (`gpexeImportWriter.js:521`): it compares `Number(row.value_numeric) !== v.value`, which is always
   true for a decimal string, so the `supplemented` outcome (`:572-575`) would silently die; it compares the normalized
-  decimal text on both sides instead (a test in section 8.2). The read-only probe
+  decimal text on both sides instead (a test in section 8.2); its `addedMetricKeys` (`gpexeImportWriter.js:525`) and
+  `importResult`'s `definitions.byKey.get(v.metricKey)` (`:538`) key by the activation and the definition id instead of
+  the source key, which one field's two mappings would share (a test with the two closed power zones). The read-only probe
   `backend/scripts/gpexe-details-coverage-probe.mjs:34, 52-61` keeps its own list (it imports nothing).
 - **The legacy path.** A `legacy_env` team has no binding and therefore no activation: its candidates are
   `blocked` `mapping_not_usable` (C2: no source creates a definition; the e03 `api` family has no extractor,
@@ -347,7 +361,7 @@ One source field may carry several mappings (the closed power zone serves 25–6
 | `source_threshold_contract_mismatch`, `source_unit_mismatch`, `source_shape_mismatch` | new | candidate `blocked` | same |
 | `required_value_missing` | new | candidate `blocked`; the detail names the athletes by their OptiMove identity and the level, for the two admins | same |
 | `canonical_value_out_of_range` | new (R8) | candidate `blocked`; never the value | same |
-| `no_mapped_values` | new (R4) | candidate `blocked`, never Ready; `nothing_to_import` keeps its meaning `no_changes` | same |
+| `no_mapped_values` | new (R4) | candidate `blocked`, never Ready, whenever no value would be written for any athlete — no open activation, or every mapped value left out under `optional`; `nothing_to_import` keeps its meaning `no_changes` | same |
 | `source_instance_held`, `source_instance_changed`, `session_imported_under_another_instance` | new | candidate `blocked` | **a platform admin only**; the club's admin gets the `mapping_not_usable` sentence and a coach the stable sentence, so no one but a platform admin learns that another instance or holder exists (the F3c2e rule) |
 | `source_metric_target_taken` | exists | a mapping-service refusal (`sourceMetricMappingService.js:364, 408, 1446`), **not** an importer code (the discovery's audience list at `:1892-1895` names it) | — |
 
@@ -357,9 +371,10 @@ above). No log on this path carries an error's message, a value or a value-beari
 
 ### 6.1 The audience mechanism
 
-Today only check rows are masked for a coach (`adminViewerOf`, `routes/gpexeImport.js:25-30`; `checkView`,
+Today a coach is masked only on check rows (`adminViewerOf`, `routes/gpexeImport.js:25-30`; `checkView`,
 `gpexeImportService.js:764-780`; a closed code set with a classification test,
-`sourceImportCredentialResolver.js:122-137`). The candidate surfaces take no viewer: the list and the detail
+`sourceImportCredentialResolver.js:122-137`), on a source-connection refusal's `reason` (`routes/gpexeImport.js:57-61`)
+and on the status's settings (`:96`). The candidate surfaces take no viewer: the list and the detail
 (`routes/gpexeImport.js:143-157`) return the stored preview whole (`gpexeImportService.js:1402-1431`) and
 `candidateReasons` passes `blockedSourceCode` verbatim (`gpexeImportReasons.js:93-100`); the batch returns `blockedCode`
 and `reasons` (`gpexeImportService.js:2375-2383, :2396`); the coach screen shows Technical details to everyone
@@ -376,8 +391,11 @@ athlete detail to that same column. So 9-B adds:
   sentence, no `activationId`, `mappingVersionId`, `sourceParameterFingerprint`, athlete detail of a refusal or
   instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
   instance codes, which become `mapping_not_usable` with its sentence in `preview.blocked`, `blockedCode` and
-  `blockedSourceCode`. `platform` sees the stored preview. The preview hash stays computed on the full preview, so an
-  approval still compares equal; the approval route compares the hash the caller sent, never a projected one.
+  `blockedSourceCode`. `platform` sees the stored preview. The projection applies to every part of a preview a surface
+  returns, stored or recomputed under the lock: also `changesToImported` in a `409 preview_changed`'s details
+  (`routes/gpexeImport.js:52, :63`) and in a batch's `refusedResult` (`gpexeImportService.js:2376-2379`). The preview
+  hash stays computed on the full preview, so an approval still compares equal; the approval route compares the hash
+  the caller sent, never a projected one.
 - **A closed set of admin-only candidate codes** with a test that every code of section 6 is classified (as the
   resolver's test does), and the new codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
   `blockedSourceCode`.
@@ -467,6 +485,11 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   admin sees `mapping_not_usable`), no holder named, the projection carrying none of the admin-only fields, a call
   without a level treated as `other`, and the hash of the full preview still accepted by the approval.
 - R17: a club variable's name for a coach of a team of that club in its workspace, "Club variable" for anyone else.
+- A granted coach sends a stale `previewHash` for a candidate that changes an imported result: the `409
+  preview_changed` and the batch's result carry no `activationId`, `mappingVersionId` or `sourceParameterFingerprint` in
+  any `changesToImported[*].values[*]`.
+- F rows 1–2: an unactivated known field shows its label to the two admins and only a count to a coach.
+- Every mapped value left out under `optional` → `blocked` `no_mapped_values`, never Ready.
 - `required` against `optional`, including the drill-level rule of R9.
 - The preview hash changes when an activation ends between preview and approval; the content hash changes under a new
   mapping version (`needs_review`); a re-import that only adds a mapped metric is `supplemented` (the decimal compare of
@@ -663,7 +686,9 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **R5 The lock order** of section 3: the approval's candidate row and then the team lock first; the binding
   `FOR SHARE` before the registry (every binding writer holds the team lock; a departure from D's registry → binding
   order); the approver's rights after every registry row (step 6b, D's order), with an unlocked right check in the
-  prefix. It amends the wording of C57 ("first" = first among the importer's locks, after the candidate row) and
+  prefix; the team and club `FOR SHARE` in step 2a, before the registry; the Metrics Core connection `FOR UPDATE` in
+  step 6, where D says `FOR SHARE`. It amends the wording of C57 ("first" = first among the importer's locks, after the
+  candidate row) and
   changes today's order of the approver lock; recorded in the discovery document. The remaining cycle class with the
   roster commands (step 6b) is accepted as bounded by 9-0 and answered `try_again`. Recommendation: accept, with
   `db-reviewer`'s confirmation in 9-B.

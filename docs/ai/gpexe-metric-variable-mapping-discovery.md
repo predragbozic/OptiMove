@@ -4016,7 +4016,8 @@ J12's `extractorAvailable`: no API change, no migration. J14 and J15 stay reserv
 the lock order, a value's identity and preview version 3, the codes of section F as built, the characterisation test,
 switch conditions 2 and 3 (9-0), and M6's numbered red-zone steps for the owner. It also proposes amendments of this
 document, recorded here only once accepted and built: the wording of C57 and of D's lock order for the approval
-(its R5: the candidate and the team lock first, the binding before the registry, the approver's rights after it), the
+(its R5: the candidate and the team lock first, the team and club `FOR SHARE` after it, the binding before the
+registry, the Metrics Core connection `FOR UPDATE` where D says `FOR SHARE`, the approver's rights after the registry), the
 J M4 row's "the stored candidates turn *changed* exactly once" (its R13, section 7.1), and section F: the code
 `no_mapped_values` in place of `nothing_to_import` for a session with no mapped value (its R4) and the audience list
 with the platform-admin-only instance codes (its R18, section 6.1).
