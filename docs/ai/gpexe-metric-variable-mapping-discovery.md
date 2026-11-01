@@ -4014,9 +4014,10 @@ J12's `extractorAvailable`: no API change, no migration. J14 and J15 stay reserv
 
 `docs/ai/phase9-importer-mappings-contract.md`, proposed on 2026-11-01 on the *Rukovodilac*'s order: the writer path in
 the lock order, a value's identity and preview version 3, the codes of section F as built, the characterisation test,
-switch conditions 2 and 3 (9-0), and M6's numbered red-zone steps for the owner. It also proposes two amendments of this
-document, recorded here only once accepted: the wording of C57 and of D's lock order for the approval's prefix (its R5),
-and the J M4 row's "the stored candidates turn *changed* exactly once" (its R13, section 7.1).
+switch conditions 2 and 3 (9-0), and M6's numbered red-zone steps for the owner. It also proposes amendments of this
+document, recorded here only once accepted and built: the wording of C57 for the approval's prefix (its R5), the J M4
+row's "the stored candidates turn *changed* exactly once" (its R13, section 7.1), and section F's audience list (its
+section 6.1).
 
 ## K. Open, but not blocking M1
 
