@@ -441,10 +441,15 @@ async function succeeded(w, data, render) {
     const ended = Number(data?.activationsEnded) || 0;
     const listed = w.after.listed ?? null;
     const started = Array.isArray(data?.activations) ? data.activations.length : 0;
+    const v = w.after.versionNumber ?? "";
+    // A replacement that keeps every team it ends is a move, said as one.
+    const moved = data?.replaced && started > 0 && started === ended && !(listed !== null && ended > listed);
     setNotice(s, [
-      `Version ${w.after.versionNumber ?? ""} is active.`,
-      data?.replaced ? endedSentence(ended, listed) : "",
-      started ? `${plural(started, "team is", "teams are")} switched on. Imports do not use mappings yet; nothing changes in imports until they do.` : "",
+      `Version ${v} is active.`,
+      moved ? `${plural(started, "team", "teams")} moved to version ${v}.` : "",
+      data?.replaced && !moved ? endedSentence(ended, listed) : "",
+      started && !moved ? `${plural(started, "team is", "teams are")} switched on${data?.replaced ? ` for version ${v}` : ""}.` : "",
+      started ? "Imports do not use mappings yet; nothing changes in imports until they do." : "",
       readError,
     ].filter(Boolean).join(" "));
   }
@@ -1059,6 +1064,32 @@ export async function handleMappingsAction(action, { render }) {
 
 // The identity of an R8 list: each open row and its team link and requirement.
 const rowsKey = (rows) => rows.map((r) => `${r.id}|${r.bindingId}|${r.requirement}`).sort().join(",");
+// The R8 list read again at the primary button. While it is read the panel is
+// confirming: a second click starts nothing, so one click is one write.
+async function listStillSame(s, p, versionId, changedText, render) {
+  p.confirming = true;
+  render();
+  let rows;
+  try {
+    ({ rows } = await allActivations({ versionId, stateFilter: "open" }));
+  } catch {
+    p.confirming = false;
+    if (s.panel !== p) return false;
+    p.error = "The teams this version switches off could not be read again. Try again.";
+    render();
+    return false;
+  }
+  p.confirming = false;
+  // Closed or taken back to the form meanwhile: nothing is sent.
+  if (s.panel !== p || !p.review) { render(); return false; }
+  if (rowsKey(rows) !== rowsKey(p.rows)) {
+    p.review = false;
+    p.changed = changedText;
+    await loadOffList(s, p, versionId, render);
+    return false;
+  }
+  return true;
+}
 async function confirmPanel(s, mapping, render) {
   const p = s.panel;
   if (!p || s.write || !mapping) return true;
@@ -1078,44 +1109,19 @@ async function confirmPanel(s, mapping, render) {
       ...(teams.length ? { activations: teams, activationReason: reason } : {}),
     }, { versionNumber: version.versionNumber });
   } else if (p.kind === "replace") {
-    if (!p.review || p.loading || p.error) return true;
+    if (!p.review || p.loading || p.error || p.confirming) return true;
     // The list is read again when the button is pressed (J16 5.1) and must
     // be the same rows, not only as many.
-    try {
-      const { rows } = await allActivations({ versionId: p.activeVersionId, stateFilter: "open" });
-      if (rowsKey(rows) !== rowsKey(p.rows)) {
-        p.review = false;
-        p.changed = "The teams of the active version changed meanwhile. Check the list again.";
-        await loadOffList(s, p, p.activeVersionId, render);
-        return true;
-      }
-    } catch {
-      p.error = "The teams this version switches off could not be read again. Try again.";
-      render();
-      return true;
-    }
+    if (!(await listStillSame(s, p, p.activeVersionId, "The teams of the active version changed meanwhile. Check the list again.", render))) return true;
     const kept = p.keep ? Object.entries(p.kept).map(([bindingId, requirement]) => ({ bindingId, requirement })) : [];
     startWrite(s, "activate", { mappingId: mapping.id, versionId: version.id }, {
       requestKey: newRequestKey(), expectedActiveVersionId: p.activeVersionId, reason,
       ...(kept.length ? { activations: kept, activationReason: reason } : {}),
     }, { versionNumber: version.versionNumber, listed: p.rows.length });
   } else if (p.kind === "disable") {
-    if (!p.review || p.loading || p.error) return true;
-    if (version.status === "active") {
-      try {
-        const { rows } = await allActivations({ versionId: version.id, stateFilter: "open" });
-        if (rowsKey(rows) !== rowsKey(p.rows)) {
-          p.review = false;
-          p.changed = "The teams of this version changed meanwhile. Check the list again.";
-          await loadOffList(s, p, version.id, render);
-          return true;
-        }
-      } catch {
-        p.error = "The teams this version switches off could not be read again. Try again.";
-        render();
-        return true;
-      }
-    }
+    if (!p.review || p.loading || p.error || p.confirming) return true;
+    if (version.status === "active"
+      && !(await listStillSame(s, p, version.id, "The teams of this version changed meanwhile. Check the list again.", render))) return true;
     startWrite(s, "disable", { mappingId: mapping.id, versionId: version.id }, { requestKey: newRequestKey(), expectedStatus: p.status, reason },
       { versionNumber: version.versionNumber, listed: p.rows.length });
   } else if (p.kind === "switchOff") {

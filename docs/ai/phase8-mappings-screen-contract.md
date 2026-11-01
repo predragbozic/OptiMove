@@ -567,10 +567,23 @@ Frontend only: no backend file, no API change, no migration.
   - **Mobile:** field errors and hints in `.search-field` keep their own style; an unavailable choice's reason is not
     faded; the step numbers are in the markup (a New version reads 3. and 4.); the version's acts have a gap; the
     reason field is styled like the screen's other fields; the checkbox, rhythm and badge notes.
-- **Tests (JSDOM).** 35 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
+- **Narrow re-review of the fixes (head `e814840`):** `code-reviewer` READY WITH NON-BLOCKING NOTES (every earlier finding
+  closed, the per-route settle lists checked against the services' codes) and `ux-design-reviewer` READY WITH
+  NON-BLOCKING NOTES (every earlier finding closed). Their two new MEDIUMs, applied in the next head:
+  - **One click is one write during the R8 re-read** (5.1, 8): while the list is read again at the primary button the
+    panel is *confirming* ("Checking the teams...", the button and Back off); a second click starts no read and no
+    write, and a panel closed or taken back meanwhile sends nothing.
+  - **A replacement that keeps only some teams says so** (5.1): "These N teams use version M. K of them move to version
+    N in the same step; the other N−K are switched off:"; when all are kept, "…Replacing it moves them to version N in
+    the same step:". The change line reads "levels: was …, now … (drill values are no longer filled)" and "the
+    conversion note changed"; after a replacement that kept every team it ended, the notice says "N teams moved to
+    version N.".
+  - Not applied: rounding the preview's numbers (they are the exact decimals J11 returns, by design).
+- **Tests (JSDOM).** 36 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
   items of section 10 they cover, and which the integration run covers, is listed in the pull request's description.
   Mutations, each removed and the suite failing: the clubs-read sentence, the name cleaning in a team row, both halves of
-  the re-read guard, the owner filter and the naming of `source_metric_target_taken`, the settled-write release, the
+  the re-read guard, the owner filter and the naming of `source_metric_target_taken`, the double-click and Back guards of the
+  R8 re-read, the mixed-Keep sentence, the settled-write release, the
   acts enabled after a settled refusal, the R8 identity, the stale team answer, the per-route settle list, the
   unknown-refusal re-read, the notice cleared on a new act, the lone club, the ticked levels, the label cleaning and the
   preview's repaint.
@@ -585,7 +598,7 @@ Frontend only: no backend file, no API change, no migration.
   database's clubs and teams with the route's keys and workspace narrowing (plus decoy athletes and users the screen
   drops); `/api/notifications`, `/api/messages` and `/api/admin/athletes` answer 500 there for the same reason and are
   outside the screen. Browser QA at 1280, 390, 375 and 360 px on every state of the flow and the detail (no horizontal
-  overflow, 44 px targets, 16 px fields). The database was dropped afterwards. After the review fixes: 110 of 110 checks.
+  overflow, 44 px targets, 16 px fields). The database was dropped afterwards. After the review fixes: 111 of 111 checks.
 - **The owner's acceptance criterion** („Stim sto ovo mora biti mnogo jednostavnijeg za korisnika”): from the Mappings list
   to the first team switched on for a system mapping, the integration run counted 16 interactions on the first head and
   **13 after the review fixes** — New mapping, the field, the variable, Review, Save draft, Submit for review and its

@@ -432,7 +432,8 @@ test("11. replace: every page of the teams switched off, named, the ended link a
   await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
   render();
   assert.match(text(), /No change from version 1 in the unit, the levels or the bound\./);
-  assert.match(text(), /These 3 teams use version 1\. Replacing it switches them off version 1 and on for version 2 in the same step:/);
+  // Two of the three can be kept (the third's link ended): the lead says so.
+  assert.match(text(), /These 3 teams use version 1\. 2 of them move to version 2 in the same step; the other one is switched off:/);
   // Keep is the first control of the list, above the teams it governs.
   const panelHtml = $(".metric-mappings-panel").innerHTML;
   assert.ok(panelHtml.indexOf('data-mm-field="keep"') < panelHtml.indexOf('data-mm-field="keptRequirement"'));
@@ -1083,4 +1084,56 @@ test("35. the preview says the two ranges as one; a New version's steps read 3. 
   render();
   assert.deepEqual($$(".metric-mappings-step-no").map((e) => e.textContent), ["3.", "4."]);
   assert.match(text(), /Step 3 of 4/);
+});
+
+test("36. the R8 re-read at the button: a second click while it runs sends nothing, Back meanwhile sends nothing; the notice after a replace", async () => {
+  let release = null;
+  overrides.push((c) => {
+    if (!release || c.method !== "GET" || !c.url.startsWith(`${B}/activations?`) || !c.url.includes(`versionId=${V1}`)) return null;
+    const held = new Promise((resolve) => { const r = release; release = null; r.wait = resolve; });
+    return held.then(() => ok({ activations: db.activations.filter((a) => a.versionId === V1 && !a.endedAt), nextCursor: null }));
+  });
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ version: {}, replaced: V1, activationsEnded: 2, activations: [act({ versionId: V2, bindingId: B1, teamId: TEAM1 })] }) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  await input('[data-mm-field="reason"]', "Replace it.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  // Hold the re-read; click twice.
+  const gate = {};
+  release = gate;
+  const button = $('[data-action="metric-mappings-confirm"]');
+  const first = actions.handleMappingsAction(button, { render });
+  for (let i = 0; i < 4; i += 1) await settle();
+  render();
+  assert.equal($('[data-action="metric-mappings-confirm"]').disabled, true);
+  assert.match($('[data-action="metric-mappings-confirm"]').textContent, /Checking the teams\.\.\./);
+  const rereads = () => calls.filter((c) => c.method === "GET" && c.url.startsWith(`${B}/activations?`) && c.url.includes(`versionId=${V1}`)).length;
+  const readsBefore = rereads();
+  await actions.handleMappingsAction(button, { render });
+  // The second click started no read and no write while the first is held.
+  assert.equal(rereads(), readsBefore);
+  assert.equal(posts().length, 0);
+  gate.wait();
+  await first;
+  render();
+  assert.equal(posts().filter((c) => c.url.endsWith("/activate")).length, 1);
+  assert.match(text(), /Version 2 is active\. 2 teams were switched off\. 1 team is switched on for version 2\. Imports do not use mappings yet/);
+  // Back while the re-read runs: nothing is sent.
+  actions.resetMappings();
+  calls.length = 0;
+  db.mappings[0].versions.find((v) => v.id === V2).status = "needs_review";
+  await open("detail");
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  await input('[data-mm-field="reason"]', "Replace it.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  const gate2 = {};
+  release = gate2;
+  const second = actions.handleMappingsAction($('[data-action="metric-mappings-confirm"]'), { render });
+  for (let i = 0; i < 4; i += 1) await settle();
+  data.mappingsState().panel.review = false;
+  gate2.wait();
+  await second;
+  assert.equal(posts().length, 0);
 });

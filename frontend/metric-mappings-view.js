@@ -497,10 +497,13 @@ function versionChanges(from, to) {
   const levels = (v) => levelsWords(v.appliesToSession, v.appliesToDrill);
   const bound = (v) => (v.parameterKind && v.parameterKind !== "none" ? boundsWords(v.parameterKind, v.sourceParameters, v.sourceParameters?.unit || "") : "");
   const out = [];
-  if (unit(from) !== unit(to) || factor(from) !== factor(to)) out.push(`unit ${unit(from)} → ${unit(to)}`);
-  if (levels(from) !== levels(to)) out.push(`levels ${levels(from)} → ${levels(to)}`);
-  if (bound(from) !== bound(to)) out.push(`bound ${bound(from) || "none"} → ${bound(to) || "none"}`);
-  if ((from.conversionNote || "") !== (to.conversionNote || "")) out.push("the conversion note");
+  if (unit(from) !== unit(to) || factor(from) !== factor(to)) out.push(`unit: was ${unit(from)}, now ${unit(to)}`);
+  if (levels(from) !== levels(to)) {
+    const lost = [from.appliesToSession && !to.appliesToSession ? "session" : "", from.appliesToDrill && !to.appliesToDrill ? "drill" : ""].filter(Boolean);
+    out.push(`levels: was ${levels(from)}, now ${levels(to)}${lost.length ? ` (${lost.join(" and ")} values are no longer filled)` : ""}`);
+  }
+  if (bound(from) !== bound(to)) out.push(`bound: was ${bound(from) || "none"}, now ${bound(to) || "none"}`);
+  if ((from.conversionNote || "") !== (to.conversionNote || "")) out.push("the conversion note changed");
   return out.length ? `Changes from version ${from.versionNumber}: ${out.join("; ")}.` : `No change from version ${from.versionNumber} in the unit, the levels or the bound.`;
 }
 function offListHtml(s, p, ctx, mapping) {
@@ -511,10 +514,17 @@ function offListHtml(s, p, ctx, mapping) {
   const versions = mapping?.versions || [];
   const from = versions.find((v) => v.id === p.activeVersionId);
   const to = versions.find((v) => v.id === p.versionId);
-  const moving = p.kind === "replace" && p.keep && Object.keys(p.kept).length > 0;
+  const kept = p.kind === "replace" && p.keep ? Object.keys(p.kept).length : 0;
+  const vFrom = escapeHtml(String(from?.versionNumber ?? ""));
+  const vTo = escapeHtml(String(to?.versionNumber ?? ""));
+  const others = n - kept;
+  // The lead says what happens to every listed team: all move, some move and
+  // the others are switched off, or all are switched off.
   const lead = p.truncated ? "More than 1,000 teams use this version; all of them are switched off."
-    : moving ? `${n === 1 ? "This team uses" : `These ${n} teams use`} version ${escapeHtml(String(from?.versionNumber ?? ""))}. Replacing it switches ${n === 1 ? "it" : "them"} off version ${escapeHtml(String(from?.versionNumber ?? ""))} and on for version ${escapeHtml(String(to?.versionNumber ?? ""))} in the same step:`
-      : `It switches off ${n === 1 ? "this team" : `these ${n} teams`}:`;
+    : kept && others === 0 ? (n === 1 ? `This team uses version ${vFrom}. Replacing it moves the team to version ${vTo} in the same step:`
+      : `These ${n} teams use version ${vFrom}. Replacing it moves them to version ${vTo} in the same step:`)
+    : kept ? `These ${n} teams use version ${vFrom}. ${kept === 1 ? "1 of them moves" : `${kept} of them move`} to version ${vTo} in the same step; ${others === 1 ? "the other one is" : `the other ${others} are`} switched off:`
+    : `It switches off ${n === 1 ? "this team" : `these ${n} teams`}:`;
   return `
     ${p.changed ? `<p class="metric-variables-field-note">${escapeHtml(p.changed)}</p>` : ""}
     ${s.org.error ? `<p class="metric-variables-field-note">${escapeHtml(s.org.error)} Teams that cannot be named are listed as no longer listed.</p>` : ""}
@@ -575,8 +585,8 @@ function panelHtml(s, mapping, ctx) {
       ${writeHtml(s)}
       ${s.write?.unconfirmed ? "" : `<div class="data-sources-form-actions">
         ${p.review
-          ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-confirm" ${locked || p.loading || p.error ? "disabled" : ""}>${p.kind === "disable" ? "Disable" : p.refusedTeam ? `Replace without keeping ${escapeHtml(p.refusedTeam.name)}` : kept.length ? `Replace and keep ${kept.length === 1 ? "1 team" : `${kept.length} teams`}` : "Replace"}</button>
-             <button class="plain-button ghost" type="button" data-action="metric-mappings-review-back" ${locked ? "disabled" : ""}>Back</button>`
+          ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-confirm" ${locked || p.loading || p.error || p.confirming ? "disabled" : ""}>${p.confirming ? "Checking the teams..." : p.kind === "disable" ? "Disable" : p.refusedTeam ? `Replace without keeping ${escapeHtml(p.refusedTeam.name)}` : kept.length ? `Replace and keep ${kept.length === 1 ? "1 team" : `${kept.length} teams`}` : "Replace"}</button>
+             <button class="plain-button ghost" type="button" data-action="metric-mappings-review-back" ${locked || p.confirming ? "disabled" : ""}>Back</button>`
           : `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-review" ${locked || p.loading || p.error ? "disabled" : ""}>Review</button>`}
         ${close}</div>`}`;
   } else if (p.kind === "switchOff") {
