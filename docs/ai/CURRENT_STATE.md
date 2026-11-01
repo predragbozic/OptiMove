@@ -2639,6 +2639,27 @@ Technical details.
         waits for an administrator's choice; a separate, later work); **C111** — the rules for editing a canonical
         variable, a separate contract after phase 9. J17 is amended for them; its acceptance and the other O-items stay
         open.
+      - **The amendment, PR #314**, was merged by the executor after the GOs of the *Rukovodilac* and the *Nezavisni
+        revizor* on its head `67430ce0`: `dd5f0b2` (parents `2dd0dbd` and `67430ce0`, 2026-11-01 19:46:11 UTC), exactly
+        from that head; its tree is the head's. Documents only, so nothing to deploy for it on its own. The *Nezavisni
+        revizor*'s optional LOW (section F of the discovery document still worded as before C110 and R7) is folded into
+        the facts pull request that follows it.
+      - **Phase P (2026-11-01):**
+        - **P1, the C97 unit evidence** of `total_time` (s), `total_distance` (m) and `max_v` (m/s) from one session of
+          13 athletes on the owner's decision (`docs/ai/gpexe-c97-unit-evidence.md`): PR #316, merged `656cf88`
+          (parents `17dc46d` and `5b6682e4`, 2026-11-01 20:25 UTC) exactly from its head, on the owner's word „Odobravam
+          merge PR #316 (C97 dokaz jedinica) sa navedenim odstupanjima.” (turn `5e2df34f`) after the *Rukovodilac*'s
+          GO. Documents only; nothing to deploy.
+        - **P2, the meaning:** the owner decided O7 (the GPEXE 6 handbook counts for these three fields; turn
+          `9b1f4a69`, J17 section 12.3); the evidence and the six acts the owner does in Source fields are PR #318
+          (merged only on the owner's word). No field is confirmed yet.
+        - **9-R**, the backup of the deployed database from the owner's computer (O2), is Draft PR #315.
+      - **C112 (2026-11-01): mapping by drag and drop** — the owner's direction for mappings after the pilot, not a
+        contract (discovery C112): after a first import, a confirmed drag of a source column onto a variable, checked
+        on two athletes, is the evidence. The screen details (one screen from the import's review, one click to save
+        and switch on) are the *Rukovodilac*'s sketch, which the owner found acceptable. Until its contract is accepted,
+        C91–C97, M2b and J16 apply unchanged. Its contract is the first work after phase 9, with the automatic
+        switching-on of system mappings and C111; questions (a)–(d) stay open for it.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
