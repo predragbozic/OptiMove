@@ -7,7 +7,7 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 
 | | |
 |---|---|
-| Status | **Proposed** (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; the owner's acceptance pending) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
+| Status | **Proposed** (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; amended for the owner's decisions of 2026-11-01, C110 and O2, section 12.3; the owner's acceptance pending) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
 | Mark | ★★ (triggers 1, 2, 3 and 4 — trigger 2 added by this contract for sections 4.1 and 6.1, the plan's phase 9 line naming 1, 3 and 4 (R3); the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
 | Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
@@ -239,7 +239,9 @@ steps 2a and 6b) and rolls back (R10).
    today's mapper are unchanged (`gpexeImportMapper.js:221-267, :277-387`): an athlete with several tracks, invalid
    statistics or more than one whole-session row is left out as today, before any requirement is judged (C18,
    section F row 3).
-8. **Classification (section F), whole candidate first.** In this order, the first that applies decides:
+8. **Classification (section F), whole candidate first.** The whole-candidate blocks are checked first, in this order,
+   the first that applies deciding; then each value's "Left out" entries (C110); **last**, `no_mapped_values` over what
+   remains:
    - a threshold-contract skip (`team_threshold_missing`, `team_threshold_split`, `threshold_mismatch`,
      `duration_mismatch`, `zone_boundary_missing`, `zone_boundary_ambiguous`) on any admitted athlete under any
      activation → `blocked`, `source_threshold_contract_mismatch`;
@@ -249,17 +251,25 @@ steps 2a and 6b) and rolls back (R10).
      value of another shape than the revision's (R7). The proven unit is a fact of the revision; it is compared with
      T4's `source_unit` (the T6 guard does the same), never with a literal of the answer. `source_unit_mismatch`
      stays for a revision / version unit disagreement found under the locks (defence in depth beside the T6 guard);
-   - a converted value outside the canonical version's `min` / `max` → `blocked`, `canonical_value_out_of_range`
-     (new, R8; today the v13 trigger raises an untyped error whose text carries the value, and the approval logs it,
-     `v13:310`, `gpexeImportService.js:2295`);
-   - a missing value (`zones_missing`, `zones_not_ready`, `zone_distance_missing`, `events_missing`, `count_missing`,
-     `details_not_fetched`, `field_missing`, `value_missing`, `total_time_missing`, `total_distance_missing`,
-     `max_v_missing`) of an admitted athlete on a level the activation covers: under `required` →
-     `required_value_missing` (whole candidate, no partial import, never a zero, C14); under `optional` → a "Left out"
-     entry with its reason (C15). A drill an athlete has no row for is not a missing value (R9);
-   - no value at all to write → `blocked`, **`no_mapped_values`** (R4; never Ready, C17).
+   - **the owner's decision C110 (2026-11-01), pilot form B** for the next two cases: only that athlete's value at that
+     level is left out, as a "Left out" entry with its reason; the rest of the session imports and the candidate stays
+     Ready if nothing else blocks it; never a zero; the value is never logged or returned. The review says plainly why
+     each value is missing. (The target form C — the session waits and an administrator chooses "leave out only this
+     value", the default, or "import anyway" with a mandatory reason and a record of who approved it — is a separate,
+     later work, not built in 9-B.)
+     - a converted value outside the canonical version's `min` / `max` → Left out, `canonical_value_out_of_range`
+       (pre-checked under the locks, R8; today the v13 trigger raises an untyped error whose text carries the value,
+       and the approval logs it, `v13:310`, `gpexeImportService.js:2295`);
+     - a missing value (`zones_missing`, `zones_not_ready`, `zone_distance_missing`, `events_missing`, `count_missing`,
+       `details_not_fetched`, `field_missing`, `value_missing`, `total_time_missing`, `total_distance_missing`,
+       `max_v_missing`) of an admitted athlete on a level the activation covers: under `required` → Left out,
+       `required_value_missing` (C110 departs here from C14's "the whole candidate is blocked" and from section F's
+       row 4, for the pilot); under `optional` → Left out with the extractor's own reason (C15). A drill an athlete
+       has no row for is not a missing value (R9);
+   - no value at all to write — no open activation, or every mapped value left out → `blocked`,
+     **`no_mapped_values`** (R4; never Ready, C17).
    Who reads which code is section 6.1; no refusal names another team, club, connection, instance or holder
-   (`discovery:1892-1895`).
+   (section F's audience list ("Audience of every refusal code", `discovery:1920-1926`)).
 9. **`savepoint gpexe_preview_import`, then the writes.** Every source identity of the import inserted and locked
    `FOR UPDATE` first (with the `team_session:<id>` reservation; today `gpexeImportWriter.js:468-484`), then the event,
    the threshold-set binding, segments, participants, the materialized activity and drill components — as today. The
@@ -363,15 +373,17 @@ One source field may carry several mappings (the closed power zone serves 25–6
 |---|---|---|---|
 | `mapping_not_usable` | new | check: candidate `blocked`; approval: `409 preview_changed` | admins precise, coach the sentence |
 | `source_threshold_contract_mismatch`, `source_unit_mismatch`, `source_shape_mismatch` | new | candidate `blocked` | same |
-| `required_value_missing` | new | candidate `blocked`; the detail names the athletes by their OptiMove identity and the level, for the two admins | same |
-| `canonical_value_out_of_range` | new (R8) | candidate `blocked`; never the value | same |
-| `no_mapped_values` | new (R4) | candidate `blocked`, never Ready, whenever no value would be written for any athlete — no open activation, or every mapped value left out under `optional`; `nothing_to_import` keeps its meaning `no_changes` | same |
+| `required_value_missing` | new | a "Left out" entry of that athlete and level; the rest of the session imports (C110, pilot form B) | the plain reason for everyone, the code for the two admins |
+| `canonical_value_out_of_range` | new (R8) | a "Left out" entry of that athlete and level; the rest imports (C110); never the value, in no answer and no log | same as the row above |
+| `no_mapped_values` | new (R4) | candidate `blocked`, never Ready, whenever no value would be written for any athlete — no open activation, or every mapped value left out (optional, required under C110, or out of range); `nothing_to_import` keeps its meaning `no_changes` | admins precise, coach the sentence |
 | `source_instance_held`, `source_instance_changed`, `session_imported_under_another_instance` | new | candidate `blocked` | **a platform admin only**; the club's admin gets the `mapping_not_usable` sentence and a coach the stable sentence, so no one but a platform admin learns that another instance or holder exists (the F3c2e rule) |
 | `source_metric_target_taken` | exists | a mapping-service refusal (`sourceMetricMappingService.js:364, 408, 1446`), **not** an importer code (the discovery's audience list at `:1892-1895` names it) | — |
 
 A coach's Imports screen shows one sentence for all of them ("This session can't be imported until an administrator
 finishes its data setup."), a platform admin and the club's admin the precise reason (except the three instance codes
-above). No log on this path carries an error's message, a value or a value-bearing id (section 3, step 10).
+above) — **except the two Left-out codes `required_value_missing` and `canonical_value_out_of_range`** (C110): they
+block nothing, and every level sees their plain reason on the athlete's Left-out entry ("required value missing",
+"outside the variable's limits"), never the value; only the code itself is for the two admins. No log on this path carries an error's message, a value or a value-bearing id (section 3, step 10).
 
 ### 6.1 The audience mechanism
 
@@ -382,8 +394,9 @@ and on the status's settings (`:96`). The candidate surfaces take no viewer: the
 (`routes/gpexeImport.js:143-157`) return the stored preview whole (`gpexeImportService.js:1402-1431`) and
 `candidateReasons` passes `blockedSourceCode` verbatim (`gpexeImportReasons.js:93-100`); the batch returns `blockedCode`
 and `reasons` (`gpexeImportService.js:2375-2383, :2396`); the coach screen shows Technical details to everyone
-(`frontend/gpexe-import-view.js:222-231`). Preview v3 adds mapping ids, fingerprints and the `required_value_missing`
-athlete detail to that same column. So 9-B adds:
+(`frontend/gpexe-import-view.js:222-231`). Preview v3 adds mapping ids and fingerprints to that same column (a "Left
+out" entry of C110 names the team's own athlete, the level and the reason in plain words, never the value, and is shown
+to every level). So 9-B adds:
 - **One audience per request, three levels** — `platform` (an active platform admin), `club_admin` (the owning club's
   active admin in that club's workspace) and `other` — computed once by the route from its own access snapshot
   (`adminViewerOf`'s definition, split into its two bases) and passed down to **six surfaces**: the list, the detail,
@@ -391,9 +404,8 @@ athlete detail to that same column. So 9-B adds:
   (`routes/gpexeImport.js:176-188`, which embeds `getCandidate`), and the stored candidate a check shows. The service
   never recomputes it; the parameter is **required, with no default**, and a missing or unknown level is treated as
   `other`.
-- **A projection of the stored preview per level.** For `other`: the codes of section 6 replaced by the stable code and
-  sentence, no `activationId`, `mappingVersionId`, `sourceParameterFingerprint`, athlete detail of a refusal or
-  instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
+- **A projection of the stored preview per level.** For `other`: the **blocking** codes of section 6 replaced by the
+  stable code and sentence (a Left-out entry of C110 keeps its plain reason; only its code is admin-only), no `activationId`, `mappingVersionId`, `sourceParameterFingerprint` or instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
   instance codes, which become `mapping_not_usable` with its sentence in `preview.blocked`, `blockedCode` and
   `blockedSourceCode`. `platform` sees the stored preview. The projection applies to every part of a preview a surface
   returns, stored or recomputed under the lock: also `changesToImported` in a `409 preview_changed`'s details
@@ -401,11 +413,14 @@ athlete detail to that same column. So 9-B adds:
   hash stays computed on the full preview, so an approval still compares equal; the approval route compares the hash
   the caller sent, never a projected one.
 - **A closed set of admin-only candidate codes** with a test that every code of section 6 is classified (as the
-  resolver's test does), and the new codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
-  `blockedSourceCode`.
-- **The discovery document's audience list** (`discovery:1892-1895`) gains `no_mapped_values`,
-  `canonical_value_out_of_range` and `source_instance_changed`, loses `nothing_to_import` and `source_metric_target_taken`
-  (neither is an importer refusal of a mapped value), and records the platform-admin-only level of the instance codes
+  resolver's test does), and the new **blocking** codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
+  `blockedSourceCode`; the two Left-out codes of C110 are value-level reasons, never in `BLOCKED_CODES`
+  (`gpexeImportReasons.js:12-13`: that map is "why the whole session cannot be imported"), and a session that carries
+  only them has `blockedCode` null.
+- **The discovery document's audience list** (section F's audience list ("Audience of every refusal code", `discovery:1920-1926`)) gains `no_mapped_values` and
+  `source_instance_changed`, loses `nothing_to_import` and `source_metric_target_taken` (neither is an importer refusal
+  of a mapped value) and `required_value_missing` (a Left-out reason under C110, its plain reason shown to every level),
+  records `canonical_value_out_of_range` the same way, and records the platform-admin-only level of the instance codes
   — in 9-B, with the code.
 
 ---
@@ -435,8 +450,8 @@ after M6 steps 2–5 (the activations exist before the deploy, so the screen goe
 ones; the old importer ignores activations). While auto-deploy is off (`metrics-core-plan.md:266-268`), no deploy of a
 commit of `main` that carries 9-B starts without that word — the *Rukovodilac*'s deploy "as needed" of step 6 of the
 standing order for migration PRs (`:373-375`) does not cover it (R3). That exception holds for the commit that carries
-9-B and for every later commit of `main` (each carries 9-B too), until M6 steps 2–5 are done or the owner says
-otherwise. **The *Rukovodilac*'s commitment (2026-11-01): it deploys no commit that contains 9-B code without the
+9-B and for every later commit of `main` (each carries 9-B too), until 9-B is live, deployed on the owner's word
+(O13). **The *Rukovodilac*'s commitment (2026-11-01): it deploys no commit that contains 9-B code without the
 owner's word.** While auto-deploy is on (`:252-256`), the merge of 9-B itself waits for that word.
 
 ---
@@ -498,10 +513,20 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   preview_changed` and the batch's result carry no `activationId`, `mappingVersionId` or `sourceParameterFingerprint` in
   any `changesToImported[*].values[*]`.
 - F rows 1–2: an unactivated known field shows its label to the two admins and only a count to a coach.
-- Every mapped value left out under `optional` → `blocked` `no_mapped_values`, never Ready.
+- Every mapped value left out (optional, required under C110, or out of range) → `blocked` `no_mapped_values`, never
+  Ready.
+- C110 audience: a session carrying only Left-out entries of C110, with at least one mapped value written, has
+  `blockedCode` null and is Ready; the coach's
+  projection keeps each entry's plain reason and never shows "This session can't be imported".
+- C110 (pilot form B): a `required` value missing for one athlete at one level → that value Left out with
+  `required_value_missing`, every other value of the session imported and the candidate Ready; a converted value
+  outside the variable's `min` / `max` (the owner's `maximal_running_speed` with max 40 km/h: an athlete at 41) → Left
+  out with `canonical_value_out_of_range`, the value in no answer, preview or log line; never a zero; the reasons shown
+  in plain words to a coach and as codes to the two admins.
 - R7: burst and brake with `unit: "number"` in the answer pass under a revision whose proven unit is `count`; another
   literal → `blocked` `source_shape_mismatch`.
-- `required` against `optional`, including the drill-level rule of R9.
+- `required` against `optional` under C110 (both leave the value out; the reason differs), including the drill-level
+  rule of R9.
 - The preview hash changes when an activation ends between preview and approval; the content hash changes under a new
   mapping version (`needs_review`); a re-import that only adds a mapped metric is `supplemented` (the decimal compare of
   `isPureSupplement`, section 5).
@@ -693,8 +718,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 - **R1 The PR split** of section 2. Recommendation: yes.
 - **R3 Merge and deploy paths** of section 2 (9-0 under the standing merge order; 9-B merged on the owner's word, and
-  every deploy of a commit of `main` that carries 9-B — that commit and every later one, until M6 steps 2–5 are done or
-  the owner says otherwise — started only on the owner's word naming it, O13: a departure from step 6 of the standing
+  every deploy of a commit of `main` that carries 9-B — that commit and every later one, until 9-B is live, deployed
+  on the owner's word (O13) — started only on the owner's word naming it, O13: a departure from step 6 of the standing
   order for migration PRs, which lets the *Rukovodilac* deploy a commit without a migration "as needed",
   `metrics-core-plan.md:373-375`; the *Rukovodilac* has committed to deploying no commit that contains 9-B code without
   the owner's word; 9-R on the owner's word, before the freeze, step
@@ -720,7 +745,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   `count`, `v34:1811-1814`) is a fact of the revision and is compared with T4, never with the answer's literal —
   comparing the two would refuse every session. It departs from section F's mapping of `unexpected_unit` to
   `source_unit_mismatch` (`discovery:1904-1911`), amended in 9-B with the code.
-- **R8 `canonical_value_out_of_range`** pre-checked under the locks, the value never logged. Recommendation: yes.
+- **R8 `canonical_value_out_of_range`** pre-checked under the locks, the value never logged; per the owner's decision
+  C110 it leaves out only that athlete's value at that level in the pilot (form B), never the whole candidate.
 - **R9 The drill-level "missing" under `required`:** a drill the athlete has no row for is not missing;
   `details_not_fetched` is. Recommendation: yes, with a test.
 - **R10 The check-time preview runs the full path** (T6 and T7 included) and rolls back. Recommendation: yes.
@@ -751,8 +777,11 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **O1 The environment of the first import.** Production (the First team's binding exists only there) supersedes the
   plan of 2026-09-18 ("F4: the first real local import", `CURRENT_STATE.md:3938, :4001`); the local OPTIMOVE is
   recorded at v21, with no GPEXE table. Recommendation: production, only after O2 and O3.
-- **O2 The Supabase backup and its restore check.** The local script refuses Supabase. EXECUTOR-PREPARES a procedure
-  draft in 9-R; "fresh" is defined in step 10.
+- **O2 The Supabase backup and its restore check — decided by the owner (2026-11-01, section 12.3):** a manual
+  `pg_dump` from the owner's own computer and a restore check into a local Postgres; the executor prepares the
+  procedure in 9-R. *The executor's proposal, not the owner's words:* for Windows, by adapting
+  `gpexe-backup-verify.mjs` (today local-only) rather than writing a new tool, reviewed in 9-R. "Fresh" is defined in step
+  10.
 - **O3 The way back.**
   - (a) A full restore is the only remedy for the pilot. It also rolls back every unrelated write since the backup
     (for example the R2 media rows and quotas, whose objects stay in the bucket).
@@ -767,7 +796,12 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **O5 Q1 (c) and the pinned step's cap**, both scheduled "before M6" (`CURRENT_STATE.md:3686-3696`): built before
   step 2, or waived for a pilot of system mappings only.
 - **O6 The pilot's fields and each activation's requirement.** (a) minimal: `total_time`, `total_distance`, `max_v`
-  (no operator needed); (b) plus the zones and events; (c) all eleven. Recommendation: (a), all `required`.
+  (no operator needed); (b) plus the zones and events; (c) all eleven. Recommendation: (a), all `required`. Under
+  C110 a `required` activation no longer blocks a session: a missing value is left out with `required_value_missing`
+  and shown as such (form C, later, holds the session for an administrator's choice). *Reported by the Rukovodilac
+  from a read-only production check (not an O6 answer):* on 2026-11-01 the owner created three system variables —
+  `duration` (min), `total_distance` (m) and `maximal_running_speed` (km/h, max 40); under C110 a speed above 40 km/h
+  is left out for that athlete, not a blocked session.
 - **O7 The meaning evidence:** whether the GPEXE 6 handbook counts as official documentation for a server reporting
   9.11.8, or a written GPEXE support answer is needed.
 - **O8 The count unit** (only if O6 includes an event count): `count` as the proven source unit, or `n` with a new
@@ -781,7 +815,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   this contract is the phase's red-zone list.
 - **O13 When 9-B is deployed** (section 7.3): the owner names the deploy of the commit that carries 9-B (and its merge
   while auto-deploy is on): at once after both GOs, or after M6 steps 2–5. Until then no other deploy carries it, and
-  later commits follow the same rule until M6 steps 2–5 are done or the owner says otherwise (R3).
+  later commits follow the same rule until 9-B is live, deployed on the owner's word (R3).
 - **O14 No migration in phase 9.** C98 records that a database guard for canonical rows stays "an optional later
   hardening (a migration), before M4" (`discovery:871-873`, the owner's wording): whether "before M4" binds. Without
   one, "never a value without its T6 row" rests on the writer and its tests (section 2). Recommendation: no migration
@@ -797,6 +831,26 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   decides whether a team coach sees a club variable's name and unit there, no club mapping is switched on for a team
   binding. Recommendation: decide it with 7h (club mapping approval); the pilot uses system variables only.
 
+### 12.3 Decided by the owner
+
+Relayed by the *Rukovodilac* with the owner's words and event ids, each checked by the executor in the *Rukovodilac*'s
+transcript. The acceptance of this contract (the plan's rule A1) and the other O-items stay open.
+
+- **O2** — „O2: backup ručnim pg_dump-om sa mog računara i proverom vraćanja u lokalni Postgres. Pripremi postupak u
+  9-R.” (owner turn `9348cbc7`, 2026-11-01 19:20:57 UTC). Section 12.2, O2.
+- **C110: a value out of the variable's limits, and a missing value of a required field** — „1. Vrednost van granica
+  varijable i vrednost koja nedostaje kod obaveznog polja: cilj je opcija C — sesija čeka, admin bira „izostavi samo tu
+  vrednost" (podrazumevano) ili „uvezi ipak" uz obavezan razlog i zapis ko je odobrio. Za pilot, dok C ne postoji,
+  opcija B — izostavlja se samo ta vrednost, ostatak sesije se uvozi, pregled jasno kaže zašto. Izmeni J17 (R8, C14,
+  O6) u skladu s tim pre koda 9-B.” (owner turn `f2ed35f4`, 2026-11-01 19:22:07 UTC). Built as form B in 9-B
+  (section 3, step 8; section 6; section 8.2; R8; O6); it supersedes C14 and section F's row 4 for the pilot. Form C
+  is a separate, later work.
+- **C111: editing a canonical variable** — point 2 of the same turn: „Izmena varijable: naziv, kratak naziv, opis i
+  ikona uvek se menjaju na licu mesta. Jedinica, dnevno sabiranje, min/max, uslov, nivoi i ključ menjaju se na licu
+  mesta samo dok varijabla nema nijednu vrednost i nijedno mapiranje; posle toga samo nova verzija (ključ trajno).
+  Svaka izmena se beleži. Pripremi ugovor kao poseban posao posle faze 9.” A separate contract after phase 9; not in
+  this one.
+
 ---
 
 ## 13. Risks
@@ -806,7 +860,9 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **A rare deadlock answered `try_again`** (a roster command, a platform-admin revoke and an approval together; step 6b).
 - **The visible change at the 9-B deploy** (section 7.3, O13).
 - **No production undo** (O3); a restore loses every later write.
-- **A whole candidate blocked by one athlete** under `required` (C14).
+- **A value silently missing from an imported session** (C110, form B): a required or out-of-range value is left out
+  while the rest imports; the review must make every gap visible, and form C (an administrator's choice) is later
+  work.
 - **Unconfirmed meanings** (burst and brake; every field's meaning needs P2).
 - **The production state is inferred, not queried:** no `gpexe_*` definition, no Metrics Core connection for the First
   team, no confirmed revision, no canonical variable.
@@ -819,7 +875,9 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 ## 14. Not in this contract
 
-The switch's default or how it is read (unless O15); regular production imports and conditions 4 and 5; Link and Unlink; several
+C110's form C (a session held for an administrator's choice, "import anyway" with a reason and a record) — a
+separate, later work; editing a canonical variable (C111) — a separate contract after phase 9; the switch's default or
+how it is read (unless O15); regular production imports and conditions 4 and 5; Link and Unlink; several
 tracks (M5, phase 10) and estimates (phase 10, no T6); derived variables (phase 11); the session list and drill reads;
 7h, 7i and the plan's R1 (the re-import of a session); a production undo (unless O3 (b)); F3c4 (unless O4); a new source or adapter; a cleanup of existing
 `gpexe_*` definitions; any GPEXE request, persistent-database read or write, Render or Supabase setting or credential
@@ -865,3 +923,6 @@ by the executor.
   on the owner's word (O13)"; the *Rukovodilac*'s unconditional commitment already covers it). The *Rukovodilac*
   accepted it as a wording correction without a new head; it goes into the first later pull request that changes this
   contract anyway (the owner's acceptance edit, 9-0 or 9-B), recorded here then.
+- **Amendment after the owner's decisions of 2026-11-01** (section 12.3): C110 as form B in step 8, section 6, 6.1,
+  8.2, R8, O6 and the risks; O2 decided; C111 recorded out of scope; the *Nezavisni revizor*'s LOW folded (section
+  7.3, R3 and O13 now end the deploy exception "until 9-B is live, deployed on the owner's word (O13)").
