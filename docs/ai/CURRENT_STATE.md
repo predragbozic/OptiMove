@@ -2656,7 +2656,7 @@ Technical details.
           `b65f4ace`) exactly from its head, on the owner's word „Odobravam merge PR #318 (C97 dokaz značenja) i PR #315
           (9-R backup).” (turn `6147b85f`, 2026-11-01 20:55:47 UTC) after the *Rukovodilac*'s GO. Documents only.
         - **The six acts (J17 section 10.2, step 2), as the owner reports them:** the owner reports, with a screenshot of
-          Source fields (about 21:09 local time, 2026-11-01), the six acts done: TIME shows "Unit s (confirmed) · Meaning
+          Source fields (taken at 22:09 CET (21:09 UTC), 2026-11-01, by the clock on the screenshot), the six acts done: TIME shows "Unit s (confirmed) · Meaning
           confirmed", TotDist "Unit m (confirmed) · Meaning confirmed" and SPEEDmax "Unit m/s (confirmed) · Meaning
           confirmed", each with "Evidence: Verified"; the other seven seeded fields stay *Observed*. Relayed by the
           *Rukovodilac*; the database was not read, so the acts' references and times are not checked here.
