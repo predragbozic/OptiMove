@@ -4074,10 +4074,10 @@ J12's `extractorAvailable`: no API change, no migration. J14 and J15 stay reserv
 
 ---
 
-### J17. The importer through mappings (M4) and the first controlled import (M6) — phase 9 (proposed; merged as PR #311)
+### J17. The importer through mappings (M4) and the first controlled import (M6) — phase 9 (accepted by the owner on 2026-11-01; merged as PR #311)
 
 `docs/ai/phase9-importer-mappings-contract.md`, proposed on 2026-11-01 on the *Rukovodilac*'s order and merged as PR #311
-(`798d355`) after both ★★ GOs, still Proposed until the owner accepts it: the writer path in
+(`798d355`) after both ★★ GOs, and accepted by the owner on 2026-11-01 (turn `e34ccb50`, relayed by the *Rukovodilac* and checked; O1, O3–O6, O8, O9 and O11–O16 as recommended; O10 in turn `bdb881f2`; J17 section 12.3): the writer path in
 the lock order, a value's identity and preview version 3, the codes of section F as built, the characterisation test,
 switch conditions 2 and 3 (9-0), and M6's numbered red-zone steps for the owner. It also proposes amendments of this
 document, recorded here only once accepted and built: the wording of C57 and of D's lock order for the approval

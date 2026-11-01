@@ -7,7 +7,7 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 
 | | |
 |---|---|
-| Status | **Proposed** (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; amended for the owner's decisions of 2026-11-01, C110 and O2, section 12.3; the owner's acceptance pending) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
+| Status | **Accepted** by the owner on 2026-11-01 (A1; turn `e34ccb50`, 21:23:53 UTC, section 12.3), with O1, O3–O6, O8, O9 and O11–O16 decided as recommended; O10 decided the same day (turn `bdb881f2`, section 12.3). Proposed (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; amended for the owner's decisions of 2026-11-01, C110 and O2, section 12.3) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
 | Mark | ★★ (triggers 1, 2, 3 and 4 — trigger 2 added by this contract for sections 4.1 and 6.1, the plan's phase 9 line naming 1, 3 and 4 (R3); the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
 | Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
@@ -812,6 +812,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **O9 The C97 timing:** P1 on the 05–06.10 snapshots before about 2026-11-10, on the 11.10–24.10 snapshots before
   about 2026-11-23, or after a refreshing search (a GPEXE request).
 - **O10 The gates' state:** the production-use gate (identity, minors included) and link gates (1) and (2).
+  *Decided (section 12.3).*
 - **O11 Condition 5** (a team archived during a running check): closed by F3c2g's re-checks, or still open (needed
   before regular imports, not before the pilot).
 - **O12 The plan lines:** the owner adds phase 9's "Input (red zone)" and "Start" lines, or states that section 10 of
@@ -837,8 +838,49 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 ### 12.3 Decided by the owner
 
 Relayed by the *Rukovodilac* with the owner's words and event ids, each checked by the executor in the *Rukovodilac*'s
-transcript. The acceptance of this contract (the plan's rule A1) and the other O-items stay open.
+transcript.
 
+- **A1: the acceptance of this contract, and O1, O3–O6, O8, O9, O11–O16** — „Prihvatam ugovor J17 (faza 9). Preostale
+  odluke O1, O3–O6 i O8–O16 po preporukama Rukovodioca: prvi uvoz u produkciji, put nazad je vraćanje celog backupa,
+  F3c4 posle uvoza, preskočiti Q1(c) i cap za pilot, polja pilota trajanje/distanca/max brzina sa Required, O8 ne
+  treba, O9 urađeno, O11 pre redovnih uvoza, sekcija 10 je spisak crvene zone, 9-B deploy odmah posle oba GO-a na moju
+  reč, bez migracije, proceduralne kontrole prozora, samo sistemske varijable u pilotu.” (owner turn `e34ccb50`,
+  2026-11-01 21:23:53 UTC, with a screenshot). Read item by item against section 12.2:
+  - **O1:** the first import is in production.
+  - **O3:** (a) — a full restore of the backup is the only way back for the pilot.
+  - **O4:** F3c4 comes after the controlled import.
+  - **O5:** Q1 (c) and the pinned step's cap are waived for the pilot (system mappings only).
+  - **O6:** (a) — `total_time`, `total_distance` and `max_v`, each activation `required` (under C110 a missing value is
+    left out, not a blocked session).
+  - **O8:** not needed (no event count in the pilot).
+  - **O9:** done — P1 on the stored snapshot of session 190122 (PR #316).
+  - **O10:** not in this turn; decided by the owner's next turn (below).
+  - **O11:** condition 5 stays open, to be closed before regular imports, not before the pilot.
+  - **O12:** section 10 of this contract is phase 9's red-zone list; the plan needs no "Input (red zone)" or "Start"
+    line for it.
+  - **O13:** 9-B is deployed at once after both GOs, on the owner's word naming the deploy (R3 unchanged).
+  - **O14:** no migration in phase 9.
+  - **O15:** the procedural controls of section 10.3; no allowlist.
+  - **O16:** system variables only in the pilot.
+
+- **O10: the gates' state** — „Ne treba pravni osnov” (owner turn `bdb881f2`, 2026-11-01 21:25:05 UTC), the answer to
+  the *Rukovodilac*'s question (its turn `dd5ccc68`, 21:24:20 UTC) whether a legal basis and a notice to the athletes,
+  and to the parents of minors, exist for OptiMove processing their names, dates of birth and GPS data from GPEXE.
+  Read:
+  - **The production-use gate** (the legal basis and the notice for names and dates of birth, minors included): the
+    owner decides it is not required. This is the owner's own assessment, not a legal confirmation; the *Rukovodilac*
+    named the risk to the owner before recording it.
+  - **Link gate (1)**, the count of non-canonical `gpexe_athlete_id` values in the deployed `gpexe_athlete_links`
+    (expected 0): not part of the owner's answer and stays open as a technical check. It is a line of step 11's
+    preflight ("the non-canonical link count 0", section 10.3); a non-zero count stops the window.
+  - **Link gate (2)**, the helper values on *Link athletes* against GPEXE's own view: recorded as met, on the
+    *Rukovodilac*'s proposal checked by the executor (not an owner decision). The screen shows each athlete's
+    whole-session preview values `gpexe_time_min`, `gpexe_total_distance` and `gpexe_max_speed`
+    (`backend/src/gpexeImportService.js:1481-1497`), which the mapper computes from `total_time` ÷ 60,
+    `total_distance` and `max_v` × 3.6 (`backend/src/gpexeImportMapper.js:128-175`). The C97 comparison (PR #316,
+    session 190122) found on the GPEXE screen exactly those three conversions of the raw `rest_v1` values for 13 of 13
+    athletes. So the gate rests on that comparison and on the code path; the *Link athletes* screen itself was not
+    compared, and the C97 document still lists the link gates as separate checks (its section "Limits").
 - **O2** — „O2: backup ručnim pg_dump-om sa mog računara i proverom vraćanja u lokalni Postgres. Pripremi postupak u
   9-R.” (owner turn `9348cbc7`, 2026-11-01 19:20:57 UTC). Section 12.2, O2.
 - **C110: a value out of the variable's limits, and a missing value of a required field** — „1. Vrednost van granica
