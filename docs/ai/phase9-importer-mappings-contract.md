@@ -799,3 +799,28 @@ tracks (M5, phase 10) and estimates (phase 10, no T6); derived variables (phase 
 7h, 7i and the plan's R1 (the re-import of a session); a production undo (unless O3 (b)); F3c4 (unless O4); a new source or adapter; a cleanup of existing
 `gpexe_*` definitions; any GPEXE request, persistent-database read or write, Render or Supabase setting or credential
 by the executor.
+
+---
+
+## 15. Review record (internal, before the *Rukovodilac*'s and the *Nezavisni revizor*'s reviews)
+
+- **Round 1, on the first draft:** `db-reviewer` NOT READY — HIGH: the approver's rights locked before the registry
+  closed a cycle with a platform-admin revoke and a 7d operation (now step 6b); MEDIUM: the T7 write outside a
+  savepoint, no client `error` listener under an idle timeout, the check-time preview unbounded, `isPureSupplement` on
+  decimals, the undo's team lock on a persistent database; LOW: R16's position, the binding justification, R2 as an
+  owner item, 9-0's error mapping. `security-reviewer` NOT READY — HIGH: the candidate surfaces carried admin-only codes
+  and fields to any coach (now section 6.1); MEDIUM: owner scope and data workspace unstated (now 4.1), the import window
+  without controls, a merge being a deploy, logs carrying values; LOW: the instance codes' audience, R16 through the
+  batch, red-zone wording. All folded.
+- **Round 2, narrow, on the fixes:** `db-reviewer` READY WITH NON-BLOCKING NOTES (the roster-command cycle class that
+  remains, now stated and bounded; the preview client's listener; the approval row's basis; the savepoint release;
+  R16's wording); `security-reviewer` READY WITH NON-BLOCKING NOTES (the sixth surface and a required audience level;
+  three levels; R17's predicate; the log field whitelist and R18; the binding scope of step 11). All folded.
+- **`code-reviewer`, in four slices** (one pass over the whole document did not finish): sections 8–14 READY WITH
+  NON-BLOCKING NOTES (Arm B at the writer itself; the 9-R merge before the freeze; LOW wording); section 3 READY WITH
+  NON-BLOCKING NOTES (step 2a and step 6 named as departures from D; identities before the first T6 row); sections 4–7
+  READY WITH NON-BLOCKING NOTES (MEDIUM: `changesToImported` values projected on every surface; LOW: today's masking,
+  section F rows 1–2, the writer's source-key lookups, the scope of `no_mapped_values`); sections 0–2 NOT READY on one
+  HIGH (9-0 under the standing merge order), refuted by `metrics-core-plan.md:209-211` and **closed** by the narrow
+  re-review (READY); its LOW notes folded.
+- No test was run (documents only); `git diff --check` clean on every commit.
