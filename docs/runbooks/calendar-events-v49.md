@@ -57,9 +57,13 @@ own `RESTRICT` foreign keys, as it is by its schedules today.
 
 **Known limits, recorded:** the link tables' triggers check the event's state and the plan's / activity's existence,
 not that the plan or activity belongs to the event's owner — K2a-1b's commands check it (the session's athlete a target of
-the event that day and inside the caller's scope; an activity in the caller's scope with a targeted participant); every link write
+the event that day and inside the caller's scope, its plan owned inside the event owner's tree; an activity in the
+caller's scope, owned inside that tree, with a targeted participant); a cancel ends the event's live links in its own
+transaction, and a change of the days that would leave a link outside them is refused — both by the service, not the
+database (a raw cancel through SQL leaves the links live: end them with `update calendar.event_session_links` /
+`event_activity_links set ended_at = now(), ended_by_user_id = <the canceller>` in the same transaction); every link write
 bumps the event's revision, so `events_need_change` requires its change row at COMMIT, but a raw link write that
-leaves the event untouched is not refused (a v50 decision, plan section 11); the `calendar` CHECKs call `training_load.source_metric_text_ok`,
+leaves the event untouched is not refused (a decision for a later calendar migration, plan section 11; v50 is 7g-B's); the `calendar` CHECKs call `training_load.source_metric_text_ok`,
 so a later `create or replace` of that function must keep its contract for these columns too (v40's fail-closed block
 names only its own columns); no `idle_in_transaction_session_timeout` is set for the event commands (as for the roster
 commands).

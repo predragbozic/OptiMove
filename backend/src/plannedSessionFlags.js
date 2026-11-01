@@ -7,8 +7,8 @@
 // and the flag invariant live in one place.
 //
 // The caller has already:
-//   - locked the live session row FOR UPDATE (the quick toggles' `for update
-//     of ps`; the alignment's ascending `for update of ps`);
+//   - locked the live session rows FOR UPDATE (the quick toggles' `for
+//     update of ps`; the alignment's ascending `for update of ps`);
 //   - decided the right (canManagePlanTrainingLoadInScope over the plan's
 //     stored plan_workspace_ownership) and the confirmation for turning RPE
 //     off on a session that already has results (countSessionResults).
@@ -16,36 +16,55 @@
 // (training_load.planned_rpe_workspace_settings), which stays its own
 // administrator's decision.
 
+// Only the flags given are written: `undefined` leaves that column as it is
+// on every row, the live one and its edit-draft copies alike. The RPE quick
+// toggle writes `rpe_enabled` alone, as it always did, so a Builder draft
+// whose tracking differs from the live row keeps its own tracking; and a
+// row whose tracking is (or becomes) off never takes RPE (the v14 rule, per
+// row: such a draft copy keeps RPE off instead of failing the write).
+//
 // A live plan with an open edit-draft carries its own copy of the same
 // logical session (preserveLogicalId, routes/builder.js); it is updated in
 // the SAME transaction, or a later "Save and finish" of the draft would
-// silently revert the flags. The copies are locked FOR UPDATE here.
-export async function writePublishedSessionFlags(client, { sessionId, planId, logicalSessionId, trainingLoadEnabled, rpeEnabled }) {
-  if (typeof trainingLoadEnabled !== "boolean" || typeof rpeEnabled !== "boolean") {
-    throw new TypeError("writePublishedSessionFlags: both flags must be booleans");
+// silently revert the flags. The copies are locked FOR UPDATE here, in
+// ascending id. One statement locks the copies and one writes, whatever the
+// number of sessions.
+export async function writePublishedSessionFlags(client, { sessions, trainingLoadEnabled, rpeEnabled }) {
+  for (const flag of [trainingLoadEnabled, rpeEnabled]) {
+    if (flag !== undefined && typeof flag !== "boolean") throw new TypeError("writePublishedSessionFlags: a flag is a boolean or undefined");
+  }
+  if (trainingLoadEnabled === undefined && rpeEnabled === undefined) {
+    throw new TypeError("writePublishedSessionFlags: nothing to write");
   }
   // The v14 CHECK (plan_sessions_rpe_requires_training_load) refuses RPE on
   // an untracked session; asked here so a caller's mistake is a programming
   // error, never a raw constraint violation reaching a user.
-  if (rpeEnabled && !trainingLoadEnabled) {
+  if (rpeEnabled === true && trainingLoadEnabled === false) {
     throw new TypeError("writePublishedSessionFlags: RPE needs Training Load tracking");
   }
+  if (!Array.isArray(sessions) || !sessions.length) return { draftSessionUpdated: false, draftSessionsUpdated: 0 };
   const draftSessionResult = await client.query(
     `select ps2.id
      from plans.plans d
      join plans.plan_days pd2 on pd2.plan_id = d.id
      join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
-     where d.edit_source_plan_id = $1 and d.is_edit_draft
-       and ps2.logical_session_id = $2
+     join unnest($1::uuid[], $2::uuid[]) as k(plan_id, logical_session_id)
+       on d.edit_source_plan_id = k.plan_id and ps2.logical_session_id = k.logical_session_id
+     where d.is_edit_draft
+     order by ps2.id
      for update of ps2`,
-    [planId, logicalSessionId],
+    [sessions.map((s) => s.planId), sessions.map((s) => s.logicalSessionId)],
   );
-  const idsToUpdate = [sessionId, ...draftSessionResult.rows.map((row) => row.id)];
+  const idsToUpdate = [...sessions.map((s) => s.sessionId), ...draftSessionResult.rows.map((row) => row.id)];
   await client.query(
-    `update plans.plan_sessions set training_load_enabled = $1, rpe_enabled = $2, updated_at = now() where id = any($3::uuid[])`,
-    [trainingLoadEnabled, rpeEnabled, idsToUpdate],
+    `update plans.plan_sessions
+        set training_load_enabled = coalesce($1::boolean, training_load_enabled),
+            rpe_enabled = coalesce($2::boolean, rpe_enabled) and coalesce($1::boolean, training_load_enabled),
+            updated_at = now()
+      where id = any($3::uuid[])`,
+    [trainingLoadEnabled ?? null, rpeEnabled ?? null, idsToUpdate],
   );
-  return { draftSessionUpdated: draftSessionResult.rowCount > 0 };
+  return { draftSessionUpdated: draftSessionResult.rowCount > 0, draftSessionsUpdated: draftSessionResult.rowCount };
 }
 
 // The submitted planned results of one logical session (the quick toggles'

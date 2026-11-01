@@ -551,12 +551,13 @@ const EVENT_ROW_FOR_WRITE_SQL = `
    where e.id = $1`;
 
 // The answer of a saved request, read again now: the stored result holds
-// ids only (never a name or a note), so a replay or a verification after an
-// unconfirmed COMMIT re-reads the event as the caller may see it today.
+// ids and the command's own counts only (never a name or a note), so a
+// replay or a verification after an unconfirmed COMMIT re-reads the event
+// as the caller may see it today and repeats the first answer's counts.
 async function answerOf(queryable, ctx, stored, extra) {
   const view = await readEventView(queryable, ctx, stored.eventId);
   if (!view) throw notFound();
-  return { status: stored.httpStatus || 200, body: { event: view, ...extra } };
+  return { status: stored.httpStatus || 200, body: { event: view, ...(stored.counts || {}), ...extra } };
 }
 
 async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
@@ -624,7 +625,7 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
 
     const requestId = crypto.randomUUID();
     const out = await apply({ client, owner, basis, row, requestId });
-    const stored = { httpStatus: out.httpStatus, eventId: out.eventId };
+    const stored = { httpStatus: out.httpStatus, eventId: out.eventId, ...(out.counts ? { counts: out.counts } : {}) };
     if (testHooks.beforeRequestRow) await testHooks.beforeRequestRow({ client, operation, requestKey, hash, eventId: out.eventId, userId: ctx.userId });
     await client.query(
       `insert into calendar.event_requests (id, request_key, request_hash, operation, performed_by_user_id, event_id, result)
@@ -809,6 +810,24 @@ export async function updateEvent(ctx, eventId, body) {
       testScheduleId: "testScheduleId" in f ? f.testScheduleId : row.test_schedule_id,
     };
     checkDaysAndTimes(next);
+    // A change of the days never strands a link (K2a-1b): every live session
+    // and activity link stays on one of the event's days, or nothing is
+    // written and the coach detaches them first. Counted under the event's
+    // lock, which every link command takes first.
+    if (next.day !== dateStr(row.day) || String(next.endDay ?? "") !== String(dateStr(row.end_day) ?? "")) {
+      const outside = (await client.query(
+        `select (select count(*)::int from calendar.event_session_links l
+                  where l.event_id = $1 and l.ended_at is null and (l.day < $2::date or l.day > $3::date))
+              + (select count(*)::int from calendar.event_activity_links l
+                   join training.activities a on a.id = l.activity_id
+                  where l.event_id = $1 and l.ended_at is null
+                    and (a.occurred_local_date < $2::date or a.occurred_local_date > $3::date)) as n`,
+        [row.id, next.day, next.endDay || next.day],
+      )).rows[0].n;
+      if (outside > 0) {
+        throw conflict("links_outside_event", "Some linked sessions or activities are outside the new days. Detach them first.", { count: outside });
+      }
+    }
     let kind = row.event_kind;
     let typeChanged = false;
     if (String(next.eventTypeId) !== String(row.event_type_id)) {
@@ -869,6 +888,18 @@ export async function cancelEvent(ctx, eventId, body) {
   const { requestKey, canonical } = validateCancelBody(body);
   return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, row }) => {
     await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
+    // A cancelled event is final and takes no link command, so its live
+    // links end with it, in the same transaction (K2a-1b): the slots and the
+    // activities are free for another event at once, and nothing stays
+    // linked to an event no one can change.
+    const sessionLinksEnded = (await client.query(
+      `update calendar.event_session_links set ended_at = now(), ended_by_user_id = $2 where event_id = $1 and ended_at is null`,
+      [row.id, ctx.userId],
+    )).rowCount;
+    const activityLinksEnded = (await client.query(
+      `update calendar.event_activity_links set ended_at = now(), ended_by_user_id = $2 where event_id = $1 and ended_at is null`,
+      [row.id, ctx.userId],
+    )).rowCount;
     await client.query(
       `update calendar.events
           set status = 'cancelled', cancelled_at = now(), cancelled_by_user_id = $2, cancel_reason = $3, revision = revision + 1
@@ -876,7 +907,11 @@ export async function cancelEvent(ctx, eventId, body) {
       [row.id, ctx.userId, canonical.reason],
     );
     const after = await readEventView(client, ctx, row.id);
-    return { eventId: row.id, httpStatus: 200, body: { event: after }, reason: canonical.reason, details: { status: ["planned", "cancelled"] } };
+    const counts = { linksEnded: { sessions: sessionLinksEnded, activities: activityLinksEnded } };
+    return {
+      eventId: row.id, httpStatus: 200, body: { event: after, ...counts }, counts, reason: canonical.reason,
+      details: { status: ["planned", "cancelled"], sessionLinksEnded, activityLinksEnded },
+    };
   });
 }
 
@@ -954,6 +989,29 @@ function eventTargetsAthleteSql(eventParam, athleteExpr, dayExpr) {
          or (tg.target_kind = 'club' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, dayExpr)})))`;
 }
 
+// A plan or an activity may be linked only inside the event owner's own tree
+// (security review of K2a-1b): the owner itself, a team event's club, or a
+// club event's teams — the owners whose managers can always see the event
+// and detach the link again. A private coach's plan of a club athlete, a
+// sibling team's or another club's, a system or unresolved one never folds
+// under the event, whoever asks (a platform administrator included); it is
+// answered like an id the caller cannot see. `holder` carries the stored
+// owner columns and, for a team owner, `owner_team_club_id`.
+function withinEventOwner(owner, holder) {
+  const scope = holder?.owner_scope;
+  const same = (a, b) => a != null && b != null && String(a) === String(b);
+  if (owner.scope === "user") return scope === "user" && same(holder.owner_user_id, owner.userId);
+  if (owner.scope === "team") {
+    return (scope === "team" && same(holder.owner_team_id, owner.teamId))
+      || (scope === "club" && same(holder.owner_club_id, owner.teamClubId));
+  }
+  if (owner.scope === "club") {
+    return (scope === "club" && same(holder.owner_club_id, owner.clubId))
+      || (scope === "team" && same(holder.owner_team_club_id, owner.clubId));
+  }
+  return false;
+}
+
 // The plans FOR SHARE in ascending id: a Builder save, delete or batch sync
 // of one of them takes its row FOR UPDATE first, so the two serialize and
 // the sessions are resolved again after the lock (whatever the Builder did
@@ -976,7 +1034,7 @@ async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { l
   const result = await client.query(
     `select ps.logical_session_id, ps.id as session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_order,
             ps.rpe_enabled, ps.training_load_enabled, pd.date as day, p.id as plan_id, p.athlete_id,
-            pwo.owner_scope, pwo.owner_user_id, pwo.owner_club_id, pwo.owner_team_id,
+            pwo.owner_scope, pwo.owner_user_id, pwo.owner_club_id, pwo.owner_team_id, ot.club_id as owner_team_club_id,
             (${scope}) as in_scope, (${targeted}) as targeted,
             coalesce(training_load.planned_rpe_effective_for_plan(p.id, pd.date), false) as switch_on,
             (select l.event_id from calendar.event_session_links l
@@ -987,6 +1045,7 @@ async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { l
        join plans.plans p on p.id = pd.plan_id
        join public.athletes ath on ath.id = p.athlete_id
        left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
+       left join public.teams ot on ot.id = pwo.owner_team_id
       where ps.logical_session_id = any($1::uuid[]) and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
       order by ps.id${lockSessions ? " for update of ps" : ""}`,
     params,
@@ -994,17 +1053,12 @@ async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { l
   return result.rows;
 }
 
-// The plans the named logical sessions belong to (read before the lock).
-async function plansOfSessions(client, logicalSessionIds) {
-  const result = await client.query(
-    `select distinct p.id
-       from plans.plan_sessions ps
-       join plans.plan_days pd on pd.id = ps.plan_day_id
-       join plans.plans p on p.id = pd.plan_id
-      where ps.logical_session_id = any($1::uuid[]) and ${WEEKLY_PLAN_SESSION_FILTER_SQL}`,
-    [logicalSessionIds],
-  );
-  return result.rows.map((r) => r.id);
+// Every named id is one published session the caller's scope sees on its
+// day, of a plan inside the event owner's tree; a missing, foreign,
+// out-of-scope, unpublished or other-owner id is the one answer.
+function allLinkable(owner, sessions, logicalSessionIds) {
+  const found = new Set(sessions.filter((x) => x.in_scope === true && withinEventOwner(owner, x)).map((x) => String(x.logical_session_id)));
+  return sessions.length === logicalSessionIds.length && logicalSessionIds.every((id) => found.has(id));
 }
 
 async function bumpRevision(client, eventId) {
@@ -1026,20 +1080,23 @@ function inEventDays(row, day) {
 // quick toggles' gate): without it nothing is written and the answer is 409
 // has_existing_results. The workspace planned-RPE switch is never touched;
 // a session whose switch is off is counted `switchOff` (it asks once the
-// switch is on). The sessions arrive locked FOR UPDATE.
+// switch is on). The sessions arrive locked FOR UPDATE. Every session of one
+// command gets the same flags (RPE on: tracking and RPE; RPE off: RPE alone,
+// tracking left as each row has it, its edit-draft copy included), so one
+// call of the shared function writes them all: the statements do not grow
+// with the number of sessions.
 async function alignLinkedSessions(client, ctx, eventRow, sessions, confirmDisableWithResults) {
   const expectsRpe = (eventRow.expects || []).includes("rpe");
   const scope = externalScheduleScopeForWorkspace(ctx.workspace, { user: { id: ctx.userId } });
   const outcome = { direction: expectsRpe ? "rpe_on" : "rpe_off", changed: 0, unchanged: 0, notAllowed: 0, switchOff: 0 };
+  const want = expectsRpe ? { trainingLoadEnabled: true, rpeEnabled: true } : { rpeEnabled: false };
   const toWrite = [];
   for (const session of sessions) {
-    const want = expectsRpe
-      ? { trainingLoadEnabled: true, rpeEnabled: true }
-      : { trainingLoadEnabled: session.training_load_enabled === true, rpeEnabled: false };
     // `switchOff` counts the sessions that follow the event after this
     // command (already aligned or written now) whose workspace switch is off.
     const switchOff = expectsRpe && !session.switch_on;
-    if (session.training_load_enabled === want.trainingLoadEnabled && session.rpe_enabled === want.rpeEnabled) {
+    const follows = expectsRpe ? session.training_load_enabled === true && session.rpe_enabled === true : session.rpe_enabled !== true;
+    if (follows) {
       outcome.unchanged += 1;
       if (switchOff) outcome.switchOff += 1;
       continue;
@@ -1049,44 +1106,49 @@ async function alignLinkedSessions(client, ctx, eventRow, sessions, confirmDisab
       outcome.notAllowed += 1;
       continue;
     }
-    toWrite.push({ session, want, switchOff });
+    toWrite.push(session);
+    if (switchOff) outcome.switchOff += 1;
   }
   if (!expectsRpe && !confirmDisableWithResults && toWrite.length) {
     const counted = await client.query(
       `select count(*)::int as n from training_load.session_feedback where logical_session_id = any($1::uuid[])`,
-      [toWrite.map(({ session }) => session.logical_session_id)],
+      [toWrite.map((session) => session.logical_session_id)],
     );
     if (counted.rows[0].n > 0) {
       throw conflict("has_existing_results", "Some of these sessions already have RPE results. Confirm to stop asking for RPE.", { resultCount: counted.rows[0].n });
     }
   }
-  for (const { session, want, switchOff } of toWrite) {
+  if (toWrite.length) {
     await writePublishedSessionFlags(client, {
-      sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id, ...want,
+      sessions: toWrite.map((session) => ({ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id })),
+      ...want,
     });
-    outcome.changed += 1;
-    if (switchOff) outcome.switchOff += 1;
   }
+  outcome.changed = toWrite.length;
   return outcome;
 }
 
 // POST /:id/sessions — attach planned sessions (a planned card's
 // `links.logicalSessionIds`): one slot-key link per session (plan section
 // 2.2), the session's athlete a target of the event on that day, the session
-// on one of the event's days and inside the caller's calendar scope; a slot
-// already linked to this event is kept (idempotent), to another event is a
-// 409. `alignSessions: true` aligns the named sessions' flags (D20).
+// on one of the event's days, inside the caller's calendar scope and of a
+// plan inside the event owner's tree (withinEventOwner); a slot already
+// linked to this event is kept (idempotent), to another event is a 409. `alignSessions: true` aligns the named sessions' flags (D20).
 export async function attachSessions(ctx, eventId, body) {
   if (!isUuid(eventId)) throw notFound();
   const { requestKey, canonical } = validateAttachSessionsBody(body);
-  return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, row }) => {
+  return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, owner, row }) => {
     await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
-    await lockPlansForShare(client, await plansOfSessions(client, canonical.logicalSessionIds));
+    // Decided first on an unlocked read, so a refused id never takes (or
+    // waits on) a lock of a plan the caller may not link; then the plans of
+    // the linkable sessions FOR SHARE in ascending id, and the sessions read
+    // and judged again under those locks (what the Builder did meanwhile is
+    // what the link sees).
+    const unlocked = await readLinkableSessions(client, ctx, row.id, canonical.logicalSessionIds);
+    if (!allLinkable(owner, unlocked, canonical.logicalSessionIds)) throw sessionNotAvailable();
+    await lockPlansForShare(client, unlocked.map((x) => x.plan_id));
     const sessions = await readLinkableSessions(client, ctx, row.id, canonical.logicalSessionIds, { lockSessions: canonical.alignSessions });
-    // Every id names a published session the caller's scope sees on its day;
-    // a missing, foreign or unpublished id is the one answer.
-    const found = new Set(sessions.filter((x) => x.in_scope === true).map((x) => String(x.logical_session_id)));
-    if (sessions.length !== canonical.logicalSessionIds.length || canonical.logicalSessionIds.some((id) => !found.has(id))) throw sessionNotAvailable();
+    if (!allLinkable(owner, sessions, canonical.logicalSessionIds)) throw sessionNotAvailable();
     if (sessions.some((x) => !inEventDays(row, dateStr(x.day)))) {
       throw conflict("session_outside_event", "A session must be on one of the event's days.");
     }
@@ -1115,11 +1177,8 @@ export async function attachSessions(ctx, eventId, body) {
       planIds: [...new Set(fresh.map((x) => String(x.plan_id)))].sort(),
     };
     if (alignment) Object.assign(details, { align: alignment.direction, aligned: alignment.changed, notAllowed: alignment.notAllowed, switchOff: alignment.switchOff });
-    return {
-      eventId: row.id, httpStatus: 200,
-      body: { event: view, attached: fresh.length, alreadyAttached: sessions.length - fresh.length, alignment },
-      details,
-    };
+    const counts = { attached: fresh.length, alreadyAttached: sessions.length - fresh.length, alignment };
+    return { eventId: row.id, httpStatus: 200, body: { event: view, ...counts }, counts, details };
   });
 }
 
@@ -1154,7 +1213,8 @@ export async function detachSessions(ctx, eventId, body) {
     );
     await bumpRevision(client, row.id);
     const view = await readEventView(client, ctx, row.id);
-    return { eventId: row.id, httpStatus: 200, body: { event: view, detached: links.length }, details: { sessions: links.length, linkIds: canonical.linkIds } };
+    const counts = { detached: links.length };
+    return { eventId: row.id, httpStatus: 200, body: { event: view, ...counts }, counts, details: { sessions: links.length, linkIds: canonical.linkIds } };
   });
 }
 
@@ -1172,7 +1232,9 @@ export async function alignSessions(ctx, eventId, body) {
          join plans.plan_days pd on pd.plan_id = p.id and pd.date = l.day
          join plans.plan_sessions ps on ps.plan_day_id = pd.id and ps.am_pm is not distinct from l.am_pm
                                     and ps.bta is not distinct from l.bta and ps.session_order = l.session_order
-        where l.event_id = $1 and l.ended_at is null and ${WEEKLY_PLAN_SESSION_FILTER_SQL}`,
+         join calendar.events e on e.id = l.event_id
+        where l.event_id = $1 and l.ended_at is null and l.day between e.day and coalesce(e.end_day, e.day)
+          and ${WEEKLY_PLAN_SESSION_FILTER_SQL}`,
       [row.id],
     )).rows;
     if (!linked.length) throw conflict("nothing_to_align", "This event has no linked session to align.");
@@ -1186,36 +1248,45 @@ export async function alignSessions(ctx, eventId, body) {
     await bumpRevision(client, row.id);
     const view = await readEventView(client, ctx, row.id);
     return {
-      eventId: row.id, httpStatus: 200, body: { event: view, alignment },
+      eventId: row.id, httpStatus: 200, body: { event: view, alignment }, counts: { alignment },
       details: { align: alignment.direction, aligned: alignment.changed, unchanged: alignment.unchanged, notAllowed: alignment.notAllowed, switchOff: alignment.switchOff },
     };
   });
 }
 
 // POST /:id/activities — attach an activity by hand (so `device_data` can be
-// met): a canonical activity inside the caller's calendar read scope, on one
-// of the event's days, with at least one participant who is a target of
-// the event that day; already linked to this event is kept, to another is a
-// 409. The activity row is locked FOR SHARE after the event.
+// met): a canonical activity inside the caller's calendar read scope and the
+// event owner's tree (withinEventOwner), on one of the event's days, with at
+// least one participant who is a target of the event that day; already
+// linked to this event is kept, to another is a 409. The activity row is
+// locked FOR SHARE after the event.
 export async function attachActivity(ctx, eventId, body) {
   if (!isUuid(eventId)) throw notFound();
   const { requestKey, canonical } = validateActivityLinkBody(body, "attach_activity");
-  return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, row }) => {
+  return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, owner, row }) => {
     await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
     const params = [canonical.activityId, row.id];
     const scope = calendarActivityScopeSql(ctx, "a", params);
     const targeted = eventTargetsAthleteSql("$2::uuid", "ap.athlete_id", "a.occurred_local_date");
-    const activity = (await client.query(
+    const readActivity = async (lock) => (await client.query(
       `select a.id, a.lifecycle_state, a.occurred_local_date, (${scope}) as in_scope,
+              a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id, ot.club_id as owner_team_club_id,
               exists (select 1 from training.activity_participants ap
                        where ap.activity_id = a.id and ap.merge_status = 'canonical' and ${targeted}) as targeted,
               (select l.event_id from calendar.event_activity_links l where l.activity_id = a.id and l.ended_at is null) as linked_event_id
          from training.activities a
-        where a.id = $1
-          for share of a`,
+         left join public.teams ot on ot.id = a.owner_team_id
+        where a.id = $1${lock ? `
+          for share of a` : ""}`,
       params,
     )).rows[0];
-    if (!activity || activity.in_scope !== true) throw activityNotAvailable();
+    // Inside the caller's read scope and the event owner's tree, decided on
+    // an unlocked read first (a refused id never takes or waits on the
+    // activity's lock), then again under the row lock.
+    const linkable = (x) => x && x.in_scope === true && withinEventOwner(owner, x);
+    if (!linkable(await readActivity(false))) throw activityNotAvailable();
+    const activity = await readActivity(true);
+    if (!linkable(activity)) throw activityNotAvailable();
     if (activity.lifecycle_state === "superseded") throw conflict("activity_superseded", "This activity was merged into another one. Reload and try again.");
     if (!inEventDays(row, dateStr(activity.occurred_local_date))) throw conflict("activity_outside_event", "The activity must be on one of the event's days.");
     if (activity.targeted !== true) throw conflict("activity_not_targeted", "No participant of this activity is a target of this event on that day.");
@@ -1231,7 +1302,7 @@ export async function attachActivity(ctx, eventId, body) {
     }
     await bumpRevision(client, row.id);
     const view = await readEventView(client, ctx, row.id);
-    return { eventId: row.id, httpStatus: 200, body: { event: view, attached: fresh }, details: { activityId: activity.id, attached: fresh } };
+    return { eventId: row.id, httpStatus: 200, body: { event: view, attached: fresh }, counts: { attached: fresh }, details: { activityId: activity.id, attached: fresh } };
   });
 }
 
@@ -1255,6 +1326,6 @@ export async function detachActivity(ctx, eventId, body) {
     );
     await bumpRevision(client, row.id);
     const view = await readEventView(client, ctx, row.id);
-    return { eventId: row.id, httpStatus: 200, body: { event: view, detached: links.length }, details: { activityId: canonical.activityId } };
+    return { eventId: row.id, httpStatus: 200, body: { event: view, detached: links.length }, counts: { detached: links.length }, details: { activityId: canonical.activityId } };
   });
 }

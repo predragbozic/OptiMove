@@ -610,10 +610,11 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     // carried over by preserveLogicalId - see builder.js) in the SAME
     // transaction, or a later Builder "Save and finish" would silently
     // revert this quick toggle back to whatever the draft still has.
-    // Tracking keeps the value just read under the row lock.
+    // Only rpe_enabled is written: every row, the draft copy included,
+    // keeps its own tracking.
     const { draftSessionUpdated } = await writePublishedSessionFlags(client, {
-      sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id,
-      trainingLoadEnabled: session.training_load_enabled === true, rpeEnabled,
+      sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
+      rpeEnabled,
     });
     await client.query("commit");
     return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated });
@@ -700,7 +701,7 @@ router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next
     // copy of this same logical session is updated in the SAME transaction,
     // or a later "Save and finish" would silently revert this toggle.
     const { draftSessionUpdated } = await writePublishedSessionFlags(client, {
-      sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id,
+      sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
       trainingLoadEnabled, rpeEnabled: nextRpeEnabled === true,
     });
     await client.query("commit");

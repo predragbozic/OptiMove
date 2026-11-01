@@ -806,13 +806,17 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   // nothing (plan section 5) and reads none. A PLANNED event folds its linked
   // sessions and activities on a day it is shown; a cancelled event folds
   // nothing (manager decision 9.12), so its sessions are planned cards again.
+  // A response that does not carry the event cards (`kinds` without `event`)
+  // folds nothing either: a linked session or activity is then its own card,
+  // never gone from that response (security review of K2a-1b).
   const coachView = ctx.type !== "athlete";
-  const sessionLinks = coachView && eventRows.length ? await readEventSessionLinks(eventRows.map((r) => r.id)) : [];
-  const activityLinks = coachView && eventRows.length ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
+  const foldsLinks = coachView && kinds.has("event") && eventRows.length > 0;
+  const sessionLinks = foldsLinks ? await readEventSessionLinks(eventRows.map((r) => r.id)) : [];
+  const activityLinks = foldsLinks ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
   const eventById = new Map(eventRows.map((r) => [String(r.id), r]));
   const foldsInto = (eventId, day) => {
     const row = eventById.get(String(eventId));
-    if (!coachView || !row || row.status !== "planned") return null;
+    if (!foldsLinks || !row || row.status !== "planned") return null;
     const key = `event:${row.id}:${day}`;
     return eventDayKeys.has(key) ? key : null;
   };

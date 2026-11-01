@@ -567,12 +567,20 @@ test("4. attach: a group folds under its event — RPE x/y, per-athlete states, 
   assert.equal(evCard.athletes.find((a) => a.athleteId === s.x[0].athleteId).rpe, "submitted");
   assert.equal(evCard.athletes.find((a) => a.athleteId === s.x[1].athleteId).rpe, "missing");
   assert.equal(evCard.alignment.pending, 0);
-  assert.equal(plannedOn(await calendar(s.coachX.cookie, { extra: "&kinds=planned" }), PAST).length, 0, "kinds=planned never shows the folded group alone");
+  // A response without the event cards folds nothing: the linked group is its
+  // own planned card there, never gone (security review, MEDIUM-3).
+  const plannedOnly = await calendar(s.coachX.cookie, { extra: "&kinds=planned" });
+  assert.equal(plannedOn(plannedOnly, PAST).length, 1, "kinds=planned shows the linked group as a planned card");
+  assert.equal(plannedOn(plannedOnly, PAST)[0].athleteCount, 3);
+  assert.equal(eventCards(plannedOnly, ev.id).length, 0);
 
-  // The same key and body: the saved request, nothing written again.
+  // The same key and body: the saved request, nothing written again, the
+  // first answer's counts repeated (code review, LOW).
   const replay = await api(`/api/calendar/events/${ev.id}/sessions`, { method: "POST", cookie: s.coachX.cookie, body });
   assert.equal(replay.status, 200, replay.text);
   assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.attached, 3);
+  assert.equal(replay.body.alreadyAttached, 0);
   assert.equal(await liveLinks(ev.id), 3);
   assert.equal((await q(`select count(*)::int as n from calendar.event_requests where request_key = $1`, [key]))[0].n, 1);
   const reused = await api(`/api/calendar/events/${ev.id}/sessions`, { method: "POST", cookie: s.coachX.cookie, body: { ...body, logicalSessionIds: body.logicalSessionIds.slice(1) } });
@@ -707,22 +715,29 @@ test("7. align: the event's expects become the linked sessions' flags, only on p
   // An open edit-draft of the first club plan carries its own copy of the session.
   const draft = await makePlan({ athleteId: s.x[0].athleteId, coachUserId: s.clubAdmin.id, owner: null, status: "draft", editSourcePlanId: clubPlans[0].planId });
   const draftSession = await makeSession({ planId: draft, date: PAST, rpeEnabled: false, tlEnabled: false, logicalSessionId: clubPlans[0].logicalSessionId });
-  const all = [...clubPlans, ...teamPlan, ...privatePlan];
+  const all = [...clubPlans, ...teamPlan];
   const switchesBefore = await rowDigests(["training_load.planned_rpe_workspace_settings"]);
   const ev = await clubEvent(s);
+  // The private coach's plan of a club athlete is outside the club's tree:
+  // the club admin sees it, but it never folds under the club's event — the
+  // answer of an id the caller cannot see (security review, MEDIUM-1).
+  const privateRefused = await attachSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [privatePlan[0].logicalSessionId] });
+  const randomRefused = await attachSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [crypto.randomUUID()] });
+  assert.equal(privateRefused.status, 400, privateRefused.text);
+  assert.equal(privateRefused.text, randomRefused.text);
   assert.equal((await attachSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: all.map((x) => x.logicalSessionId) })).status, 200);
   let res = await calendar(s.clubAdmin.cookie);
   let evCard = eventCards(res, ev.id)[0];
-  assert.equal(evCard.alignment.pending, 4);
+  assert.equal(evCard.alignment.pending, 3);
   assert.deepEqual(evCard.gaps, ["rpe"], "RPE expected, nothing asks yet: a gap");
   assert.notEqual(evCard.status, "awaiting_entry");
   const view = (await getEvent(s.clubAdmin.cookie, ev.id)).body.event;
-  assert.equal(view.alignment.pending, 4);
+  assert.equal(view.alignment.pending, 3);
   // The team coach of Y may not manage the club's event.
   assert.equal((await alignSessions(s.coachY.cookie, ev.id, { expectedRevision: 2 })).status, 404);
   const aligned = await alignSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 2 });
   assert.equal(aligned.status, 200, aligned.text);
-  assert.deepEqual(aligned.body.alignment, { direction: "rpe_on", changed: 2, unchanged: 0, notAllowed: 2, switchOff: 0 });
+  assert.deepEqual(aligned.body.alignment, { direction: "rpe_on", changed: 2, unchanged: 0, notAllowed: 1, switchOff: 0 });
   for (const x of clubPlans) assert.deepEqual(await flagsOf(x.sessionId), { rpe_enabled: true, training_load_enabled: true });
   assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: true, training_load_enabled: true }, "the edit-draft copy follows");
   for (const x of [...teamPlan, ...privatePlan]) assert.deepEqual(await flagsOf(x.sessionId), { rpe_enabled: false, training_load_enabled: false }, "a plan the club only reads is not changed");
@@ -733,7 +748,7 @@ test("7. align: the event's expects become the linked sessions' flags, only on p
   assert.equal(change.details.aligned, 2);
   res = await calendar(s.clubAdmin.cookie);
   evCard = eventCards(res, ev.id)[0];
-  assert.equal(evCard.alignment.pending, 2);
+  assert.equal(evCard.alignment.pending, 1);
   assert.deepEqual(evCard.rpe, { asked: 2, submitted: 0 });
   assert.deepEqual(evCard.gaps, []);
   // Turning RPE off (the event no longer expects it): a session with results needs the confirmation.
@@ -764,9 +779,17 @@ test("8. attach with alignSessions aligns the named sessions in the same command
   const plans = await plansFor(athletes, { owner: { scope: "team", teamId }, coachUserId: coach.id, rpeEnabled: false, tlEnabled: false });
   const type = await typeOf(coach.cookie, "training");
   const ev = (await createEvent(coach.cookie, { eventTypeId: type.id, title: "Training", day: PAST, targets: [{ kind: "team", id: teamId }] })).body.event;
-  const res = await attachSessions(coach.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: plans.map((x) => x.logicalSessionId), alignSessions: true });
+  const body = { requestKey: newKey(), expectedRevision: 1, logicalSessionIds: plans.map((x) => x.logicalSessionId), alignSessions: true };
+  const res = await api(`/api/calendar/events/${ev.id}/sessions`, { method: "POST", cookie: coach.cookie, body });
   assert.equal(res.status, 200, res.text);
   assert.deepEqual(res.body.alignment, { direction: "rpe_on", changed: 2, unchanged: 0, notAllowed: 0, switchOff: 2 });
+  // A replay repeats the first answer's counts (code review, LOW), nothing written again.
+  const replay = await api(`/api/calendar/events/${ev.id}/sessions`, { method: "POST", cookie: coach.cookie, body });
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(replay.body.replayed, true);
+  assert.deepEqual(replay.body.alignment, res.body.alignment);
+  assert.equal(replay.body.attached, 2);
+  assert.equal(replay.body.event.revision, 2);
   assert.equal((await q(`select count(*)::int as n from training_load.planned_rpe_workspace_settings where owner_team_id = $1`, [teamId]))[0].n, 0, "the switch is not created or flipped");
   const change = (await q(`select kind, details from calendar.event_changes where event_id = $1 order by revision desc limit 1`, [ev.id]))[0];
   assert.equal(change.kind, "attach_sessions");
@@ -813,6 +836,38 @@ test("9. the Training Load quick toggles write through the same shared function:
   assert.equal(/update plans\.plan_sessions/.test(service), false, "the calendar writes flags only through plannedSessionFlags.js");
 });
 
+test("9b. the RPE quick toggle never changes the edit-draft copy's tracking (code review HIGH-1): off leaves the draft's own tracking off, on keeps an untracked draft copy without RPE instead of failing; the alignment's RPE off leaves tracking too", async () => {
+  const s = await squad("tl9b");
+  const team = { scope: "team", teamId: s.teamX };
+  const [one] = await plansFor([s.x[0]], { owner: team, coachUserId: s.coachX.id });
+  // The coach turned tracking off in the Builder's open draft, not yet published.
+  const draft = await makePlan({ athleteId: s.x[0].athleteId, coachUserId: s.coachX.id, owner: null, status: "draft", editSourcePlanId: one.planId });
+  const draftSession = await makeSession({ planId: draft, date: PAST, rpeEnabled: false, tlEnabled: false, logicalSessionId: one.logicalSessionId });
+  const toggle = (body) => api(`/api/training-load/sessions/${one.sessionId}/rpe-enabled`, { method: "PATCH", cookie: s.coachX.cookie, body });
+  let r = await toggle({ rpeEnabled: false });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.draftSessionUpdated, true);
+  assert.deepEqual(await flagsOf(one.sessionId), { rpe_enabled: false, training_load_enabled: true });
+  assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: false, training_load_enabled: false }, "the draft keeps its own tracking");
+  r = await toggle({ rpeEnabled: true });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(await flagsOf(one.sessionId), { rpe_enabled: true, training_load_enabled: true });
+  assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: false, training_load_enabled: false }, "an untracked draft copy never takes RPE");
+  // The alignment's RPE off writes RPE alone: a tracked draft copy stays tracked, an untracked one untracked.
+  await q(`update plans.plan_sessions set training_load_enabled = true, rpe_enabled = true where id = $1`, [draftSession.sessionId]);
+  const [two] = await plansFor([s.x[1]], { owner: team, coachUserId: s.coachX.id });
+  const draft2 = await makePlan({ athleteId: s.x[1].athleteId, coachUserId: s.coachX.id, owner: null, status: "draft", editSourcePlanId: two.planId });
+  const draftSession2 = await makeSession({ planId: draft2, date: PAST, rpeEnabled: false, tlEnabled: false, logicalSessionId: two.logicalSessionId });
+  const ev = await teamEvent(s, { expects: [] });
+  const res = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [one.logicalSessionId, two.logicalSessionId], alignSessions: true });
+  assert.equal(res.status, 200, res.text);
+  assert.deepEqual(res.body.alignment, { direction: "rpe_off", changed: 2, unchanged: 0, notAllowed: 0, switchOff: 0 });
+  assert.deepEqual(await flagsOf(one.sessionId), { rpe_enabled: false, training_load_enabled: true });
+  assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: false, training_load_enabled: true });
+  assert.deepEqual(await flagsOf(two.sessionId), { rpe_enabled: false, training_load_enabled: true });
+  assert.deepEqual(await flagsOf(draftSession2.sessionId), { rpe_enabled: false, training_load_enabled: false }, "the draft's own tracking off stays off");
+});
+
 // ---------------------------------------------------------------------------
 // Activities (device_data)
 // ---------------------------------------------------------------------------
@@ -833,6 +888,8 @@ test("10. attach an activity: device data meets the event (done), the activity c
   assert.equal(card.status, "done");
   assert.deepEqual(card.links.activityIds, [imported]);
   assert.equal(allItems(cal).some((i) => i.key === `activity:${imported}`), false, "the activity folds under the event");
+  const activitiesOnly = await calendar(s.clubAdmin.cookie, { extra: "&kinds=activity" });
+  assert.ok(allItems(activitiesOnly).some((i) => i.key === `activity:${imported}`), "kinds=activity shows the linked activity as its own card");
   const again = await attachActivity(s.clubAdmin.cookie, ev.id, { expectedRevision: 2, activityId: imported });
   assert.equal(again.status, 200, again.text);
   assert.equal(again.body.attached, false);
@@ -923,4 +980,169 @@ test("11. the lock order against a Builder save: an attach waits on the plan row
   assert.deepEqual([a.status, b.status].sort(), [200, 409], `${a.text} / ${b.text}`);
   assert.equal([a, b].find((r) => r.status === 409).body.error, "session_already_attached");
   assert.equal((await q(`select count(*)::int as n from calendar.event_session_links where event_id in ($1, $2) and ended_at is null`, [e1.id, e2.id]))[0].n, 3);
+});
+
+// ---------------------------------------------------------------------------
+// The review round: cancel, a change of the days, the owner's tree, the
+// alignment's statements
+// ---------------------------------------------------------------------------
+const liveActivityLinks = async (eventId) => (await q(`select count(*)::int as n from calendar.event_activity_links where event_id = $1 and ended_at is null`, [eventId]))[0].n;
+
+test("12. a cancelled event releases its links in the same command (code review HIGH-2): the change row and the answer count them, a replay repeats the count, the slots and the activity go to another event at once", async () => {
+  const s = await squad("cxl");
+  const team = { scope: "team", teamId: s.teamX };
+  const group = await plansFor(s.x, { owner: team, coachUserId: s.coachX.id });
+  const ev = await teamEvent(s, { expects: ["rpe", "device_data"] });
+  assert.equal((await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: group.map((x) => x.logicalSessionId) })).status, 200);
+  const activity = await makeActivity({ owner: team, origin: "api_import", name: "GPS" });
+  await addParticipant(activity, s.x[0].athleteId);
+  assert.equal((await attachActivity(s.coachX.cookie, ev.id, { expectedRevision: 2, activityId: activity })).status, 200);
+  const body = { requestKey: newKey(), expectedRevision: 3, reason: "Rain" };
+  const cancelled = await api(`/api/calendar/events/${ev.id}/cancel`, { method: "POST", cookie: s.coachX.cookie, body });
+  assert.equal(cancelled.status, 200, cancelled.text);
+  assert.equal(cancelled.body.event.status, "cancelled");
+  assert.deepEqual(cancelled.body.linksEnded, { sessions: 3, activities: 1 });
+  assert.equal(await liveLinks(ev.id), 0);
+  assert.equal(await liveActivityLinks(ev.id), 0);
+  assert.equal((await q(`select count(*)::int as n from calendar.event_session_links where event_id = $1 and ended_by_user_id = $2`, [ev.id, s.coachX.id]))[0].n, 3);
+  const change = (await q(`select kind, revision, details from calendar.event_changes where event_id = $1 order by revision desc limit 1`, [ev.id]))[0];
+  assert.equal(change.kind, "cancel");
+  assert.equal(change.revision, 4);
+  assert.equal(change.details.sessionLinksEnded, 3);
+  assert.equal(change.details.activityLinksEnded, 1);
+  const replay = await api(`/api/calendar/events/${ev.id}/cancel`, { method: "POST", cookie: s.coachX.cookie, body });
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(replay.body.replayed, true);
+  assert.deepEqual(replay.body.linksEnded, { sessions: 3, activities: 1 });
+  // The same slots and the activity go to a new event at once.
+  const ev2 = await teamEvent(s, { title: "Indoors", expects: ["rpe", "device_data"] });
+  const again = await attachSessions(s.coachX.cookie, ev2.id, { expectedRevision: 1, logicalSessionIds: group.map((x) => x.logicalSessionId) });
+  assert.equal(again.status, 200, again.text);
+  assert.equal(again.body.attached, 3);
+  const againActivity = await attachActivity(s.coachX.cookie, ev2.id, { expectedRevision: 2, activityId: activity });
+  assert.equal(againActivity.status, 200, againActivity.text);
+  assert.equal(againActivity.body.attached, true);
+  const card = eventCards(await calendar(s.coachX.cookie), ev2.id)[0];
+  assert.deepEqual([...card.links.planIds].sort(), group.map((x) => x.planId).sort());
+  assert.ok(card.links.activityIds.includes(activity));
+});
+
+test("13. a change of the event's days never strands a link (code review MEDIUM): a day that leaves a linked session or activity outside is refused with the count and writes nothing; a change that keeps them inside works; after a detach the move works", async () => {
+  const s = await squad("mov");
+  const team = { scope: "team", teamId: s.teamX };
+  const d1 = addDays(PAST, -1);
+  const first = await plansFor([s.x[0]], { owner: team, coachUserId: s.coachX.id, date: d1 });
+  const second = await plansFor([s.x[1]], { owner: team, coachUserId: s.coachX.id, date: PAST });
+  const ev = await teamEvent(s, { day: d1, endDay: PAST, expects: ["rpe", "device_data"] });
+  assert.equal((await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [first[0].logicalSessionId, second[0].logicalSessionId] })).status, 200);
+  const activity = await makeActivity({ owner: team, origin: "api_import" });
+  await addParticipant(activity, s.x[1].athleteId);
+  assert.equal((await attachActivity(s.coachX.cookie, ev.id, { expectedRevision: 2, activityId: activity })).status, 200);
+  const shrink = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 3, day: PAST, endDay: null });
+  assert.equal(shrink.status, 409, shrink.text);
+  assert.equal(shrink.body.error, "links_outside_event");
+  assert.equal(shrink.body.count, 1);
+  const away = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 3, day: FUTURE, endDay: null });
+  assert.equal(away.status, 409, away.text);
+  assert.equal(away.body.count, 3, "two sessions and the activity");
+  const row = (await q(`select revision, day, end_day from calendar.events where id = $1`, [ev.id]))[0];
+  assert.equal(row.revision, 3, "nothing written");
+  assert.equal(await liveLinks(ev.id), 2);
+  // Widening keeps every link inside.
+  const wider = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 3, endDay: addDays(PAST, 1) });
+  assert.equal(wider.status, 200, wider.text);
+  // Detach the first day's link, then the event may leave that day.
+  const view = (await getEvent(s.coachX.cookie, ev.id)).body.event;
+  const firstLink = view.sessionLinks.find((l) => l.day === d1);
+  assert.equal((await detachSessions(s.coachX.cookie, ev.id, { expectedRevision: 4, linkIds: [firstLink.id] })).status, 200);
+  const moved = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 5, day: PAST, endDay: null });
+  assert.equal(moved.status, 200, moved.text);
+  assert.equal(await liveLinks(ev.id), 1);
+  const aligned = await alignSessions(s.coachX.cookie, ev.id, { expectedRevision: 6 });
+  assert.equal(aligned.status, 200, aligned.text);
+  assert.equal(aligned.body.alignment.unchanged + aligned.body.alignment.changed + aligned.body.alignment.notAllowed, 1, "only the link inside the days");
+});
+
+test("14. a plan or an activity is linked only inside the event owner's tree (security review MEDIUM-1): an athlete of teams X and Y — team Y's plan and activity never fold under team X's event, whoever asks (byte-identical to a random id), and team Y's calendar keeps them; the club's own plan and team X's activity do", async () => {
+  const s = await squad("own");
+  const a = s.x[0];
+  await addMembership({ athleteId: a.athleteId, clubId: s.clubId, teamId: s.teamY });
+  const [yPlan] = await plansFor([a], { owner: { scope: "team", teamId: s.teamY }, coachUserId: s.coachY.id, name: "Y training" });
+  const ev = await teamEvent(s, { expects: ["rpe", "device_data"] });
+  const random = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [crypto.randomUUID()] });
+  for (const who of [s.coachX, s.clubAdmin]) {
+    const refused = await attachSessions(who.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [yPlan.logicalSessionId] });
+    assert.equal(refused.status, 400, refused.text);
+    assert.equal(refused.text, random.text);
+  }
+  assert.equal(await liveLinks(ev.id), 0);
+  assert.ok(plannedOn(await calendar(s.coachY.cookie), PAST).some((c) => c.athleteIds.includes(a.athleteId)), "team Y's coach keeps the plan's own card");
+  const yActivity = await makeActivity({ owner: { scope: "team", teamId: s.teamY }, origin: "api_import" });
+  await addParticipant(yActivity, a.athleteId);
+  const randomActivity = await attachActivity(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, activityId: crypto.randomUUID() });
+  const refusedActivity = await attachActivity(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, activityId: yActivity });
+  assert.equal(refusedActivity.status, 400, refusedActivity.text);
+  assert.equal(refusedActivity.text, randomActivity.text);
+  assert.equal(await liveActivityLinks(ev.id), 0);
+  // A refused id never takes or waits on its plan's or activity's lock
+  // (security review LOW-1): with team Y's plan and activity held FOR UPDATE
+  // the answer is still the same 400 at once, never a wait or a try_again.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select id from plans.plans where id = $1 for update`, [yPlan.planId]);
+    await holder.query(`select id from training.activities where id = $1 for update`, [yActivity]);
+    const heldPlan = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [yPlan.logicalSessionId] });
+    assert.equal(heldPlan.text, random.text);
+    const heldActivity = await attachActivity(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, activityId: yActivity });
+    assert.equal(heldActivity.text, randomActivity.text);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  // Inside the tree: the club's plan (a team event's club) and team X's own activity.
+  const [clubPlan] = await plansFor([a], { owner: { scope: "club", clubId: s.clubId }, coachUserId: s.clubAdmin.id, name: "Club training", amPm: "AM" });
+  assert.equal((await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [clubPlan.logicalSessionId] })).status, 200);
+  const xActivity = await makeActivity({ owner: { scope: "team", teamId: s.teamX }, origin: "api_import" });
+  await addParticipant(xActivity, a.athleteId);
+  assert.equal((await attachActivity(s.coachX.cookie, ev.id, { expectedRevision: 2, activityId: xActivity })).status, 200);
+});
+
+test("15. the alignment's statements do not grow with its sessions (code review LOW): one session and three sessions with their edit-draft copies, the same count", async () => {
+  const s = await squad("stm");
+  const team = { scope: "team", teamId: s.teamX };
+  const hooks = eventService.testHooks;
+  async function alignStatements(athletes, title) {
+    const plans = await plansFor(athletes, { owner: team, coachUserId: s.coachX.id, rpeEnabled: false, tlEnabled: false, name: title });
+    for (const x of plans) {
+      const draft = await makePlan({ athleteId: x.athlete.athleteId, coachUserId: s.coachX.id, owner: null, status: "draft", editSourcePlanId: x.planId });
+      await makeSession({ planId: draft, date: PAST, name: title, rpeEnabled: false, tlEnabled: false, logicalSessionId: x.logicalSessionId });
+    }
+    const ev = await teamEvent(s, { title });
+    assert.equal((await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: plans.map((x) => x.logicalSessionId) })).status, 200);
+    let count = 0;
+    let wrapped = null;
+    hooks.beforeLocks = ({ client }) => {
+      const original = client.query;
+      wrapped = { client, original };
+      client.query = function counted(...args) {
+        count += 1;
+        return original.apply(this, args);
+      };
+    };
+    try {
+      const res = await alignSessions(s.coachX.cookie, ev.id, { expectedRevision: 2 });
+      assert.equal(res.status, 200, res.text);
+      assert.equal(res.body.alignment.changed, athletes.length);
+    } finally {
+      delete hooks.beforeLocks;
+      if (wrapped) wrapped.client.query = wrapped.original;
+    }
+    for (const x of plans) assert.deepEqual(await flagsOf(x.sessionId), { rpe_enabled: true, training_load_enabled: true });
+    return count;
+  }
+  const one = await alignStatements([s.x[0]], "One");
+  const three = await alignStatements(s.x, "Three");
+  assert.equal(three, one, `the same number of statements for one and for three sessions (${one})`);
 });
