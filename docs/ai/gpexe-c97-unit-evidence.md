@@ -166,7 +166,8 @@ merged first (C95). It does not make a field `verified`: that also needs the mea
 
 - **Not the meaning.** The meaning act needs the field's definition from official GPEXE documentation or GPEXE
   support's written answer (C97). Whether the GPEXE 6 REST handbook counts for a server that reports 9.11.x is the
-  owner's decision O7 (J17 section 12.2).
+  owner's decision O7 (J17 section 12.2). The owner accepted it for these three fields; the meaning evidence and the
+  six acts are in `docs/ai/gpexe-c97-meaning-evidence.md`.
 - **Not sessions S1 and S2.** For two more sessions (three athletes each) the owner confirmed only that the fields
   agree in meaning (time, distance, maximum speed). The owner did not compare numbers with the UI. That is not unit
   evidence, and it is not meaning evidence either.
