@@ -62,7 +62,8 @@ caller's scope, owned inside that tree, with a targeted participant) when the li
 follows the canonical survivor of a later merge without that check (v4's sanctioned merge paths join only
 activities of one owner, so the survivor stays inside the tree); the unique live link per activity holds per
 `activity_id`, not per survivor: the attach refuses a second event through the aliases' links, but two live links
-made before a merge both stay, and the read folds the survivor under the older one (end the other with a detach);
+made before a merge both stay, and the read folds the survivor under the oldest one whose event is shown on the
+survivor's own day (end the other with a detach);
 the alignment judges a session by its live row, so a Builder draft copy whose flags differ is not written and its
 publication brings the old flags back (the card shows it under `alignment.pending`; align again); a cancel ends the
 event's live links in its own

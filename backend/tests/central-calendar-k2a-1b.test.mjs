@@ -1201,6 +1201,15 @@ test("16. a merged activity never belongs to two events (independent review MEDI
   assert.equal(toA.status, 200, toA.text);
   assert.equal(toA.body.attached, false, "already A's through the alias's link: kept, no second row");
   assert.equal(await liveActivityLinks(evA.id), 1);
+  // The 409 stays behind the read scope and the owner's tree: team Y's coach,
+  // on team Y's event, gets the random id's answer for the linked survivor
+  // (security re-review LOW).
+  const typeY = await typeOf(s.coachY.cookie, "training");
+  const createdY = await createEvent(s.coachY.cookie, { eventTypeId: typeY.id, title: "Y", day: PAST, targets: [{ kind: "team", id: s.teamY }] });
+  assert.equal(createdY.status, 201, createdY.text);
+  const randomY = await attachActivity(s.coachY.cookie, createdY.body.event.id, { expectedRevision: 1, activityId: crypto.randomUUID() });
+  const survivorY = await attachActivity(s.coachY.cookie, createdY.body.event.id, { expectedRevision: 1, activityId: survivor });
+  assert.equal(survivorY.text, randomY.text);
 
   // Two live links that a later merge makes name one survivor. The newer one
   // (E's, to the survivor) is written first and its event has the smaller
@@ -1237,6 +1246,68 @@ test("16. a merged activity never belongs to two events (independent review MEDI
   assert.equal(againD.body.attached, false);
   const evF = await teamEvent(s, { title: "F" });
   assert.equal((await attachActivity(s.coachX.cookie, evF.id, { expectedRevision: 1, activityId: survivor2 })).body.error, "activity_already_attached");
+});
+
+test("16b. a merge of two days' activities (code re-review MEDIUM): the survivor folds under the oldest link whose event is shown on its own day — under E in a wide window and in its day alone, never under D of the other day and never a card of its own", async () => {
+  const s = await squad("mrd");
+  const teamX = { scope: "team", teamId: s.teamX };
+  const d1 = addDays(PAST, -1);
+  const alias = await makeActivity({ owner: teamX, origin: "manual", name: "Alias", date: d1 });
+  await addParticipant(alias, s.x[0].athleteId, d1);
+  const survivor = await makeActivity({ owner: teamX, origin: "api_import", name: "Survivor" });
+  await addParticipant(survivor, s.x[0].athleteId);
+  const evD = await teamEvent(s, { title: "D", day: d1 });
+  const evE = await teamEvent(s, { title: "E" });
+  // D's link (to the alias, on d1) is the older one.
+  assert.equal((await attachActivity(s.coachX.cookie, evD.id, { expectedRevision: 1, activityId: alias })).status, 200);
+  assert.equal((await attachActivity(s.coachX.cookie, evE.id, { expectedRevision: 1, activityId: survivor })).status, 200);
+  await mergeActivity(alias, survivor);
+  for (const [from, to] of [[d1, PAST], [PAST, PAST], [FROM, TO]]) {
+    const read = await calendar(s.coachX.cookie, { from, to, extra: "&include=athletes" });
+    assert.ok(eventCards(read, evE.id)[0].links.activityIds.includes(survivor), `${from}..${to}: under E, the event shown on the survivor's day`);
+    assert.equal(ofKind(allItems(read), "activity").length, 0, `${from}..${to}: never a card of its own`);
+    const dCards = eventCards(read, evD.id);
+    if (dCards.length) assert.equal(dCards[0].links.activityIds.includes(survivor), false, `${from}..${to}: never under D`);
+  }
+});
+
+test("16c. a merge that commits while an attach waits on the survivor's row lock is seen (code and security re-reviews, LOW): the alias's link counts, the attach answers activity_already_attached and writes nothing", async () => {
+  const s = await squad("mrc");
+  const teamX = { scope: "team", teamId: s.teamX };
+  const alias = await makeActivity({ owner: teamX, origin: "manual", name: "Alias" });
+  await addParticipant(alias, s.x[0].athleteId);
+  const survivor = await makeActivity({ owner: teamX, origin: "api_import", name: "Survivor" });
+  await addParticipant(survivor, s.x[0].athleteId);
+  const evA = await teamEvent(s, { title: "A" });
+  const evC = await teamEvent(s, { title: "C" });
+  assert.equal((await attachActivity(s.coachX.cookie, evA.id, { expectedRevision: 1, activityId: alias })).status, 200);
+  // The merge holds both rows FOR UPDATE (v4's order) and supersedes the
+  // alias; the attach of the survivor to C waits on its FOR SHARE; the merge
+  // commits.
+  const merger = new pg.Client({ connectionString: db.url });
+  await merger.connect();
+  let open = false;
+  try {
+    await merger.query("begin");
+    open = true;
+    await merger.query(`select id from training.activities where id = any($1::uuid[]) order by id for update`, [[alias, survivor]]);
+    await merger.query(`select set_config('training.allow_supersede_write', 'on', true)`);
+    await merger.query(`update training.activities set lifecycle_state = 'superseded', superseded_by_activity_id = $2 where id = $1`, [alias, survivor]);
+    const pending = attachActivity(s.coachX.cookie, evC.id, { expectedRevision: 1, activityId: survivor });
+    // The activity read waiting on a lock is the locked one (pg_stat_activity
+    // keeps only the first 1024 bytes of a query, so its tail is not seen).
+    await waitForLockWait((r) => /^select a\.id, a\.lifecycle_state/.test(r.query));
+    await merger.query("commit");
+    open = false;
+    const res = await pending;
+    assert.equal(res.status, 409, res.text);
+    assert.equal(res.body.error, "activity_already_attached");
+  } finally {
+    if (open) await merger.query("rollback").catch(() => {});
+    await merger.end();
+  }
+  assert.equal(await liveActivityLinks(evC.id), 0);
+  assert.equal((await q(`select revision from calendar.events where id = $1`, [evC.id]))[0].revision, 1);
 });
 
 test("17. the reason for THIS day on attach (independent review R5): an athlete who left team X after d1 — X's coach cannot reach the d2 session (byte-identical to a random id), the club admin is told the athlete is not targeted that day, one such day refuses the whole request, the d1 session links and stays X's history on d1", async () => {
@@ -1286,7 +1357,13 @@ test("18. a linked activity outside the manager's own read scope (independent re
   assert.deepEqual(xGet.body.event.activityLinks, [{ id: adminLink.id, activityId: clubAct, day: PAST, visible: false, name: null, origin: null }]);
   assert.equal(xGet.text.includes("Club-only activity name"), false);
   assert.equal((await calendar(s.coachX.cookie)).text.includes(clubAct), false, "coach X's calendar does not show it either");
-  // Coach X's command answers carry the same reduced link.
+  // Coach X's command answers carry the same reduced link: a stale command's
+  // `current` (the security and code re-reviews).
+  const stale = await patchEvent(s.coachX.cookie, tev.id, { expectedRevision: 1, title: "Renamed" });
+  assert.equal(stale.status, 409, stale.text);
+  assert.equal(stale.body.error, "event_changed");
+  assert.deepEqual(stale.body.current.activityLinks, [{ id: adminLink.id, activityId: clubAct, day: PAST, visible: false, name: null, origin: null }]);
+  assert.equal(stale.text.includes("Club-only activity name"), false);
   const unreadable = await makeActivity({ owner: club, origin: "api_import", name: "Club unread" });
   await addParticipant(unreadable, s.x[0].athleteId);
   const random = await attachActivity(s.coachX.cookie, tev.id, { expectedRevision: 2, activityId: crypto.randomUUID() });
@@ -1310,7 +1387,8 @@ test("19. the targets change after a link (independent review R11): a viewer who
   assert.equal(patched.status, 200, patched.text);
   const yView = await calendar(s.coachY.cookie, { extra: "&include=athletes" });
   const sharedCards = plannedOn(yView, PAST).filter((c) => c.athleteIds.includes(shared.athleteId));
-  assert.ok(eventCards(yView, ev.id).length === 1 || sharedCards.length === 1, "the shared athlete's session is never gone from Y's calendar");
+  assert.equal(eventCards(yView, ev.id).length, 0, "coach Y no longer gets team X's event");
+  assert.equal(sharedCards.length, 1, "so the shared athlete's session is coach Y's planned card");
   const card = eventCards(await calendar(s.coachX.cookie, { extra: "&include=athletes" }), ev.id)[0];
   assert.equal(card.athletes.find((a) => a.athleteId === shared.athleteId)?.targeted, false);
   // A filter on the athlete the event no longer targets: the event is not

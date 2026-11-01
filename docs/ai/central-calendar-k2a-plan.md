@@ -700,9 +700,11 @@ manager view (`GET /:id`) lists `sessionLinks` (state `linked` / `renamed` / `or
 calendar read scope, else `visible: false` with its ids and day alone, so its manager can still detach it
 (independent review LOW-3: a club admin's link of a club activity to team X's event never shows team X's coach
 what that activity is). An activity is attached to one event at a time, its aliases included (ADR-001: the
-attach looks through `training.activity_alias_ids`); when a merge comes after two live links were made, the
-survivor folds under the older link's event in every window, and each event keeps its own live link until it is
-detached (independent review MEDIUM-1). A cancelled event folds nothing (its links end with it), the athlete workspace folds and reads no
+attach looks through `training.activity_alias_ids`, in a statement of its own after the activity's row lock, so a
+merge that commits while the attach waits is seen); when a merge comes after two live links were made, the
+survivor folds under the oldest link whose event is shown on the survivor's own day — the same answer in every
+window that holds that day, also when the merge joined activities of two days — and each event keeps its own live
+link until it is detached (independent review MEDIUM-1 and its narrow re-reviews). A cancelled event folds nothing (its links end with it), the athlete workspace folds and reads no
 link, and a response without the event cards (`kinds` without `event`) folds no linked session or activity — each
 is its own card there, never gone from that response (security review MEDIUM-3). The statement count stays
 independent of the number of items: two more statements (the session and the activity links) when the window
@@ -718,9 +720,11 @@ concurrent attaches; after the review round: 9b (the edit-draft copy's own track
 links), 13 (a change of the days never strands a link), 14 (the event owner's tree, also with the foreign plan
 and activity held `FOR UPDATE`), 15 (the alignment's statements for one and for three sessions), and the `kinds`
 and replay-count assertions in tests 4, 8 and 10; after the independent review: 16 (a merged activity never
-belongs to two events), and the reviewer's own scenarios R5, R10, R11 and R12 as tests 17 (the target rule of
-each day), 18 (an unreadable linked activity in the manager view; an unreadable activity never attached), 19 (a
-change of the targets under an athlete filter) and 20 (detach through another event).
+belongs to two events; the 409 never reaches a caller outside the read scope), 16b (a merge of two days'
+activities, the same in a wide window and in its day), 16c (a merge that commits while the attach waits on the
+activity's lock), and the reviewer's own scenarios R5, R10, R11 and R12 as tests 17 (the target rule of each day),
+18 (an unreadable linked activity in the manager view and in a command's answer; an unreadable activity never
+attached), 19 (a change of the targets under an athlete filter) and 20 (detach through another event).
 
 **The review round** (internal `code-reviewer` and `security-reviewer` on `8ad4af2`):
 
@@ -755,6 +759,17 @@ NON-BLOCKING NOTES, no BLOCKER or HIGH; its notes:
 | MEDIUM-2: four guards no test protected — the target rule of the session's own day, the fold only under an event card emitted that day, the read scope on an activity attach, a detach only of this event's links | the reviewer's R5, R10, R11 and R12 are tests 17–20 | 17 (RM2), 18 (RM4), 19 (RM3), 20 (RM5, RM5b) |
 | LOW-3: team X's coach read the name of a club activity the club's admin linked to X's event, an activity X may not read | the manager view names a linked activity only inside the caller's read scope (`visible: false` otherwise); the detach stays the manager's | 18 (ML5, ML5b, ML5c) |
 | LOW-4: the alignment judges a session by its live row, so a Builder draft copy whose flags differ stays as it is and a later "Save and finish" brings its old flags back | recorded (open point 8, the runbook) | — |
+
+The narrow re-reviews of that delta (`687b108..8f04a9d`), `code-reviewer` and `security-reviewer`: both READY WITH
+NON-BLOCKING NOTES, no BLOCKER or HIGH; their notes:
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| Code MEDIUM: "the first link wins" ignored the activity's own day — after a merge of two days' activities a wide window made the survivor a card of its own while its day alone folded it under the other event | every link's event kept, oldest first; the survivor folds under the first one shown on its own day | 16, 16b (MR1r, MR2, MR2b, MR3) |
+| Code LOW / security LOW: the aliases' links were read in the statement that waits on the activity's lock, so a merge that committed during the wait was not seen | `linkedEventOf`, a statement of its own after the lock (READ COMMITTED: a new snapshot) | 16c (MLK) |
+| Security MEDIUM / code LOW: no test saw coach X's command answer, only `GET /:id` | a stale command's `current` asserted as the reduced link | 18 (ML6) |
+| Security LOW: nothing pinned that `activity_already_attached` stays behind the read scope | team Y's coach attaching the linked survivor gets the random id's answer | 16 (MS409) |
+| Code LOW: test 19 accepted the event card or the planned card | coach Y gets no event card and the session as a planned card | 19 |
 
 **Open points (for the manager):**
 1. The standalone alignment is audited as kind `update` (above); a later calendar migration could add

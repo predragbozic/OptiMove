@@ -521,9 +521,10 @@ async function readEventSessionLinks(eventIds) {
 // The live activity links of the window's events, each followed forward to
 // its canonical activity (ADR-001: a merged activity's link names the
 // survivor), the oldest first. Two live links can name one survivor only
-// when the merge came after both were made; the caller keeps the first, so
-// the survivor folds under one event, the same one for every window
-// (independent review of PR #313, MEDIUM-1). One statement.
+// when the merge came after both were made; the caller folds the survivor
+// under the oldest one whose event is shown on the survivor's own day, so
+// every window that holds that day gives the same answer (independent review
+// of PR #313, MEDIUM-1, and its narrow code re-review). One statement.
 async function readEventActivityLinks(eventIds) {
   const result = await query(
     `select l.event_id, training.resolve_canonical_activity_id(l.activity_id) as activity_id
@@ -830,9 +831,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const key = foldsInto(link.event_id, dateStr(link.day));
     if (key) slotToEventKey.set(slotKeyOf(link.plan_id, dateStr(link.day), link.am_pm, link.bta, link.session_order), key);
   }
-  const activityToEventId = new Map();
+  const activityToEventIds = new Map();
   for (const link of activityLinks) {
-    if (!activityToEventId.has(String(link.activity_id))) activityToEventId.set(String(link.activity_id), String(link.event_id));
+    const key = String(link.activity_id);
+    if (!activityToEventIds.has(key)) activityToEventIds.set(key, []);
+    activityToEventIds.get(key).push(String(link.event_id));
   }
   const eventFolds = new Map();
   const foldFor = (key) => {
@@ -1040,8 +1043,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const own = [];
     const linkedToEvents = [];
     for (const row of await readActivityRows(ctx, { from, to, filters })) {
-      const linkedEventId = activityToEventId.get(String(row.id));
-      const linkedKey = linkedEventId ? foldsInto(linkedEventId, dateStr(row.day)) : null;
+      let linkedKey = null;
+      for (const linkedEventId of activityToEventIds.get(String(row.id)) || []) {
+        linkedKey = foldsInto(linkedEventId, dateStr(row.day));
+        if (linkedKey) break;
+      }
       if (linkedKey) {
         linkedToEvents.push({ row, key: linkedKey });
         continue;

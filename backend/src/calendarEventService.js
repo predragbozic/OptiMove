@@ -1279,14 +1279,31 @@ export async function alignSessions(ctx, eventId, body) {
   });
 }
 
+// The event a live link of this activity names — or a link of an activity
+// merged into it (ADR-001: such a link names this one) — this event's own
+// first, then the oldest, so a merge never lets the survivor take a second
+// event (independent review of PR #313, MEDIUM-1). Read after the activity's
+// row lock in a statement of its own: READ COMMITTED gives it a snapshot
+// taken after the lock, so a merge that committed while the command waited
+// is seen (the narrow re-reviews of PR #313). Only after the read scope and
+// the owner's tree, so the 409 never reaches a caller who may not read the
+// activity.
+async function linkedEventOf(client, activityId, eventId) {
+  const result = await client.query(
+    `select l.event_id from calendar.event_activity_links l
+      where l.activity_id in (select x.activity_id from training.activity_alias_ids($1::uuid) x) and l.ended_at is null
+      order by (l.event_id = $2::uuid) desc, l.linked_at, l.id
+      limit 1`,
+    [activityId, eventId],
+  );
+  return result.rows[0]?.event_id ?? null;
+}
+
 // POST /:id/activities — attach an activity by hand (so `device_data` can be
 // met): a canonical activity inside the caller's calendar read scope and the
 // event owner's tree (withinEventOwner), on one of the event's days, with at
 // least one participant who is a target of the event that day; already
-// linked to this event is kept, to another is a 409. "Linked" counts every
-// live link of the activity's aliases too (ADR-001: a link of an activity
-// merged into this one names this one), so a merge never lets the survivor
-// take a second event (independent review of PR #313, MEDIUM-1). The
+// linked to this event is kept, to another is a 409 (`linkedEventOf`). The
 // activity row is locked FOR SHARE after the event.
 export async function attachActivity(ctx, eventId, body) {
   if (!isUuid(eventId)) throw notFound();
@@ -1300,11 +1317,7 @@ export async function attachActivity(ctx, eventId, body) {
       `select a.id, a.lifecycle_state, a.occurred_local_date, (${scope}) as in_scope,
               a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id, ot.club_id as owner_team_club_id,
               exists (select 1 from training.activity_participants ap
-                       where ap.activity_id = a.id and ap.merge_status = 'canonical' and ${targeted}) as targeted,
-              (select l.event_id from calendar.event_activity_links l
-                where l.activity_id in (select x.activity_id from training.activity_alias_ids(a.id) x) and l.ended_at is null
-                order by (l.event_id = $2::uuid) desc, l.linked_at, l.id
-                limit 1) as linked_event_id
+                       where ap.activity_id = a.id and ap.merge_status = 'canonical' and ${targeted}) as targeted
          from training.activities a
          left join public.teams ot on ot.id = a.owner_team_id
         where a.id = $1${lock ? `
@@ -1321,10 +1334,11 @@ export async function attachActivity(ctx, eventId, body) {
     if (activity.lifecycle_state === "superseded") throw conflict("activity_superseded", "This activity was merged into another one. Reload and try again.");
     if (!inEventDays(row, dateStr(activity.occurred_local_date))) throw conflict("activity_outside_event", "The activity must be on one of the event's days.");
     if (activity.targeted !== true) throw conflict("activity_not_targeted", "No participant of this activity is a target of this event on that day.");
-    if (activity.linked_event_id && String(activity.linked_event_id) !== String(row.id)) {
+    const linkedEventId = await linkedEventOf(client, activity.id, row.id);
+    if (linkedEventId && String(linkedEventId) !== String(row.id)) {
       throw conflict("activity_already_attached", "This activity is already attached to another event.");
     }
-    const fresh = !activity.linked_event_id;
+    const fresh = !linkedEventId;
     if (fresh) {
       await client.query(
         `insert into calendar.event_activity_links (event_id, activity_id, link_method, linked_by_user_id) values ($1, $2, 'manual', $3)`,
