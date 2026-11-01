@@ -19,6 +19,8 @@ import {
   replaceName, restoreVariable, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { ensureSourceFieldsList } from "./source-fields-actions.js";
+import { ensureMappingsList } from "./metric-mappings-actions.js";
+import { mappingsContext } from "./metric-mappings-data.js";
 import { sourceFieldsContext } from "./source-fields-data.js";
 
 export const KEY_SUGGESTION_DELAY_MS = 350;
@@ -102,6 +104,7 @@ export function loadDataConfigHome(render) {
   const reads = [ensureClassification(render)];
   if (!s.list.loaded && !s.list.loading) reads.push(loadVariables(render));
   if (sourceFieldsContext()) reads.push(ensureSourceFieldsList(render));
+  if (mappingsContext()) reads.push(ensureMappingsList(render));
   render();
   return Promise.all(reads);
 }

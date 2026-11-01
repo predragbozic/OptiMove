@@ -7,6 +7,7 @@ import { renderGpexeImportsHtml } from "./gpexe-import-view.js";
 import { variablesContext } from "./metric-variables-data.js";
 import { renderVariablesHtml } from "./metric-variables-view.js";
 import { renderSourceFieldsHtml } from "./source-fields-view.js";
+import { renderMappingsHtml } from "./metric-mappings-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -1452,7 +1453,7 @@ function trainingLoadFilterCount() {
 // Pure, exported so both the render side and tests can assert space
 // membership directly instead of re-deriving it from markup.
 export function trainingLoadTopLevelSpace(section) {
-  if (section === "variables" || section === "source-fields") return "dataConfig";
+  if (section === "variables" || section === "source-fields" || section === "mappings") return "dataConfig";
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
@@ -1606,6 +1607,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "imports" ? renderGpexeImportsHtml() : ""}
       ${section === "variables" ? renderVariablesHtml() : ""}
       ${section === "source-fields" ? renderSourceFieldsHtml() : ""}
+      ${section === "mappings" ? renderMappingsHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
     </div>
   `;

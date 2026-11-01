@@ -6,7 +6,9 @@
 // while a read runs, fails or holds a filtered list, the way into each screen
 // and back, Source fields' way back to the start screen, the focus moving to
 // each new screen's title, and every row of a read in a list that scrolls
-// inside its card (the owner's request of 2026-10-30).
+// inside its card (the owner's request of 2026-10-30). Phase 8 (J16) adds the
+// Mappings card for an administrator, counted from the Mappings section's own
+// first list page.
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -27,6 +29,7 @@ const { handleVariablesAction, loadVariablesSection, resetVariables } = await im
 const { variablesState } = await import("../metric-variables-data.js");
 const { renderVariablesHtml } = await import("../metric-variables-view.js");
 const { resetSourceFields } = await import("../source-fields-actions.js");
+const { resetMappings } = await import("../metric-mappings-actions.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { handleTrainingLoadAction } = await import("../training-load-actions.js");
 const { state } = await import("../state.js");
@@ -34,6 +37,7 @@ const { state } = await import("../state.js");
 const VB = "/api/training-load/sources/metrics/variables";
 const CB = "/api/training-load/sources/metrics/classification";
 const FB = "/api/training-load/sources/metrics/fields";
+const MB = "/api/training-load/sources/metrics/mappings";
 const CLUB = "11111111-0000-4000-8000-000000000001";
 
 const node = (id, name, over = {}) => ({ id, key: id, name, description: null, ownerScope: "system", state: "active", editable: true, actions: [], namesToken: "b".repeat(64), truncated: false, ...over });
@@ -49,11 +53,14 @@ const field = (id, label) => ({ id, sourceSystem: "gpexe", apiFamily: "rest_v1",
 let variables = [];
 let nextCursor = null;
 let fields = [];
+let mappings = [];
+const mapping = (id, label) => ({ id, ownerScope: "system", sourceMetric: { id: "f1", label: "Total time" }, metricDefinitionId: "v1", target: { label }, latestVersion: null, activeVersionId: null, versionCounts: {} });
 function serve() {
   respond = (call) => {
     if (call.method === "GET" && call.url === CB) return { status: 200, body: tree() };
     if (call.method === "GET" && call.url.startsWith(`${VB}?`)) return { status: 200, body: { variables, nextCursor } };
     if (call.method === "GET" && call.url === FB) return { status: 200, body: { fields } };
+    if (call.method === "GET" && call.url === MB) return { status: 200, body: { mappings, nextCursor: null } };
     return { status: 404, body: { error: "notFound" } };
   };
 }
@@ -79,10 +86,12 @@ const asCoach = () => { state.currentUser = { id: "u1", activeWorkspace: { type:
 beforeEach(() => {
   resetVariables();
   resetSourceFields();
+  resetMappings();
   calls.length = 0;
   variables = [variable("v1", "Total distance", "run"), variable("v2", "Sprint <i>distance</i>"), variable("v3", "Top speed", "speed"), variable("v4", "Accelerations")];
   nextCursor = null;
   fields = [field("f1", "Total time"), field("f2", "Distance <x>")];
+  mappings = [mapping("m1", "Time <z>")];
   serve();
   state.activeTab = "training-load";
   state.trainingLoad.section = "variables";
@@ -90,19 +99,20 @@ beforeEach(() => {
   content.innerHTML = "";
 });
 
-test("1. Data configuration opens on the start screen: four cards for an administrator, each with its count and its rows, from one read each", async () => {
+test("1. Data configuration opens on the start screen: five cards for an administrator, each with its count and its rows, from one read each", async () => {
   assert.equal(variablesState().view, "home", "a fresh screen starts on the start screen");
   await loadVariablesSection(render);
-  assert.deepEqual(gets().sort(), [CB, FB, `${VB}?scope=own&state=active`].sort(), "the tree, the list and the fields: one read each, no read of its own");
+  assert.deepEqual(gets().sort(), [CB, FB, MB, `${VB}?scope=own&state=active`].sort(), "the tree, the list, the fields and the mappings: one read each, no read of its own");
   assert.equal($("#metric-variables-title").textContent, "Data configuration");
   assert.deepEqual(cards(), [
     { title: "Variables", summary: "4 active variables", rows: ["Total distance", "Sprint <i>distance</i>", "Top speed", "Accelerations"] },
     { title: "Domains", summary: "2 domains · 1 archived", rows: ["Endurance <b>", "Speed"] },
     { title: "Categories", summary: "1 category · 1 archived", rows: ["Aerobic capacity"] },
     { title: "Source fields", summary: "2 fields", rows: ["Total time", "Distance <x>"] },
+    { title: "Mappings", summary: "1 mapping", rows: ["Time <z>"] },
   ]);
-  assert.ok(content.innerHTML.includes("Sprint &lt;i&gt;distance&lt;/i&gt;") && content.innerHTML.includes("Endurance &lt;b&gt;") && content.innerHTML.includes("Distance &lt;x&gt;"), "every name is escaped");
-  assert.equal(content.querySelectorAll("i, b, x").length, 0);
+  assert.ok(content.innerHTML.includes("Sprint &lt;i&gt;distance&lt;/i&gt;") && content.innerHTML.includes("Endurance &lt;b&gt;") && content.innerHTML.includes("Distance &lt;x&gt;") && content.innerHTML.includes("Time &lt;z&gt;"), "every name is escaped");
+  assert.equal(content.querySelectorAll("i, b, x, z").length, 0);
   // A variable with an icon shows it; one without shows the neutral tile.
   const rows = content.querySelectorAll(".dc-card")[0].querySelectorAll(".dc-card-row .dc-tile-variable");
   assert.equal(rows[0].classList.contains("is-empty"), false);
@@ -127,23 +137,26 @@ test("1. Data configuration opens on the start screen: four cards for an adminis
   assert.ok(!$(".metric-variables-segmented") && !$(".training-load-subnav"), "no switch: the start screen replaces both");
 });
 
-test("2. a club's administrator gets the same four cards; a team's coach three, never Source fields, and nothing reads the fields", async () => {
+test("2. a club's administrator gets the same five cards; a team's coach three, never Source fields or Mappings, and nothing reads them", async () => {
   asClub();
   await loadVariablesSection(render);
-  assert.deepEqual(cards().map((c) => c.title), ["Variables", "Domains", "Categories", "Source fields"]);
+  assert.deepEqual(cards().map((c) => c.title), ["Variables", "Domains", "Categories", "Source fields", "Mappings"]);
   assert.match(content.textContent, /How FK <Borac>'s training data is described/);
   assert.ok(content.innerHTML.includes("FK &lt;Borac&gt;"), "the club's name is escaped");
   resetVariables();
   resetSourceFields();
+  resetMappings();
   calls.length = 0;
   asCoach();
   await loadVariablesSection(render);
   assert.deepEqual(cards().map((c) => c.title), ["Variables", "Domains", "Categories"]);
   assert.ok(!gets().includes(FB), "a coach's screen never reads the source fields");
+  assert.ok(!gets().includes(MB), "nor the mappings");
   assert.match(content.textContent, /The variables of this team's club and how they are grouped\./);
   // Rendered in Training Load, the coach's start screen has no way to Source fields.
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!html.includes('data-section="source-fields"'));
+  assert.ok(!html.includes('data-section="mappings"'));
 });
 
 test("3. a card says what it can: loading, a failed read, a list that holds more than its first page, a filtered list, nothing yet", async () => {
@@ -159,19 +172,23 @@ test("3. a card says what it can: loading, a failed read, a list that holds more
 
   resetVariables();
   resetSourceFields();
-  respond = (call) => (call.url === FB || call.url === CB || call.url.startsWith(`${VB}?`) ? { status: 500, body: { error: "internal_error" } } : base(call));
+  resetMappings();
+  respond = (call) => (call.url === FB || call.url === MB || call.url === CB || call.url.startsWith(`${VB}?`) ? { status: 500, body: { error: "internal_error" } } : base(call));
   await loadVariablesSection(render);
-  assert.deepEqual(cards().map((c) => c.summary), ["Could not be loaded. Open the list to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again."]);
+  assert.deepEqual(cards().map((c) => c.summary), ["Could not be loaded. Open the list to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again."]);
 
   resetVariables();
   resetSourceFields();
+  resetMappings();
   nextCursor = "next";
   variables = [variable("v1", "Total distance")];
   fields = [];
+  mappings = [];
   respond = base;
   await loadVariablesSection(render);
   assert.equal(cards()[0].summary, "More than 1 active variables");
   assert.equal(cards()[3].summary, "No source fields yet");
+  assert.equal(cards()[4].summary, "No mappings yet");
 
   // A list read with a filter or another state counts nothing: it is not this workspace's active list.
   variablesState().stateFilter = "archived";
@@ -250,7 +267,7 @@ test("7. a card shows every row its read holds; from the fifth row on its list s
   variables = Array.from({ length: 12 }, (_, i) => variable(`v${i + 1}`, `Variable ${i + 1}`));
   fields = Array.from({ length: 10 }, (_, i) => field(`f${i + 1}`, `Field ${i + 1}`));
   await loadVariablesSection(render);
-  assert.deepEqual(gets().sort(), [CB, FB, `${VB}?scope=own&state=active`].sort(), "still one read each, no read of its own");
+  assert.deepEqual(gets().sort(), [CB, FB, MB, `${VB}?scope=own&state=active`].sort(), "still one read each, no read of its own");
   const [vars, domains, categories, sources] = cards();
   assert.deepEqual([vars.summary, vars.rows.length, vars.rows[11]], ["12 active variables", 12, "Variable 12"], "every variable of the read, the count unchanged");
   assert.deepEqual([sources.summary, sources.rows.length, sources.rows[9]], ["10 fields", 10, "Field 10"], "every field, the count unchanged");

@@ -12,6 +12,8 @@
 import { sourceFieldsContext, sourceFieldsState } from "./source-fields-data.js";
 import { CHEVRON_HTML, fieldTileHtml, nodeTileHtml, variableTileHtml } from "./data-config-tiles.js";
 import { currentRevision } from "./source-fields-data.js";
+import { mappingsContext, mappingsState } from "./metric-mappings-data.js";
+import { mappingsCardSummary } from "./metric-mappings-view.js";
 import { escapeHtml } from "./utils.js";
 
 // Up to four rows fit without scrolling; from the fifth on the list scrolls
@@ -99,6 +101,13 @@ function sourceFieldsCard() {
   return card({ attrs: `data-action="training-load-section" data-section="source-fields"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Source fields", summary, rows });
 }
 
+// Mappings (phase 8, J16 3): the first page of the section's own list.
+function mappingsCard() {
+  const list = mappingsState().list;
+  const rows = list.loaded ? list.items.map((m) => `${fieldTileHtml({ valueShape: "number" }, { size: "sm" })}<span>${escapeHtml(m.target?.label || m.target?.key || "")}</span>`) : [];
+  return card({ attrs: `data-action="training-load-section" data-section="mappings"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Mappings", summary: escapeHtml(mappingsCardSummary(list)), rows });
+}
+
 export function renderDataConfigHomeHtml(s, ctx) {
   return `
     <div class="metric-variables-head">
@@ -113,6 +122,7 @@ export function renderDataConfigHomeHtml(s, ctx) {
       ${nodesCard(s, "domain")}
       ${nodesCard(s, "category")}
       ${sourceFieldsContext() ? sourceFieldsCard() : ""}
+      ${mappingsContext() ? mappingsCard() : ""}
     </ul>
   `;
 }
