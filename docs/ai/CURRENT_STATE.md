@@ -2663,6 +2663,18 @@ Technical details.
         - **Next (J17 section 10.2, steps 3–5):** three system mappings (TIME → `duration`, TotDist → `total_distance`,
           SPEEDmax → `maximal_running_speed`), submitted and activated, then switched on for the First team's binding
           with the requirement of O6 (the owner's decision).
+        - **Steps 3–5 as the owner reports them** (a screenshot at 22:23 CET, relayed by the *Rukovodilac*; the
+          database was not read): the mapping Duration (from TIME) is System, version 1 Active (s → min, Session and
+          Drill), switched on for the First team's binding (GPEXE team 980), Required, from 01.11.2026; Total distance
+          (from TotDist) and Maximal running speed (from SPEEDmax) are System, version 1 Active, their switching-on not
+          shown on the screenshot.
+      - **J17 accepted (A1), 2026-11-01:** the owner's turn `e34ccb50` (21:23:53 UTC, relayed by the *Rukovodilac* and
+        checked) accepts the contract and decides O1, O3–O6, O8, O9 and O11–O16 as recommended (J17 section 12.3):
+        production; a full restore as the way back; F3c4 after the import; Q1 (c) and the cap waived for the pilot;
+        the three fields, Required; O12 — section 10 is the red-zone list; O13 — 9-B deployed at once after both GOs on
+        the owner's word; no migration; procedural window controls; system variables only. **O10 stays open** (the
+        production-use gate and the link gates, which the owner reports); it blocks only the import window. The code
+        of phase 9 may start: 9-0 (switch conditions 2 and 3), then 9-B.
         - **9-R**, the backup of the deployed database from the owner's computer (O2,
           `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase)"): PR #315, merged `3032b3b` (parents
           `73b2776` and `76b57625`) exactly from its head, on the same owner's word, after the GOs of the *Rukovodilac*

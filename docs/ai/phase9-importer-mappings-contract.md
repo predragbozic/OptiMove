@@ -7,7 +7,7 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 
 | | |
 |---|---|
-| Status | **Proposed** (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; amended for the owner's decisions of 2026-11-01, C110 and O2, section 12.3; the owner's acceptance pending) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
+| Status | **Accepted** by the owner on 2026-11-01 (A1; turn `e34ccb50`, 21:23:53 UTC, section 12.3), with O1, O3–O6, O8, O9 and O11–O16 decided as recommended and O10 open. Proposed (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; amended for the owner's decisions of 2026-11-01, C110 and O2, section 12.3) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
 | Mark | ★★ (triggers 1, 2, 3 and 4 — trigger 2 added by this contract for sections 4.1 and 6.1, the plan's phase 9 line naming 1, 3 and 4 (R3); the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
 | Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
@@ -837,7 +837,32 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 ### 12.3 Decided by the owner
 
 Relayed by the *Rukovodilac* with the owner's words and event ids, each checked by the executor in the *Rukovodilac*'s
-transcript. The acceptance of this contract (the plan's rule A1) and the other O-items stay open.
+transcript.
+
+- **A1: the acceptance of this contract, and O1, O3–O6, O8, O9, O11–O16** — „Prihvatam ugovor J17 (faza 9). Preostale
+  odluke O1, O3–O6 i O8–O16 po preporukama Rukovodioca: prvi uvoz u produkciji, put nazad je vraćanje celog backupa,
+  F3c4 posle uvoza, preskočiti Q1(c) i cap za pilot, polja pilota trajanje/distanca/max brzina sa Required, O8 ne
+  treba, O9 urađeno, O11 pre redovnih uvoza, sekcija 10 je spisak crvene zone, 9-B deploy odmah posle oba GO-a na moju
+  reč, bez migracije, proceduralne kontrole prozora, samo sistemske varijable u pilotu.” (owner turn `e34ccb50`,
+  2026-11-01 21:23:53 UTC, with a screenshot). Read item by item against section 12.2:
+  - **O1:** the first import is in production.
+  - **O3:** (a) — a full restore of the backup is the only way back for the pilot.
+  - **O4:** F3c4 comes after the controlled import.
+  - **O5:** Q1 (c) and the pinned step's cap are waived for the pilot (system mappings only).
+  - **O6:** (a) — `total_time`, `total_distance` and `max_v`, each activation `required` (under C110 a missing value is
+    left out, not a blocked session).
+  - **O8:** not needed (no event count in the pilot).
+  - **O9:** done — P1 on the stored snapshot of session 190122 (PR #316).
+  - **O10: open.** The owner's range "O8–O16" covers it, but the turn gives no answer for it and section 12.2 has no
+    recommendation to follow: it is the state of the production-use gate and of the link gates (1) and (2), which the
+    owner reports. It blocks no code (9-0, 9-B); it blocks the import window (section 10.3).
+  - **O11:** condition 5 stays open, to be closed before regular imports, not before the pilot.
+  - **O12:** section 10 of this contract is phase 9's red-zone list; the plan needs no "Input (red zone)" or "Start"
+    line for it.
+  - **O13:** 9-B is deployed at once after both GOs, on the owner's word naming the deploy (R3 unchanged).
+  - **O14:** no migration in phase 9.
+  - **O15:** the procedural controls of section 10.3; no allowlist.
+  - **O16:** system variables only in the pilot.
 
 - **O2** — „O2: backup ručnim pg_dump-om sa mog računara i proverom vraćanja u lokalni Postgres. Pripremi postupak u
   9-R.” (owner turn `9348cbc7`, 2026-11-01 19:20:57 UTC). Section 12.2, O2.
