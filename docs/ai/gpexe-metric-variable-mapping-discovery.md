@@ -1894,8 +1894,9 @@ of C50; the rollback refuses unless these rows are exactly the seed.
 ## F. Required / optional and the fail-closed table
 
 **Amended for the pilot by C110 (2026-11-01):** row 4 (a `required` value missing) and a converted value outside the
-variable's `min` / `max` leave out only that value (form B), not the whole candidate; the audience list and the
-skip-code paragraph below follow it (their plain reason is shown to every level on the Left-out entry); J17 builds it.
+variable's `min` / `max` leave out only that value (form B), not the whole candidate. The audience list below is
+superseded for these two codes (the plain reason on the Left-out entry for every level, the code for the two admins)
+and is rewritten in 9-B; the skip-code paragraph below names the change. J17 builds it.
 
 | Case | Behaviour | Visibility |
 |---|---|---|

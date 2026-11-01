@@ -269,7 +269,7 @@ steps 2a and 6b) and rolls back (R10).
    - no value at all to write — no open activation, or every mapped value left out → `blocked`,
      **`no_mapped_values`** (R4; never Ready, C17).
    Who reads which code is section 6.1; no refusal names another team, club, connection, instance or holder
-   (`discovery:1892-1895`).
+   (section F's audience list ("Audience of every refusal code", `discovery:1920-1926`)).
 9. **`savepoint gpexe_preview_import`, then the writes.** Every source identity of the import inserted and locked
    `FOR UPDATE` first (with the `team_session:<id>` reservation; today `gpexeImportWriter.js:468-484`), then the event,
    the threshold-set binding, segments, participants, the materialized activity and drill components — as today. The
@@ -417,7 +417,7 @@ to every level). So 9-B adds:
   `blockedSourceCode`; the two Left-out codes of C110 are value-level reasons, never in `BLOCKED_CODES`
   (`gpexeImportReasons.js:12-13`: that map is "why the whole session cannot be imported"), and a session that carries
   only them has `blockedCode` null.
-- **The discovery document's audience list** (`discovery:1892-1895`) gains `no_mapped_values` and
+- **The discovery document's audience list** (section F's audience list ("Audience of every refusal code", `discovery:1920-1926`)) gains `no_mapped_values` and
   `source_instance_changed`, loses `nothing_to_import` and `source_metric_target_taken` (neither is an importer refusal
   of a mapped value) and `required_value_missing` (a Left-out reason under C110, its plain reason shown to every level),
   records `canonical_value_out_of_range` the same way, and records the platform-admin-only level of the instance codes
@@ -515,7 +515,8 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
 - F rows 1–2: an unactivated known field shows its label to the two admins and only a count to a coach.
 - Every mapped value left out (optional, required under C110, or out of range) → `blocked` `no_mapped_values`, never
   Ready.
-- C110 audience: a session carrying only Left-out entries of C110 has `blockedCode` null and is Ready; the coach's
+- C110 audience: a session carrying only Left-out entries of C110, with at least one mapped value written, has
+  `blockedCode` null and is Ready; the coach's
   projection keeps each entry's plain reason and never shows "This session can't be imported".
 - C110 (pilot form B): a `required` value missing for one athlete at one level → that value Left out with
   `required_value_missing`, every other value of the session imported and the candidate Ready; a converted value
