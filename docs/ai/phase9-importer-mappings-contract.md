@@ -10,8 +10,8 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 | Status | **Proposed** by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120`). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
 | Mark | ★★ (triggers 1, 2, 3 and 4; the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
-| Owner decisions | Section 12.2 (O1–O15). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
-| Decides | The owner: O1–O15. The *Rukovodilac*: R1 and R3–R17 (section 12.1; R2 became O14). The *Nezavisni revizor* reviews this contract and 9-B (★★). |
+| Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
+| Decides | The owner: O1–O16. The *Rukovodilac*: R1 and R3–R18 (section 12.1; R2 became O14). The *Nezavisni revizor* reviews this contract and 9-B (★★). |
 
 ---
 
@@ -202,7 +202,7 @@ steps 2a and 6b) and rolls back (R10).
      keys are set from NULL (the write-once trigger allows it). A `23505` on
      `metric_source_connections_one_active_instance` (another team holds the triple) → `rollback to savepoint` and
      `source_instance_held` (whole candidate). Row locks taken before the savepoint survive the rollback to it, so the
-     transaction stays usable and the candidate can be stored as `blocked`.
+     transaction stays usable and the candidate can be stored as `blocked`. A successful write releases the savepoint.
    - The active row with keys set: they must equal the binding's, else `source_instance_changed`.
    - The session's `team_session:<id>` identity exists under another v11 row with the same triple (any state) →
      `session_imported_under_another_instance`. The lookup crosses owner scopes and returns a boolean only, never an
@@ -212,12 +212,21 @@ steps 2a and 6b) and rolls back (R10).
    already held.
    - **6b (approval only). The approver's rights `FOR SHARE`** (`lock_gpexe_import_approver`, v23 `:33-57`), after
      every registry row, as D orders (`discovery:1213-1219`). A right revoked since step 1 → `42501` →
-     `403 not_an_approver`, nothing written. Taking them in step 1, as today, would close a cycle with a platform-admin
-     revoke and a 7d operation: the revoke locks every active platform admin `FOR UPDATE` in id order
-     (`routes/organization.js:522-531`, `:962-978`), a 7d operation holds its registry rows and then waits for its own
-     admin's rows `FOR SHARE` (`source_metric_require_platform_admin`, `v34:167-173`), and the importer, holding the
-     approver's rows, would wait for that registry row (R5). The approval row's v23 / v33 trigger then finds the
-     rows already held.
+     `403 not_an_approver`, nothing written. The approval row's `basis` and grant come from this locked result, not from
+     step 1's unlocked check (`gpexeImportService.js:2243`). The approval row's v23 / v33 trigger then finds the rows
+     already held.
+   - *Why here, and what remains (R5).* Taking the rights in step 1, as today, would close a cycle with a
+     platform-admin revoke and a 7d operation: the revoke locks every active platform admin `FOR UPDATE` in id order
+     (`routes/organization.js:522-531`, `:962-978`); a 7d operation holds its registry rows and then waits for its own
+     admin's rows `FOR SHARE` (`source_metric_require_platform_admin`, `v34:167-173`); the importer, holding the
+     approver's rows, would wait for that registry row. Step 6b removes that cycle. It does **not** make the approval
+     cycle-free: the roster commands take the actor's rights first and the team import lock second
+     (`lock_activity_decider`, v26 `:750-759`; `activityRosterCommands.js:9-19, :278-283`), the inverse of the
+     importer's team lock → rights, so a roster command by one platform admin, a revoke and an approval by another can
+     still form a cycle. A check-time preview started by a platform admin is in the same class (its event row's
+     `created_by_user_id` takes `FOR KEY SHARE` on the user's row, `gpexeImportWriter.js:245-247`). PostgreSQL breaks
+     such a cycle with `40P01`; 9-0's bounds and the `40P01` → `try_again` mapping (section 9) answer it with nothing
+     written. Reordering the roster commands is a separate decision, not in this contract.
 7. **The plan (pure, no lock).** Built **after** the locks, from the stored bundle and the locked activation set:
    one `metricSpec` per activation, whose `extract` is `extractorFor(source_system, api_family, source_metric_key)`
    with the version's `source_parameters` (never a bound or threshold from code, discovery section E), at the
@@ -254,9 +263,10 @@ steps 2a and 6b) and rolls back (R10).
     extractor's value as an exact decimal string). The writer checks C55's conditions before it writes, for its stable
     codes; the trigger is the backstop, and a `23514` from it inside the savepoint is answered as `internal_error`
     with nothing written (never a value without its T6 row). Never a stronger lock after a T6 insert. **Logs** on
-    this path carry the SQLSTATE and the constraint or trigger name only, never an error's message or stack (the
-    v13 messages carry the value and the definition id, `v13:307, :310`; today's sinks `gpexeImportService.js:1112,
-    :2289, :2295` log message or stack text).
+    this path carry only the database error's `code`, `constraint`, `table` and `routine` fields, never its `message`,
+    `detail`, `where`, `hint` or a stack (the v13 messages carry the value and the definition id, `v13:307, :310`). 9-B
+    rewrites the sinks that log message or stack text today: `gpexeImportService.js:1112, :2289, :2295, :2441, :2452`
+    and `routes/gpexeImport.js:181`.
 11. **Hashes.** The occasion content hash gains the mapping version id and, per value, the source value and unit
     (`discovery:1645-1648`): a session re-imported under a new mapping version is `needs_review`, never a silent
     supersede. The preview hash gains the sorted set of `(activation_id, mapping_version_id)` (`discovery:1883`).
@@ -297,8 +307,11 @@ One source field may carry several mappings (the closed power zone serves 25–6
   (`canonical_activity_results`, v4 `:770-781`), and preview v3 carries the variable's `label` and `unit`, while the
   catalog shows a club-owned definition only to that club's admin (`trainingLoadMetricsAccess.js:116-134`). For a
   coach, the preview projection (section 6.1) names a club variable only where C99 admits that coach to it (an active
-  coach of an active team of that club, in that team's workspace, `discovery:891-895`), otherwise as "Club variable";
-  system variables are named for everyone (R17). The pilot uses system variables
+  coach of an active team of that club, in that team's workspace, `discovery:887-893`; the predicate C99 built is
+  `resolveVariableEditor`, `canonicalVariableAdminService.js:735-763`, not `catalogVisibilitySql`), otherwise as "Club
+  variable"; system variables are named for everyone (R17). After an import, the activity results carry only the
+  definition id, which the catalog hides from a team coach for a club variable; so no club mapping is switched on for a
+  binding before that view is decided (O16). The pilot uses system variables
   only (section 10.2, step 3).
 
 ---
@@ -340,7 +353,7 @@ One source field may carry several mappings (the closed power zone serves 25–6
 
 A coach's Imports screen shows one sentence for all of them ("This session can't be imported until an administrator
 finishes its data setup."), a platform admin and the club's admin the precise reason (except the three instance codes
-above). No log on this path carries an error's message, a value or an id (section 3, step 10).
+above). No log on this path carries an error's message, a value or a value-bearing id (section 3, step 10).
 
 ### 6.1 The audience mechanism
 
@@ -352,13 +365,19 @@ Today only check rows are masked for a coach (`adminViewerOf`, `routes/gpexeImpo
 and `reasons` (`gpexeImportService.js:2375-2383, :2396`); the coach screen shows Technical details to everyone
 (`frontend/gpexe-import-view.js:222-231`). Preview v3 adds mapping ids, fingerprints and the `required_value_missing`
 athlete detail to that same column. So 9-B adds:
-- **One audience per request**, computed once by the route from its own access snapshot (`adminViewerOf`'s
-  definition, extended with the platform-admin-only level of the instance codes) and passed down to the list, the
-  detail, the approval's refusals and the batch results; the service never recomputes it.
-- **A projection of the stored preview for a non-admin**: the codes of section 6 replaced by the stable code and
+- **One audience per request, three levels** — `platform` (an active platform admin), `club_admin` (the owning club's
+  active admin in that club's workspace) and `other` — computed once by the route from its own access snapshot
+  (`adminViewerOf`'s definition, split into its two bases) and passed down to **six surfaces**: the list, the detail,
+  the approval's refusals, the batch results, the candidate read inside a successful approval's answer
+  (`routes/gpexeImport.js:176-188`, which embeds `getCandidate`), and the stored candidate a check shows. The service
+  never recomputes it; the parameter is **required, with no default**, and a missing or unknown level is treated as
+  `other`.
+- **A projection of the stored preview per level.** For `other`: the codes of section 6 replaced by the stable code and
   sentence, no `activationId`, `mappingVersionId`, `sourceParameterFingerprint`, athlete detail of a refusal or
-  instance fact; values and their labels as section 4.1 says. The preview hash stays computed on the full preview, so
-  an approval still compares equal; the approval route compares the hash the caller sent, never a projected one.
+  instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
+  instance codes, which become `mapping_not_usable` with its sentence in `preview.blocked`, `blockedCode` and
+  `blockedSourceCode`. `platform` sees the stored preview. The preview hash stays computed on the full preview, so an
+  approval still compares equal; the approval route compares the hash the caller sent, never a projected one.
 - **A closed set of admin-only candidate codes** with a test that every code of section 6 is classified (as the
   resolver's test does), and the new codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
   `blockedSourceCode`.
@@ -434,10 +453,11 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
 
 ### 8.2 Also in 9-B
 
-- Every code of section 6 through the real route, on **all five surfaces** (the list, the detail, the approval's
-  refusal, the batch result, the check's stored candidate) as a coach, a granted coach, the club's admin and a platform
-  admin: the audience split of section 6.1, the instance codes for a platform admin only, no holder named, the
-  projection carrying none of the admin-only fields, and the hash of the full preview still accepted by the approval.
+- Every code of section 6 through the real route, on **all six surfaces** of section 6.1 as a coach, a granted coach,
+  the club's admin and a platform admin: the three levels, the instance codes for a platform admin only (the club's
+  admin sees `mapping_not_usable`), no holder named, the projection carrying none of the admin-only fields, a call
+  without a level treated as `other`, and the hash of the full preview still accepted by the approval.
+- R17: a club variable's name for a coach of a team of that club in its workspace, "Club variable" for anyone else.
 - `required` against `optional`, including the drill-level rule of R9.
 - The preview hash changes when an activation ends between preview and approval; the content hash changes under a new
   mapping version (`needs_review`); a re-import that only adds a mapped metric is `supplemented` (the decimal compare of
@@ -446,8 +466,10 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
 - Concurrency (real connections): the import against a 7d version end (its T5 `FOR NO KEY UPDATE` waits); against an
   Unbind (`try_again` at the team lock, C58); against a 7g instance end (its try-lock); two approvals of the same team;
   **an approval, a 7d operation by another platform admin and a platform-admin revoke together** (the cycle step 6b
-  avoids; a revoke of the approver lands as `403 not_an_approver` with nothing written); no `40P01` in any order (C57).
-  Each wait falls under 9-0's bound.
+  removes; a revoke of the approver lands as `403 not_an_approver` with nothing written); **an approval, a roster
+  command by another platform admin and a platform-admin revoke together** (the cycle class that remains): any
+  `40P01` is answered `try_again` with nothing written, never a partial write. No `40P01` arises between the importer
+  and a 7d writer, an Unbind or a 7g end (C57). Each wait falls under 9-0's bound.
 - The T7 refusal through a fault seam (two teams on one triple are unreachable through v30): the `23505` rolls back to
   its savepoint and the candidate is stored `blocked` `source_instance_held`.
 - A value-bearing trigger error injected on the import path: the log holds the SQLSTATE and the constraint or trigger
@@ -483,13 +505,14 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
     resolved, never answered `try_again`.
 - **Condition 2, the check-time preview.** The same three bounds in `buildCandidatePreview`
   (`gpexeImportPreview.js:155-171`), whose transaction holds the team lock (so an Unbind, a 7g end and a settings
-  change answer `try_again` for as long as it waits). A bounded wait there fails the check with a stable code, never a
-  `blocked` candidate.
+  change answer `try_again` for as long as it waits), and the same `error` listener on its client in `recordCandidate`
+  (`gpexeImportService.js:1166-1173`). A bounded wait there fails the check with a stable code, never a `blocked`
+  candidate; a test proves a killed preview session fails the check with a stable code and the process survives.
 - **Condition 2, the deployed request timeout** (Render and any proxy) is an owner step (section 10, step 7).
 - **Condition 3, on disposable databases only.** The undo script learns the team from the `metric_events` row
   (`gpexe-undo-imported-session.mjs:289`), so it reads the event without a lock, takes `lockTeamForImport`, then
-  re-reads and re-checks the event (the 7g pattern, `sourceInstanceEndService.js:219-266`), after its
-  `user_global_roles` read and before any other lock. A test proves an undo waits for a running import of the same team
+  re-reads and re-checks the event (the 7g pattern, `sourceInstanceEndService.js:219-266`); its platform-admin check
+  (`assertPlatformAdmin`, `gpexe-undo-imported-session.mjs:266-289`) moves after the team lock, the importer's order. A test proves an undo waits for a running import of the same team
   and the reverse. The team lock does **not** make the undo safe on a persistent database: it disables triggers table
   by table (`:85-94`, `:298`; `ALTER TABLE … DISABLE TRIGGER` takes a `SHARE ROW EXCLUSIVE` lock), which inverts with
   every other team's import or check-time preview (they write the threshold-set binding, then the values, then T6) and
@@ -522,7 +545,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 ### 10.2 After the evidence (may run before 9-B is deployed; the old importer ignores them)
 
-1. **OWNER — decisions O1–O12 and O14–O15** (section 12.2; O13 at step 6).
+1. **OWNER — decisions O1–O12 and O14–O16** (section 12.2; O13 at step 6).
 2. **OWNER — the first field confirmations** (a separate order, `metrics-core-plan.md:827-828`): the unit act and the
    meaning act in Source fields, as an active platform admin in the platform workspace; each is written once.
    EXECUTOR-PREPARES: the exact units, operators and evidence anchors.
@@ -559,8 +582,12 @@ request, reads or writes no persistent database, and touches no Render or Supaba
     - **every** actionable candidate of the team by id: the owner accepts each one by id, or the window does not open
       (O15 offers a technical bound);
     - **every** active platform admin and every un-revoked approver grant of the team: the owner accepts each one;
-    - the open activations and their requirements as decided; the T7 keys of the First team (NULL or the expected
-      triple); the non-canonical link count 0.
+    - the open activations and their requirements as decided, and that the First team's binding is the **only**
+      binding with an open activation (with 9-B live a candidate imports only through an open activation of its own
+      binding, so this bounds the environment-wide switch to that team); the T7 keys of the First team (NULL or the
+      expected triple); the non-canonical link count 0.
+    Every SELECT file runs inside the plan's read-only wrapper (`begin transaction read only;` … `rollback;`,
+    `metrics-core-plan.md:361-363`).
 12. **OWNER — the record row** (environment, backup, `.verify.json`, verified at, confirmed by) is written **before**
     the switch goes on (`gpexe-in-app-import.md:764-767`).
 13. **OWNER — switch on**: `GPEXE_IMPORT_APPLY_ENABLED=true` in Render for the chosen environment only, by the owner's
@@ -616,10 +643,12 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **R4 `no_mapped_values`** as a new code; `nothing_to_import` keeps `no_changes` (it is "up to date" on the screen,
   `frontend/gpexe-import-view.js:65, :177, :765, :1717`). Recommendation: yes.
 - **R5 The lock order** of section 3: the approval's candidate row and then the team lock first; the binding
-  `FOR SHARE` before the registry (every binding writer holds the team lock); the approver's rights after every
-  registry row (step 6b, D's order), with an unlocked right check in the prefix. It amends the wording of C57 ("first"
-  = first among the importer's locks, after the candidate row) and changes today's order of the approver lock;
-  recorded in the discovery document. Recommendation: accept, with `db-reviewer`'s confirmation in 9-B.
+  `FOR SHARE` before the registry (every binding writer holds the team lock; a departure from D's registry → binding
+  order); the approver's rights after every registry row (step 6b, D's order), with an unlocked right check in the
+  prefix. It amends the wording of C57 ("first" = first among the importer's locks, after the candidate row) and
+  changes today's order of the approver lock; recorded in the discovery document. The remaining cycle class with the
+  roster commands (step 6b) is accepted as bounded by 9-0 and answered `try_again`. Recommendation: accept, with
+  `db-reviewer`'s confirmation in 9-B.
 - **R6 A Metrics Core connection found inactive under its `FOR UPDATE`** (reachable only by a raw write, since a 7g end
   needs the team lock): `mapping_not_usable` (recommended) or a new code.
 - **R7 The details unit check:** compare with the revision's proven `source_unit` instead of the literal `'number'`
@@ -640,10 +669,15 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   database) or are retired. Recommendation: take a mapped plan; both stay disposable-only.
 - **R16 A team or club archived after the route's check:** step 2a re-reads the resolver's facts under the team lock
   and answers the identical 404. Through the batch (`approveOneOfBatch`, `gpexeImportService.js:2460`, which turns it
-  into a per-candidate `notFound` and goes on, `BATCH_STOP_CODES` at `:2368`): the batch stops at it.
-  Recommendation: yes, both routes tested.
-- **R17 A club variable's name for a coach** (section 4.1): shown only where C99 admits that coach to the club variable,
-  otherwise "Club variable". Recommendation: yes; the pilot uses system variables only.
+  into a per-candidate `notFound` and goes on, `BATCH_STOP_CODES` at `:2368`): R16 adds that code to
+  `BATCH_STOP_CODES`, so the batch stops at it. Recommendation: yes, both routes tested.
+- **R17 A club variable's name for a coach** (section 4.1): shown only where C99 admits that coach to the club variable
+  (`resolveVariableEditor`'s predicate), otherwise "Club variable", with a test. Recommendation: yes; the pilot uses
+  system variables only.
+- **R18 The three-level audience and the platform-admin-only instance codes** (section 6, 6.1). It departs from section
+  F's accepted rule that the owning club's admin gets every precise code (`discovery:1892-1898`), so that no one but a
+  platform admin learns that another instance or holder exists (the F3c2e rule). Recommendation: yes; the discovery
+  document's audience list is amended in 9-B.
 
 ### 12.2 For the owner
 
@@ -690,6 +724,10 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   switch is read, so it is the owner's decision (section 14). Recommendation: the procedural controls of section 10.3
   for the pilot; the allowlist only if step 11 shows another actionable candidate or another approver the owner does
   not accept.
+- **O16 A club variable through an import.** The activity results carry only a value's definition id, which the
+  catalog hides from a team coach for a club-owned variable (`trainingLoadMetricsAccess.js:116-134`). Until the owner
+  decides whether a team coach sees a club variable's name and unit there, no club mapping is switched on for a team
+  binding. Recommendation: decide it with 7h (club mapping approval); the pilot uses system variables only.
 
 ---
 
@@ -697,6 +735,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 - **The snapshot expiry** (P1, O9).
 - **More locks per approval** while condition 2 is unbuilt; 9-0 comes first.
+- **A rare deadlock answered `try_again`** (a roster command, a platform-admin revoke and an approval together; step 6b).
 - **The visible change at the 9-B deploy** (section 7.3, O13).
 - **No production undo** (O3); a restore loses every later write.
 - **A whole candidate blocked by one athlete** under `required` (C14).
