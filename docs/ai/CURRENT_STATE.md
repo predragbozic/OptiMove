@@ -2639,6 +2639,15 @@ Technical details.
         waits for an administrator's choice; a separate, later work); **C111** — the rules for editing a canonical
         variable, a separate contract after phase 9. J17 is amended for them; its acceptance and the other O-items stay
         open.
+      - **The amendment, PR #314**, was merged by the executor after the GOs of the *Rukovodilac* and the *Nezavisni
+        revizor* on its head `67430ce0`: `dd5f0b2` (parents `2dd0dbd` and `67430ce0`, 2026-11-01 19:46:11 UTC), exactly
+        from that head; its tree is the head's. Documents only, so nothing to deploy for it on its own. The *Nezavisni
+        revizor*'s optional LOW (section F of the discovery document still worded as before C110 and R7) is folded into
+        the facts pull request that follows it.
+      - **Phase P in progress (2026-11-01):** P1, the C97 unit evidence of `total_time`, `total_distance` and `max_v`
+        from one session on the owner's decision, is Draft PR #316 (merged only on the owner's word); P2, the meaning,
+        waits for the GPEXE handbook's pages and the owner's O7. 9-R, the backup of the deployed database from the
+        owner's computer (O2), is Draft PR #315.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that

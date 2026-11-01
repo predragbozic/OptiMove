@@ -743,8 +743,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   (`sourceMetricExtractors.js:140`) stays, as a check of the answer's **shape**; another literal is
   `source_shape_mismatch`, never `source_unit_mismatch`. The proven unit (for burst and brake the seed's hypothesis is
   `count`, `v34:1811-1814`) is a fact of the revision and is compared with T4, never with the answer's literal —
-  comparing the two would refuse every session. It departs from section F's mapping of `unexpected_unit` to
-  `source_unit_mismatch` (`discovery:1904-1911`), amended in 9-B with the code.
+  comparing the two would refuse every session. It departs from section F's earlier mapping of `unexpected_unit` to
+  `source_unit_mismatch`; section F of the discovery document now records R7, and the code follows in 9-B.
 - **R8 `canonical_value_out_of_range`** pre-checked under the locks, the value never logged; per the owner's decision
   C110 it leaves out only that athlete's value at that level in the pilot (form B), never the whole candidate.
 - **R9 The drill-level "missing" under `required`:** a drill the athlete has no row for is not missing;
@@ -801,7 +801,10 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   and shown as such (form C, later, holds the session for an administrator's choice). *Reported by the Rukovodilac
   from a read-only production check (not an O6 answer):* on 2026-11-01 the owner created three system variables —
   `duration` (min), `total_distance` (m) and `maximal_running_speed` (km/h, max 40); under C110 a speed above 40 km/h
-  is left out for that athlete, not a blocked session.
+  is left out for that athlete, not a blocked session. The check followed the owner's „napravio sam proveri" (the
+  *Rukovodilac*'s session, event `755396e6`, 2026-11-01 16:52:13 UTC). It was one `SELECT` in a read-only transaction
+  on `metric_definitions`, its versions and scope capabilities for `owner_scope = 'system'`, and it read no athlete
+  row.
 - **O7 The meaning evidence:** whether the GPEXE 6 handbook counts as official documentation for a server reporting
   9.11.8, or a written GPEXE support answer is needed.
 - **O8 The count unit** (only if O6 includes an event count): `count` as the proven source unit, or `n` with a new
