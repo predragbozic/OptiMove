@@ -197,8 +197,20 @@ test("undo: removes the session reservation even when the binding is gone", asyn
 test("undo: refuses when two gpexe connections carry the same team_session", async () => {
   const org = await setupTeam();
   await runImport(org, makeBundle({ sessionId: 6104, athletes: standardAthletes() }));
-  // v20 allows this: the index covers active connections only.
-  await admin.query(`update training_load.metric_source_connections set state = 'inactive' where owner_team_id = $1 and source_system = 'gpexe'`, [org.teamId]);
+  // v20 allows this: the index covers active connections only. A fixture of a
+  // state no route builds (v50 lets only the end of a held source instance -
+  // a keyed connection, with its audit row - change `state`): v50's two
+  // triggers are off for this one statement only, through
+  // session_replication_role in its own transaction (J13 section 6).
+  await admin.query("begin");
+  try {
+    await admin.query("set local session_replication_role = replica");
+    await admin.query(`update training_load.metric_source_connections set state = 'inactive' where owner_team_id = $1 and source_system = 'gpexe'`, [org.teamId]);
+    await admin.query("commit");
+  } catch (error) {
+    await admin.query("rollback").catch(() => {});
+    throw error;
+  }
   const second = (await admin.query(
     `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`,
     [org.teamId],

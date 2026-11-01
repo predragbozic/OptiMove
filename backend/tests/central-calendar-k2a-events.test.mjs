@@ -38,7 +38,10 @@ const EXTRA_TRAINING_LOAD_MIGRATIONS = [
   "202609011200_training_load_v6_external_schedule_event_type.sql",
   "202609030900_training_load_v8_specific_dates_group.sql",
 ];
-const MIGRATIONS = [...TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...EXTRA_TRAINING_LOAD_MIGRATIONS].sort();
+// The calendar's own migration is v49: this suite stops there, so a later
+// migration (v50, phase 7g) never sits between its rehearsal and its checks.
+const MIGRATIONS = [...TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...EXTRA_TRAINING_LOAD_MIGRATIONS].sort()
+  .filter((m) => m <= V49);
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 const TZ = "Europe/Belgrade";
 

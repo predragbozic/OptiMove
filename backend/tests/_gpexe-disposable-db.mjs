@@ -73,6 +73,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202610301700_training_load_v47_unit_conversion_guards.sql",
   "202610301900_training_load_v48_mapping_activations.sql",
   "202610311000_calendar_v49_events.sql",
+  "202610311200_training_load_v50_source_instance_end.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
