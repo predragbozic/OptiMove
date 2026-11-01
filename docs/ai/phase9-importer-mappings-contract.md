@@ -862,5 +862,6 @@ by the executor.
 - **The ★★ GOs on `e57f854d`:** the *Rukovodilac* (narrow re-review; R7 and the LOW closed) and the *Nezavisni revizor*
   (narrow re-review; one optional LOW: section 7.3 and R3 end the deploy exception "until M6 steps 2–5 are done or the
   owner says otherwise" while O13 has the owner name the deploy, so the text should read "until 9-B is live, deployed
-  on the owner's word (O13)"; the *Rukovodilac*'s unconditional commitment already covers it). The LOW is carried to the
-  next edit of this contract (the owner's acceptance).
+  on the owner's word (O13)"; the *Rukovodilac*'s unconditional commitment already covers it). The *Rukovodilac*
+  accepted it as a wording correction without a new head; it goes into the first later pull request that changes this
+  contract anyway (the owner's acceptance edit, 9-0 or 9-B), recorded here then.

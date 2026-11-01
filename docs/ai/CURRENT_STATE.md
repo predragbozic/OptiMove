@@ -2622,8 +2622,8 @@ Technical details.
         lock cycle, admin-only codes reaching a coach; folded, narrow re-reviews READY WITH NON-BLOCKING NOTES);
         `code-reviewer` in four slices (READY WITH NON-BLOCKING NOTES; one HIGH refuted by the plan's standing merge
         order and closed). The *Nezavisni revizor*: NO-GO on `275cf62f` (MEDIUM: O13 governed the merge of 9-B, not
-        its deploy), GO on `5715f12c` and on `e57f854d` (one optional LOW: the end of the deploy exception, for the
-        next edit of the contract). The *Rukovodilac*: NO-GO on `275cf62f` (MEDIUM: R7, the details literal
+        its deploy), GO on `5715f12c` and on `e57f854d` (one optional LOW: the end of the deploy exception, accepted by
+        the *Rukovodilac* as a wording correction for the first later pull request that changes the contract). The *Rukovodilac*: NO-GO on `275cf62f` (MEDIUM: R7, the details literal
         `"number"` is a shape; LOW: health three times after a Render environment change), GO on `e57f854d`; its
         decisions on R1 and R3–R18 are final, and it committed to deploy no commit that contains 9-B code without the
         owner's word.
