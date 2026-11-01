@@ -143,7 +143,7 @@ team or club row is locked during an approval.
 |---|---|---|---|
 | **9-A** | This contract (docs only) and its pointers in the plan and the discovery document | — | The owner accepts the contract before any code (the plan's rule A1); the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs |
 | **9-0** | Switch conditions 2 and 3 (section 9), reserved since 7g (`metrics-core-plan.md:1075-1078`), and the same bounds on the check-time preview | none | Standing merge order after both GOs (trigger 4). It touches condition (b) of the order — `gpexeImportService.js` is a module `gpexeRetentionCli.js` and `startGpexeRetentionSchedule()` call — so it is covered only when its body says what then runs at start-up and on a schedule and why it writes nothing to production data, and the GO confirms that (`metrics-core-plan.md:193-211`) |
-| **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge** (O13): while Render's auto-deploy is on, a merge is a deploy (`metrics-core-plan.md:252-256`), and this one puts the new write path live and changes what a check shows for a bound team (section 7.3) |
+| **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge and the deploy** (O13): the deploy puts the new write path live and changes what a check shows for a bound team (section 7.3). While auto-deploy is off (every deploy since 2026-10-28 was started by hand, `metrics-core-plan.md:266-268`), the deploy of any commit of `main` that carries 9-B is started only on the owner's word naming it, not under the *Rukovodilac*'s "a deploy without a migration after a merge, as needed" (`:373-375`, R3); while auto-deploy is on, a merge is a deploy (`:252-256`), so the merge itself waits for that word |
 | **9-R** | The M6 runbook and the executor's prepared material (section 10.4): the Supabase backup procedure draft, the pre-switch and post-import SELECT files (each run by the executor only on a disposable `optimove_tests_*` database), the proposals for variables and mappings, the record-table row | none | M6 material, outside the green zone (`metrics-core-plan.md:1120` at the base: „M6 follows phase 9. All of it is the owner's and outside the green zone, the standing merge order included.”): the owner's word |
 | **9-E** | Facts after each merge (CURRENT_STATE, the J M4 row "As built", the ADR-007 extension) | none | Standing merge order (facts only) |
 
@@ -425,10 +425,14 @@ refreshes them; the executor never sends one.
 The check path has no switch: from the first check after the deploy, a bound team's sessions are judged through its
 activations. Without any activation every session of the First team is `blocked` `no_mapped_values` (never Ready), so
 "Ready to import 2" becomes "Needs attention"; the Link athletes helper values stay (section 4). No import can happen
-(the switch is off). The way back is a revert PR (no migration). Because a merge is a deploy while auto-deploy is on
-(`metrics-core-plan.md:252-256`), **O13** is about the merge: the owner names the merge of 9-B, either as soon as it has
-both GOs, or only after M6 steps 2–5 (the activations exist before the deploy, so the screen goes from today's
-previews straight to mapped ones; the old importer ignores activations).
+(the switch is off). The way back is a revert PR (no migration). **O13** therefore governs the **deploy** of 9-B, not
+only its merge: the owner names the deploy of the commit that carries 9-B, either as soon as it has both GOs, or only
+after M6 steps 2–5 (the activations exist before the deploy, so the screen goes from today's previews straight to mapped
+ones; the old importer ignores activations). While auto-deploy is off (`metrics-core-plan.md:266-268`), no deploy of a
+commit of `main` that carries 9-B starts without that word — the *Rukovodilac*'s deploy "as needed" of step 6 of the
+standing order for migration PRs (`:373-375`) does not cover it (R3) — and every later commit of `main` carries 9-B
+too, so after the 9-B merge any deploy waits for the owner's word until 9-B is live. While auto-deploy is on
+(`:252-256`), the merge of 9-B itself waits for that word.
 
 ---
 
@@ -590,9 +594,10 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 4. **OWNER — the mappings**: create, draft, submit, activate (Mappings screen). EXECUTOR-PREPARES: the list with the
    seeded conversions (s → min, m/s → km/h).
 5. **OWNER — switch them on for the First team's binding**, with an explicit requirement for each (O6).
-6. **OWNER — the merge of 9-0 and 9-B**: 9-0 under the standing merge order; 9-B on the owner's word naming it, at the
-   time O13 decides (a merge is a deploy while auto-deploy is on; any other deploy is the *Rukovodilac*'s under its
-   Render key, on the owner's order).
+6. **OWNER — the merge of 9-0 and 9-B, and the deploy of 9-B**: 9-0 under the standing merge order; 9-B merged on the
+   owner's word naming it, and the commit that carries it deployed only on the owner's word naming that deploy, at the
+   time O13 decides (the *Rukovodilac* starts it under its Render key; its "as needed" deploy without a migration does
+   not cover a commit that carries 9-B, R3).
    - **6a. OWNER — the merge of 9-R** (the owner's word), so that steps 11 and 16 run merged files named by their
      sha256 (the connector rule needs the whole file's hash, `metrics-core-plan.md:365`), before the freeze of step 9.
 7. **OWNER — confirm the deployed request timeout** (Render and any proxy; condition 2's second half). A Render setting
@@ -667,7 +672,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **9-0:** `code-reviewer`, `db-reviewer`; trigger 4.
 - **9-B:** `code-reviewer`, `security-reviewer`, `db-reviewer` (the J M4 row); `mobile-qa` and `ux-design-reviewer`
   if the Imports review's layout changes (R14); triggers 1, 2, 3, 4 and the five-point rule; then the *Rukovodilac*'s
-  and the *Nezavisni revizor*'s ★★ reviews; then the owner's word naming the merge (O13).
+  and the *Nezavisni revizor*'s ★★ reviews; then the owner's word naming the merge and the deploy (O13).
 - **M6:** triggers 1 and 5 (only fake-source evidence exists for an irreversible write); the owner's external review.
 
 ---
@@ -677,8 +682,11 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 ### 12.1 For the *Rukovodilac*
 
 - **R1 The PR split** of section 2. Recommendation: yes.
-- **R3 Merge paths** of section 2 (9-0 under the standing merge order; 9-B on the owner's word, O13; 9-R on the owner's
-  word, before the freeze, step 6a). This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
+- **R3 Merge and deploy paths** of section 2 (9-0 under the standing merge order; 9-B merged on the owner's word, and
+  every deploy of a commit of `main` that carries 9-B — until 9-B is live — started only on the owner's word naming it,
+  O13: a departure from step 6 of the standing order for migration PRs, which lets the *Rukovodilac* deploy a commit
+  without a migration "as needed", `metrics-core-plan.md:373-375`; 9-R on the owner's word, before the freeze, step
+  6a). This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
   "Triggers 1, 3 and 4" for phase 9 (`metrics-core-plan.md:1115`); it is stricter, and the plan's line itself changes
   only on the owner's word. Recommendation: as written.
 - **R4 `no_mapped_values`** as a new code; `nothing_to_import` keeps `no_changes` (it is "up to date" on the screen,
@@ -755,8 +763,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   before regular imports, not before the pilot).
 - **O12 The plan lines:** the owner adds phase 9's "Input (red zone)" and "Start" lines, or states that section 10 of
   this contract is the phase's red-zone list.
-- **O13 When 9-B is merged** (a merge is a deploy while auto-deploy is on; section 7.3): at once after both GOs, or
-  after M6 steps 2–5.
+- **O13 When 9-B is deployed** (section 7.3): the owner names the deploy of the commit that carries 9-B (and its merge
+  while auto-deploy is on): at once after both GOs, or after M6 steps 2–5. Until then no other deploy carries it (R3).
 - **O14 No migration in phase 9.** C98 records that a database guard for canonical rows stays "an optional later
   hardening (a migration), before M4" (`discovery:871-873`, the owner's wording): whether "before M4" binds. Without
   one, "never a value without its T6 row" rests on the writer and its tests (section 2). Recommendation: no migration
@@ -824,3 +832,7 @@ by the executor.
   HIGH (9-0 under the standing merge order), refuted by `metrics-core-plan.md:209-211` and **closed** by the narrow
   re-review (READY); its LOW notes folded.
 - No test was run (documents only); `git diff --check` clean on every commit.
+- **The *Nezavisni revizor*'s ★★ review of `275cf62`:** NO-GO on one MEDIUM — O13 governed the merge of 9-B, while
+  auto-deploy is off and step 6 of the standing order for migration PRs lets the *Rukovodilac* deploy a commit without a
+  migration "as needed", so 9-B could go live before the owner's chosen moment. Fixed in the commit after it: O13, R3,
+  section 2, section 7.3, step 6 and section 11 now govern the deploy of every commit that carries 9-B.
