@@ -1001,10 +1001,28 @@ order covers is merged under it; a migration PR that the standing order for migr
     UTC: `/api/health` answered `ok: true` on `e6ca433` three times in a row; `/api/auth/me` answered
     `{"user":null}`; without a login the preview route (with and without `?candidateId=<zero UUID>`), `GET /fields`,
     `GET /activations?bindingId=<zero UUID>` and the GPEXE team status answered 401.
+- **7g-B, Done, 2026-11-01.**
+  - PR #305 (branch `feature/7g-source-instance-end`, base `04fc170`): ending a held source instance, two routes
+    (`backend/src/sourceInstanceEndService.js`) and migration v50 (it is v50 because v49 is the calendar's, PR #298;
+    J13 named v49 "if none comes between"), dormant until M4 writes T7 keys. J13 section 12 ("As built") records it.
+  - Reviews: the internal rounds, then ★★ GO on `6504570f` from the *Rukovodilac* (its turn `a64b2933`, 2026-10-31
+    05:54:03 UTC, restated after the owner's pause, its turn `a6721bcc`, 2026-11-01 06:26:31 UTC) and the *Nezavisni
+    revizor* (its turn `1a4e4ed4`, 2026-11-01 06:32:20 UTC).
+  - Step 1 of the standing order for migration PRs: the *Rukovodilac*'s read-only preflight of 2026-11-01 (10:22–10:27
+    UTC, all eight blocks as expected), then its merge order (its turn `8590e441`, 10:27:29 UTC).
+  - Merge by the executor under the standing merge order: `5a2b39d` (parents `04fc170` and `6504570f`, 10:29:52 UTC),
+    exactly from `6504570f`.
+  - Deploy: the *Rukovodilac*'s session permission refused the Render deploy with a migration, so step 6 did not run;
+    the owner deployed `5a2b39d` by hand (owner turn `71b4693e`, 10:39:32 UTC), the owner's confirmation under step 3.
+    The *Rukovodilac*'s smoke, 10:40:25 – 10:40:46 UTC: `/api/health` answered `ok: true` on `5a2b39d` three times in
+    a row; `/api/auth/me` answered `{"user":null}`; without a login both new routes, `GET /fields`, `GET /mappings` and
+    the GPEXE team status answered 401.
+  - Post-check: the *Rukovodilac*'s read-only run of `docs/runbooks/source-instance-end-v50-postcheck.sql` (its turn
+    `ec301e87`, 10:48:15 UTC), all five blocks as expected: **v50 directly confirmed**.
 - **7d-C** (D3's prepared replacement in L4, R1 of J10) is not built; it is part of 7d (J10, R1) and has no place in
   the order yet.
-- **Next, by J12's R1 (below): 7g-B** (its migration written now that v48 is merged and deployed; it is **v50**,
-  because v49 is the calendar's, PR #298; J13 named v49 "if none comes between").
+- **Next, by the order of J12's R1 and the owner's decision on 7h and 7i (below): a minimal phase 8** (the Mappings
+  tab), then phase 9 (the first controlled import).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
