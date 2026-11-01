@@ -25,7 +25,9 @@ import {
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
-import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
+import {
+  blockedByMapping, buildCandidatePreview, canonicalJson, isImportWaitError, isSessionEndedError, previewLocked, setImportTransactionBounds, sha256Hex,
+} from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { recordImportObservations } from "./activitySourceObservations.js";
 import { createCheckMeter, NOOP_CHECK_METER } from "./gpexeCheckTiming.js";
@@ -1166,10 +1168,30 @@ async function recordCandidate(checkId, { teamId, userId, bundle, drillParameter
   let previewHash;
   try {
     const previewClient = await pool.connect();
+    // Switch condition 2: the server may end this session while it is checked
+    // out (the preview's idle-in-transaction bound, a kill); the listener keeps
+    // that from ending the process (removed before release). A bounded wait or
+    // an ended session fails the check with a stable code - never a blocked
+    // candidate, and nothing of the check is published.
+    let sessionLost = false;
+    const onPreviewClientError = () => { sessionLost = true; };
+    previewClient.on("error", onPreviewClientError);
     try {
       ({ preview, previewHash } = await buildCandidatePreview(previewClient, { bundle, ownerTeamId: teamId, performedByUserId: userId }));
+    } catch (error) {
+      if (isImportWaitError(error)) {
+        console.error(`[gpexe] check ${checkId}: the preview of a session ended by a bound (${error.code})`);
+        throw importRefusal("check_preview_busy");
+      }
+      if (sessionLost || isSessionEndedError(error)) {
+        sessionLost = true;
+        console.error(`[gpexe] check ${checkId}: the preview's database session ended (${error?.code ?? "connection"})`);
+        throw importRefusal("check_preview_interrupted");
+      }
+      throw error;
     } finally {
-      previewClient.release();
+      previewClient.removeListener("error", onPreviewClientError);
+      previewClient.release(sessionLost ? true : undefined);
     }
   } finally {
     meter.preview(previewStarted);
@@ -2151,6 +2173,10 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
   }
 }
 
+// Switch condition 2: the answer to a bounded wait before the COMMIT. The
+// route's own try_again sentence, with what was (not) done.
+const APPROVAL_TRY_AGAIN = "Another check, import or change of this team was running, or the server was busy. Nothing was imported; try again in a moment.";
+
 export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
@@ -2167,8 +2193,19 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
   let commitSent = false;
   let commitUncertain = false;
   let released = false;
+  // Switch condition 2: the server may end this session while it is checked
+  // out (the idle-in-transaction bound, a kill). Without a listener that
+  // 'error' event would end the process; with it, the next statement fails
+  // and the transaction is gone with the session (removed before release).
+  let sessionLost = false;
+  const onClientError = () => { sessionLost = true; };
+  client.on("error", onClientError);
   try {
     await client.query("begin");
+    // Switch condition 2: every wait before the COMMIT is bounded by the
+    // server (lock, statement, idle in transaction), set before the first
+    // lock; the COMMIT is bounded too (see setImportTransactionBounds).
+    await setImportTransactionBounds(client);
     // Step 1.
     const right = (await client.query(
       `select basis, grant_id from training_load.lock_gpexe_import_approver($1, $2) limit 1`,
@@ -2265,6 +2302,15 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported },
       import: { eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts },
     };
+    // Switch condition 2: the deferred trigger and constraint work runs now,
+    // as a statement the server bounds. PostgreSQL does not apply
+    // statement_timeout to the deferred work a COMMIT runs (a 3 s deferred
+    // trigger finished under a 1 s SET LOCAL statement_timeout, PostgreSQL 16;
+    // gpexe-import-bounds-9-0.test.mjs test 6), so it is fired here, before
+    // the COMMIT: a bounded wait or a refusal is still "nothing written". The
+    // COMMIT that follows only ends the transaction and keeps its own client
+    // bound (COMMIT_ANSWER_TIMEOUT_MS) and resolveUncertainCommit.
+    await client.query("set constraints all immediate");
     // From here on "nothing was imported" can no longer be said: once the
     // COMMIT is sent, a missing answer is an unknown outcome.
     commitSent = true;
@@ -2276,8 +2322,12 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     } catch (commitError) {
       commitUncertain = true;
       // The connection is not trusted any more: close it first (this also
-      // ends a COMMIT still waiting on it), then look on another one.
+      // ends a COMMIT still waiting on it), then look on another one. An
+      // error the COMMIT itself raised (57014 from the statement bound on its
+      // deferred trigger work included) is resolved the same way, never
+      // answered try_again: it may have landed.
       released = true;
+      client.removeListener("error", onClientError);
       client.release(true);
       return await resolveUncertainCommit(teamId, candidateId, { approvalId: approval.id, result, commitError });
     }
@@ -2290,13 +2340,27 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     }
     if (error instanceof GpexeImportServiceError) throw error;
     if (error?.code === "42501") throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    // Switch condition 2: a wait the server bounded before the COMMIT (a lock
+    // not granted in time, a statement ended by its bound, a deadlock), or a
+    // session the server ended (the idle bound) - the transaction rolled
+    // back, nothing was written. The COMMIT's own errors never reach here
+    // (resolveUncertainCommit above).
+    if (!commitSent && (isImportWaitError(error) || sessionLost || isSessionEndedError(error))) {
+      if (!isImportWaitError(error)) sessionLost = true;
+      console.error(`[gpexe] approval of candidate ${candidateId} stopped before its COMMIT (${error?.code ?? "connection"}); nothing was imported`);
+      throw refusal(409, "try_again", APPROVAL_TRY_AGAIN);
+    }
     // Anything else (a database guard firing, a bug) is logged here and
     // answered with a stable code; its text never reaches the caller.
     console.error(`[gpexe] approval of candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
     throw refusal(500, "internal_error", "The approval failed on the server; nothing was imported.");
   } finally {
-    // A connection whose COMMIT went unanswered is not trusted again.
-    if (!released) client.release(commitUncertain ? true : undefined);
+    // A connection whose COMMIT went unanswered, or whose session the server
+    // ended, is not trusted again.
+    if (!released) {
+      client.removeListener("error", onClientError);
+      client.release(commitUncertain || sessionLost ? true : undefined);
+    }
   }
 }
 
@@ -2363,9 +2427,11 @@ export function parseBatchApproveBody(body) {
 }
 
 // A refusal that holds for every remaining candidate (the switch was turned
-// off, the approver lost the right) or a failure of the server stops the
-// batch; any other refusal concerns its candidate only.
-const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error"]);
+// off, the approver lost the right), a failure of the server, or a bounded
+// wait (try_again: the team's import lock or the server is busy, and every
+// remaining candidate of the batch is the same team's) stops the batch; any
+// other refusal concerns its candidate only.
+const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error", "try_again"]);
 
 function batchResult(candidateId, outcome, code = null, extra = {}) {
   return { candidateId, outcome, code, approvalId: null, ...extra };

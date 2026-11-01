@@ -41,7 +41,8 @@ export const CHECK_TIMING_CODES = Object.freeze([
   "connection_not_usable", "connection_credential_changed", "host_not_allowed", "adapter_not_available", "key_missing",
   "credential_unreadable", "binding_ended", "team_club_changed", "binding_started", "drill_set_incomplete",
   "drill_parameter_effect_not_distinguishable", "check_finalize_busy", "check_finalize_failed",
-  "check_finalize_outcome_unknown", "source_team_mismatch", "context_not_issued",
+  "check_finalize_outcome_unknown", "source_team_mismatch", "context_not_issued", "check_preview_busy",
+  "check_preview_interrupted",
   // the rest_v1 adapter and the adapter registry
   "athlete_row_not_confirmed", "athlete_row_not_listed", "credential_missing", "drills_count_out_of_range",
   "duplicate_param", "invalid_bound_team", "invalid_drill_index", "invalid_id", "invalid_options", "path_not_allowed",

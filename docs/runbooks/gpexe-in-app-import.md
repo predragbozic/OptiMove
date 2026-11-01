@@ -446,6 +446,25 @@ importer's own order. A check running at the same time only takes the team
 import lock for its preview and the candidate row afterwards, so the two
 cannot deadlock.
 
+**Every wait before the COMMIT is bounded** (switch condition 2, phase 9-0;
+`backend/src/gpexeImportPreview.js`, `setImportTransactionBounds`). Right after
+`BEGIN`, before the first lock, the transaction sets `SET LOCAL lock_timeout =
+5 s`, `statement_timeout = 10 s` and `idle_in_transaction_session_timeout =
+10 s`. Right before the COMMIT it runs `SET CONSTRAINTS ALL IMMEDIATE`, so the
+deferred trigger and constraint work runs as a statement the server bounds:
+PostgreSQL does not apply `statement_timeout` to the deferred work a COMMIT
+runs (measured on PostgreSQL 16: a 3 s deferred trigger finished under a 1 s
+bound). A lock not granted in time (55P03), a statement ended by its bound
+(57014), a deadlock (40P01) or a session the server ended (the idle bound)
+before the COMMIT is **409 `try_again`**, nothing written; the connection of
+an ended session is not reused, and a listener on the checked-out client keeps
+the server's end of the session from ending the process. The COMMIT keeps its
+15 s answer bound and the uncertain-outcome rule below; an error the COMMIT
+itself raises is never `try_again`. Measured on J17's Arm A1 fixture (53
+values): the longest statement about 11 ms, the COMMIT about 3 ms. The deployed
+request timeout (Render and any proxy) is an owner step before the switch
+(J17 section 10, step 7).
+
 The database checks the same rules again, whoever writes: an approval row is
 refused for a user without the right, a basis the user does not hold, a
 candidate that is not pending, an expired snapshot, a preview hash that is
@@ -470,6 +489,7 @@ same time: the second waits for the candidate row and is then refused with
 | 409 `nothing_to_import` | The import would write nothing. | Nothing. |
 | 409 `changes_need_acceptance` | Changes to imported results were not accepted. | Review them and send `acceptChanges: true`. |
 | 409 `preview_changed` | The preview is not the one reviewed, or what the import would do changed between the review and the approval. | Open `reviewAgain.href`, review the candidate again, approve the new `previewHash`. |
+| 409 `try_again` | A wait before the COMMIT reached its bound: another check, import or change of the team held the team lock or a row, the server ended an idle session, or a statement ran too long. Nothing was imported. | Try again in a moment. |
 | 500 `internal_error` | Anything unexpected **before the COMMIT was sent**, e.g. a database guard firing. Nothing was imported; the server log has the detail. | Report it; do not retry blindly. |
 | 503 `import_outcome_unknown` | The COMMIT was sent but not confirmed, and the import could not be found yet. **It may or may not have been imported.** | Follow "When the outcome is uncertain" below. |
 
@@ -602,7 +622,7 @@ only known safe details, never a server message:
 | `imported` | `null` | Imported and committed (or verified after an unconfirmed COMMIT). | `approvalId`, `commitConfirmation` |
 | `already_imported` | `already_imported` | Imported before (perhaps by this same request sent earlier, or another approval at the same time). Nothing new was written; treat it as success. | `approvalId` when readable |
 | `refused` | `superseded_by_newer_data`, `blocked`, `snapshot_expired_check_again`, `nothing_to_import`, `not_ready`, `changes_need_acceptance`, `preview_changed`, `notFound` | Not imported, for certain; the batch goes on with the next candidate. `preview_changed` also when the preview is not the one the approver saw. | `reviewAgain`, `changesToImported`, `reasons`, `blockedCode` |
-| `refused` | `import_switch_off`, `not_an_approver`, `internal_error` | Not imported, for certain; the switch was turned off, the right was lost, or the server failed **before** a COMMIT — **the batch stops**. | — |
+| `refused` | `import_switch_off`, `not_an_approver`, `internal_error`, `try_again` | Not imported, for certain; the switch was turned off, the right was lost, the server failed **before** a COMMIT, or a wait before the COMMIT reached its bound — **the batch stops**. | — |
 | `import_outcome_unknown` | `import_outcome_unknown` | The COMMIT was sent but not confirmed and the import could not be found yet. **It may or may not be imported. The batch stops.** | `approvalId`, `verify` (as in the 503 above) |
 | `not_attempted` | `null` | The batch stopped before this candidate. Nothing was tried. | — |
 
@@ -619,12 +639,11 @@ or simply send the same request again.
 2026-09-24). Without lock contention the request lasts about the sum of its approvals;
 an unconfirmed COMMIT can add 15 s + 5 s once, after which the batch stops. In the tests
 two small approvals took well under half a second in total; a real session has more
-athletes and drills. **The limit does not bound the worst case**: the open risk above
-(unbounded lock waits before a COMMIT) applies to every candidate of a batch, so under
-lock contention a batch can still wait without limit — now up to 10 times in one
-request. Only condition 2 (a bound on the pre-COMMIT lock waits) bounds that, and it
-matters more once batch approval is the usual path. Raising the limit needs measured
-approval times on real sessions and a confirmed deployed request timeout.
+athletes and drills. Since 9-0 every wait before a COMMIT is bounded (5 s per lock wait,
+10 s per statement, 10 s idle; "What the server does, in one transaction"), and a bounded
+wait stops the batch (`try_again`), so contention costs at most one bounded wait per
+request, not one per candidate. Raising the limit still needs measured approval times on
+real sessions and a confirmed deployed request timeout.
 
 ## When a check's results become actionable (v33)
 
@@ -711,6 +730,16 @@ connection and the check's status is read on a new connection (at most 5 s) - `s
 committed; otherwise the check fails as `check_finalize_outcome_unknown` (the failed write is
 conditional on `running`, so it waits for the old transaction and never overwrites a commit). These
 three codes are shown to a coach as they are (a team fact). Run the check again.
+
+**The check-time preview is bounded too** (switch condition 2, phase 9-0). Each session's preview
+runs in its own transaction that holds the team lock; it sets the approval's bounds right after
+`BEGIN` (5 s per lock wait, 10 s per statement, 10 s idle in the transaction) and always rolls
+back. A wait that reaches its bound fails the check as `check_preview_busy` (an approval, an import
+or a change of the team held the lock or a row too long); a session the server ended fails it as
+`check_preview_interrupted`. Neither ever stores a `blocked` candidate; nothing of the check is
+published (its staging is discarded) and both codes are shown to a coach as they are (a team or
+database fact). Run the check again. While a preview waits on the team lock, an Unbind, a 7g end
+or a settings change of the team answers `try_again` for as long as it waits.
 
 **Exactly one `superseded_by`** (`gpexe_import_candidates_superseded_by_exactly_one`): a superseded row
 names either the newer candidate or the check that withdrew it, never both and never neither; no other

@@ -590,6 +590,29 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   every other team's import or check-time preview (they write the threshold-set binding, then the values, then T6) and
   blocks all of them while it runs. A production undo needs its own mechanism or a maintenance window (O3).
 - Reviewers: `code-reviewer`, `db-reviewer` (trigger 4).
+- **As built (9-0)** — `backend/src/gpexeImportPreview.js` (`setImportTransactionBounds`), `gpexeImportService.js`
+  (`approveCandidate`, `recordCandidate`, the batch), `backend/scripts/gpexe-undo-imported-session.mjs`; tests
+  `backend/tests/gpexe-import-bounds-9-0.test.mjs`. The values: `lock_timeout` 5 s, `statement_timeout` 10 s,
+  `idle_in_transaction_session_timeout` 10 s, for the approval and the check-time preview alike. Measured on Arm A1
+  (53 values, the writer in the approval's transaction shape): the longest statement about 11 ms, the COMMIT about
+  3 ms; through the route (both drills) about 4 ms and 2 ms. Departures from the text above:
+  - **The COMMIT's deferred work.** PostgreSQL does not apply `statement_timeout` to the deferred trigger and
+    constraint work a COMMIT runs (measured on PostgreSQL 16: a 3 s deferred trigger finished, and committed,
+    under a 1 s bound, with `SET LOCAL` and at the session level alike; test 6a), so the sentence "the effective
+    server bound on it is the lower of the two" does not hold. The approval therefore runs `SET CONSTRAINTS ALL
+    IMMEDIATE` right before the COMMIT: the deferred work runs as a statement the server bounds, and a slow
+    deferred trigger is a `409 try_again` with nothing written (test 6b), a definite answer before the COMMIT
+    instead of an unknown outcome. An error the COMMIT itself raises still goes through `resolveUncertainCommit`,
+    never `try_again` (test 6c, a 57014 at the COMMIT that did and did not land). The COMMIT keeps its 15 s
+    client bound.
+  - **T6 is not measured here:** the writer of 9-0 does not write T6 yet; 9-B's Arm A1 runs under the same bounds
+    and is measured again there.
+  - **The batch stops at `try_again`** (the team lock or the server is busy, and every candidate of a batch is the
+    same team's), so one request waits at most one bounded wait.
+  - **The check-time preview's codes:** `check_preview_busy` (55P03, 57014, 40P01) and `check_preview_interrupted`
+    (a session the server ended), both shown to a coach as they are.
+  - **A session the server ended** before the COMMIT is `try_again` too (the transaction went with it); its
+    connection is released as broken.
 
 ---
 

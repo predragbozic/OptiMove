@@ -178,6 +178,9 @@ const REFUSAL_TEXT = {
   changes_need_acceptance: "Not imported yet: this import changes results that were already imported. Tick the box to accept those changes, then approve.",
   preview_changed: "Not imported: the data changed since you opened this session. Review it again, then approve.",
   internal_error: "Not imported: the server failed before writing anything. Try again later.",
+  // Switch condition 2: a bounded wait before the COMMIT (another check,
+  // import or change of the team, or a busy server); nothing was written.
+  try_again: "Not imported: another check, import or change of this team was running, or the server was busy. Nothing was written; try again in a moment.",
   // v33: refused because the last successful search did not confirm it, or it was withdrawn.
   candidate_not_actionable: "Not imported: this session is not confirmed for import. Find new sessions again, then review it.",
 };
@@ -766,6 +769,7 @@ function batchOutcomeText(r) {
   if (code === "import_switch_off") return { cls: "is-refused", text: "Not imported: importing was switched off in this environment." };
   if (code === "not_an_approver") return { cls: "is-refused", text: "Not imported: you may not approve imports for this team any more. Ask a platform admin." };
   if (code === "internal_error") return { cls: "is-refused", text: "Not imported: the server failed before writing anything. Try again later." };
+  if (code === "try_again") return { cls: "is-refused", text: "Not imported: another check, import or change of this team was running, or the server was busy. Try again in a moment." };
   if (code === "notFound") return { cls: "is-refused", text: "Not imported: this session is not available." };
   return { cls: "is-refused", text: "Not imported: the server refused it. Open the session to see what to do.", open: r.candidateId, openLabel: "Open" };
 }

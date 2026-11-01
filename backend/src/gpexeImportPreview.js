@@ -21,6 +21,76 @@ import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gp
 // 2: changesToImported (phase F2).
 export const PREVIEW_VERSION = 2;
 
+// Switch condition 2 (J17 section 9): the server-side bounds of every
+// transaction that takes the team import lock to run the importer - the
+// approval (gpexeImportService.approveCandidate) and the check-time preview
+// (buildCandidatePreview). Set as SET LOCAL right after BEGIN, before the
+// first lock, so they end with the transaction and never stay on a pooled
+// connection:
+//   * lock_timeout bounds every lock wait (the approver's role and grant rows,
+//     the candidate row, the team's advisory import lock, the importer's own
+//     rows): 55P03;
+//   * statement_timeout bounds every statement: 57014. PostgreSQL does not
+//     apply it to the deferred trigger and constraint work a COMMIT runs, so
+//     the approval fires that work first with SET CONSTRAINTS ALL IMMEDIATE
+//     (a bounded statement before the COMMIT); the COMMIT itself keeps the
+//     approval's 15 s client bound on its answer;
+//   * idle_in_transaction_session_timeout ends a session whose transaction
+//     waits on the client (FATAL 25P03; the connection is closed).
+// None of these waits can then outlast the bound by itself; the approval and
+// the check map 55P03 / 57014 / 40P01 before a COMMIT to their own stable
+// codes, nothing written. The statement bound is far above the measured cost
+// (backend/tests/gpexe-import-bounds-9-0.test.mjs, "Arm A1 commits under the
+// production bounds"), and the lock bound is longer than a normal check-time
+// preview holds the team lock.
+export const IMPORT_LOCK_TIMEOUT_MS = 5_000;
+export const IMPORT_STATEMENT_TIMEOUT_MS = 10_000;
+export const IMPORT_IDLE_IN_TRANSACTION_MS = 10_000;
+const DEFAULT_IMPORT_BOUNDS = Object.freeze({
+  lockTimeoutMs: IMPORT_LOCK_TIMEOUT_MS,
+  statementTimeoutMs: IMPORT_STATEMENT_TIMEOUT_MS,
+  idleInTransactionMs: IMPORT_IDLE_IN_TRANSACTION_MS,
+});
+let importBounds = DEFAULT_IMPORT_BOUNDS;
+// Tests shorten the bounds (whole milliseconds, 1 to 600000); null restores them.
+export function setImportTransactionBoundsForTests(bounds) {
+  if (!bounds) {
+    importBounds = DEFAULT_IMPORT_BOUNDS;
+    return;
+  }
+  const next = { ...DEFAULT_IMPORT_BOUNDS, ...bounds };
+  for (const value of Object.values(next)) {
+    if (!Number.isInteger(value) || value < 1 || value > 600_000) throw new Error("import transaction bounds must be whole milliseconds, 1 to 600000");
+  }
+  importBounds = Object.freeze(next);
+}
+export function importTransactionBounds() {
+  return importBounds;
+}
+// One round trip; set_config(..., true) is SET LOCAL.
+export async function setImportTransactionBounds(client) {
+  const b = importBounds;
+  await client.query(
+    `select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true),
+            set_config('idle_in_transaction_session_timeout', $3, true)`,
+    [`${b.lockTimeoutMs}ms`, `${b.statementTimeoutMs}ms`, `${b.idleInTransactionMs}ms`],
+  );
+}
+// A bounded wait before a COMMIT: a lock not granted in time, a statement
+// ended by its bound, or a deadlock the server broke.
+const IMPORT_WAIT_CODES = new Set(["55P03", "57014", "40P01"]);
+export function isImportWaitError(error) {
+  return IMPORT_WAIT_CODES.has(error?.code);
+}
+// The server ended the session (the idle-in-transaction bound, an
+// administrator's kill, a shutdown), or the connection is gone: the open
+// transaction ended with it, nothing of it committed.
+const SESSION_ENDED_CODES = new Set(["25P03", "57P01", "57P02", "57P03"]);
+export function isSessionEndedError(error) {
+  return SESSION_ENDED_CODES.has(error?.code)
+    || /Connection terminated|not queryable|Client was closed/i.test(String(error?.message ?? ""));
+}
+
 // What an approved import does to a result that was ALREADY imported, per
 // importer outcome. Every one of these has to be accepted explicitly
 // (acceptChanges) before the approval writes anything (owner, 2026-09-18).
@@ -148,6 +218,13 @@ export function blockedByMapping(bundle, error) {
   return { preview, previewHash: sha256Hex(canonicalJson({ preview, state: [] })), summary: null };
 }
 
+// Tests hold the check-time preview right after it took the team lock (to
+// let a bound end it).
+let checkPreviewHold = null;
+export function setCheckPreviewHoldForTests(fn) {
+  checkPreviewHold = fn ?? null;
+}
+
 // Returns { preview, previewHash }. `client` must not be inside a
 // transaction: this opens one, takes the team's import lock, reads everything
 // the preview depends on, runs the import, and always rolls back — so the
@@ -162,7 +239,10 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
   }
   await client.query("begin");
   try {
+    // Switch condition 2: bounded before the team lock (see above).
+    await setImportTransactionBounds(client);
     await lockTeamForImport(client, ownerTeamId);
+    if (checkPreviewHold) await checkPreviewHold(client);
     const { preview, previewHash } = await previewLocked(client, { bundle, plan, ownerTeamId, performedByUserId });
     return { preview, previewHash };
   } finally {

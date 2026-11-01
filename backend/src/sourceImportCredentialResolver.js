@@ -100,6 +100,9 @@ const MESSAGES = Object.freeze({
   check_finalize_busy: "The check could not finish because another change of this team was running; nothing of it was published. Run the check again.",
   check_finalize_failed: "The check could not finish; nothing of it was published. Run the check again.",
   check_finalize_outcome_unknown: "It could not be confirmed that the check finished; nothing of it is published unless it did. Run the check again.",
+  // Switch condition 2 (J17 section 9): the check-time preview of a session is bounded.
+  check_preview_busy: "The preview of a session waited too long for another check, import or change of this team, or for the database; nothing of the check was published. Run the check again.",
+  check_preview_interrupted: "The database ended the preview of a session before it finished; nothing of the check was published. Run the check again.",
   source_team_mismatch: "The check asked for a source team other than the bound one; nothing was read.",
   context_not_issued: "The source context was not issued by the resolver; nothing was read.",
 });
