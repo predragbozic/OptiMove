@@ -262,7 +262,9 @@ function focusPanelStart(cal) {
   else doc?.querySelector?.(".cc-new-event")?.focus?.({ preventScroll: true });
 }
 
-function closeEventForm(render, { asked = false } = {}) {
+// `rereadRender` paints the read below when the caller paints the rest itself
+// (another item opened: `render` is null here, the handler draws the panel).
+function closeEventForm(render, { asked = false, rereadRender = render } = {}) {
   const cal = state.centralCalendar;
   const form = cal.form;
   if (!form) return true;
@@ -273,7 +275,7 @@ function closeEventForm(render, { asked = false } = {}) {
   // A save in flight or not confirmed may have landed: the calendar is read
   // again at once (never the cached answer from before it), so the coach can
   // find the event before making it a second time.
-  if (form.busy || form.unconfirmed) void rereadAfterUncertainWrite(cal, render, form);
+  if (form.busy || form.unconfirmed) void rereadAfterUncertainWrite(cal, rereadRender, form);
   return true;
 }
 
@@ -288,12 +290,15 @@ function oneLineTitle(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+// `form` names the write the coach left (its own line); without it (a late
+// answer) the line already on screen stays - the read would clear it.
 async function rereadAfterUncertainWrite(cal, render, form) {
   invalidateCentralCalendarCache();
   if (state.centralCalendar !== cal) return;
+  const kept = cal.notice;
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
-  if (form) cal.notice = uncertainNotice(form);
+  cal.notice = form ? uncertainNotice(form) : cal.notice || kept;
   render?.();
 }
 
@@ -676,6 +681,12 @@ export function handleCentralCalendarInput(target, { render } = {}) {
 export function handleCentralCalendarKeydown(event) {
   if (event?.key !== "Enter" || !event.target?.matches?.("[data-cc-event-athlete-search]")) return false;
   event.preventDefault();
+  // A phone's Search key: the keyboard goes away so the filtered list shows.
+  try {
+    if (globalThis.window?.matchMedia?.("(pointer: coarse)")?.matches) event.target.blur?.();
+  } catch {
+    // No matchMedia: a computer, the keyboard stays.
+  }
   return true;
 }
 
@@ -749,7 +760,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const date = action.dataset.date;
     if (!key || !isIsoDate(date)) return true;
     // The event form gives way only after its own question (K2a-2).
-    if (cal.form && !closeEventForm(null)) return true;
+    if (cal.form && !closeEventForm(null, { rereadRender: render })) return true;
     // The open item again folds the panel.
     if (cal.panel.open && cal.panel.key === key) {
       cal.panel = closedPanel();

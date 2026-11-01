@@ -81,7 +81,7 @@ function baseItem(overrides) {
 function eventItem(id, date, overrides) {
   return baseItem({
     key: `event:${id}:${date}`, kind: "event", date, eventId: id, eventKind: "training", eventTypeLabel: "Training", eventTypeId: T_TRAINING,
-    endTime: null, location: null, span: { from: date, to: date }, gaps: [], revision: 1, canManage: true, notes: null,
+    endTime: null, location: null, span: { from: date, to: date }, gaps: [], scheduleFold: { external: null, test: null }, revision: 1, canManage: true, notes: null,
     links: { eventId: id, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: null, testScheduleId: null },
     ...overrides,
   });
@@ -268,6 +268,26 @@ test("1c. the status pill: Planned for a planned item and for an event expecting
   assert.equal(badge(eventItem(E_MATCH, "2026-11-01", { status: "done", expects: ["rpe"] })), "Done");
 });
 
+test("1d. a referenced schedule shown beside the event (scheduleFold: separate): the card and the panel say so, no gap note", async () => {
+  const items = [
+    ...ITEMS.filter((item) => item.eventId !== E_MATCH),
+    eventItem(E_MATCH, DAY(1), { title: "Cup match", eventKind: "match", eventTypeLabel: "Match", teamIds: [U17], athleteCount: 2, expects: ["rpe"], status: "planned", gaps: [], scheduleFold: { external: "separate", test: null } }),
+    baseItem({ key: "external:sch-9:d1", kind: "external", date: DAY(1), title: "Cup match RPE", eventType: "match", teamIds: [U17], athleteCount: 18, expects: ["rpe"], status: "planned", rpe: { asked: 18, submitted: 0 } }),
+  ];
+  installFetchMock(server({ items }));
+  await loadCentralCalendar({ render });
+  const card = dom().querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"]`);
+  assert.equal(card.querySelector(".cc-card-note").textContent, "Linked schedule shown separately");
+  assert.match(card.getAttribute("aria-label"), /Linked schedule shown separately/);
+  assert.ok(dom().querySelector('.cc-card[data-key="external:sch-9:d1"]'), "the schedule's own card is beside it");
+  await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  const panel = dom().querySelector(".cc-panel").textContent;
+  assert.match(panel, /The linked RPE request reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts\./);
+  assert.doesNotMatch(panel, /nothing attached to this event asks/);
+  assert.equal(view.centralCalendarScheduleSeparate(eventItem(E_MATCH, DAY(1), { scheduleFold: { external: "folded", test: null } })), false);
+  assert.equal(view.centralCalendarScheduleSeparate(eventItem(E_MATCH, DAY(1), { scheduleFold: { external: null, test: "separate" } })), true);
+});
+
 // --- 2. The Filters panel and the chips -------------------------------------------
 
 test("2a. the Filters panel starts collapsed with one summary line; the chips are in the markup, hidden; the toggle opens it", async () => {
@@ -396,13 +416,13 @@ test("3b. the strip: one team-colour dot per team with a visible card that day, 
   assert.equal(day(5).querySelector(".cc-strip-dots"), null, "an empty day has no dots");
   assert.deepEqual(view.centralCalendarDayTeamIds([{ teamIds: [U13, U19] }, { teamIds: [U17] }], TEAMS), [U19, U17, U13], "in teams[] order");
   assert.deepEqual(view.centralCalendarDayTeamIds([{ teamIds: [U13, U19, U17] }], TEAMS, 2), [U19, U17]);
-  // More than four teams on a day: four dots and "+N"; the label names them all.
+  // More than four teams on a day: three dots and "+N"; the label names them all.
   const six = Array.from({ length: 6 }, (_, index) => ({ teamId: `t${index}`, name: `G${index}` }));
   state.centralCalendar.data = { ...state.centralCalendar.data, teams: six, days: state.centralCalendar.data.days.map((day) => (day.date === DAY(5) ? { ...day, items: [baseItem({ key: "p:six", date: DAY(5), teamIds: six.map((team) => team.teamId) })] } : day)) };
   render();
   const busy = dom().querySelector(`.cc-strip-day[data-date="${DAY(5)}"]`);
-  assert.equal(busy.querySelectorAll(".cc-strip-dots .cc-team-dot").length, 4);
-  assert.equal(busy.querySelector(".cc-strip-more").textContent, "+2");
+  assert.equal(busy.querySelectorAll(".cc-strip-dots .cc-team-dot").length, 3);
+  assert.equal(busy.querySelector(".cc-strip-more").textContent, "+3");
   assert.match(busy.getAttribute("aria-label"), /G0, G1, G2, G3, G4, G5$/);
 });
 
@@ -752,6 +772,22 @@ test("6h. an answer that arrives after the coach left the saving form reads the 
   await tick();
   assert.equal(rangeReads(calls).length, reads + 1, "the late success is read, not dropped");
   assert.equal(state.centralCalendar.form, null);
+  assert.match(state.centralCalendar.notice, /was not checked/, "the line of the leave stays after the late read");
+});
+
+test("6k. leaving a result not confirmed by opening another card paints the read again with its line", async () => {
+  const calls = installFetchMock(server({ loseFirstAnswer: true }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  const reads = rangeReads(calls).filter((call) => !call.url.includes("include=athletes")).length;
+  confirmAnswer = true;
+  await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  await tick();
+  assert.equal(rangeReads(calls).filter((call) => !call.url.includes("include=athletes")).length, reads + 1);
+  assert.match(rendered, /was not checked\. The calendar was read again/, "painted, not only in state");
+  assert.equal(state.centralCalendar.panel.key, `event:${E_MATCH}:${DAY(1)}`);
 });
 
 test("6i. Enter in the athlete search never submits the form; elsewhere Enter is left alone", () => {
@@ -765,6 +801,15 @@ test("6i. Enter in the athlete search never submits the form; elsewhere Enter is
   const other = { key: "a", target: { matches: () => true }, preventDefault() { this.done = true; } };
   handleCentralCalendarKeydown(other);
   assert.equal(other.done, undefined);
+  // A phone's Search key also puts the keyboard away.
+  let blurred = false;
+  globalThis.window.matchMedia = (query) => ({ matches: query === "(pointer: coarse)" });
+  try {
+    handleCentralCalendarKeydown({ key: "Enter", target: { matches: () => true, blur: () => { blurred = true; } }, preventDefault() {} });
+  } finally {
+    delete globalThis.window.matchMedia;
+  }
+  assert.equal(blurred, true);
 });
 
 test("6j. typing in the athlete search redraws only the list: the input itself is never replaced", async () => {

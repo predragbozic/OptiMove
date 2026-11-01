@@ -21138,6 +21138,14 @@ body.exercise-header-pinned #viewToolbar {
   overflow-wrap: anywhere;
 }
 
+/* A referenced schedule shown beside the event (scheduleFold: separate). */
+.cc-card-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
 .cc-team-pill {
   display: inline-flex;
   align-items: center;
@@ -21402,11 +21410,13 @@ body.exercise-header-pinned #viewToolbar {
   overflow-wrap: anywhere;
 }
 
-/* Two columns in the 300 px side panel and on a phone; each field keeps its
-   input at the top when the other one of its row has a hint or an error. */
+/* Two columns where a date and its picker fit (a phone of 360 px and up, the
+   360 px side panel), one in the 300 px side panel, where 120 px clipped the
+   date; each field keeps its input at the top when the other one of its row
+   has a hint or an error. */
 .cc-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   align-items: start;
   gap: 10px;
 }

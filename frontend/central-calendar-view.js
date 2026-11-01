@@ -140,6 +140,14 @@ function eventKindWord(item) {
   return item.eventTypeLabel || CENTRAL_CALENDAR_EVENT_KIND_LABELS[item.eventKind] || "Event";
 }
 
+// A referenced schedule that reaches athletes the event does not list stays
+// its own card beside the event (K2a-1a round 4, `scheduleFold`: "separate");
+// the event card says so instead of showing its numbers.
+export function centralCalendarScheduleSeparate(item) {
+  return item?.kind === "event" && (item.scheduleFold?.external === "separate" || item.scheduleFold?.test === "separate");
+}
+const SEPARATE_WORDS = "Linked schedule shown separately";
+
 export function centralCalendarTeamIndex(teamId, teams) {
   const index = (teams || []).findIndex((team) => team.teamId === teamId);
   return index < 0 ? -1 : index % CENTRAL_CALENDAR_PALETTE_SIZE;
@@ -337,6 +345,7 @@ function cardAriaLabel(item, teams, today) {
   const span = centralCalendarSpanLabel(item);
   if (span) parts.push(span);
   if (item.kind === "event" && item.location) parts.push(item.location);
+  if (centralCalendarScheduleSeparate(item)) parts.push(SEPARATE_WORDS);
   const badge = centralCalendarStatusBadge(item, today);
   if (badge) parts.push(badge.label);
   const count = centralCalendarCountLabel(item);
@@ -362,6 +371,7 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
         <span class="cc-card-top">${itemIconHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind">${escapeHtml(centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
+        ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
         <span class="cc-card-meta">${renderTeamPillHtml(firstTeam, teams)}${renderBadgeHtml(item, today)}${count ? `<span class="cc-card-count">${escapeHtml(count)}</span>` : ""}${renderTeamDotsHtml(item, teams)}</span>
       </span>
     </button>`;
@@ -602,7 +612,8 @@ function renderStripHtml(days, byDate, cal, today, teams) {
         const count = items.length;
         const isSelected = date === selected;
         const allIds = centralCalendarDayTeamIds(items, teams);
-        const dotIds = allIds.slice(0, 4);
+        // Four marks at most in a phone's narrow day: four dots, or three and "+N".
+        const dotIds = allIds.slice(0, allIds.length > 4 ? 3 : 4);
         const names = allIds.map((id) => teamName(id, teams)).join(", ");
         return `<button type="button" class="cc-strip-day${isSelected ? " is-selected" : ""}${date === today ? " is-today" : ""}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${isSelected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(`${centralCalendarLongDate(date)}${date === today ? ", today" : ""}${count ? `, ${count} item${count === 1 ? "" : "s"}` : ""}${names ? `, ${names}` : ""}`)}">
           <span class="cc-strip-name">${escapeHtml(weekdayShort(date))}</span>
@@ -771,6 +782,8 @@ function eventDatesText(item) {
 function renderEventFactsHtml(item) {
   const expects = item.expects || [];
   const gaps = (item.gaps || []).map((gap) => GAP_NOTES[gap]).filter(Boolean);
+  if (item.scheduleFold?.external === "separate") gaps.push("The linked RPE request reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
+  if (item.scheduleFold?.test === "separate") gaps.push("The linked test reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   const multiDay = item.span?.from && item.span?.to && item.span.to !== item.span.from;
   return `${multiDay ? `<p class="cc-panel-note">${escapeHtml(`${eventDatesText(item)} (${centralCalendarSpanLabel(item).toLowerCase()})`)}</p>` : ""}
       ${item.location ? `<p class="cc-panel-place">${renderIconSvg("map-pin", { size: 16 })}<span>${escapeHtml(item.location)}</span></p>` : ""}

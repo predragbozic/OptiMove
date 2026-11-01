@@ -1,6 +1,6 @@
 # Central calendar — K2a-2 plan: events in the screen (frontend only)
 
-Status: **built in the K2a-2 pull request**, on the K2a-1a API (PR #298: `backend/src/routes/calendarEvents.js`,
+Status: **built in the K2a-2 pull request**, on the K2a-1a API (PR #298, merged as `0117912`: `backend/src/routes/calendarEvents.js`,
 `calendarEventService.js`, `calendarEventAccess.js`, the `kind: "event"` items of `GET /api/calendar`). The
 product decisions are D18–D23 of `docs/ai/central-calendar-k2a-plan.md` section 10 and the owner's design request of
 2026-10-30 (relayed by the manager); the screen is K1b's (`docs/ai/central-calendar-k1b-plan.md`). **No backend
@@ -138,6 +138,22 @@ LOW), `mobile-qa` NOT READY (1 HIGH, 3 MEDIUM, LOW). Applied:
 - An imported activity of today shows no *Planned* pill (as K1b).
 - The tests' fake server keeps the service's requestKey contract (replay, `request_key_reused`), and a lost-but-saved
   create proves one event after Check result.
+
+Narrow re-reviews of the delta: `code-reviewer` READY WITH NON-BLOCKING NOTES, `ux-design-reviewer` READY,
+`mobile-qa` READY WITH NON-BLOCKING NOTES — no new BLOCKER or HIGH. Their new LOW, applied: a late answer keeps the
+leave's line; leaving by opening another card paints the read; a phone's Search key puts the keyboard away; three
+strip dots and "+N" when more than four teams; the 300 px side panel keeps one date column (120 px clipped the date in
+a browser check), a phone two.
+
+**After PR #298 merged (`0117912`):** `origin/main` merged into the branch; its round 4 added `scheduleFold`
+(`external` / `test`: `folded`, `separate` or null) to the event card. A referenced schedule shown beside the event
+(`separate`) makes the card say *Linked schedule shown separately* and the panel explain that it reaches athletes the
+event does not list, so it is its own card with its own counts (no gap note then — the server sets none).
+
+**Follow-ups (LOW, recorded, not built):** the cancel reason is not shown back anywhere (the card carries none); a team
+coach gets no line on why a club event has no Edit; the form gives no hint that a multi-day event's times show on
+every day; sticky form actions in the sheet; the muted 11 px labels' contrast and the sheet's `dvh` fallback (both
+K1b's).
 
 Not done here, recorded: an end-to-end run against the real K2a-1a routes on a disposable database (the frontend's
 outcome rules are proven against a fake that keeps the service's contract; the code-reviewer's backend note — a
