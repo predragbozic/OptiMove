@@ -2688,6 +2688,16 @@ Technical details.
         (2) (the helper values) is recorded as met by the C97 comparison and the mapper's conversions, the screen
         itself not compared (J17 section 12.3). The code of phase 9 may start: 9-0 (switch conditions 2 and 3), then
         9-B.
+        - **9-0 merged and deployed** (switch conditions 2 and 3, J17 section 9 and its "As built (9-0)"): PR #322,
+          merged `8fa0ea7` (parents `f095bb9` and `f137d72d`) exactly from its head on 2026-11-01, under the standing
+          merge order after the GOs of the *Rukovodilac* (turn `32809d31`, its own runs and six mutations) and the
+          *Nezavisni revizor* (turn `1fb945d6`, no BLOCKER, HIGH or MEDIUM; three LOW for 9-B: a test that `try_again`
+          is never answered after the COMMIT was sent, the undo / approval lock order until 9-B's step 6b, the idle
+          bound measured on a real session). Deployed by the *Rukovodilac* through the Render API without a migration
+          (none on the path since the served `17dc46d`): `/api/health` first served `8fa0ea7` at 23:28:43 UTC, then
+          `ok: true` three times in a row (23:28:51, 23:29:02 and 23:29:12 UTC); without a login `/api/auth/me` answered
+          200 and the GPEXE status, candidates, one check, the mappings list, the source connections and the approval
+          route answered 401. No production write, no GPEXE request; the import switch untouched.
         - **9-R**, the backup of the deployed database from the owner's computer (O2,
           `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase)"): PR #315, merged `3032b3b` (parents
           `73b2776` and `76b57625`) exactly from its head, on the same owner's word, after the GOs of the *Rukovodilac*
@@ -4055,7 +4065,7 @@ pre-existing; pass/fail counts don't belong in this file
      and `idle_in_transaction_session_timeout` with a stable refusal code, and the
      deployed request timeout confirmed. Today another approval of the same team, or a
      transaction abandoned on a real network stall, can make an approval wait with no
-     limit. **Built in 9-0** (J17 section 9; not yet merged): the approval and the check-time
+     limit. **Built in 9-0** (J17 section 9; PR #322, merged `8fa0ea7`, deployed 2026-11-01): the approval and the check-time
      preview set `lock_timeout` 5 s, `statement_timeout` 10 s and
      `idle_in_transaction_session_timeout` 10 s right after `BEGIN`; the approval fires its
      deferred work with `SET CONSTRAINTS ALL IMMEDIATE` before the COMMIT (PostgreSQL does not
@@ -4069,7 +4079,7 @@ pre-existing; pass/fail counts don't belong in this file
      those holders.
   3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
      ever used on a persistent database. Today it runs only on disposable databases.
-     **Built in 9-0** (not yet merged): the owner team read without a lock, the team lock, the
+     **Built in 9-0** (PR #322, merged and deployed): the owner team read without a lock, the team lock, the
      platform admin, then the event locked and checked again; an undo and an import of the
      same team wait for each other. It does not make the undo safe on a persistent database
      (it still disables triggers table by table).
@@ -4243,7 +4253,7 @@ pre-existing; pass/fail counts don't belong in this file
   insert holds it `FOR SHARE`; the advisory try-lock cannot bound that tuple wait. No route moves a
   team today; the route that one day does must set `lock_timeout` (same class as the next entry).
 - **An approval can wait without a limit before its COMMIT** (PR #107 reviews; its server-side waits are bounded
-  by 9-0 once merged; a statement whose answer is lost on the network is still bounded only by TCP and the deployed
+  since 9-0, PR #322, deployed 2026-11-01; a statement whose answer is lost on the network is still bounded only by TCP and the deployed
   request timeout, J17 section 10 step 7).
   It waits on the role and grant rows, the candidate row, and the team import lock. It
   also waits when a transaction abandoned on a network stall keeps those locks until TCP

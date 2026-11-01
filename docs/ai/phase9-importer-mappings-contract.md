@@ -594,7 +594,7 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   every other team's import or check-time preview (they write the threshold-set binding, then the values, then T6) and
   blocks all of them while it runs. A production undo needs its own mechanism or a maintenance window (O3).
 - Reviewers: `code-reviewer`, `db-reviewer` (trigger 4).
-- **As built (9-0)** — `backend/src/gpexeImportPreview.js` (`setImportTransactionBounds`), `gpexeImportService.js`
+- **As built (9-0)** — PR #322, merged `8fa0ea7` and deployed on 2026-11-01. `backend/src/gpexeImportPreview.js` (`setImportTransactionBounds`), `gpexeImportService.js`
   (`approveCandidate`, `recordCandidate`, the batch), `backend/scripts/gpexe-undo-imported-session.mjs`; tests
   `backend/tests/gpexe-import-bounds-9-0.test.mjs`. The values: `lock_timeout` 5 s, `statement_timeout` 10 s,
   `idle_in_transaction_session_timeout` 10 s, for the approval and the check-time preview alike. Measured on Arm A1
