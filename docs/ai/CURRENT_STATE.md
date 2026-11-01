@@ -2663,6 +2663,22 @@ Technical details.
         - **Next (J17 section 10.2, steps 3–5):** three system mappings (TIME → `duration`, TotDist → `total_distance`,
           SPEEDmax → `maximal_running_speed`), submitted and activated, then switched on for the First team's binding
           with the requirement of O6 (the owner's decision).
+        - **Steps 3–5 as the owner reports them** (a screenshot at 22:23 CET, relayed by the *Rukovodilac*; the
+          database was not read): the mapping Duration (from TIME) is System, version 1 Active (s → min, Session and
+          Drill), switched on for the First team's binding (GPEXE team 980), Required, from 01.11.2026; Total distance
+          (from TotDist) and Maximal running speed (from SPEEDmax) are System, version 1 Active, their switching-on not
+          shown on the screenshot.
+      - **J17 accepted (A1), 2026-11-01:** the owner's turn `e34ccb50` (21:23:53 UTC, relayed by the *Rukovodilac* and
+        checked) accepts the contract and decides O1, O3–O6, O8, O9 and O11–O16 as recommended (J17 section 12.3):
+        production; a full restore as the way back; F3c4 after the import; Q1 (c) and the cap waived for the pilot;
+        the three fields, Required; O12 — section 10 is the red-zone list; O13 — 9-B deployed at once after both GOs on
+        the owner's word; no migration; procedural window controls; system variables only. **O10** followed in the
+        owner's turn `bdb881f2` (21:25:05 UTC): „Ne treba pravni osnov” — the production-use gate (legal basis and
+        notice for names and dates of birth, minors included) is not required, by the owner's own assessment, not a
+        legal confirmation. Link gate (1) (the non-canonical id count) stays a line of step 11's preflight; link gate
+        (2) (the helper values) is recorded as met by the C97 comparison and the mapper's conversions, the screen
+        itself not compared (J17 section 12.3). The code of phase 9 may start: 9-0 (switch conditions 2 and 3), then
+        9-B.
         - **9-R**, the backup of the deployed database from the owner's computer (O2,
           `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase)"): PR #315, merged `3032b3b` (parents
           `73b2776` and `76b57625`) exactly from its head, on the same owner's word, after the GOs of the *Rukovodilac*
@@ -3954,6 +3970,11 @@ pre-existing; pass/fail counts don't belong in this file
   - **(2)** the helper values (Time, Distance, Top speed) match GPEXE's own view of the same session for
     two or three athletes. That the `rest_v1` numbers have the units the mapper assumes for e03 is not
     verified. If they do not match, a code fix of the units comes first.
+  - **State on 2026-11-01** (J17 section 12.3, O10): (2) is recorded as met by the C97 comparison of PR #316 (the
+    mapper's three conversions match the GPEXE screen for 13 of 13 athletes; the *Link athletes* screen itself not
+    compared); (1) stays open as a line of the pre-switch preflight (J17 step 11). The production-use gate is not
+    required by the owner's decision (turn `bdb881f2`, „Ne treba pravni osnov”; the owner's assessment, not a legal
+    confirmation).
 
 - **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
   external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
@@ -4261,10 +4282,9 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    No production field is confirmed through M2b before the owner-run evidence (C97) exists. Before the first
    production confirmation (M6), the owner also decides the pinned step's cap (see Separate tasks). The import
    switch stays off throughout.
-2. The owner states the state of the production-use gate and of the two gates before a link (an identity
-   load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
-   three sessions of 05.10–06.10.2026 linked; when the remaining links were made and whether those gates
-   were confirmed is not recorded here — the gates stay open until the owner states it).
+2. The production-use gate and the two gates before a link: stated on 2026-11-01 (J17 section 12.3, O10) — the
+   production-use gate not required (the owner's assessment), gate (2) met by the C97 comparison, gate (1) a line
+   of the pre-switch preflight. When the links of 05.10–06.10.2026 were made is still not recorded here.
 3. The separate resend timing task (see Separate tasks), when the owner schedules it.
 4. PR B, the F3c4 cut-over (see the active step).
 5. The second owner-run procedure for one controlled real import (after M6).
