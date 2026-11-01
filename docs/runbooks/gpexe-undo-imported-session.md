@@ -22,10 +22,10 @@ refused.
 
 The check is made twice, independently:
 
-1. **By the script**, first thing inside the transaction, before any lock is
-   taken or any protection is disabled. It reads the role row `FOR SHARE`, so a
-   concurrent revocation either commits first and is seen, or waits until the
-   run has finished.
+1. **By the script**, inside the transaction, right after the team's import
+   lock (below) and before the event is locked or any protection is disabled.
+   It reads the role row `FOR SHARE`, so a concurrent revocation either
+   commits first and is seen, or waits until the run has finished.
 2. **By the database**, when the log row is written: the v21 insert trigger
    repeats the same check and raises `insufficient_privilege` (SQLSTATE
    42501). A copy of the script with its own check removed still cannot commit
@@ -39,6 +39,34 @@ triggers can name any admin. The record is therefore "run in the name of this
 admin, for this reason". The accountability rests on who holds those
 credentials. An in-app undo behind the normal login would close this gap, and
 is separate, unapproved work.
+
+## The team's import lock (switch condition 3, phase 9-0)
+
+The run first reads the event's owner team without a lock, then takes the
+team's import lock (`lockTeamForImport`, the same key every import, check-time
+preview, check start, athlete link, settings change, bind and Unbind of that
+team takes), then checks the platform admin, then locks the event and checks
+its owner team again (if it changed, the run refuses and is started again).
+So an undo waits for a running import of the same team, and an import of the
+team waits for a running undo (`backend/tests/gpexe-import-bounds-9-0.test.mjs`,
+tests 12 and 13). The wait is not bounded: the script runs only on disposable
+databases.
+
+**This does not make the undo safe on a persistent database.** The run still
+disables triggers table by table (below); `ALTER TABLE … DISABLE TRIGGER`
+takes a `SHARE ROW EXCLUSIVE` lock that every other team's import and
+check-time preview waits on while the run lasts, in an order that can invert
+with theirs. The undo also locks the event before it updates the session's
+source identities, while the importer and the manual-correction path lock an
+identity before its event; the manual-correction path takes no team lock, so
+that order can invert too (a deadlock ends one side; on a disposable database
+the undo simply rolls back). A production undo needs its own mechanism or a
+maintenance window (J17, O3: a full restore of the backup is the only way back
+for the pilot).
+
+An event without an owner team is refused before any lock ("has no owner team").
+The refusal order is: no such event, no owner team, then the team lock, then the
+platform admin, then the event's own checks.
 
 ## Why a procedure is needed at all
 

@@ -68,6 +68,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { parseArgs, describeApplyTarget, assertDisposableApplyTarget } from "./gpexe-import-pilot.mjs";
+import { lockTeamForImport } from "../src/gpexeImportWriter.js";
 
 const DISPOSABLE_NAME = /^optimove_tests_gpexe_[a-z0-9_]+$/;
 
@@ -260,9 +261,20 @@ function assertUndoable(scope) {
 // earlier look and this run is either visible here (and refused) or blocked
 // until this transaction ends. Locking the event first and its activities
 // second is the same direction the rest of the chain uses (event -> activity).
-// Checked before anything is locked or disabled, with the role row read FOR
-// SHARE so a concurrent revocation either lands first or waits for this run.
-// The log trigger (v21) repeats the check when the row is written.
+//
+// Switch condition 3 (J17 section 9): before any of that, the event's owner
+// team is read without a lock and the team's import lock is taken (the
+// importer's lockTeamForImport, the key every import, check-time preview,
+// check start, link, settings change, bind and Unbind of the team takes),
+// then the event is locked and its owner team checked again (the 7g
+// pattern). So an undo waits for a running import of the same team, and an
+// import waits for a running undo. The team lock does NOT make the undo safe
+// on a persistent database: it still disables triggers table by table, which
+// takes SHARE ROW EXCLUSIVE locks that every other team's import waits on.
+//
+// The platform admin is checked after the team lock, with the role row read
+// FOR SHARE so a concurrent revocation either lands first or waits for this
+// run. The log trigger (v21) repeats the check when the row is written.
 async function assertPlatformAdmin(client, userId) {
   const r = await client.query(
     `select 1 from public.user_global_roles r join public.users u on u.id = r.user_id
@@ -273,7 +285,8 @@ async function assertPlatformAdmin(client, userId) {
   if (!r.rowCount) throw new Error(`refusing: user ${userId} is not an active platform admin — only a platform admin may undo an imported session.`);
 }
 
-export async function undoImportedSession(client, requested, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
+// onTeamLocked(client): a test hook, run right after the team import lock is held.
+export async function undoImportedSession(client, requested, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify, onTeamLocked }) {
   await assertDisposableClient(client);
   if (!performedByUserId) throw new Error("refusing: the platform admin performing the undo must be named (performedByUserId).");
   if (typeof reason !== "string" || !reason.trim()) throw new Error("refusing: a reason is required.");
@@ -285,9 +298,22 @@ export async function undoImportedSession(client, requested, { performedByUserId
 
   await client.query("begin");
   try {
+    // 1. The event's owner team, without a lock.
+    const plain = (await client.query(`select owner_team_id from training_load.metric_events where id = $1`, [requested.eventId])).rows[0];
+    if (!plain) throw new Error(`no metric event ${requested.eventId}`);
+    if (!plain.owner_team_id) throw new Error(`refusing: metric event ${requested.eventId} has no owner team, so no team import lock can serialize the undo with that team's imports.`);
+    // 2. The team's import lock (waits for a running import of the team).
+    await lockTeamForImport(client, plain.owner_team_id);
+    if (onTeamLocked) await onTeamLocked(client);
+    // 3. The platform admin, after the team lock.
     await assertPlatformAdmin(client, performedByUserId);
-    const eventRow = await client.query(`select id from training_load.metric_events where id = $1 for update`, [requested.eventId]);
+    // 4. The event, locked, and its owner team once more (defence in depth: v12
+    // already keeps the owner of an event with measurements final).
+    const eventRow = await client.query(`select id, owner_team_id from training_load.metric_events where id = $1 for update`, [requested.eventId]);
     if (!eventRow.rowCount) throw new Error(`no metric event ${requested.eventId}`);
+    if (eventRow.rows[0].owner_team_id !== plain.owner_team_id) {
+      throw new Error(`refusing: the owner team of metric event ${requested.eventId} changed before it was locked; run the undo again.`);
+    }
     let scope = await collectScope(client, { eventId: requested.eventId });
     if (scope.activities.length) {
       await client.query(`select id from training.activities where id = any($1::uuid[]) order by id for update`, [scope.activities.map((a) => a.id)]);

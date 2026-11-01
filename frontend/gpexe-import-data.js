@@ -1095,8 +1095,9 @@ export async function sendBatch(render) {
       // The server has decided about every session it tried: it leaves the
       // selection here, whatever the reload says (a refused session is only
       // chosen again from the fresh list). A session not tried, or refused
-      // because the server failed, waits for the reload's verdict.
-      if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && r.code === "internal_error")) delete gx.batch.selected[r.candidateId];
+      // because the server failed or was busy (try_again: nothing written),
+      // waits for the reload's verdict.
+      if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && (r.code === "internal_error" || r.code === "try_again"))) delete gx.batch.selected[r.candidateId];
     }
     gx.batch.confirming = false;
   } catch (error) {

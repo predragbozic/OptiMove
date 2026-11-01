@@ -372,3 +372,31 @@ test("10. the source card's 'listed below' line counts the visible rows only: wi
   assert.match(page, /No sessions found yet\./, "a hidden version is not a found session");
   assert.match(page, /Replaced or no longer found versions \(1\)/);
 });
+
+// Phase 9, 9-0 (switch condition 2): a bounded wait before the COMMIT answers
+// 409 try_again, nothing written - one sentence, never "imported", and in a
+// batch the session reads the same (the batch stops there).
+test("11. try_again: a refused approval after a bounded wait reads as one sentence saying nothing was written; in a batch the session reads the same and is never counted as imported", async () => {
+  resetState();
+  responder = server({
+    teamStatus: { enabled: true, canApprove: true },
+    candidates: [row()],
+    onApprove: () => ({ status: 409, body: { error: "try_again", message: "Another check, import or change of this team was running, or the server was busy. Nothing was imported; try again in a moment." } }),
+    onImports: (call) => ({ status: 200, body: { results: call.body.candidateIds.map((candidateId) => ({ candidateId, outcome: "refused", code: "try_again", approvalId: null })), summary: { requested: 1, imported: 0, alreadyImported: 0, refused: 1, unknown: 0, notAttempted: 0 } } }),
+  });
+  await openImports();
+  await openCandidate("cand-1");
+  await act("training-load-gpexe-approve");
+  const review = html();
+  assert.match(review, /Not imported: another check, import or change of this team was running, or the server was busy\. Nothing was written; try again in a moment\./);
+  assert.doesNotMatch(review, /gpexe-badge is-imported/);
+  assert.doesNotMatch(review, /Import result not confirmed/);
+  await act("training-load-gpexe-close");
+  await act("training-load-gpexe-pick", { candidateId: "cand-1" }, { checked: true });
+  await act("training-load-gpexe-batch-review");
+  await act("training-load-gpexe-batch-send");
+  const batch = html();
+  assert.match(batch, /Not imported: another check, import or change of this team was running, or the server was busy\. Try again in a moment\./);
+  assert.doesNotMatch(batch, /1 imported/);
+  assert.ok(gx().batch.selected["cand-1"], "a session refused try_again keeps its selection, like one the server failed");
+});

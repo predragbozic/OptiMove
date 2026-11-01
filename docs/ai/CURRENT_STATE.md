@@ -2977,8 +2977,9 @@ nothing imported is visible in the app.
   - **Who may run the undo** (`backend/scripts/gpexe-undo-imported-session.mjs`): only an
     **active platform admin** (active `user_global_roles` role and `users.is_active`),
     always with a reason.
-    - The script checks this before taking any lock, and the v21 insert trigger checks it
-      again (SQLSTATE 42501).
+    - The script checks this before taking any lock (since 9-0: after the team's import
+      lock, before the event is locked or any protection is disabled; the undo runbook,
+      "The team's import lock"), and the v21 insert trigger checks it again (SQLSTATE 42501).
     - `--reason` and `--performed-by-user-id` are required on every run, dry run included.
     - The script still refuses any database that is not a disposable
       `optimove_tests_gpexe_*` one.
@@ -4054,9 +4055,24 @@ pre-existing; pass/fail counts don't belong in this file
      and `idle_in_transaction_session_timeout` with a stable refusal code, and the
      deployed request timeout confirmed. Today another approval of the same team, or a
      transaction abandoned on a real network stall, can make an approval wait with no
-     limit.
+     limit. **Built in 9-0** (J17 section 9; not yet merged): the approval and the check-time
+     preview set `lock_timeout` 5 s, `statement_timeout` 10 s and
+     `idle_in_transaction_session_timeout` 10 s right after `BEGIN`; the approval fires its
+     deferred work with `SET CONSTRAINTS ALL IMMEDIATE` before the COMMIT (PostgreSQL does not
+     bound a COMMIT's deferred work); a bounded wait is `409 try_again` (approval, the batch
+     stops) or `check_preview_busy` / `check_preview_interrupted` (check), nothing written. The
+     deployed request timeout stays an owner step (J17 section 10, step 7). Each wait is bounded,
+     not a whole request; and only the approval and the preview get the idle bound, so another
+     team-lock holder that is abandoned (a check start, a link or settings write, the roster
+     command, a source-connection Test / Reconnect / Bind) still blocks them until the server
+     drops it - they answer `try_again` instead of hanging. Separate task: an idle bound for
+     those holders.
   3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
      ever used on a persistent database. Today it runs only on disposable databases.
+     **Built in 9-0** (not yet merged): the owner team read without a lock, the team lock, the
+     platform admin, then the event locked and checked again; an undo and an import of the
+     same team wait for each other. It does not make the undo safe on a persistent database
+     (it still disables triggers table by table).
   4. **Mandatory before regular production imports** (owner, 2026-09-19): a safe,
      verified production procedure for results imported under a wrongly linked GPEXE
      athlete. Unlinking only ends the link and never changes imported results; the app
@@ -4226,7 +4242,9 @@ pre-existing; pass/fail counts don't belong in this file
   recorded, not fixed): moving a team to another club waits on the team row while a binding
   insert holds it `FOR SHARE`; the advisory try-lock cannot bound that tuple wait. No route moves a
   team today; the route that one day does must set `lock_timeout` (same class as the next entry).
-- **An approval can wait without a limit before its COMMIT** (PR #107 reviews, not fixed).
+- **An approval can wait without a limit before its COMMIT** (PR #107 reviews; its server-side waits are bounded
+  by 9-0 once merged; a statement whose answer is lost on the network is still bounded only by TCP and the deployed
+  request timeout, J17 section 10 step 7).
   It waits on the role and grant rows, the candidate row, and the team import lock. It
   also waits when a transaction abandoned on a network stall keeps those locks until TCP
   keepalive notices. This is condition 2 in Separate tasks.
