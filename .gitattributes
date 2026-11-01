@@ -31,3 +31,5 @@ docs/runbooks/unit-conversion-guards-v47*.sql text eol=lf
 # Binary media fixtures of the backend tests.
 backend/tests/fixtures/media/*.mp4 binary
 docs/runbooks/mapping-activations-v48*.sql text eol=lf
+# Phase 7g (v50): the md5s of v48's revision guard body and v16's dashboard gate body the rollback restores must stay stable across checkouts.
+docs/runbooks/source-instance-end-v50*.sql text eol=lf

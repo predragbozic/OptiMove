@@ -8,8 +8,9 @@
 // (docs/ai/v39-revision-lifecycle-contract.md), J8
 // (docs/ai/phase7b-mapping-transitions-contract.md), J9, the unit
 // conversions (docs/ai/phase7c-unit-conversions-contract.md), J10, the T5
-// activations (docs/ai/phase7d-mapping-activations-contract.md), and J11, the
-// aggregate preview (docs/ai/phase7e-aggregate-preview-contract.md):
+// activations (docs/ai/phase7d-mapping-activations-contract.md), J11, the
+// aggregate preview (docs/ai/phase7e-aggregate-preview-contract.md), and J13,
+// ending a held source instance (docs/ai/phase7g-source-instance-end-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -26,6 +27,7 @@ import * as classification from "../canonicalClassificationService.js";
 import * as conversions from "../unitConversionService.js";
 import * as activations from "../sourceMetricActivationService.js";
 import * as previews from "../sourceMetricPreviewService.js";
+import * as instances from "../sourceInstanceEndService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -432,6 +434,28 @@ router.post("/fields/:fieldId/revisions/:revisionId/replace", handle(async (req,
   if (!revisions.mayChangeRevisions(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await revisions.replaceRevision({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 200);
+}));
+
+// Phase 7g (J13): the held source instances. An active platform admin in the
+// platform workspace only - everyone else the identical 404, before the query
+// or the body is looked at. The list ({ instances, nextCursor }) reads the raw
+// query string; the end (200 { instance }) takes 415, a non-object body 400, a
+// malformed id the identical 404, a wrong body shape 400, then the write.
+router.get("/source-instances", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!instances.mayEndInstances(ctx)) return notFound(res);
+  const at = req.originalUrl.indexOf("?");
+  const queryString = at === -1 ? "" : req.originalUrl.slice(at + 1);
+  res.json(await instances.listInstances({ ctx, queryString }));
+}));
+
+router.post("/source-instances/:connectionId/end", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!instances.mayEndInstances(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await instances.endInstance({ ctx, connectionId: req.params.connectionId, body: req.body }), 200);
 }));
 
 // Anything else under this prefix is the same 404.
