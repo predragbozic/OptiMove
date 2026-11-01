@@ -5,7 +5,7 @@
 | Status | **Proposed.** It is evidence for the meaning act only once it is merged, and it is merged only on the owner's word. |
 | Covers | The **meaning** of `athlete_session.total_time`, `athlete_session.total_distance` and `athlete_session.max_v` on `server3` / `rest_v1`. |
 | Companion | The unit evidence of the same three fields: `docs/ai/gpexe-c97-unit-evidence.md` (merged, PR #316). |
-| Source | GPEXE's REST handbook, `gpexe-v.6-api-rest-handbook.pdf` (60 pages), pages 11, 37–38 and 52. |
+| Source | GPEXE's REST handbook, `gpexe-v.6-api-rest-handbook.pdf`, pages 11, 37–38 and 52; the owner holds the file. |
 | Cited by | The meaning act of M2b (`POST /fields/:fieldId/revisions/:revisionId/meaning-verification`, discovery document J4) through the anchors of section 3. |
 | Recorded | 2026-11-01, from the pages the *Rukovodilac* read in the handbook the owner sent, and the owner's decision O7. |
 
@@ -14,7 +14,7 @@ anchor is never renamed or removed. A correction is a new section with a new anc
 
 <a id="owner-decision-o7"></a>
 
-## 1. The owner's decision O7
+## 1. The owner's decision O7 (J17 section 12.2)
 
 C97 asks for the meaning from official GPEXE documentation or GPEXE support's written answer. The handbook is written
 for GPEXE 6, and `server3` reports 9.11.x. The owner decided that it counts for these three fields:
@@ -30,13 +30,13 @@ It covers these three fields and these pages only. It does not make the handbook
 
 ## 2. The source and how it was read
 
-- **The handbook is not in the repository.** It is the vendor's document and is not public; the owner sent it to the
-  *Rukovodilac*'s session (event `718e4a98`, 2026-11-01 20:09:43 UTC). This document quotes only the short passages it
-  needs, with their page numbers (the PDF's own page numbers).
+- **The handbook is not in the repository.** It is the vendor's document and is not public; the owner holds it and sent
+  it to the *Rukovodilac*'s session (event `718e4a98`, 2026-11-01 20:09:43 UTC). This document quotes only the short
+  passages the anchors need, with their page numbers, on the *Rukovodilac*'s instruction.
 - **Who read it.** The *Rukovodilac* extracted the pages' text and reported the passages. The author of this document
   read the same extracted text in the *Rukovodilac*'s transcript; the author and the reviewers did not open the PDF.
 - **No GPEXE request** was sent, and no production data is used here. The numbers quoted in section 3 are the
-  handbook's own example, not an athlete's values.
+  vendor's sample in the handbook, not OptiMove data.
 
 <a id="results"></a>
 
@@ -64,26 +64,28 @@ Two checks on that example alone (recomputed for this document):
 "• total_distance, Distance", "• max_values_speed, Maximal speed".
 
 **Page 11, "User Units", "Key: user_units".** The units the GPEXE app shows are each user's own setting
-("speed: m/s, km/h, m/min", "time: s, min"). The API answers in its own units (the page 37–38 example: seconds,
-metres, metres per second). This is why the GPEXE screen showed km/h and mm:ss in the unit comparison while the raw
-values are in m/s and s (`docs/ai/gpexe-c97-unit-evidence.md`, section 3).
+("speed: m/s, km/h, m/min", "time: s, min"). The handbook does not label the units of the page 37–38 example; only
+seconds follows from it (the interval). The raw units **s, m and m/s come from the independent unit evidence**
+(`docs/ai/gpexe-c97-unit-evidence.md`, PR #316), and the example is consistent with them. That the GPEXE screen showed
+km/h and mm:ss while the raw values are in m/s and s fits page 11 (an inference of this document, not a handbook
+sentence).
 
 <a id="total-time-meaning"></a>
 
 ### 3.1 `athlete_session.total_time`
 
-**Meaning:** the duration of the athlete's session record, from the start to the end of its time interval
-(`datetime_intervals`), in seconds.
+**Meaning:** the athlete's recorded time in the session record, in seconds (the unit from PR #316).
 
-**Evidence:** the page 37–38 example, where `total_time` equals the length of `datetime_intervals` to the microsecond;
-page 52 names the duration indicator "Duration" (its key there is `average_time`, the indicator over sessions, not this
-field); page 11 for the display unit.
+**Evidence:** the page 37–38 example, whose one interval (`datetime_intervals`) is as long as `total_time` to the
+microsecond. *Inferred from that example; the handbook has no sentence that defines `total_time`; accepted under O7
+(section 4).* Whether several intervals of one record are summed or spanned is not shown by the example. Page 52 names
+a "Duration" indicator under another key (`average_time`, not this field; page 52 does not name `total_time`).
 
 <a id="total-distance-meaning"></a>
 
 ### 3.2 `athlete_session.total_distance`
 
-**Meaning:** the distance the athlete covered in the session record, in metres.
+**Meaning:** the distance the athlete covered in the session record, in metres (the unit from PR #316).
 
 **Evidence:** page 52 names `total_distance` "Distance"; on page 37–38 it equals `average_v × total_time`, so it is the
 distance travelled over that interval at that average speed.
@@ -92,10 +94,11 @@ distance travelled over that interval at that average speed.
 
 ### 3.3 `athlete_session.max_v`
 
-**Meaning:** the athlete's maximal speed in the session record, in metres per second.
+**Meaning:** the athlete's maximal speed in the session record, in metres per second (the unit from PR #316).
 
 **Evidence:** page 52 names `max_values_speed` "Maximal speed"; on page 37–38 `max_v` (6.485) is greater than
-`average_v` (1.524) in the same unit. The value OptiMove stores for `athlete_session.max_v` **is** the session details'
+`average_v` (1.524), as a maximum must be. *Inferred for `max_v` itself; the handbook has no sentence that defines
+`max_v`; accepted under O7 (section 4).* The value OptiMove stores for `athlete_session.max_v` **is** the session details'
 `max_values_speed` for that athlete, proven equal to the row's own `max_v` on one row of each session by the check's
 canary (`docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`).
 
@@ -106,6 +109,10 @@ canary (`docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`).
 - **The handbook has no sentence that defines `total_time` or `max_v` on its own.** Their meaning rests on the page
   37–38 example (the interval arithmetic, `max_v` above `average_v`) and on the indicator names of page 52. For
   `total_distance` page 52 names the field itself.
+- **One example, one interval.** The example holds a single interval, so it does not show how `total_time` treats
+  several intervals of one record (summed or spanned).
+- **The units are not the handbook's.** s, m and m/s come from the unit evidence (PR #316); the handbook's example is
+  only consistent with them.
 - **The handbook is for GPEXE 6; the server reports 9.11.x.** The owner accepted it for these three fields (O7,
   section 1). A written confirmation by GPEXE support would be stronger, and is not needed for these fields.
 - **The units agree with the independent unit evidence** (PR #316: m, m/s, s from 13 athletes against the GPEXE
@@ -119,8 +126,8 @@ Before any act: both documents (`docs/ai/gpexe-c97-unit-evidence.md` and this on
 the owner's, as an **active platform admin in the platform workspace** (C94). Each act is saved once and never
 changed; a mistake needs a new revision.
 
-Where: **Training Load → Data configuration → Source fields**, the GPEXE `rest_v1` group. Open the field by its label
-(seeded as below; the key is under *Technical details* of the act's form). Each act is done on **Revision 1**, the
+Where: **Training Load → Data configuration → Source fields**, the GPEXE group. Find each field by its label (seeded
+as below; the key is under *Technical details* of the act's form). Each act is done on **Revision 1**, the
 field's active revision. If the screen shows another revision as active, or the act's button is missing (already
 confirmed), stop and report.
 
@@ -133,13 +140,19 @@ confirmed), stop and report.
 | 5 | SPEEDmax · `athlete_session.max_v` | Confirm the unit | Unit the source delivers: `m/s` | `docs/ai/gpexe-c97-unit-evidence.md#max-v-unit` |
 | 6 | SPEEDmax · `athlete_session.max_v` | Confirm the meaning | (nothing else) | `docs/ai/gpexe-c97-meaning-evidence.md#max-v-meaning` |
 
-Each time: press the button, type the unit (unit acts only) and the evidence exactly as shown, press the form's
-**Confirm the unit** / **Confirm the meaning**, read the question that names the field, the unit and the evidence, and
-confirm. These are plain fields: the unit form has no bound unit and the meaning form no operator. Never type a name,
-an id or a measured value.
+Each time: press the button, type the unit (unit acts only), copy the evidence from the table (do not retype it),
+press the form's **Confirm the unit** / **Confirm the meaning**, and compare the question it asks (the field, the
+revision, the unit, the evidence) with the table row character by character; if anything differs, cancel. Only then
+confirm. A wrong field, unit or anchor cannot be changed afterwards: the server checks the reference's form, not that it
+belongs to the field, and a correction is a new revision. These are plain fields: the unit form has no bound unit and
+the meaning form no operator. Never type a name, an id or a measured value.
+
+The meaning acts rest on O7 (section 1): the form asks to confirm only when the document holds the field's definition
+from GPEXE documentation; here that definition is the inference of section 3, which the owner accepted under O7.
 
 **After all six:** each of the three fields shows *Unit `s` / `m` / `m/s` (confirmed)*, *Meaning confirmed*, and
-*Evidence: Verified*. If an answer is lost ("Result not confirmed"), use **Check result**, never a second act.
+*Evidence: Verified*; its *Confirmations* list shows the two confirmations on revision 1 with the evidence of the table.
+If an answer is lost ("Result not confirmed"), use **Check result**, never a second act.
 
 <a id="limits"></a>
 
