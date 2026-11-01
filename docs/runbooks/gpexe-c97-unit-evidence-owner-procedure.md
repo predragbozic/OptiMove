@@ -166,7 +166,9 @@ the evidence document (with its anchor) that M2b's unit act cites; the owner rev
 
 **Recorded so far:** the unit of `athlete_session.total_time`, `total_distance` and `max_v`, from one session with 13
 athletes on the owner's decision (instead of two sessions), in `docs/ai/gpexe-c97-unit-evidence.md`, with its
-departures from this procedure named there (section 2.1). The other seven fields and every meaning are still open.
+departures from this procedure named there (section 2.1). Their meaning, from the GPEXE handbook on the owner's
+decision O7, is in `docs/ai/gpexe-c97-meaning-evidence.md`, with the six acts the owner does in Source fields. The
+other seven fields are still open.
 
 ## 5. The meaning side (not from this procedure)
 
