@@ -77,7 +77,7 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarLayout, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, restoreCentralCalendarView } from "./central-calendar-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -298,7 +298,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -421,7 +421,11 @@ function bindEvents() {
   els.railToggle?.addEventListener("click", toggleRail);
   els.mobileNavToggle?.addEventListener("click", toggleMobileNav);
   els.mobileNavBackdrop?.addEventListener("click", closeMobileNav);
-  els.signOut?.addEventListener("click", signOut);
+  // The central calendar's event form (K2a-2) is asked before the logout
+  // request, never after it: a "No" keeps the session and the form.
+  els.signOut?.addEventListener("click", () => {
+    if (centralCalendarMayBeLeft({ final: "sign-out" })) void signOut();
+  });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
   // crossed (a phone's day strip against a week's columns, the time grid
@@ -495,6 +499,8 @@ function bindEvents() {
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("keydown", handleBuilderSearchKeydown);
   els.content.addEventListener("keydown", handleTemplateMetadataKeydown);
+  // Central calendar (K2a-2): Enter in the event form's athlete search never submits it.
+  els.content.addEventListener("keydown", handleCentralCalendarKeydown);
   // Text fields that grow with their text (textarea-autosize.js), wherever
   // they are rendered (the content area and the Builder's modals).
   document.addEventListener("input", (event) => {
@@ -506,6 +512,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface }));
   // Data configuration -> Source fields: the operator select reports through "change" too.
   els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target));
+  // Central calendar (K2a-2): the event form's select, dates and boxes too.
+  els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
   // Data configuration -> Mappings: a checkbox, a radio or a select reports its choice through "change".
   els.content.addEventListener("change", (event) => { if (event.target?.matches?.("select, input[type=checkbox], input[type=radio]")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
@@ -649,6 +657,8 @@ function bindEvents() {
   window.addEventListener("beforeunload", (event) => handleExerciseMediaBeforeUnload(event, state));
   // Import from Google Drive: files on their way ask the same way.
   window.addEventListener("beforeunload", handleDriveImportBeforeUnload);
+  // Central calendar (K2a-2): an event save in flight, not confirmed or not made.
+  window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
   // repaints of a running import (toggle does not bubble: caught on the way
   // down), and a repaint of its card waits while a pointer is down, then
@@ -694,6 +704,12 @@ async function handleContentSubmit(event) {
   if (event.target.closest("[data-source-fields-form]")) {
     event.preventDefault();
     await submitSourceFieldsForm({ render: renderActiveTrainingLoadSurface });
+    return;
+  }
+  // Central calendar (K2a-2): create, edit or cancel an event.
+  if (event.target.closest("[data-cc-event-form]")) {
+    event.preventDefault();
+    await submitCentralCalendarEventForm({ render: renderCentralCalendar });
     return;
   }
 
@@ -1281,6 +1297,8 @@ function handleContentInput(event) {
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
   if (handleSourceFieldsInput(event.target)) return;
+  // Central calendar (K2a-2): the event form's values.
+  if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
   // Data configuration -> Mappings: typed values (a choice reports through "change").
   if (event.target?.closest?.("[data-mm-field]")) {
     if (event.target.matches?.("input[type=text], textarea")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface });
@@ -1856,7 +1874,8 @@ async function handleGlobalClick(event) {
     closeWorkspaceSwitcherIfOutside(event.target);
     return;
   }
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: askLeaveTrainingLoad })) {
+  // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -2056,7 +2075,8 @@ function handleAppBack() {
 
   // Central calendar (K1b): an open item panel closes before anything else
   // of the screen (the Training Load drawers' own rule).
-  if (closeCentralCalendarPanel(renderCentralCalendar)) return true;
+  const calendar = closeCentralCalendarPanel(renderCentralCalendar);
+  if (calendar) return calendar; // a kept form: BACK_STAYED
 
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this
@@ -2250,7 +2270,13 @@ function renderCentralCalendar() {
   if (state.activeTab !== "central-calendar") return;
   // A repaint keeps the chip rows' sideways scroll and the focused control.
   const snapshot = captureCentralCalendarView(els.content.querySelector(".central-calendar"));
-  els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, { today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex() });
+  els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, {
+    today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex(),
+    // K2a-2: New event where this workspace may create one; the event form's athletes.
+    canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
+    // The event saves left unconfirmed in this workspace, each with Check result.
+    uncertainWrites: centralCalendarUncertainWrites(),
+  });
   restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
 }
 

@@ -283,7 +283,7 @@ test("3b. the Types chip follows the server's kinds: Activities shows own-card a
   await act({ action: "central-calendar-toggle-kind", kind: "test" });
   assert.deepEqual([...dom().querySelectorAll(".cc-card")].map((card) => card.dataset.key), ["activity:act-gps", "test:tsch-1:d2", "test:tsch-2:d4", "activity:act-manual"]);
   await act({ action: "central-calendar-clear-filters" });
-  assert.deepEqual(state.centralCalendar.filters, { teamIds: [], kinds: [] });
+  assert.deepEqual(state.centralCalendar.filters, { teamIds: [], kinds: [], eventKinds: [] });
   assert.equal(dom().querySelectorAll(".cc-card").length, 9);
   await act({ action: "central-calendar-toggle-kind", kind: "bogus" });
   assert.deepEqual(state.centralCalendar.filters.kinds, [], "an unknown kind is ignored");
@@ -331,7 +331,8 @@ test("4b. the time grid (wide, grid mode) places a timed card at its hour and th
 
 test("5a. the status badge per status x expects (D14, D15)", () => {
   const badge = (item) => view.centralCalendarStatusBadge(baseItem(item))?.label ?? null;
-  assert.equal(badge({ status: "planned" }), null);
+  // K2a-2 (the owner's status pill): Planned shows too.
+  assert.equal(badge({ status: "planned" }), "Planned");
   assert.equal(badge({ status: "none" }), null);
   assert.equal(badge({ status: "done" }), "Done");
   assert.equal(badge({ status: "awaiting_entry", expects: ["rpe"], rpe: { asked: 20, submitted: 17 } }), "Awaiting RPE");
@@ -355,7 +356,8 @@ test("5b. the one count per kind, the title fallbacks, the when label and the ki
   assert.equal(title({ kind: "planned" }), "Training session");
   assert.equal(title({ kind: "activity" }), "Activity");
   assert.equal(title({ kind: "external", eventType: "match" }), "Match");
-  assert.equal(title({ kind: "external" }), "Event");
+  // Choice 9.10 of the K2a plan: an external card is an RPE request.
+  assert.equal(title({ kind: "external" }), "RPE request");
   assert.equal(title({ kind: "test" }), "Test");
   assert.equal(title({ kind: "test", title: "CMJ" }), "CMJ");
   const when = (item) => view.centralCalendarWhenLabel(baseItem(item));
@@ -363,7 +365,7 @@ test("5b. the one count per kind, the title fallbacks, the when label and the ki
   assert.equal(when({ slot: { amPm: "AM", bta: "T", order: 2 } }), "AM · Training");
   assert.equal(when({ slot: { amPm: "PM", bta: null, order: 1 } }), "PM");
   assert.equal(when({ slot: null }), "");
-  assert.equal(view.centralCalendarKindLabel(baseItem({ kind: "planned", athleteCount: 20 })), "Training · 20 athletes");
+  assert.equal(view.centralCalendarKindLabel(baseItem({ kind: "planned", athleteCount: 20 })), "Planned training · 20 athletes");
   assert.equal(view.centralCalendarKindLabel(baseItem({ kind: "activity", origin: "api_import", athleteCount: 1 })), "Imported activity · 1 athlete");
   assert.equal(view.centralCalendarKindLabel(baseItem({ kind: "activity", origin: "manual", athleteCount: 0 })), "Activity");
 });
@@ -377,7 +379,7 @@ test("5c. the rendered card: team colour by position in teams[], a second team a
   assert.equal(training.querySelector(".cc-badge").textContent, "Awaiting RPE");
   assert.equal(training.querySelector(".cc-card-count").textContent, "RPE 17/20");
   assert.equal(training.querySelector(".cc-card-when").textContent, "AM · Training");
-  assert.equal(training.querySelector(".cc-card-kind").textContent, "Training · 20 athletes");
+  assert.equal(training.querySelector(".cc-card-kind").textContent, "Planned training · 20 athletes");
   const strength = doc.querySelector('.cc-card[data-key="planned:batch-2"]');
   assert.match(strength.getAttribute("style"), /--cc-team-0/);
   assert.equal(strength.querySelectorAll(".cc-card-teams .cc-team-dot").length, 1, "the second team is a dot");
@@ -904,7 +906,11 @@ test("10a. the coach's Back root is Home and the rail's Calendar highlights the 
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\);/);
   assert.doesNotMatch(appJs, /openWeeklyCalendarFromRail/, "the rail no longer opens the weekly plan's month picker");
   assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar \}\);/, "the content click dispatch");
-  assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return/g) || []).length, 2, "Back and Escape both close the panel first and draw the screen again");
+  assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return;/g) || []).length, 1, "Escape closes the panel first and draws the screen again");
+  // Back too; an event form the coach chose to keep (K2a-2) puts back the
+  // history entry Back consumed.
+  assert.match(appJs, /const calendar = closeCentralCalendarPanel\(renderCentralCalendar\);\s*if \(calendar\) return calendar;/, "Back closes the panel first and passes its answer on");
+  assert.match(appJs, /const BACK_STAYED = "stayed";/, "the calendar's \"stayed\" is Back's own BACK_STAYED");
   assert.match(appJs, /resetCentralCalendarForWorkspaceChange\(\);\s*invalidateCentralCalendarCache\(\);/, "a workspace switch resets the slice and the cache");
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\{ forceRefresh: true \}\);/, "and reloads an open calendar");
   // The function bodies, by brace matching (the menu-cache-policy-coverage pattern).

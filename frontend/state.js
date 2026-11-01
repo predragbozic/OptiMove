@@ -55,7 +55,11 @@ export const emptyCentralCalendarState = () => ({
   // the day a phone's strip or the month grid points at.
   anchor: "",
   selectedDate: "",
-  filters: { teamIds: [], kinds: [] },
+  // K2a-2: `eventKinds` narrows the events by their kind (a card passes when
+  // its kind is chosen, or it is an event whose kind is chosen); the Filters
+  // panel starts collapsed.
+  filters: { teamIds: [], kinds: [], eventKinds: [] },
+  filtersOpen: false,
   range: { from: "", to: "" },
   data: null,
   loading: false,
@@ -70,6 +74,12 @@ export const emptyCentralCalendarState = () => ({
   // ("changed" when the key is no longer in that answer, "failed" when the
   // read failed).
   panel: { open: false, key: "", date: "", athletes: null, loading: false, error: "" },
+  // K2a-2 (docs/ai/central-calendar-k2a-2-plan.md): the workspace's event
+  // types (GET /api/calendar/events/types, read once per workspace; null =
+  // not read yet) and the open event form - create, edit or the cancel
+  // confirmation (central-calendar-event-form.js), null when none is open.
+  eventTypes: null,
+  form: null,
 });
 
 export const emptyExerciseOptions = () => ({

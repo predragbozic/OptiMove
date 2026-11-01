@@ -21,8 +21,13 @@ const CENTRAL_CALENDAR_DAY_NAMESPACE = "central-calendar-day";
 // storage still works.
 const WEEK_MODE_STORAGE_KEY = "optimove.central-calendar.week-mode";
 
-export const CENTRAL_CALENDAR_KINDS = Object.freeze(["planned", "activity", "external", "test"]);
+// The kinds in the Types chips' order: events first (K2a-2), then K1's four.
+export const CENTRAL_CALENDAR_KINDS = Object.freeze(["event", "planned", "activity", "external", "test"]);
 export const CENTRAL_CALENDAR_VIEWS = Object.freeze(["month", "week", "day"]);
+// An event's kind (D2, the seeded types' base kinds; K2a plan section 6).
+export const CENTRAL_CALENDAR_EVENT_KINDS = Object.freeze(["training", "match", "test", "travel", "meeting", "day_off", "camp"]);
+// What an event may expect (D19), in the server's order.
+export const CENTRAL_CALENDAR_EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 
 let rangeGeneration = 0;
 let dayGeneration = 0;
@@ -192,6 +197,72 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Events (K2a-2, docs/ai/central-calendar-k2a-2-plan.md section 4) over the
+// K2a-1a routes /api/calendar/events. The reads are plain; every write
+// carries a requestKey made when it is sent, so a lost answer is checked by
+// sending the very same request again (the server replays it, never saves
+// twice).
+// ---------------------------------------------------------------------------
+const EVENTS_BASE = "/api/calendar/events";
+// A write still open after this bound is a lost answer, never a refusal: the
+// server's own worst case (the pool checkout, a 15 s lock wait, the bounded
+// COMMIT of 15 s and its 5 s check) is well under it.
+export const CENTRAL_CALENDAR_WRITE_BOUND_MS = 90_000;
+
+export function newCentralCalendarRequestKey() {
+  return globalThis.crypto.randomUUID();
+}
+
+function eventWrite(path, method, body) {
+  const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(CENTRAL_CALENDAR_WRITE_BOUND_MS) : undefined;
+  return api(path, { method, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
+}
+
+const eventPath = (eventId) => `${EVENTS_BASE}/${encodeURIComponent(eventId)}`;
+export const fetchCentralCalendarEventTypes = () => api(`${EVENTS_BASE}/types`);
+export const fetchCentralCalendarEvent = (eventId) => api(eventPath(eventId));
+export const createCentralCalendarEvent = (body) => eventWrite(EVENTS_BASE, "POST", body);
+export const updateCentralCalendarEvent = (eventId, body) => eventWrite(eventPath(eventId), "PATCH", body);
+export const cancelCentralCalendarEvent = (eventId, body) => eventWrite(`${eventPath(eventId)}/cancel`, "POST", body);
+
+export function centralCalendarErrorInfo(error) {
+  const data = error?.data && typeof error.data === "object" ? error.data : null;
+  const status = Number(error?.status) || 0;
+  return {
+    status,
+    // No answer (the network, the client bound) is its own code: the screen
+    // never says a write failed when it cannot know.
+    code: typeof data?.error === "string" ? data.error : status ? "error" : "no_answer",
+    message: typeof data?.message === "string" ? data.message : "",
+    current: data?.current || null,
+  };
+}
+
+// The answers that say nothing about whether a write landed: no answer, the
+// service's own 503 outcome_unknown, and any other 5xx it did not write itself
+// (a proxy, a restart, a body that is not JSON). `internal_error` (a certain
+// rollback) and the busy pool's `try_again` are stated refusals.
+export function centralCalendarOutcomeUnknown(info) {
+  if (info.code === "no_answer" || info.code === "outcome_unknown") return true;
+  return info.status >= 500 && info.code !== "internal_error" && info.code !== "try_again";
+}
+
+// Check result sends the same request again. Only these answers settle what
+// happened to the first one: the server gives them after its request record
+// showed that nothing was saved under the key (calendarEventService.js: the
+// replay check precedes every check of the command), or for the body itself,
+// which is the same as the first time. Every other answer (busy, no access,
+// signed out, a server error) comes before that record is read, so the first
+// write stays not confirmed.
+const SETTLED_ON_CHECK = new Set([
+  "event_changed", "event_cancelled", "type_not_available", "target_not_available", "schedule_not_available",
+  "schedule_kind_mismatch", "schedule_already_referenced", "nothing_to_change",
+  "invalid_type", "invalid_title", "invalid_day", "invalid_time", "invalid_timezone", "invalid_location", "invalid_expects",
+  "invalid_notes", "invalid_targets", "invalid_reason", "invalid_revision", "invalid_schedule",
+]);
+export const centralCalendarCheckSettles = (info) => info.status >= 400 && info.status < 500 && SETTLED_ON_CHECK.has(info.code);
 
 export function findCentralCalendarItem(data, key) {
   for (const day of data?.days || []) {
