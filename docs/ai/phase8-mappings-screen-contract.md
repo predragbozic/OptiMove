@@ -7,7 +7,7 @@ document*) for the "Mappings / activations" bullet of its section H, built over 
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Zatim sledeće po planu: minimalna faza 8 (ekran mapiranja) — ugovor ako ga nema, pa implementacija.”, its turn `ec301e87`, 10:48:15 UTC). No phase 8 contract existed. Revised after the internal reviews (section 14). **Accepted** by the *Rukovodilac* on 2026-11-01 (its turn `e0830de3`, 11:46:59 UTC: „ODLUKE R1–R19: sve PRIHVAĆENE kako si preporučio”), merged as PR #308. **Built** in the 8-B pull request (section 15). |
+| Status | Proposed by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Zatim sledeće po planu: minimalna faza 8 (ekran mapiranja) — ugovor ako ga nema, pa implementacija.”, its turn `ec301e87`, 10:48:15 UTC). No phase 8 contract existed. Revised after the internal reviews (section 14). **Accepted** by the *Rukovodilac* on 2026-11-01 (its turn `e0830de3`, 11:46:59 UTC: „ODLUKE R1–R19: sve PRIHVAĆENE kako si preporučio”), merged as PR #308. **Built** in the 8-B pull request (section 15), merged as PR #309 (`a0b4436`). |
 | Verified against commit | `08c6cbf` (merge of PR #307). Every file and line reference is to that commit. |
 | Mark | ★ (the plan's mark for phase 8): frontend only. **No API change, no migration**, no backend file. |
 | Owner decisions | None new is needed (section 12 lists what is the *Rukovodilac*'s). The owner's sentence „Stim sto ovo mora biti mnogo jednostavnijeg za korisnika” (owner turn `d9a0b800`, 2026-10-28) is an acceptance criterion of `ux-design-reviewer`. |
