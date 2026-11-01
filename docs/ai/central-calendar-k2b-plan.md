@@ -1,7 +1,7 @@
 # Central calendar — K2b-1 plan: Settings → Calendar (types, details, places, colours)
 
 Status: **the structure and the slices 1a → 1c → 1d (→ 1e) accepted by the manager on 2026-11-01, with T1–T5 decided as
-recommended (section 15); the owner's answers to Q1–Q12 are pending, and v51 and the code wait for them** (Q3, Q5, Q7,
+recommended and T6 decided (section 15); the owner's answers to Q1–Q12 are pending, and v51 and the code wait for them** (Q3, Q5, Q7,
 Q10 and Q11 change the schema). Written against the checked-out code at `17dc46d` (merge of PR #313, `main`). No
 database was touched.
 
@@ -484,13 +484,13 @@ built from the address only (and absent without one), the auto-colour rule, no `
 - T4. **Yes:** K2a-1b's open point 2 (a raw link write without a revision bump) stays open, not in v51.
 - T5. **Yes:** 1a → 1c on 1a's API while 1b is reviewed → 1d → (1e).
 
-**Found while building the test skeleton (2026-11-01), for the manager — not decided:**
+**Found while building the test skeleton (2026-11-01); decided by the manager the same day:**
 
 - T6. A platform admin reaches a club's workspace only through a `club_admin` role of that club
   (`loadAvailableWorkspaces`, `backend/src/workspace.js:37-66`; the skeleton's test 0a saw the fallback to the platform
   workspace without it), and `eventWriteBasis` then answers `club_admin` first — so D24's "platform admin from the club's
-  workspace as support" is, today, a platform admin who is also the club's admin, audited as `club_admin`. Recommended
-  for K2b-1: keep it so (no new path); the alternative is the *Source connections* pattern (the platform workspace with
-  a club picker, `sourceConnectionsAdminContext`, `frontend/source-connections-data.js:74-85`), which adds a club id to
-  every settings request and its own access tests — a later, separate addition if the owner wants support without a
-  club role.
+  workspace as support" is, today, a platform admin who is also the club's admin, audited as `club_admin`. **Decided:
+  K2b-1 keeps it so** — a club workspace belongs to whoever holds that club's `club_admin` role, and a platform admin
+  writes there on the `club_admin` basis; no new path. Choosing a club from the platform workspace (the *Source
+  connections* pattern, `sourceConnectionsAdminContext`, `frontend/source-connections-data.js:74-85`, which would add a
+  club id to every settings request and its own access tests) is a later addition, only if the owner asks for it.
