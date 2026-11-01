@@ -1112,6 +1112,8 @@ order covers is merged under it; a migration PR that the standing order for migr
     answered 401; the served bundle holds the screen.
 
 ### Phase 9 ★★: M4, the importer integration
+- **Contract:** `docs/ai/phase9-importer-mappings-contract.md` (J17), proposed on 2026-11-01 on the *Rukovodilac*'s
+  order; with M6's red-zone steps for the owner (its section 10). No code before the owner accepts it.
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.
 - **Acceptance:** a characterisation test:
   - the same numbers as today, within 1e-9;
