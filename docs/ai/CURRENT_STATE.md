@@ -2667,7 +2667,16 @@ Technical details.
           database was not read): the mapping Duration (from TIME) is System, version 1 Active (s → min, Session and
           Drill), switched on for the First team's binding (GPEXE team 980), Required, from 01.11.2026; Total distance
           (from TotDist) and Maximal running speed (from SPEEDmax) are System, version 1 Active, their switching-on not
-          shown on the screenshot.
+          shown on the screenshot. **Completed** by the owner's next report (turn `35fc8434`, 21:38:27 UTC, relayed and
+          checked): „Total distance i Maximal running speed uključeni za First team, kao Duration.” — all three
+          switched on for the First team (GPEXE team 980), Required. J17 section 10.2, steps 2–5, are done as reported;
+          the database was not read.
+      - **The owner's work order** (turn `628d0be9`, 21:39:51 UTC, relayed and checked; J17 section 12.3): pre- and
+        post-checks, merges and deploys without a migration run without the owner's separate word; a deploy with a
+        migration and higher-level or planning decisions still go to the owner. For 9-B: both GOs, then the merge
+        under the standing merge order and the *Rukovodilac*'s deploy (O13 amended); the read-only checks of J17
+        steps 11 and 16 may run through the *Rukovodilac*'s connector. The import switch, the key and the window stay
+        the owner's.
       - **J17 accepted (A1), 2026-11-01:** the owner's turn `e34ccb50` (21:23:53 UTC, relayed by the *Rukovodilac* and
         checked) accepts the contract and decides O1, O3–O6, O8, O9 and O11–O16 as recommended (J17 section 12.3):
         production; a full restore as the way back; F3c4 after the import; Q1 (c) and the cap waived for the pilot;
