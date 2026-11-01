@@ -755,9 +755,12 @@ environment:
   each with its own backup.
 - For the local OPTIMOVE database the backup is taken and verified with
   `backend/scripts/gpexe-backup-verify.mjs`
-  (`docs/runbooks/gpexe-backup-verify.md`). For Supabase, how the backup and
-  the restore check are done is decided together with that environment's
-  decision.
+  (`docs/runbooks/gpexe-backup-verify.md`). For Supabase the owner decided on
+  2026-11-01 (J17, O2): a manual `pg_dump` from the owner's own computer with a
+  restore check into a local Postgres — the same script's `--remote-source`
+  mode, run only by the owner (`docs/runbooks/gpexe-backup-verify.md`, "The
+  deployed database (Supabase), from the owner's computer"), which also shows
+  the row to add below.
 - **The app never says a backup was checked.** It only shows whether the
   switch is on (`importSwitch`). Nothing in the code or the database checks a
   backup; this gate is a person following this runbook.

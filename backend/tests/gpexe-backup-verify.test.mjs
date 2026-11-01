@@ -13,7 +13,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { importGpexePlan } from "../src/gpexeImportWriter.js";
-import { backupAndVerify, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs } from "../scripts/gpexe-backup-verify.mjs";
+import { APP_SCHEMAS, backupAndVerify, backupAndVerifyRemote, checkSchemaList, dumpCreatesSchema, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs, promptHidden } from "../scripts/gpexe-backup-verify.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 
@@ -103,6 +103,9 @@ test("backup: an untouched restore matches the source table by table and row by 
   assert.ok(report.catalogCompared.triggers > 0 && report.catalogCompared.functions > 0);
   assert.equal(report.restoreDropped, true);
   assert.equal(await databaseExists(report.restoreDatabase), false, "the restore copy is gone");
+  // v32's CHECK comes back with its ANDs regrouped; Postgres's own re-parse
+  // shows it is the same constraint (reconcileReprintedChecks).
+  assert.ok(report.reprintedChecks.includes("training_load.gpexe_athlete_identities.gpexe_athlete_identities_display_name"), JSON.stringify(report.reprintedChecks));
   assert.ok(fs.existsSync(dump), "the verified dump is kept");
   const onDisk = crypto.createHash("sha256").update(fs.readFileSync(dump)).digest("hex");
   assert.equal(report.dump.sha256, onDisk);
@@ -285,4 +288,191 @@ test("backup: the catalog normalization rewrites only the re-printed IN list, no
   for (const kind of ["ownership and privileges", "domain constraints", "row-level security", "materialized view contents"]) {
     assert.ok(NOT_COMPARED.some((line) => line.startsWith(kind)), kind);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The remote mode (J17, O2): the deployed database read from the owner's
+// computer over TLS, only the application's schemas, restored into a new
+// database on the local server. Here the "remote" source is a disposable
+// database on this machine's server, reached over TLS like the real one.
+
+function withoutPassword(raw, database) {
+  const u = new URL(raw);
+  const password = decodeURIComponent(u.password);
+  u.password = "";
+  if (database) u.pathname = `/${database}`;
+  return { url: u.toString(), password };
+}
+
+async function withConfig(config, fn) {
+  const client = new pg.Client(config);
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+async function prepareOutsideObjects() {
+  // What a hosted database has besides the application: a schema of its own,
+  // and an extension installed into one of the application's schemas.
+  await admin.query(`create schema if not exists outside_app`);
+  await admin.query(`create table if not exists outside_app.not_ours (x int)`);
+  await admin.query(`insert into outside_app.not_ours values (1)`);
+  await admin.query(`create extension if not exists pgcrypto with schema public`);
+}
+
+// The disposable database carries migrations_v2's GPEXE subset, so not every
+// application schema exists in it; the remote mode refuses a listed schema
+// the source lacks, so the tests list the ones present.
+async function presentAppSchemas() {
+  const present = (await admin.query(`select nspname from pg_namespace where nspname = any($1::text[])`, [[...APP_SCHEMAS]])).rows.map((r) => r.nspname);
+  assert.ok(present.includes("public") && present.includes("training_load"));
+  return present.sort();
+}
+
+async function remoteArgs(dump, extra = {}) {
+  const src = withoutPassword(db.url);
+  const rst = withoutPassword(ORIGINAL_DATABASE_URL, "postgres");
+  return {
+    sourceUrl: src.url, sourcePassword: src.password, restoreUrl: rst.url, restorePassword: rst.password, dumpPath: dump, pgBin: PG_BIN,
+    schemas: await presentAppSchemas(), skipSchemas: ["outside_app"], ...extra,
+  };
+}
+
+test("remote: a TLS source, the application's schemas only, restored into a new local database and compared; the rest is listed, not dumped", { skip }, async () => {
+  await prepareOutsideObjects();
+  const dump = dumpPath();
+  let sourceUsedTls;
+  let outsideRestored;
+  const report = await backupAndVerifyRemote(await remoteArgs(dump, {
+    onDumpStarted: async ({ sourcePid }) => {
+      sourceUsedTls = (await admin.query(`select ssl from pg_stat_ssl where pid = $1`, [sourcePid])).rows[0]?.ssl;
+    },
+    onRestored: (config) => withConfig(config, async (c) => {
+      outsideRestored = (await c.query(`select 1 from pg_namespace where nspname = 'outside_app'`)).rowCount;
+    }),
+  }));
+  assert.equal(report.verified, true, JSON.stringify(report.mismatches));
+  assert.equal(sourceUsedTls, true, "the source session ran over TLS");
+  assert.equal(report.mode, "remote-source");
+  assert.equal(report.sslMode, "require");
+  assert.deepEqual(report.schemas, await presentAppSchemas());
+  assert.ok(report.schemasLeftOut.includes("outside_app"), JSON.stringify(report.schemasLeftOut));
+  assert.deepEqual(report.schemasSkippedByOwner, ["outside_app"]);
+  assert.equal(outsideRestored, 0, "a schema that is not listed is not dumped");
+  assert.ok(report.extensionsInDumpedSchemas.some((e) => e.startsWith("pgcrypto ")), "the extension is listed, not compared");
+  assert.ok(report.tablesCompared > 50, `${report.tablesCompared} tables`);
+  assert.equal(report.restoreDropped, true);
+  assert.equal(await databaseExists(report.restoreDatabase), false, "the restore copy is gone");
+  assert.ok(fs.existsSync(dump), "the verified dump is kept");
+  assert.equal(report.dump.sha256, crypto.createHash("sha256").update(fs.readFileSync(dump)).digest("hex"));
+  const written = JSON.parse(fs.readFileSync(`${dump}.verify.json`, "utf8"));
+  assert.equal(written.verified, true);
+  for (const secret of [withoutPassword(db.url).password, withoutPassword(ORIGINAL_DATABASE_URL).password]) {
+    if (secret) assert.ok(!JSON.stringify(written).includes(secret), "the report never carries a password");
+  }
+});
+
+test("remote: a changed value in the restored copy is caught, and that dump is deleted", { skip }, async () => {
+  await prepareOutsideObjects();
+  const dump = dumpPath();
+  const report = await backupAndVerifyRemote(await remoteArgs(dump, {
+    onRestored: (config) => withConfig(config, async (c) => {
+      await c.query(`alter table training_load.metric_values disable trigger user`);
+      await c.query(`update training_load.metric_values set value_numeric = value_numeric + 1 where id = (select id from training_load.metric_values where value_numeric is not null order by id limit 1)`);
+    }),
+  }));
+  assert.equal(report.verified, false);
+  assert.ok(report.mismatches.some((m) => m.name === "training_load.metric_values" && /different content/.test(m.problem)), JSON.stringify(report.mismatches));
+  assert.equal(await databaseExists(report.restoreDatabase), false);
+  assert.equal(fs.existsSync(dump), false, "an unverified dump does not survive");
+  assert.equal(fs.existsSync(`${dump}.verify.json`), false);
+});
+
+test("remote: a password in a URL, a remote restore host, TLS settings and bad schema lists are refused before anything is written", { skip }, async () => {
+  const base = await remoteArgs(dumpPath());
+  const withPassword = new URL(db.url);
+  const cases = [
+    [{ sourceUrl: withPassword.toString() }, /must not carry a password/],
+    [{ restoreUrl: new URL(ORIGINAL_DATABASE_URL).toString() }, /must not carry a password/],
+    [{ restoreUrl: withoutPassword(ORIGINAL_DATABASE_URL.replace(/@[^/]+\//, "@db.example.com:5432/"), "postgres").url }, /is not this machine/],
+    [{ sourceUrl: `${base.sourceUrl}?host=db.example.com` }, /must not carry query parameters/],
+    [{ sslMode: "disable" }, /is not one of require, verify-full/],
+    [{ sslMode: "verify-full" }, /verify-full needs --ssl-root-cert/],
+    [{ sslRootCert: path.join(workDir, "ca.crt") }, /used only with verify-full/],
+    [{ schemas: [] }, /at least one schema/],
+    [{ schemas: ["public; drop schema public"] }, /not an application schema name/],
+    [{ schemas: ["pg_catalog"] }, /not an application schema name/],
+    [{ schemas: ["public", "public"] }, /listed twice/],
+    [{ sourcePassword: undefined }, /source password is missing/],
+  ];
+  for (const [change, expected] of cases) {
+    const dump = dumpPath();
+    await assert.rejects(backupAndVerifyRemote({ ...base, dumpPath: dump, ...change }), expected, JSON.stringify(change));
+    assert.equal(fs.existsSync(dump), false, `nothing claimed for ${JSON.stringify(change)}`);
+  }
+  // A schema the source has that is neither dumped, known as the hosting
+  // provider's, nor acknowledged: refused before the dump, path removed.
+  await prepareOutsideObjects();
+  const notAcknowledged = dumpPath();
+  await assert.rejects(backupAndVerifyRemote({ ...base, dumpPath: notAcknowledged, skipSchemas: [] }), /the source has schema outside_app, neither listed nor known/);
+  assert.equal(fs.existsSync(notAcknowledged), false);
+  await assert.rejects(backupAndVerifyRemote({ ...base, dumpPath: dumpPath(), skipSchemas: ["public"] }), /both dumped and skipped/);
+  // A listed schema the source lacks: refused after connecting, and the
+  // claimed path is removed again.
+  const dump = dumpPath();
+  await assert.rejects(backupAndVerifyRemote({ ...base, dumpPath: dump, schemas: ["public", "no_such_schema"] }), /the source has no schema no_such_schema/);
+  assert.equal(fs.existsSync(dump), false);
+  assert.deepEqual(checkSchemaList(["training_load", "public"]), ["public", "training_load"]);
+});
+
+test("remote: pg_dump gets the password, sslmode and root certificate through its own variables only, and only the listed schemas", () => {
+  const url = new URL("postgresql://postgres.someproject@pooler.example.com:5432/postgres");
+  const env = pgEnv(url, { PGSSLMODE: "disable", PGHOST: "elsewhere", PGSSLROOTCERT: "C:/old.crt", Path: "C:/Windows" }, { password: "s3cret", sslMode: "require" });
+  assert.deepEqual(Object.keys(env).sort(), ["PGPASSWORD", "PGSSLMODE", "Path"]);
+  assert.equal(env.PGPASSWORD, "s3cret");
+  assert.equal(env.PGSSLMODE, "require");
+  const full = pgEnv(url, {}, { password: "s3cret", sslMode: "verify-full", sslRootCert: "C:/ca.crt" });
+  assert.deepEqual(full, { PGPASSWORD: "s3cret", PGSSLMODE: "verify-full", PGSSLROOTCERT: "C:/ca.crt" });
+  assert.deepEqual(pgDumpArgs(url, "postgres", "00000003-1", "C:/b/x.dump", ["public", "training"]),
+    ["-Fc", "--snapshot=00000003-1", "--strict-names", "--schema", "public", "--schema", "training", "-f", "C:/b/x.dump",
+      "--host", "pooler.example.com", "--port", "5432", "--username", "postgres.someproject", "--dbname", "postgres", "--no-password"]);
+});
+
+test("remote: the CLI asks for both passwords only after its checks, never takes --database-url, and runs end to end", { skip }, async () => {
+  const src = withoutPassword(db.url);
+  const rst = withoutPassword(ORIGINAL_DATABASE_URL, "postgres");
+  const asked = [];
+  const readPassword = async (question) => {
+    asked.push(question);
+    return asked.length === 1 ? src.password : rst.password;
+  };
+  await assert.rejects(backupMain(["--remote-source", "--restore-url", rst.url, "--dump", dumpPath()], { readPassword }), /--source-url is required/);
+  await assert.rejects(backupMain(["--remote-source", "--source-url", src.url, "--restore-url", rst.url, "--dump", dumpPath(), "--database-url", db.url], { readPassword }), /never --database-url/);
+  await assert.rejects(backupMain(["--remote-source", "--source-url", db.url, "--restore-url", rst.url, "--dump", dumpPath()], { readPassword }), /must not carry a password/);
+  await assert.rejects(backupMain(["--source-url", src.url, "--dump", dumpPath()], { readPassword }), /belong to --remote-source/);
+  await assert.rejects(backupMain(["--remote-source", "--source-url"], { readPassword }), /--source-url needs a value/);
+  assert.deepEqual(asked, [], "no password is asked for before the checks pass");
+  await prepareOutsideObjects();
+  const dump = dumpPath();
+  const schemaFlags = (await presentAppSchemas()).flatMap((name) => ["--schema", name]);
+  const report = await backupMain(["--remote-source", "--source-url", src.url, "--restore-url", rst.url, "--dump", dump, ...schemaFlags, "--skip-schema", "outside_app", ...(PG_BIN ? ["--pg-bin", PG_BIN] : [])], { readPassword });
+  assert.equal(asked.length, 2);
+  assert.equal(report.verified, true, JSON.stringify(report.mismatches));
+  assert.equal(report.sslMode, "require");
+  assert.ok(fs.existsSync(`${dump}.verify.json`));
+});
+
+test("remote: a password is read only from an interactive terminal", async () => {
+  await assert.rejects(promptHidden("Password: ", { input: { isTTY: false }, output: { write() {} } }), /only from an interactive terminal/);
+});
+
+test("remote: the table of contents tells whether the dump recreates a schema", () => {
+  const toc = [";", "; Archive created at 2026-11-01", "215; 2615 2200 SCHEMA - public postgres", "216; 2615 16385 SCHEMA - training postgres", "3001; 1259 16390 TABLE public clubs postgres"].join("\r\n");
+  assert.equal(dumpCreatesSchema(toc, "public"), true);
+  assert.equal(dumpCreatesSchema(toc, "training"), true);
+  assert.equal(dumpCreatesSchema(toc, "plans"), false);
+  assert.equal(dumpCreatesSchema("3001; 1259 16390 TABLE public clubs postgres", "public"), false);
 });
