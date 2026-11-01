@@ -2651,9 +2651,20 @@ Technical details.
           merge PR #316 (C97 dokaz jedinica) sa navedenim odstupanjima.” (turn `5e2df34f`) after the *Rukovodilac*'s
           GO. Documents only; nothing to deploy.
         - **P2, the meaning:** the owner decided O7 (the GPEXE 6 handbook counts for these three fields; turn
-          `9b1f4a69`, J17 section 12.3); the evidence and the six acts the owner does in Source fields are PR #318
-          (merged only on the owner's word). No field is confirmed yet.
-        - **9-R**, the backup of the deployed database from the owner's computer (O2), is Draft PR #315.
+          `9b1f4a69`, J17 section 12.3). The evidence and the six acts the owner does in Source fields
+          (`docs/ai/gpexe-c97-meaning-evidence.md`, section 5): PR #318, merged `73b2776` (parents `d3588ff` and
+          `b65f4ace`) exactly from its head, on the owner's word „Odobravam merge PR #318 (C97 dokaz značenja) i PR #315
+          (9-R backup).” (turn `6147b85f`, 2026-11-01 20:55:47 UTC) after the *Rukovodilac*'s GO. Documents only.
+          **No field is confirmed yet:** the six acts are the owner's next step (J17 section 10.2, step 2).
+        - **9-R**, the backup of the deployed database from the owner's computer (O2,
+          `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase)"): PR #315, merged `3032b3b` (parents
+          `73b2776` and `76b57625`) exactly from its head, on the same owner's word, after the GOs of the *Rukovodilac*
+          (with its own run, 26/26) and the *Nezavisni revizor* (no BLOCKER, HIGH or MEDIUM). A command-line tool only
+          the owner runs; nothing the server, its start-up or a scheduled job runs imports it, so nothing to deploy for
+          it. Not yet run against the deployed database: the first run is the owner's (J17 section 10.3, the backup
+          before the switch); not tested on Windows, with PostgreSQL 17 tools, a real Supabase pooler or `verify-full`
+          with a real CA, so that run fails closed on anything untested. The *Nezavisni revizor* recommends
+          `verify-full` (the runbook does too).
       - **C112 (2026-11-01): mapping by drag and drop** — the owner's direction for mappings after the pilot, not a
         contract (discovery C112): after a first import, a confirmed drag of a source column onto a variable, checked
         on two athletes, is the evidence. The screen details (one screen from the import's review, one click to save
