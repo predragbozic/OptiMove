@@ -21513,6 +21513,25 @@ body.exercise-header-pinned #viewToolbar {
   font-weight: 800;
 }
 
+/* "Check the earlier result" (the review of PR #306, HIGH-1): the quiet way
+   out sits under the two actions; the screen's line of saves left
+   unconfirmed reads like the unconfirmed box. */
+.cc-pending-forget {
+  justify-self: start;
+}
+
+.cc-uncertain-line {
+  border: 1px solid var(--cc-awaiting);
+  background: var(--cc-awaiting-soft);
+  color: var(--text);
+}
+
+.cc-uncertain-line .cc-inline-button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
 .cc-cancel-name {
   margin: 0;
   overflow-wrap: anywhere;

@@ -76,7 +76,7 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -420,7 +420,11 @@ function bindEvents() {
   els.railToggle?.addEventListener("click", toggleRail);
   els.mobileNavToggle?.addEventListener("click", toggleMobileNav);
   els.mobileNavBackdrop?.addEventListener("click", closeMobileNav);
-  els.signOut?.addEventListener("click", signOut);
+  // The central calendar's event form (K2a-2) is asked before the logout
+  // request, never after it: a "No" keeps the session and the form.
+  els.signOut?.addEventListener("click", () => {
+    if (centralCalendarMayBeLeft({ final: true })) void signOut();
+  });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
   // crossed (a phone's day strip against a week's columns, the time grid
@@ -2063,7 +2067,8 @@ function handleAppBack() {
 
   // Central calendar (K1b): an open item panel closes before anything else
   // of the screen (the Training Load drawers' own rule).
-  if (closeCentralCalendarPanel(renderCentralCalendar)) return true;
+  const calendar = closeCentralCalendarPanel(renderCentralCalendar);
+  if (calendar) return calendar; // a kept form: BACK_STAYED
 
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this
@@ -2261,6 +2266,8 @@ function renderCentralCalendar() {
     today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex(),
     // K2a-2: New event where this workspace may create one; the event form's athletes.
     canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
+    // The event saves left unconfirmed in this workspace, each with Check result.
+    uncertainWrites: centralCalendarUncertainWrites(),
   });
   restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
 }

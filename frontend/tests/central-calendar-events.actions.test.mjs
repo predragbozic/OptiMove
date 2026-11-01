@@ -20,10 +20,13 @@ globalThis.window = { confirm: (question) => { questions.push(question); return 
 const { state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const {
+  CENTRAL_CALENDAR_STAYED,
   centralCalendarCanCreateEvents,
   centralCalendarEventRoster,
   centralCalendarMayBeLeft,
   centralCalendarRosterIndex,
+  centralCalendarUncertainWrites,
+  clearCentralCalendarUncertainWrites,
   closeCentralCalendarPanel,
   handleCentralCalendarAction,
   handleCentralCalendarBeforeUnload,
@@ -189,6 +192,7 @@ let layout = "wide";
 function render() {
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout, roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
+    uncertainWrites: centralCalendarUncertainWrites(),
   });
 }
 function dom(html = rendered) {
@@ -209,6 +213,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 beforeEach(() => {
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
+  clearCentralCalendarUncertainWrites();
+  state.deliberateNavigation = false;
   state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: CLUB, label: "First Club" } };
   state.activeTab = "central-calendar";
   state.athletes = ROSTER.map((row) => ({ ...row }));
@@ -737,7 +743,7 @@ test("6f. a create saved but its answer lost: Check result replays the SAME key,
   assert.equal(fake({ url: "/api/calendar/events", method: "POST", body: { ...first.body, title: "Other" } }).status, 409);
 });
 
-test("6g. leaving a result not confirmed reads the calendar again at once and says to look for the event before creating it again", async () => {
+test("6g. leaving a result not confirmed reads the calendar again at once and says where Check result is before creating it again", async () => {
   const fake = server({ loseFirstAnswer: true });
   const calls = installFetchMock(fake);
   await loadCentralCalendar({ render });
@@ -752,11 +758,12 @@ test("6g. leaving a result not confirmed reads the calendar again at once and sa
   assert.match(questions.at(-1), /not confirmed/);
   assert.equal(state.centralCalendar.form, null);
   assert.equal(rangeReads(calls).length, reads + 1, "read again, never the cached answer from before the write");
-  assert.equal(state.centralCalendar.notice, "The result of “Cup final” was not checked. The calendar was read again: look for it before creating it again.");
+  assert.equal(state.centralCalendar.notice, "The result of “Cup final” is not confirmed. The calendar was read again. New event offers Check result first: use it before creating the event again.");
   assert.ok(dom().querySelector(`.cc-card[data-key="event:${E_NEW}:${TODAY}"]`), "the event that landed is on screen");
+  assert.equal(centralCalendarUncertainWrites().length, 1, "the write waits to be checked");
 });
 
-test("6h. an answer that arrives after the coach left the saving form reads the calendar again", async () => {
+test("6h. an answer that arrives after the coach left the saving form settles it: the calendar is read again and the line says what happened", async () => {
   let release;
   const calls = installFetchMock(server({ writes: () => new Promise((resolve) => { release = resolve; }) }));
   await loadCentralCalendar({ render });
@@ -770,9 +777,12 @@ test("6h. an answer that arrives after the coach left the saving form reads the 
   release({ status: 201, body: { event: eventView({ id: E_NEW, title: "Training", day: TODAY }) } });
   await sending;
   await tick();
-  assert.equal(rangeReads(calls).length, reads + 1, "the late success is read, not dropped");
+  assert.ok(rangeReads(calls).length > reads, "the late success is read, not dropped");
   assert.equal(state.centralCalendar.form, null);
-  assert.match(state.centralCalendar.notice, /was not checked/, "the line of the leave stays after the late read");
+  assert.equal(state.centralCalendar.notice, "“Training” was created.", "the late answer's line, never the leave's 'not confirmed'");
+  assert.deepEqual(centralCalendarUncertainWrites(), [], "settled: nothing waits to be checked");
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(state.centralCalendar.form.pending, undefined, "New event opens the plain form again");
 });
 
 test("6k. leaving a result not confirmed by opening another card paints the read again with its line", async () => {
@@ -786,7 +796,7 @@ test("6k. leaving a result not confirmed by opening another card paints the read
   await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
   await tick();
   assert.equal(rangeReads(calls).filter((call) => !call.url.includes("include=athletes")).length, reads + 1);
-  assert.match(rendered, /was not checked\. The calendar was read again/, "painted, not only in state");
+  assert.match(rendered, /is not confirmed\. The calendar was read again\./, "painted, not only in state");
   assert.equal(state.centralCalendar.panel.key, `event:${E_MATCH}:${DAY(1)}`);
 });
 
@@ -991,7 +1001,7 @@ test("9a. a form with unsaved values asks before another item, Escape and a work
   await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
   assert.ok(state.centralCalendar.form, "declined: the form stays");
   assert.equal(state.centralCalendar.panel.open, false);
-  assert.equal(closeCentralCalendarPanel(render), true, "Escape is handled");
+  assert.equal(closeCentralCalendarPanel(render), CENTRAL_CALENDAR_STAYED, "Escape / Back is handled, and Back is told the form stayed");
   assert.ok(state.centralCalendar.form);
   assert.equal(centralCalendarMayBeLeft(), false);
   assert.deepEqual(questions, ["Discard the new event you have not saved?", "Discard the new event you have not saved?", "Discard the new event you have not saved?"]);
@@ -1027,9 +1037,12 @@ test("9c. a cancel confirmation with a typed reason asks before Escape; an untou
   assert.equal(centralCalendarMayBeLeft(), true);
   input({ ccEventField: "reason" }, { value: "Rain" });
   confirmAnswer = false;
-  assert.equal(closeCentralCalendarPanel(render), true);
+  assert.equal(closeCentralCalendarPanel(render), CENTRAL_CALENDAR_STAYED);
   assert.ok(state.centralCalendar.form, "declined: the confirmation stays");
   assert.deepEqual(questions, ["Discard the reason you have typed?"]);
+  confirmAnswer = true;
+  assert.equal(closeCentralCalendarPanel(render), true, "accepted: closed");
+  assert.equal(state.centralCalendar.form, null);
 });
 
 // --- 10. The markup's rules ---------------------------------------------------------------------
@@ -1052,4 +1065,312 @@ test("10a. no data-tab anywhere, every control a button or a labelled field; the
   assert.match(block, /\.cc-check-list \{\n  display: grid;\n\}/, "no scroller of its own inside the panel or the sheet");
   assert.match(block, /\.cc-form-grid \{[^}]*align-items: start;/);
   assert.match(block, /@media \(min-width: 1024px\) and \(pointer: fine\) \{\n  \.cc-chip \{\n    min-height: 36px;/, "the compact chip only on a pointer screen");
+});
+
+// --- 11. The independent review of PR #306 -------------------------------------------------------
+
+// The fake server behind a switch that takes the calendar read down (the
+// writes still answer): the reviewer's repro of HIGH-1.
+function withReadDown(fake) {
+  const control = { down: false };
+  const calls = installFetchMock((call) => (control.down && call.url.startsWith("/api/calendar?") ? { throwNetworkError: true } : fake(call)));
+  return { calls, control };
+}
+
+test("11a. HIGH-1: the create was saved, its answer lost and the calendar read fails on leaving - the line says the calendar was NOT read; New event offers Check the earlier result with the SAME key and body, never by itself", async () => {
+  const fake = server({ loseFirstAnswer: true });
+  const { calls, control } = withReadDown(fake);
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  input({ ccEventField: "title" }, { value: "Cup final" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.form.unconfirmed, true);
+  assert.equal(fake.live.filter((item) => item.eventId === E_NEW).length, 1, "the server saved it");
+  control.down = true;
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  assert.match(state.centralCalendar.refreshError, /Showing the last loaded calendar/);
+  assert.equal(state.centralCalendar.notice, "The result of “Cup final” is not confirmed, and the calendar could not be read again, so it may not show the result yet. New event offers Check result first: use it before creating the event again.");
+  assert.doesNotMatch(state.centralCalendar.notice, /was read again/);
+  assert.equal(dom().querySelector(`.cc-card[data-key="event:${E_NEW}:${TODAY}"]`), null, "the saved event is not on screen: the read failed");
+  assert.equal(writesOf(calls).length, 1);
+  await tick();
+  assert.equal(writesOf(calls).length, 1, "nothing is sent by itself");
+  // New event: the earlier result first - no fields, the same request.
+  await act({ action: "central-calendar-new-event" });
+  const form = state.centralCalendar.form;
+  assert.equal(form.pending, true);
+  assert.equal(form.mode, "create");
+  const panel = dom().querySelector(".cc-panel");
+  assert.equal(panel.querySelector("#ccPanelTitle").textContent, "Check the earlier result");
+  assert.match(panel.textContent, /A new event “Cup final” on .+ was sent, but its answer was lost: it is not known whether it was created\./);
+  assert.equal(panel.querySelector(".cc-event-form"), null, "nothing to edit");
+  assert.equal(writesOf(calls).length, 1, "opening it sends nothing");
+  control.down = false;
+  await act({ action: "central-calendar-event-check-result" });
+  const [first, second] = writesOf(calls);
+  assert.equal(second.body.requestKey, first.body.requestKey, "the SAME key");
+  assert.deepEqual(second.body, first.body, "the SAME body");
+  assert.equal(fake.live.filter((item) => item.eventId === E_NEW).length, 1, "one event, never a duplicate");
+  assert.equal(state.centralCalendar.notice, "Checked: “Cup final” was created.");
+  assert.deepEqual(centralCalendarUncertainWrites(), [], "settled: no longer waited for");
+  await act({ action: "central-calendar-close-panel" });
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(state.centralCalendar.form.pending, undefined, "New event opens the plain form again");
+});
+
+test("11b. HIGH-1: an edit left unconfirmed gates that event's Edit and Cancel (not New event); a settled refusal on the check forgets it and says so", async () => {
+  const answers = [{ throwNetworkError: true }, { status: 409, body: { error: "event_changed", message: "Changed.", current: { revision: 3 } } }];
+  const items = ITEMS.map((item) => (item.eventId === E_CAMP ? { ...item, canManage: true } : item));
+  const calls = await openEdit({ items, writes: () => answers.shift() });
+  input({ ccEventField: "title" }, { value: "Cup final" });
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.form.unconfirmed, true);
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  assert.match(state.centralCalendar.notice, /^The result of the change to “Cup match” is not confirmed\. The calendar was read again\. The event's Edit and Cancel offer Check result first/);
+  for (const action of ["central-calendar-edit-event", "central-calendar-cancel-event"]) {
+    await act({ action, key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+    assert.equal(state.centralCalendar.form.pending, true, `${action} opens the check first`);
+    assert.equal(state.centralCalendar.form.mode, "edit");
+    assert.match(dom().querySelector(".cc-panel").textContent, /A change to “Cup match” was sent/);
+    await act({ action: "central-calendar-event-form-close" });
+    assert.equal(state.centralCalendar.form, null, "a pending check closes without a question and stays waiting");
+    assert.equal(centralCalendarUncertainWrites().length, 1);
+  }
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(state.centralCalendar.form.pending, undefined, "no create waits: New event is the plain form");
+  await act({ action: "central-calendar-event-form-close" });
+  await act({ action: "central-calendar-cancel-event", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
+  assert.equal(state.centralCalendar.form.mode, "cancel");
+  assert.equal(state.centralCalendar.form.pending, undefined, "another event's Cancel is its plain confirmation");
+  await act({ action: "central-calendar-event-form-close" });
+  const reads = calls.filter((call) => call.url === `/api/calendar/events/${E_MATCH}`).length;
+  await act({ action: "central-calendar-edit-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  assert.equal(calls.filter((call) => call.url === `/api/calendar/events/${E_MATCH}`).length, reads, "the check reads nothing first");
+  await act({ action: "central-calendar-event-check-result" });
+  const [first, second] = writesOf(calls);
+  assert.deepEqual(second.body, first.body, "the SAME body and key");
+  assert.equal(second.url, first.url);
+  assert.equal(second.method, "PATCH");
+  assert.equal(state.centralCalendar.notice, "Checked: The change to “Cup match” was not saved. The event was changed meanwhile; make your change again.");
+  assert.deepEqual(centralCalendarUncertainWrites(), []);
+});
+
+test("11c. HIGH-1: a check that does not settle keeps it waiting; Forget it asks with the duplicate's risk, a No keeps it, a Yes lets New event open the plain form", async () => {
+  const answers = [{ throwNetworkError: true }, { status: 503, body: { error: "try_again", message: "Busy." } }];
+  const calls = await openCreate({ writes: () => answers.shift() || { throwNetworkError: true } });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  await act({ action: "central-calendar-new-event" });
+  await act({ action: "central-calendar-event-check-result" });
+  assert.equal(state.centralCalendar.form.pending, true, "busy: still not confirmed");
+  assert.match(state.centralCalendar.form.checkNote, /server was busy/);
+  assert.equal(centralCalendarUncertainWrites().length, 1);
+  confirmAnswer = false;
+  await act({ action: "central-calendar-event-forget" });
+  assert.match(questions.at(-1), /If the event was created, creating it again makes a second one/);
+  assert.equal(state.centralCalendar.form.pending, true, "a No keeps the check");
+  confirmAnswer = true;
+  await act({ action: "central-calendar-event-forget" });
+  assert.equal(state.centralCalendar.form, null);
+  assert.deepEqual(centralCalendarUncertainWrites(), []);
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(state.centralCalendar.form.pending, undefined);
+  assert.equal(writesOf(calls).length, 2, "forgetting sends nothing");
+});
+
+test("11d. HIGH-1: a write waiting to be checked belongs to its sign-in and workspace - never shown or offered in another club, back on returning", async () => {
+  installFetchMock(server({ loseFirstAnswer: true }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  render();
+  assert.match(dom().querySelector(".cc-uncertain-line").textContent, /1 save of an event is not confirmed\./);
+  const OTHER = "c2c2c2c2-0000-4000-8000-000000000002";
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: OTHER, label: "Other Club" } };
+  resetCentralCalendarForWorkspaceChange();
+  clearAllViewCache();
+  installFetchMock(server({ workspace: { type: "club", scopeId: OTHER } }));
+  await loadCentralCalendar({ render });
+  assert.deepEqual(centralCalendarUncertainWrites(), []);
+  assert.equal(dom().querySelector(".cc-uncertain-line"), null);
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(state.centralCalendar.form.pending, undefined, "the other club's New event is the plain form");
+  await act({ action: "central-calendar-event-form-close" });
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: true }), false, "a sign-out from the other club still asks: it drops the first club's write too");
+  assert.match(questions.at(-1), /It cannot be checked after signing out\./);
+  state.currentUser = { id: "coach-2", activeWorkspace: { type: "club", scopeId: CLUB, label: "First Club" } };
+  assert.deepEqual(centralCalendarUncertainWrites(), [], "another sign-in never sees it");
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: CLUB, label: "First Club" } };
+  assert.equal(centralCalendarUncertainWrites().length, 1, "back in its own club: still waiting");
+});
+
+test("11e. HIGH-1: the screen's line opens the check of its write; it hides while a form holds the panel", async () => {
+  await openCreate({ writes: () => ({ throwNetworkError: true }) });
+  input({ ccEventField: "title" }, { value: "<b>Final</b>" });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  const line = dom().querySelector(".cc-uncertain-line");
+  const button = line.querySelector('[data-action="central-calendar-event-pending"]');
+  assert.equal(button.textContent, "Check “<b>Final</b>”", "the title as text");
+  assert.equal(line.querySelector("b"), null);
+  await act({ action: "central-calendar-event-pending", requestKey: button.dataset.requestKey });
+  assert.equal(state.centralCalendar.form.pending, true);
+  assert.equal(dom().querySelector(".cc-uncertain-line"), null, "hidden while the form is open");
+});
+
+test("11f. HIGH-1 (a): event_changed whose read again fails never says 'shown as it is now'; a success whose read fails says the calendar may not show it", async () => {
+  let ctl = withReadDown(server({ writes: () => ({ status: 409, body: { error: "event_changed", message: "Changed.", current: { revision: 3 } } }) }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  await act({ action: "central-calendar-edit-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  input({ ccEventField: "title" }, { value: "Cup final" });
+  ctl.control.down = true;
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.notice, "Nothing was saved: this event was changed meanwhile, and the calendar could not be read again. Read it again to see the event as it is now before changing it.");
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  ctl = withReadDown(server());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-new-event" });
+  fillValid();
+  ctl.control.down = true;
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.notice, "“Training” was created. The calendar could not be read again, so it may not show this yet.");
+});
+
+test("11g. MEDIUM-1: a deliberate navigation (sign-out, an athlete-workspace switch) is never asked again on unload; sign-out asks before its logout request", async () => {
+  let release;
+  await openCreate({ writes: () => new Promise((resolve) => { release = resolve; }) });
+  fillValid();
+  const sending = submitCentralCalendarEventForm({ render });
+  const unload = { isTrusted: true, preventDefault() { this.prevented = true; } };
+  assert.equal(handleCentralCalendarBeforeUnload(unload), true, "a save in flight is protected");
+  state.deliberateNavigation = true;
+  const deliberate = { isTrusted: true, preventDefault() { this.prevented = true; } };
+  assert.equal(handleCentralCalendarBeforeUnload(deliberate), false);
+  assert.equal(deliberate.prevented, undefined);
+  state.deliberateNavigation = false;
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: true }), false);
+  assert.match(questions.at(-1), /^An event is still being saved\. Sign out anyway\? .*It cannot be checked after signing out\./);
+  release({ throwNetworkError: true });
+  await sending;
+  confirmAnswer = true;
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  // No form, a write waiting: a sign-out still asks.
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: true }), false);
+  assert.match(questions.at(-1), /^The result of an event's save is not confirmed\. It cannot be checked after signing out\. Sign out anyway\?/);
+  assert.equal(centralCalendarMayBeLeft(), true, "a workspace switch keeps it to check later without asking");
+  // app.js: the question comes before signOut() and its logout request, and
+  // the button is the only way into it.
+  const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: true \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
+  assert.equal((appJs.match(/\bsignOut\(\);/g) || []).length, 1, "signOut() is called from that listener only");
+  assert.doesNotMatch(appJs, /addEventListener\("click", signOut\)/);
+  assert.equal(CENTRAL_CALENDAR_STAYED, "stayed", "app.js's Back passes it on as its own BACK_STAYED");
+  // The workspace switch asks before its PUT (workspace-actions.js).
+  const ws = readFileSync(new URL("../workspace-actions.js", import.meta.url), "utf8");
+  assert.ok(ws.indexOf("if (handlers.confirmLeave && !handlers.confirmLeave()) return true;") < ws.indexOf('api("/api/auth/workspace"'));
+  assert.match(appJs, /confirmLeave: \(\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\)/);
+});
+
+test("11h. LOW-2: the update banner's probe (an untrusted beforeunload) counts only what is being saved, never a form that is merely changed", async () => {
+  await openCreate();
+  input({ ccEventField: "title" }, { value: "Changed" });
+  const probe = { isTrusted: false, preventDefault() { this.prevented = true; } };
+  assert.equal(handleCentralCalendarBeforeUnload(probe), false, "the banner asks normally; its mayLeave asks about the values");
+  assert.equal(handleCentralCalendarBeforeUnload({ isTrusted: true, preventDefault() {} }), true, "a real unload still protects the values");
+  state.centralCalendar.form.unconfirmed = true;
+  assert.equal(handleCentralCalendarBeforeUnload({ isTrusted: false, preventDefault() {} }), true, "a result not confirmed is 'being saved'");
+});
+
+test("11i. LOW-3: hostile strings stay text in the card, the panel, the form, the cancel confirmation and the line", async () => {
+  const H = { title: `<img src=x onerror="alert(1)">Cup`, location: `"><script>alert(2)</script>`, notes: `<b>bold</b> & <i>it</i>`, type: `<svg onload="alert(3)">Match` };
+  const items = ITEMS.map((item) => (item.eventId === E_MATCH ? { ...item, title: H.title, location: H.location, notes: H.notes, eventTypeLabel: H.type } : item));
+  const event = eventView({ title: H.title, location: H.location, notes: H.notes, eventTypeLabel: H.type, eventTypeId: "70000000-0000-4000-8000-0000000000ff", targets: [{ kind: "team", id: U17, name: "<u>U17</u>" }] });
+  const calls = installFetchMock(server({ items, event, writes: () => ({ status: 200, body: { event: { ...event, status: "cancelled", revision: 3 } } }) }));
+  state.athletes = [{ athlete_uuid: A1, athlete_id: "1", athlete: "<i>Ana</i>" }];
+  await loadCentralCalendar({ render });
+  const injected = (doc) => doc.querySelectorAll(".central-calendar img, .central-calendar script, .central-calendar b, .central-calendar i, .central-calendar u, .central-calendar [onload], .central-calendar [onerror]").length;
+  let doc = dom();
+  assert.equal(injected(doc), 0, "the card");
+  assert.match(doc.querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"]`).textContent, /<img src=x/);
+  await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  doc = dom();
+  assert.equal(injected(doc), 0, "the panel (notes and the type's label: M10b, M11)");
+  assert.equal(doc.querySelector(".cc-panel-notes-text").textContent, H.notes);
+  assert.match(doc.querySelector(".cc-panel-kind").textContent, /<svg onload="alert\(3\)">Match/);
+  await act({ action: "central-calendar-edit-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  await act({ action: "central-calendar-event-athletes" });
+  doc = dom();
+  assert.equal(injected(doc), 0, "the edit form");
+  assert.equal(doc.querySelector("#ccEvent-title").value, H.title);
+  assert.equal(doc.querySelector("#ccEvent-notes").value, H.notes);
+  assert.match(doc.querySelector(".cc-field-static").textContent, /<svg onload/, "the read-only type's label (M11)");
+  await act({ action: "central-calendar-event-form-close" });
+  await act({ action: "central-calendar-cancel-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  doc = dom();
+  assert.equal(injected(doc), 0, "the cancel confirmation");
+  assert.equal(doc.querySelector(".cc-cancel-name strong").textContent, H.title);
+  await submitCentralCalendarEventForm({ render });
+  doc = dom();
+  assert.equal(injected(doc), 0, "the line after it");
+  assert.match(doc.querySelector(".cc-refresh-note").textContent, /<img src=x onerror="alert\(1\)">Cup/);
+  assert.equal(writesOf(calls).length, 1);
+});
+
+test("11j. LOW-3: Cancel needs the card's canManage (M6); a sent form's fields are locked while its result is not confirmed (M17)", async () => {
+  const calls = installFetchMock(server());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-cancel-event", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
+  assert.equal(state.centralCalendar.form, null, "a reader's card: no cancel confirmation");
+  assert.equal(writesOf(calls).length, 0);
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  await openCreate({ writes: () => ({ throwNetworkError: true }) });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  const form = state.centralCalendar.form;
+  const sentBody = JSON.stringify(form.sentBody);
+  assert.equal(dom().querySelector(".cc-event-form fieldset.cc-form-fields").disabled, true, "the fields are disabled");
+  input({ ccEventField: "title" }, { value: "Changed after sending" });
+  input({ ccEventTarget: "team", targetId: U19, targetName: "U19" }, { checked: true });
+  assert.notEqual(form.draft.title, "Changed after sending", "the draft does not move");
+  assert.equal(form.draft.targets.some((target) => target.id === U19), false);
+  assert.equal(JSON.stringify(form.sentBody), sentBody, "Check result sends what was sent");
+});
+
+test("11k. HIGH-1: a late answer that does not settle (no answer, 503 outcome_unknown) keeps the write waiting; New event still offers the check", async () => {
+  for (const late of [{ throwNetworkError: true }, { status: 503, body: { error: "outcome_unknown", message: "Unknown." } }]) {
+    clearAllViewCache();
+    resetCentralCalendarForWorkspaceChange();
+    clearCentralCalendarUncertainWrites();
+    let release;
+    await openCreate({ writes: () => new Promise((resolve) => { release = resolve; }) });
+    fillValid();
+    const sending = submitCentralCalendarEventForm({ render });
+    confirmAnswer = true;
+    closeCentralCalendarPanel(render);
+    await tick();
+    release(late);
+    await sending;
+    await tick();
+    assert.equal(centralCalendarUncertainWrites().length, 1, "still waiting to be checked");
+    assert.match(state.centralCalendar.notice, /is not confirmed/, "the leave's line stays: nothing was learned");
+    await act({ action: "central-calendar-new-event" });
+    assert.equal(state.centralCalendar.form.pending, true);
+  }
 });

@@ -1,3 +1,4 @@
+import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -25,6 +26,7 @@ import {
   newCentralCalendarCancelForm,
   newCentralCalendarCreateForm,
   newCentralCalendarEditForm,
+  newCentralCalendarPendingForm,
   renderCentralCalendarAthleteListHtml,
   setCentralCalendarFormExpect,
   setCentralCalendarFormField,
@@ -150,14 +152,14 @@ function focusCard(key) {
 // when there was nothing to close (or the calendar is not the open screen).
 // With `render` the screen is drawn again and the focus returns to the card.
 // A form that is saving, not confirmed or holds unsaved values asks first;
-// a "No" keeps it (and still counts as handled).
+// a "No" keeps it and answers CENTRAL_CALENDAR_STAYED, so app.js's Back puts
+// back the history entry it consumed (its BACK_STAYED, the same word).
+export const CENTRAL_CALENDAR_STAYED = "stayed";
+
 export function closeCentralCalendarPanel(render) {
   if (state.activeTab !== "central-calendar") return false;
   const cal = state.centralCalendar;
-  if (cal.form) {
-    closeEventForm(render);
-    return true;
-  }
+  if (cal.form) return closeEventForm(render) ? true : CENTRAL_CALENDAR_STAYED;
   if (!cal.panel.open) return false;
   const key = cal.panel.key;
   cal.panel = closedPanel();
@@ -223,23 +225,91 @@ function ask(question) {
 
 const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?" });
 
+// The writes the coach left while their result was not known - in flight or
+// not confirmed (the independent review of PR #306, HIGH-1). Memory only, by
+// sign-in and workspace: the pattern of PR #146's unconfirmed identity load.
+// While one waits, New event (for a create) and that event's own Edit /
+// Cancel open "Check the earlier result" first, which sends the SAME body and
+// key - never by itself; a settled answer removes it. A workspace switch keeps
+// it under its own workspace (never shown in another); a reload or sign-out
+// drops all of them (the page asks first).
+const uncertainWrites = new Map();
+
+// The sign-in and the active workspace (the view cache's own parts), never
+// the calendar answer - a read that failed must not lose the entry.
+function workspaceKeyOf() {
+  const [userId, type, scopeId] = currentUserWorkspaceContextParts();
+  return userId && type ? `${userId}|${type}:${scopeId ?? ""}` : "";
+}
+
+export function centralCalendarUncertainWrites() {
+  return uncertainWrites.get(workspaceKeyOf()) || [];
+}
+
+function rememberUncertainWrite(form) {
+  const key = workspaceKeyOf();
+  if (!key || !form?.sentBody || !form.requestKey) return;
+  const title = form.mode === "create" ? oneLineTitle(form.sentBody.title) : form.eventTitle;
+  const entry = {
+    mode: form.mode, eventId: form.eventId || "", eventTitle: title || "", requestKey: form.requestKey, sentBody: form.sentBody,
+    key: form.key || "", date: form.mode === "create" ? form.sentBody.day : form.date, span: form.span || null, revision: form.revision,
+  };
+  uncertainWrites.set(key, [...(uncertainWrites.get(key) || []).filter((other) => other.requestKey !== form.requestKey), entry]);
+}
+
+function forgetUncertainWrite(requestKey) {
+  for (const [key, list] of uncertainWrites) {
+    const rest = list.filter((entry) => entry.requestKey !== requestKey);
+    if (rest.length) uncertainWrites.set(key, rest);
+    else uncertainWrites.delete(key);
+  }
+}
+
+// Any workspace's: a reload or a sign-out drops them all.
+function anyUncertainWrite() {
+  return [...uncertainWrites.values()].some((list) => list.length > 0);
+}
+
+// Tests start over from here.
+export function clearCentralCalendarUncertainWrites() {
+  uncertainWrites.clear();
+}
+
 // Leaving the form (another item, Escape / Back, a workspace switch through
 // app.js): a save in flight, a result not confirmed or unsaved values are
 // asked about first. A move to another menu keeps the form (the slice stays).
-export function centralCalendarMayBeLeft() {
-  const form = state.centralCalendar?.form;
-  if (!form) return true;
-  if (form.busy) return ask("An event is still being saved. Leave anyway? Its result will not be shown here.");
-  if (form.unconfirmed) return ask("The last save of an event is not confirmed. Leave without checking? Look for the event in the calendar afterwards.");
-  if (form.dirty && DISCARD_QUESTION[form.mode]) return ask(DISCARD_QUESTION[form.mode]);
-  return true;
+// Left while its result is not known, a write is kept to check later.
+// `final`: a sign-out, asked before its request - nothing can be checked
+// after it, so a write kept to check counts too (in any workspace), form or
+// not.
+export function centralCalendarMayBeLeft({ final = false } = {}) {
+  const cal = state.centralCalendar;
+  const form = cal?.form;
+  const later = final ? "It cannot be checked after signing out." : "You can check it later under New event or the event.";
+  const verb = final ? "Sign out" : "Leave";
+  const waiting = () => final && anyUncertainWrite();
+  if (!form) return waiting() ? ask(`The result of an event's save is not confirmed. ${later} Sign out anyway?`) : true;
+  let leave = true;
+  if (form.busy) leave = ask(`An event is still being saved. ${verb} anyway? Its result will not be shown here. ${later}`);
+  else if (form.unconfirmed) leave = form.pending && !final ? true : ask(`The last save of an event is not confirmed. ${verb} without checking? ${later}`);
+  else if (form.dirty && DISCARD_QUESTION[form.mode]) leave = ask(DISCARD_QUESTION[form.mode]);
+  else if (waiting()) leave = ask(`The result of an event's save is not confirmed. ${later} Sign out anyway?`);
+  if (leave && (form.busy || form.unconfirmed)) rememberUncertainWrite(form);
+  return leave;
 }
 
 // app.js's "beforeunload": closing or reloading the page loses the only view
-// of a save in flight or not confirmed, and unsaved values.
+// of a save in flight or not confirmed (the form's or a write kept to check),
+// and unsaved values. A navigation the app makes on purpose (a sign-out, a
+// switch into or out of the athlete workspace) has asked already. The app's
+// own probe (app-update.js `workInProgress`, an untrusted event) counts only
+// what is being saved; unsaved values are asked about by its `mayLeave`.
 export function handleCentralCalendarBeforeUnload(event) {
+  if (state.deliberateNavigation) return false;
   const form = state.centralCalendar?.form;
-  if (!form || !(form.busy || form.unconfirmed || form.dirty)) return false;
+  const saving = Boolean(form && (form.busy || form.unconfirmed)) || anyUncertainWrite();
+  const unsaved = Boolean(form?.dirty) && event?.isTrusted !== false;
+  if (!saving && !unsaved) return false;
   event.preventDefault();
   event.returnValue = "An event is not saved or its result is not confirmed.";
   return true;
@@ -255,7 +325,8 @@ function focusPanelStart(cal) {
     return;
   }
   if (cal.form) {
-    (doc?.querySelector?.(".cc-panel [data-cc-focus]") || doc?.querySelector?.(".cc-panel .cc-panel-close"))?.focus?.({ preventScroll: true });
+    // The first field; a pending check has none - its Check result.
+    (doc?.querySelector?.(".cc-panel [data-cc-focus]") || doc?.querySelector?.('.cc-panel [data-action="central-calendar-event-check-result"]') || doc?.querySelector?.(".cc-panel .cc-panel-close"))?.focus?.({ preventScroll: true });
     return;
   }
   if (cal.panel.open) focusCard(cal.panel.key);
@@ -273,33 +344,85 @@ function closeEventForm(render, { asked = false, rereadRender = render } = {}) {
   render?.();
   focusPanelStart(cal);
   // A save in flight or not confirmed may have landed: the calendar is read
-  // again at once (never the cached answer from before it), so the coach can
-  // find the event before making it a second time.
-  if (form.busy || form.unconfirmed) void rereadAfterUncertainWrite(cal, rereadRender, form);
+  // again at once (never the cached answer from before it), and the write is
+  // kept to check (centralCalendarMayBeLeft) before it is made a second time.
+  if ((form.busy || form.unconfirmed) && !form.pending) void rereadAfterUncertainWrite(cal, rereadRender, form);
   return true;
 }
 
-function uncertainNotice(form) {
-  const title = form.mode === "create" ? oneLineTitle(form.draft.title) : form.eventTitle;
-  if (form.mode === "create") return `The result of “${title || "the new event"}” was not checked. The calendar was read again: look for it before creating it again.`;
-  if (form.mode === "cancel") return `The result of cancelling “${title || "the event"}” was not checked. The calendar was read again: look at the event before cancelling it again.`;
-  return `The result of the change to “${title || "the event"}” was not checked. The calendar was read again: look at the event before changing it again.`;
+// The line after leaving a write whose result is not known: whether the read
+// worked, and where the write waits to be checked. A read that failed says so
+// - never "the calendar was read again" over the last calendar loaded.
+function uncertainNotice(form, { readFailed }) {
+  const title = form.mode === "create" ? oneLineTitle(form.draft.title) : oneLineTitle(form.eventTitle);
+  const what = form.mode === "create" ? `“${title || "the new event"}”` : form.mode === "cancel" ? `cancelling “${title || "the event"}”` : `the change to “${title || "the event"}”`;
+  const how = form.mode === "create"
+    ? "New event offers Check result first: use it before creating the event again."
+    : `The event's Edit and Cancel offer Check result first: use it before ${form.mode === "cancel" ? "cancelling" : "changing"} the event again.`;
+  return readFailed
+    ? `The result of ${what} is not confirmed, and the calendar could not be read again, so it may not show the result yet. ${how}`
+    : `The result of ${what} is not confirmed. The calendar was read again. ${how}`;
 }
+
+// A settled answer's line, when the read after it failed: the calendar on
+// screen is the one from before the write.
+const READ_FAILED_TAIL = " The calendar could not be read again, so it may not show this yet.";
 
 function oneLineTitle(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-// `form` names the write the coach left (its own line); without it (a late
-// answer) the line already on screen stays - the read would clear it.
+// Whether the read just made failed: the calendar on screen (if any) is the
+// last one loaded, not a fresh one (central-calendar-data.js sets these).
+function readFailed(cal) {
+  return Boolean(cal.error || cal.refreshError);
+}
+
+// The calendar read again after the coach left `form`'s write while its result
+// was not known; the line says what the read gave. When the write's own answer
+// settled meanwhile (lateAnswer), its line wins and this one is not written.
 async function rereadAfterUncertainWrite(cal, render, form) {
   invalidateCentralCalendarCache();
   if (state.centralCalendar !== cal) return;
-  const kept = cal.notice;
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
-  cal.notice = form ? uncertainNotice(form) : cal.notice || kept;
+  if (!centralCalendarUncertainWrites().some((entry) => entry.requestKey === form.requestKey)) return;
+  cal.notice = uncertainNotice(form, { readFailed: readFailed(cal) });
   render?.();
+}
+
+// The waiting write to check first, if any: a create before New event, an
+// edit or a cancel of the same event before its Edit / Cancel.
+function pendingEntryFor({ mode, eventId = "" }) {
+  const list = centralCalendarUncertainWrites();
+  if (mode === "create") return list.find((entry) => entry.mode === "create") || null;
+  return list.find((entry) => entry.mode !== "create" && entry.eventId && entry.eventId === eventId) || null;
+}
+
+function openPendingCheck(cal, entry, render) {
+  if (cal.form || !entry) return;
+  cal.form = newCentralCalendarPendingForm(entry);
+  render?.();
+  focusPanelStart(cal);
+}
+
+// "Forget it without checking…" on a pending check: after a question that
+// names what may already have happened, the write is no longer waited for.
+const FORGET_QUESTION = Object.freeze({
+  create: "Forget this save without checking? If the event was created, creating it again makes a second one: look for it in the calendar first.",
+  edit: "Forget this save without checking? If the change was saved, the event already has it: look at the event first.",
+  cancel: "Forget this save without checking? If the event was cancelled, it already shows as cancelled: look at the event first.",
+});
+
+function forgetPendingCheck(cal, render) {
+  const form = cal.form;
+  if (!form?.pending || form.busy) return;
+  if (!ask(FORGET_QUESTION[form.mode])) return;
+  forgetUncertainWrite(form.requestKey);
+  cal.form = null;
+  cal.notice = "";
+  render?.();
+  focusPanelStart(cal);
 }
 
 // The types are read once per workspace (the slice is reset on a switch).
@@ -363,6 +486,10 @@ async function loadCreateTypes(form, cal, render) {
 async function openCreateForm(render) {
   const cal = state.centralCalendar;
   if (!centralCalendarCanCreateEvents() || cal.form) return;
+  // A create the coach left unconfirmed is checked first (HIGH-1): a second
+  // one could be a duplicate.
+  const waiting = pendingEntryFor({ mode: "create" });
+  if (waiting) return openPendingCheck(cal, waiting, render);
   const owner = workspaceOwner(cal);
   const teams = cal.data?.teams || [];
   // A team workspace's own team; a club's teams the Groups chips chose.
@@ -420,6 +547,8 @@ async function openEditForm(item, render) {
   if (cal.form || item?.kind !== "event" || item.canManage !== true || item.cancelled) return;
   const form = newCentralCalendarEditForm(item);
   if (!form.eventId) return;
+  const waiting = pendingEntryFor({ mode: "edit", eventId: form.eventId });
+  if (waiting) return openPendingCheck(cal, waiting, render);
   cal.form = form;
   render?.();
   await loadEditEvent(form, cal, render);
@@ -430,15 +559,19 @@ function openCancelForm(item, render) {
   if (cal.form || item?.kind !== "event" || item.canManage !== true || item.cancelled) return;
   const form = newCentralCalendarCancelForm(item);
   if (!form.eventId) return;
+  const waiting = pendingEntryFor({ mode: "cancel", eventId: form.eventId });
+  if (waiting) return openPendingCheck(cal, waiting, render);
   cal.form = form;
   render?.();
   focusPanelStart(cal);
 }
 
-// The form is closed and the calendar read again (a refusal that changes
-// what is shown, or a stranger's 404); the item's panel stays open on its key
-// when it is still there, the one line says why.
-async function settleAndReload(cal, render, { notice, panelKey = "", panelDate = "" } = {}) {
+// The form is closed and the calendar read again (a settled answer, a refusal
+// that changes what is shown, or a stranger's 404); the item's panel stays
+// open on its key when it is still there, the one line says why. When that
+// read fails the line says so (`readFailedNotice`, else READ_FAILED_TAIL):
+// the calendar on screen is the one from before.
+async function settleAndReload(cal, render, { notice, readFailedNotice = "", panelKey = "", panelDate = "" } = {}) {
   cal.form = null;
   if (panelKey && panelDate) cal.panel = { open: true, key: panelKey, date: panelDate, athletes: null, loading: false, error: "" };
   else cal.panel = closedPanel();
@@ -446,7 +579,7 @@ async function settleAndReload(cal, render, { notice, panelKey = "", panelDate =
   render?.();
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
-  cal.notice = notice;
+  cal.notice = readFailed(cal) ? readFailedNotice || `${notice}${READ_FAILED_TAIL}` : notice;
   render?.();
   focusPanelStart(cal);
   if (cal.panel.open) await loadCentralCalendarDay({ render, forceRefresh: true });
@@ -506,22 +639,64 @@ async function sendEventForm(render) {
   try {
     data = await WRITES[form.mode](form);
   } catch (error) {
-    if (!current()) return lateAnswer(cal, render);
+    const info = centralCalendarErrorInfo(error);
+    if (!current()) return lateAnswer(cal, render, form, { info, check });
     form.busy = false;
-    await refused(form, centralCalendarErrorInfo(error), render, { check });
+    await refused(form, info, render, { check });
     return;
   }
-  if (!current()) return lateAnswer(cal, render);
+  if (!current()) return lateAnswer(cal, render, form, { data, check });
   form.busy = false;
   await saved(form, data, render, { check });
 }
 
-// The coach left the form while its write was in flight: whatever the answer
-// says, what is shown may be from before it - read the calendar again (the
-// workspace's own slice only; a switch has reset it already).
-async function lateAnswer(cal, render) {
+// Whether an answer settles what happened to the write: a success, or a stated
+// refusal (on a Check result, only one given after the request record).
+function answerSettles({ info = null, check = false }) {
+  if (!info) return true;
+  return !(centralCalendarOutcomeUnknown(info) || (check && !centralCalendarCheckSettles(info)));
+}
+
+// The coach left the form while its write was in flight. An answer that does
+// not settle it changes nothing (the write still waits to be checked). One
+// that does is no longer waited for - in any workspace - and, in the one on
+// screen, the calendar is read again and the line says what happened. A form
+// the coach has open meanwhile is left alone, unless it is the pending check
+// of this very write.
+async function lateAnswer(cal, render, form, outcome) {
+  if (!answerSettles(outcome)) return;
+  forgetUncertainWrite(form.requestKey);
   if (state.centralCalendar !== cal) return;
-  await rereadAfterUncertainWrite(cal, render, null);
+  if (cal.form?.pending && cal.form.requestKey === form.requestKey && !cal.form.busy) cal.form = null;
+  const notice = outcome.info ? notDoneText(form, outcome.info) : savedText(form, outcome.data);
+  invalidateCentralCalendarCache();
+  await loadCentralCalendar({ render, forceRefresh: true });
+  if (state.centralCalendar !== cal) return;
+  cal.notice = readFailed(cal) ? `${notice}${READ_FAILED_TAIL}` : notice;
+  render?.();
+}
+
+function formTitle(form, event = null) {
+  return oneLineTitle(event?.title || (form.mode === "create" ? form.sentBody?.title || form.draft.title : form.eventTitle)) || "The event";
+}
+
+function savedText(form, data, { check = false } = {}) {
+  const title = formTitle(form, data?.event || null);
+  const words = { create: `“${title}” was created.`, edit: `Changes to “${title}” were saved.`, cancel: `“${title}” was cancelled.` };
+  return `${check ? "Checked: " : ""}${words[form.mode]}`;
+}
+
+// A settled refusal of a write the coach no longer has open as a form (a late
+// answer, a pending check): what was not done, and why when the code says.
+function notDoneText(form, info, { check = false } = {}) {
+  const title = formTitle(form);
+  const head = { create: `“${title}” was not created.`, edit: `The change to “${title}” was not saved.`, cancel: `“${title}” was not cancelled.` }[form.mode];
+  const why = info.status === 404
+    ? form.mode === "create" ? " Events cannot be created in this workspace now." : ` ${NOT_AVAILABLE}`
+    : info.code === "event_changed" ? " The event was changed meanwhile; make your change again."
+      : info.code === "event_cancelled" ? " The event was cancelled meanwhile."
+        : " Nothing was saved; you can make it again.";
+  return `${check ? "Checked: " : ""}${head}${why}`;
 }
 
 // The sentence of a stated refusal: nothing was saved.
@@ -577,17 +752,26 @@ async function refused(form, info, render, { check = false } = {}) {
     globalThis.document?.querySelector?.('[data-action="central-calendar-event-check-result"]')?.focus?.();
     return;
   }
+  // Settled: nothing was saved under this key.
+  forgetUncertainWrite(form.requestKey);
   form.unconfirmed = false;
   form.checkNote = "";
+  if (form.pending) {
+    // A pending check has no fields to mark: it closes with what was not done.
+    await settleAndReload(cal, render, { notice: notDoneText(form, info, { check: true }), panelKey: form.key, panelDate: form.date });
+    return;
+  }
   if (info.status === 404) {
     await settleAndReload(cal, render, { notice: form.mode === "create" ? "Events cannot be created in this workspace now. Nothing was saved." : NOT_AVAILABLE });
     return;
   }
   if (info.code === "event_changed" || info.code === "event_cancelled") {
     // The form was made from an event that changed or was cancelled: it
-    // closes, the calendar is read again, and the panel shows it as it is.
+    // closes, the calendar is read again, and the panel shows it as it is -
+    // or, when that read fails, the line says it could not be read.
     await settleAndReload(cal, render, {
       notice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile. It is shown as it is now; make your change again." : "Nothing was saved: this event was cancelled meanwhile and can no longer be changed.",
+      readFailedNotice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile, and the calendar could not be read again. Read it again to see the event as it is now before changing it." : "",
       panelKey: form.key, panelDate: form.date,
     });
     return;
@@ -614,9 +798,8 @@ function fieldShown(form, field) {
 async function saved(form, data, render, { check = false } = {}) {
   const cal = state.centralCalendar;
   const event = data?.event || null;
-  const title = event?.title || form.eventTitle || form.draft.title || "The event";
-  const words = { create: `“${title}” was created.`, edit: `Changes to “${title}” were saved.`, cancel: `“${title}” was cancelled.` };
-  const notice = `${check ? "Checked: " : ""}${words[form.mode]}`;
+  forgetUncertainWrite(form.requestKey);
+  const notice = savedText(form, data, { check });
   cal.form = null;
   // The event's panel on the day the coach was on when it is still one of
   // the event's days, else its first day; the range follows that day.
@@ -851,6 +1034,16 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-event-check-result") {
     if (cal.form?.unconfirmed && !cal.form.busy) await sendEventForm(render);
+    return true;
+  }
+  // The screen's line of writes left unconfirmed: one opens its pending check.
+  if (type === "central-calendar-event-pending") {
+    const entry = centralCalendarUncertainWrites().find((other) => other.requestKey === action.dataset.requestKey);
+    if (entry && !cal.form) openPendingCheck(cal, entry, render);
+    return true;
+  }
+  if (type === "central-calendar-event-forget") {
+    forgetPendingCheck(cal, render);
     return true;
   }
   if (type === "central-calendar-event-form-retry") {

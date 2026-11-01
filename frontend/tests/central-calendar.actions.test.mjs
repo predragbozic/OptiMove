@@ -906,7 +906,11 @@ test("10a. the coach's Back root is Home and the rail's Calendar highlights the 
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\);/);
   assert.doesNotMatch(appJs, /openWeeklyCalendarFromRail/, "the rail no longer opens the weekly plan's month picker");
   assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar \}\);/, "the content click dispatch");
-  assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return/g) || []).length, 2, "Back and Escape both close the panel first and draw the screen again");
+  assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return;/g) || []).length, 1, "Escape closes the panel first and draws the screen again");
+  // Back too; an event form the coach chose to keep (K2a-2) puts back the
+  // history entry Back consumed.
+  assert.match(appJs, /const calendar = closeCentralCalendarPanel\(renderCentralCalendar\);\s*if \(calendar\) return calendar;/, "Back closes the panel first and passes its answer on");
+  assert.match(appJs, /const BACK_STAYED = "stayed";/, "the calendar's \"stayed\" is Back's own BACK_STAYED");
   assert.match(appJs, /resetCentralCalendarForWorkspaceChange\(\);\s*invalidateCentralCalendarCache\(\);/, "a workspace switch resets the slice and the cache");
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\{ forceRefresh: true \}\);/, "and reloads an open calendar");
   // The function bodies, by brace matching (the menu-cache-policy-coverage pattern).

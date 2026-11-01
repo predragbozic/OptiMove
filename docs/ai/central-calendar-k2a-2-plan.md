@@ -116,6 +116,19 @@ harness extended with the event routes, at 1280 and 375 px. Reviewers: `code-rev
 - The *GPS / device data* box: offered as D19 says, but nothing can meet it before K2a-1b (an imported activity
   linked to the event); the form says so under the box, and a past event that ticks it reads *Awaiting device
   data*. Hiding the box until K2a-1b is the alternative.
+- **Where *No time* goes** (the independent review of PR #306, MEDIUM-2; not changed): the selected day's list (a
+  phone's week and month, the Day view) puts the cards with neither a time nor a slot **last**, under *No time*;
+  the wide week's time grid keeps them in a band **above** the hours, and the server orders them first. The
+  alternative is to put them first in the list too (for example under *All day*). The owner's design asked for
+  a *No time* section; which end it sits at is the owner's choice.
+- **What the chips count** (LOW-5; not changed): a card per day, so a three-day camp counts *Camp 3* over a week
+  that shows all three days. Counting events instead of cards is the alternative.
+- **A team's event edited from the club workspace** (LOW-4; recorded, not built): the athlete list offers the
+  club's whole roster, and the server refuses an athlete who is not in the team (`target_not_available`, shown on
+  the targets). Offering only the team's members needs the members of that team, which the calendar's own
+  answers do not carry and the rail's roster (`state.athletes`) has no memberships for: a read of
+  `GET /api/organization` (as the Tests and Training Load pickers do) or a field on the event read. Not small, so
+  recorded; the owner decides whether it comes with K2a-1b.
 
 ## 9. Review round 1 (as built after it)
 
@@ -149,6 +162,39 @@ a browser check), a phone two.
 (`external` / `test`: `folded`, `separate` or null) to the event card. A referenced schedule shown beside the event
 (`separate`) makes the card say *Linked schedule shown separately* and the panel explain that it reaches athletes the
 event does not list, so it is its own card with its own counts (no gap note then — the server sets none).
+
+**The independent review of PR #306 (NOT READY: 1 HIGH, 2 MEDIUM, 5 LOW), as built after it:**
+
+- **HIGH-1, a duplicate after leaving a save not confirmed.** The line after leaving said the calendar was read
+  again whatever that read did. Now it depends on the read: when it failed, the line says the calendar could not be
+  read and may not show the result yet (the same for `event_changed` — never "shown as it is now" — and a success
+  whose read fails says the calendar may not show it yet). And the write itself is kept: a create, an edit or a
+  cancel the coach left while its result was not known (in flight or not confirmed) is held in memory only — its
+  mode, event, key and the body as sent — under the sign-in and the active workspace (the pattern of PR #146's
+  identity load; another club or another sign-in never sees it; a reload or a sign-out drops it, and both ask
+  first). While it waits, **New event** (for a create) and that event's **Edit** and **Cancel** open *Check the
+  earlier result* instead of the form, and a line above the calendar names each one with its own *Check …* button.
+  *Check result* sends the SAME body with the SAME key, never by itself; an answer that settles it (a success, or a
+  refusal given after the server read its request record) removes it and says what happened; one that does not
+  keeps it with one line why; a late answer to the first send settles it the same way, in whichever workspace is
+  shown. *Forget it without checking…* removes it after a question that names the risk (a second event).
+- **MEDIUM-1:** the page's unload guard ignores a navigation the app makes on purpose (`state.deliberateNavigation`:
+  a sign-out, a switch into or out of the athlete workspace), as the Imports and roster guards do. A sign-out asks
+  the calendar **before** its logout request (also when only a write waits to be checked); a workspace switch
+  already asked before its `PUT`.
+- **MEDIUM-2** and **LOW-5:** not changed, recorded in section 8 for the owner; the view's comment no longer says
+  that nothing is re-sorted.
+- **LOW-1:** a Back the coach declines (the form stays) answers `stayed`, app.js's `BACK_STAYED`, so the history
+  entry Back consumed is put back.
+- **LOW-2:** the update banner's probe (an untrusted `beforeunload`) counts only a save in flight or not confirmed;
+  a form that is merely changed lets the banner ask normally, and its `mayLeave` asks about the values.
+- **LOW-3:** a test with hostile strings through the card, the panel, the edit form, the cancel confirmation and the
+  line after it; tests for Cancel without `canManage` and for the locked fields of a sent form.
+- **LOW-4:** recorded in section 8 (not small).
+
+Recorded with it: a switch into or out of the athlete workspace reloads the page, so a write waiting to be checked
+is dropped there although the switch's question says it can be checked later (the switch does not tell the
+calendar which workspace it goes to).
 
 **Follow-ups (LOW, recorded, not built):** the cancel reason is not shown back anywhere (the card carries none); a team
 coach gets no line on why a club event has no Edit; the form gives no hint that a multi-day event's times show on

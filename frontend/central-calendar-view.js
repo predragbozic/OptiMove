@@ -9,9 +9,12 @@ import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMond
 // Types, Event types), a month, a week (the server's slot order as a list,
 // or a time grid on a wide screen) or a day, the card, the item panel and,
 // in its place, the event form (central-calendar-event-form.js). The server
-// groups (D16) and orders (D13) - nothing here re-sorts a day's items; the
-// chips only hide whole cards, and the selected day's list only moves the
-// cards with neither a time nor a slot under "No time" (a stable split).
+// groups (D16) and orders (D13); the chips only hide whole cards. One
+// departure from that order: the selected day's list (a phone's week and
+// month, the Day view) moves the cards with neither a time nor a slot after
+// the others, under "No time" - the server puts them first, and the wide
+// week's time grid keeps them in a band above the hours. Within each part
+// the server's order stays. The owner's choice (plan section 8).
 // `layout` is "phone" (<= 760 px), "medium" (761-1023 px) or "wide"
 // (>= 1024 px), decided by the actions module from window.matchMedia.
 
@@ -640,8 +643,9 @@ function renderDayTeamsHtml(items, cal, teams) {
     </ul>`;
 }
 
-// The cards with a time or a slot in the server's order, then the ones with
-// neither under "No time" - a stable split, nothing is re-sorted (K2a-2).
+// The cards with a time or a slot, then the ones with neither under "No time"
+// (K2a-2): the untimed cards move from the server's place for them (first)
+// to the end; each part keeps the server's order (plan section 8).
 function renderDayListCardsHtml(items, teams, openKey, today, emptyText) {
   if (!items.length) return `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, openKey, today, { emptyText })}</div>`;
   const untimed = items.filter((item) => !item.startTime && !item.slot);
@@ -843,10 +847,27 @@ function renderPanelHtml(cal, layout, today, roster, formCtx) {
   return panelHost(body, layout);
 }
 
+// The event saves the coach left while their result was not known (the
+// actions module's memory, this workspace's only): one line with a Check
+// result per save, which opens its "Check the earlier result". Not while a
+// form is open (the form holds the panel).
+function renderUncertainWritesHtml(cal, writes) {
+  if (cal.form || !writes?.length) return "";
+  const label = (entry) => {
+    const title = String(entry.eventTitle || "").replace(/\s+/g, " ").trim() || (entry.mode === "create" ? "the new event" : "the event");
+    return entry.mode === "create" ? `Check “${title}”` : entry.mode === "cancel" ? `Check cancelling “${title}”` : `Check the change to “${title}”`;
+  };
+  return `<div class="cc-refresh-note cc-uncertain-line" role="status">
+      <span>${writes.length === 1 ? "1 save of an event is not confirmed." : `${writes.length} saves of events are not confirmed.`}</span>
+      ${writes.map((entry) => `<button type="button" class="plain-button cc-inline-button" data-action="central-calendar-event-pending" data-request-key="${escapeAttr(entry.requestKey)}">${escapeHtml(label(entry))}</button>`).join("")}
+    </div>`;
+}
+
 // `canCreate`: the active workspace may create events (a club, a team, a
 // private coach - the actions module decides from the answer's workspace);
-// `eventRoster`: the workspace's athletes for the form's targets ({ id, name }).
-export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster = new Map(), canCreate = false, eventRoster = [] } = {}) {
+// `eventRoster`: the workspace's athletes for the form's targets ({ id, name });
+// `uncertainWrites`: the event saves left unconfirmed in this workspace.
+export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster = new Map(), canCreate = false, eventRoster = [], uncertainWrites = [] } = {}) {
   const teams = cal.data?.teams || [];
   const byDate = centralCalendarItemsByDate(cal.data);
   const days = cal.anchor ? centralCalendarDisplayedDays(cal.view, cal.anchor) : [];
@@ -860,6 +881,7 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
       ${renderFiltersHtml(cal, counts, teams)}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}
       ${cal.notice ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.notice)}</p>` : ""}
+      ${renderUncertainWritesHtml(cal, uncertainWrites)}
       <div class="cc-body">
         <div class="cc-main">${cal.anchor ? renderBodyHtml(cal, layout, today) : renderStateHtml(cal)}</div>
         ${renderPanelHtml(cal, layout, today, roster, formCtx)}

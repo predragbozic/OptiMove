@@ -145,6 +145,23 @@ export function newCentralCalendarCancelForm(item) {
   return form;
 }
 
+// "Check the earlier result" (the independent review of PR #306, HIGH-1): a
+// write the coach left while its result was not known, opened again from New
+// event, the event's Edit / Cancel or the screen's line. It holds the request
+// exactly as it was sent - the same body and key - and nothing to edit; Check
+// result sends it again, never by itself.
+export function newCentralCalendarPendingForm(entry) {
+  const form = baseForm(entry.mode, {
+    pending: true, unconfirmed: true,
+    key: entry.key || "", date: entry.date || "", eventId: entry.eventId || "", eventTitle: entry.eventTitle || "",
+    revision: entry.revision, requestKey: entry.requestKey, sentBody: entry.sentBody,
+  });
+  form.span = entry.span || null;
+  form.draft.title = entry.mode === "create" ? String(entry.sentBody?.title ?? "") : "";
+  form.draft.day = entry.mode === "create" ? String(entry.sentBody?.day ?? "") : "";
+  return form;
+}
+
 // ---------------------------------------------------------------------------
 // The request
 // ---------------------------------------------------------------------------
@@ -439,11 +456,37 @@ function spanText(form, longDate) {
   return longDate(form.date);
 }
 
+// What a pending check is about, in one sentence.
+function pendingWhatText(form, longDate) {
+  const title = String(form.mode === "create" ? form.draft.title : form.eventTitle).replace(/\s+/g, " ").trim();
+  if (form.mode === "create") return `A new event “${title || "Event"}”${form.draft.day ? ` on ${longDate(form.draft.day)}` : ""} was sent, but its answer was lost: it is not known whether it was created.`;
+  if (form.mode === "cancel") return `Cancelling “${title || "the event"}” was sent, but its answer was lost: it is not known whether it was cancelled.`;
+  return `A change to “${title || "the event"}” was sent, but its answer was lost: it is not known whether it was saved.`;
+}
+
+const PENDING_BEFORE = Object.freeze({ create: "Check it before creating the event again.", edit: "Check it before changing the event again.", cancel: "Check it before cancelling the event again." });
+
+function pendingFormHtml(form, ctx) {
+  return `${headHtml("Check the earlier result")}
+    <div class="cc-unconfirmed" role="alert">
+      <p class="cc-unconfirmed-title">Result not confirmed</p>
+      <p class="cc-panel-note">${escapeHtml(pendingWhatText(form, ctx.longDate || ((iso) => iso)))}</p>
+      <p class="cc-panel-note">${escapeHtml(PENDING_BEFORE[form.mode] || "")} Check result sends the same request again; it is never saved twice.</p>
+      ${form.checkNote ? `<p class="cc-panel-note">${escapeHtml(form.checkNote)}</p>` : ""}
+      <div class="cc-form-actions">
+        <button type="button" class="plain-button cc-primary" data-action="central-calendar-event-check-result"${form.busy ? " disabled" : ""}>${form.busy ? "Checking…" : "Check result"}</button>
+        <button type="button" class="plain-button" data-action="central-calendar-event-form-close"${form.busy ? " disabled" : ""}>Close</button>
+      </div>
+      <button type="button" class="plain-button cc-form-small cc-pending-forget" data-action="central-calendar-event-forget"${form.busy ? " disabled" : ""}>Forget it without checking…</button>
+    </div>`;
+}
+
 // The form in the panel's place. `ctx`: { types, typesError, teams, roster,
 // longDate } - the workspace's types, its teams (the calendar answer's
 // teams[]) and athletes, and the date formatter of the view.
 export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
   const locked = form.busy || form.unconfirmed;
+  if (form.pending) return pendingFormHtml(form, ctx);
   if (form.mode === "cancel") {
     return `${headHtml("Cancel this event?")}
       <form class="cc-event-form" data-cc-event-form novalidate>
