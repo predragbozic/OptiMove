@@ -4019,7 +4019,8 @@ document, recorded here only once accepted and built: the wording of C57 and of 
 (its R5: the candidate and the team lock first, the team and club `FOR SHARE` after it, the binding before the
 registry, the Metrics Core connection `FOR UPDATE` where D says `FOR SHARE`, the approver's rights after the registry), the
 J M4 row's "the stored candidates turn *changed* exactly once" (its R13, section 7.1), and section F: the code
-`no_mapped_values` in place of `nothing_to_import` for a session with no mapped value (its R4) and the audience list
+`no_mapped_values` in place of `nothing_to_import` for a session with no mapped value (its R4), `unexpected_unit` as
+`source_shape_mismatch` (its R7) and the audience list
 with the platform-admin-only instance codes (its R18, section 6.1).
 
 ## K. Open, but not blocking M1

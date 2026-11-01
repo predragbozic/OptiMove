@@ -243,8 +243,12 @@ steps 2a and 6b) and rolls back (R10).
    - a threshold-contract skip (`team_threshold_missing`, `team_threshold_split`, `threshold_mismatch`,
      `duration_mismatch`, `zone_boundary_missing`, `zone_boundary_ambiguous`) on any admitted athlete under any
      activation → `blocked`, `source_threshold_contract_mismatch`;
-   - `unexpected_unit`, or a unit in the answer different from the revision's proven `source_unit` (R7) →
-     `source_unit_mismatch`; a value of another shape than the revision's → `source_shape_mismatch`;
+   - the details' literal `unit: "number"` is checked as a **shape**, as today (`sourceMetricExtractors.js:140`; the
+     seed: "The observed unit "number" is a shape", `v34:1811-1814`; the C97 runbook, row of
+     `details.players.tot_burst_events`): another literal (`unexpected_unit`) → `source_shape_mismatch`, as does a
+     value of another shape than the revision's (R7). The proven unit is a fact of the revision; it is compared with
+     T4's `source_unit` (the T6 guard does the same), never with a literal of the answer. `source_unit_mismatch`
+     stays for a revision / version unit disagreement found under the locks (defence in depth beside the T6 guard);
    - a converted value outside the canonical version's `min` / `max` → `blocked`, `canonical_value_out_of_range`
      (new, R8; today the v13 trigger raises an untyped error whose text carries the value, and the approval logs it,
      `v13:310`, `gpexeImportService.js:2295`);
@@ -430,9 +434,10 @@ only its merge: the owner names the deploy of the commit that carries 9-B, eithe
 after M6 steps 2–5 (the activations exist before the deploy, so the screen goes from today's previews straight to mapped
 ones; the old importer ignores activations). While auto-deploy is off (`metrics-core-plan.md:266-268`), no deploy of a
 commit of `main` that carries 9-B starts without that word — the *Rukovodilac*'s deploy "as needed" of step 6 of the
-standing order for migration PRs (`:373-375`) does not cover it (R3) — and every later commit of `main` carries 9-B
-too, so after the 9-B merge any deploy waits for the owner's word until 9-B is live. While auto-deploy is on
-(`:252-256`), the merge of 9-B itself waits for that word.
+standing order for migration PRs (`:373-375`) does not cover it (R3). That exception holds for the commit that carries
+9-B and for every later commit of `main` (each carries 9-B too), until M6 steps 2–5 are done or the owner says
+otherwise. **The *Rukovodilac*'s commitment (2026-11-01): it deploys no commit that contains 9-B code without the
+owner's word.** While auto-deploy is on (`:252-256`), the merge of 9-B itself waits for that word.
 
 ---
 
@@ -494,6 +499,8 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   any `changesToImported[*].values[*]`.
 - F rows 1–2: an unactivated known field shows its label to the two admins and only a count to a coach.
 - Every mapped value left out under `optional` → `blocked` `no_mapped_values`, never Ready.
+- R7: burst and brake with `unit: "number"` in the answer pass under a revision whose proven unit is `count`; another
+  literal → `blocked` `source_shape_mismatch`.
 - `required` against `optional`, including the drill-level rule of R9.
 - The preview hash changes when an activation ends between preview and approval; the content hash changes under a new
   mapping version (`needs_review`); a re-import that only adds a mapped metric is `supplemented` (the decimal compare of
@@ -636,13 +643,16 @@ request, reads or writes no persistent database, and touches no Render or Supaba
     17's facts PR commits it into the runbook's table.
 13. **OWNER — switch on**: `GPEXE_IMPORT_APPLY_ENABLED=true` in Render for the chosen environment only, by the owner's
     own action; no executor or *Rukovodilac* key sets a Render environment variable. Whether the service must restart
-    for it to take effect is not verifiable from the repository; the owner confirms "on" through the Imports status
-    (`importSwitch`) before step 14, never by assumption.
+    for it to take effect is not verifiable from the repository; a change of a Render environment variable starts a
+    new deploy of the commit already served, so the owner confirms "on" through the Imports status (`importSwitch`)
+    and `/api/health` three times in a row on the same commit step 11 found (equal to `main`) before step 14, never by
+    assumption.
 14. **OWNER — exactly one approval** through the single-candidate route with its `previewHash`, never the batch. On
     `503 import_outcome_unknown`: the `verify` links, never a blind retry (`gpexe-in-app-import.md:393-532`). No roster
     decision on the imported activity until step 16 passes (the undo refuses after one).
-15. **OWNER — switch off at once**, confirmed by three consecutive reads of `importSwitch` showing it off (after any
-    restart); "Switch off at" in the record row.
+15. **OWNER — switch off at once**, confirmed by three consecutive reads of `importSwitch` showing it off and
+    `/api/health` three times in a row on the same commit as in step 11 (the change starts a new deploy of it);
+    "Switch off at" in the record row.
 16. **OWNER — the read-only post-import check** (the merged SELECT file of section 10.4, named by its sha256): the approval read
     (`GET …/approvals/:approvalId`, `routes/gpexeImport.js:212`); the candidate `imported`; no other candidate of the
     team imported in the window; the counts equal the preview; no new `gpexe_*` definition; T6 rows = values of the
@@ -679,13 +689,15 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 ## 12. Decisions
 
-### 12.1 For the *Rukovodilac*
+### 12.1 For the *Rukovodilac* (decided on 2026-11-01 in its ★★ review of `275cf62`: R1, R3–R6, R8–R18 as recommended; R7 as written below)
 
 - **R1 The PR split** of section 2. Recommendation: yes.
 - **R3 Merge and deploy paths** of section 2 (9-0 under the standing merge order; 9-B merged on the owner's word, and
-  every deploy of a commit of `main` that carries 9-B — until 9-B is live — started only on the owner's word naming it,
-  O13: a departure from step 6 of the standing order for migration PRs, which lets the *Rukovodilac* deploy a commit
-  without a migration "as needed", `metrics-core-plan.md:373-375`; 9-R on the owner's word, before the freeze, step
+  every deploy of a commit of `main` that carries 9-B — that commit and every later one, until M6 steps 2–5 are done or
+  the owner says otherwise — started only on the owner's word naming it, O13: a departure from step 6 of the standing
+  order for migration PRs, which lets the *Rukovodilac* deploy a commit without a migration "as needed",
+  `metrics-core-plan.md:373-375`; the *Rukovodilac* has committed to deploying no commit that contains 9-B code without
+  the owner's word; 9-R on the owner's word, before the freeze, step
   6a). This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
   "Triggers 1, 3 and 4" for phase 9 (`metrics-core-plan.md:1115`); it is stricter, and the plan's line itself changes
   only on the owner's word. Recommendation: as written.
@@ -702,8 +714,12 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   `db-reviewer`'s confirmation in 9-B.
 - **R6 A Metrics Core connection found inactive under its `FOR UPDATE`** (reachable only by a raw write, since a 7g end
   needs the team lock): `mapping_not_usable` (recommended) or a new code.
-- **R7 The details unit check:** compare with the revision's proven `source_unit` instead of the literal `'number'`
-  (`sourceMetricExtractors.js:140`); either way a mismatch is `source_unit_mismatch`. Recommendation: the proven unit.
+- **R7 The details unit check** — *decided by the Rukovodilac (2026-11-01)*: the literal `'number'`
+  (`sourceMetricExtractors.js:140`) stays, as a check of the answer's **shape**; another literal is
+  `source_shape_mismatch`, never `source_unit_mismatch`. The proven unit (for burst and brake the seed's hypothesis is
+  `count`, `v34:1811-1814`) is a fact of the revision and is compared with T4, never with the answer's literal —
+  comparing the two would refuse every session. It departs from section F's mapping of `unexpected_unit` to
+  `source_unit_mismatch` (`discovery:1904-1911`), amended in 9-B with the code.
 - **R8 `canonical_value_out_of_range`** pre-checked under the locks, the value never logged. Recommendation: yes.
 - **R9 The drill-level "missing" under `required`:** a drill the athlete has no row for is not missing;
   `details_not_fetched` is. Recommendation: yes, with a test.
@@ -764,7 +780,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 - **O12 The plan lines:** the owner adds phase 9's "Input (red zone)" and "Start" lines, or states that section 10 of
   this contract is the phase's red-zone list.
 - **O13 When 9-B is deployed** (section 7.3): the owner names the deploy of the commit that carries 9-B (and its merge
-  while auto-deploy is on): at once after both GOs, or after M6 steps 2–5. Until then no other deploy carries it (R3).
+  while auto-deploy is on): at once after both GOs, or after M6 steps 2–5. Until then no other deploy carries it, and
+  later commits follow the same rule until M6 steps 2–5 are done or the owner says otherwise (R3).
 - **O14 No migration in phase 9.** C98 records that a database guard for canonical rows stays "an optional later
   hardening (a migration), before M4" (`discovery:871-873`, the owner's wording): whether "before M4" binds. Without
   one, "never a value without its T6 row" rests on the writer and its tests (section 2). Recommendation: no migration
@@ -836,3 +853,9 @@ by the executor.
   auto-deploy is off and step 6 of the standing order for migration PRs lets the *Rukovodilac* deploy a commit without a
   migration "as needed", so 9-B could go live before the owner's chosen moment. Fixed in the commit after it: O13, R3,
   section 2, section 7.3, step 6 and section 11 now govern the deploy of every commit that carries 9-B.
+- **The *Rukovodilac*'s ★★ review of `275cf62`:** NO-GO on one MEDIUM — R7 as first recommended (compare the answer's
+  `unit` with the revision's proven unit) contradicted the seed (`"number"` is a shape) and Arm A1; its decision: the
+  literal stays as a shape check, `source_shape_mismatch`. A LOW: a Render environment change redeploys the served commit,
+  so steps 13 and 15 confirm `/api/health` three times on the same commit. It accepted the *Nezavisni revizor*'s finding
+  and set the deploy exception's duration and its own commitment (section 7.3, R3, O13). Its decisions on R1 and R3–R18
+  are final. All folded in the commit after `5715f12`.
