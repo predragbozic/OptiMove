@@ -2611,6 +2611,27 @@ Technical details.
         and `GET /api/training-load/sources/gpexe/connections?clubId=<zero UUID>` answered 401; the served bundle
         `assets/app-Ba-80peD.js` holds the screen (`metric-mappings-new`). No production write, no GPEXE request; the
         import switch untouched.
+    - **Phase 9, the contract J17, PR #311: proposed and merged; no code before the owner accepts it.**
+      - **What:** `docs/ai/phase9-importer-mappings-contract.md`, written on the *Rukovodilac*'s order of 2026-11-01
+        („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim
+        spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). Documents only: the M4
+        writer through mappings (lock order, preview version 3, the section F codes, the audience mechanism, the
+        characterisation test), 9-0 (switch conditions 2 and 3), and M6's numbered red-zone steps for the owner (P1–P2
+        now, the C97 evidence; then steps 1–17 up to one approved session). No code, migration or API change.
+      - **Reviews:** `db-reviewer` and `security-reviewer` (one HIGH each in the first round: a revoke / 7d / approval
+        lock cycle, admin-only codes reaching a coach; folded, narrow re-reviews READY WITH NON-BLOCKING NOTES);
+        `code-reviewer` in four slices (READY WITH NON-BLOCKING NOTES; one HIGH refuted by the plan's standing merge
+        order and closed). The *Nezavisni revizor*: NO-GO on `275cf62f` (MEDIUM: O13 governed the merge of 9-B, not
+        its deploy), GO on `5715f12c` and on `e57f854d` (one optional LOW: the end of the deploy exception, for the
+        next edit of the contract). The *Rukovodilac*: NO-GO on `275cf62f` (MEDIUM: R7, the details literal
+        `"number"` is a shape; LOW: health three times after a Render environment change), GO on `e57f854d`; its
+        decisions on R1 and R3–R18 are final, and it committed to deploy no commit that contains 9-B code without the
+        owner's word.
+      - **Merge** by the executor under the standing merge order: `798d355` (parents `1932ad1` and `e57f854d`,
+        2026-11-01 14:57:27 UTC), exactly from `e57f854d`; its tree is the head's. Documents only, so nothing to
+        deploy for it on its own.
+      - **Open:** the owner's acceptance of the contract (the plan's rule A1) and the decisions O1–O16, which the
+        *Rukovodilac* gathers; phase P (P1, the C97 evidence, before the 05–06.10 snapshots expire around 2026-11-10).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -4161,7 +4182,8 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
      and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301), 7e-B (the
      aggregate preview, PR #303) and 7g-B (ending a held source instance, PR #305, migration v50, directly confirmed by
      the *Rukovodilac*'s post-check) are merged and deployed; the minimal phase 8, the Mappings screen (J16, PR #309), is
-     merged and deployed. Next by the plan: phase 9 (the first controlled import); phases 7h and 7i come right after
+     merged and deployed; phase 9's contract (J17, PR #311) is merged as Proposed. Next by the plan: the owner's
+     acceptance of J17 and the decisions O1–O16, then phase 9's code (9-0, 9-B) and M6; phases 7h and 7i come right after
      the first import, before more clubs are brought on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around

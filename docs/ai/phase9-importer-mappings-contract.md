@@ -7,7 +7,7 @@ of the owner-run M6 that follows it. It is the M4 and M6 rows of section J of
 
 | | |
 |---|---|
-| Status | **Proposed** by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
+| Status | **Proposed** (merged as PR #311, `798d355`, exactly from `e57f854d`, after both ★★ GOs; the owner's acceptance pending) by the executor on 2026-11-01, on the *Rukovodilac*'s order of that day („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). No phase 9 contract existed; the plan holds a stub (`metrics-core-plan.md:1114-1120` at the base). **No code is written before this contract is accepted.** |
 | Verified against commit | `1932ad1` (merge of PR #310). Every file and line reference is to that commit unless marked otherwise. |
 | Mark | ★★ (triggers 1, 2, 3 and 4 — trigger 2 added by this contract for sections 4.1 and 6.1, the plan's phase 9 line naming 1, 3 and 4 (R3); the five-point rule for transactions with an external effect). For a ★★ phase the owner approves the contract before any code (`metrics-core-plan.md:450-452`). |
 | Owner decisions | Section 12.2 (O1–O16). The plan's phase 9 has no "Input (red zone)" or "Start" line; those are written only on the owner's own word, never by relay (`metrics-core-plan.md:432-435`). |
@@ -859,3 +859,8 @@ by the executor.
   so steps 13 and 15 confirm `/api/health` three times on the same commit. It accepted the *Nezavisni revizor*'s finding
   and set the deploy exception's duration and its own commitment (section 7.3, R3, O13). Its decisions on R1 and R3–R18
   are final. All folded in the commit after `5715f12`.
+- **The ★★ GOs on `e57f854d`:** the *Rukovodilac* (narrow re-review; R7 and the LOW closed) and the *Nezavisni revizor*
+  (narrow re-review; one optional LOW: section 7.3 and R3 end the deploy exception "until M6 steps 2–5 are done or the
+  owner says otherwise" while O13 has the owner name the deploy, so the text should read "until 9-B is live, deployed
+  on the owner's word (O13)"; the *Rukovodilac*'s unconditional commitment already covers it). The LOW is carried to the
+  next edit of this contract (the owner's acceptance).
