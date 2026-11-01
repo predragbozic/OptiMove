@@ -1202,15 +1202,19 @@ test("16. a merged activity never belongs to two events (independent review MEDI
   assert.equal(toA.body.attached, false, "already A's through the alias's link: kept, no second row");
   assert.equal(await liveActivityLinks(evA.id), 1);
 
-  // Two live links that a later merge makes name one survivor: E's link to
-  // the survivor (the newer) was written first, D's link to the alias (the
-  // older) after it.
+  // Two live links that a later merge makes name one survivor. The newer one
+  // (E's, to the survivor) is written first and its event has the smaller
+  // id, the older one (D's, to the alias) after it on the larger id: without
+  // the read's order the newer comes first whichever way PostgreSQL reads the
+  // links (in the table's order or by event id), so only the order by
+  // `linked_at` makes D's the first.
   const alias2 = await makeActivity({ owner: teamX, origin: "manual", name: "Alias 2" });
   await addParticipant(alias2, s.x[1].athleteId);
   const survivor2 = await makeActivity({ owner: teamX, origin: "api_import", name: "Survivor 2" });
   await addParticipant(survivor2, s.x[1].athleteId);
-  const evD = await teamEvent(s, { title: "D" });
-  const evE = await teamEvent(s, { title: "E" });
+  const [evE, evD] = [await teamEvent(s, { title: "D or E" }), await teamEvent(s, { title: "E or D" })]
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  assert.ok(evE.id < evD.id);
   assert.equal((await attachActivity(s.coachX.cookie, evE.id, { expectedRevision: 1, activityId: survivor2 })).status, 200);
   await q(
     `insert into calendar.event_activity_links (event_id, activity_id, link_method, linked_by_user_id, linked_at) values ($1,$2,'manual',$3, now() - interval '1 hour')`,
