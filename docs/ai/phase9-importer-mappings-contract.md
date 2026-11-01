@@ -143,7 +143,7 @@ team or club row is locked during an approval.
 |---|---|---|---|
 | **9-A** | This contract (docs only) and its pointers in the plan and the discovery document | — | The owner accepts the contract before any code (the plan's rule A1); the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs |
 | **9-0** | Switch conditions 2 and 3 (section 9), reserved since 7g (`metrics-core-plan.md:1075-1078`), and the same bounds on the check-time preview | none | Standing merge order after both GOs (trigger 4). It touches condition (b) of the order — `gpexeImportService.js` is a module `gpexeRetentionCli.js` and `startGpexeRetentionSchedule()` call — so it is covered only when its body says what then runs at start-up and on a schedule and why it writes nothing to production data, and the GO confirms that (`metrics-core-plan.md:193-211`) |
-| **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge and the deploy** (O13): the deploy puts the new write path live and changes what a check shows for a bound team (section 7.3). While auto-deploy is off (every deploy since 2026-10-28 was started by hand, `metrics-core-plan.md:266-268`), the deploy of any commit of `main` that carries 9-B is started only on the owner's word naming it, not under the *Rukovodilac*'s "a deploy without a migration after a merge, as needed" (`:373-375`, R3); while auto-deploy is on, a merge is a deploy (`:252-256`), so the merge itself waits for that word |
+| **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge and the deploy** (O13): the deploy puts the new write path live and changes what a check shows for a bound team (section 7.3). While auto-deploy is off (every deploy since 2026-10-28 was started by hand, `metrics-core-plan.md:266-268`), the deploy of any commit of `main` that carries 9-B is started only on the owner's word naming it, not under the *Rukovodilac*'s "a deploy without a migration after a merge, as needed" (`:373-375`, R3); while auto-deploy is on, a merge is a deploy (`:252-256`), so the merge itself waits for that word. **Amended by the owner's work order `628d0be9`** (section 12.3): both GOs, then the merge under the standing merge order and the *Rukovodilac*'s deploy without a migration; no owner's word |
 | **9-R** | The M6 runbook and the executor's prepared material (section 10.4): the Supabase backup procedure draft, the pre-switch and post-import SELECT files (each run by the executor only on a disposable `optimove_tests_*` database), the proposals for variables and mappings, the record-table row | none | M6 material, outside the green zone (`metrics-core-plan.md:1120` at the base: „M6 follows phase 9. All of it is the owner's and outside the green zone, the standing merge order included.”): the owner's word |
 | **9-E** | Facts after each merge (CURRENT_STATE, the J M4 row "As built", the ADR-007 extension) | none | Standing merge order (facts only) |
 
@@ -453,6 +453,10 @@ standing order for migration PRs (`:373-375`) does not cover it (R3). That excep
 9-B and for every later commit of `main` (each carries 9-B too), until 9-B is live, deployed on the owner's word
 (O13). **The *Rukovodilac*'s commitment (2026-11-01): it deploys no commit that contains 9-B code without the
 owner's word.** While auto-deploy is on (`:252-256`), the merge of 9-B itself waits for that word.
+**Amended (2026-11-01, the owner's work order `628d0be9`, section 12.3):** the owner's word for the merge and the deploy
+of 9-B is no longer needed. After both GOs, 9-B merges under the standing merge order and the *Rukovodilac* deploys it
+without a migration; its commitment above ends with that order. The activations of the pilot exist already (M6 steps
+2–5, section 12.3), so the screen goes from today's previews straight to mapped ones.
 
 ---
 
@@ -649,7 +653,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
     bookkeeping of the candidates excepted) — checked by step 11.
 11. **OWNER — the read-only pre-switch preflight** (the SELECT file of section 10.4), run by the owner, or by the
     *Rukovodilac* through its connector only if the owner's recorded word extends that right beyond the migration
-    pre- and post-checks (`metrics-core-plan.md:357-371`). It shows:
+    pre- and post-checks (`metrics-core-plan.md:357-371`) — extended by the owner's work order `628d0be9` (section
+    12.3). It shows:
     - the served commit equals `main`, and no migration is undeployed; no running check;
     - the freshness of step 10 (the newest approval, occasion, value and T6 time against the backup's time);
     - the target candidate actionable (last check `succeeded`, drill effect `confirmed` or `not_required`), its
@@ -723,7 +728,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   order for migration PRs, which lets the *Rukovodilac* deploy a commit without a migration "as needed",
   `metrics-core-plan.md:373-375`; the *Rukovodilac* has committed to deploying no commit that contains 9-B code without
   the owner's word; 9-R on the owner's word, before the freeze, step
-  6a). This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
+  6a). *Amended for 9-B by the owner's work order `628d0be9` (section 12.3).* This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
   "Triggers 1, 3 and 4" for phase 9 (`metrics-core-plan.md:1115`); it is stricter, and the plan's line itself changes
   only on the owner's word. Recommendation: as written.
 - **R4 `no_mapped_values`** as a new code; `nothing_to_import` keeps `no_changes` (it is "up to date" on the screen,
@@ -858,7 +863,8 @@ transcript.
   - **O11:** condition 5 stays open, to be closed before regular imports, not before the pilot.
   - **O12:** section 10 of this contract is phase 9's red-zone list; the plan needs no "Input (red zone)" or "Start"
     line for it.
-  - **O13:** 9-B is deployed at once after both GOs, on the owner's word naming the deploy (R3 unchanged).
+  - **O13:** 9-B is deployed at once after both GOs, on the owner's word naming the deploy (R3 unchanged). *Amended
+    by the work order `628d0be9` below: no owner's word.*
   - **O14:** no migration in phase 9.
   - **O15:** the procedural controls of section 10.3; no allowlist.
   - **O16:** system variables only in the pilot.
@@ -900,6 +906,28 @@ transcript.
   20:10:49 UTC). The evidence is `docs/ai/gpexe-c97-meaning-evidence.md` (PR #318); the unit evidence of the same
   fields is `docs/ai/gpexe-c97-unit-evidence.md` (PR #316, merged on the owner's word, turn `5e2df34f`). Section 10.1's
   P1 and P2 are thereby ready for step 2 of section 10.2 once PR #318 is merged.
+- **M6 steps 2–5 done, as the owner reports them** — „Total distance i Maximal running speed uključeni za First team,
+  kao Duration.” (owner turn `35fc8434`, 2026-11-01 21:38:27 UTC). With the report of 22:23 CET (Duration switched on):
+  the three system mappings (TIME → Duration, TotDist → Total distance, SPEEDmax → Maximal running speed) have version
+  1 active and are switched on for the First team's binding (GPEXE team 980), each `required`. The database was not read.
+- **The owner's work order** — „kada bude nesto trebalo javljaj, mada vecinu stvari koje smo dogovorili da radis bez moje
+  pomoci radi a to podrazumeva postcek, precek, merogovanje, deploy, samo deploy sa migracijama me mozes pitati i nesto u
+  vezi promene planiranja ili neka odluka viseg nivoa. Sve ostalo samostalno” (owner turn `628d0be9`, 2026-11-01
+  21:39:51 UTC, in the *Rukovodilac*'s session; relayed with the *Rukovodilac*'s reading, checked). For this contract:
+  - **O13 and R3, 9-B:** no owner's word for the merge or the deploy. After both GOs (the *Rukovodilac*'s and the
+    *Nezavisni revizor*'s ★★), 9-B merges under the standing merge order, and the *Rukovodilac* deploys it under its
+    "a deploy without a migration after a merge, as needed" (`metrics-core-plan.md:373-375`). Its commitment of section
+    7.3 ends.
+  - **Steps 11 and 16:** the owner's recorded word that lets the *Rukovodilac* run the read-only pre-switch preflight
+    and post-import check through its connector, inside the plan's read-only wrapper, from the merged files named by
+    their sha256 (step 6a). It never writes.
+  - **Evidence documents and other PRs without a migration** that this contract put on the owner's word: the
+    *Rukovodilac*'s GO under the standing merge order, and the *Nezavisni revizor*'s GO where a ★★ review asks for it.
+  - **Unchanged:** a PR with a migration and its deploy (the owner's order naming the migration, and the owner's „da”);
+    the import switch, the key and the window (steps 9, 10, 12–15: the owner's own actions); a change of the plan's
+    sections 1–4, of the ★ marks or of the phase order (never by relay, `metrics-core-plan.md`, section 2). The plan's
+    text is not changed: its step 6 already lets the *Rukovodilac* deploy without a migration, and the standing merge
+    order already covers PRs without one.
 - **C112: mapping by drag and drop** (owner turns `7fca0a79` and `fbeca2ea`, 2026-11-01; discovery C112) — a direction
   for mappings after the pilot; it changes nothing in this contract.
 
