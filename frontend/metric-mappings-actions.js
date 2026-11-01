@@ -497,7 +497,8 @@ async function refused(w, info, { render, check }) {
     s.write = null;
     return continueWithDraft(s, info.current.mappingId, render);
   }
-  if (info.code === "request_key_reused") w.body = { ...w.body, requestKey: newRequestKey() };
+  // request_key_reused needs no key change here: a refused write is never sent
+  // again; the next attempt is a new write with a new key (startWrite).
   if (TEAM_CODES.has(info.code) && info.current?.bindingId && s.panel) {
     // One team of a batch is refused: it is named and unticked, and the
     // others can be sent with a new request (J16 5.1, 6).

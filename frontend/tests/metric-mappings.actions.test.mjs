@@ -1137,3 +1137,82 @@ test("36. the R8 re-read at the button: a second click while it runs sends nothi
   await second;
   assert.equal(posts().length, 0);
 });
+
+test("37. text written by another administrator or a source is escaped and cleaned on every screen: list, detail, chooser and review card", async () => {
+  const P = "<img src=x onerror=alert(1)>‮";
+  db.mappings[0].target.label = `${P}Distance`;
+  db.mappings[0].sourceMetric.label = `${P}Total distance`;
+  db.mappings[0].versions.find((v) => v.id === V1).conversionNote = `${P}Metres, as GPEXE gives them.`;
+  db.org.clubs[0].name = `${P}FK Borac`;
+  const u19 = db.connections[CLUB][0].boundTeams.find((t) => t.bindingId === B2);
+  u19.teamName = `${P}U19`;
+  u19.sourceTeamId = `${P}981`;
+  db.org.teams.find((t) => t.id === TEAM2).name = `${P}U19`;
+  const safe = (where) => {
+    const html = content.innerHTML;
+    assert.doesNotMatch(html, /<img/, `${where}: no element from the text`);
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/, `${where}: the text is shown escaped`);
+    assert.doesNotMatch(html, /‮/, `${where}: no bidi control`);
+  };
+  await open();
+  safe("list");
+  await click(`[data-action="metric-mappings-open"][data-mapping-id="${M1}"]`);
+  render();
+  safe("detail");
+  assert.match(text(), /Metres, as GPEXE gives them\./);
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="club"]', CLUB);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  safe("chooser");
+  await input(`[data-mm-field="team"][data-binding-id="${B2}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "U19 too.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  const card = $(".metric-mappings-panel .metric-mappings-review-card").innerHTML;
+  assert.doesNotMatch(card, /<img/);
+  assert.match(card, /U19” — linked to GPEXE team &lt;img src=x onerror=alert\(1\)&gt;981/);
+  assert.doesNotMatch(card, /‮/);
+  safe("review card");
+});
+
+test("38. after request_key_reused the next attempt is a new request with a new key, never the refused key", async () => {
+  let refuse = true;
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/activations` && refuse ? ((refuse = false), ok({ error: "request_key_reused" }, 409)) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="club"]', CLUB);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B2}"]`, true);
+  await input('[data-mm-field="requirement"][value="optional"]', true);
+  await input('[data-mm-field="reason"]', "U19 too.");
+  await click('[data-action="metric-mappings-review"]');
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.match(text(), /An earlier save of this form may already be stored\. Close it and look at the mapping before saving again\./);
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  const sent = posts().filter((c) => c.url === `${B}/activations`);
+  assert.equal(sent.length, 2);
+  assert.notEqual(sent[1].body.requestKey, sent[0].body.requestKey);
+  assert.match(text(), /Switched on\./);
+});
+
+test("39. while a result is not confirmed every act that writes is off in the markup: the version's acts, New version, Switch off, New mapping", async () => {
+  db.mappings[0].versions.unshift(ver({ id: V3, versionNumber: 3, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/submit") ? { throwNetworkError: true } : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /Result not confirmed/);
+  const acts = $$('.metric-variables-version .metric-variables-actions button, [data-action="metric-mappings-new-version"], [data-action="metric-mappings-switch-off-open"]');
+  assert.ok(acts.length >= 5);
+  assert.ok(acts.every((b) => b.disabled), acts.filter((b) => !b.disabled).map((b) => b.dataset.action).join(","));
+  assert.equal($('[data-action="metric-mappings-check-result"]').disabled, false);
+  // The list's New mapping too, while the result is not confirmed.
+  data.mappingsState().view = "list";
+  render();
+  assert.equal($('[data-action="metric-mappings-new"]').disabled, true);
+});

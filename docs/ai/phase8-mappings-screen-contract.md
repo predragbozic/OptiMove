@@ -560,8 +560,9 @@ Frontend only: no backend file, no API change, no migration.
     panel has its own sentence; the platform administrator is told "You can activate it now." after Submit and on the
     step-4 card; the preview reads "a–b s in GPEXE = c–d min in “variable”"; in step 1 the fields that can be chosen come
     first, with the Source fields link for the platform. The **clicks to the first switch on of a system mapping fall
-    from 16 to 13** (measured again in the integration run). Not applied (a contract change, for the *Rukovodilac*):
-    "Save and submit for review" in one act, which would save two more.
+    from 16 to 13** (measured again in the integration run). Not applied: "Save and submit for review" in one act,
+    which would save two more — the *Rukovodilac* kept 4.5 and section 8 as they are for 8-B in its review of `a81e4da`
+    (2026-11-01: a draft and its submission stay two acts); recorded as a follow-up.
   - **Security (R10):** variable and field labels and the conversion note are cleaned wherever shown; the clubs read
     in flight is awaited by a second caller (the names of the R8 list); the version number in a button is escaped.
   - **Mobile:** field errors and hints in `.search-field` keep their own style; an unavailable choice's reason is not
@@ -579,11 +580,22 @@ Frontend only: no backend file, no API change, no migration.
     conversion note changed"; after a replacement that kept every team it ended, the notice says "N teams moved to
     version N.".
   - Not applied: rounding the preview's numbers (they are the exact decimals J11 returns, by design).
-- **Tests (JSDOM).** 36 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
+- **The *Rukovodilac*'s review of `a81e4da`** (2026-11-01): NO-GO for tests only — the code read as correct, but its
+  mutations showed that no test proved the escaping (a review card's GPEXE team id and `shown()` without `escapeHtml`
+  survived), the new key after `request_key_reused`, or the acts held while a result is not confirmed. Applied as a
+  test-only delta: test 37 puts `<img src=x onerror=alert(1)>` and U+202E into a variable label, a field label, a
+  conversion note, a club and a team name and a GPEXE team id and checks the list, the detail, the chooser and the
+  review card (no element, the text escaped, no bidi control); test 38 checks that the attempt after
+  `request_key_reused` is a new request with a new key; test 39 checks that every act that writes is off in the markup
+  while a result is not confirmed. The line of `refused()` that gave a refused write a new key was unreachable since
+  the HIGH fix (a refused write is never sent again; the next attempt is a new write with a new key) and is removed;
+  test 38 pins the behaviour itself.
+- **Tests (JSDOM).** 39 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
   items of section 10 they cover, and which the integration run covers, is listed in the pull request's description.
   Mutations, each removed and the suite failing: the clubs-read sentence, the name cleaning in a team row, both halves of
   the re-read guard, the owner filter and the naming of `source_metric_target_taken`, the double-click and Back guards of the
-  R8 re-read, the mixed-Keep sentence, the settled-write release, the
+  R8 re-read, the mixed-Keep sentence, the escaping of a review card's GPEXE team id and of `shown()`, the acts held
+  while a result is not confirmed, a resend that would reuse a refused key, the settled-write release, the
   acts enabled after a settled refusal, the R8 identity, the stale team answer, the per-route settle list, the
   unknown-refusal re-read, the notice cleared on a new act, the lone club, the ticked levels, the label cleaning and the
   preview's repaint.
