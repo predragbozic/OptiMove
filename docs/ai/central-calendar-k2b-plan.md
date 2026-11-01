@@ -195,7 +195,7 @@ fail-closed self-check at the end of v51 counts every seeded row (system and per
 | Active workspace | Settings → Calendar (read the whole catalog, write it) | The event form's lists (types, details, places, team defaults) | Values of an event's details |
 |---|---|---|---|
 | club C — club admin of C | yes, basis `club_admin` | C's live set | events the account manages (K2a 4.1: C's and its teams', D18) |
-| club C — platform admin (support, D24) | yes, basis `platform_admin`, audited | C's live set | the same |
+| club C — platform admin (support, D24) | yes — but a club workspace is offered only for a club the account administers (`loadAvailableWorkspaces`, `backend/src/workspace.js:37-66`), so a platform admin there also holds C's `club_admin` role and writes on that basis (`eventWriteBasis` prefers it); the `platform_admin` basis is never reached through a club workspace (T6) | C's live set | the same |
 | team T — team coach | no (`403`; the tab is not offered) | T's club's live set; T's default place | T's own events |
 | private coach | no | the `system` types and details (read-only); **no places** (one-off text only, Q6) | own events |
 | platform | no writes: `403 workspace_required` ("Open the club's workspace…", the events' answer); no read | — | support, as every event write (K2a-1b open point 9) |
@@ -384,7 +384,7 @@ the test, bodies compared byte for byte):
 | private coach | settings → 403; the form: system types and details, `locations: []`; `locationId` → the 400; a system detail on own event works; a club's detail → the 400 |
 | athlete | every settings route 403 / 404; the calendar card holds `place` and nothing of the details (allowlist test); another club's event never appears |
 | platform admin, platform workspace | settings writes `403 workspace_required`; reads 403 |
-| platform admin, club workspace | as the club admin, audited with basis `platform_admin` |
+| platform admin who also administers C, club workspace | as the club admin, basis `club_admin` (T6) |
 | stranger (a coach of another club; a revoked admin) | the 404 / 403 everywhere; a role revoked between the route's check and the lock → the 404 body (the K2a seam) |
 | archived club / archived team | every write the 404; an archived team's colour route the 404 |
 
@@ -483,3 +483,14 @@ built from the address only (and absent without one), the auto-colour rule, no `
   bounded COMMIT); the K2a suites (`central-calendar-k2a-events`, `-k2a-1b`, `-k1a`) run as regression in 1a.
 - T4. **Yes:** K2a-1b's open point 2 (a raw link write without a revision bump) stays open, not in v51.
 - T5. **Yes:** 1a → 1c on 1a's API while 1b is reviewed → 1d → (1e).
+
+**Found while building the test skeleton (2026-11-01), for the manager — not decided:**
+
+- T6. A platform admin reaches a club's workspace only through a `club_admin` role of that club
+  (`loadAvailableWorkspaces`, `backend/src/workspace.js:37-66`; the skeleton's test 0a saw the fallback to the platform
+  workspace without it), and `eventWriteBasis` then answers `club_admin` first — so D24's "platform admin from the club's
+  workspace as support" is, today, a platform admin who is also the club's admin, audited as `club_admin`. Recommended
+  for K2b-1: keep it so (no new path); the alternative is the *Source connections* pattern (the platform workspace with
+  a club picker, `sourceConnectionsAdminContext`, `frontend/source-connections-data.js:74-85`), which adds a club id to
+  every settings request and its own access tests — a later, separate addition if the owner wants support without a
+  club role.
