@@ -16,6 +16,7 @@ import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAth
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "../trainingActivityAccess.js";
+import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 
 const router = Router();
 
@@ -596,38 +597,29 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     // planned results for this exact logical session - nothing else could
     // ever share that id.
     if (rpeEnabled === false && !confirmDisableWithResults) {
-      const existingCountResult = await client.query(
-        `select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`,
-        [session.logical_session_id],
-      );
-      if (existingCountResult.rows[0].n > 0) {
+      const resultCount = await countSessionResults(client, session.logical_session_id);
+      if (resultCount > 0) {
         await client.query("rollback");
-        return res.status(409).json({ error: "hasExistingResults", resultCount: existingCountResult.rows[0].n });
+        return res.status(409).json({ error: "hasExistingResults", resultCount });
       }
     }
 
-    // If this live plan currently has an open edit-draft, its own copy of
-    // this same session (same logical_session_id, carried over by
-    // preserveLogicalId - see builder.js) must be updated in the SAME
+    // The one write path of a published session's flags
+    // (plannedSessionFlags.js): it also updates the live plan's open
+    // edit-draft copy of this same session (same logical_session_id,
+    // carried over by preserveLogicalId - see builder.js) in the SAME
     // transaction, or a later Builder "Save and finish" would silently
     // revert this quick toggle back to whatever the draft still has.
-    const draftSessionResult = await client.query(
-      `select ps2.id
-       from plans.plans d
-       join plans.plan_days pd2 on pd2.plan_id = d.id
-       join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
-       where d.edit_source_plan_id = $1 and d.is_edit_draft
-         and ps2.logical_session_id = $2
-       for update of ps2`,
-      [session.plan_id, session.logical_session_id],
-    );
-    const idsToUpdate = [session.session_id, ...draftSessionResult.rows.map((row) => row.id)];
-    await client.query(
-      `update plans.plan_sessions set rpe_enabled = $1, updated_at = now() where id = any($2::uuid[])`,
-      [rpeEnabled, idsToUpdate],
-    );
+    // Only rpe_enabled is written: every row, the draft copy included,
+    // keeps its own tracking, and a draft copy whose tracking is off keeps
+    // RPE off (`draftRpeKeptOff`; before K2a-1b that case failed on the v14
+    // CHECK with a 500).
+    const { draftSessionUpdated, draftSessionsKeptRpeOff } = await writePublishedSessionFlags(client, {
+      sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
+      rpeEnabled,
+    });
     await client.query("commit");
-    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
+    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated, draftRpeKeptOff: draftSessionsKeptRpeOff > 0 });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -698,38 +690,24 @@ router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next
 
     const willCascadeDisableRpe = trainingLoadEnabled === false && session.rpe_enabled === true;
     if (willCascadeDisableRpe && !confirmDisableWithResults) {
-      const existingCountResult = await client.query(
-        `select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`,
-        [session.logical_session_id],
-      );
-      if (existingCountResult.rows[0].n > 0) {
+      const resultCount = await countSessionResults(client, session.logical_session_id);
+      if (resultCount > 0) {
         await client.query("rollback");
-        return res.status(409).json({ error: "hasExistingResults", resultCount: existingCountResult.rows[0].n });
+        return res.status(409).json({ error: "hasExistingResults", resultCount });
       }
     }
     const nextRpeEnabled = willCascadeDisableRpe ? false : session.rpe_enabled;
 
-    // Same edit-draft cascade as PATCH .../rpe-enabled - a live plan's
-    // currently-open edit-draft copy of this same logical session must be
-    // updated in the SAME transaction, or a later "Save and finish" would
-    // silently revert this toggle.
-    const draftSessionResult = await client.query(
-      `select ps2.id
-       from plans.plans d
-       join plans.plan_days pd2 on pd2.plan_id = d.id
-       join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
-       where d.edit_source_plan_id = $1 and d.is_edit_draft
-         and ps2.logical_session_id = $2
-       for update of ps2`,
-      [session.plan_id, session.logical_session_id],
-    );
-    const idsToUpdate = [session.session_id, ...draftSessionResult.rows.map((row) => row.id)];
-    await client.query(
-      `update plans.plan_sessions set training_load_enabled = $1, rpe_enabled = $2, updated_at = now() where id = any($3::uuid[])`,
-      [trainingLoadEnabled, nextRpeEnabled, idsToUpdate],
-    );
+    // Same one write path and edit-draft cascade as PATCH .../rpe-enabled
+    // (plannedSessionFlags.js) - a live plan's currently-open edit-draft
+    // copy of this same logical session is updated in the SAME transaction,
+    // or a later "Save and finish" would silently revert this toggle.
+    const { draftSessionUpdated } = await writePublishedSessionFlags(client, {
+      sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
+      trainingLoadEnabled, rpeEnabled: nextRpeEnabled === true,
+    });
     await client.query("commit");
-    return res.json({ sessionId: session.session_id, trainingLoadEnabled, rpeEnabled: nextRpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
+    return res.json({ sessionId: session.session_id, trainingLoadEnabled, rpeEnabled: nextRpeEnabled, draftSessionUpdated });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}

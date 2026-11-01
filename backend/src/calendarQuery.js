@@ -13,9 +13,10 @@
 // scheduleOccupiedDatesInRange) — a static test refuses either import here.
 //
 // One item per thing that happened or is planned (section 2):
-//   planned   a planned GROUP: the Builder batch siblings
-//             (plans.plans.builder_batch_id) on one day, slot and session
-//             name; a plan outside a batch is a group of one. An activity
+//   planned   a planned GROUP (owner decision D16b, 2026-10-31): the
+//             sessions of one plan OWNER on one day, slot and session name
+//             (plannedGroupKey); a plan without a resolved owner is a group
+//             of one. An activity
 //             whose canonical participant is linked (confirmed) to one of
 //             the group's logical sessions FOLDS into the group's card
 //             (links.activityIds) — a training of 20 athletes with 17 RPE
@@ -30,7 +31,9 @@
 //   event     a calendar event (K2a, calendar.events) on one of its days: the
 //             owner's own event (structural), or one reached through a target
 //             athlete who was a member ON THAT DAY; a referenced external or
-//             test schedule's day card FOLDS under it (plan section 1.4). The
+//             test schedule's day card FOLDS under it (plan section 1.4), and so
+//             do the planned sessions and the activities linked to it (K2a-1b,
+//             calendar.event_session_links / event_activity_links). The
 //             athlete workspace gets the reduced card of D21.
 import crypto from "node:crypto";
 import { query } from "./db.js";
@@ -121,16 +124,55 @@ function shortHash(text) {
   return crypto.createHash("sha1").update(String(text ?? "")).digest("hex").slice(0, 12);
 }
 
-// THE grouping rule of a planned session (owner decision D16, 2026-10-30):
-// the Builder batch (plans.plans.builder_batch_id) on one day, slot and
-// session name is one card; a plan without a batch is a group of one.
-// Trainings made one by one for several athletes are never merged by team,
-// day, slot and name — the Builder's multi-athlete selection (the batch) is
-// the intended way to make a team training. This function is the one place
-// the rule lives.
+// THE grouping rule of a planned session (owner decision D16b, 2026-10-31,
+// replacing D16's batch-only grouping): one card per plan OWNER (the plan's
+// stored training_load.plan_workspace_ownership — owner_scope and the owner's
+// id), DAY, SLOT (AM / PM and Before / Training / After) and SESSION NAME,
+// trimmed and compared case-insensitively. Plans made one by one or imported
+// group like a Builder batch (a batch shares owner, day, slot and name
+// anyway, so the batch id left the key); different slots, names or owners
+// (a team's plan and the club's) stay separate cards. A plan without a
+// trustworthy owner (`unresolved`, or no ownership row) is a group of one.
+// The owner part is hashed: the key reaches every viewer, and a private
+// coach's user id must never be read from it. The group is formed over the
+// rows the viewer's scope already returned (readPlannedRows, per athlete and
+// day), so a card never holds an athlete the viewer may not see, and a wide
+// window is the union of its days. This function is the one place the rule
+// lives.
+export function normalizedSessionName(name) {
+  return String(name ?? "").trim().toLowerCase();
+}
 export function plannedGroupKey(row, day) {
-  const groupId = row.builder_batch_id || row.plan_id;
-  return `planned:${groupId}:${day}:${row.am_pm || ""}:${row.bta || ""}:${Number(row.session_order) || 0}:${shortHash(row.session_name)}`;
+  const resolved = row.plan_owner_scope && row.plan_owner_scope !== "unresolved" && row.plan_owner_id;
+  const owner = resolved ? `${row.plan_owner_scope}:${row.plan_owner_id}` : `plan:${row.plan_id}`;
+  return `planned:${shortHash(owner)}:${day}:${row.am_pm || ""}:${row.bta || ""}:${shortHash(normalizedSessionName(row.session_name))}`;
+}
+// A planned card's title: the spelling most of its sessions carry (trimmed);
+// on a tie the alphabetically first; nothing named → null (the screen's
+// "Training session").
+function pickTitle(votes) {
+  let best = null;
+  let bestCount = 0;
+  for (const [name, count] of votes) {
+    if (count > bestCount || (count === bestCount && best !== null && name < best)) {
+      best = name;
+      bestCount = count;
+    }
+  }
+  return best || null;
+}
+// One athlete's RPE state over several sessions of one card: what is still
+// to do wins (missing, then missed), then what was done.
+const RPE_STATE_RANK = { missing: 4, missed: 3, submitted: 2, not_asked: 1 };
+function mergeRpeState(a, b) {
+  if (a == null) return b ?? null;
+  if (b == null) return a;
+  return (RPE_STATE_RANK[b] || 0) > (RPE_STATE_RANK[a] || 0) ? b : a;
+}
+// A linked session's slot (calendar.event_session_links' identity, plan
+// section 2.2): the live plan, the day and the slot with its order.
+function slotKeyOf(planId, day, amPm, bta, order) {
+  return `${planId}|${day}|${amPm || ""}|${bta || ""}|${Number(order) || 0}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +185,11 @@ async function readPlannedRows(ctx, { from, to, filters, teamIds }) {
   const extra = calendarAthleteFilterSql("ath", filters, params, "pd.date");
   const result = await query(
     `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.session_time, ps.am_pm, ps.bta, ps.session_order,
-            pd.date as day, p.id as plan_id, p.builder_batch_id,
+            ps.rpe_enabled, ps.training_load_enabled,
+            pd.date as day, p.id as plan_id,
+            pwo.owner_scope as plan_owner_scope,
+            case pwo.owner_scope when 'club' then pwo.owner_club_id::text when 'team' then pwo.owner_team_id::text
+                                 when 'user' then pwo.owner_user_id::text when 'system' then 'system' end as plan_owner_id,
             ath.id as athlete_id, ${athleteNameSql("ath")} as athlete_name,
             ${athleteTeamIdsSql("ath", 3, "pd.date")} as team_ids,
             (ps.rpe_enabled = true and training_load.planned_rpe_effective_for_plan(p.id, pd.date)) as rpe_expected,
@@ -152,6 +198,7 @@ async function readPlannedRows(ctx, { from, to, filters, teamIds }) {
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
        join public.athletes ath on ath.id = p.athlete_id
+       left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
       where ${WEEKLY_PLAN_SESSION_FILTER_SQL}
         and pd.date between $1::date and $2::date
         and (${scope})${extra}
@@ -443,6 +490,52 @@ async function readEventTeamTargets(eventIds) {
   return byEvent;
 }
 
+// The live session links of the window's events (K2a-1b), each resolved to
+// the published session now in its slot (plan section 2.2): a link whose plan
+// was deleted (plan_id null) or whose slot holds no published session any
+// more is ORPHANED (no session_id) — counted on the event's card, never an
+// error and never silently gone; a session renamed since the link still
+// resolves and is counted as renamed. One statement.
+async function readEventSessionLinks(eventIds) {
+  const result = await query(
+    `select l.id, l.event_id, l.plan_id, l.day, l.am_pm, l.bta, l.session_order, l.session_name_at_link,
+            s.session_id, s.session_name
+       from calendar.event_session_links l
+       left join lateral (
+         select ps.id as session_id, ps.name as session_name
+           from plans.plans p
+           join plans.plan_days pd on pd.plan_id = p.id
+           join plans.plan_sessions ps on ps.plan_day_id = pd.id
+          where p.id = l.plan_id and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
+            and pd.date = l.day and ps.am_pm is not distinct from l.am_pm and ps.bta is not distinct from l.bta
+            and ps.session_order = l.session_order
+          order by ps.id
+          limit 1
+       ) s on true
+      where l.event_id = any($1::uuid[]) and l.ended_at is null`,
+    [eventIds],
+  );
+  return result.rows;
+}
+
+// The live activity links of the window's events, each followed forward to
+// its canonical activity (ADR-001: a merged activity's link names the
+// survivor), the oldest first. Two live links can name one survivor only
+// when the merge came after both were made; the caller folds the survivor
+// under the oldest one whose event is shown on the survivor's own day, so
+// every window that holds that day gives the same answer (independent review
+// of PR #313, MEDIUM-1, and its narrow code re-review). One statement.
+async function readEventActivityLinks(eventIds) {
+  const result = await query(
+    `select l.event_id, training.resolve_canonical_activity_id(l.activity_id) as activity_id
+       from calendar.event_activity_links l
+      where l.event_id = any($1::uuid[]) and l.ended_at is null
+      order by l.linked_at, l.id`,
+    [eventIds],
+  );
+  return result.rows;
+}
+
 // ---------------------------------------------------------------------------
 // The in-memory projection of a schedule's days (the rule of routes/tests.js,
 // scheduleOccupiedDatesInRange): one_time → its start date; 'dates' → its
@@ -572,6 +665,68 @@ function compareCards(x, y) {
   return 0;
 }
 
+// The linked planned sessions and activities of one event day (K2a-1b, plan
+// sections 2.3 and 3.2) become the event's channels:
+//   - RPE x/y over the linked sessions that ask (rpe_enabled and the
+//     workspace switch: the K1a rule), added to a folded external
+//     schedule's; each athlete's state from their linked session; a linked
+//     athlete who is no target any more is listed with `targeted: false`;
+//   - `alignment.pending`: the linked sessions whose flags do not follow the
+//     event's `expects` (D20: a panel note until the coach aligns them,
+//     never an alarm; the status stays the channels');
+//   - device data: a linked imported activity whose roster (where one
+//     exists) needs no state; its attendance is the event's.
+function applyEventFold(card, fold) {
+  const expectsRpe = card.expects.includes("rpe");
+  let asked = 0;
+  let submitted = 0;
+  let pending = 0;
+  const states = new Map();
+  const extraAthletes = new Map();
+  for (const r of fold.rows) {
+    const state = r.rpe_expected ? (r.rpe_submitted ? "submitted" : "missing") : "not_asked";
+    if (r.rpe_expected) {
+      asked += 1;
+      if (r.rpe_submitted) submitted += 1;
+    }
+    const aligned = expectsRpe ? r.rpe_enabled === true && r.training_load_enabled === true : r.rpe_enabled !== true;
+    if (!aligned) pending += 1;
+    const id = String(r.athlete_id);
+    states.set(id, mergeRpeState(states.get(id), state));
+    if (!extraAthletes.has(id)) extraAthletes.set(id, { athleteId: r.athlete_id, name: r.athlete_name, teamIds: uniq(r.team_ids || []) });
+    card.links.planIds.push(r.plan_id);
+    if (r.logical_session_id) card.links.logicalSessionIds.push(r.logical_session_id);
+  }
+  if (asked > 0) {
+    card.rpe = card.rpe
+      ? { ...card.rpe, asked: card.rpe.asked + asked, submitted: card.rpe.submitted + submitted }
+      : { asked, submitted };
+  }
+  const listed = new Set(card.athletes.map((a) => String(a.athleteId)));
+  for (const a of card.athletes) {
+    if (states.has(String(a.athleteId))) a.rpe = mergeRpeState(a.rpe, states.get(String(a.athleteId)));
+  }
+  for (const [id, a] of extraAthletes) {
+    if (listed.has(id)) continue;
+    card.athletes.push({ ...a, rpe: states.get(id) ?? null, result: null, targeted: false });
+  }
+  card.links.planIds = uniq(card.links.planIds);
+  card.links.logicalSessionIds = uniq(card.links.logicalSessionIds);
+  card.links.activityIds.push(...fold.activityIds, ...fold.activities.map((a) => a.id));
+  const imported = fold.activities.filter((a) => a.imported);
+  if (imported.length) {
+    const withRoster = imported.filter((a) => a.counts);
+    if (withRoster.length) {
+      const sum = (f) => withRoster.reduce((n, a) => n + f(a.counts), 0);
+      const roster = sum((c) => c.roster);
+      const needsState = sum((c) => c.needsState);
+      card.attendance = { roster, present: Math.max(0, roster - needsState - sum((c) => c.didNotParticipate)), needsState };
+    }
+    card.deviceData = imported.some((a) => !a.counts || a.counts.needsState === 0);
+  }
+  card.alignment = { pending };
+}
+
 // ---------------------------------------------------------------------------
 // The read.
 // ---------------------------------------------------------------------------
@@ -611,24 +766,114 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const readExternalProjected = wantExternal || refersExternal;
   const readTest = wantTest || refersTest;
 
+  // The event days (K2a), decided BEFORE the other kinds are read: a planned
+  // session or an activity linked to an event folds only under an event card
+  // this viewer really gets on that day, so it never vanishes into a card
+  // that is not emitted (it stays its own card instead). One card per event
+  // and day of its span inside the window, shown through the structural
+  // relation or through at least one target athlete who was a member ON THAT
+  // DAY (the P1 rule).
+  const eventDays = [];
+  const eventDayKeys = new Set();
+  let teamTargets = new Map();
+  // The teams an event names: its team targets and its owner team.
+  const eventTeams = (row) => new Set([...(teamTargets.get(String(row.id)) || []), ...(row.owner_scope === "team" && row.owner_team_id ? [String(row.owner_team_id)] : [])]);
+  if (eventRows.length) {
+    const pairs = [];
+    for (const row of eventRows) {
+      const first = dateStr(row.day) > from ? dateStr(row.day) : from;
+      const lastOwn = dateStr(row.end_day) || dateStr(row.day);
+      const last = lastOwn < to ? lastOwn : to;
+      for (let cursor = first; cursor <= last; cursor = addDaysIso(cursor, 1)) pairs.push({ scheduleId: row.id, day: cursor });
+    }
+    teamTargets = await readEventTeamTargets(eventRows.map((r) => r.id));
+    // A coach's card names the workspace's teams; the athlete's card (D21
+    // "teams") names the athlete's own teams ON THAT DAY among the teams the
+    // event names — the membership rule of readScheduleTargetAthletes over
+    // the union of the window's event teams, cut back per event below. (The
+    // other kinds' athlete cards still carry no team: a K1a follow-up, plan
+    // section 8.)
+    const teamScope = ctx.type === "athlete" ? uniq(eventRows.flatMap((row) => [...eventTeams(row)])) : teamIds;
+    const targets = await readScheduleTargetAthletes(ctx, "calendar.event_targets", { pairs, filters, teamIds: teamScope, idColumn: "event_id" });
+    for (const row of eventRows) {
+      for (const { scheduleId, day } of pairs) {
+        if (String(scheduleId) !== String(row.id)) continue;
+        const athletes = targets.get(`${row.id}|${day}`) || [];
+        if (row.structural !== true && !athletes.length) continue;
+        if (filtering && !athletes.length) continue;
+        eventDays.push({ row, day, athletes });
+        eventDayKeys.add(`event:${row.id}:${day}`);
+      }
+    }
+  }
+
+  // The links (K2a-1b) are a coach's matter: the athlete workspace folds
+  // nothing (plan section 5) and reads none. A PLANNED event folds its linked
+  // sessions and activities on a day it is shown; a cancelled event folds
+  // nothing (manager decision 9.12), so its sessions are planned cards again.
+  // A response that does not carry the event cards (`kinds` without `event`)
+  // folds nothing either: a linked session or activity is then its own card,
+  // never gone from that response (security review of K2a-1b).
+  const coachView = ctx.type !== "athlete";
+  const foldsLinks = coachView && kinds.has("event") && eventRows.length > 0;
+  const sessionLinks = foldsLinks ? await readEventSessionLinks(eventRows.map((r) => r.id)) : [];
+  const activityLinks = foldsLinks ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
+  const eventById = new Map(eventRows.map((r) => [String(r.id), r]));
+  const foldsInto = (eventId, day) => {
+    const row = eventById.get(String(eventId));
+    if (!foldsLinks || !row || row.status !== "planned") return null;
+    const key = `event:${row.id}:${day}`;
+    return eventDayKeys.has(key) ? key : null;
+  };
+  const slotToEventKey = new Map();
+  for (const link of sessionLinks) {
+    if (!link.session_id) continue;
+    const key = foldsInto(link.event_id, dateStr(link.day));
+    if (key) slotToEventKey.set(slotKeyOf(link.plan_id, dateStr(link.day), link.am_pm, link.bta, link.session_order), key);
+  }
+  const activityToEventIds = new Map();
+  for (const link of activityLinks) {
+    const key = String(link.activity_id);
+    if (!activityToEventIds.has(key)) activityToEventIds.set(key, []);
+    activityToEventIds.get(key).push(String(link.event_id));
+  }
+  const eventFolds = new Map();
+  const foldFor = (key) => {
+    if (!eventFolds.has(key)) eventFolds.set(key, { rows: [], activityIds: [], activities: [] });
+    return eventFolds.get(key);
+  };
+
   // The planned groups and the external days are read whenever activities
   // are, so that an activity linked to one of them always folds into its
-  // card and never stands alone (D16: never twenty cards for one training);
-  // when their kind is not requested, the cards are simply not emitted.
-  if (wantPlanned || wantActivity) {
+  // card and never stands alone (never twenty cards for one training); when
+  // their kind is not requested, the cards are simply not emitted. They are
+  // read as well when an event of the window has a linked session (its RPE
+  // channel).
+  if (wantPlanned || wantActivity || slotToEventKey.size) {
     for (const row of await readPlannedRows(ctx, { from, to, filters, teamIds })) {
       const day = dateStr(row.day);
+      // A session linked to an event shown on that day folds under it; the
+      // rest of its group stays a planned card (an athlete added to the
+      // training after the attach stays visible beside the event).
+      const eventKey = slotToEventKey.get(slotKeyOf(row.plan_id, day, row.am_pm, row.bta, row.session_order));
+      if (eventKey) {
+        foldFor(eventKey).rows.push(row);
+        if (row.logical_session_id) logicalSessionToKey.set(String(row.logical_session_id), eventKey);
+        continue;
+      }
       const key = plannedGroupKey(row, day);
       if (!cards.has(key)) {
         cards.set(key, newCard({
-          key, kind: "planned", date: day, title: row.session_name || null,
+          key, kind: "planned", date: day, title: null,
           slot: { amPm: row.am_pm || null, bta: row.bta || null, order: Number(row.session_order) || 0 },
-          startTime: timeStr(row.session_time),
           links: { activityIds: [], planIds: [], logicalSessionIds: [] },
+          titleVotes: new Map(), times: new Set(),
         }));
       }
       const card = cards.get(key);
-      if (!card.startTime && row.session_time) card.startTime = timeStr(row.session_time);
+      const spelled = String(row.session_name ?? "").trim();
+      card.titleVotes.set(spelled, (card.titleVotes.get(spelled) || 0) + 1);
+      card.times.add(timeStr(row.session_time) || "");
       const teamIdsOfAthlete = uniq(row.team_ids || []);
       teamIdsOfAthlete.forEach((id) => card.teamIds.add(id));
       card.athletes.push({
@@ -642,10 +887,23 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
     for (const card of cards.values()) {
       if (card.kind !== "planned") continue;
+      card.title = pickTitle(card.titleVotes);
+      // The time every session of the group shares; different times show
+      // the slot words instead of a time that is wrong for some athletes.
+      card.startTime = card.times.size === 1 ? ([...card.times][0] || null) : null;
+      // RPE x/y over the sessions that ask (a group may mix rpe_enabled).
       const asked = card.athletes.filter((a) => a.rpe !== "not_asked").length;
       const submitted = card.athletes.filter((a) => a.rpe === "submitted").length;
       card.expects = asked > 0 ? ["rpe"] : [];
       card.rpe = asked > 0 ? { asked, submitted } : null;
+      // One athlete with two same-named sessions in one slot is listed once.
+      const byAthlete = new Map();
+      for (const a of card.athletes) {
+        const prior = byAthlete.get(String(a.athleteId));
+        if (prior) prior.rpe = mergeRpeState(prior.rpe, a.rpe);
+        else byAthlete.set(String(a.athleteId), a);
+      }
+      card.athletes = [...byAthlete.values()];
       card.links.planIds = uniq(card.links.planIds);
       card.links.logicalSessionIds = uniq(card.links.logicalSessionIds);
     }
@@ -778,15 +1036,28 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   }
 
   // Activities: fold the linked ones into their planned / external card
-  // (section 2.2); the rest are their own cards.
-  if (wantPlanned || wantExternal || wantActivity) {
+  // (section 2.2) or under the event they are linked to (K2a-1b); the rest
+  // are their own cards. Read as well when an event is asked for (its RPE
+  // channel and its device data).
+  if (wantPlanned || wantExternal || wantActivity || (kinds.has("event") && eventRows.length > 0)) {
     const own = [];
+    const linkedToEvents = [];
     for (const row of await readActivityRows(ctx, { from, to, filters })) {
+      let linkedKey = null;
+      for (const linkedEventId of activityToEventIds.get(String(row.id)) || []) {
+        linkedKey = foldsInto(linkedEventId, dateStr(row.day));
+        if (linkedKey) break;
+      }
+      if (linkedKey) {
+        linkedToEvents.push({ row, key: linkedKey });
+        continue;
+      }
       let folded = false;
       for (const logicalSessionId of row.logical_session_ids || []) {
         const key = logicalSessionToKey.get(String(logicalSessionId));
         if (!key) continue;
-        cards.get(key).links.activityIds.push(row.id);
+        if (key.startsWith("event:")) foldFor(key).activityIds.push(row.id);
+        else cards.get(key).links.activityIds.push(row.id);
         folded = true;
       }
       for (const assignmentId of row.external_assignment_ids || []) {
@@ -799,7 +1070,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
     // The roster (who of the team still needs a state) is the coach's view:
     // the athlete workspace gets no attendance of a team activity.
-    const rosterCounts = ctx.type === "athlete" ? new Map() : await readRosterCounts(own.map((row) => row.id));
+    const rosterCounts = ctx.type === "athlete" ? new Map() : await readRosterCounts([...own, ...linkedToEvents.map((x) => x.row)].map((row) => row.id));
+    for (const { row, key } of linkedToEvents) {
+      const read = rosterCounts.get(String(row.id)) || null;
+      foldFor(key).activities.push({ id: row.id, imported: IMPORTED_ORIGINS.has(row.origin), counts: read?.hasRoster ? read : null });
+    }
     for (const row of own) {
       const participants = Array.isArray(row.participants) ? row.participants : [];
       const expects = [];
@@ -824,106 +1099,92 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
   }
 
-  // Event cards (K2a plan section 1.4): one per event and day of its span
-  // inside the window, shown through the structural relation or through at
-  // least one target athlete who was a member ON THAT DAY (the P1 rule), with
-  // the referenced schedule's day card folded under it.
-  if (eventRows.length) {
-    const pairs = [];
-    for (const row of eventRows) {
-      const first = dateStr(row.day) > from ? dateStr(row.day) : from;
-      const lastOwn = dateStr(row.end_day) || dateStr(row.day);
-      const last = lastOwn < to ? lastOwn : to;
-      for (let cursor = first; cursor <= last; cursor = addDaysIso(cursor, 1)) pairs.push({ scheduleId: row.id, day: cursor });
+  // Event cards (K2a plan section 1.4), one per event day decided above, with
+  // the referenced schedule's day card, the linked sessions (K2a-1b) and the
+  // linked activities folded under a PLANNED event.
+  const workspaceTeams = new Set(teamIds.map(String));
+  for (const { row, day, athletes } of eventDays) {
+    const canManage = ctx.type === "coach" && eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null;
+    const card = newCard({
+      key: `event:${row.id}:${day}`, kind: "event", date: day, title: row.title,
+      startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), location: row.location,
+      eventId: String(row.id), eventKind: row.event_kind, eventTypeId: String(row.event_type_id), eventTypeLabel: row.event_type_label,
+      span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
+      expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
+      revision: row.revision, canManage, notes: canManage ? row.notes : undefined,
+      athleteView: ctx.type === "athlete",
+      scheduleFold: { external: null, test: null },
+      athletes: athletes.map((a) => ({ ...a, rpe: null, result: null })),
+      links: {
+        eventId: String(row.id), planIds: [], logicalSessionIds: [], activityIds: [],
+        externalScheduleId: row.external_schedule_id ? String(row.external_schedule_id) : null, externalOccurrenceId: null,
+        testScheduleId: row.test_schedule_id ? String(row.test_schedule_id) : null, testOccurrenceId: null,
+        orphanedSessionLinks: 0, renamedSessionLinks: 0,
+      },
+    });
+    if (ctx.type === "athlete") {
+      const named = eventTeams(row);
+      athletes.forEach((a) => a.teamIds.forEach((id) => { if (named.has(String(id))) card.teamIds.add(String(id)); }));
+    } else {
+      athletes.forEach((a) => a.teamIds.forEach((id) => card.teamIds.add(id)));
     }
-    const teamTargets = await readEventTeamTargets(eventRows.map((r) => r.id));
-    // The teams an event names: its team targets and its owner team.
-    const eventTeams = (row) => new Set([...(teamTargets.get(String(row.id)) || []), ...(row.owner_scope === "team" && row.owner_team_id ? [String(row.owner_team_id)] : [])]);
-    // A coach's card names the workspace's teams; the athlete's card (D21
-    // "teams") names the athlete's own teams ON THAT DAY among the teams the
-    // event names — the membership rule of readScheduleTargetAthletes over
-    // the union of the window's event teams, cut back per event below. (The
-    // other kinds' athlete cards still carry no team: a K1a follow-up, plan
-    // section 8.)
-    const teamScope = ctx.type === "athlete" ? uniq(eventRows.flatMap((row) => [...eventTeams(row)])) : teamIds;
-    const targets = await readScheduleTargetAthletes(ctx, "calendar.event_targets", { pairs, filters, teamIds: teamScope, idColumn: "event_id" });
-    const workspaceTeams = new Set(teamIds.map(String));
-    for (const row of eventRows) {
-      const canManage = ctx.type === "coach" && eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null;
-      for (const { scheduleId, day } of pairs) {
-        if (String(scheduleId) !== String(row.id)) continue;
-        const athletes = targets.get(`${row.id}|${day}`) || [];
-        if (row.structural !== true && !athletes.length) continue;
-        if (filtering && !athletes.length) continue;
-        const card = newCard({
-          key: `event:${row.id}:${day}`, kind: "event", date: day, title: row.title,
-          startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), location: row.location,
-          eventId: String(row.id), eventKind: row.event_kind, eventTypeId: String(row.event_type_id), eventTypeLabel: row.event_type_label,
-          span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
-          expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
-          revision: row.revision, canManage, notes: canManage ? row.notes : undefined,
-          athleteView: ctx.type === "athlete",
-          scheduleFold: { external: null, test: null },
-          athletes: athletes.map((a) => ({ ...a, rpe: null, result: null })),
-          links: {
-            eventId: String(row.id), planIds: [], logicalSessionIds: [], activityIds: [],
-            externalScheduleId: row.external_schedule_id ? String(row.external_schedule_id) : null, externalOccurrenceId: null,
-            testScheduleId: row.test_schedule_id ? String(row.test_schedule_id) : null, testOccurrenceId: null,
-          },
-        });
-        if (ctx.type === "athlete") {
-          const named = eventTeams(row);
-          athletes.forEach((a) => a.teamIds.forEach((id) => { if (named.has(String(id))) card.teamIds.add(String(id)); }));
-        } else {
-          athletes.forEach((a) => a.teamIds.forEach((id) => card.teamIds.add(id)));
-        }
-        for (const id of teamTargets.get(String(row.id)) || []) if (workspaceTeams.has(id)) card.teamIds.add(id);
-        if (row.owner_scope === "team" && row.owner_team_id && workspaceTeams.has(String(row.owner_team_id))) card.teamIds.add(String(row.owner_team_id));
-        // The referenced schedule's card of this day folds under a PLANNED
-        // event: its counts and per-athlete states become the event's
-        // channel; the card itself is never emitted alone. A cancelled event
-        // folds nothing (manager decision 9.12: the schedule keeps collecting
-        // and stays its own card), and the athlete workspace folds nothing
-        // either — the athlete's own RPE request stays visible beside the
-        // reduced event card (plan section 5).
-        // It folds only when, for this day and this viewer, EVERY athlete of
-        // the schedule's card is among the event's target athletes (the
-        // owner's external review of PR #298, the manager's option 3): the
-        // numbers on an event card come only from athletes the card lists.
-        // A schedule that reaches wider than the event stays its own card
-        // beside it, and the event card says so (`scheduleFold`: separate)
-        // instead of taking the schedule's numbers.
-        const folds = row.status === "planned" && ctx.type !== "athlete";
-        const listed = new Set(card.athletes.map((a) => String(a.athleteId)));
-        const covers = (other) => other.athletes.every((a) => listed.has(String(a.athleteId)));
-        if (folds && row.external_schedule_id) {
-          const ext = cards.get(`external:${row.external_schedule_id}:${day}`);
-          if (ext && !covers(ext)) card.scheduleFold.external = "separate";
-          else if (ext) {
-            card.scheduleFold.external = "folded";
-            card.rpe = ext.rpe;
-            card.links.externalOccurrenceId = ext.links.externalOccurrenceId ?? null;
-            card.links.activityIds.push(...(ext.links.activityIds || []));
-            const states = new Map(ext.athletes.map((a) => [String(a.athleteId), a.rpe]));
-            for (const a of card.athletes) a.rpe = states.get(String(a.athleteId)) ?? null;
-            cards.delete(ext.key);
-          }
-        }
-        if (folds && row.test_schedule_id) {
-          const tst = cards.get(`test:${row.test_schedule_id}:${day}`);
-          if (tst && !covers(tst)) card.scheduleFold.test = "separate";
-          else if (tst) {
-            card.scheduleFold.test = "folded";
-            card.results = tst.results;
-            card.links.testOccurrenceId = tst.links.testOccurrenceId ?? null;
-            const states = new Map(tst.athletes.map((a) => [String(a.athleteId), a.result]));
-            for (const a of card.athletes) a.result = states.get(String(a.athleteId)) ?? null;
-            cards.delete(tst.key);
-          }
-        }
-        cards.set(card.key, card);
+    for (const id of teamTargets.get(String(row.id)) || []) if (workspaceTeams.has(id)) card.teamIds.add(id);
+    if (row.owner_scope === "team" && row.owner_team_id && workspaceTeams.has(String(row.owner_team_id))) card.teamIds.add(String(row.owner_team_id));
+    // The referenced schedule's card of this day folds under a PLANNED
+    // event: its counts and per-athlete states become the event's channel;
+    // the card itself is never emitted alone. A cancelled event folds
+    // nothing (manager decision 9.12: the schedule keeps collecting and stays
+    // its own card), and the athlete workspace folds nothing either — the
+    // athlete's own RPE request stays visible beside the reduced event card
+    // (plan section 5).
+    // It folds only when, for this day and this viewer, EVERY athlete of the
+    // schedule's card is among the event's target athletes (the owner's
+    // external review of PR #298, the manager's option 3): the numbers on an
+    // event card come only from athletes the card lists. A schedule that
+    // reaches wider than the event stays its own card beside it, and the
+    // event card says so (`scheduleFold`: separate) instead of taking the
+    // schedule's numbers.
+    const folds = row.status === "planned" && ctx.type !== "athlete";
+    const listed = new Set(card.athletes.map((a) => String(a.athleteId)));
+    const covers = (other) => other.athletes.every((a) => listed.has(String(a.athleteId)));
+    if (folds && row.external_schedule_id) {
+      const ext = cards.get(`external:${row.external_schedule_id}:${day}`);
+      if (ext && !covers(ext)) card.scheduleFold.external = "separate";
+      else if (ext) {
+        card.scheduleFold.external = "folded";
+        card.rpe = ext.rpe;
+        card.links.externalOccurrenceId = ext.links.externalOccurrenceId ?? null;
+        card.links.activityIds.push(...(ext.links.activityIds || []));
+        const states = new Map(ext.athletes.map((a) => [String(a.athleteId), a.rpe]));
+        for (const a of card.athletes) a.rpe = states.get(String(a.athleteId)) ?? null;
+        cards.delete(ext.key);
       }
     }
+    if (folds && row.test_schedule_id) {
+      const tst = cards.get(`test:${row.test_schedule_id}:${day}`);
+      if (tst && !covers(tst)) card.scheduleFold.test = "separate";
+      else if (tst) {
+        card.scheduleFold.test = "folded";
+        card.results = tst.results;
+        card.links.testOccurrenceId = tst.links.testOccurrenceId ?? null;
+        const states = new Map(tst.athletes.map((a) => [String(a.athleteId), a.result]));
+        for (const a of card.athletes) a.result = states.get(String(a.athleteId)) ?? null;
+        cards.delete(tst.key);
+      }
+    }
+    const fold = folds ? eventFolds.get(card.key) : null;
+    if (fold) applyEventFold(card, fold);
+    if (ctx.type !== "athlete") {
+      // The links that no longer find their session (a deleted plan, a
+      // session moved to another slot) and the sessions renamed since the
+      // link: visible on the manager's card, never silent (plan 2.2).
+      for (const link of sessionLinks) {
+        if (String(link.event_id) !== String(row.id) || dateStr(link.day) !== day) continue;
+        if (!link.session_id) card.links.orphanedSessionLinks += 1;
+        else if (normalizedSessionName(link.session_name) !== normalizedSessionName(link.session_name_at_link)) card.links.renamedSessionLinks += 1;
+      }
+    }
+    cards.set(card.key, card);
   }
 
   // Days, statuses, order, the public shape.
@@ -991,6 +1252,7 @@ function publicCard(card, includeAthletes) {
     if (card.canManage) {
       out.eventTypeId = card.eventTypeId;
       out.notes = card.notes ?? null;
+      out.alignment = card.alignment ?? { pending: 0 };
     } else {
       // A reader who may not manage the event gets no id of its type or of
       // its referenced schedules (the reduced GET /:id shows none either);

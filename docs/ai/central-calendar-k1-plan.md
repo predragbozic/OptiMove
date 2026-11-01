@@ -51,17 +51,25 @@ one of them.
 
 | `kind` | One item per | Source rows | Key |
 |---|---|---|---|
-| `planned` | **planned group**: the Builder batch siblings with the same day, slot and session name; a plan outside a batch is a group of one | `plans.plan_sessions` → `plan_days` → `plans` (published weekly plans only: `WEEKLY_PLAN_SESSION_FILTER_SQL`, `trainingLoad.js:49-54`); **every** session, tracked or not (K0 §7; Coach Home counts them all, `backend/src/routes/athletes.js:82-140`) | `planned:<builder_batch_id or plan id>:<date>:<am_pm>:<bta>:<session_order>:<sha1 of name>` |
+| `planned` | **planned group** (D16b, 2026-10-31): the sessions of one plan **owner** (`training_load.plan_workspace_ownership`) with the same day, slot (AM / PM, Before / Training / After) and session name (trimmed, case-insensitive); a plan without a resolved owner is a group of one | `plans.plan_sessions` → `plan_days` → `plans` (published weekly plans only: `WEEKLY_PLAN_SESSION_FILTER_SQL`, `trainingLoad.js:49-54`); **every** session, tracked or not (K0 §7; Coach Home counts them all, `backend/src/routes/athletes.js:82-140`) | `planned:<sha1 of owner scope:owner id>:<date>:<am_pm>:<bta>:<sha1 of the trimmed, lower-case name>` |
 | `activity` | a canonical activity (`lifecycle_state <> 'superseded'`) **not folded into a planned or external card** (section 2.2) — a GPEXE / imported session, a coach-made activity, a self-report activity whose session is outside the window or the scope | `training.activities` (`migrations_v2/202609071000_…v1_core_tables.sql:87-116`) | `activity:<activity id>` |
 | `external` | an external schedule on one day | `training_load.external_schedules` / `_occurrences` / `_assignments` / `_targets` (`…v4_external_scheduling.sql:160`); days without an occurrence projected in memory | `external:<schedule id>:<date>` |
 | `test` | a test schedule on one day | `tests.test_schedules` / `_targets` / `_occurrences` / `_assignments` (`…tests_v42_phase1…sql:24, 138, 168, 307`); the same in-memory projection as `tests.js:1011` | `test:<schedule id>:<date>` |
 
 Grouping evidence: a multi-athlete weekly plan is one plan per athlete sharing `plans.plans.builder_batch_id`
 (`backend/src/routes/builder.js:426-437`; the column `create_builder_schema.sql:127`); a sibling edited
-apart gets another session name and so another group — accepted (K0 §6). **D16 (owner, 2026-10-30):** the
-rule is the batch only — plans made one by one for several athletes are never merged by team, day, slot and
-name. The rule lives in one named function of `calendarQuery.js` (`plannedGroupKey`), so a later change is
-small. An athlete's RPE materializes one
+apart gets another session name and so another group — accepted (K0 §6). **D16 (owner, 2026-10-30)** made the
+batch the only rule; **D16b (owner, 2026-10-31) replaced it**: production showed many "Training session · 1
+athlete" cards per day and slot, because plans made one by one or imported carry no batch id. The group is now
+the plan's **owner** (`owner_scope` and the owner's id from `training_load.plan_workspace_ownership`), the day,
+the slot (AM / PM, Before / Training / After) and the session name, trimmed and compared case-insensitively; the
+batch id left the key (a batch shares all four anyway). Different slots, names or owners (a team's plan and the
+club's) stay separate cards; a plan whose owner is `unresolved` or missing is a group of one. The group is formed
+over the rows the viewer's scope returned, so a card holds no athlete the viewer may not see and a wide window
+is the union of its days; RPE x/y counts only the sessions that ask; the title is the most common spelling, the
+time the one every session shares (else none); the owner part of the key is hashed. The rule lives in one named
+function of `calendarQuery.js` (`plannedGroupKey`); K2a-1b built it (`docs/ai/central-calendar-k2a-plan.md`
+section 11). An athlete's RPE materializes one
 **team-owned one-participant** activity per athlete and logical session
 (`backend/src/trainingActivityMaterialize.js:837-880`, origin `planned_session`), linked by
 `training.activity_participant_session_links` (`…v2_components_links.sql:213-237`).

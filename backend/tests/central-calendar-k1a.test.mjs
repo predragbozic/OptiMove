@@ -525,7 +525,7 @@ test("3. today decides awaiting entry: with today on the day the same card is pl
   assert.deepEqual(itemsOn(res, FUTURE)[0].rpe, { asked: 2, submitted: 0 });
 });
 
-test("4. expects is derived: rpe_enabled off, or the workspace switch off, asks nothing (status none); a plan outside a batch is a group of one; one batch, two slots, two cards in slot order", async () => {
+test("4. expects is derived: rpe_enabled off, or the workspace switch off, asks nothing (status none); another slot and name of the same owner is its own card (D16b); two slots, two cards in slot order; the key carries no plan or batch id", async () => {
   const noRpe = await teamWithBatch("g4a", { n: 2, rpeEnabled: false });
   let res = await calendar(noRpe.coach.cookie);
   let card = itemsOn(res, PAST)[0];
@@ -546,8 +546,13 @@ test("4. expects is derived: rpe_enabled off, or the workspace switch off, asks 
   const items = itemsOn(res, PAST);
   assert.equal(items.length, 2);
   assert.equal(items[0].title, "Morning run", "AM before PM");
-  assert.equal(items[0].key.startsWith(`planned:${extraPlan}:`), true, "a plan outside a batch is keyed by its plan id");
-  assert.equal(items[1].key.startsWith(`planned:${solo.batchId}:`), true);
+  assert.equal(items[1].title, "Team training");
+  // D16b (owner, 2026-10-31): the key is the hashed owner, the day, the slot and the name — never a plan or batch id.
+  for (const item of items) {
+    assert.equal(item.key.includes(extraPlan), false);
+    assert.equal(item.key.includes(solo.batchId), false);
+    assert.equal(item.key.includes(solo.teamId), false);
+  }
 });
 
 // ---------------------------------------------------------------------------
