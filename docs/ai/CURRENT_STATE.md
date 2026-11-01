@@ -2655,7 +2655,14 @@ Technical details.
           (`docs/ai/gpexe-c97-meaning-evidence.md`, section 5): PR #318, merged `73b2776` (parents `d3588ff` and
           `b65f4ace`) exactly from its head, on the owner's word „Odobravam merge PR #318 (C97 dokaz značenja) i PR #315
           (9-R backup).” (turn `6147b85f`, 2026-11-01 20:55:47 UTC) after the *Rukovodilac*'s GO. Documents only.
-          **No field is confirmed yet:** the six acts are the owner's next step (J17 section 10.2, step 2).
+        - **The six acts (J17 section 10.2, step 2), as the owner reports them:** the owner reports, with a screenshot of
+          Source fields (about 21:09 local time, 2026-11-01), the six acts done: TIME shows "Unit s (confirmed) · Meaning
+          confirmed", TotDist "Unit m (confirmed) · Meaning confirmed" and SPEEDmax "Unit m/s (confirmed) · Meaning
+          confirmed", each with "Evidence: Verified"; the other seven seeded fields stay *Observed*. Relayed by the
+          *Rukovodilac*; the database was not read, so the acts' references and times are not checked here.
+        - **Next (J17 section 10.2, steps 3–5):** three system mappings (TIME → `duration`, TotDist → `total_distance`,
+          SPEEDmax → `maximal_running_speed`), submitted and activated, then switched on for the First team's binding
+          with the requirement of O6 (the owner's decision).
         - **9-R**, the backup of the deployed database from the owner's computer (O2,
           `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase)"): PR #315, merged `3032b3b` (parents
           `73b2776` and `76b57625`) exactly from its head, on the same owner's word, after the GOs of the *Rukovodilac*
