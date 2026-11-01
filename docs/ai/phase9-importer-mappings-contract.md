@@ -141,7 +141,7 @@ team or club row is locked during an approval.
 
 | PR | Content | Migration | Merge path (proposal; R1, R3) |
 |---|---|---|---|
-| **9-A** | This contract (docs only) and its pointers in the plan and the discovery document | — | The owner accepts the contract (A1) before any code; the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs |
+| **9-A** | This contract (docs only) and its pointers in the plan and the discovery document | — | The owner accepts the contract before any code (the plan's rule A1); the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs |
 | **9-0** | Switch conditions 2 and 3 (section 9), reserved since 7g (`metrics-core-plan.md:1075-1078`), and the same bounds on the check-time preview | none | Standing merge order after both GOs (trigger 4; it imports `gpexeImportService.js`, which `server.js` and `gpexeRetentionCli.js` load at start-up, so the PR body states that nothing new runs or writes at start-up) |
 | **9-B** | The writer and the mapper through mappings (sections 3–7), the audience mechanism (section 6.1), the frontend of the Imports review (R14), the tests of section 8 | none (O14) | Both GOs, then **the owner's word naming the merge** (O13): while Render's auto-deploy is on, a merge is a deploy (`metrics-core-plan.md:252-256`), and this one puts the new write path live and changes what a check shows for a bound team (section 7.3) |
 | **9-R** | The M6 runbook and the executor's prepared material (section 10.4): the Supabase backup procedure draft, the pre-switch and post-import SELECT files (each run by the executor only on a disposable `optimove_tests_*` database), the proposals for variables and mappings, the record-table row | none | M6 material, outside the green zone (`metrics-core-plan.md:1120`): the owner's word |
@@ -424,9 +424,12 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   (team 77, session 5001, athletes 101 / 102 / 103, thresholds 1473, `detailsDrills = [0]`). Eleven system variables
   and eleven active mappings (time s → min `/60`; distance m; max speed m/s → km/h `×3.6`; the two closed power zones
   25–60 and 60–75, the open top ≥ 75; the speed zone ≥ 7 m/s; acceleration and deceleration ±2.5 m/s² with 0.3 s;
-  burst and brake), every activation `optional` at both levels, written through the guarded fixture
-  (`backend/tests/support/source-revisions.mjs`, every guard on). The oracle is a frozen copy of
-  `GPEXE_METRIC_SPECS` under `backend/tests/support` (7f test 9's pattern), one double per (athlete, level, legacy key).
+  burst and brake), every activation `optional` at both levels. The revisions are verified through
+  `verifyRevisionRow` of `backend/tests/support/source-revisions.mjs` with every guard on (never
+  `zoneMeaningAsFutureDecision`, which turns triggers off; a zone's meaning is possible with every guard on since v42);
+  the variables, mappings and activations are written through the real M3-0, M2, 7b and 7d service paths. The oracle is
+  a new frozen copy of `GPEXE_METRIC_SPECS` under `backend/tests/support` (7f test 9 compares against the live
+  export), one double per (athlete, level, legacy key).
   Asserts:
   1. the set of (athlete, level, metric) written equals the oracle's non-skipped set (athlete 103 left out for
      `multiple_tracks`; burst and brake of drill index 1 left out `details_not_fetched`); no extra value, no zero;
@@ -442,11 +445,17 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   round at the 10th decimal; three kept athletes and a two-track fourth, `detailsDrills [0, 1]`), the same
   activations, approved through the real `approveCandidate` route with the switch on in the test process only:
   assertions 2, 3, 4 and 6, and the counts this bundle gives (recomputed in the test, not copied).
-- **Arm B — no activation.** The same two bundles with no activation, and again with an activation on an ended
-  binding: the check preview is `blocked` `no_mapped_values`; the approval is refused before any write; zero new rows in
-  `metric_values`, occasions, identities, events, participants, segments, activities, components, T6, and the
-  definition tables (digest). Today's mapper does not refuse a plan with no values (`gpexeImportMapper.js:386` refuses
-  only "no athlete admitted"), so this gate is new.
+- **Arm B — no activation, proven at the writer itself** (every earlier gate open; never through an earlier refusal
+  such as the switch, an ended binding or a blocked candidate). Today's mapper does not refuse a plan with no values
+  (`gpexeImportMapper.js:386` refuses only "no athlete admitted"), so this gate is new.
+  1. *Writer:* `runImport` (the writer's own entry, as Arm A1) on both bundles with no activation refuses
+     `no_mapped_values`; zero new rows in `metric_values`, occasions, identities, events, participants, segments,
+     activities, components and T6; the definition tables digest-identical. Today's writer creates eleven definitions
+     here, so this test fails before 9-B and passes after it.
+  2. *Route, switch on in the test process:* a candidate previewed with an activation, the activation ended, then the
+     approval: refused (`preview_changed`, the refreshed preview `no_mapped_values`), nothing written.
+  3. *An ended binding:* the team bound again, its only activation still on the old, ended binding: the new binding
+     has no open activation, so the check preview is `blocked` `no_mapped_values` and nothing is written.
 - **Arm C — a pre-M4 candidate.** Stored with today's preview v2: the first approval answers `preview_changed` and
   stores the recomputed preview; a second approval with that hash imports exactly once. Separately: one check refreshes
   the preview, reports the session unchanged, and the approval imports once.
@@ -492,7 +501,10 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
 - **Condition 2, the approval.** `approveCandidate` (and the batch, which calls it) sets, right after `begin` and
   before the first lock, `SET LOCAL lock_timeout`, `statement_timeout` and `idle_in_transaction_session_timeout`. The
   values are proposed in the PR, below the client's and the route's bounds; `statement_timeout` is chosen from a
-  measurement of the T6 trigger's cost on the Arm A1 fixture (53 values), not guessed.
+  measurement on the Arm A1 fixture (53 values) of the T6 trigger's cost **and of the COMMIT with its deferred trigger
+  work** (a `SET LOCAL` is still in force at the COMMIT, so the effective server bound on it is the lower of the two),
+  not guessed. A test commits an Arm A1 approval under the chosen value, and an injected slow deferred trigger gives a
+  `57014` at the COMMIT that goes through `resolveUncertainCommit`, never `try_again`.
   - Before the COMMIT, a `55P03`, `57014` or `40P01` is `409 try_again` with nothing written (as
     `sourceConnectionService.js:532` and `gpexeImportService.js:1617` map `40P01`).
   - An error the COMMIT itself raises goes through `resolveUncertainCommit`, never `try_again`; the COMMIT keeps its
@@ -509,10 +521,11 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   (`gpexeImportService.js:1166-1173`). A bounded wait there fails the check with a stable code, never a `blocked`
   candidate; a test proves a killed preview session fails the check with a stable code and the process survives.
 - **Condition 2, the deployed request timeout** (Render and any proxy) is an owner step (section 10, step 7).
-- **Condition 3, on disposable databases only.** The undo script learns the team from the `metric_events` row
-  (`gpexe-undo-imported-session.mjs:289`), so it reads the event without a lock, takes `lockTeamForImport`, then
-  re-reads and re-checks the event (the 7g pattern, `sourceInstanceEndService.js:219-266`); its platform-admin check
-  (`assertPlatformAdmin`, `gpexe-undo-imported-session.mjs:266-289`) moves after the team lock, the importer's order. A test proves an undo waits for a running import of the same team
+- **Condition 3, on disposable databases only.** Today the undo script checks the platform admin
+  (`assertPlatformAdmin`, defined at `gpexe-undo-imported-session.mjs:266-274`, called at `:288`) and then locks the
+  event `FOR UPDATE` (`:289`); it never reads the team. 9-0 reads the event's `owner_team_id` without a lock (new),
+  takes `lockTeamForImport`, then locks and re-checks the event (the 7g pattern, `sourceInstanceEndService.js:219-266`),
+  and moves the platform-admin check after the team lock, the importer's order. A test proves an undo waits for a running import of the same team
   and the reverse. The team lock does **not** make the undo safe on a persistent database: it disables triggers table
   by table (`:85-94`, `:298`; `ALTER TABLE … DISABLE TRIGGER` takes a `SHARE ROW EXCLUSIVE` lock), which inverts with
   every other team's import or check-time preview (they write the threshold-set binding, then the values, then T6) and
@@ -543,7 +556,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   the official handbook or a written answer of GPEXE support (C97, `discovery:813-817`); O7 decides whether the GPEXE 6
   handbook counts for a server reporting 9.11.8.
 
-### 10.2 After the evidence (may run before 9-B is deployed; the old importer ignores them)
+### 10.2 After the evidence (steps 1–5 may run before 9-B is deployed, the old importer ignoring them; steps 6–8 are the deploy and its check)
 
 1. **OWNER — decisions O1–O12 and O14–O16** (section 12.2; O13 at step 6).
 2. **OWNER — the first field confirmations** (a separate order, `metrics-core-plan.md:827-828`): the unit act and the
@@ -557,6 +570,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 6. **OWNER — the merge of 9-0 and 9-B**: 9-0 under the standing merge order; 9-B on the owner's word naming it, at the
    time O13 decides (a merge is a deploy while auto-deploy is on; any other deploy is the *Rukovodilac*'s under its
    Render key, on the owner's order).
+   - **6a. OWNER — the merge of 9-R** (the owner's word), so that steps 11 and 16 run merged files named by their
+     sha256 (the connector rule needs the whole file's hash, `metrics-core-plan.md:365`), before the freeze of step 9.
 7. **OWNER — confirm the deployed request timeout** (Render and any proxy; condition 2's second half). A Render setting
    stays the owner's.
 8. **OWNER — one check with the switch off** on a small window that holds the target session. Stop on any failure code
@@ -587,9 +602,10 @@ request, reads or writes no persistent database, and touches no Render or Supaba
       binding, so this bounds the environment-wide switch to that team); the T7 keys of the First team (NULL or the
       expected triple); the non-canonical link count 0.
     Every SELECT file runs inside the plan's read-only wrapper (`begin transaction read only;` … `rollback;`,
-    `metrics-core-plan.md:361-363`).
+    `metrics-core-plan.md:361-363`), from the merged 9-R file named by its sha256 (step 6a).
 12. **OWNER — the record row** (environment, backup, `.verify.json`, verified at, confirmed by) is written **before**
-    the switch goes on (`gpexe-in-app-import.md:764-767`).
+    the switch goes on (`gpexe-in-app-import.md:764-767`). During the freeze it is kept outside the repository; step
+    17's facts PR commits it into the runbook's table.
 13. **OWNER — switch on**: `GPEXE_IMPORT_APPLY_ENABLED=true` in Render for the chosen environment only, by the owner's
     own action; no executor or *Rukovodilac* key sets a Render environment variable. Whether the service must restart
     for it to take effect is not verifiable from the repository; the owner confirms "on" through the Imports status
@@ -599,7 +615,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
     decision on the imported activity until step 16 passes (the undo refuses after one).
 15. **OWNER — switch off at once**, confirmed by three consecutive reads of `importSwitch` showing it off (after any
     restart); "Switch off at" in the record row.
-16. **OWNER — the read-only post-import check** (the SELECT file of section 10.4): the approval read
+16. **OWNER — the read-only post-import check** (the merged SELECT file of section 10.4, named by its sha256): the approval read
     (`GET …/approvals/:approvalId`, `routes/gpexeImport.js:212`); the candidate `imported`; no other candidate of the
     team imported in the window; the counts equal the preview; no new `gpexe_*` definition; T6 rows = values of the
     import; the T7 keys set; no zero where the preview left a value out. The freeze ends when it passes.
@@ -624,7 +640,7 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 - **9-A** (documentation of DB, auth and red-zone contracts, the matrix's docs row): `code-reviewer` on the whole
   document, `db-reviewer` on its DB and transaction parts, `security-reviewer` on its audience, authorization, DB-safety
-  and red-zone parts; then the *Rukovodilac* and the *Nezavisni revizor*; then the owner's acceptance (A1).
+  and red-zone parts; then the *Rukovodilac* and the *Nezavisni revizor*; then the owner's acceptance before any code (the plan's rule A1).
 - **9-0:** `code-reviewer`, `db-reviewer`; trigger 4.
 - **9-B:** `code-reviewer`, `security-reviewer`, `db-reviewer` (the J M4 row); `mobile-qa` and `ux-design-reviewer`
   if the Imports review's layout changes (R14); triggers 1, 2, 3, 4 and the five-point rule; then the *Rukovodilac*'s
@@ -639,7 +655,9 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 - **R1 The PR split** of section 2. Recommendation: yes.
 - **R3 Merge paths** of section 2 (9-0 under the standing merge order; 9-B on the owner's word, O13; 9-R on the owner's
-  word). Recommendation: as written.
+  word, before the freeze, step 6a). This contract also adds trigger 2 (the audience mechanism, R18) to the plan's
+  "Triggers 1, 3 and 4" for phase 9 (`metrics-core-plan.md:1115`); it is stricter, and the plan's line itself changes
+  only on the owner's word. Recommendation: as written.
 - **R4 `no_mapped_values`** as a new code; `nothing_to_import` keeps `no_changes` (it is "up to date" on the screen,
   `frontend/gpexe-import-view.js:65, :177, :765, :1717`). Recommendation: yes.
 - **R5 The lock order** of section 3: the approval's candidate row and then the team lock first; the binding
@@ -753,6 +771,6 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 
 The switch's default or how it is read (unless O15); regular production imports and conditions 4 and 5; Link and Unlink; several
 tracks (M5, phase 10) and estimates (phase 10, no T6); derived variables (phase 11); the session list and drill reads;
-7h, 7i and R1; a production undo (unless O3 (b)); F3c4 (unless O4); a new source or adapter; a cleanup of existing
+7h, 7i and the plan's R1 (the re-import of a session); a production undo (unless O3 (b)); F3c4 (unless O4); a new source or adapter; a cleanup of existing
 `gpexe_*` definitions; any GPEXE request, persistent-database read or write, Render or Supabase setting or credential
 by the executor.
