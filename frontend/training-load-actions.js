@@ -5,7 +5,9 @@ import {
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
+import { emptyVariablesState } from "./metric-variables-data.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
+import { dropMappingsForms, loadMappingsSection, mappingsMayBeLeft, mappingsUnloadShouldWarn, resetMappings } from "./metric-mappings-actions.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -124,6 +126,7 @@ export function loadTrainingLoadSectionData(section, render) {
   if (section === "imports") return loadGpexeImports(render);
   if (section === "variables") return loadVariablesSection(render);
   if (section === "source-fields") return loadSourceFieldsSection(render);
+  if (section === "mappings") return loadMappingsSection(render);
   return loadTrainingLoadWeekly(section, render);
 }
 
@@ -229,11 +232,13 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // leave below drops it.
   if (state.trainingLoad.section === "variables" && !variablesMayBeLeft()) return false;
   if (state.trainingLoad.section === "source-fields" && !sourceFieldsMayBeLeft()) return false;
+  if (state.trainingLoad.section === "mappings" && !mappingsMayBeLeft()) return false;
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   const left = releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
   // A variable form the coach agreed to leave is not shown again on return.
   if (left) dropVariablesForm();
   if (left && state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
+  if (left) dropMappingsForms();
   // Leaving Training Load drops the GPEXE names and dates of birth the
   // Imports view held (they live in the open view's memory only).
   if (left && _nextTab !== "training-load") clearGpexeIdentities();
@@ -265,7 +270,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
+  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn() && !mappingsUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -276,6 +281,7 @@ export function discardTrainingLoadLeaveDrafts() {
   if (state.activeTab !== "training-load") return;
   dropVariablesForm();
   if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
+  dropMappingsForms();
   discardAnalysisEditorDraft();
   discardAnalysisLayoutDraft();
   clearGpexeIdentities();
@@ -929,9 +935,23 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       }
       if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
     }
-    // Source fields' way back opens the Data configuration start screen.
+    // The same for a mapping's flow, panel or write (phase 8).
+    if (state.trainingLoad.section === "mappings" && action.dataset.section !== "mappings") {
+      if (!mappingsMayBeLeft()) {
+        renderTrainingLoad();
+        return true;
+      }
+      dropMappingsForms();
+    }
+    // Source fields' and Mappings' way back opens the Data configuration start screen.
     if (action.dataset.section === "variables" && action.dataset.dcHome !== undefined && state.trainingLoad.variables) {
       state.trainingLoad.variables.view = "home";
+      state.trainingLoad.variables.node = null;
+    }
+    // Mappings' "Create it in Variables" opens the Variables list itself (phase 8).
+    if (action.dataset.section === "variables" && action.dataset.dcView === "variables") {
+      if (!state.trainingLoad.variables) state.trainingLoad.variables = emptyVariablesState();
+      state.trainingLoad.variables.view = "variables";
       state.trainingLoad.variables.node = null;
     }
     setTrainingLoadSection(action.dataset.section);
@@ -2749,7 +2769,8 @@ export function resetTrainingLoadForWorkspaceChange() {
   // may not offer it.
   resetVariables();
   resetSourceFields();
-  if (state.trainingLoad.section === "variables" || state.trainingLoad.section === "source-fields") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
+  resetMappings();
+  if (state.trainingLoad.section === "variables" || state.trainingLoad.section === "source-fields" || state.trainingLoad.section === "mappings") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
   // GPEXE imports: the old object's generation is bumped first, so a check
   // still being polled for the OLD workspace's team stops by itself.
   state.trainingLoad.gpexe.generation += 1;
