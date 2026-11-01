@@ -646,8 +646,9 @@ replay of a saved command repeats the first answer's counts (`attached`, `alread
 
 **The event owner's tree** (the security review of K2a-1b, MEDIUM-1). Seeing a plan or an activity is not enough to
 link it: its stored owner (`plan_workspace_ownership`; the activity's own owner columns) must be the event's owner,
-a team event's club, or one of a club event's teams — the owners whose managers always see the event and can
-detach the link. A private coach's plan of a club athlete, a sibling team's plan of an athlete in both teams,
+a team event's club, or one of a club event's teams — one tenant's own hierarchy (D18): a team event's link to its
+club's plan can be detached by the club's admin; a club event's link to a team's plan is detached by the club's
+admin, not by the team's coach, who sees the plan folded under the club's event. A private coach's plan of a club athlete, a sibling team's plan of an athlete in both teams,
 another club's, a `system` or `unresolved` one is answered like an id the caller cannot see, whoever asks (a
 platform administrator included). Without it, a coach of team X could fold team Y's plan of a shared athlete under
 X's event on Y's calendar, and Y's coach could not undo it.
@@ -680,8 +681,8 @@ written; the workspace planned-RPE switch is never touched (a session whose swit
 from those routes with their edit-draft cascade; the Builder's draft-only bulk actions are not part of it. It
 writes **only the flags it is given** (code review HIGH-1): the RPE quick toggle and the alignment's RPE off write
 `rpe_enabled` alone, so a Builder draft whose tracking differs from the live row keeps its own tracking, and a row
-whose tracking is off never takes RPE (such a draft copy keeps RPE off; before, the RPE toggle on that case failed
-on the v14 CHECK with a 500). One call writes every session of an alignment — one statement locks the edit-draft
+whose tracking is off never takes RPE (such a draft copy keeps RPE off and the RPE toggle's answer says
+`draftRpeKeptOff: true`; before, that case failed on the v14 CHECK with a 500). One call writes every session of an alignment — one statement locks the edit-draft
 copies, one writes — so the alignment's statements do not grow with its sessions. The standalone alignment is
 audited as kind `update` with `details.align` (v49's kinds hold no `align_sessions`); the attach's alignment as
 `attach_sessions` with `details.aligned`.
@@ -726,6 +727,16 @@ and replay-count assertions in tests 4, 8 and 10.
 | Security LOW-1: a lock taken before the scope decision | decided on an unlocked read first | 14 (MS2, MS2b) |
 | Security LOW-2, LOW-4, the second half of LOW-5 | recorded below, not changed | — |
 
+The narrow re-reviews of that delta (`8ad4af2..b1f6491`): both READY WITH NON-BLOCKING NOTES, every finding above
+closed; their notes:
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| Code LOW: the RPE toggle over an untracked draft copy answered `draftSessionUpdated: true` while the copy kept RPE off | the answer adds `draftRpeKeptOff` (true only then) | 9, 9b (ML3) |
+| Code LOW / security LOW-2: the day check judged a linked activity by the raw link's date, the read by the canonical survivor's | the check joins `training.resolve_canonical_activity_id` | 13 (ML4) |
+| Security LOW-1: the owner's tree is not re-checked on read for a merged activity | recorded (open point 7, the runbook) | — |
+| Security NIT: the tree's wording for a club event over a team's plan | the paragraph above says who detaches | — |
+
 **Open points (for the manager):**
 1. The standalone alignment is audited as kind `update` (above); a later calendar migration could add
    `align_sessions` to the two CHECKs if the audit should name it (v50 is now 7g-B's, PR #305).
@@ -748,4 +759,7 @@ and replay-count assertions in tests 4, 8 and 10.
    left the caller's scope since (security LOW-2; the owner's tree keeps such a link inside the event's own
    tree); the group key's owner part is an unsalted 48-bit hash (LOW-4, an HMAC is possible); after an unknown
    COMMIT the answer is the reduced view without `getEvent`'s readable check (the second half of LOW-5, from
-   K2a-1a).
+   K2a-1a); the owner's tree is checked when a link is made, not when it is read — an activity link follows the
+   canonical survivor of a later merge (ADR-001) without a tree check (the narrow security re-review's LOW-1;
+   whether a merge survivor can have another owner is not established; sessions are not affected, a plan's
+   stored owner never changes).

@@ -55,16 +55,23 @@ export async function writePublishedSessionFlags(client, { sessions, trainingLoa
      for update of ps2`,
     [sessions.map((s) => s.planId), sessions.map((s) => s.logicalSessionId)],
   );
-  const idsToUpdate = [...sessions.map((s) => s.sessionId), ...draftSessionResult.rows.map((row) => row.id)];
-  await client.query(
+  const draftIds = new Set(draftSessionResult.rows.map((row) => String(row.id)));
+  const idsToUpdate = [...sessions.map((s) => s.sessionId), ...draftIds];
+  const written = await client.query(
     `update plans.plan_sessions
         set training_load_enabled = coalesce($1::boolean, training_load_enabled),
             rpe_enabled = coalesce($2::boolean, rpe_enabled) and coalesce($1::boolean, training_load_enabled),
             updated_at = now()
-      where id = any($3::uuid[])`,
+      where id = any($3::uuid[])
+      returning id, rpe_enabled`,
     [trainingLoadEnabled ?? null, rpeEnabled ?? null, idsToUpdate],
   );
-  return { draftSessionUpdated: draftSessionResult.rowCount > 0, draftSessionsUpdated: draftSessionResult.rowCount };
+  // The draft copies asked for RPE that kept it off (their own tracking is
+  // off), so the caller can say so instead of claiming the copy follows.
+  const draftSessionsKeptRpeOff = rpeEnabled === true
+    ? written.rows.filter((row) => draftIds.has(String(row.id)) && row.rpe_enabled !== true).length
+    : 0;
+  return { draftSessionUpdated: draftIds.size > 0, draftSessionsUpdated: draftIds.size, draftSessionsKeptRpeOff };
 }
 
 // The submitted planned results of one logical session (the quick toggles'

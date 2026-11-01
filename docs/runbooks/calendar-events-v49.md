@@ -58,7 +58,8 @@ own `RESTRICT` foreign keys, as it is by its schedules today.
 **Known limits, recorded:** the link tables' triggers check the event's state and the plan's / activity's existence,
 not that the plan or activity belongs to the event's owner — K2a-1b's commands check it (the session's athlete a target of
 the event that day and inside the caller's scope, its plan owned inside the event owner's tree; an activity in the
-caller's scope, owned inside that tree, with a targeted participant); a cancel ends the event's live links in its own
+caller's scope, owned inside that tree, with a targeted participant) when the link is made — an activity link then
+follows the canonical survivor of a later merge without that check; a cancel ends the event's live links in its own
 transaction, and a change of the days that would leave a link outside them is refused — both by the service, not the
 database (a raw cancel through SQL leaves the links live: end them with `update calendar.event_session_links` /
 `event_activity_links set ended_at = now(), ended_by_user_id = <the canceller>` in the same transaction); every link write

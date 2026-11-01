@@ -818,7 +818,11 @@ test("9. the Training Load quick toggles write through the same shared function:
   assert.equal(r.status, 409, r.text);
   assert.equal(r.body.error, "sessionNotTracked");
   assert.equal((await toggle("training-load-enabled", { trainingLoadEnabled: true })).status, 200);
-  assert.equal((await toggle("rpe-enabled", { rpeEnabled: true })).status, 200);
+  r = await toggle("rpe-enabled", { rpeEnabled: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.draftSessionUpdated, true);
+  assert.equal(r.body.draftRpeKeptOff, false, "a tracked draft copy follows");
+  assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: true, training_load_enabled: true });
   await submitRpe(s.x[0], one.sessionId);
   r = await toggle("training-load-enabled", { trainingLoadEnabled: false });
   assert.equal(r.status, 409, r.text);
@@ -849,10 +853,13 @@ test("9b. the RPE quick toggle never changes the edit-draft copy's tracking (cod
   assert.equal(r.body.draftSessionUpdated, true);
   assert.deepEqual(await flagsOf(one.sessionId), { rpe_enabled: false, training_load_enabled: true });
   assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: false, training_load_enabled: false }, "the draft keeps its own tracking");
+  assert.equal(r.body.draftRpeKeptOff, false);
   r = await toggle({ rpeEnabled: true });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(await flagsOf(one.sessionId), { rpe_enabled: true, training_load_enabled: true });
   assert.deepEqual(await flagsOf(draftSession.sessionId), { rpe_enabled: false, training_load_enabled: false }, "an untracked draft copy never takes RPE");
+  assert.equal(r.body.draftSessionUpdated, true);
+  assert.equal(r.body.draftRpeKeptOff, true, "the answer says the draft copy kept RPE off (re-review LOW)");
   // The alignment's RPE off writes RPE alone: a tracked draft copy stays tracked, an untracked one untracked.
   await q(`update plans.plan_sessions set training_load_enabled = true, rpe_enabled = true where id = $1`, [draftSession.sessionId]);
   const [two] = await plansFor([s.x[1]], { owner: team, coachUserId: s.coachX.id });
@@ -1061,6 +1068,19 @@ test("13. a change of the event's days never strands a link (code review MEDIUM)
   const aligned = await alignSessions(s.coachX.cookie, ev.id, { expectedRevision: 6 });
   assert.equal(aligned.status, 200, aligned.text);
   assert.equal(aligned.body.alignment.unchanged + aligned.body.alignment.changed + aligned.body.alignment.notAllowed, 1, "only the link inside the days");
+  // A merge (ADR-001): the event shows the linked activity's canonical
+  // survivor, so the day check judges the survivor's day (re-review LOW).
+  const survivor = await makeActivity({ owner: team, origin: "api_import", name: "Merged", date: FUTURE });
+  await q(`select set_config('training.allow_supersede_write', 'on', false)`);
+  try {
+    await q(`update training.activities set lifecycle_state = 'superseded', superseded_by_activity_id = $2 where id = $1`, [activity, survivor]);
+  } finally {
+    await q(`select set_config('training.allow_supersede_write', 'off', false)`);
+  }
+  const afterMerge = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 7, endDay: addDays(PAST, 1) });
+  assert.equal(afterMerge.status, 409, afterMerge.text);
+  assert.equal(afterMerge.body.error, "links_outside_event");
+  assert.equal(afterMerge.body.count, 1, "the survivor's day is outside the new days");
 });
 
 test("14. a plan or an activity is linked only inside the event owner's tree (security review MEDIUM-1): an athlete of teams X and Y — team Y's plan and activity never fold under team X's event, whoever asks (byte-identical to a random id), and team Y's calendar keeps them; the club's own plan and team X's activity do", async () => {

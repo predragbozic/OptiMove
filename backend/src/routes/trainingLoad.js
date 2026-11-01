@@ -611,13 +611,15 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     // transaction, or a later Builder "Save and finish" would silently
     // revert this quick toggle back to whatever the draft still has.
     // Only rpe_enabled is written: every row, the draft copy included,
-    // keeps its own tracking.
-    const { draftSessionUpdated } = await writePublishedSessionFlags(client, {
+    // keeps its own tracking, and a draft copy whose tracking is off keeps
+    // RPE off (`draftRpeKeptOff`; before K2a-1b that case failed on the v14
+    // CHECK with a 500).
+    const { draftSessionUpdated, draftSessionsKeptRpeOff } = await writePublishedSessionFlags(client, {
       sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
       rpeEnabled,
     });
     await client.query("commit");
-    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated });
+    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated, draftRpeKeptOff: draftSessionsKeptRpeOff > 0 });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}

@@ -811,15 +811,16 @@ export async function updateEvent(ctx, eventId, body) {
     };
     checkDaysAndTimes(next);
     // A change of the days never strands a link (K2a-1b): every live session
-    // and activity link stays on one of the event's days, or nothing is
-    // written and the coach detaches them first. Counted under the event's
-    // lock, which every link command takes first.
+    // and activity link (the activity's canonical survivor, ADR-001, as the
+    // read shows it) stays on one of the event's days, or nothing is written
+    // and the coach detaches them first. Counted under the event's lock,
+    // which every link command takes first.
     if (next.day !== dateStr(row.day) || String(next.endDay ?? "") !== String(dateStr(row.end_day) ?? "")) {
       const outside = (await client.query(
         `select (select count(*)::int from calendar.event_session_links l
                   where l.event_id = $1 and l.ended_at is null and (l.day < $2::date or l.day > $3::date))
               + (select count(*)::int from calendar.event_activity_links l
-                   join training.activities a on a.id = l.activity_id
+                   join training.activities a on a.id = training.resolve_canonical_activity_id(l.activity_id)
                   where l.event_id = $1 and l.ended_at is null
                     and (a.occurred_local_date < $2::date or a.occurred_local_date > $3::date)) as n`,
         [row.id, next.day, next.endDay || next.day],
