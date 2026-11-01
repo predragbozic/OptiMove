@@ -743,7 +743,8 @@ test("7. align: the event's expects become the linked sessions' flags, only on p
   for (const x of [...teamPlan, ...privatePlan]) assert.deepEqual(await flagsOf(x.sessionId), { rpe_enabled: false, training_load_enabled: false }, "a plan the club only reads is not changed");
   assert.deepEqual(await rowDigests(["training_load.planned_rpe_workspace_settings"]), switchesBefore, "the workspace switch is never touched");
   const change = (await q(`select kind, details from calendar.event_changes where event_id = $1 order by revision desc limit 1`, [ev.id]))[0];
-  assert.equal(change.kind, "update");
+  // K2b-1a, T1: the standalone alignment is audited with its own kind (v51).
+  assert.equal(change.kind, "align_sessions");
   assert.equal(change.details.align, "rpe_on");
   assert.equal(change.details.aligned, 2);
   res = await calendar(s.clubAdmin.cookie);

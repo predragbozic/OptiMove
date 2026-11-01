@@ -1,9 +1,9 @@
 # Central calendar — K2b-1 plan: Settings → Calendar (types, details, places, colours)
 
-Status: **the structure and the slices 1a → 1c → 1d (→ 1e) accepted by the manager on 2026-11-01, with T1–T5 decided as
-recommended and T6 decided (section 15); the owner's answers to Q1–Q12 are pending, and v51 and the code wait for them** (Q3, Q5, Q7,
-Q10 and Q11 change the schema). Written against the checked-out code at `17dc46d` (merge of PR #313, `main`). No
-database was touched.
+Status: **accepted (2026-11-01).** The manager accepted the structure and the slices 1a → 1c → 1d → 1e and decided
+T1–T6; the owner accepted every recommendation of Q1–Q12, recorded as **D28–D39** (section 16). **K2b-1a is built in
+this pull request.** Written against the checked-out code at `17dc46d` (merge of PR #313, `main`; `origin/main` moved to
+`656cf88` with documents only, no migration). No persistent database was touched.
 
 - Inputs: `docs/ai/central-calendar-k0-discovery.md` (D1–D14, the K2 sketch of its section 8),
   `docs/ai/central-calendar-k2a-plan.md` (the event model of section 1, the access rule of 4.1, the lock order of 4.3,
@@ -494,3 +494,57 @@ built from the address only (and absent without one), the auto-colour rule, no `
   writes there on the `club_admin` basis; no new path. Choosing a club from the platform workspace (the *Source
   connections* pattern, `sourceConnectionsAdminContext`, `frontend/source-connections-data.js:74-85`, which would add a
   club id to every settings request and its own access tests) is a later addition, only if the owner asks for it.
+
+## 16. Decisions (2026-11-01)
+
+The owner accepted every recommendation of section 15 (relayed by the manager the same day); the manager decided T1–T6
+(section 15). Recorded as decisions:
+
+| | Question | Decision |
+|---|---|---|
+| **D28** | Q1 | The athlete's *Upcoming events* on Athlete Home (14 days, name, type, day, time, place with its address and note, *Open in maps*) is built now, as the fifth slice **K2b-1e**. |
+| **D29** | Q2 | No athlete-filled details in K2b-1, not even as definitions: the coach's details are event context kept in the calendar; anything an athlete answers is a Metrics Core variable collected in K2b-2 (section 10). `filled_by` holds `coach` only. |
+| **D30** | Q3 | An option of a detail that already has answers may be hidden: old answers keep its label, new events cannot choose it; it may be shown again. |
+| **D31** | Q4 | A required detail left empty after the event's last day makes the card *Awaiting details*; optional details only show "n of m filled" in the panel. No reminder notification in K2b-1. |
+| **D32** | Q5 | The seed of section 3, with D23's match fields as seeded details of the *Match* type (opponent, home or away, our score, their score); no `is_match` column. |
+| **D33** | Q6 | A private coach has no places and no details of their own in K2b-1: a one-off place text, the `system` details. |
+| **D34** | Q7 | An event shows its library place as it is now, past events included; a venue that moved is a new place. |
+| **D35** | Q8 | The `system` set (types, details, options) is read-only through the API; it changes by migration. |
+| **D36** | Q9 | The screen's word for a library field is **Details** ("Details to fill in after the event"). |
+| **D37** | Q10 | Types, details, options and places are archived, never deleted — used or not. |
+| **D38** | Q11 | Colours come from the closed palette of 12 (section 2.5). |
+| **D39** | Q12 | A detail's value is filled in only by the event's managers (the `canManage` of K2a 4.1). |
+
+## 17. K2b-1a as built (2026-11-01)
+
+On the manager's GO of 2026-11-01 (D28–D39, T1–T6). Migration **v51**
+(`migrations_v2/202611011900_calendar_v51_settings.sql`; runbook `docs/runbooks/calendar-settings-v51.md` with its
+preflight, post-check and rollback SQL) and the Settings API; no frontend change.
+
+- **The schema** is section 2's, with three refinements found while building it:
+  - a type's list and an event's selection are rewritten by difference (entries removed, moved, added): an entry may
+    change its `position`, never its type, event or detail, so an archived detail already listed stays on an edit
+    (plan 2.6) while v51 refuses it as a **new** entry;
+  - a child row's pairing reads its parent's `xmin` (the parent written in this transaction), with the seed's one
+    exception (an option or a list entry of a copy still exactly as seeded) — recorded as a known limit in the
+    runbook;
+  - a club's type, detail or option is deleted only together with its club (the hard delete of maintenance and of the
+    shared suites' cleanup, v49's rule); a direct `DELETE` is refused; a place, a team setting and a value never.
+- **The API** (`backend/src/routes/calendarSettings.js`, `backend/src/calendarSettingsService.js`): section 5.1's
+  routes; the club workspace and its admin only (T6: a platform admin there also holds the club's `club_admin` role and
+  writes on that basis); every write through **one command runner** extracted from K2a's (`backend/src/calendarCommandRunner.js`,
+  T3) — the event commands use it too, their behaviour unchanged (the K2a suites pass); the routers share one error
+  answer (`backend/src/routes/calendarRouteErrors.js`).
+- **T1:** `POST /api/calendar/events/:id/sessions/align` is audited with kind `align_sessions`.
+- **T2:** `GET /api/calendar/events/types` answers `{ types, fields, locations, teamDefaults }`; each type gains
+  `colorKey` and its live `defaultFieldIds`. `GET /api/calendar`'s `teams[]` gain `colorKey`.
+- **Found by a race test (4b):** an event created while its type is being archived failed with a 500 (v49's trigger
+  saw the archive). The event commands now read the type `FOR SHARE`: the create waits for the archive and answers
+  `400 type_not_available`.
+- **The K2a suites,** as regression (T3): `central-calendar-k2a-events` now runs its own routes on a database through
+  every migration and its v49 checks (post-check, objects, rollback rehearsal, the "an event exists" refusal) on
+  databases that stop at v49; `central-calendar-k2a-1b`'s test 7 expects `align_sessions`; `source-instance-end-7g`'s
+  database stops at v50 (it asserted v50 was the last test migration).
+- **Tests:** `backend/tests/central-calendar-k2b-settings.test.mjs` (24 tests: the role matrix and the form's read,
+  the migration and its rollback rehearsal, the black-box scenarios of section 12, the invariants raw and through the
+  routes, the races, the bounded COMMIT); the shared fixture `backend/tests/support/calendar-fixture.mjs`.
