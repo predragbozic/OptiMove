@@ -1233,7 +1233,7 @@ transcript; J11 section 0.1 holds the table):
       the *Rukovodilac*'s chat, 2026-11-01 19:54:28 UTC), and, on the *Rukovodilac*'s interactive sketch of it: „ovo
       izgleda dobro, mnogo je jednostavnije i prihvatljivije, smatram da ovako nesto treba da bude u nasoj
       aplikaciji.” (owner turn `fbeca2ea`, 20:02:15 UTC). Both relayed with their event ids and checked by the executor.
-    - **The direction, as the *Rukovodilac* understood it, on a sketch the owner found "much simpler and acceptable"**
+    - **The direction, as the *Rukovodilac* understood it, on a sketch the owner found much simpler and acceptable**
       (not the owner's own text; its details are settled by the contract):
       - one screen, opened from the review of a first import: on one side the GPEXE columns with a raw value and its
         unit, on the other the club's or the system's variables;
