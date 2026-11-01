@@ -370,7 +370,13 @@ export function reconcileMovedSequences(sourcePrint, restoredPrint, before, afte
     const restored = m && restoredByName.get(m[1]);
     const low = before.get(m?.[1]);
     const high = after.get(m?.[1]);
-    if (!restored || low === undefined || high === undefined || restored.last === "unused" || high === "unused") return item;
+    if (!restored || low === undefined || high === undefined || high === "unused") return item;
+    if (restored.last === "unused") {
+      // Unused when the run started, used by its end: pg_dump read it before the first use.
+      if (low !== "unused") return item;
+      reconciled.push(m[1]);
+      return restored.item;
+    }
     const value = BigInt(restored.last);
     const ends = [low === "unused" ? null : BigInt(low), BigInt(high)].filter((v) => v !== null);
     const min = ends.reduce((a, b) => (b < a ? b : a));
@@ -720,21 +726,65 @@ async function toolMajor(pgBin, name) {
 // host, user and paths are replaced by placeholders.
 export function sanitizeToolError(name, error, replacements = []) {
   if (error?.code === "ENOENT") return `${name} was not found — give the PostgreSQL bin directory with --pg-bin`;
+  // Only the tool's own error and warning lines (fail closed: a translated
+  // or unknown line is dropped, never shown).
   const lines = String(error?.stderr ?? "").split(/\r?\n/)
-    .filter((line) => /^pg_(dump|restore): /i.test(line) && !/^pg_(dump|restore): (detail|hint):/i.test(line))
+    .filter((line) => /^pg_(dump|restore): (error|warning): /.test(line))
     .slice(0, 3);
-  const masked = lines.map((line) => {
-    let out = line;
-    for (const [value, placeholder] of replacements) if (value) out = out.split(value).join(placeholder);
-    return out
-      .replace(/"[^"]*"/g, '"…"')
-      .replace(/'[^']*'/g, "'…'")
-      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "<ip>")
-      .replace(/\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b/gi, "<ip>")
-      .slice(0, 300);
-  });
+  const masked = lines.map((line) => maskText(line, replacements).slice(0, 300));
   const code = typeof error?.code === "number" ? ` (exit code ${error.code})` : "";
   return `${name} failed${code}${masked.length ? `: ${masked.join(" | ")}` : ""}`;
+}
+
+// The known values first (host, user, project reference, paths, passwords),
+// then every quoted text (a quote left open runs to the end of the line) and
+// every IPv4 / IPv6-looking address.
+function maskText(text, replacements = []) {
+  let out = String(text);
+  for (const [value, placeholder] of replacements) if (value) out = out.split(value).join(placeholder);
+  return out
+    .replace(/"[^"]*(?:"|$)/g, '"…"')
+    .replace(/'[^']*(?:'|$)/g, "'…'")
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "<ip>")
+    .replace(/(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}/gi, "<ip>");
+}
+
+// Any other failure of the remote run (the database driver, the network,
+// TLS) is reported as a fixed sentence and its code only: a driver message
+// names the user with the project reference ("password authentication
+// failed for user ..."), the host or an address, and the owner may paste it
+// into a chat. The script's own refusals and the tools' sanitized lines pass
+// as they are.
+const OWN_MESSAGE = /^(refusing:|SAFETY:|pg_dump (failed|was not found)|pg_restore (failed|was not found)|cancelled$)/;
+const CODE_TEXT = {
+  "28P01": "password authentication failed — check the password",
+  "28000": "the user is not allowed to connect — check the user in the URL",
+  "3D000": "the database does not exist — check the database name in the URL",
+  "57P03": "the server is not accepting connections yet — try again later",
+  "55P03": "a table lock was not granted in time — run it again at a quiet moment",
+  "57014": "a statement was cancelled by a time limit",
+  "25P02": "the read-only transaction was aborted",
+  ENOTFOUND: "the host was not found — check the host in the URL",
+  EAI_AGAIN: "the host could not be looked up — check the network",
+  ECONNREFUSED: "the connection was refused — check the host and the port",
+  ETIMEDOUT: "the connection timed out — check the network",
+  ECONNRESET: "the connection was closed by the other side",
+  EHOSTUNREACH: "the host is not reachable — check the network",
+  ERR_TLS_CERT_ALTNAME_INVALID: "the server's certificate does not name this host",
+  SELF_SIGNED_CERT_IN_CHAIN: "the server's certificate could not be verified with the given CA file",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: "the server's certificate could not be verified with the given CA file",
+  DEPTH_ZERO_SELF_SIGNED_CERT: "the server's certificate could not be verified with the given CA file",
+  CERT_HAS_EXPIRED: "the server's certificate has expired",
+};
+export function sanitizeRemoteError(error) {
+  const message = String(error?.message ?? "");
+  if (OWN_MESSAGE.test(message)) return error;
+  const code = typeof error?.code === "string" && /^[A-Z0-9_]{2,40}$/.test(error.code) ? error.code : null;
+  const known = code ? CODE_TEXT[code] : undefined;
+  const ssl = /\bSSL\b|TLS|certificate/i.test(message) && !known ? " (a TLS problem)" : "";
+  const sanitized = new Error(`database connection or query failed${code ? ` (${code})` : ""}: ${known ?? `see the code${ssl}`}`);
+  sanitized.code = code ?? undefined;
+  return sanitized;
 }
 
 async function runToolSanitized(pgBin, name, args, options, replacements) {
@@ -785,7 +835,10 @@ export async function backupAndVerifyRemote({
   const ssl = sslConfig(sslMode, sslRootCert, source.hostname);
   const dump = await claimDumpTarget(dumpPath);
   // What a failed tool's message may never show.
-  const hidden = [[source.hostname, "<source host>"], [decodeURIComponent(source.username), "<source user>"], [dump, "<dump>"]];
+  const sourceUser = decodeURIComponent(source.username);
+  const projectRef = sourceUser.includes(".") ? sourceUser.slice(sourceUser.indexOf(".") + 1) : "";
+  const hidden = [[sourcePassword, "<password>"], [restorePassword, "<password>"], [source.hostname, "<source host>"],
+    [sourceUser, "<source user>"], [projectRef, "<project>"], [dump, "<dump>"]];
   log(`source (read only, sslmode ${sslMode}): host ${sourceInfo.host}, port ${sourceInfo.port}, database ${sourceInfo.database}`);
   log(`schemas dumped: ${dumpSchemas.join(", ")}`);
 
@@ -804,7 +857,7 @@ export async function backupAndVerifyRemote({
   let failure = null;
   const cleanupProblems = [];
   const restoreClientConfig = (database) => clientConfig(restoreServer, database, restorePassword, false);
-  const sourceClient = new pg.Client(clientConfig(source, sourceInfo.database, sourcePassword, ssl, { keepAlive: true }));
+  const sourceClient = new pg.Client(clientConfig(source, sourceInfo.database, sourcePassword, ssl, { keepAlive: true, keepAliveInitialDelayMillis: 30_000 }));
   sourceClient.on("error", () => {});
   try {
     await sourceClient.connect();
@@ -862,7 +915,7 @@ export async function backupAndVerifyRemote({
     // 2. Dump and source fingerprint, concurrently, on the same snapshot. The
     // sequences are read just before and after (see reconcileMovedSequences).
     const sequencesBefore = await readSequenceValues(sourceClient, dumpSchemas);
-    const dumpEnv = pgEnv(source, process.env, { password: sourcePassword, sslMode, sslRootCert: sslRootCert || undefined });
+    const dumpEnv = { ...pgEnv(source, process.env, { password: sourcePassword, sslMode, sslRootCert: sslRootCert || undefined }), LC_ALL: "C", LANGUAGE: "C" };
     const dumping = runToolSanitized(pgBin, "pg_dump", pgDumpArgs(source, sourceInfo.database, snapshot, dump, dumpSchemas, { lockWaitTimeout: "60s" }), { env: dumpEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, hidden);
     if (onDumpStarted) await onDumpStarted({ sourcePid: sourceClient.processID });
     const [printed, dumped] = await Promise.allSettled([fingerprint(sourceClient, { schemas: dumpSchemas }), dumping]);
@@ -877,7 +930,7 @@ export async function backupAndVerifyRemote({
     log(`dump written: ${report.dump.bytes} bytes, sha256 ${report.dump.sha256}`);
 
     // 3. Trial restore into a new database on the local server.
-    const restoreEnv = pgEnv(restoreServer, process.env, { password: restorePassword });
+    const restoreEnv = { ...pgEnv(restoreServer, process.env, { password: restorePassword }), LC_ALL: "C", LANGUAGE: "C" };
     const maintenance = new pg.Client(restoreClientConfig(restoreInfo.database));
     maintenance.on("error", () => {});
     await maintenance.connect();
@@ -925,8 +978,8 @@ export async function backupAndVerifyRemote({
     verified = mismatches.length === 0;
     report.verified = verified;
   } catch (error) {
-    failure = error;
-    throw error;
+    failure = sanitizeRemoteError(error);
+    throw failure;
   } finally {
     await sourceClient.end().catch(() => {});
     if (!verified) {
@@ -988,13 +1041,16 @@ export function promptHidden(question, { input = process.stdin, output = process
     output.write(question);
     const rl = readline.createInterface({ input, output: sink, terminal: true });
     let settled = false;
-    rl.on("SIGINT", () => {
+    const cancel = () => {
       if (settled) return;
       settled = true;
       rl.close();
       output.write("\n");
       reject(new Error("cancelled"));
-    });
+    };
+    rl.on("SIGINT", cancel);
+    // Ctrl+D, or the input ending, closes readline without an answer.
+    rl.on("close", cancel);
     rl.question("", (answer) => {
       if (settled) return;
       settled = true;

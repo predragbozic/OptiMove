@@ -14,7 +14,7 @@ import pg from "pg";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { importGpexePlan } from "../src/gpexeImportWriter.js";
 import { PassThrough } from "node:stream";
-import { APP_SCHEMAS, backupAndVerify, backupAndVerifyRemote, checkSchemaList, dumpCreatesSchema, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs, preflightRemote, promptHidden, reconcileMovedSequences, sanitizeToolError } from "../scripts/gpexe-backup-verify.mjs";
+import { APP_SCHEMAS, backupAndVerify, backupAndVerifyRemote, checkSchemaList, dumpCreatesSchema, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs, preflightRemote, promptHidden, reconcileMovedSequences, sanitizeRemoteError, sanitizeToolError } from "../scripts/gpexe-backup-verify.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 
@@ -517,6 +517,16 @@ test("remote: a typed password is never echoed, and Ctrl+C cancels the prompt", 
   cancelled.input.write("abc\u0003");
   await assert.rejects(pending, /cancelled/);
   assert.ok(!cancelled.written.join("").includes("abc"));
+  // Ctrl+D on an empty line, and the input simply ending: never a silent wait (bounded, so a hang fails fast).
+  const within = (promise) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error("still waiting after 2 s")), 2000).unref())]);
+  const eof = fakeTerminal();
+  const closing = promptHidden("Password: ", { input: eof.input, output: eof.output });
+  eof.input.write("\u0004");
+  await assert.rejects(within(closing), /cancelled/);
+  const ended = fakeTerminal();
+  const ending = promptHidden("Password: ", { input: ended.input, output: ended.output });
+  ended.input.end();
+  await assert.rejects(within(ending), /cancelled/);
 });
 
 test("remote: the table of contents tells whether the dump recreates a schema", () => {
@@ -556,13 +566,17 @@ test("remote: a failed pg_dump is reported by its own error line, with host, use
     `echo 'pg_dump: error: connection to server at "pooler.secret-host.example" (10.1.2.3), port 5432 failed: FATAL:  password authentication failed for user "postgres.secretref"' >&2`,
     `echo 'CONTEXT:  COPY athletes, line 1: "Petar Petrovic"' >&2`,
     `echo 'pg_dump: detail: Key (email)=(petar@example.com) already exists.' >&2`,
+    `echo "pg_dump: error: pw=$PGPASSWORD args=$*" >&2`,
     "exit 1",
   ].join("\n"));
   const dump = dumpPath();
   const error = await backupAndVerifyRemote(await remoteArgs(dump, { pgBin: bin })).then(() => null, (e) => e);
   assert.ok(error, "the run fails");
   assert.match(error.message, /^pg_dump failed \(exit code 1\): pg_dump: error: connection to server at "…" \(<ip>\), port 5432 failed/);
-  for (const secret of ["secret-host", "10.1.2.3", "secretref", "Petar", "CONTEXT", "petar@", "Command failed", BIN_DIR]) {
+  const src = withoutPassword(db.url);
+  const sourceUser = decodeURIComponent(new URL(src.url).username);
+  assert.match(error.message, /pw=<password> args=/, "the tool's own password line is masked, not dropped");
+  for (const secret of ["secret-host", "10.1.2.3", "secretref", "Petar", "CONTEXT", "petar@", "Command failed", BIN_DIR, src.password, sourceUser, dump].filter(Boolean)) {
     assert.ok(!error.message.includes(secret), `the message does not carry ${secret}: ${error.message}`);
   }
   assert.equal(fs.existsSync(dump), false, "the unverified dump is gone");
@@ -580,6 +594,43 @@ test("remote: the tool error filter keeps only tool lines and masks the given va
   assert.equal(sanitizeToolError("pg_dump", { code: "ENOENT" }), "pg_dump was not found — give the PostgreSQL bin directory with --pg-bin");
   assert.equal(sanitizeToolError("pg_dump", { code: 2, stderr: "something else" }), "pg_dump failed (exit code 2)");
   assert.match(sanitizeToolError("pg_dump", { code: 1, stderr: "pg_dump: error: at \"h\" (fe80::1:2), port 5432 failed: C:/b/x.dump" }, [["C:/b/x.dump", "<dump>"]]), /\(<ip>\), port 5432 failed: <dump>$/);
+  // A quote left open runs to the end of the line; an address starting with "::"; a translated or detail line is dropped.
+  assert.equal(sanitizeToolError("pg_restore", { code: 1, stderr: "pg_restore: error: bad value: \"Ana Petrovic\npg_restore: error: from (::1)\npg_restore: detail: Key (email)=(a@b.c)\npg_restore: fehler: Ana" }),
+    "pg_restore failed (exit code 1): pg_restore: error: bad value: \"…\" | pg_restore: error: from (<ip>)");
+  assert.equal(sanitizeToolError("pg_dump", { code: 1, stderr: "pg_dump: error: password postgres.ref s3cret" }, [["s3cret", "<password>"], ["postgres.ref", "<source user>"]]),
+    "pg_dump failed (exit code 1): pg_dump: error: password <source user> <password>");
+});
+
+test("remote: a driver, network or TLS failure is reported by a fixed sentence and its code, never by its own text", () => {
+  const own = new Error("refusing: the source has no schema x");
+  assert.equal(sanitizeRemoteError(own), own, "the script's own refusals pass as they are");
+  const tool = new Error("pg_dump failed (exit code 1): pg_dump: error: x");
+  assert.equal(sanitizeRemoteError(tool), tool);
+  const auth = Object.assign(new Error('password authentication failed for user "postgres.secretref"'), { code: "28P01" });
+  assert.equal(sanitizeRemoteError(auth).message, "database connection or query failed (28P01): password authentication failed — check the password");
+  const dns = Object.assign(new Error("getaddrinfo ENOTFOUND db.secretref.supabase.co"), { code: "ENOTFOUND" });
+  assert.equal(sanitizeRemoteError(dns).message, "database connection or query failed (ENOTFOUND): the host was not found — check the host in the URL");
+  const tls = new Error("Hostname/IP does not match certificate's altnames: DNS:*.pooler.supabase.com");
+  assert.equal(sanitizeRemoteError(tls).message, "database connection or query failed: see the code (a TLS problem)");
+  const odd = Object.assign(new Error("something with 10.1.2.3"), { code: "weird code; drop table" });
+  assert.equal(sanitizeRemoteError(odd).message, "database connection or query failed: see the code");
+});
+
+test("remote: a wrong source password, a user with a project reference and a closed port come back without the user, the reference, the host or the address", { skip }, async () => {
+  const base = await remoteArgs(dumpPath());
+  const wrongPassword = await backupAndVerifyRemote({ ...base, dumpPath: dumpPath(), sourcePassword: "not-the-password" }).then(() => null, (e) => e);
+  assert.match(wrongPassword.message, /^database connection or query failed \(28P01\): password authentication failed/);
+  const withRef = new URL(base.sourceUrl);
+  withRef.username = "postgres.secretref";
+  const refUser = await backupAndVerifyRemote({ ...base, dumpPath: dumpPath(), sourceUrl: withRef.toString() }).then(() => null, (e) => e);
+  assert.match(refUser.message, /^database connection or query failed \((28P01|28000)\)/);
+  assert.ok(!refUser.message.includes("secretref"), refUser.message);
+  const closed = new URL(base.sourceUrl);
+  closed.hostname = "127.0.0.1";
+  closed.port = "1";
+  const refused = await backupAndVerifyRemote({ ...base, dumpPath: dumpPath(), sourceUrl: closed.toString() }).then(() => null, (e) => e);
+  assert.match(refused.message, /^database connection or query failed \(ECONNREFUSED\)/);
+  assert.ok(!refused.message.includes("127.0.0.1"), refused.message);
 });
 
 test("remote: a pg_dump older than the source server is refused before anything is dumped", { skip: stubSkip }, async () => {
@@ -617,6 +668,10 @@ test("remote: a sequence a writer advances during the run is accepted only withi
   assert.deepEqual(reconcileMovedSequences(fromUnused, print(2), new Map([["public.s", "unused"]]), new Map([["public.s", "3"]])), ["public.s"]);
   const notMoved = print(5);
   assert.deepEqual(reconcileMovedSequences(notMoved, print(4), new Map([["public.s", "5"]]), new Map([["public.s", "5"]])), []);
+  const stillUnused = print(1);
+  assert.deepEqual(reconcileMovedSequences(stillUnused, print("unused"), new Map([["public.s", "unused"]]), new Map([["public.s", "1"]])), ["public.s"], "pg_dump read it before its first use");
+  const usedBefore = print(3);
+  assert.deepEqual(reconcileMovedSequences(usedBefore, print("unused"), new Map([["public.s", "2"]]), new Map([["public.s", "3"]])), [], "a used sequence never comes back unused");
 });
 
 test("remote: an extension's member table, its constraint and a member sequence are left out on both sides", { skip }, async () => {

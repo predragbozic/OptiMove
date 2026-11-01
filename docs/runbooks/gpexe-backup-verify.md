@@ -133,9 +133,10 @@ Postgres, which the script drops at the end.
 ### Each time: a quiet moment
 
 Run it when **no deploy, no migration, no GPEXE check and no import** is running, and none is about to start. The
-backup holds a shared lock on every application table while it reads: a migration that wants to change a table waits
-for it (at most 60 s, then the backup stops instead of holding the migration up longer), and the application's own
-queries can queue behind such a migration. On a quiet database it is never noticed.
+backup holds a shared lock on every application table from the start of its read until the read ends (minutes). A
+migration that wants to change a table during that time waits for the end of the read, and the application's own
+queries on that table queue behind the migration. Only when a change is already running as the backup starts does the
+backup give up after 60 s instead of waiting. On a quiet database it is never noticed.
 
 ### Each time: the connection string, without the password
 
@@ -204,11 +205,13 @@ local mode.
   (empty, unless you decided otherwise); `tablesCompared` and `rowsCompared`; `restoreDropped: true`.
   `sequencesMovedDuringRun` names a sequence the application advanced while the run lasted; its restored value lies
   between the values read just before and after `pg_dump`, so it is not a difference.
-- **`VERIFICATION FAILED`** or any `refusing:` / `SAFETY:` / `pg_dump failed` / `pg_restore failed` line: the dump
-  is deleted (or was never written). Do not turn the import switch on. Report only that one line (the script masks
-  hosts, the user, paths and quoted text in it) and, for a difference, the table or catalog **names** the script
-  printed. Never paste the whole output, the `.verify.json` or the local Postgres server log: they can hold the host,
-  the project reference or row data.
+- **`VERIFICATION FAILED`** or any `refusing:` / `SAFETY:` / `pg_dump failed` / `pg_restore failed` /
+  `database connection or query failed` line: the dump is deleted (or was never written). Do not turn the import
+  switch on. Report only that one line and, for a difference, the table or catalog **names** the script printed. In a
+  `pg_dump failed` / `pg_restore failed` line the script masks the host, the user, the project reference, paths,
+  passwords, quoted text and addresses; a `database connection or query failed` line carries only a code and a fixed
+  sentence (for example `28P01`: the password is wrong). Never paste the whole output, the `.verify.json` or the local
+  Postgres server log: they can hold the host, the project reference or row data.
 - `refusing: the source has schema …`: stop and report the schema's name. `refusing: the source has no schema …`: stop
   and report it too; nothing was dumped.
 - A run stopped with Ctrl+C or a closed window can leave a partial dump (delete it) and a database
