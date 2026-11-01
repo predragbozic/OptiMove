@@ -104,7 +104,7 @@ unverified and delete it.
 
 ## The deployed database (Supabase), from the owner's computer
 
-**Who:** the owner only, on his own Windows computer. Nobody else runs it: not the executor, not the *Rukovodilac*.
+**Who:** the owner only, on the owner's own Windows computer. Nobody else runs it: not the executor, not the *Rukovodilac*.
 It only **reads** the deployed database; the trial restore goes into a new, throwaway database on the owner's local
 Postgres, which the script drops at the end.
 
@@ -114,17 +114,28 @@ Postgres, which the script drops at the end.
    "Command Line Tools" components. The deployed server is PostgreSQL 17.6, and `pg_dump` / `pg_restore` must be at
    least the server's major version. Check in PowerShell:
    `& "C:\Program Files\PostgreSQL\17\bin\pg_dump.exe" --version` → `pg_dump (PostgreSQL) 17.x`.
-   The installer's local server is the restore target (usually `localhost:5432`, user `postgres`, the password chosen
-   at installation).
+   The installer's local server is the restore target (user `postgres`, the password chosen at installation). It
+   must be the **same major version as the deployed server (17)** and use the **UTF8** encoding; the script refuses
+   otherwise, before anything is dumped. If another Postgres already listens on 5432 (for example the development
+   database), the installer picks another port (often 5433): use that port in `--restore-url`. To check a port, in
+   pgAdmin or `psql` on it: `select version();` (17.x) and `show server_encoding;` (UTF8).
 2. **Node.js** and the repository checkout with its backend packages installed (`npm --prefix backend install`), as
    for running the app locally, and **git** on the PATH (the script uses git to refuse a dump path inside a
    repository).
-3. **A folder for the backups**, created once, for example `C:\OptiMove-backups`:
+3. **A folder for the backups**, created once, under your own user folder, for example
+   `C:\Users\<you>\OptiMove-backups` (a folder directly under `C:\` is writable by every user of the computer):
    - **outside** every git checkout, and **outside** OneDrive, Dropbox or any other synced folder (Windows often syncs
      Documents and Desktop to OneDrive);
    - on a disk protected by BitLocker (Windows device encryption);
    - the dump holds personal data (athletes, users, password hashes, GPEXE identities): it is **never** attached,
      uploaded, sent or copied anywhere.
+
+### Each time: a quiet moment
+
+Run it when **no deploy, no migration, no GPEXE check and no import** is running, and none is about to start. The
+backup holds a shared lock on every application table while it reads: a migration that wants to change a table waits
+for it (at most 60 s, then the backup stops instead of holding the migration up longer), and the application's own
+queries can queue behind such a migration. On a quiet database it is never noticed.
 
 ### Each time: the connection string, without the password
 
@@ -134,9 +145,13 @@ Copy the URL **without** the password, so it reads
 `postgresql://postgres.<project-ref>@<pooler-host>:5432/postgres`. A URL that carries a password is refused: both
 passwords are typed when asked and are never on a command line, in a file or in the shell's history.
 
-TLS is always on: `sslmode=require` by default (the traffic is encrypted). For full certificate verification,
-download the project's CA certificate (Supabase dashboard → Database settings → SSL configuration) and add
-`--ssl-root-cert <path to the .crt>`; the script then uses `verify-full`.
+TLS is always on, and there is no way to switch it off. Two levels:
+- **Recommended: `verify-full`.** Download the project's CA certificate once (Supabase dashboard → Database settings →
+  SSL configuration → Download certificate), keep it next to the backups, and add `--ssl-root-cert <path to the .crt>`.
+  The script then checks that it really talks to the Supabase server.
+- **Without `--ssl-root-cert`: `sslmode=require`.** The traffic is encrypted, but the server's certificate is not
+  checked, so someone who controls the network between the computer and Supabase could stand in the middle. Use it
+  only on a network you trust (not a public Wi-Fi); the script says so before it asks for the password.
 
 ### Run (PowerShell, from the repository folder)
 
@@ -144,12 +159,24 @@ download the project's CA certificate (Supabase dashboard → Database settings 
 node backend/scripts/gpexe-backup-verify.mjs --remote-source `
   --source-url "postgresql://postgres.<project-ref>@<pooler-host>:5432/postgres" `
   --restore-url "postgresql://postgres@localhost:5432/postgres" `
-  --dump C:/OptiMove-backups/optimove-production-<YYYY-MM-DD>.dump `
+  --dump "C:/Users/<you>/OptiMove-backups/optimove-production-YYYY-MM-DD.dump" `
+  --ssl-root-cert "C:/Users/<you>/OptiMove-backups/prod-ca.crt" `
   --pg-bin "C:/Program Files/PostgreSQL/17/bin"
 ```
 
-It asks, without echo, for the deployed database's password (Supabase dashboard → Database settings) and then for
-the local Postgres password (Enter if there is none).
+Replace `YYYY-MM-DD` with the date and `<you>` with your user name, and keep every path in quotes. `--pg-bin` is
+required: the tools are never looked up anywhere else.
+
+It first checks everything it can without a password (the URLs, the local host, the dump path, the schema names, the
+tool versions), and only then asks, without echo, for two passwords:
+1. **The deployed database's password.** It is the password inside the deployed application's existing
+   `DATABASE_URL` (the Render service's environment), or the one kept in your password manager. **Never use "Reset
+   database password" in Supabase for a backup:** the deployed application would lose its database connection until
+   its `DATABASE_URL` is changed too. If you do not know the password, stop.
+2. **The local Postgres password** (Enter if there is none).
+
+Type the passwords; if you paste one, clear the clipboard afterwards (Windows + V keeps a history). When you type
+the first character, nothing may appear on the screen; if anything does, press Ctrl+C and report it.
 
 What it does — the local mode's procedure, with these differences:
 - it dumps and compares **only the application's schemas**: `calendar`, `library`, `media`, `plans`, `public`,
@@ -175,9 +202,18 @@ local mode.
 - **`VERIFIED`**: next to the dump sits `<dump>.verify.json`. Check in it, without copying any data anywhere:
   `verified: true`; `schemas` (the eight above); `schemasLeftOut` (only Supabase's own); `schemasSkippedByOwner`
   (empty, unless you decided otherwise); `tablesCompared` and `rowsCompared`; `restoreDropped: true`.
-- **`VERIFICATION FAILED`** or any `refusing:` / `SAFETY:` / `pg_restore: error` line: the dump is deleted (or was
-  never written). Do not turn the import switch on. Report only the first error line and, for a difference, the table
-  or catalog **names** the script printed — never row data.
+  `sequencesMovedDuringRun` names a sequence the application advanced while the run lasted; its restored value lies
+  between the values read just before and after `pg_dump`, so it is not a difference.
+- **`VERIFICATION FAILED`** or any `refusing:` / `SAFETY:` / `pg_dump failed` / `pg_restore failed` line: the dump
+  is deleted (or was never written). Do not turn the import switch on. Report only that one line (the script masks
+  hosts, the user, paths and quoted text in it) and, for a difference, the table or catalog **names** the script
+  printed. Never paste the whole output, the `.verify.json` or the local Postgres server log: they can hold the host,
+  the project reference or row data.
+- `refusing: the source has schema …`: stop and report the schema's name. `refusing: the source has no schema …`: stop
+  and report it too; nothing was dumped.
+- A run stopped with Ctrl+C or a closed window can leave a partial dump (delete it) and a database
+  `optimove_tests_gpexe_restore_<random>` on the local Postgres: drop it (pgAdmin → Databases → right click →
+  Delete/Drop).
 
 ### The record row
 
@@ -190,8 +226,9 @@ import switch on") is filled in for this backup, **without** the host, the proje
 
 ### Keeping and deleting
 
-Keep the verified dump and its report together until the import it protects has passed its post-check and the owner
-decides it is no longer needed; then delete both. A dump without its report next to it is unverified: delete it.
+Keep the verified dump and its report together until the import it protects has passed its post-check and a newer
+verified backup exists, and no longer than 30 days (the proposed limit; the owner decides); then delete both (and empty
+the recycle bin). A dump without its report next to it is unverified: delete it.
 
 ### What it does not do
 

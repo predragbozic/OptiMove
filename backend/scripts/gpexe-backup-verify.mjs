@@ -61,6 +61,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import pg from "pg";
@@ -181,9 +182,13 @@ export function pgConnectionArgs(url, database) {
 
 // With a schema list (the remote mode) only those schemas are dumped, and
 // --strict-names makes pg_dump fail on a listed schema the source lacks.
-export function pgDumpArgs(source, database, snapshot, dump, schemas = null) {
+// The remote mode also bounds pg_dump's wait for a table lock: on a live
+// server a queued ALTER would otherwise wait behind the backup's shared locks
+// and stall the application's own queries behind it.
+export function pgDumpArgs(source, database, snapshot, dump, schemas = null, { lockWaitTimeout = null } = {}) {
   const only = schemas ? ["--strict-names", ...schemas.flatMap((name) => ["--schema", name])] : [];
-  return ["-Fc", `--snapshot=${snapshot}`, ...only, "-f", dump, ...pgConnectionArgs(source, database)];
+  const bound = lockWaitTimeout ? [`--lock-wait-timeout=${lockWaitTimeout}`] : [];
+  return ["-Fc", `--snapshot=${snapshot}`, ...bound, ...only, "-f", dump, ...pgConnectionArgs(source, database)];
 }
 
 export function pgRestoreArgs(source, restoreDatabase, dump) {
@@ -207,15 +212,22 @@ async function insideGitWorkTree(dir) {
 // The path is claimed by creating the file exclusively ("wx"), in one atomic
 // step: a file that appears at that path at any moment after the check
 // cannot be overwritten by pg_dump, because the check IS the creation.
-async function claimDumpTarget(dumpPath) {
+async function checkDumpTarget(dumpPath) {
   if (!dumpPath) throw new Error("--dump <path> is required");
   const resolved = path.resolve(dumpPath);
   const dir = path.dirname(resolved);
   if (!fs.existsSync(dir)) throw new Error(`refusing: directory ${dir} does not exist`);
+  if (fs.existsSync(resolved)) throw new Error(`refusing: ${resolved} already exists — a backup is never overwritten`);
   if (fs.existsSync(`${resolved}.verify.json`)) throw new Error(`refusing: ${resolved}.verify.json already exists`);
   if (await insideGitWorkTree(dir)) throw new Error(`refusing: ${dir} is inside a git work tree — the dump holds personal data and must stay outside any repository`);
+  return resolved;
+}
+
+async function claimDumpTarget(dumpPath) {
+  const resolved = await checkDumpTarget(dumpPath);
   try {
-    await (await fsp.open(resolved, "wx")).close();
+    // Readable by its owner only (where the file system has POSIX modes).
+    await (await fsp.open(resolved, "wx", 0o600)).close();
   } catch (error) {
     if (error.code === "EEXIST") throw new Error(`refusing: ${resolved} already exists — a backup is never overwritten`);
     throw error;
@@ -276,7 +288,7 @@ export async function fingerprint(client, { schemas = null } = {}) {
     `select con.conrelid::regclass::text || ' ' || con.conname || ' ' || con.contype::text as head, con.contype::text as type,
             con.conrelid::regclass::text as tbl, con.conname as name, pg_get_constraintdef(con.oid) as def
        from pg_constraint con join pg_namespace n on n.oid = con.connamespace
-      where con.conrelid <> 0 and ${F}`,
+      where con.conrelid <> 0 and ${F} ${notExtensionMember("pg_class", "con.conrelid", schemas)}`,
   )).rows;
   // The CHECKs with their parts, for reconcileReprintedChecks (not compared
   // on their own: the constraints list above is).
@@ -317,14 +329,68 @@ export async function fingerprint(client, { schemas = null } = {}) {
     triggers: await list(
       `select t.tgrelid::regclass::text || ' ' || t.tgname || ' enabled=' || t.tgenabled::text || ' ' || md5(pg_get_triggerdef(t.oid)) as item
          from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
-        where not t.tgisinternal and ${F}`,
+        where not t.tgisinternal and ${F} ${notExtensionMember("pg_class", "t.tgrelid", schemas)}`,
     ),
-    sequences: await list(
-      `select schemaname || '.' || sequencename || ' last=' || coalesce(last_value::text, 'unused') as item
-         from pg_sequences where ${schemas ? schemaFilter(schemas, "schemaname") : "schemaname not in ('pg_catalog', 'information_schema')"}`,
-    ),
+    sequences: await list(sequenceSql(schemas)),
   };
   return { tables, catalog, checks };
+}
+
+function sequenceSql(schemas) {
+  if (!schemas) {
+    return `select schemaname || '.' || sequencename || ' last=' || coalesce(last_value::text, 'unused') as item
+              from pg_sequences where schemaname not in ('pg_catalog', 'information_schema')`;
+  }
+  return `select s.schemaname || '.' || s.sequencename || ' last=' || coalesce(s.last_value::text, 'unused') as item
+            from pg_sequences s
+            join pg_namespace n on n.nspname = s.schemaname
+            join pg_class c on c.relnamespace = n.oid and c.relname = s.sequencename
+           where ${schemaFilter(schemas, "s.schemaname")} ${notExtensionMember("pg_class", "c.oid", schemas)}`;
+}
+
+// A sequence is not transactional: pg_dump reads its value at its own moment,
+// not in the exported snapshot, so on a live source a sequence a writer
+// advances while the run lasts can differ between the source fingerprint and
+// the restored copy. The remote mode reads every sequence just before pg_dump
+// starts and again after it ends; a restored value inside that range is the
+// value pg_dump saw, and the source item is replaced by the restored one. A
+// value outside the range stays a difference. Returns the names reconciled.
+const SEQUENCE_ITEM = /^(.+) last=(-?\d+|unused)$/;
+export function reconcileMovedSequences(sourcePrint, restoredPrint, before, after) {
+  const restoredItems = new Set(restoredPrint.catalog.sequences);
+  const restoredByName = new Map();
+  for (const item of restoredPrint.catalog.sequences) {
+    const m = SEQUENCE_ITEM.exec(item);
+    if (m) restoredByName.set(m[1], { item, last: m[2] });
+  }
+  const reconciled = [];
+  sourcePrint.catalog.sequences = sourcePrint.catalog.sequences.map((item) => {
+    if (restoredItems.has(item)) return item;
+    const m = SEQUENCE_ITEM.exec(item);
+    const restored = m && restoredByName.get(m[1]);
+    const low = before.get(m?.[1]);
+    const high = after.get(m?.[1]);
+    if (!restored || low === undefined || high === undefined || restored.last === "unused" || high === "unused") return item;
+    const value = BigInt(restored.last);
+    const ends = [low === "unused" ? null : BigInt(low), BigInt(high)].filter((v) => v !== null);
+    const min = ends.reduce((a, b) => (b < a ? b : a));
+    const max = ends.reduce((a, b) => (b > a ? b : a));
+    if (low === "unused" ? value <= max : value >= min && value <= max) {
+      reconciled.push(m[1]);
+      return restored.item;
+    }
+    return item;
+  }).sort();
+  return reconciled;
+}
+
+async function readSequenceValues(client, schemas) {
+  const values = new Map();
+  for (const { item } of (await client.query(sequenceSql(schemas))).rows) {
+    const m = SEQUENCE_ITEM.exec(item);
+    if (m) values.set(m[1], m[2]);
+  }
+  return values;
 }
 
 // A CHECK can come back from a dump and restore printed with a different but
@@ -598,11 +664,97 @@ function sslConfig(sslMode, sslRootCert, host) {
   return { ca: fs.readFileSync(sslRootCert, "utf8"), rejectUnauthorized: true, servername: host };
 }
 
-function clientConfig(url, database, password, ssl) {
+function clientConfig(url, database, password, ssl, extra = {}) {
   return {
     host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port || 5432),
-    user: decodeURIComponent(url.username), password, database, ssl,
+    user: decodeURIComponent(url.username), password, database, ssl, ...extra,
   };
+}
+
+// Every check that needs no password and no connection, in one place: the
+// CLI runs it before it asks for either password, and backupAndVerifyRemote
+// runs it again first. Nothing is written: the dump path is only checked
+// here, and claimed later.
+export async function preflightRemote({
+  sourceUrl, restoreUrl, dumpPath, schemas = APP_SCHEMAS, skipSchemas = [], sslMode = "require", sslRootCert = "", pgBin = "",
+}) {
+  const source = checkConnectionUrl(sourceUrl, "the source URL");
+  const restoreServer = checkConnectionUrl(restoreUrl, "the restore URL");
+  // Supabase's transaction pooler (6543) hands each statement to any server
+  // session, so it cannot hold the exported snapshot pg_dump imports.
+  if ((source.port || "5432") === "6543") throw new Error("refusing: port 6543 is the transaction pooler — use the session pooler (port 5432)");
+  if (!SSL_MODES.includes(sslMode)) throw new Error(`refusing: sslmode ${sslMode} is not one of ${SSL_MODES.join(", ")}`);
+  if (sslMode === "verify-full" && !(sslRootCert && fs.existsSync(sslRootCert))) throw new Error("refusing: verify-full needs --ssl-root-cert <existing file>");
+  if (sslMode !== "verify-full" && sslRootCert) throw new Error("refusing: --ssl-root-cert is used only with verify-full");
+  if (!LOCAL_HOSTS.has(restoreServer.hostname)) throw new Error(`refusing: restore host ${restoreServer.hostname} is not this machine — the trial restore runs on the local Postgres`);
+  const dumpSchemas = checkSchemaList(schemas);
+  const acknowledged = skipSchemas.length ? checkSchemaList(skipSchemas) : [];
+  if (acknowledged.some((name) => dumpSchemas.includes(name))) throw new Error("refusing: a schema is both dumped and skipped");
+  const sourceInfo = describe(source);
+  const restoreInfo = describe(restoreServer);
+  const dump = await checkDumpTarget(dumpPath);
+  const pgDumpMajor = await toolMajor(pgBin, "pg_dump");
+  const pgRestoreMajor = await toolMajor(pgBin, "pg_restore");
+  if (pgRestoreMajor < pgDumpMajor) throw new Error(`refusing: pg_restore ${pgRestoreMajor} is older than pg_dump ${pgDumpMajor} — use the tools of one PostgreSQL installation (--pg-bin)`);
+  return { source, restoreServer, dumpSchemas, acknowledged, sourceInfo, restoreInfo, dump, pgDumpMajor, pgRestoreMajor };
+}
+
+async function toolMajor(pgBin, name) {
+  let stdout;
+  try {
+    ({ stdout } = await run(tool(pgBin, name), ["--version"], { windowsHide: true }));
+  } catch (error) {
+    throw new Error(error.code === "ENOENT" ? `refusing: ${name} was not found — give the PostgreSQL bin directory with --pg-bin` : `refusing: ${name} --version failed`);
+  }
+  const m = /\(PostgreSQL\)\s+(\d+)/.exec(stdout);
+  if (!m) throw new Error(`refusing: the version of ${name} could not be read`);
+  return Number(m[1]);
+}
+
+// A failed pg_dump or pg_restore in the remote mode is reported by its own
+// error lines only. execFile's message starts with the whole command line
+// (host, user with the project reference, paths), and a restore error can
+// carry row data on its CONTEXT / DETAIL lines; the owner may paste the
+// message into a chat. So only "pg_dump: error: ..." style lines are kept,
+// every quoted text and every IP address in them is masked, and the known
+// host, user and paths are replaced by placeholders.
+export function sanitizeToolError(name, error, replacements = []) {
+  if (error?.code === "ENOENT") return `${name} was not found — give the PostgreSQL bin directory with --pg-bin`;
+  const lines = String(error?.stderr ?? "").split(/\r?\n/)
+    .filter((line) => /^pg_(dump|restore): /i.test(line) && !/^pg_(dump|restore): (detail|hint):/i.test(line))
+    .slice(0, 3);
+  const masked = lines.map((line) => {
+    let out = line;
+    for (const [value, placeholder] of replacements) if (value) out = out.split(value).join(placeholder);
+    return out
+      .replace(/"[^"]*"/g, '"…"')
+      .replace(/'[^']*'/g, "'…'")
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "<ip>")
+      .replace(/\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b/gi, "<ip>")
+      .slice(0, 300);
+  });
+  const code = typeof error?.code === "number" ? ` (exit code ${error.code})` : "";
+  return `${name} failed${code}${masked.length ? `: ${masked.join(" | ")}` : ""}`;
+}
+
+async function runToolSanitized(pgBin, name, args, options, replacements) {
+  try {
+    return await run(tool(pgBin, name), args, options);
+  } catch (error) {
+    throw new Error(sanitizeToolError(name, error, replacements));
+  }
+}
+
+// The source's and the restore server's facts that decide whether a trial
+// restore can be compared at all: a different major version prints views,
+// functions and indexes differently, and a different encoding cannot hold the
+// same text. Read before anything is dumped.
+async function serverFacts(client) {
+  const r = (await client.query(
+    `select current_setting('server_version_num')::int as num, current_setting('server_encoding') as encoding`,
+  )).rows[0];
+  if (!/^[A-Z0-9_]+$/.test(r.encoding)) throw new Error("SAFETY: unexpected server encoding name");
+  return { major: Math.floor(r.num / 10000), encoding: r.encoding };
 }
 
 async function readFingerprintWith(config, database, schemas) {
@@ -624,22 +776,16 @@ export async function backupAndVerifyRemote({
   sourceUrl, sourcePassword, restoreUrl, restorePassword = "", dumpPath, schemas = APP_SCHEMAS, skipSchemas = [],
   sslMode = "require", sslRootCert = "", pgBin = "", onSnapshotExported, onDumpStarted, onRestored, log = () => {},
 }) {
-  const source = checkConnectionUrl(sourceUrl, "the source URL");
-  const restoreServer = checkConnectionUrl(restoreUrl, "the restore URL");
   if (typeof sourcePassword !== "string") throw new Error("refusing: the source password is missing");
-  if (!SSL_MODES.includes(sslMode)) throw new Error(`refusing: sslmode ${sslMode} is not one of ${SSL_MODES.join(", ")}`);
-  if (sslMode === "verify-full" && !(sslRootCert && fs.existsSync(sslRootCert))) throw new Error("refusing: verify-full needs --ssl-root-cert <existing file>");
-  if (sslMode !== "verify-full" && sslRootCert) throw new Error("refusing: --ssl-root-cert is used only with verify-full");
-  if (!LOCAL_HOSTS.has(restoreServer.hostname)) throw new Error(`refusing: restore host ${restoreServer.hostname} is not this machine — the trial restore runs on the local Postgres`);
-  const dumpSchemas = checkSchemaList(schemas);
-  const acknowledged = skipSchemas.length ? checkSchemaList(skipSchemas) : [];
-  if (acknowledged.some((name) => dumpSchemas.includes(name))) throw new Error("refusing: a schema is both dumped and skipped");
-  const sourceInfo = describe(source);
-  const restoreInfo = describe(restoreServer);
+  const { source, restoreServer, dumpSchemas, acknowledged, sourceInfo, restoreInfo, pgDumpMajor } = await preflightRemote({
+    sourceUrl, restoreUrl, dumpPath, schemas, skipSchemas, sslMode, sslRootCert, pgBin,
+  });
   const restoreName = `optimove_tests_gpexe_restore_${crypto.randomBytes(5).toString("hex")}`;
   if (!RESTORE_DB_PATTERN.test(restoreName)) throw new Error("SAFETY: bad restore database name");
   const ssl = sslConfig(sslMode, sslRootCert, source.hostname);
   const dump = await claimDumpTarget(dumpPath);
+  // What a failed tool's message may never show.
+  const hidden = [[source.hostname, "<source host>"], [decodeURIComponent(source.username), "<source user>"], [dump, "<dump>"]];
   log(`source (read only, sslmode ${sslMode}): host ${sourceInfo.host}, port ${sourceInfo.port}, database ${sourceInfo.database}`);
   log(`schemas dumped: ${dumpSchemas.join(", ")}`);
 
@@ -658,18 +804,36 @@ export async function backupAndVerifyRemote({
   let failure = null;
   const cleanupProblems = [];
   const restoreClientConfig = (database) => clientConfig(restoreServer, database, restorePassword, false);
-  const sourceClient = new pg.Client(clientConfig(source, sourceInfo.database, sourcePassword, ssl));
+  const sourceClient = new pg.Client(clientConfig(source, sourceInfo.database, sourcePassword, ssl, { keepAlive: true }));
   sourceClient.on("error", () => {});
   try {
     await sourceClient.connect();
     const who = (await sourceClient.query(`select current_database() as db`)).rows[0];
     if (who.db !== sourceInfo.database) throw new Error(`SAFETY: connected to database ${who.db}, expected ${sourceInfo.database}`);
-    // 1. One snapshot for the dump and the source fingerprint. A hosted
-    // server may cap statements or idle transactions; neither may cut the
-    // fingerprint or the open snapshot while pg_dump still runs.
+    // 0. Can this machine restore and compare it at all? pg_dump at least the
+    // source's major; the local server the same major and encoding.
+    const sourceFacts = await serverFacts(sourceClient);
+    if (pgDumpMajor < sourceFacts.major) throw new Error(`refusing: pg_dump ${pgDumpMajor} is older than the source server (${sourceFacts.major}) — install PostgreSQL ${sourceFacts.major} client tools (--pg-bin)`);
+    const probe = new pg.Client(restoreClientConfig(restoreInfo.database));
+    probe.on("error", () => {});
+    await probe.connect();
+    try {
+      await assertConnectedLocally(probe, restoreInfo.database);
+      const localFacts = await serverFacts(probe);
+      if (localFacts.major !== sourceFacts.major) throw new Error(`refusing: the local Postgres is version ${localFacts.major}, the source ${sourceFacts.major} — restore into a local PostgreSQL ${sourceFacts.major} server (its port in --restore-url)`);
+      if (localFacts.encoding !== sourceFacts.encoding) throw new Error(`refusing: the local Postgres's encoding is ${localFacts.encoding}, the source's ${sourceFacts.encoding}`);
+    } finally {
+      await probe.end().catch(() => {});
+    }
+    report.restoreEncoding = sourceFacts.encoding;
+    // 1. One snapshot for the dump and the source fingerprint. Statements are
+    // not cut (a hosted server may cap them); a lock wait and an idle
+    // transaction are bounded, so a queued ALTER is not stalled for long and a
+    // dropped laptop never leaves the snapshot open on the source.
     await sourceClient.query("begin transaction isolation level repeatable read read only");
     await sourceClient.query("set local statement_timeout = 0");
-    await sourceClient.query("set local idle_in_transaction_session_timeout = 0");
+    await sourceClient.query("set local lock_timeout = '10s'");
+    await sourceClient.query("set local idle_in_transaction_session_timeout = '2h'");
     if ((await sourceClient.query("show transaction_read_only")).rows[0].transaction_read_only !== "on") {
       throw new Error("SAFETY: the source transaction is not read only");
     }
@@ -683,7 +847,7 @@ export async function backupAndVerifyRemote({
     )).rows.map((r) => r.item);
     const unknown = report.schemasLeftOut.filter((name) => !HOSTING_SCHEMAS.includes(name) && !acknowledged.includes(name));
     if (unknown.length) {
-      throw new Error(`refusing: the source has schema ${unknown.join(", ")}, neither listed nor known as the hosting provider's — list it with --schema, or state with --skip-schema that it is not the application's`);
+      throw new Error(`refusing: the source has schema ${unknown.join(", ")}, neither listed nor known as the hosting provider's — stop and report its name; only when it is certainly not the application's, name it with --skip-schema (--schema replaces the default list: it would have to repeat every application schema)`);
     }
     report.schemasSkippedByOwner = acknowledged.filter((name) => report.schemasLeftOut.includes(name));
     report.extensionsInDumpedSchemas = (await sourceClient.query(
@@ -695,14 +859,17 @@ export async function backupAndVerifyRemote({
     report.serverVersion = (await sourceClient.query("show server_version")).rows[0].server_version;
     if (onSnapshotExported) await onSnapshotExported();
 
-    // 2. Dump and source fingerprint, concurrently, on the same snapshot.
+    // 2. Dump and source fingerprint, concurrently, on the same snapshot. The
+    // sequences are read just before and after (see reconcileMovedSequences).
+    const sequencesBefore = await readSequenceValues(sourceClient, dumpSchemas);
     const dumpEnv = pgEnv(source, process.env, { password: sourcePassword, sslMode, sslRootCert: sslRootCert || undefined });
-    const dumping = run(tool(pgBin, "pg_dump"), pgDumpArgs(source, sourceInfo.database, snapshot, dump, dumpSchemas), { env: dumpEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    const dumping = runToolSanitized(pgBin, "pg_dump", pgDumpArgs(source, sourceInfo.database, snapshot, dump, dumpSchemas, { lockWaitTimeout: "60s" }), { env: dumpEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, hidden);
     if (onDumpStarted) await onDumpStarted({ sourcePid: sourceClient.processID });
     const [printed, dumped] = await Promise.allSettled([fingerprint(sourceClient, { schemas: dumpSchemas }), dumping]);
     if (printed.status === "rejected") throw printed.reason;
     if (dumped.status === "rejected") throw dumped.reason;
     const sourcePrint = printed.value;
+    const sequencesAfter = await readSequenceValues(sourceClient, dumpSchemas);
     await sourceClient.query("rollback");
     report.dump.bytes = (await fsp.stat(dump)).size;
     report.dump.sha256 = await sha256(dump);
@@ -716,7 +883,8 @@ export async function backupAndVerifyRemote({
     await maintenance.connect();
     try {
       await assertConnectedLocally(maintenance, restoreInfo.database);
-      await maintenance.query(`create database ${quoteIdent(restoreName)}`);
+      // template0: nothing a customised template1 holds; the source's encoding.
+      await maintenance.query(`create database ${quoteIdent(restoreName)} template template0 encoding '${report.restoreEncoding}'`);
       restoreCreated = true;
     } finally {
       await maintenance.end().catch(() => {});
@@ -725,7 +893,7 @@ export async function backupAndVerifyRemote({
     // public is listed, and every new database already has an empty public:
     // when the dump's table of contents holds that entry, the new database's
     // own (empty) public is dropped first, so the restore recreates it.
-    const toc = (await run(tool(pgBin, "pg_restore"), ["--list", dump], { env: restoreEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 })).stdout;
+    const toc = (await runToolSanitized(pgBin, "pg_restore", ["--list", dump], { env: restoreEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, hidden)).stdout;
     if (dumpCreatesSchema(toc, "public")) {
       const fresh = new pg.Client(restoreClientConfig(restoreName));
       fresh.on("error", () => {});
@@ -741,13 +909,14 @@ export async function backupAndVerifyRemote({
         await fresh.end().catch(() => {});
       }
     }
-    await run(tool(pgBin, "pg_restore"), pgRestoreArgs(restoreServer, restoreName, dump), { env: restoreEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    await runToolSanitized(pgBin, "pg_restore", pgRestoreArgs(restoreServer, restoreName, dump), { env: restoreEnv, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, hidden);
     log(`restored into ${restoreName} on this machine`);
     if (onRestored) await onRestored(restoreClientConfig(restoreName));
 
     // 4. Compare, the listed schemas only.
     const restoredPrint = await readFingerprintWith(restoreClientConfig(restoreName), restoreName, dumpSchemas);
     report.reprintedChecks = await reconcileReprintedChecks(restoreClientConfig(restoreName), sourcePrint, restoredPrint);
+    report.sequencesMovedDuringRun = reconcileMovedSequences(sourcePrint, restoredPrint, sequencesBefore, sequencesAfter);
     const mismatches = compareFingerprints(sourcePrint, restoredPrint);
     report.tablesCompared = Object.keys(sourcePrint.tables).length;
     report.rowsCompared = Object.values(sourcePrint.tables).reduce((sum, t) => sum + t.rows, 0);
@@ -806,21 +975,33 @@ export function dumpCreatesSchema(toc, name) {
 
 // A password typed on the terminal, never echoed, never stored. Refused when
 // the input is not an interactive terminal (a password is never piped in).
+// The question goes to the real output; readline itself writes (and so
+// echoes) only into a sink that discards everything, so no keystroke reaches
+// the screen. Ctrl+C cancels.
 export function promptHidden(question, { input = process.stdin, output = process.stdout } = {}) {
   return new Promise((resolve, reject) => {
     if (!input.isTTY) {
       reject(new Error("refusing: a password is read only from an interactive terminal"));
       return;
     }
-    const rl = readline.createInterface({ input, output, terminal: true });
-    let muted = false;
-    rl._writeToOutput = (text) => { if (!muted) output.write(text); };
-    rl.question(question, (answer) => {
+    const sink = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    output.write(question);
+    const rl = readline.createInterface({ input, output: sink, terminal: true });
+    let settled = false;
+    rl.on("SIGINT", () => {
+      if (settled) return;
+      settled = true;
+      rl.close();
+      output.write("\n");
+      reject(new Error("cancelled"));
+    });
+    rl.question("", (answer) => {
+      if (settled) return;
+      settled = true;
       rl.close();
       output.write("\n");
       resolve(answer);
     });
-    muted = true;
   });
 }
 
@@ -850,18 +1031,21 @@ async function mainRemote(opts, readPassword) {
   if (!opts.sourceUrl) throw new Error("--source-url is required with --remote-source");
   if (!opts.restoreUrl) throw new Error("--restore-url is required with --remote-source");
   if (!opts.dump) throw new Error("--dump <path> is required");
+  // The tools are named by their directory, never looked up on the PATH or
+  // in the current directory.
+  const pgBin = opts.pgBin ?? process.env.PG_BIN ?? "";
+  if (!pgBin) throw new Error("--pg-bin <the PostgreSQL bin directory> is required with --remote-source");
+  const settings = {
+    sourceUrl: opts.sourceUrl, restoreUrl: opts.restoreUrl, dumpPath: opts.dump,
+    schemas: opts.schemas.length ? opts.schemas : APP_SCHEMAS, skipSchemas: opts.skipSchemas,
+    sslMode: opts.sslRootCert ? "verify-full" : "require", sslRootCert: opts.sslRootCert ?? "", pgBin,
+  };
   // Every check that needs no password runs before the prompts.
-  checkConnectionUrl(opts.sourceUrl, "the source URL");
-  checkConnectionUrl(opts.restoreUrl, "the restore URL");
+  await preflightRemote(settings);
+  if (settings.sslMode === "require") console.log("TLS: encrypted, but the server's certificate is not checked (sslmode require); --ssl-root-cert checks it (verify-full).");
   const sourcePassword = await readPassword("Password of the source database (not shown): ");
   const restorePassword = await readPassword("Password of the local Postgres (not shown; Enter if none): ");
-  const report = await backupAndVerifyRemote({
-    sourceUrl: opts.sourceUrl, sourcePassword, restoreUrl: opts.restoreUrl, restorePassword, dumpPath: opts.dump,
-    schemas: opts.schemas.length ? opts.schemas : APP_SCHEMAS, skipSchemas: opts.skipSchemas,
-    sslMode: opts.sslRootCert ? "verify-full" : "require", sslRootCert: opts.sslRootCert ?? "",
-    pgBin: opts.pgBin ?? process.env.PG_BIN ?? "", log: (line) => console.log(line),
-  });
-  return report;
+  return backupAndVerifyRemote({ ...settings, sourcePassword, restorePassword, log: (line) => console.log(line) });
 }
 
 export async function main(argv, { readPassword = promptHidden } = {}) {
