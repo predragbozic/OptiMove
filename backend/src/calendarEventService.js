@@ -51,7 +51,6 @@ import { runCalendarCommand } from "./calendarCommandRunner.js";
 export const EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 export const EVENT_TARGET_KINDS = Object.freeze(["athlete", "team", "club"]);
 export const MAX_EVENT_TARGETS = 200;
-const LOCK_TIMEOUT = "15s";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -263,7 +262,10 @@ const EVENT_VIEW_SQL = `
          e.title, e.day, e.end_day, e.start_time, e.end_time, e.timezone, e.location, e.status,
          e.cancelled_at, e.cancel_reason, e.expects, e.notes, e.external_schedule_id, e.test_schedule_id, e.revision,
          e.created_at, e.updated_at,
-         et.kind as event_kind, et.label as event_type_label,
+         et.kind as event_kind,
+            -- A club's type is shown only on its own club's events (a team moved to
+            -- another club keeps its events and their type id; K2b-1a, security M1).
+            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then et.label end as event_type_label,
          t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
          coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active,
          (select coalesce(jsonb_agg(jsonb_build_object(
@@ -455,13 +457,20 @@ async function teamClubId(queryable, teamId) {
 // GET /types — the types the active workspace may use, non-archived. An
 // archived team's workspace, or a team workspace of an archived club (nothing
 // can be created there), gets the router's one 404, as every write there.
-export async function listEventTypes(ctx) {
+// The owner whose catalog the workspace's events use (K2b-1a: resolved once
+// for GET /types and the form's lists that come with it).
+export async function eventCatalogOwner(ctx) {
   if (ctx.type !== "coach") throw forbidden();
   const owner = eventOwnerForWorkspace(ctx);
   if (owner?.scope === "team") {
     owner.teamClubId = await teamClubId(pool, owner.teamId);
     if (!owner.teamClubId) throw notFound();
   }
+  return owner;
+}
+
+export async function listEventTypes(ctx, resolvedOwner) {
+  const owner = resolvedOwner === undefined ? await eventCatalogOwner(ctx) : resolvedOwner;
   const params = [];
   const ownerSql = eventTypesOwnerSql(owner, "t", params);
   const result = await pool.query(

@@ -8,9 +8,12 @@
 //   2. prepare(): who may write, the writer lock and the subject's lock — the
 //      caller's; it returns the request hash and its own state
 //   3. the requestKey replay, AFTER the locks (so the caller is authorized
-//      again): the same key and the same request → the saved answer, read
-//      again now; the same key and another request → 409 request_key_reused;
-//      a refused request writes no row, so its key stays free
+//      again) and after a transaction-scoped advisory lock on (requests
+//      table, user, key): a second request with the same key waits until the
+//      first one has ended and then reads its committed row (a double submit,
+//      a retry during an in-flight COMMIT) — the same request → the saved
+//      answer, read again now; another request → 409 request_key_reused; a
+//      refused request writes no row, so its key stays free
 //   4. apply(), then writeRecord(): the request row and its change row(s)
 //      (the database refuses a COMMIT without the pair)
 //   5. a bounded COMMIT (the roster commands' discipline): an answer within
@@ -18,7 +21,11 @@
 //      → the saved outcome with verifiedAfterCommitError, or 503
 //      outcome_unknown — never "nothing was saved" after a sent COMMIT.
 // A same-key race (a double submit, a retry during an in-flight COMMIT) ends
-// in the saved answer, never a 500; a failing lookup says try again.
+// in the saved answer (the key lock of step 3; the request row's unique index
+// is the backstop) — never a 500 and never a refusal caused by the first
+// request's own write (its name, its first row); a failing lookup says try
+// again. A saved outcome whose view cannot be read now is 503 outcome_unknown
+// (Check result repeats the key), never "nothing was saved".
 import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { EventError } from "./calendarEventAccess.js";
@@ -75,6 +82,9 @@ export async function runCalendarCommand(spec) {
     await client.query(`set local lock_timeout = '${COMMAND_LOCK_TIMEOUT}'`);
     const prepared = await spec.prepare(client);
     hash = prepared.hash;
+    // Requests with the same key serialize here (step 3); requests with
+    // different keys never contend.
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${requestsTable}:${userId}:${requestKey}`]);
 
     const prior = (await client.query(
       `select * from ${requestsTable} where performed_by_user_id = $1 and request_key = $2`,
@@ -82,7 +92,7 @@ export async function runCalendarCommand(spec) {
     )).rows[0];
     if (prior) {
       if (!spec.sameRequest(prior, prepared)) throw requestKeyReused();
-      const answer = await spec.answer(client, prior.result, { replayed: true });
+      const answer = await savedAnswer(spec, client, prior.result, { replayed: true });
       await client.query("rollback");
       return { ...answer, replayed: true };
     }
@@ -111,7 +121,7 @@ export async function runCalendarCommand(spec) {
           console.error(`[${spec.label}] checking a racing ${operation} failed: ${checkError?.message}`);
           throw new EventError(409, "try_again", busyMessage);
         }
-        if (found) return { ...(await spec.answer(pool, found, { replayed: true })), replayed: true };
+        if (found) return { ...(await savedAnswer(spec, pool, found, { replayed: true })), replayed: true };
         throw requestKeyReused();
       }
       throw error;
@@ -131,13 +141,27 @@ export async function runCalendarCommand(spec) {
     } catch (checkError) {
       console.error(`[${spec.label}] checking ${operation} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }
-    if (found) return { ...(await spec.answer(pool, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
+    if (found) return { ...(await savedAnswer(spec, pool, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
     throw new EventError(503, "outcome_unknown", OUTCOME_UNKNOWN);
   } finally {
     if (!released) {
       client.removeListener("error", onClientError);
       client.release(broken ? true : undefined);
     }
+  }
+}
+
+// The answer of a SAVED request: its view read again now. A stated refusal
+// (the one 404: the caller may no longer read it) passes through; any other
+// failure is 503 outcome_unknown — the request is saved, so never "nothing
+// was saved".
+async function savedAnswer(spec, queryable, stored, extra) {
+  try {
+    return await spec.answer(queryable, stored, extra);
+  } catch (error) {
+    if (error instanceof EventError) throw error;
+    console.error(`[${spec.label}] reading the saved answer of ${spec.operation} failed: ${error?.code ?? ""} ${error?.message}`);
+    throw new EventError(503, "outcome_unknown", OUTCOME_UNKNOWN);
   }
 }
 

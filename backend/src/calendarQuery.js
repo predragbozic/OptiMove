@@ -457,7 +457,10 @@ async function readEventRows(ctx, { from, to }) {
     `select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id, e.event_type_id,
             e.title, e.day, e.end_day, e.start_time, e.end_time, e.location, e.status, e.expects, e.notes,
             e.external_schedule_id, e.test_schedule_id, e.revision,
-            et.kind as event_kind, et.label as event_type_label,
+            et.kind as event_kind,
+            -- A club's type is shown only on its own club's events (a team moved to
+            -- another club keeps its events and their type id; K2b-1a, security M1).
+            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then et.label end as event_type_label,
             t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
             coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active,
             (${structural}) as structural

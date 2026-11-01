@@ -361,7 +361,7 @@ test("1a. v49 is recorded once, with its objects and seed; the post-check runboo
   assert.equal((await createEvent(c.clubAdmin.cookie, { eventTypeId: training.id, title: "Uses the type", day: FUTURE, targets: [{ kind: "club", id: c.clubId }] })).status, 201);
   // Since v51 (K2b-1a, D37) a club's type is never deleted on its own: the
   // refusal now comes from its guard before the events' foreign key.
-  await assert.rejects(q(`delete from calendar.event_types where id = $1`, [training.id]), (e) => e.code === "23514" || e.code === "23503");
+  await assert.rejects(q(`delete from calendar.event_types where id = $1`, [training.id]), (e) => e.code === "23514" && /archived, never deleted/.test(e.message));
 });
 
 test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest identical -> re-apply; the rollback refuses once an event exists", async () => {

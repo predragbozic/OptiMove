@@ -136,9 +136,9 @@ against the new definition. A test holds each side.
 
 - `event_types`, `event_fields`, `locations`, `team_settings`: every update bumps `revision` by exactly one, and at
   COMMIT a `settings_changes` row names the subject at that revision (deferred) — the v49 `events_need_change` rule.
-- Child rows (`event_field_options`, `event_type_fields`): a write needs, at COMMIT, its parent's change row **written
-  in the same transaction** (`xmin = pg_current_xact_id()::xid` on the change row) — so the parent's revision is bumped
-  and audited.
+- Child rows (`event_field_options`, `event_type_fields`): a write needs, at COMMIT, its **parent written in the same
+  transaction** (`xmin = pg_current_xact_id()::xid` on the parent row) — the parent's revision rule then requires its
+  change row, so the child is audited through it.
 - A **seed-shaped insert** (`seed_key` set, `created_by_user_id` null) needs no change row: the migration and
   `seed_club_event_types` write them (the v49 seed had none either). Any later update needs its change. Known limit,
   recorded in the runbook: a raw insert made in the seed's shape passes without a change row (no route writes one).
@@ -220,7 +220,7 @@ Mounted with `requireAuth` before `/api/calendar` (as the events router, `backen
 
 | Route | Body | Notes |
 |---|---|---|
-| `GET /` | — | the active club's whole catalog: types (live and archived, each with `revision`, icon, colour, default expects, detail ids, `seeded`), details (with options, `answered`, `inUse`), places, the club's active teams with `colorKey`, `defaultLocationId`, `revision` (0 when no row yet) |
+| `GET /` | — | the active club's whole catalog: types (live and archived, each with `revision`, icon, colour, default expects, detail ids, `seeded`), details (with options, `answered`, `eventCount`), places, the club's active teams with `colorKey`, `defaultLocationId`, `revision` (0 when no row yet) |
 | `POST /types` | `requestKey, label, kind, iconKey?, colorKey?, defaultExpects, fieldIds` | the key made from the label |
 | `PATCH /types/:id` | `requestKey, expectedRevision, label?, iconKey?, colorKey?, defaultExpects?, fieldIds?` | `409 type_changed {current}` on a stale revision |
 | `POST /types/:id/archive`, `/restore` | `requestKey, expectedRevision` | `409 last_type`, `label_taken` |
@@ -286,8 +286,10 @@ Event command (K2a, extended): lock_event_writer → the event FOR UPDATE → re
 
 No cycle: a holder of a detail's or a place's `FOR UPDATE` (their own editor) waits on nothing after it; every other
 command takes them `FOR SHARE`, after its own subject. The bounded COMMIT, the replay after the locks, the same-key
-race and `verifiedAfterCommitError` / `503 outcome_unknown` are `runEventCommand`'s (`backend/src/calendarEventService.js:587-765`),
-extracted into one shared runner the settings service uses too (no second copy of it). `55P03` / `40P01` → `409
+race and `verifiedAfterCommitError` / `503 outcome_unknown` were K2a's `runEventCommand`; they are now one shared runner,
+`runCalendarCommand` in `backend/src/calendarCommandRunner.js`, that both services use (no second copy of it). A second
+request with the same key waits on a transaction-scoped advisory lock of (table, user, key) taken right after the
+caller's locks, then replays the first one's saved answer (17). `55P03` / `40P01` → `409
 try_again`; a live-label unique violation → `409 label_taken`.
 
 ## 7. The event form, the panel and the card (K2b-1d)
@@ -548,3 +550,23 @@ preflight, post-check and rollback SQL) and the Settings API; no frontend change
 - **Tests:** `backend/tests/central-calendar-k2b-settings.test.mjs` (24 tests: the role matrix and the form's read,
   the migration and its rollback rehearsal, the black-box scenarios of section 12, the invariants raw and through the
   routes, the races, the bounded COMMIT); the shared fixture `backend/tests/support/calendar-fixture.mjs`.
+
+**The internal review round** (`db-reviewer`, `security-reviewer`, `code-reviewer` on `b78f95f`; the db and security
+reviews READY WITH NON-BLOCKING NOTES, the code review NOT READY on one HIGH that the security review rated MEDIUM):
+
+| Finding | Fix | Test (mutation) |
+|---|---|---|
+| Code HIGH / security M2: two requests with the same key at once (a double submit, a retry during the first COMMIT) — the second met the first's own write (a taken name, the team's first row, the new order) and answered `label_taken` / `team_changed` / `nothing_to_change` although its request was saved | the runner takes a transaction-scoped advisory lock on (requests table, user, key) right after the caller's locks: the second waits, then replays the saved answer (the event commands get it too) | 4e (M26) |
+| Security M1: a team moved to another club (`PUT /api/organization/teams/:id` changes `club_id`) keeps its events and their type id — club A's now editable type label showed on club B's events, and A's counts included B's events | the reads show a club's type label only on that club's events (`event_type_label` null otherwise, the screen falls back to the kind's word); every `eventCount` counts only the club's own events (owned by it or by one of its teams now) | 3k (M28, M29, M30) |
+| Security L1: the moved team's default place (club A's) read back in club B and A's place named the team | a default place of another club reads as none; a place names only its club's teams; B's next write clears it | 3k (M31, M32) |
+| Security L2: `GET /events/types` derived the club twice | one owner (`eventCatalogOwner`) for the types and the form's lists | 0c, 2c |
+| Security L3: a saved request whose view could not be read answered "Nothing was saved" | `savedAnswer`: 503 `outcome_unknown` (Check result replays), the one 404 passes through | — (no seam reaches it; recorded) |
+| Security L4: the alignment's canonical body changed (`align_sessions`), so a same-key retry of an alignment saved before this deploy is `request_key_reused` | recorded (a window of minutes; accepted) | — |
+| DB F1: `public.clubs` was locked after the DDL and the icon update — a `POST /clubs` of the old server could deadlock with v51 or land a club without icons (the self-check then aborts) | the clubs lock is the migration's first statement | — (concurrency of the deploy; M33 recorded as not testable here) |
+| DB F2: no test of the last-live-type guard's advisory lock | two archives of the last two types at once: one passes, the other `last_type` | 4f (M27) |
+| DB F3: the rollback locked the types before the events (the event commands' order is the reverse) | events first; the runbook says to run it with the previous release serving | 1b |
+| DB F4, F5: the seed exception's consequences, the READ COMMITTED assumption and the lock footprint were not in the runbook | added to `docs/runbooks/calendar-settings-v51.md` | — |
+| Code LOW: k2a-events test 1a accepted 23503 or 23514 | exactly v51's refusal | k2a-events 1a |
+| Code LOW: 4d never resent the lost request's key | the same body with the same key writes as a first request | 4d |
+| Code LOW: the plan's §2.4, §5.1 and §6 disagreed with the code; an unused `LOCK_TIMEOUT` | corrected; removed | — |
+| Notes: `settingsClub` accepted the unreachable `platform_admin` basis; `eventWriteBasis`'s comment contradicted T6 | `club_admin` only (T6 enforced); the comment aligned | 2g |

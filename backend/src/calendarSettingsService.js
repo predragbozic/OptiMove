@@ -24,7 +24,7 @@ import { boundedText, unitTokenOk } from "./metricTextRules.js";
 import { isIconKey } from "./iconKeys.js";
 import { isCalendarColorKey } from "./calendarColors.js";
 import { EventError, eventWriteBasis, forbidden, notFound } from "./calendarEventAccess.js";
-import { EVENT_EXPECTS, expectsField, isUuid, listEventTypes, requestKeyOf, revisionField, textField } from "./calendarEventService.js";
+import { EVENT_EXPECTS, eventCatalogOwner, expectsField, isUuid, listEventTypes, requestKeyOf, revisionField, textField } from "./calendarEventService.js";
 import { hashOf, runCalendarCommand } from "./calendarCommandRunner.js";
 
 export const EVENT_KINDS = Object.freeze(["training", "match", "travel", "meeting", "day_off", "camp", "test"]);
@@ -52,8 +52,11 @@ export function settingsClub(ctx, { withId = false } = {}) {
   if (ctx.workspace?.type === "platform") throw withId ? notFound() : workspaceRequired();
   if (ctx.workspace?.type !== "club") throw refuse();
   const clubId = String(ctx.workspace.scopeId);
+  // T6: a club workspace is offered only to the holders of that club's
+  // club_admin role (a platform admin included), and eventWriteBasis answers
+  // club_admin first — the one basis Settings -> Calendar writes on.
   const basis = eventWriteBasis(ctx, { scope: "club", clubId, teamId: null, userId: null, teamClubId: null, teamActive: true, clubActive: true });
-  if (basis !== "club_admin" && basis !== "platform_admin") throw refuse();
+  if (basis !== "club_admin") throw refuse();
   return { clubId, basis };
 }
 
@@ -342,12 +345,17 @@ export function validateTeamUpdate(body) {
 const num = (v) => (v === null || v === undefined ? null : Number(v));
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
+// The events of club $1 (owned by the club, or by one of its teams NOW): a
+// team moved to another club takes its events with it, and their counts
+// never reach the old club (security review of K2b-1a, M1).
+const CLUB_EVENT_SQL = `(e.owner_club_id = $1 or exists (select 1 from public.teams et where et.id = e.owner_team_id and et.club_id = $1))`;
+
 const TYPE_VIEW_SQL = `
   select t.id, t.key, t.kind, t.label, t.icon_key, t.color_key, t.default_expects, t.sort_order, t.seed_key,
          t.archived_at, t.revision,
          (select coalesce(array_agg(l.field_id order by l.position, l.field_id), '{}') from calendar.event_type_fields l
            where l.event_type_id = t.id) as field_ids,
-         (select count(*)::int from calendar.events e where e.event_type_id = t.id) as event_count
+         (select count(*)::int from calendar.events e where e.event_type_id = t.id and ${CLUB_EVENT_SQL}) as event_count
     from calendar.event_types t
    where t.owner_scope = 'club' and t.owner_club_id = $1`;
 
@@ -364,7 +372,8 @@ const FIELD_VIEW_SQL = `
   select f.id, f.key, f.label, f.description, f.filled_by, f.value_kind, f.unit, f.min_value, f.max_value, f.required,
          f.sort_order, f.seed_key, f.archived_at, f.revision,
          calendar.field_has_values(f.id) as answered,
-         (select count(*)::int from calendar.event_selected_fields s where s.field_id = f.id) as event_count,
+         (select count(*)::int from calendar.event_selected_fields s join calendar.events e on e.id = s.event_id
+           where s.field_id = f.id and ${CLUB_EVENT_SQL}) as event_count,
          (select coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'label', o.label, 'sortOrder', o.sort_order, 'archived', o.archived_at is not null)
                    order by o.sort_order, o.created_at, o.id), '[]'::jsonb)
             from calendar.event_field_options o where o.field_id = f.id) as options
@@ -382,8 +391,9 @@ function fieldView(r) {
 
 const LOCATION_VIEW_SQL = `
   select l.id, l.name, l.address, l.note, l.archived_at, l.revision,
-         (select count(*)::int from calendar.events e where e.location_id = l.id) as event_count,
+         (select count(*)::int from calendar.events e where e.location_id = l.id and ${CLUB_EVENT_SQL}) as event_count,
          (select coalesce(array_agg(s.team_id order by s.team_id), '{}') from calendar.team_settings s
+            join public.teams st on st.id = s.team_id and st.club_id = l.owner_club_id
            where s.default_location_id = l.id) as default_of_team_ids
     from calendar.locations l
    where l.owner_club_id = $1`;
@@ -395,11 +405,15 @@ function locationView(r) {
   };
 }
 
-// The club's ACTIVE teams with their settings (revision 0 = no row yet).
+// The club's ACTIVE teams with their settings (revision 0 = no row yet). A
+// default place of another club (the team was moved) reads as none.
 const TEAM_VIEW_SQL = `
-  select t.id as team_id, t.name, s.color_key, s.default_location_id, coalesce(s.revision, 0) as revision
+  select t.id as team_id, t.name, s.color_key,
+         case when dl.owner_club_id = t.club_id then s.default_location_id end as default_location_id,
+         coalesce(s.revision, 0) as revision
     from public.teams t
     left join calendar.team_settings s on s.team_id = t.id
+    left join calendar.locations dl on dl.id = s.default_location_id
    where t.club_id = $1 and coalesce(t.is_active, true)`;
 
 function teamView(r) {
@@ -962,17 +976,18 @@ export async function formCatalog(queryable, { club, teamIds = [] }) {
 // — the details, places and team default places the workspace's event form
 // offers. The types' own read decides who may ask (403 / the one 404).
 export async function eventFormOptions(ctx) {
-  const types = await listEventTypes(ctx);
-  const ws = ctx.workspace;
+  // One owner for the whole answer (security review L2): the types and the
+  // form's lists always come from the same club.
+  const owner = await eventCatalogOwner(ctx);
+  const types = await listEventTypes(ctx, owner);
   let club = null;
   let teamIds = [];
-  if (ws.type === "club") {
-    club = String(ws.scopeId);
+  if (owner?.scope === "club") {
+    club = owner.clubId;
     teamIds = (await pool.query(`select id from public.teams where club_id = $1 and coalesce(is_active, true)`, [club])).rows.map((r) => String(r.id));
-  } else if (ws.type === "team") {
-    const team = (await pool.query(`select club_id from public.teams where id = $1`, [ws.scopeId])).rows[0];
-    club = team ? String(team.club_id) : null;
-    teamIds = [String(ws.scopeId)];
+  } else if (owner?.scope === "team") {
+    club = owner.teamClubId;
+    teamIds = [owner.teamId];
   }
   return { types, ...(await formCatalog(pool, { club, teamIds })) };
 }

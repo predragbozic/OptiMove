@@ -551,6 +551,9 @@ test("3b. the meaning freeze: a detail with a value keeps its label, unit, bound
     const res = await send(admin.cookie, "PATCH", `/fields/${weather.id}`, { expectedRevision: answered.revision, ...change });
     assert.equal(res.status, 409, res.text);
     assert.equal(res.body.error, "field_answered");
+    // The service names what is frozen and returns the detail as it is.
+    assert.deepEqual(res.body.frozen, "label" in change ? ["label"] : ["options.rename"]);
+    assert.equal(res.body.current.id, weather.id);
   }
   const temp = (await catalog(admin.cookie)).fields.find((f) => f.id === temperature.id);
   for (const change of [{ unit: "F" }, { minValue: -10 }, { maxValue: 60 }]) {
@@ -634,6 +637,13 @@ test("3c. the database keeps every detail inside its owner: type lists, event se
     await select(c);
     await c.query(`insert into calendar.event_field_values (event_id, field_id, number_value, updated_by_user_id) values ($1, $2, 18.5, $3)`, [ev.id, temperature.id, admin.id]);
   });
+  // A choice value names an option of ITS detail only.
+  const weather = byKey(cat.fields, "weather");
+  const surface = byKey(cat.fields, "surface");
+  await assert.rejects(rawEventWrite(client, { eventId: ev.id, userId: admin.id }, async (c) => {
+    await c.query(`insert into calendar.event_selected_fields (event_id, field_id, position) values ($1, $2, 1)`, [ev.id, weather.id]);
+    await c.query(`insert into calendar.event_field_values (event_id, field_id, option_id, updated_by_user_id) values ($1, $2, $3, $4)`, [ev.id, weather.id, surface.options[0].id, admin.id]);
+  }), (e) => e.constraint === "event_field_values_option");
   // A value is never deleted; a write without the event's own write is refused.
   await assert.rejects(q(`delete from calendar.event_field_values where event_id = $1`, [ev.id]), (e) => e.code === "23514");
   await assert.rejects(q(`update calendar.event_field_values set number_value = 19 where event_id = $1`, [ev.id]), (e) => e.code === "23514" && /written with its event/.test(e.message));
@@ -827,6 +837,41 @@ test("3j. a new club through POST /api/organization/clubs gets the full seed in 
   assert.equal((await q(`select calendar.seed_club_event_types($1) as n`, [clubId]))[0].n, 0, "idempotent");
 });
 
+test("3k. a team moved to another club (security review M1, L1): its events never show the old club's type label, the old club never counts them, and the team's old default place reads as none", async () => {
+  const a = await freshClub("moveA");
+  const b = await freshClub("moveB");
+  const catA = await catalog(a.admin.cookie);
+  const training = byKey(catA.types, "training");
+  assert.equal((await send(a.admin.cookie, "PATCH", `/types/${training.id}`, { expectedRevision: 1, label: "A secret label" })).status, 200);
+  const place = await send(a.admin.cookie, "POST", "/locations", { name: "A ground" });
+  assert.equal((await send(a.admin.cookie, "PUT", `/teams/${a.teamId}`, { expectedRevision: 0, colorKey: "plum", defaultLocationId: place.body.location.id })).status, 200);
+  const coach = await env.fx.coachOf(a.teamId, "moveA coach");
+  const created = await api("/api/calendar/events", {
+    method: "POST", cookie: coach.cookie,
+    body: { requestKey: newKey(), timezone: TZ, eventTypeId: training.id, title: "Team session", day: FUTURE, targets: [{ kind: "team", id: a.teamId }] },
+  });
+  assert.equal(created.status, 201, created.text);
+  assert.equal((await catalog(a.admin.cookie)).types.find((t) => t.id === training.id).eventCount, 1);
+  await q(`update public.teams set club_id = $2 where id = $1`, [a.teamId, b.clubId]);
+
+  const card = (await calendarOf(b.admin.cookie)).body.days.flatMap((d) => d.items).find((i) => i.kind === "event" && (i.eventId === created.body.event.id));
+  assert.ok(card, "club B sees its moved team's event");
+  assert.equal(card.eventTypeLabel, null, "never club A's label");
+  const view = await api(`/api/calendar/events/${created.body.event.id}`, { cookie: b.admin.cookie });
+  assert.equal(view.status, 200, view.text);
+  assert.equal(view.body.event.eventTypeLabel, null);
+  const afterA = await catalog(a.admin.cookie);
+  assert.equal(afterA.types.find((t) => t.id === training.id).eventCount, 0, "club A no longer counts it");
+  assert.deepEqual(afterA.locations.find((l) => l.id === place.body.location.id).defaultOfTeamIds, [], "nor names the moved team");
+  const teamInB = (await catalog(b.admin.cookie)).teams.find((t) => t.teamId === String(a.teamId));
+  assert.deepEqual([teamInB.colorKey, teamInB.defaultLocationId, teamInB.revision], ["plum", null, 1], "club A's place reads as none");
+  assert.equal((await send(a.admin.cookie, "PUT", `/teams/${a.teamId}`, { expectedRevision: 1, colorKey: "rust" })).status, 404, "club A no longer writes it");
+  const written = await send(b.admin.cookie, "PUT", `/teams/${a.teamId}`, { expectedRevision: 1, colorKey: "sky" });
+  assert.equal(written.status, 200, written.text);
+  assert.equal((await q(`select default_location_id from calendar.team_settings where team_id = $1`, [a.teamId]))[0].default_location_id, null, "the stale default is cleared on B's write");
+  assert.deepEqual((await typesOf(coach.cookie)).body.teamDefaults, {});
+});
+
 // ---------------------------------------------------------------------------
 // 4. Concurrency
 // ---------------------------------------------------------------------------
@@ -857,10 +902,13 @@ test("4a. a value racing a detail's edit, both orders: the edit sees a value com
   const edited = await editing;
   assert.deepEqual([edited.status, edited.body.error], [409, "field_answered"], edited.text);
 
-  // Order 2: the edit holds the detail FOR UPDATE; a value of another detail
+  // Order 2: the edit holds the detail FOR UPDATE; a value of a detail the
+  // event chose BEFORE the race (so only the value's own FOR SHARE waits)
   // waits, then is judged by the new bounds.
   const travel = byKey(cat.fields, "travel_time");
   const ev2 = await clubEvent(admin, clubId);
+  await rawEventWrite(valueClient, { eventId: ev2.id, userId: admin.id },
+    (c) => c.query(`insert into calendar.event_selected_fields (event_id, field_id, position) values ($1, $2, 0)`, [ev2.id, travel.id]));
   const hooks = settingsService.testHooks;
   const g = gate();
   hooks.beforeCommit = async () => { g.reached(); await g.opened; };
@@ -868,7 +916,6 @@ test("4a. a value racing a detail's edit, both orders: the edit sees a value com
     const narrowing = send(admin.cookie, "PATCH", `/fields/${travel.id}`, { expectedRevision: 1, maxValue: 60 });
     await g.arrived;
     const valueWrite = rawEventWrite(valueClient, { eventId: ev2.id, userId: admin.id }, async (c) => {
-      await c.query(`insert into calendar.event_selected_fields (event_id, field_id, position) values ($1, $2, 0)`, [ev2.id, travel.id]);
       await c.query(`insert into calendar.event_field_values (event_id, field_id, number_value, updated_by_user_id) values ($1, $2, 120, $3)`, [ev2.id, travel.id, admin.id]);
     });
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -957,6 +1004,7 @@ test("4d. the bounded COMMIT of the shared runner: a lost answer after a real CO
   const { clubId, admin } = await freshClub("commit");
   const hooks = settingsService.testHooks;
   const body = { requestKey: newKey(), name: "Lost answer hall" };
+  let lostBody;
   try {
     hooks.commit = async (client) => {
       await client.query("commit");
@@ -974,11 +1022,86 @@ test("4d. the bounded COMMIT of the shared runner: a lost answer after a real CO
       error.code = "ECONNRESET";
       throw error;
     };
-    const lost = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: { requestKey: newKey(), name: "Never saved hall" } });
+    lostBody = { requestKey: newKey(), name: "Never saved hall" };
+    const lost = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
     assert.deepEqual([lost.status, lost.body.error], [503, "outcome_unknown"]);
   } finally {
     delete hooks.commit;
   }
   assert.equal((await q(`select count(*)::int as n from calendar.locations where owner_club_id = $1 and name = 'Never saved hall'`, [clubId]))[0].n, 0);
-  assert.equal((await send(admin.cookie, "POST", "/locations", { name: "Never saved hall" })).status, 201);
+  // The lost request's key is free: the same body with the same key now
+  // writes, as a first request (never request_key_reused, never a replay).
+  const again = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
+  assert.equal(again.status, 201, again.text);
+  assert.equal(again.body.replayed, undefined);
+});
+
+test("4e. the same key twice at once (a double submit while the first is before its COMMIT): one write, the second replays it — a create, and a team's first row", async () => {
+  const { clubId, teamId, admin } = await freshClub("twice");
+  const hooks = settingsService.testHooks;
+  const twice = async (method, p, body) => {
+    const g = gate();
+    let first = true;
+    hooks.beforeCommit = async () => {
+      if (!first) return;
+      first = false;
+      g.reached();
+      await g.opened;
+    };
+    try {
+      const a = api(`/api/calendar/settings${p}`, { method, cookie: admin.cookie, body });
+      await g.arrived;
+      const b = api(`/api/calendar/settings${p}`, { method, cookie: admin.cookie, body });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      g.open();
+      return await Promise.all([a, b]);
+    } finally {
+      delete hooks.beforeCommit;
+      g.open();
+    }
+  };
+  const placeBody = { requestKey: newKey(), name: "Twice hall" };
+  const [pa, pb] = await twice("POST", "/locations", placeBody);
+  assert.equal(pa.status, 201, pa.text);
+  assert.equal(pb.status, 201, pb.text);
+  assert.equal(pb.body.replayed, true);
+  assert.equal(pb.body.location.id, pa.body.location.id);
+  assert.equal((await q(`select count(*)::int as n from calendar.locations where owner_club_id = $1 and name = 'Twice hall'`, [clubId]))[0].n, 1);
+  assert.equal((await q(`select count(*)::int as n from calendar.settings_requests where request_key = $1`, [placeBody.requestKey]))[0].n, 1);
+  const teamBody = { requestKey: newKey(), expectedRevision: 0, colorKey: "teal" };
+  const [ta, tb] = await twice("PUT", `/teams/${teamId}`, teamBody);
+  assert.equal(ta.status, 200, ta.text);
+  assert.equal(tb.status, 200, tb.text);
+  assert.equal(tb.body.replayed, true);
+  assert.equal(tb.body.team.revision, 1);
+});
+
+test("4f. two archives of a club's last two live types at once: one passes, the other is last_type (the advisory lock of the guard)", async () => {
+  const { admin } = await freshClub("lastrace");
+  const cat = await catalog(admin.cookie);
+  for (const type of cat.types.slice(2)) assert.equal((await send(admin.cookie, "POST", `/types/${type.id}/archive`, { expectedRevision: 1 })).status, 200);
+  const [x, y] = cat.types.slice(0, 2);
+  const hooks = settingsService.testHooks;
+  const g = gate();
+  let first = true;
+  hooks.beforeCommit = async () => {
+    if (!first) return;
+    first = false;
+    g.reached();
+    await g.opened;
+  };
+  try {
+    const a = send(admin.cookie, "POST", `/types/${x.id}/archive`, { expectedRevision: 1 });
+    await g.arrived;
+    const b = send(admin.cookie, "POST", `/types/${y.id}/archive`, { expectedRevision: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    g.open();
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.equal(ra.status, 200, ra.text);
+    assert.deepEqual([rb.status, rb.body.error], [409, "last_type"], rb.text);
+  } finally {
+    delete hooks.beforeCommit;
+    g.open();
+  }
+  assert.equal((await catalog(admin.cookie)).types.filter((t) => !t.archived).length, 1);
 });

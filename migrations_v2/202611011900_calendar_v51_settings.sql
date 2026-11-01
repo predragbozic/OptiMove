@@ -39,6 +39,14 @@
 
 set local lock_timeout = '5s';
 
+-- No club is created while v51 runs, and the lock comes FIRST, before any DDL
+-- on calendar.*: POST /clubs takes the clubs table, then inserts its type
+-- copies, so taking the two in the same order means no deadlock, and no club
+-- of the old server can land between the icon update and the seed below
+-- without its details (db review of K2b-1a, F1). Event writes take ROW SHARE
+-- on clubs (lock_event_writer's FOR SHARE), which this mode does not block.
+lock table public.clubs in share row exclusive mode;
+
 -- ---------------------------------------------------------------------------
 -- 0. Helpers
 -- ---------------------------------------------------------------------------
@@ -422,8 +430,8 @@ end $$;
 
 -- The clubs v49 seeded keep their type copies (their icons are set above,
 -- their revision stays 1); their details, options and the lists of their
--- seeded types are copied here, by the same function.
-lock table public.clubs in share row exclusive mode;
+-- seeded types are copied here, by the same function (public.clubs is locked
+-- since the top of the file).
 select calendar.seed_club_event_types(c.id) from public.clubs c where coalesce(c.is_active, true) order by c.id;
 
 -- ---------------------------------------------------------------------------
