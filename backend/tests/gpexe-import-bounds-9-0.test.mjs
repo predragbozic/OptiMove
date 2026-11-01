@@ -400,6 +400,20 @@ test("5. approval: a session the server ends while idle in the transaction answe
   assert.equal((await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).status, 200);
 });
 
+test("5b. approval: every wait and session-end code before the COMMIT is try_again - a deadlock (40P01) and an administrator's end of the session (57P01) included - nothing written", async () => {
+  const { team, list } = await teamWithCandidates([9551]);
+  const candidate = await candidateDetail(team, list[0].id);
+  const before = await allRowCounts();
+  for (const [code, message] of [["40P01", "deadlock detected"], ["57P01", "terminating connection due to administrator command"]]) {
+    await withSwitchOn(async () => {
+      service.setApprovalObserver(async () => { throw Object.assign(new Error(message), { code }); });
+      const r = await approve(team, candidate);
+      assert.deepEqual([r.status, r.body.error], [409, "try_again"], `${code}: ${JSON.stringify(r.body)}`);
+    });
+    assert.deepEqual(await allRowCounts(), before, `${code}: nothing written`);
+  }
+});
+
 // A deferred trigger on the approvals table that sleeps for the candidates
 // listed in a marker table (created and dropped by the test).
 async function withSlowDeferredTrigger(candidateIds, seconds, fn) {
@@ -724,6 +738,22 @@ test("10. check: a preview statement ended by its bound fails the check with che
   }
   assert.deepEqual([check.status, check.error.code], ["failed", "check_preview_busy"]);
   assert.deepEqual(await stagedAndPublished(team.teamId, check.id), { observations: 0, candidates: 0 });
+});
+
+test("10b. check: a deadlock (40P01) in the preview fails the check with check_preview_busy, a session the server ended (57P01) with check_preview_interrupted - nothing published", async () => {
+  for (const [code, expected, sessionId] of [["40P01", "check_preview_busy", 10101], ["57P01", "check_preview_interrupted", 10102]]) {
+    const team = await setupTeam();
+    service.setGpexeClientFactory(fakeGpexe({ bundles: [routeBundle(sessionId)] }));
+    setCheckPreviewHoldForTests(() => { throw Object.assign(new Error("injected"), { code }); });
+    let check;
+    try {
+      check = await checkNow(team);
+    } finally {
+      setCheckPreviewHoldForTests(null);
+    }
+    assert.deepEqual([check.status, check.error.code], ["failed", expected], code);
+    assert.deepEqual(await stagedAndPublished(team.teamId, check.id), { observations: 0, candidates: 0 });
+  }
 });
 
 test("11. check: the database ends the preview's session (the idle bound) - the check fails with check_preview_interrupted, the process lives on, the connection is not reused", async () => {

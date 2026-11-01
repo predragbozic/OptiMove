@@ -2204,7 +2204,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     await client.query("begin");
     // Switch condition 2: every wait before the COMMIT is bounded by the
     // server (lock, statement, idle in transaction), set before the first
-    // lock; the COMMIT is bounded too (see setImportTransactionBounds).
+    // lock; the COMMIT keeps only its own 15 s client bound (COMMIT_ANSWER_TIMEOUT_MS), and its deferred work is
+    // fired before it by SET CONSTRAINTS ALL IMMEDIATE (below).
     await setImportTransactionBounds(client);
     // Step 1.
     const right = (await client.query(
@@ -2304,9 +2305,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     };
     // Switch condition 2: the deferred trigger and constraint work runs now,
     // as a statement the server bounds. PostgreSQL does not apply
-    // statement_timeout to the deferred work a COMMIT runs (a 3 s deferred
-    // trigger finished under a 1 s SET LOCAL statement_timeout, PostgreSQL 16;
-    // gpexe-import-bounds-9-0.test.mjs test 6), so it is fired here, before
+    // statement_timeout to the deferred work a COMMIT runs (measured on
+    // PostgreSQL 16; gpexe-import-bounds-9-0.test.mjs test 6a), so it is fired here, before
     // the COMMIT: a bounded wait or a refusal is still "nothing written". The
     // COMMIT that follows only ends the transaction and keeps its own client
     // bound (COMMIT_ANSWER_TIMEOUT_MS) and resolveUncertainCommit.

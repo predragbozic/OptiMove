@@ -597,8 +597,9 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   (53 values, the writer in the approval's transaction shape): the longest statement about 11 ms, the COMMIT about
   3 ms; through the route (both drills) about 4 ms and 2 ms. Departures from the text above:
   - **The COMMIT's deferred work.** PostgreSQL does not apply `statement_timeout` to the deferred trigger and
-    constraint work a COMMIT runs (measured on PostgreSQL 16: a 3 s deferred trigger finished, and committed,
-    under a 1 s bound, with `SET LOCAL` and at the session level alike; test 6a), so the sentence "the effective
+    constraint work a COMMIT runs (measured on PostgreSQL 16 by hand: a 3 s deferred trigger finished, and
+    committed, under a 1 s bound, with `SET LOCAL` and at the session level alike; test 6a repeats it with 1.5 s under
+    300 ms; PostgreSQL 17.6, which production runs, was not measured, and the fix holds either way), so the sentence "the effective
     server bound on it is the lower of the two" does not hold. The approval therefore runs `SET CONSTRAINTS ALL
     IMMEDIATE` right before the COMMIT: the deferred work runs as a statement the server bounds, and a slow
     deferred trigger is a `409 try_again` with nothing written (test 6b), a definite answer before the COMMIT
@@ -608,7 +609,12 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   - **T6 is not measured here:** the writer of 9-0 does not write T6 yet; 9-B's Arm A1 runs under the same bounds
     and is measured again there.
   - **The batch stops at `try_again`** (the team lock or the server is busy, and every candidate of a batch is the
-    same team's), so one request waits at most one bounded wait.
+    same team's). Each wait is bounded, not the request: waits that end just under their bounds are successes, so a
+    batch of N can still take about N times their sum (the deployed request timeout of step 7 is sized with that).
+  - **Only the approval and the check-time preview get the idle bound.** The other holders of the team lock (a check
+    start, a link or settings write, the roster command, a source-connection Test / Reconnect / Bind across its
+    source request) set a lock bound at most; one of them abandoned makes approvals and previews of the team answer
+    `try_again` / `check_preview_busy` until the server drops it. A follow-up, not in 9-0.
   - **The check-time preview's codes:** `check_preview_busy` (55P03, 57014, 40P01) and `check_preview_interrupted`
     (a session the server ended), both shown to a coach as they are.
   - **A session the server ended** before the COMMIT is `try_again` too (the transaction went with it); its

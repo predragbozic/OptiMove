@@ -56,8 +56,17 @@ databases.
 disables triggers table by table (below); `ALTER TABLE … DISABLE TRIGGER`
 takes a `SHARE ROW EXCLUSIVE` lock that every other team's import and
 check-time preview waits on while the run lasts, in an order that can invert
-with theirs. A production undo needs its own mechanism or a maintenance window
-(J17, O3: a full restore of the backup is the only way back for the pilot).
+with theirs. The undo also locks the event before it updates the session's
+source identities, while the importer and the manual-correction path lock an
+identity before its event; the manual-correction path takes no team lock, so
+that order can invert too (a deadlock ends one side; on a disposable database
+the undo simply rolls back). A production undo needs its own mechanism or a
+maintenance window (J17, O3: a full restore of the backup is the only way back
+for the pilot).
+
+An event without an owner team is refused before any lock ("has no owner team").
+The refusal order is: no such event, no owner team, then the team lock, then the
+platform admin, then the event's own checks.
 
 ## Why a procedure is needed at all
 

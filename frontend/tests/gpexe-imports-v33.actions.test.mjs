@@ -398,4 +398,5 @@ test("11. try_again: a refused approval after a bounded wait reads as one senten
   const batch = html();
   assert.match(batch, /Not imported: another check, import or change of this team was running, or the server was busy\. Try again in a moment\./);
   assert.doesNotMatch(batch, /1 imported/);
+  assert.ok(gx().batch.selected["cand-1"], "a session refused try_again keeps its selection, like one the server failed");
 });

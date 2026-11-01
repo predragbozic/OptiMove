@@ -4051,7 +4051,12 @@ pre-existing; pass/fail counts don't belong in this file
      deferred work with `SET CONSTRAINTS ALL IMMEDIATE` before the COMMIT (PostgreSQL does not
      bound a COMMIT's deferred work); a bounded wait is `409 try_again` (approval, the batch
      stops) or `check_preview_busy` / `check_preview_interrupted` (check), nothing written. The
-     deployed request timeout stays an owner step (J17 section 10, step 7).
+     deployed request timeout stays an owner step (J17 section 10, step 7). Each wait is bounded,
+     not a whole request; and only the approval and the preview get the idle bound, so another
+     team-lock holder that is abandoned (a check start, a link or settings write, the roster
+     command, a source-connection Test / Reconnect / Bind) still blocks them until the server
+     drops it - they answer `try_again` instead of hanging. Separate task: an idle bound for
+     those holders.
   3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
      ever used on a persistent database. Today it runs only on disposable databases.
      **Built in 9-0** (not yet merged): the owner team read without a lock, the team lock, the

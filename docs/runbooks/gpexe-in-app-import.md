@@ -453,8 +453,9 @@ cannot deadlock.
 10 s`. Right before the COMMIT it runs `SET CONSTRAINTS ALL IMMEDIATE`, so the
 deferred trigger and constraint work runs as a statement the server bounds:
 PostgreSQL does not apply `statement_timeout` to the deferred work a COMMIT
-runs (measured on PostgreSQL 16: a 3 s deferred trigger finished under a 1 s
-bound). A lock not granted in time (55P03), a statement ended by its bound
+runs (measured on PostgreSQL 16 by hand: a 3 s deferred trigger finished
+under a 1 s bound; test 6a repeats it with 1.5 s under 300 ms; PostgreSQL 17,
+which production runs, was not measured, and the fix does not depend on it). A lock not granted in time (55P03), a statement ended by its bound
 (57014), a deadlock (40P01) or a session the server ended (the idle bound)
 before the COMMIT is **409 `try_again`**, nothing written; the connection of
 an ended session is not reused, and a listener on the checked-out client keeps
@@ -639,11 +640,14 @@ or simply send the same request again.
 2026-09-24). Without lock contention the request lasts about the sum of its approvals;
 an unconfirmed COMMIT can add 15 s + 5 s once, after which the batch stops. In the tests
 two small approvals took well under half a second in total; a real session has more
-athletes and drills. Since 9-0 every wait before a COMMIT is bounded (5 s per lock wait,
-10 s per statement, 10 s idle; "What the server does, in one transaction"), and a bounded
-wait stops the batch (`try_again`), so contention costs at most one bounded wait per
-request, not one per candidate. Raising the limit still needs measured approval times on
-real sessions and a confirmed deployed request timeout.
+athletes and drills. Since 9-0 every single wait before a COMMIT is bounded (5 s per lock
+wait, 10 s per statement, 10 s idle; "What the server does, in one transaction"), and a wait
+that reaches its bound stops the batch (`try_again`). That bounds each wait, not the request:
+each candidate has several lock points (the approver's rows, the candidate, the team lock,
+the importer's rows), and waits that end just under their bounds are successes, so a batch of
+N can still take about N times the sum of such waits. The reads before each approval are not
+under these bounds. Raising the limit still needs measured approval times on real sessions and
+a confirmed deployed request timeout.
 
 ## When a check's results become actionable (v33)
 
@@ -738,8 +742,11 @@ back. A wait that reaches its bound fails the check as `check_preview_busy` (an 
 or a change of the team held the lock or a row too long); a session the server ended fails it as
 `check_preview_interrupted`. Neither ever stores a `blocked` candidate; nothing of the check is
 published (its staging is discarded) and both codes are shown to a coach as they are (a team or
-database fact). Run the check again. While a preview waits on the team lock, an Unbind, a 7g end
-or a settings change of the team answers `try_again` for as long as it waits.
+database fact). Run the check again. While a preview holds the team lock, an Unbind, a 7g end
+or a settings change of the team answers `try_again` for as long as it holds it. A Test or a
+Reconnect of the team's source connection holds the team lock for its whole source request (up to
+its 90 s network budget), so a check running at the same moment can end `check_preview_busy`:
+avoid a Test or a Reconnect while a check runs, or run the check again.
 
 **Exactly one `superseded_by`** (`gpexe_import_candidates_superseded_by_exactly_one`): a superseded row
 names either the newer candidate or the check that withdrew it, never both and never neither; no other

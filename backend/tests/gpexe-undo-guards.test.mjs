@@ -326,7 +326,8 @@ test("undo: only an active platform admin may run it; anyone else is refused bef
     for (const [who, userId] of [["a team coach", coach], ["a revoked admin", revoked], ["a disabled admin account", inactive]]) {
       await assert.rejects(
         undoImportedSession(client, scope, { performedByUserId: userId, reason: "not allowed", apply: true }),
-        // The script's own check, before anything is locked; the database
+        // The script's own check, after the team's import lock and before the
+        // event is locked or any protection is disabled; the database
         // check behind it is tested on its own below.
         // (assert.rejects matches a RegExp against String(error), hence "Error: ".)
         /^Error: refusing: user \S+ is not an active platform admin/,
