@@ -14,7 +14,7 @@ after v48 is merged and deployed**, against v48's body as merged (section 6.3).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11); accepted with PR #297. **Built by 7g-B** in an open pull request (section 12, "As built"). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11); accepted with PR #297. **Built by 7g-B** (section 12, "As built"): PR #305, merged as `5a2b39d` and deployed on 2026-11-01; v50 directly confirmed on the production database by the *Rukovodilac*'s read-only post-check. |
 | Verified against commit | `6a94ce29` (merge of PR #294) for `main`; v48 as on the 7d-B branch (PR #295, head `578717af`). Every file and line reference below is to `6a94ce29` unless it names another. |
 | Migration | **Yes**: the next free number after v48 (**v49** if none comes between), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v49_source_instance_end.sql` (section 6). The calendar's events took v49 (PR #298), so it is **v50**: `migrations_v2/202610311200_training_load_v50_source_instance_end.sql` (section 12). |
 | **Owner decisions** | The owner's decisions of phases 7e–7g are numbered OD1–OD7 in all three contracts (J11 section 0.1). This contract needs **OD5**, the shape of the operation, **decided on 2026-10-30 as recommended, with the narrower reading** (the *Rukovodilac*'s reading of the owner's „5. to smo vec rekli dole”, turn `396e7078`): only an active platform admin in the platform workspace, a mandatory reason, refused while the owner team has an active binding of that source team (R2) or an open activation on the owner team's bindings of it (section 3.2). OD6 leaves D9 the platform admin's. |
@@ -327,8 +327,9 @@ lock), any frontend, any production write, a re-activation, a move of history be
 
 ## 12. As built (7g-B)
 
-An open pull request. **Base** `04fc170` (merge of PR #304, documents only over `e6ca433`). The sections above were
-verified against `6a94ce29`; their references into code moved since: `runWrite` is
+PR #305, merged as `5a2b39d` and deployed on 2026-11-01 (see "After the external round" at the end of this
+section). **Base** `04fc170` (merge of PR #304, documents only over `e6ca433`). The sections above were verified
+against `6a94ce29`; their references into code moved since: `runWrite` is
 `backend/src/sourceMetricMappingService.js:763-834`, `retireConversion` is `backend/src/unitConversionService.js:237-279`,
 `mayVerify` is `backend/src/sourceFieldVerificationService.js:88`, and D9 in the discovery document is around its
 lines 1655-1690. **The migration is v50** (section 6 names it v49 "if none comes between"; the calendar's events took
@@ -485,4 +486,20 @@ actor who is not an active platform admin, a basis other than `platform_admin`).
   one note (items 9 and 10 and J1 row 11 did not name `try_again`'s shared M2 causes, and `connectionId` in a
   `readError` answer only after the right is confirmed again) applied as wording in the next head, with no code or
   test change.
-- **External round (★★):** pending.
+- **External round (★★):** GO on `6504570f` from the *Rukovodilac* (its turn `a64b2933`, 2026-10-31 05:54:03 UTC; it
+  computed the four files' sha256 itself, rehearsed v50 and its rollback, ran the suites and 18 mutations of its own,
+  and named no finding that asks for a change) and the *Nezavisni revizor* (its turn `1a4e4ed4`, 2026-11-01 06:32:20
+  UTC; its own rehearsal, suites and mutations; no BLOCKER, HIGH or MEDIUM). No new head.
+
+**After the external round:**
+- **The *Nezavisni revizor*'s optional LOW-1** (a test, not code): test 7 depends on the state test 6 leaves, so a
+  mutation that fails test 6 also fails test 7, with an unrelated error ("Cannot read properties of undefined") instead
+  of its own check. Not applied, since both GOs were on `6504570f`; test 7 is to build its own state in the next pull
+  request that touches the suite (`CURRENT_STATE.md`, "Separate tasks").
+- **Merge and deploy** (`CURRENT_STATE.md`, the 7g-B entry of the active phase): the *Rukovodilac*'s read-only preflight
+  of 2026-11-01 (10:22–10:27 UTC) and merge order (its turn `8590e441`); merged as `5a2b39d` (parents `04fc170` and
+  `6504570f`, 2026-11-01 10:29:52 UTC) exactly from `6504570f`; deployed by the owner by hand (owner turn `71b4693e`,
+  10:39:32 UTC), because the *Rukovodilac*'s session permission refused the Render deploy with a migration; the
+  *Rukovodilac*'s smoke and its read-only post-check (its turn `ec301e87`, 10:48:15 UTC): `v50_rows` 1,
+  `v50_checksum_ok` true, `later_migrations` 0, `bodies_v50` 4, `guard_ok`, `link_ok` and `index_ok` true,
+  `instance_end_rows` 0, `inactive_keyed` 0. **v50 directly confirmed.**
