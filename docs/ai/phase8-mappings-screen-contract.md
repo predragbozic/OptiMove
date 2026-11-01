@@ -127,6 +127,9 @@ offered only to the caller the table names; a hidden act is never the protection
 ### 4.2 Step 1 — the field
 - A step indicator ("Step 1 of 3"); **Back** keeps the choices made; changing the field clears the variable and the
   details.
+- **As built (8-B, recorded by J18's PR 18-A):** the flow has four steps, the three above and a fourth, *Review*, so the
+  indicator reads "Step 1 of 4" (`frontend/metric-mappings-view.js:120, :132`). "Three steps" in this contract means
+  the three choices before the review.
 - `GET /fields`, grouped by source as Source fields groups them. A `409 result_too_large` (more than 100 fields, or more
   than 20 revisions of one field) reads
   "There are too many source fields to list here. Ask a platform administrator." (the same for more than 200 variables

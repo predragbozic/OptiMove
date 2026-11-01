@@ -2712,7 +2712,9 @@ Technical details.
         on two athletes, is the evidence. The screen details (one screen from the import's review, one click to save
         and switch on) are the *Rukovodilac*'s sketch, which the owner found acceptable. Until its contract is accepted,
         C91–C97, M2b and J16 apply unchanged. Its contract is the first work after phase 9, with the automatic
-        switching-on of system mappings and C111; questions (a)–(d) stay open for it.
+        switching-on of system mappings and C111; questions (a)–(d) stay open for it. That contract, J18
+        (`docs/ai/c112-drag-mapping-contract.md`), is proposed (2026-11-01, documentation only; not accepted, nothing
+        built).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
