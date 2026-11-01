@@ -14,7 +14,7 @@ anchor is never renamed or removed. A correction is a new section with a new anc
 
 <a id="owner-decision-o7"></a>
 
-## 1. The owner's decision O7 (J17 section 12.2)
+## 1. The owner's decision O7 (question: J17 section 12.2; decision: section 12.3)
 
 C97 asks for the meaning from official GPEXE documentation or GPEXE support's written answer. The handbook is written
 for GPEXE 6, and `server3` reports 9.11.x. The owner decided that it counts for these three fields:
@@ -131,7 +131,7 @@ as below; the key is under *Technical details* of the act's form). Each act is d
 field's active revision. If the screen shows another revision as active, or the act's button is missing (already
 confirmed), stop and report.
 
-| # | Field (seeded label · key) | Button | What to type | Evidence (type exactly) |
+| # | Field (seeded label · key) | Button | What to type | Evidence (copy exactly) |
 |---|---|---|---|---|
 | 1 | TIME · `athlete_session.total_time` | Confirm the unit | Unit the source delivers: `s` | `docs/ai/gpexe-c97-unit-evidence.md#total-time-unit` |
 | 2 | TIME · `athlete_session.total_time` | Confirm the meaning | (nothing else) | `docs/ai/gpexe-c97-meaning-evidence.md#total-time-meaning` |
