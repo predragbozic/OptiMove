@@ -279,21 +279,28 @@ export function clearCentralCalendarUncertainWrites() {
 // app.js): a save in flight, a result not confirmed or unsaved values are
 // asked about first. A move to another menu keeps the form (the slice stays).
 // Left while its result is not known, a write is kept to check later.
-// `final`: a sign-out, asked before its request - nothing can be checked
-// after it, so a write kept to check counts too (in any workspace), form or
-// not.
+// `final`: leaving the page itself, asked before its request - "sign-out"
+// (true too) or "switch" (into or out of the athlete workspace, which loads
+// the page again). Nothing can be checked after it, so a write kept to check
+// counts too (in any workspace), form or not.
+const FINAL_WORDS = Object.freeze({
+  "sign-out": { verb: "Sign out", later: "It cannot be checked after signing out." },
+  switch: { verb: "Switch", later: "It cannot be checked after this switch: the page is loaded again." },
+});
+
 export function centralCalendarMayBeLeft({ final = false } = {}) {
   const cal = state.centralCalendar;
   const form = cal?.form;
-  const later = final ? "It cannot be checked after signing out." : "You can check it later under New event or the event.";
-  const verb = final ? "Sign out" : "Leave";
-  const waiting = () => final && anyUncertainWrite();
-  if (!form) return waiting() ? ask(`The result of an event's save is not confirmed. ${later} Sign out anyway?`) : true;
+  const words = final ? FINAL_WORDS[final === true ? "sign-out" : final] || FINAL_WORDS["sign-out"] : null;
+  const later = words ? words.later : "You can check it later under New event or the event.";
+  const verb = words ? words.verb : "Leave";
+  const waiting = () => Boolean(words) && anyUncertainWrite();
+  if (!form) return waiting() ? ask(`The result of an event's save is not confirmed. ${later} ${verb} anyway?`) : true;
   let leave = true;
   if (form.busy) leave = ask(`An event is still being saved. ${verb} anyway? Its result will not be shown here. ${later}`);
-  else if (form.unconfirmed) leave = form.pending && !final ? true : ask(`The last save of an event is not confirmed. ${verb} without checking? ${later}`);
+  else if (form.unconfirmed) leave = form.pending && !words ? true : ask(`The last save of an event is not confirmed. ${verb} without checking? ${later}`);
   else if (form.dirty && DISCARD_QUESTION[form.mode]) leave = ask(DISCARD_QUESTION[form.mode]);
-  else if (waiting()) leave = ask(`The result of an event's save is not confirmed. ${later} Sign out anyway?`);
+  else if (waiting()) leave = ask(`The result of an event's save is not confirmed. ${later} ${verb} anyway?`);
   if (leave && (form.busy || form.unconfirmed)) rememberUncertainWrite(form);
   return leave;
 }

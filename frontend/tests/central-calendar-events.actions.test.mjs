@@ -1065,6 +1065,7 @@ test("10a. no data-tab anywhere, every control a button or a labelled field; the
   assert.match(block, /\.cc-check-list \{\n  display: grid;\n\}/, "no scroller of its own inside the panel or the sheet");
   assert.match(block, /\.cc-form-grid \{[^}]*align-items: start;/);
   assert.match(block, /@media \(min-width: 1024px\) and \(pointer: fine\) \{\n  \.cc-chip \{\n    min-height: 36px;/, "the compact chip only on a pointer screen");
+  assert.match(block, /\.cc-refresh-note,\n\.cc-unconfirmed,\n\.cc-unconfirmed \.cc-panel-note,\n\.cc-panel-kind,\n\.cc-panel-when,\n\.cc-panel-note,\n\.cc-panel-sentence \{\n  min-width: 0;\n  overflow-wrap: anywhere;\n\}/, "a long title without a space wraps in every line and in the pending check (the review's MEDIUM-A)");
 });
 
 // --- 11. The independent review of PR #306 -------------------------------------------------------
@@ -1277,14 +1278,13 @@ test("11g. MEDIUM-1: a deliberate navigation (sign-out, an athlete-workspace swi
   // app.js: the question comes before signOut() and its logout request, and
   // the button is the only way into it.
   const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
-  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: true \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
+  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: "sign-out" \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
   assert.equal((appJs.match(/\bsignOut\(\);/g) || []).length, 1, "signOut() is called from that listener only");
   assert.doesNotMatch(appJs, /addEventListener\("click", signOut\)/);
   assert.equal(CENTRAL_CALENDAR_STAYED, "stayed", "app.js's Back passes it on as its own BACK_STAYED");
   // The workspace switch asks before its PUT (workspace-actions.js).
   const ws = readFileSync(new URL("../workspace-actions.js", import.meta.url), "utf8");
-  assert.ok(ws.indexOf("if (handlers.confirmLeave && !handlers.confirmLeave()) return true;") < ws.indexOf('api("/api/auth/workspace"'));
-  assert.match(appJs, /confirmLeave: \(\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\)/);
+  assert.ok(ws.indexOf("if (handlers.confirmLeave && !handlers.confirmLeave({ reload })) return true;") < ws.indexOf('api("/api/auth/workspace"'));
 });
 
 test("11h. LOW-2: the update banner's probe (an untrusted beforeunload) counts only what is being saved, never a form that is merely changed", async () => {
@@ -1301,7 +1301,9 @@ test("11i. LOW-3: hostile strings stay text in the card, the panel, the form, th
   const H = { title: `<img src=x onerror="alert(1)">Cup`, location: `"><script>alert(2)</script>`, notes: `<b>bold</b> & <i>it</i>`, type: `<svg onload="alert(3)">Match` };
   const items = ITEMS.map((item) => (item.eventId === E_MATCH ? { ...item, title: H.title, location: H.location, notes: H.notes, eventTypeLabel: H.type } : item));
   const event = eventView({ title: H.title, location: H.location, notes: H.notes, eventTypeLabel: H.type, eventTypeId: "70000000-0000-4000-8000-0000000000ff", targets: [{ kind: "team", id: U17, name: "<u>U17</u>" }] });
-  const calls = installFetchMock(server({ items, event, writes: () => ({ status: 200, body: { event: { ...event, status: "cancelled", revision: 3 } } }) }));
+  // A type the coach's club named itself (K2b): its label in the select's option.
+  const HOSTILE_TYPE = { id: "70000000-0000-4000-8000-0000000000ee", kind: "training", key: "x", label: `<img src=y onerror="alert(4)">Drill`, defaultExpects: [], iconKey: null, sortOrder: 5, ownerScope: "club" };
+  const calls = installFetchMock(server({ items, event, types: [HOSTILE_TYPE, ...TYPES], writes: () => ({ status: 200, body: { event: { ...event, status: "cancelled", revision: 3 } } }) }));
   state.athletes = [{ athlete_uuid: A1, athlete_id: "1", athlete: "<i>Ana</i>" }];
   await loadCentralCalendar({ render });
   const injected = (doc) => doc.querySelectorAll(".central-calendar img, .central-calendar script, .central-calendar b, .central-calendar i, .central-calendar u, .central-calendar [onload], .central-calendar [onerror]").length;
@@ -1330,6 +1332,39 @@ test("11i. LOW-3: hostile strings stay text in the card, the panel, the form, th
   assert.equal(injected(doc), 0, "the line after it");
   assert.match(doc.querySelector(".cc-refresh-note").textContent, /<img src=x onerror="alert\(1\)">Cup/);
   assert.equal(writesOf(calls).length, 1);
+  // New event: the type's label in the select's option (the review's M11 of
+  // the option) - a select drops tags it does not take, so the text itself.
+  await act({ action: "central-calendar-close-panel" });
+  await act({ action: "central-calendar-new-event" });
+  doc = dom();
+  assert.equal(injected(doc), 0, "the new event form");
+  assert.equal(doc.querySelector(`#ccEvent-eventTypeId option[value="${HOSTILE_TYPE.id}"]`).textContent, HOSTILE_TYPE.label);
+});
+
+test("11l. LOW-A: a switch into or out of the athlete workspace loads the page again - it asks as finally as a sign-out, in its own words", async () => {
+  const { handleWorkspaceAction } = await import("../workspace-actions.js");
+  const seen = [];
+  const handlers = { confirmLeave: (leave) => { seen.push(leave); return false; } };
+  await handleWorkspaceAction({ dataset: { action: "workspace-select", workspaceType: "athlete", workspaceScopeId: "" } }, handlers);
+  await handleWorkspaceAction({ dataset: { action: "workspace-select", workspaceType: "team", workspaceScopeId: U19 } }, handlers);
+  assert.deepEqual(seen, [{ reload: true }, { reload: false }], "the switch says whether it loads the page again, before its PUT");
+  await openCreate({ writes: () => ({ throwNetworkError: true }) });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: "switch" }), false, "the form not confirmed");
+  assert.equal(questions.at(-1), "The last save of an event is not confirmed. Switch without checking? It cannot be checked after this switch: the page is loaded again.");
+  confirmAnswer = true;
+  await act({ action: "central-calendar-event-form-close" });
+  await tick();
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: "switch" }), false, "a write waiting, no form");
+  assert.equal(questions.at(-1), "The result of an event's save is not confirmed. It cannot be checked after this switch: the page is loaded again. Switch anyway?");
+  const asked = questions.length;
+  assert.equal(centralCalendarMayBeLeft({ final: false }), true, "a switch between clubs keeps it to check later, unasked");
+  assert.equal(questions.length, asked);
+  const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appJs, /confirmLeave: \(leave\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\{ final: leave\?\.reload \? "switch" : false \}\)/, "app.js maps the reload to a final question");
 });
 
 test("11j. LOW-3: Cancel needs the card's canManage (M6); a sent form's fields are locked while its result is not confirmed (M17)", async () => {

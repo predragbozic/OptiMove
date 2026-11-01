@@ -192,9 +192,11 @@ event does not list, so it is its own card with its own counts (no gap note then
   line after it; tests for Cancel without `canManage` and for the locked fields of a sent form.
 - **LOW-4:** recorded in section 8 (not small).
 
-Recorded with it: a switch into or out of the athlete workspace reloads the page, so a write waiting to be checked
-is dropped there although the switch's question says it can be checked later (the switch does not tell the
-calendar which workspace it goes to).
+**The narrow re-review of `fd77b6d` (READY WITH NON-BLOCKING NOTES), applied:** a title, type or place without a
+space wraps in every line of the screen and of the panel and in the pending check (MEDIUM-A: at 360 px a 68-character
+word had widened the page to 450 px); a switch into or out of the athlete workspace, which loads the page again,
+tells `confirmLeave` so (`{ reload }`, `workspace-actions.js`) and the calendar asks as finally as a sign-out, in its
+own words (LOW-A); a type's label in the New event select is tested with a hostile string (LOW-B).
 
 **Follow-ups (LOW, recorded, not built):** the cancel reason is not shown back anywhere (the card carries none); a team
 coach gets no line on why a club event has no Edit; the form gives no hint that a multi-day event's times show on

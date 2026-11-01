@@ -21532,6 +21532,20 @@ body.exercise-header-pinned #viewToolbar {
   text-align: start;
 }
 
+/* A coach's title, type or place in a line of the screen or of the panel
+   wraps anywhere: a long word without a space never widens the page or the
+   sheet (the review of PR #306, MEDIUM-A). */
+.cc-refresh-note,
+.cc-unconfirmed,
+.cc-unconfirmed .cc-panel-note,
+.cc-panel-kind,
+.cc-panel-when,
+.cc-panel-note,
+.cc-panel-sentence {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .cc-cancel-name {
   margin: 0;
   overflow-wrap: anywhere;
