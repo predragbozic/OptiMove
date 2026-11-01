@@ -1222,6 +1222,37 @@ transcript; J11 section 0.1 holds the table):
       nijednu vrednost i nijedno mapiranje; posle toga samo nova verzija (ključ trajno). Svaka izmena se beleži.
       Pripremi ugovor kao poseban posao posle faze 9.” (the same turn `f2ed35f4`).
     - Not built; its contract is written after phase 9 (likely with a migration, the versions being append-only).
+112. **Mapping by drag and drop: the direction for future mappings** (a direction, not a contract; it changes C97, M2b
+     and J16 for mappings after the pilot).
+    - **The owner's words:** „kada se budu radila mapiranja u buduce u klubovima, potrebno je da taj neko uradi prvi
+      uvoz i dobije se tabela sa varijablama od strane kluba, admin izabere varijable koje hoce da mapira, za njih
+      dobije vrednosti iz tabele nakon toga radi prevlacenja za dvojicu sportista (potrebno je da je mapirao na isti
+      nacin i jednog i drugog. Znaci na osnovu potvrdjenog prevlacenja to ce biti dokaz. Nema potrebe za ovim
+      smaranjima realno. Potrebno je samo da se ucita vrednost i za to da odredi. Znaci ono sto vidim i prevucem tamo
+      tako je, Upustvo ce dobiti sta treba da vode racuna npr. Znaci napraviti userfriendly" (owner turn `7fca0a79` in
+      the *Rukovodilac*'s chat, 2026-11-01 19:54:28 UTC), and, on the *Rukovodilac*'s interactive sketch of it: „ovo
+      izgleda dobro, mnogo je jednostavnije i prihvatljivije, smatram da ovako nesto treba da bude u nasoj
+      aplikaciji." (owner turn `fbeca2ea`, 20:02:15 UTC). Both relayed with their event ids and checked by the executor.
+    - **The direction, as the *Rukovodilac* understood it and the owner approved on the sketch** (not the owner's own
+      text):
+      - one screen, opened from the review of a first import: on one side the GPEXE columns with a raw value and its
+        unit, on the other the club's or the system's variables;
+      - the administrator drags a column onto a variable (on a phone: tap, then tap); the screen proposes the conversion
+        from `unit_conversions` and shows, for two athletes of the same stored session, what GPEXE sends, what OptiMove
+        will store and what the GPEXE screen should show (mm:ss, km/h);
+      - the administrator ticks "matches"; that confirmation (who, when, which values) is the evidence; one click
+        "Save and switch on for the team";
+      - units that do not agree are refused, with the reason; a short guide comes with the screen.
+    - **What it changes:** for mappings after the pilot, the C97 evidence standard, M2b's two acts with a document under
+      `docs/` (C91–C97, J4) and J16's four steps are replaced by the confirmed drag and its stored record. The pilot keeps
+      what was agreed: the P1 / P2 evidence of the three fields (PR #316 and its meaning companion) and the acts of J17
+      section 10.2.
+    - **Open for its contract:** (a) what remains of the meaning act and how it is recorded; (b) whether the platform
+      still confirms a system field or the first administrator's confirmation counts; (c) two athletes of one session or
+      of two sessions; (d) where the evidence is stored — the exact values for the administrators, no names for anyone
+      else.
+    - **When:** the contract ("mapping by drag and drop") is the first work after phase 9, together with the automatic
+      switching-on of system mappings and C111. Nothing of it is built before its contract is accepted.
 
 ---
 
