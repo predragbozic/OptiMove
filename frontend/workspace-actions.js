@@ -108,7 +108,11 @@ export async function handleWorkspaceAction(action, handlers = {}) {
     // reloads the page, so an unsaved Dashboards layout or widget draft is
     // confirmed before the request - false keeps the current workspace. The
     // question does not discard anything: if the request fails, the draft stays.
-    if (handlers.confirmLeave && !handlers.confirmLeave()) return true;
+    // `reload`: the switch goes into or out of the athlete workspace, which
+    // loads the page again - what only this page holds is lost (the central
+    // calendar's event saves waiting to be checked, K2a-2).
+    const reload = nextType === "athlete" || isAthleteMode();
+    if (handlers.confirmLeave && !handlers.confirmLeave({ reload })) return true;
 
     state.workspaceSwitcher.pending = true;
     state.workspaceSwitcher.error = "";

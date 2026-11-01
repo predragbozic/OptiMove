@@ -287,7 +287,8 @@ test("H4 (review LOW): accepting the question but failing the request loses noth
 test("H4: app.js hands the ask-only question to both handlers and the discard to the notifications", () => {
   const app = readFileSync(new URL("../app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(app, /const askLeaveTrainingLoad = \(\) => confirmLeaveTrainingLoad\(null, \{ discard: false \}\);/);
-  assert.match(app, /handleWorkspaceAction\(action, \{[^}]*confirmLeave: askLeaveTrainingLoad[^}]*\}\)/);
+  // A workspace switch also asks the central calendar's event form (K2a-2): it resets that screen too.
+  assert.match(app, /handleWorkspaceAction\(action, \{[^}]*confirmLeave: \(leave\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\{ final: leave\?\.reload \? "switch" : false \}\) \}\)/);
   assert.match(app, /handleNotificationAction\(action, \{[^}]*confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts[^}]*\}\)/);
 });
 
