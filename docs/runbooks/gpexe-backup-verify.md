@@ -240,6 +240,16 @@ the recycle bin). A dump without its report next to it is unverified: delete it.
 - It does not back up Supabase's own schemas (logins of the Supabase dashboard, storage objects) or the media files in
   object storage (R2): only the application's database schemas.
 
+## Its tests
+
+`backend/tests/gpexe-backup-verify.test.mjs` (T1 runner, kind `disposable`:
+`node scripts/test-runner.mjs --project backend --file gpexe-backup-verify.test.mjs`) needs `pg_dump` and `pg_restore`
+on the PATH or in `PG_BIN`. Its remote-mode tests also need a test server with **`ssl = on`** and a **password**
+(scram) in `DATABASE_URL`: the remote mode always connects over TLS, and several tests check that a wrong password is
+reported by its code. On a server without TLS, or without a password, those tests fail (as "a TLS problem" or an
+unexpected login) instead of being skipped; that is the test environment, not the script. Both reviewers of PR #315
+reproduced it: 26/26 with TLS and a scram password, fewer without.
+
 ## Restoring for real
 
 This procedure proves the dump can be restored. Restoring it over the real
