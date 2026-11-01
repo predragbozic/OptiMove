@@ -164,6 +164,10 @@ match the team's thresholds` (yes / no) and `the UI's zone or event settings equ
 `provenance: details max_values_speed, canary-equal to the row's max_v`. The executor turns the returned table into
 the evidence document (with its anchor) that M2b's unit act cites; the owner reviews it before it is merged.
 
+**Recorded so far:** the unit of `athlete_session.total_time`, `total_distance` and `max_v`, from one session with 13
+athletes on the owner's decision (instead of two sessions), in `docs/ai/gpexe-c97-unit-evidence.md`, with its
+departures from this procedure named there (section 2.1). The other seven fields and every meaning are still open.
+
 ## 5. The meaning side (not from this procedure)
 
 The meaning act of each field needs the field's definition, and for a zone or an event field its operator and the
