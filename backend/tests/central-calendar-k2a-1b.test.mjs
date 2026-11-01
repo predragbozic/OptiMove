@@ -1166,3 +1166,179 @@ test("15. the alignment's statements do not grow with its sessions (code review 
   const three = await alignStatements(s.x, "Three");
   assert.equal(three, one, `the same number of statements for one and for three sessions (${one})`);
 });
+
+// What the sanctioned reparent / merge does to the activity it empties (v4:
+// the same owner on both sides, the supersede flag set for its own
+// transaction only).
+async function mergeActivity(aliasId, survivorId) {
+  await q("begin");
+  try {
+    await q(`select set_config('training.allow_supersede_write', 'on', true)`);
+    await q(`update training.activities set lifecycle_state = 'superseded', superseded_by_activity_id = $2 where id = $1`, [aliasId, survivorId]);
+    await q("commit");
+  } catch (error) {
+    await q("rollback").catch(() => {});
+    throw error;
+  }
+}
+
+test("16. a merged activity never belongs to two events (independent review MEDIUM-1): the survivor of an activity linked to event A is already A's — attaching it to C is activity_already_attached, to A is kept; two live links made before a merge fold the survivor under the older one in every window, and each event still keeps its own", async () => {
+  const s = await squad("mrg");
+  const teamX = { scope: "team", teamId: s.teamX };
+  const alias = await makeActivity({ owner: teamX, origin: "manual", name: "Alias" });
+  await addParticipant(alias, s.x[0].athleteId);
+  const survivor = await makeActivity({ owner: teamX, origin: "api_import", name: "Survivor" });
+  await addParticipant(survivor, s.x[0].athleteId);
+  const evA = await teamEvent(s, { title: "A" });
+  const evC = await teamEvent(s, { title: "C" });
+  assert.equal((await attachActivity(s.coachX.cookie, evA.id, { expectedRevision: 1, activityId: alias })).status, 200);
+  await mergeActivity(alias, survivor);
+  const toC = await attachActivity(s.coachX.cookie, evC.id, { expectedRevision: 1, activityId: survivor });
+  assert.equal(toC.status, 409, toC.text);
+  assert.equal(toC.body.error, "activity_already_attached");
+  assert.equal(await liveActivityLinks(evC.id), 0);
+  const toA = await attachActivity(s.coachX.cookie, evA.id, { expectedRevision: 2, activityId: survivor });
+  assert.equal(toA.status, 200, toA.text);
+  assert.equal(toA.body.attached, false, "already A's through the alias's link: kept, no second row");
+  assert.equal(await liveActivityLinks(evA.id), 1);
+
+  // Two live links that a later merge makes name one survivor: E's link to
+  // the survivor (the newer) was written first, D's link to the alias (the
+  // older) after it.
+  const alias2 = await makeActivity({ owner: teamX, origin: "manual", name: "Alias 2" });
+  await addParticipant(alias2, s.x[1].athleteId);
+  const survivor2 = await makeActivity({ owner: teamX, origin: "api_import", name: "Survivor 2" });
+  await addParticipant(survivor2, s.x[1].athleteId);
+  const evD = await teamEvent(s, { title: "D" });
+  const evE = await teamEvent(s, { title: "E" });
+  assert.equal((await attachActivity(s.coachX.cookie, evE.id, { expectedRevision: 1, activityId: survivor2 })).status, 200);
+  await q(
+    `insert into calendar.event_activity_links (event_id, activity_id, link_method, linked_by_user_id, linked_at) values ($1,$2,'manual',$3, now() - interval '1 hour')`,
+    [evD.id, alias2, s.coachX.id],
+  );
+  await mergeActivity(alias2, survivor2);
+  for (const [from, to] of [[FROM, TO], [PAST, PAST]]) {
+    const read = await calendar(s.coachX.cookie, { from, to, extra: "&include=athletes" });
+    assert.ok(eventCards(read, evD.id)[0].links.activityIds.includes(survivor2), `${from}..${to}: the survivor folds under the older link's event`);
+    assert.equal(eventCards(read, evE.id)[0].links.activityIds.includes(survivor2), false, `${from}..${to}: and only there`);
+    assert.equal(ofKind(allItems(read), "activity").length, 0, `${from}..${to}: never a card of its own`);
+  }
+  // Each event keeps its own live link: attaching the survivor again to E
+  // (its own link) or to D (the alias's) is kept; to a third event, a 409.
+  const againE = await attachActivity(s.coachX.cookie, evE.id, { expectedRevision: 2, activityId: survivor2 });
+  assert.equal(againE.status, 200, againE.text);
+  assert.equal(againE.body.attached, false);
+  const againD = await attachActivity(s.coachX.cookie, evD.id, { expectedRevision: 1, activityId: survivor2 });
+  assert.equal(againD.status, 200, againD.text);
+  assert.equal(againD.body.attached, false);
+  const evF = await teamEvent(s, { title: "F" });
+  assert.equal((await attachActivity(s.coachX.cookie, evF.id, { expectedRevision: 1, activityId: survivor2 })).body.error, "activity_already_attached");
+});
+
+test("17. the reason for THIS day on attach (independent review R5): an athlete who left team X after d1 — X's coach cannot reach the d2 session (byte-identical to a random id), the club admin is told the athlete is not targeted that day, one such day refuses the whole request, the d1 session links and stays X's history on d1", async () => {
+  const s = await squad("day");
+  const leaver = await makeAthlete("day Leaver", { clubId: s.clubId, teamId: s.teamX });
+  const d1 = addDays(PAST, -1);
+  const d2 = PAST;
+  await archiveMembership(await teamMembershipId(leaver.athleteId, s.teamX), `${d1}T12:00:00Z`);
+  const teamX = { scope: "team", teamId: s.teamX };
+  const [p1] = await plansFor([leaver], { owner: teamX, coachUserId: s.coachX.id, date: d1 });
+  const [p2] = await plansFor([leaver], { owner: teamX, coachUserId: s.coachX.id, date: d2 });
+  const ev = await teamEvent(s, { day: d1, endDay: d2 });
+  const random = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [crypto.randomUUID()] });
+  const coachD2 = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [p2.logicalSessionId] });
+  assert.equal(coachD2.text, random.text);
+  const adminD2 = await attachSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [p2.logicalSessionId] });
+  assert.equal(adminD2.status, 409, adminD2.text);
+  assert.equal(adminD2.body.error, "athlete_not_targeted");
+  const both = await attachSessions(s.clubAdmin.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [p1.logicalSessionId, p2.logicalSessionId] });
+  assert.equal(both.body.error, "athlete_not_targeted", "one non-target day refuses the whole request");
+  assert.equal(await liveLinks(ev.id), 0);
+  const coachD1 = await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: [p1.logicalSessionId] });
+  assert.equal(coachD1.status, 200, coachD1.text);
+  const xd1 = await calendar(s.coachX.cookie, { from: d1, to: d1, extra: "&include=athletes" });
+  assert.ok(eventCards(xd1, ev.id)[0].athleteIds.includes(leaver.athleteId));
+  const xd2 = await calendar(s.coachX.cookie, { from: d2, to: d2, extra: "&include=athletes" });
+  assert.equal(xd2.text.includes(leaver.athleteId), false);
+});
+
+test("18. a linked activity outside the manager's own read scope (independent review LOW-3 and R10): the club admin links a club activity to team X's event — the club admin's view names it; coach X's view keeps its ids and day only (visible: false, no name, no origin) and coach X can still detach it; coach X attaching an unreadable club activity gets the random id's answer", async () => {
+  const s = await squad("rd");
+  const club = { scope: "club", clubId: s.clubId };
+  const tev = await teamEvent(s, { title: "Team with club gps" });
+  const clubAct = await makeActivity({ owner: club, origin: "api_import", name: "Club-only activity name" });
+  await addParticipant(clubAct, s.x[2].athleteId);
+  const linked = await attachActivity(s.clubAdmin.cookie, tev.id, { expectedRevision: 1, activityId: clubAct });
+  assert.equal(linked.status, 200, linked.text);
+  const named = { visible: true, name: "Club-only activity name", origin: "api_import" };
+  const pick = (l) => ({ visible: l.visible, name: l.name, origin: l.origin });
+  const adminLink = linked.body.event.activityLinks.find((l) => l.activityId === clubAct);
+  assert.deepEqual(pick(adminLink), named);
+  const adminGet = await getEvent(s.clubAdmin.cookie, tev.id);
+  assert.deepEqual(pick(adminGet.body.event.activityLinks.find((l) => l.activityId === clubAct)), named);
+  const xGet = await getEvent(s.coachX.cookie, tev.id);
+  assert.equal(xGet.status, 200, xGet.text);
+  assert.equal(xGet.body.event.canManage, true);
+  assert.deepEqual(xGet.body.event.activityLinks, [{ id: adminLink.id, activityId: clubAct, day: PAST, visible: false, name: null, origin: null }]);
+  assert.equal(xGet.text.includes("Club-only activity name"), false);
+  assert.equal((await calendar(s.coachX.cookie)).text.includes(clubAct), false, "coach X's calendar does not show it either");
+  // Coach X's command answers carry the same reduced link.
+  const unreadable = await makeActivity({ owner: club, origin: "api_import", name: "Club unread" });
+  await addParticipant(unreadable, s.x[0].athleteId);
+  const random = await attachActivity(s.coachX.cookie, tev.id, { expectedRevision: 2, activityId: crypto.randomUUID() });
+  const refused = await attachActivity(s.coachX.cookie, tev.id, { expectedRevision: 2, activityId: unreadable });
+  assert.equal(refused.text, random.text, "an activity outside coach X's read scope");
+  assert.equal(await liveActivityLinks(tev.id), 1);
+  const detached = await detachActivity(s.coachX.cookie, tev.id, { expectedRevision: 2, activityId: clubAct });
+  assert.equal(detached.status, 200, detached.text);
+  assert.equal(detached.body.detached, 1);
+  assert.equal(await liveActivityLinks(tev.id), 0);
+});
+
+test("19. the targets change after a link (independent review R11): a viewer who no longer gets the event keeps the session as a planned card; the manager sees the linked athlete as targeted: false; under a filter on that athlete the session is never gone", async () => {
+  const s = await squad("tgt");
+  const shared = await makeAthlete("tgt Shared", { clubId: s.clubId, teamId: s.teamX });
+  await addMembership({ athleteId: shared.athleteId, clubId: s.clubId, teamId: s.teamY });
+  const p = await plansFor([shared, s.x[0]], { owner: { scope: "team", teamId: s.teamX }, coachUserId: s.coachX.id });
+  const ev = await teamEvent(s);
+  assert.equal((await attachSessions(s.coachX.cookie, ev.id, { expectedRevision: 1, logicalSessionIds: p.map((x) => x.logicalSessionId) })).status, 200);
+  const patched = await patchEvent(s.coachX.cookie, ev.id, { expectedRevision: 2, targets: [{ kind: "athlete", id: s.x[0].athleteId }] });
+  assert.equal(patched.status, 200, patched.text);
+  const yView = await calendar(s.coachY.cookie, { extra: "&include=athletes" });
+  const sharedCards = plannedOn(yView, PAST).filter((c) => c.athleteIds.includes(shared.athleteId));
+  assert.ok(eventCards(yView, ev.id).length === 1 || sharedCards.length === 1, "the shared athlete's session is never gone from Y's calendar");
+  const card = eventCards(await calendar(s.coachX.cookie, { extra: "&include=athletes" }), ev.id)[0];
+  assert.equal(card.athletes.find((a) => a.athleteId === shared.athleteId)?.targeted, false);
+  // A filter on the athlete the event no longer targets: the event is not
+  // emitted that day, so the session must stay a planned card.
+  for (const [label, who] of [["coach X", s.coachX], ["club admin", s.clubAdmin]]) {
+    const filtered = await calendar(who.cookie, { extra: `&athleteIds=${shared.athleteId}&include=athletes` });
+    const shown = eventCards(filtered, ev.id);
+    const own = plannedOn(filtered, PAST).filter((c) => c.athleteIds.includes(shared.athleteId)).length;
+    assert.ok(own === 1 || (shown.length === 1 && shown[0].athleteIds.includes(shared.athleteId)), `${label}: the session is never gone under a filter`);
+  }
+});
+
+test("20. detach through another event (independent review R12): the manager of event A detaching a session link or an activity of event B gets link_not_available, the same as a random id, and event B is untouched", async () => {
+  const s = await squad("oth");
+  const p = await plansFor(s.x, { owner: { scope: "team", teamId: s.teamX }, coachUserId: s.coachX.id });
+  const evA = await teamEvent(s, { title: "A" });
+  const evB = await teamEvent(s, { title: "B" });
+  const onB = await attachSessions(s.coachX.cookie, evB.id, { expectedRevision: 1, logicalSessionIds: [p[0].logicalSessionId] });
+  assert.equal(onB.status, 200, onB.text);
+  const act = await makeActivity({ owner: { scope: "team", teamId: s.teamX }, origin: "api_import" });
+  await addParticipant(act, s.x[1].athleteId);
+  assert.equal((await attachActivity(s.coachX.cookie, evB.id, { expectedRevision: 2, activityId: act })).status, 200);
+  const viaA = await detachSessions(s.coachX.cookie, evA.id, { expectedRevision: 1, linkIds: [onB.body.event.sessionLinks[0].id] });
+  const random = await detachSessions(s.coachX.cookie, evA.id, { expectedRevision: 1, linkIds: [crypto.randomUUID()] });
+  assert.equal(viaA.body.error, "link_not_available", viaA.text);
+  assert.equal(viaA.text, random.text);
+  const actViaA = await detachActivity(s.coachX.cookie, evA.id, { expectedRevision: 1, activityId: act });
+  const actRandom = await detachActivity(s.coachX.cookie, evA.id, { expectedRevision: 1, activityId: crypto.randomUUID() });
+  assert.equal(actViaA.body.error, "link_not_available", actViaA.text);
+  assert.equal(actViaA.text, actRandom.text);
+  assert.equal(await liveLinks(evB.id), 1);
+  assert.equal(await liveActivityLinks(evB.id), 1);
+  assert.equal((await q(`select revision from calendar.events where id = $1`, [evA.id]))[0].revision, 1);
+  assert.equal((await q(`select revision from calendar.events where id = $1`, [evB.id]))[0].revision, 3);
+});

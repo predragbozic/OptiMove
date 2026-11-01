@@ -59,7 +59,13 @@ own `RESTRICT` foreign keys, as it is by its schedules today.
 not that the plan or activity belongs to the event's owner — K2a-1b's commands check it (the session's athlete a target of
 the event that day and inside the caller's scope, its plan owned inside the event owner's tree; an activity in the
 caller's scope, owned inside that tree, with a targeted participant) when the link is made — an activity link then
-follows the canonical survivor of a later merge without that check; a cancel ends the event's live links in its own
+follows the canonical survivor of a later merge without that check (v4's sanctioned merge paths join only
+activities of one owner, so the survivor stays inside the tree); the unique live link per activity holds per
+`activity_id`, not per survivor: the attach refuses a second event through the aliases' links, but two live links
+made before a merge both stay, and the read folds the survivor under the older one (end the other with a detach);
+the alignment judges a session by its live row, so a Builder draft copy whose flags differ is not written and its
+publication brings the old flags back (the card shows it under `alignment.pending`; align again); a cancel ends the
+event's live links in its own
 transaction, and a change of the days that would leave a link outside them is refused — both by the service, not the
 database (a raw cancel through SQL leaves the links live: end them with `update calendar.event_session_links` /
 `event_activity_links set ended_at = now(), ended_by_user_id = <the canceller>` in the same transaction); every link write

@@ -636,7 +636,7 @@ identical 404, one request row and one change row, the bounded COMMIT; every com
 | `POST /:id/sessions` | `logicalSessionIds` (1–200, a planned card's `links.logicalSessionIds`), `alignSessions`, `confirmDisableWithResults` | `400 session_not_available` (missing, unpublished, outside the caller's calendar scope on its day, or of a plan outside the event owner's tree — one answer); `409 session_outside_event`, `athlete_not_targeted` (the session's athlete is no target that day), `session_already_attached` (another event's live link; also the unique index under a race) |
 | `POST /:id/sessions/detach` | `linkIds` (the manager view's `sessionLinks[].id`, an orphaned link included) | `400 link_not_available` |
 | `POST /:id/sessions/align` | `confirmDisableWithResults` | `409 nothing_to_align`, `has_existing_results { resultCount }` |
-| `POST /:id/activities` | `activityId` | `400 activity_not_available` (missing, outside the caller's read scope, or owned outside the event owner's tree — one answer); `409 activity_superseded`, `activity_outside_event`, `activity_not_targeted` (no participant is a target that day), `activity_already_attached` |
+| `POST /:id/activities` | `activityId` | `400 activity_not_available` (missing, outside the caller's read scope, or owned outside the event owner's tree — one answer); `409 activity_superseded`, `activity_outside_event`, `activity_not_targeted` (no participant is a target that day), `activity_already_attached` (another event's live link of this activity or of an activity merged into it) |
 | `POST /:id/activities/detach` | `activityId` (the canonical id the read shows) | `400 link_not_available` |
 
 A slot already linked to this event, or the same activity, is kept (idempotent: `attached` 0 / false). The link is
@@ -696,7 +696,13 @@ imported one whose roster needs no state meets `device_data` (its attendance is 
 carries `links.orphanedSessionLinks` (the plan deleted, or the slot holds no session), `links.renamedSessionLinks`
 and `alignment.pending` (the panel's note until aligned — the status stays the channels', a gap stays a gap); the
 manager view (`GET /:id`) lists `sessionLinks` (state `linked` / `renamed` / `orphaned`, `aligned`) and
-`activityLinks`. A cancelled event folds nothing (its links end with it), the athlete workspace folds and reads no
+`activityLinks` — an activity named (`visible: true`, its name and origin) only when it is in the caller's
+calendar read scope, else `visible: false` with its ids and day alone, so its manager can still detach it
+(independent review LOW-3: a club admin's link of a club activity to team X's event never shows team X's coach
+what that activity is). An activity is attached to one event at a time, its aliases included (ADR-001: the
+attach looks through `training.activity_alias_ids`); when a merge comes after two live links were made, the
+survivor folds under the older link's event in every window, and each event keeps its own live link until it is
+detached (independent review MEDIUM-1). A cancelled event folds nothing (its links end with it), the athlete workspace folds and reads no
 link, and a response without the event cards (`kinds` without `event`) folds no linked session or activity — each
 is its own card there, never gone from that response (security review MEDIUM-3). The statement count stays
 independent of the number of items: two more statements (the session and the activity links) when the window
@@ -711,7 +717,10 @@ toggles through the shared function, activities and device data, the lock order 
 concurrent attaches; after the review round: 9b (the edit-draft copy's own tracking), 12 (a cancel releases its
 links), 13 (a change of the days never strands a link), 14 (the event owner's tree, also with the foreign plan
 and activity held `FOR UPDATE`), 15 (the alignment's statements for one and for three sessions), and the `kinds`
-and replay-count assertions in tests 4, 8 and 10.
+and replay-count assertions in tests 4, 8 and 10; after the independent review: 16 (a merged activity never
+belongs to two events), and the reviewer's own scenarios R5, R10, R11 and R12 as tests 17 (the target rule of
+each day), 18 (an unreadable linked activity in the manager view; an unreadable activity never attached), 19 (a
+change of the targets under an athlete filter) and 20 (detach through another event).
 
 **The review round** (internal `code-reviewer` and `security-reviewer` on `8ad4af2`):
 
@@ -737,6 +746,16 @@ closed; their notes:
 | Security LOW-1: the owner's tree is not re-checked on read for a merged activity | recorded (open point 7, the runbook) | — |
 | Security NIT: the tree's wording for a club event over a team's plan | the paragraph above says who detaches | — |
 
+The independent review of PR #313 at `687b108` (black-box scenarios through the real routes): READY WITH
+NON-BLOCKING NOTES, no BLOCKER or HIGH; its notes:
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| MEDIUM-1: the survivor of a merged activity linked to event A could be attached to event C (two live links, the read keeping the last) | the attach counts the live links of the activity's aliases (`training.activity_alias_ids`), this event's first: kept here, `409 activity_already_attached` elsewhere; the read takes the links oldest first and the first wins | 16 (MA1, MA2, MR1, MR2, MR2b) |
+| MEDIUM-2: four guards no test protected — the target rule of the session's own day, the fold only under an event card emitted that day, the read scope on an activity attach, a detach only of this event's links | the reviewer's R5, R10, R11 and R12 are tests 17–20 | 17 (RM2), 18 (RM4), 19 (RM3), 20 (RM5, RM5b) |
+| LOW-3: team X's coach read the name of a club activity the club's admin linked to X's event, an activity X may not read | the manager view names a linked activity only inside the caller's read scope (`visible: false` otherwise); the detach stays the manager's | 18 (ML5, ML5b, ML5c) |
+| LOW-4: the alignment judges a session by its live row, so a Builder draft copy whose flags differ stays as it is and a later "Save and finish" brings its old flags back | recorded (open point 8, the runbook) | — |
+
 **Open points (for the manager):**
 1. The standalone alignment is audited as kind `update` (above); a later calendar migration could add
    `align_sessions` to the two CHECKs if the audit should name it (v50 is now 7g-B's, PR #305).
@@ -760,6 +779,16 @@ closed; their notes:
    tree); the group key's owner part is an unsalted 48-bit hash (LOW-4, an HMAC is possible); after an unknown
    COMMIT the answer is the reduced view without `getEvent`'s readable check (the second half of LOW-5, from
    K2a-1a); the owner's tree is checked when a link is made, not when it is read — an activity link follows the
-   canonical survivor of a later merge (ADR-001) without a tree check (the narrow security re-review's LOW-1;
-   whether a merge survivor can have another owner is not established; sessions are not affected, a plan's
-   stored owner never changes).
+   canonical survivor of a later merge (ADR-001) without a tree check (the narrow security re-review's LOW-1).
+   **Closed by the independent review:** both sanctioned paths that make a survivor
+   (`training.reparent_activity_participant`, `training.merge_activity_participants`,
+   `202609071300_training_activity_v4_canonical_functions.sql`) refuse to join activities of different owners, so
+   a survivor keeps the owner its link was checked against; sessions are not
+   affected either (a plan's stored owner never changes).
+8. The alignment judges each session by its live row (independent review LOW-4): a session whose live flags
+   already follow the event is not written, so a Builder draft copy of it whose flags differ stays as it is, and
+   publishing that draft ("Save and finish") brings the old flags back to the live row; the event's card then
+   shows the session again under `alignment.pending`, and aligning once more fixes it. Recorded, not changed.
+9. **For the owner, in the external review package:** a platform administrator manages an event's links from the
+   platform workspace too (support), as every other event write (section 4.1; K2a-1a's tests 19 and 20) — the
+   attach and the detach of sessions and activities and the alignment included. Not changed.

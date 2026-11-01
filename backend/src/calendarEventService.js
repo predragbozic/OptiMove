@@ -321,8 +321,10 @@ const EVENT_VIEW_SQL = `
     left join public.clubs tc on tc.id = t.club_id
    where e.id = $1`;
 
-// The manager's view: everything the event holds.
-function viewOf(row) {
+// The manager's view: everything the event holds; a linked activity's name
+// and origin only when the caller may read that activity
+// (`readableActivityIds`).
+function viewOf(row, readableActivityIds) {
   return {
     id: row.id,
     ownerScope: row.owner_scope, ownerClubId: row.owner_club_id, ownerTeamId: row.owner_team_id, ownerUserId: row.owner_user_id,
@@ -334,7 +336,7 @@ function viewOf(row) {
     revision: row.revision, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
     targets: row.targets || [],
     links: { planIds: (row.plan_ids || []).map(String), activityIds: (row.activity_ids || []).map(String) },
-    ...linkFacts(row),
+    ...linkFacts(row, readableActivityIds),
     canManage: true,
     notes: row.notes,
   };
@@ -345,9 +347,13 @@ function viewOf(row) {
 // (the session's name changed since the link) or `orphaned` (the plan was
 // deleted or its slot holds no session any more: visible, never silent) —
 // and whether its flags follow the event's `expects` (`aligned`); the live
-// activity links; `alignment.pending`, the panel's note until the coach
-// aligns (D20, never an alarm).
-function linkFacts(row) {
+// activity links — named (`visible: true`, the name and the origin) only
+// when the activity is in the caller's calendar read scope, else
+// `visible: false` with its ids and day alone, so its manager can still
+// detach it without learning what it is (independent review of PR #313,
+// LOW-3); `alignment.pending`, the panel's note until the coach aligns (D20,
+// never an alarm).
+function linkFacts(row, readableActivityIds = new Set()) {
   const expectsRpe = (row.expects || []).includes("rpe");
   const sessionLinks = (row.session_links || []).map((l) => {
     const state = !l.sessionId ? "orphaned"
@@ -361,9 +367,13 @@ function linkFacts(row) {
       asksRpe: l.sessionId ? l.rpeEnabled === true && l.trainingLoadEnabled === true : null, aligned,
     };
   });
-  const activityLinks = (row.activity_links || []).map((l) => ({
-    id: l.id, activityId: l.activityId, name: l.name ?? null, day: dateStr(l.day), origin: l.origin ?? null,
-  }));
+  const activityLinks = (row.activity_links || []).map((l) => {
+    const visible = readableActivityIds.has(String(l.activityId));
+    return {
+      id: l.id, activityId: l.activityId, day: dateStr(l.day), visible,
+      name: visible ? l.name ?? null : null, origin: visible ? l.origin ?? null : null,
+    };
+  });
   return {
     sessionLinks, activityLinks,
     alignment: { pending: sessionLinks.filter((l) => l.aligned === false).length },
@@ -413,10 +423,24 @@ function addDay(iso, days = 1) {
   return d.toISOString().slice(0, 10);
 }
 
+// The linked activities the caller may read in the calendar (the activity
+// read scope the attach checks too); one statement, none without a link.
+async function readableActivityIdsOf(queryable, ctx, row) {
+  const ids = (row.activity_links || []).map((l) => String(l.activityId));
+  if (!ids.length) return new Set();
+  const params = [ids];
+  const scope = calendarActivityScopeSql(ctx, "a", params);
+  const result = await queryable.query(`select a.id from training.activities a where a.id = any($1::uuid[]) and (${scope})`, params);
+  return new Set(result.rows.map((r) => String(r.id)));
+}
+async function managerViewOf(queryable, ctx, row) {
+  return viewOf(row, await readableActivityIdsOf(queryable, ctx, row));
+}
+
 async function readEventView(queryable, ctx, eventId) {
   const row = (await queryable.query(EVENT_VIEW_SQL, [eventId])).rows[0];
   if (!row) return null;
-  if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null) return viewOf(row);
+  if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null) return managerViewOf(queryable, ctx, row);
   return reducedViewOf(row, ctx, queryable);
 }
 
@@ -464,7 +488,7 @@ export async function getEvent(ctx, eventId) {
   if (ctx.type !== "coach" || !isUuid(eventId)) throw notFound();
   const row = (await pool.query(EVENT_VIEW_SQL, [eventId.toLowerCase()])).rows[0];
   if (!row) throw notFound();
-  if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null) return viewOf(row);
+  if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null) return managerViewOf(pool, ctx, row);
   const params = [eventId.toLowerCase()];
   const candidate = calendarScheduleCandidateSql(ctx, "e", "calendar.event_targets", params, "e.day", "coalesce(e.end_day, e.day)", "event_id");
   const readable = (await pool.query(`select 1 from calendar.events e where e.id = $1 and (${candidate})`, params)).rowCount > 0;
@@ -1259,8 +1283,11 @@ export async function alignSessions(ctx, eventId, body) {
 // met): a canonical activity inside the caller's calendar read scope and the
 // event owner's tree (withinEventOwner), on one of the event's days, with at
 // least one participant who is a target of the event that day; already
-// linked to this event is kept, to another is a 409. The activity row is
-// locked FOR SHARE after the event.
+// linked to this event is kept, to another is a 409. "Linked" counts every
+// live link of the activity's aliases too (ADR-001: a link of an activity
+// merged into this one names this one), so a merge never lets the survivor
+// take a second event (independent review of PR #313, MEDIUM-1). The
+// activity row is locked FOR SHARE after the event.
 export async function attachActivity(ctx, eventId, body) {
   if (!isUuid(eventId)) throw notFound();
   const { requestKey, canonical } = validateActivityLinkBody(body, "attach_activity");
@@ -1274,7 +1301,10 @@ export async function attachActivity(ctx, eventId, body) {
               a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id, ot.club_id as owner_team_club_id,
               exists (select 1 from training.activity_participants ap
                        where ap.activity_id = a.id and ap.merge_status = 'canonical' and ${targeted}) as targeted,
-              (select l.event_id from calendar.event_activity_links l where l.activity_id = a.id and l.ended_at is null) as linked_event_id
+              (select l.event_id from calendar.event_activity_links l
+                where l.activity_id in (select x.activity_id from training.activity_alias_ids(a.id) x) and l.ended_at is null
+                order by (l.event_id = $2::uuid) desc, l.linked_at, l.id
+                limit 1) as linked_event_id
          from training.activities a
          left join public.teams ot on ot.id = a.owner_team_id
         where a.id = $1${lock ? `

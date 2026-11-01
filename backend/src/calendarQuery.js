@@ -520,12 +520,16 @@ async function readEventSessionLinks(eventIds) {
 
 // The live activity links of the window's events, each followed forward to
 // its canonical activity (ADR-001: a merged activity's link names the
-// survivor). One statement.
+// survivor), the oldest first. Two live links can name one survivor only
+// when the merge came after both were made; the caller keeps the first, so
+// the survivor folds under one event, the same one for every window
+// (independent review of PR #313, MEDIUM-1). One statement.
 async function readEventActivityLinks(eventIds) {
   const result = await query(
     `select l.event_id, training.resolve_canonical_activity_id(l.activity_id) as activity_id
        from calendar.event_activity_links l
-      where l.event_id = any($1::uuid[]) and l.ended_at is null`,
+      where l.event_id = any($1::uuid[]) and l.ended_at is null
+      order by l.linked_at, l.id`,
     [eventIds],
   );
   return result.rows;
@@ -826,7 +830,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const key = foldsInto(link.event_id, dateStr(link.day));
     if (key) slotToEventKey.set(slotKeyOf(link.plan_id, dateStr(link.day), link.am_pm, link.bta, link.session_order), key);
   }
-  const activityToEventId = new Map(activityLinks.map((link) => [String(link.activity_id), String(link.event_id)]));
+  const activityToEventId = new Map();
+  for (const link of activityLinks) {
+    if (!activityToEventId.has(String(link.activity_id))) activityToEventId.set(String(link.activity_id), String(link.event_id));
+  }
   const eventFolds = new Map();
   const foldFor = (key) => {
     if (!eventFolds.has(key)) eventFolds.set(key, { rows: [], activityIds: [], activities: [] });
