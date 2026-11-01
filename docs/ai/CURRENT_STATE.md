@@ -2632,6 +2632,13 @@ Technical details.
         deploy for it on its own.
       - **Open:** the owner's acceptance of the contract (the plan's rule A1) and the decisions O1–O16, which the
         *Rukovodilac* gathers; phase P (P1, the C97 evidence, before the 05–06.10 snapshots expire around 2026-11-10).
+      - **The owner's decisions of 2026-11-01** (relayed by the *Rukovodilac* with their event ids, checked in its
+        transcript; J17 section 12.3): **O2** — a manual `pg_dump` from the owner's computer with a restore check into
+        a local Postgres, the procedure prepared in 9-R; **C110** — a value outside a variable's limits and a missing
+        value of a required field leave out only that value in the pilot (form B), the target being form C (the session
+        waits for an administrator's choice; a separate, later work); **C111** — the rules for editing a canonical
+        variable, a separate contract after phase 9. J17 is amended for them; its acceptance and the other O-items stay
+        open.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -3548,6 +3555,14 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **C110 form C: a session held for an administrator's choice** (the owner's target, 2026-11-01): for a value outside a
+  variable's limits or a missing required value, the session waits; an administrator chooses "leave out only this
+  value" (the default) or "import anyway" with a mandatory reason and a record of who approved it. After the pilot's
+  form B (J17); not scheduled.
+- **C111: editing a canonical variable** (the owner, 2026-11-01): name, short name, description and icon always in
+  place; unit, daily aggregation, min/max, condition, levels and key in place only while the variable has no value and
+  no mapping, afterwards only a new version (the key permanent); every change recorded. A separate contract after
+  phase 9, likely with a migration.
 - **Mappings: "Save and submit for review" in one act** (`ux-design-reviewer` on PR #309; the *Rukovodilac* kept J16 4.5
   and section 8 as they are for 8-B, its turn `b480908c`, 2026-11-01): the step-4 review card could save the draft and
   submit it for review in one act, two interactions fewer to the first switch on of a system mapping. A change of J16;
