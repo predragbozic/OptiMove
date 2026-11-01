@@ -1001,10 +1001,28 @@ order covers is merged under it; a migration PR that the standing order for migr
     UTC: `/api/health` answered `ok: true` on `e6ca433` three times in a row; `/api/auth/me` answered
     `{"user":null}`; without a login the preview route (with and without `?candidateId=<zero UUID>`), `GET /fields`,
     `GET /activations?bindingId=<zero UUID>` and the GPEXE team status answered 401.
+- **7g-B, Done, 2026-11-01.**
+  - PR #305 (branch `feature/7g-source-instance-end`, base `04fc170`): ending a held source instance, two routes
+    (`backend/src/sourceInstanceEndService.js`) and migration v50 (it is v50 because v49 is the calendar's, PR #298;
+    J13 named v49 "if none comes between"), dormant until M4 writes T7 keys. J13 section 12 ("As built") records it.
+  - Reviews: the internal rounds, then ★★ GO on `6504570f` from the *Rukovodilac* (its turn `a64b2933`, 2026-10-31
+    05:54:03 UTC, restated after the owner's pause, its turn `a6721bcc`, 2026-11-01 06:26:31 UTC) and the *Nezavisni
+    revizor* (its turn `1a4e4ed4`, 2026-11-01 06:32:20 UTC).
+  - Step 1 of the standing order for migration PRs: the *Rukovodilac*'s read-only preflight of 2026-11-01 (10:22–10:27
+    UTC, all eight blocks as expected), then its merge order (its turn `8590e441`, 10:27:29 UTC).
+  - Merge by the executor under the standing merge order: `5a2b39d` (parents `04fc170` and `6504570f`, 10:29:52 UTC),
+    exactly from `6504570f`.
+  - Deploy: the *Rukovodilac*'s session permission refused the Render deploy with a migration, so step 6 did not run;
+    the owner deployed `5a2b39d` by hand (owner turn `71b4693e`, 10:39:32 UTC), the owner's confirmation under step 3.
+    The *Rukovodilac*'s smoke, 10:40:25 – 10:40:46 UTC: `/api/health` answered `ok: true` on `5a2b39d` three times in
+    a row; `/api/auth/me` answered `{"user":null}`; without a login both new routes, `GET /fields`, `GET /mappings` and
+    the GPEXE team status answered 401.
+  - Post-check: the *Rukovodilac*'s read-only run of `docs/runbooks/source-instance-end-v50-postcheck.sql` (its turn
+    `ec301e87`, 10:48:15 UTC), all five blocks as expected: **v50 directly confirmed**.
 - **7d-C** (D3's prepared replacement in L4, R1 of J10) is not built; it is part of 7d (J10, R1) and has no place in
   the order yet.
-- **Next, by J12's R1 (below): 7g-B** (its migration written now that v48 is merged and deployed; it is **v50**,
-  because v49 is the calendar's, PR #298; J13 named v49 "if none comes between").
+- **Next, by the order of J12's R1 and the owner's decision on 7h and 7i (below):** the minimal phase 8 (the Mappings
+  tab) is done (PR #309, below); next is phase 9 (the first controlled import).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
@@ -1060,6 +1078,8 @@ order covers is merged under it; a migration PR that the standing order for migr
   taking the team import lock (`lockTeamForImport`) — conditions 2 and 3 under "Separate tasks" of `CURRENT_STATE.md`.
 
 ### Phase 8 ★: M3 Mappings tab, after 7b and 7d
+- **Contract of the minimal phase 8:** `docs/ai/phase8-mappings-screen-contract.md` (J16), proposed on 2026-11-01 on the
+  *Rukovodilac*'s order; frontend only, no API change, no migration.
 - **Acceptance:** an activation's confirmation names the source, the mapping version, the team and the binding.
 - **The owner's guidance** (owner turn `d9a0b800`, 2026-10-28, section 6): „Stim sto ovo mora biti mnogo jednostavnijeg
   za korisnika”.
@@ -1072,8 +1092,30 @@ order covers is merged under it; a migration PR that the standing order for migr
 - **From 7e-B's external review** (the *Rukovodilac*, its turn `3bf1249e`, 2026-10-31): the aggregate preview (J11)
   also shows a candidate whose `drill_parameter_effect` is `not_observed`, which cannot be approved for import; this
   phase's screen must mark such a candidate as not for import wherever it shows the preview.
+- **Done, 2026-11-01.**
+  - The contract J16 (PR #308, `f8ebb28`), accepted by the *Rukovodilac* with R1–R19 as recommended (its turn
+    `e0830de3`, 11:46:59 UTC).
+  - 8-B, PR #309 (branch `feature/phase8-mappings-screen`, base `f8ebb28`): the Mappings screen in Data configuration,
+    frontend only (no backend file, API change or migration). J16 section 15 ("As built") records it: the guided flow,
+    the detail and its acts, teams by name, the preview with the *Not confirmed for import* mark, the review rounds,
+    39 JSDOM tests and an integration run of 111 checks on a disposable database.
+  - The owner's guidance as acceptance criterion: 13 interactions from the Mappings list to the first team switched on
+    for a system mapping, plus typing the conversion note and the reason; "Save and submit for review" in one act
+    stays a follow-up (the *Rukovodilac* kept two acts for 8-B).
+  - Reviews: the internal rounds, then the *Rukovodilac*'s ★★ review: NO-GO on `a81e4daf` for tests only (its turn
+    `b480908c`, 13:07:02 UTC), GO on `418dfedb` after the test-only delta (its turn `c17c9a05`, 13:13:30 UTC).
+  - Merge by the executor under the standing merge order: `a0b4436` (parents `f8ebb28` and `418dfedb`, 13:13:56 UTC),
+    exactly from `418dfedb`.
+  - Deploy by the *Rukovodilac* through the Render API (no migration); production first served `a0b4436` at 13:16:37
+    UTC. Its smoke, without a login: `/api/health` answered `ok: true` on `a0b4436` three times in a row; `/api/auth/me`
+    answered 200; `GET /fields`, `/targets`, `/conversions`, `/mappings`, `/activations` and the GPEXE connections read
+    answered 401; the served bundle holds the screen.
 
 ### Phase 9 ★★: M4, the importer integration
+- **Contract:** `docs/ai/phase9-importer-mappings-contract.md` (J17), proposed on 2026-11-01 on the *Rukovodilac*'s
+  order; with M6's red-zone steps for the owner (its section 10). Merged as PR #311 (`798d355`, exactly from
+  `e57f854d`) after the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs; its status stays Proposed. No code before
+  the owner accepts it and decides O1–O16.
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.
 - **Acceptance:** a characterisation test:
   - the same numbers as today, within 1e-9;

@@ -35,6 +35,7 @@ const { state } = await import("../state.js");
 const VB = "/api/training-load/sources/metrics/variables";
 const CB = "/api/training-load/sources/metrics/classification";
 const FB = "/api/training-load/sources/metrics/fields";
+const MB = "/api/training-load/sources/metrics/mappings";
 const CLUB = "11111111-0000-4000-8000-000000000001";
 const TEAM = "22222222-0000-4000-8000-000000000001";
 const VAR_ID = "aaaaaaaa-1111-4000-8000-000000000001";
@@ -122,6 +123,7 @@ function serve(post = () => ({ status: 404, body: { error: "notFound" } })) {
     if (call.method === "GET" && call.url === CB) return { status: 200, body: tree };
     // The start screen's Source fields card (an administrator's).
     if (call.method === "GET" && call.url === FB) return { status: 200, body: { fields: [] } };
+    if (call.method === "GET" && call.url === MB) return { status: 200, body: { mappings: [], nextCursor: null } };
     if (call.method === "GET" && call.url.startsWith(`${VB}?`)) return { status: 200, body: { variables: listItems, nextCursor: null } };
     if (call.method === "GET" && call.url.startsWith(`${VB}/${VAR_ID}`)) return { status: 200, body: { variable: { ...current, versions: [{ ...current.currentVersion, current: true, reason: null }] }, nextCursor: null } };
     if (call.method === "POST") return post(call);
@@ -173,9 +175,9 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // The tree (C1)
 // ---------------------------------------------------------------------------
-test("the start screen reads the domains and categories, the list and the source fields once; Domains and Categories are screens of their own, each reading the tree again; back to the start screen reads nothing", async () => {
+test("the start screen reads the domains and categories, the list, the source fields and the mappings once; Domains and Categories are screens of their own, each reading the tree again; back to the start screen reads nothing", async () => {
   await loadVariablesSection(render);
-  assert.deepEqual(gets(), [CB, `${VB}?scope=own&state=active`, FB], "one read each: the tree, the list, the source fields");
+  assert.deepEqual(gets(), [CB, `${VB}?scope=own&state=active`, FB, MB], "one read each: the tree, the list, the source fields, the mappings");
   const cards = [...content.querySelectorAll(".dc-card")].map((card) => [
     card.querySelector(".dc-card-title strong").textContent,
     card.querySelector(".dc-card-title .muted").textContent,
@@ -186,6 +188,7 @@ test("the start screen reads the domains and categories, the list and the source
     ["Domains", "1 domain · 1 archived", ["Endurance"]],
     ["Categories", "2 categories", ["Aerobic capacity", "Sprint <b>"]],
     ["Source fields", "No source fields yet", []],
+    ["Mappings", "No mappings yet", []],
   ]);
   assert.ok(content.innerHTML.includes("Sprint &lt;b&gt;"), "a name on a card is escaped");
   assert.ok(!$(".metric-variables-segmented") && !$('[data-view="classification"]'), "no switch any more: the start screen replaces it");

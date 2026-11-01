@@ -20987,6 +20987,178 @@ body.exercise-header-pinned #viewToolbar {
   font-style: italic;
 }
 
+/* ------------------------------------------------------------------------
+   Data configuration -> Mappings (phase 8, J16). The screen reuses the
+   Variables and Source fields classes; these add the flow's steps, the rows
+   that stay listed but cannot be chosen, the review card and the team rows.
+   ------------------------------------------------------------------------ */
+.metric-mappings-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.metric-mappings-steps li {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--muted, #5f6b7a);
+}
+/* The step's own number is in the markup, so a New version reads 3. and 4. */
+.metric-mappings-step-no {
+  margin-right: 4px;
+}
+.metric-mappings-steps li.is-current {
+  color: inherit;
+  font-weight: 600;
+}
+.metric-mappings-choice.is-unavailable {
+  cursor: default;
+  background: var(--surface-muted, #f4f5f7);
+}
+/* The choice is faded; the sentence saying why stays at full contrast. */
+.metric-mappings-choice.is-unavailable > :not(.metric-mappings-reason) {
+  opacity: 0.75;
+}
+.metric-mappings-choice[aria-pressed="true"] {
+  border-color: var(--accent, #2563eb);
+}
+.metric-mappings-reason {
+  display: block;
+  color: var(--muted, #5f6b7a);
+  font-size: 14px;
+}
+.metric-mappings-review-card,
+.metric-mappings-panel {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.metric-mappings-panel .metric-mappings-review-card {
+  margin: 0;
+  border-left-width: 4px;
+}
+.metric-mappings-teams {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.metric-mappings-team-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.metric-mappings-team-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+.metric-mappings-team-row > select,
+.metric-mappings-panel select,
+.metric-mappings-panel textarea,
+.metric-mappings-flow input[type="text"] {
+  min-height: 44px;
+  font-size: 16px;
+}
+/* A reason is a sentence: its field takes the panel's width and looks like
+   the screen's other fields. */
+.metric-mappings-panel textarea {
+  font: inherit;
+  font-size: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+/* The shared .search-field span rule would make an error and a hint small
+   grey bold text; on this screen they read as an error and as a hint. */
+.metric-mappings .search-field > span.metric-variables-field-error {
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+.metric-mappings .search-field > span.muted {
+  font-size: 14px;
+  font-weight: 400;
+}
+/* A version's acts: a clear gap between them, Disable included. */
+.metric-mappings .metric-variables-version .metric-variables-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* The flow's content: one rhythm between headings, sentences and fields. */
+div.metric-mappings-flow:not(.metric-variables-head) {
+  display: grid;
+  gap: 10px;
+}
+/* A kept team's requirement on the new version: "on version N as [select]". */
+.metric-mappings-kept {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+}
+.metric-mappings-team-row .plain-button,
+.metric-mappings-teams > .plain-button,
+.metric-mappings-steps .plain-button,
+.metric-mappings .inline-link {
+  min-height: 44px;
+}
+.metric-mappings .inline-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  text-decoration: underline;
+}
+.metric-mappings .source-fields-choice input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.metric-mappings .item-badge.is-suggested {
+  border-color: var(--accent, #2563eb);
+}
+.metric-mappings .item-badge.is-warning {
+  border-color: var(--tlc-warning, #8a5a00);
+  color: var(--tlc-warning, #8a5a00);
+  font-size: 12px;
+}
+.metric-mappings-club-badge {
+  border-color: #934c65;
+  color: #934c65;
+}
+@media (max-width: 760px) {
+  .metric-mappings-panel .data-sources-form-actions .plain-button,
+  .metric-mappings-flow .data-sources-form-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .metric-mappings-team-row > select {
+    width: 100%;
+  }
+}
+
 /* ============================================================
    Central calendar (K2a-2) - docs/ai/central-calendar-k2a-2-plan.md.
    Events in the screen: the collapsible Filters panel, the smaller chips

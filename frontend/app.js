@@ -38,6 +38,7 @@ import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from
 import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
+import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
@@ -513,6 +514,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target));
   // Central calendar (K2a-2): the event form's select, dates and boxes too.
   els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
+  // Data configuration -> Mappings: a checkbox, a radio or a select reports its choice through "change".
+  els.content.addEventListener("change", (event) => { if (event.target?.matches?.("select, input[type=checkbox], input[type=radio]")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
   // opens and folds it itself, and its own "toggle" event (it does not
   // bubble, hence the capture) keeps that state for the next repaint. A
@@ -1296,6 +1299,11 @@ function handleContentInput(event) {
   if (handleSourceFieldsInput(event.target)) return;
   // Central calendar (K2a-2): the event form's values.
   if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
+  // Data configuration -> Mappings: typed values (a choice reports through "change").
+  if (event.target?.closest?.("[data-mm-field]")) {
+    if (event.target.matches?.("input[type=text], textarea")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface });
+    return;
+  }
 
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
@@ -2955,6 +2963,7 @@ async function handleContentClick(event) {
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
   if (await handleVariablesAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleSourceFieldsAction(action, { render: renderActiveTrainingLoadSurface })) return;
+  if (await handleMappingsAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleTrainingLoadAction(action, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate })) return;
   handleMediaAction(action);
 }

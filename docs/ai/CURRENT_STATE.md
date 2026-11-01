@@ -42,7 +42,12 @@ PRs were added on top of `6568cf7` (merge of PR #299); nothing else was re-deriv
 #300), with the gpexe baseline reproduction on `6568cf7`; nothing else was re-derived then. Phase 7e-B (PR #303), PR
 #298 (the calendar's events and migration v49, another track) with the *Rukovodilac*'s v49 post-check, and the deploys
 of `0117912` and `e6ca433` were added at `e6ca433` (merge of PR #303), with the gpexe baseline reproduction on
-`0117912`; nothing else was re-derived then.
+`0117912`; nothing else was re-derived then. PR #304 (those facts), phase 7g-B (PR #305, migration v50) with the
+*Rukovodilac*'s v50 post-check, the deploy of `5a2b39d` and the owner's statements on the pre- and post-checks were added
+at `5a2b39d` (merge of PR #305), with the gpexe baseline reproduction on `04fc170`; nothing else was re-derived then.
+PR #307 (those facts), the contract of the minimal phase 8 (J16, PR #308) and phase 8's 8-B, the Mappings screen (PR
+#309), with the deploy of `a0b4436`, were added at `a0b4436` (merge of PR #309), with the frontend baseline reproduction
+on `f8ebb28`; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2505,6 +2510,128 @@ Technical details.
       this plan's reviews. **v49 directly confirmed** by the *Rukovodilac*'s read-only post-check (above). v49 is the
       calendar's migration, not Metrics Core's: 7g-B's migration is therefore v50 (J13 named v49 "if none comes
       between").
+    - **PR #304, the 7e-B facts record — merged (documents only).** Merged as `04fc170` (parents `e6ca433` and
+      `f48bba82`, 2026-10-31 01:52:52 UTC) by the executor under the standing merge order, exactly from `f48bba82`,
+      after the *Rukovodilac*'s GO on that head (01:52:38 UTC). Deployed with `5a2b39d`.
+    - **7g-B, PR #305: ending a held source instance (J13, migration v50) — merged and deployed; v50 directly
+      confirmed.**
+      - **What:** `GET /api/training-load/sources/metrics/source-instances` and
+        `POST …/source-instances/:connectionId/end`, for an active platform admin in the platform workspace only
+        (everyone else the identical 404). An end turns a team-owned Metrics Core connection that holds a T7 source
+        instance `inactive`, with a mandatory reason and its `source_instance_end` audit row, under the owner team's
+        import lock; it is refused while the owner team has an active binding of that source team or an open
+        activation on its bindings of it; nothing is deleted or moved. Migration v50
+        (`migrations_v2/202610311200_training_load_v50_source_instance_end.sql`): the state guard, the deferred audit
+        link, the once-index, v48's T8 revision guard with the `source_instance_end` branch, and v16's dashboard gate
+        with one early return, so a series pinned to an ended instance stays editable. Dormant until M4 writes T7 keys:
+        production holds no keyed connection (preflight block 4). J13 section 12 ("As built") records it.
+      - **Reviews:** the internal rounds (J13 section 12, "Review record"), then ★★ GO on `6504570f` from the
+        *Rukovodilac* (its turn `a64b2933`, 2026-10-31 05:54:03 UTC, naming the four files with their sha256, with its
+        read-only preflight of that day) and the *Nezavisni revizor* (its turn `1a4e4ed4`, 2026-11-01 06:32:20 UTC); no
+        BLOCKER, HIGH or MEDIUM, no new head. The *Nezavisni revizor*'s optional LOW-1 is under Separate tasks.
+      - **Pause:** the owner's „zausavi procese privremeno, gasim racunar”, which the *Rukovodilac* relayed as no merge,
+        push, new branch, pull request or new work (its turn `767a3e22`, 2026-10-31 06:01:13 UTC), until the owner's
+        „Nastavi” (relayed, its turn `a6721bcc`, 2026-11-01 06:26:31 UTC, where its GO was restated). The preflight of
+        2026-10-31 no longer counted for the merge (a new UTC day).
+      - **Merge gate:** the *Rukovodilac* ran the read-only preflight
+        `docs/runbooks/source-instance-end-v50-preflight.sql` again on 2026-11-01, each block in
+        `begin transaction read only; … rollback;` by its own report: all eight blocks as expected (`safe_to_merge`
+        true, `series_on_inactive` 0). Then its merge order (its turn `8590e441`, 10:27:29 UTC), which named the run
+        "~06:3x UTC"; it corrected that to 10:22–10:27 UTC (its turn `65c8696d`, 10:31:09 UTC), the run its transcript
+        shows before the order (one had also started at 06:32 UTC).
+      - **Merge** by the executor under the standing merge order: `5a2b39d` (parents `04fc170` and `6504570f`, 10:29:52
+        UTC), exactly from `6504570f`; the only migration path it adds is v50.
+      - **Deploy by the owner, by hand.** The *Rukovodilac*'s session permission refused the Render deploy with a
+        migration (its report to the owner, its turn `362a44d3`, 10:31:16 UTC; the earlier deploys without a migration
+        had passed). The owner then deployed `5a2b39d` by hand (owner turn `71b4693e`, 10:39:32 UTC: „pokrenuo sam
+        deploy”), the owner's confirmation under step 3 of the standing order for migration PRs. Production first
+        served `5a2b39d` at 10:40:20 UTC.
+      - **Smoke** (the *Rukovodilac*, 10:40:25 – 10:40:46 UTC): `/api/health` answered `ok: true` on `5a2b39d` three
+        times in a row; `/api/auth/me` answered `{"user":null}`; without a login `GET /source-instances`,
+        `POST /source-instances/<zero UUID>/end` (with `{}`), `GET /fields`, `GET /mappings` and the GPEXE team status
+        answered 401.
+      - **Post-check:** the *Rukovodilac* ran `docs/runbooks/source-instance-end-v50-postcheck.sql` (sha256
+        `04b28942eee2cabfdb17971f2eabd2a29a0bde91182df0aafe93208d9fd5fe2d`) read-only, each of its five blocks in
+        `begin transaction read only; … rollback;` by its own report (its turn `ec301e87`, 10:48:15 UTC): `v50_rows` 1,
+        `v50_checksum_ok` true, `later_migrations` 0; `bodies_v50` 4; `guard_ok` and `link_ok` true; `index_ok` true;
+        `instance_end_rows` 0, `inactive_keyed` 0. **v50 directly confirmed** on the production database.
+      - **The owner's statements on the pre- and post-checks**, in the *Rukovodilac*'s chat: „molim te ne trazi mi vise
+        potvde sa postcek i precek” (owner turn `fc101c34`, 2026-11-01 10:26:12 UTC) and again „molim te ne trazi mi
+        vise odobrenje za postchek i precek” (owner turns `f16b4ab2`, 10:47:54 UTC, and `30143034`, 10:48:10 UTC). The
+        *Rukovodilac* reads the first as: after a clean preflight a migration's deploy goes without the owner's „da”,
+        and the *Rukovodilac* runs the post-check and reports only its result to the owner (its merge order, turn
+        `8590e441`). Section 2 of the plan (steps 3 and 6) is not changed by this record; that change is to be proposed
+        in a separate pull request, which only the owner approves.
+    - **PR #307, the 7g-B facts record — merged (documents only).** Merged as `08c6cbf` (parents `5a2b39d` and
+      `ea1423c3`, 2026-11-01 11:02:38 UTC) by the executor under the standing merge order, exactly from `ea1423c3`,
+      after the *Rukovodilac*'s GO on that head (its turn `43b7aa04`, 11:00:13 UTC). Deployed with `a0b4436`.
+    - **PR #308, the contract of the minimal phase 8 (J16) — merged (documents only).**
+      `docs/ai/phase8-mappings-screen-contract.md`, proposed on the *Rukovodilac*'s order (its turn `ec301e87`,
+      10:48:15 UTC: „Zatim sledeće po planu: minimalna faza 8 (ekran mapiranja) — ugovor ako ga nema, pa
+      implementacija.”); frontend only, over the existing routes. The *Rukovodilac*'s GO on `bb238124` (its turn
+      `e0830de3`, 11:46:59 UTC) accepted R1–R19 as recommended („ODLUKE R1–R19: sve PRIHVAĆENE kako si preporučio”),
+      with two notes: the owner's sentence „Stim sto ovo mora biti mnogo jednostavnijeg za korisnika” is
+      `ux-design-reviewer`'s acceptance criterion, with the number of clicks to the first switch on of a system mapping;
+      the pull request says which items of section 10 the JSDOM tests cover and which the integration run covers.
+      Merged as `f8ebb28` (parents `08c6cbf` and `bb238124`, 11:47:27 UTC), exactly from `bb238124`. Deployed with
+      `a0b4436`.
+    - **Phase 8, 8-B, PR #309: the Mappings screen (J16) — merged and deployed.**
+      - **What:** Training Load → Data configuration → **Mappings**, for the platform workspace and a club workspace
+        (never a team workspace or a coach): a guided flow (the field, the variable it can fill, the unit and the
+        details, a review card, then Save draft); the mapping's detail with one primary act by state (submit, New
+        version, activate with or without teams, replace with Keep these teams, disable), the teams a replacement or a
+        disable switches off read in full and compared again at the button; teams switched on and off by name with an
+        in-page review card; the preview over a saved session through the list route only, with the fail-closed *Not
+        confirmed for import* mark; every write bounded, a lost answer *Result not confirmed* with Check result.
+        Frontend only (`frontend/metric-mappings-{data,actions,view}.js` and their wiring); no backend file, no API
+        change, no migration. J16 section 15 ("As built") records it.
+      - **Reviews:** `code-reviewer`, `ux-design-reviewer`, `security-reviewer` (narrow, R10) and `mobile-qa` on the
+        first head (one HIGH: a refused write could not be sent again), narrow re-reviews of the fixes, then the
+        *Rukovodilac*'s ★★ review: NO-GO on `a81e4daf` for tests only (its turn `b480908c`, 13:07:02 UTC: escaping, the
+        new key after `request_key_reused` and the acts held while a result is not confirmed were not proven by a
+        test), then GO on `418dfedb` after the test-only delta (its turn `c17c9a05`, 13:13:30 UTC), with its own runs of
+        the suite and of five mutations. It kept "Save and submit for review" as two acts for 8-B (under Separate tasks).
+      - **The owner's acceptance criterion:** 13 interactions from the Mappings list to the first team switched on for a
+        system mapping (16 on the first head), plus typing the conversion note and the reason, measured in the
+        integration run; `ux-design-reviewer` judged it acceptable.
+      - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs`, 39 tests (JSDOM, a fake server that keeps the
+        routes' contracts), every new guard mutation-checked; an integration run against the real routes on a
+        disposable database migrated through v50 (the executor's scratch harness, not in the repository): 111 of 111
+        checks, with browser QA at 1280, 390, 375 and 360 px, no GPEXE request, the database dropped. That database holds
+        `migrations_v2` only, so the legacy `/api/organization` route could not run there and the harness served it
+        from the same database's clubs and teams.
+      - **Merge** by the executor under the standing merge order: `a0b4436` (parents `f8ebb28` and `418dfedb`,
+        2026-11-01 13:13:56 UTC), exactly from `418dfedb`; its tree is the head's.
+      - **Deploy** by the *Rukovodilac* through the Render API (no migration: between the served `5a2b39d` and `a0b4436`
+        no file of `migrations_v2/`, `migrations/`, `backend/src/migrate.js` or `backend/package.json` changed, by its
+        check). Production first served `a0b4436` with `ok: true` at 13:16:37 UTC, then three times in a row (13:16:45,
+        13:16:56 and 13:17:06 UTC).
+      - **Smoke** (the *Rukovodilac*, without a login, GET only, the zero UUID): `/api/auth/me` answered 200;
+        `GET /api/training-load/sources/metrics/fields`, `/targets`, `/conversions`, `/mappings` and `/activations`
+        and `GET /api/training-load/sources/gpexe/connections?clubId=<zero UUID>` answered 401; the served bundle
+        `assets/app-Ba-80peD.js` holds the screen (`metric-mappings-new`). No production write, no GPEXE request; the
+        import switch untouched.
+    - **Phase 9, the contract J17, PR #311: proposed and merged; no code before the owner accepts it.**
+      - **What:** `docs/ai/phase9-importer-mappings-contract.md`, written on the *Rukovodilac*'s order of 2026-11-01
+        („Posle merge-a: faza 9 (prvi kontrolisani uvoz, M4/M6). Pošalji mi plan ili ugovor faze 9 pre koda, sa jasnim
+        spiskom koraka koje radi vlasnik (crvena zona: prekidač za uvoz, backup, GPEXE).”). Documents only: the M4
+        writer through mappings (lock order, preview version 3, the section F codes, the audience mechanism, the
+        characterisation test), 9-0 (switch conditions 2 and 3), and M6's numbered red-zone steps for the owner (P1–P2
+        now, the C97 evidence; then steps 1–17 up to one approved session). No code, migration or API change.
+      - **Reviews:** `db-reviewer` and `security-reviewer` (one HIGH each in the first round: a revoke / 7d / approval
+        lock cycle, admin-only codes reaching a coach; folded, narrow re-reviews READY WITH NON-BLOCKING NOTES);
+        `code-reviewer` in four slices (READY WITH NON-BLOCKING NOTES; one HIGH refuted by the plan's standing merge
+        order and closed). The *Nezavisni revizor*: NO-GO on `275cf62f` (MEDIUM: O13 governed the merge of 9-B, not
+        its deploy), GO on `5715f12c` and on `e57f854d` (one optional LOW: the end of the deploy exception, accepted by
+        the *Rukovodilac* as a wording correction for the first later pull request that changes the contract). The *Rukovodilac*: NO-GO on `275cf62f` (MEDIUM: R7, the details literal
+        `"number"` is a shape; LOW: health three times after a Render environment change), GO on `e57f854d`; its
+        decisions on R1 and R3–R18 are final, and it committed to deploy no commit that contains 9-B code without the
+        owner's word.
+      - **Merge** by the executor under the standing merge order: `798d355` (parents `1932ad1` and `e57f854d`,
+        2026-11-01 14:57:27 UTC), exactly from `e57f854d`; its tree is the head's. Documents only, so nothing to
+        deploy for it on its own.
+      - **Open:** the owner's acceptance of the contract (the plan's rule A1) and the decisions O1–O16, which the
+        *Rukovodilac* gathers; phase P (P1, the C97 evidence, before the 05–06.10 snapshots expire around 2026-11-10).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2970,6 +3097,15 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- **Deployed with `a0b4436`** (the merge of PR #309, 8-B, the Mappings screen), started by the *Rukovodilac* through the
+  Render API on 2026-11-01; production first served it at 13:16:37 UTC. Over `5a2b39d` it adds PR #307 (the 7g-B facts,
+  `08c6cbf`) and PR #308 (the J16 contract, `f8ebb28`), both documents only, and PR #309 (frontend only); no migration.
+  See the 8-B entry of the active phase for its smoke.
+- **Deployed with `5a2b39d`** (the merge of PR #305, 7g-B, migration v50), deployed by the owner by hand on 2026-11-01
+  (owner turn `71b4693e`, 10:39:32 UTC), because the *Rukovodilac*'s session permission refused a Render deploy with a
+  migration; production first served it at 10:40:20 UTC. Over `e6ca433` it adds PR #304 (the 7e-B facts, documents
+  only, `04fc170`) and PR #305. **v50 directly confirmed** by the *Rukovodilac*'s read-only post-check (the 7g-B entry
+  of the active phase).
 - **Deployed with `e6ca433`** (the merge of PR #303, 7e-B), started by the *Rukovodilac* through the Render API on
   2026-10-31 (live 01:43:55 UTC), under step 6 of the standing order for migration PRs. Over `0117912` it adds only
   PR #303; no migration. See the 7e-B entry of the active phase for its smoke.
@@ -3376,7 +3512,9 @@ pre-existing; pass/fail counts don't belong in this file
   - `exercise-personalization.test.mjs` — "video-only effective media can be opened without requiring an image";
   - `training-load.actions.test.mjs` — X5a and X5b.
 
-  The same seven files failed again in the PR-1b and PR-1c runs of 2026-10-30, as on a clean detached `01cd32d`.
+  The same seven files failed again in the PR-1b and PR-1c runs of 2026-10-30, as on a clean detached `01cd32d`. For the
+  8-B runs of 2026-11-01 (Node 22.22.0), the branch's `--preset frontend-fast` failed only in these seven files; on a
+  clean detached `f8ebb28` the same seven failed with the same counts.
 - Reproduced on a clean detached `main` worktree (`0592550`) on 2026-10-30 with `--preset gpexe`, Node 22.22.0 (not
   fixed): `gpexe-client.test.mjs`, `gpexe-rest-v1-adapter-reads.test.mjs` and `gpexe-backup-verify.test.mjs` (the last
   as recorded above); the PR-1b and PR-1c runs failed in exactly these three files. Reproduced again on a clean
@@ -3386,7 +3524,10 @@ pre-existing; pass/fail counts don't belong in this file
   22 does not hold in this container. Its tests B7.5 and B7.8, run alone with `--test-name-pattern`, passed.
   Reproduced again on a clean detached `0117912` on 2026-10-31 for the 7e-B runs (`--preset gpexe`, Node 22.22.0): the
   same three files, with the same counts as the branch's runs; on the branch, B7.7, B7.7b, B7.8 and B8.2 of the
-  adapter suite, run alone with `--test-name-pattern`, passed.
+  adapter suite, run alone with `--test-name-pattern`, passed. For the 7g-B runs of 2026-10-31 (Node 22.22.0), the
+  branch's `--preset gpexe` and `--preset backend-fast` failed only in these three files; each of them, run on its own
+  with the T1 runner on a clean detached `04fc170`, failed with the same counts. On the branch, B7.7, B7.7b, B7.8 and
+  B8.2, run alone, passed.
 - `backend/tests/source-hosts-server3.test.mjs` test 12 (no credential or token in any file of the change) failed on
   `main` from PR #264 on: two full 40-hex commit ids in this file read as a REST token's shape. They are shortened in
   the facts pull request of 2026-10-30.
@@ -3407,6 +3548,15 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **Mappings: "Save and submit for review" in one act** (`ux-design-reviewer` on PR #309; the *Rukovodilac* kept J16 4.5
+  and section 8 as they are for 8-B, its turn `b480908c`, 2026-11-01): the step-4 review card could save the draft and
+  submit it for review in one act, two interactions fewer to the first switch on of a system mapping. A change of J16;
+  not scheduled.
+
+- **The 7g suite: test 7 builds its own state** (the *Nezavisni revizor*'s optional LOW-1 on PR #305, 2026-11-01; J13
+  section 12, "After the external round"). Test 7 of `backend/tests/source-instance-end-7g.test.mjs` reads the state
+  test 6 leaves, so a mutation that fails test 6 also fails test 7, with an unrelated error instead of its own check.
+  Not applied, since both GOs were on `6504570f`; it goes with the next pull request that touches that suite.
 - **The 7e preview: a test that a candidate whose last check is another team's answers `409
   candidate_source_mismatch`** (the *Nezavisni revizor*'s optional LOW-1 on PR #303, 2026-10-31; J11 section 12,
   "After the external round"). It kills the mutation dropping `k.owner_team_id = s.owner_team_id` in
@@ -4029,10 +4179,11 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and deployed (with `00b3958`);
    - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43), 7c (PR #293, v47) and 7d-B (PR #295, v48) are done,
      merged and deployed, v43, v47 and v48 directly confirmed by the owner's post-checks. The contracts of 7e, 7f and 7g
-     and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301) and 7e-B (the
-     aggregate preview, PR #303) are merged and deployed. Next by the plan: 7g-B (ending a held source instance,
-     migration v50, since v49 is the calendar's, PR #298), then
-     a minimal phase 8 (the Mappings tab) and phase 9 (the first controlled import); phases 7h and 7i come right after
+     and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301), 7e-B (the
+     aggregate preview, PR #303) and 7g-B (ending a held source instance, PR #305, migration v50, directly confirmed by
+     the *Rukovodilac*'s post-check) are merged and deployed; the minimal phase 8, the Mappings screen (J16, PR #309), is
+     merged and deployed; phase 9's contract (J17, PR #311) is merged as Proposed. Next by the plan: the owner's
+     acceptance of J17 and the decisions O1–O16, then phase 9's code (9-0, 9-B) and M6; phases 7h and 7i come right after
      the first import, before more clubs are brought on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
