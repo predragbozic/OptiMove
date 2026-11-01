@@ -2977,8 +2977,9 @@ nothing imported is visible in the app.
   - **Who may run the undo** (`backend/scripts/gpexe-undo-imported-session.mjs`): only an
     **active platform admin** (active `user_global_roles` role and `users.is_active`),
     always with a reason.
-    - The script checks this before taking any lock, and the v21 insert trigger checks it
-      again (SQLSTATE 42501).
+    - The script checks this before taking any lock (since 9-0: after the team's import
+      lock, before the event is locked or any protection is disabled; the undo runbook,
+      "The team's import lock"), and the v21 insert trigger checks it again (SQLSTATE 42501).
     - `--reason` and `--performed-by-user-id` are required on every run, dry run included.
     - The script still refuses any database that is not a disposable
       `optimove_tests_gpexe_*` one.
@@ -4241,7 +4242,9 @@ pre-existing; pass/fail counts don't belong in this file
   recorded, not fixed): moving a team to another club waits on the team row while a binding
   insert holds it `FOR SHARE`; the advisory try-lock cannot bound that tuple wait. No route moves a
   team today; the route that one day does must set `lock_timeout` (same class as the next entry).
-- **An approval can wait without a limit before its COMMIT** (PR #107 reviews; fixed by 9-0 once merged).
+- **An approval can wait without a limit before its COMMIT** (PR #107 reviews; its server-side waits are bounded
+  by 9-0 once merged; a statement whose answer is lost on the network is still bounded only by TCP and the deployed
+  request timeout, J17 section 10 step 7).
   It waits on the role and grant rows, the candidate row, and the team import lock. It
   also waits when a transaction abandoned on a network stall keeps those locks until TCP
   keepalive notices. This is condition 2 in Separate tasks.

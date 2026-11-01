@@ -446,7 +446,7 @@ importer's own order. A check running at the same time only takes the team
 import lock for its preview and the candidate row afterwards, so the two
 cannot deadlock.
 
-**Every wait before the COMMIT is bounded** (switch condition 2, phase 9-0;
+**Every server-side wait before the COMMIT is bounded** (switch condition 2, phase 9-0;
 `backend/src/gpexeImportPreview.js`, `setImportTransactionBounds`). Right after
 `BEGIN`, before the first lock, the transaction sets `SET LOCAL lock_timeout =
 5 s`, `statement_timeout = 10 s` and `idle_in_transaction_session_timeout =
@@ -457,7 +457,10 @@ runs (measured on PostgreSQL 16 by hand: a 3 s deferred trigger finished
 under a 1 s bound; test 6a repeats it with 1.5 s under 300 ms; PostgreSQL 17,
 which production runs, was not measured, and the fix does not depend on it). A lock not granted in time (55P03), a statement ended by its bound
 (57014), a deadlock (40P01) or a session the server ended (the idle bound)
-before the COMMIT is **409 `try_again`**, nothing written; the connection of
+before the COMMIT is **409 `try_again`**, nothing written (proved on a direct
+PostgreSQL 16 connection; behind the Supabase pooler a killed session could
+surface as a code not in the list, which answers `500 internal_error`, still
+nothing written - an owner-run check before the switch, not done); the connection of
 an ended session is not reused, and a listener on the checked-out client keeps
 the server's end of the session from ending the process. The COMMIT keeps its
 15 s answer bound and the uncertain-outcome rule below; an error the COMMIT

@@ -37,9 +37,11 @@ export const PREVIEW_VERSION = 2;
 //     approval's 15 s client bound on its answer;
 //   * idle_in_transaction_session_timeout ends a session whose transaction
 //     waits on the client (FATAL 25P03; the connection is closed).
-// None of these waits can then outlast the bound by itself; the approval and
-// the check map 55P03 / 57014 / 40P01 before a COMMIT to their own stable
-// codes, nothing written. The statement bound is far above the measured cost
+// Every server-side wait is then bounded; the approval and the check map
+// 55P03 / 57014 / 40P01 before a COMMIT to their own stable codes, nothing
+// written. These are server bounds only: a statement whose answer is lost on
+// the network is bounded by TCP and the deployed request timeout, not here
+// (only the approval's COMMIT has a client-side bound). The statement bound is far above the measured cost
 // (backend/tests/gpexe-import-bounds-9-0.test.mjs, "Arm A1 commits under the
 // production bounds"), and the lock bound is longer than a normal check-time
 // preview holds the team lock.

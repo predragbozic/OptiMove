@@ -622,7 +622,11 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   - **The check-time preview's codes:** `check_preview_busy` (55P03, 57014, 40P01) and `check_preview_interrupted`
     (a session the server ended), both shown to a coach as they are.
   - **A session the server ended** before the COMMIT is `try_again` too (the transaction went with it); its
-    connection is released as broken.
+    connection is released as broken. Proved on a direct PostgreSQL 16 connection; behind the Supabase pooler a
+    killed session could surface as a code not in the list (for example 08P01) and answer `500 internal_error` -
+    still nothing written, and the batch stops. Not measured on production.
+  - **Server-side bounds only.** A statement before the COMMIT whose answer is lost on the network is bounded by TCP
+    and the deployed request timeout (step 7), not by these bounds; only the COMMIT has a client-side bound.
 
 ---
 
