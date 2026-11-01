@@ -22,6 +22,11 @@ const fmtDate = (iso) => {
 const code = (value) => `<code class="source-fields-code">${escapeHtml(value)}</code>`;
 // A name in a review card: cleaned, then escaped, in quotes.
 const named = (value) => `“${escapeHtml(cleanName(value))}”`;
+// Any other text written by an administrator or a source, wherever it is
+// shown: cleaned (control and format characters, bidi included), then escaped.
+const shown = (value, max = 200) => escapeHtml(cleanName(value, max));
+// A write in flight or not confirmed holds the screen; a settled refusal does not.
+const holds = (s) => Boolean(s.write && (s.write.busy || s.write.unconfirmed));
 const noticeHtml = (s) => (!s.notice ? ""
   : s.noticeKind === "warning" ? `<p class="metric-variables-notice is-warning" role="alert" tabindex="-1">${escapeHtml(s.notice)}</p>`
   : `<p class="metric-variables-notice" role="status" tabindex="-1">${escapeHtml(s.notice)}</p>`);
@@ -92,7 +97,7 @@ function renderListHtml(s, ctx) {
         <p class="muted">A mapping tells OptiMove which source field fills which of your variables.${ctx.owner === "club" ? " System mappings come from a platform administrator; you switch them on for your teams." : ""}</p>
         <p class="muted">${ACTS_SENTENCE}</p>
       </div>
-      <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-new" ${s.write ? "disabled" : ""}>New mapping</button>
+      <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-new" ${holds(s) ? "disabled" : ""}>New mapping</button>
     </div>
     ${noticeHtml(s)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading mappings...</p>` : ""}
@@ -101,8 +106,8 @@ function renderListHtml(s, ctx) {
     ${list.items.length ? `<ul class="metric-variables-list">${list.items.map((m) => `
       <li>
         <button type="button" class="metric-variables-item dc-item" data-action="metric-mappings-open" data-mapping-id="${escapeAttr(m.id)}">
-          <span class="metric-variables-item-name">${escapeHtml(m.target?.label || m.target?.key || "")} ${ownerBadge(m, ctx)}</span>
-          <span class="metric-variables-item-facts muted">from ${escapeHtml(m.sourceMetric?.label || m.sourceMetric?.key || "")} · ${escapeHtml(sourceOfMapping(s, m))} · ${escapeHtml(mappingStateText(m))}</span>
+          <span class="metric-variables-item-name">${shown(m.target?.label || m.target?.key || "")} ${ownerBadge(m, ctx)}</span>
+          <span class="metric-variables-item-facts muted">from ${shown(m.sourceMetric?.label || m.sourceMetric?.key || "")} · ${escapeHtml(sourceOfMapping(s, m))} · ${escapeHtml(mappingStateText(m))}</span>
         </button>
       </li>`).join("")}</ul>` : ""}
     ${list.nextCursor ? `<button class="plain-button" type="button" data-action="metric-mappings-more" ${list.loadingMore ? "disabled" : ""}>${list.loadingMore ? "Loading..." : "Load more"}</button>` : ""}
@@ -120,7 +125,7 @@ function stepsHtml(f) {
     if (step < first) return "";
     const current = step === f.step;
     const done = step < f.step;
-    return `<li class="${current ? "is-current" : ""}"${current ? ` aria-current="step"` : ""}>${done
+    return `<li class="${current ? "is-current" : ""}"${current ? ` aria-current="step"` : ""}><span class="metric-mappings-step-no" aria-hidden="true">${step}.</span>${done
       ? `<button class="plain-button ghost" type="button" data-action="metric-mappings-flow-step" data-step="${step}">${escapeHtml(name)}</button>`
       : `<span>${escapeHtml(name)}</span>`}</li>`;
   }).join("")}</ol>
@@ -139,11 +144,15 @@ function stepFieldHtml(s, ctx) {
     groups.get(key).push(field);
   }
   const noneReady = !anyFieldReady(s);
+  const someUnconfirmed = s.refs.fields.some((field) => fieldStatus(field).unitMissing);
+  // Within a source, the fields that can be chosen come first (stable order).
+  for (const [key, fields] of groups) groups.set(key, [...fields].sort((a, b) => Number(fieldStatus(b).choosable) - Number(fieldStatus(a).choosable)));
   return `
     <h3>Which source field?</h3>
     ${noneReady ? `<p class="metric-variables-field-note">${ctx.owner === "system"
       ? `No field is ready yet: confirm a field's unit first in <button class="plain-button ghost inline-link" type="button" data-action="training-load-section" data-section="source-fields">Source fields</button>.`
-      : "No field is ready yet: a platform administrator confirms a field's unit in the platform workspace first."}</p>` : ""}
+      : "No field is ready yet: a platform administrator confirms a field's unit in the platform workspace first."}</p>`
+      : someUnconfirmed && ctx.owner === "system" ? `<p class="muted">A field whose unit is not confirmed yet is confirmed in <button class="plain-button ghost inline-link" type="button" data-action="training-load-section" data-section="source-fields">Source fields</button>.</p>` : ""}
     ${[...groups.entries()].map(([source, fields]) => `
       <section class="metric-classification-section" aria-label="${escapeAttr(sourceLabel(source))}">
         <h4>${escapeHtml(sourceLabel(source))}</h4>
@@ -156,7 +165,7 @@ function stepFieldHtml(s, ctx) {
           ].filter(Boolean).join(" · ");
           return `<li>
             <button type="button" class="metric-variables-item metric-mappings-choice${st.choosable ? "" : " is-unavailable"}" data-action="metric-mappings-flow-field" data-field-id="${escapeAttr(field.id)}" ${st.choosable ? "" : `aria-disabled="true"`}${s.flow.fieldId === field.id ? ` aria-pressed="true"` : ""}>
-              <span class="metric-variables-item-name">${escapeHtml(field.label || field.key || "")}</span>
+              <span class="metric-variables-item-name">${shown(field.label || field.key || "")}</span>
               <span class="metric-variables-item-facts muted">${facts}</span>
               ${st.choosable ? (st.meaningPending ? `<span class="muted">You can save a draft now; it can be activated only once the field's meaning is confirmed.</span>` : "")
                 : `<span class="metric-mappings-reason">${escapeHtml(st.reason)}${st.unitMissing && ctx.owner !== "system" ? " A platform administrator confirms it in the platform workspace." : ""}</span>`}
@@ -169,16 +178,16 @@ function stepTargetHtml(s, ctx) {
   const { field, revision } = flowFacts(s);
   if (!revision) return "";
   const ordered = orderedTargets(s.refs.targets, revision, s.refs.conversions);
-  const taken = fieldTakenBy(s, s.flow.fieldId, s.flow.targetId);
+  const taken = fieldTakenBy(s, s.flow.fieldId, s.flow.targetId, ctx.owner);
   return `
-    <h3>Which variable should ${escapeHtml(field.label || field.key || "this field")} fill?</h3>
+    <h3>Which variable should ${shown(field.label || field.key || "this field")} fill?</h3>
     <p class="muted">The field gives ${code(revision.sourceUnit)}. Variables with the same unit come first.</p>
     ${ctx.isPlatformAdmin ? `<p class="muted">Unit conversions cannot be added on this screen yet.</p>` : ""}
-    ${taken ? `<p class="metric-variables-field-note">This field already fills ${escapeHtml(taken.target?.label || "another variable")}. Only one of them can be active at a time.</p>` : ""}
+    ${taken ? `<p class="metric-variables-field-note">This field already fills ${shown(taken.target?.label || "another variable")}. Only one of them can be active at a time.</p>` : ""}
     ${ordered.length ? `<ul class="metric-variables-list">${ordered.map(({ target, status }) => `
       <li>
         <button type="button" class="metric-variables-item metric-mappings-choice${status.choosable ? "" : " is-unavailable"}" data-action="metric-mappings-flow-target" data-target-id="${escapeAttr(target.id)}" ${status.choosable ? "" : `aria-disabled="true"`}${s.flow.targetId === target.id ? ` aria-pressed="true"` : ""}>
-          <span class="metric-variables-item-name">${escapeHtml(target.label || target.key || "")}
+          <span class="metric-variables-item-name">${shown(target.label || target.key || "")}
             ${status.choosable ? (status.badge === "same" ? `<span class="item-badge is-suggested">Same unit</span>` : `<span class="item-badge">Converted from ${escapeHtml(revision.sourceUnit)}</span>`) : ""}</span>
           <span class="metric-variables-item-facts muted">${target.currentVersion?.unit ? `Unit ${escapeHtml(target.currentVersion.unit)}` : "No unit"}</span>
           ${status.choosable ? "" : `<span class="metric-mappings-reason">${escapeHtml(status.reason)}</span>`}
@@ -264,7 +273,9 @@ function stepReviewHtml(s, locked) {
         ${bound ? `<div><dt>Bound</dt><dd>${escapeHtml(bound)}</dd></div>` : ""}
         ${status.conversion ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(cleanName(f.draft.conversionNote, 500))}</dd></div>` : ""}
       </dl>
-      <p class="muted">A draft changes nothing yet: it is submitted for review, and a platform administrator activates it.</p>
+      <p class="muted">${mappingsContext()?.isPlatformAdmin
+        ? "A draft changes nothing yet: submit it for review, then you can activate it."
+        : "A draft changes nothing yet: it is submitted for review, and a platform administrator activates it."}</p>
     </div>
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
@@ -277,7 +288,7 @@ function renderFlowHtml(s, ctx) {
   const f = s.flow;
   const locked = Boolean(s.write?.busy || s.write?.unconfirmed);
   const { field, target } = flowFacts(s);
-  const title = f.fixed ? `New version of ${escapeHtml(target?.label || "the mapping")} from ${escapeHtml(field?.label || "the field")}` : "New mapping";
+  const title = f.fixed ? `New version of ${shown(target?.label || "the mapping")} from ${shown(field?.label || "the field")}` : "New mapping";
   let body = refsStateHtml(s);
   if (!body) {
     if (f.step === 1) body = stepFieldHtml(s, ctx);
@@ -316,7 +327,7 @@ function versionFactsHtml(s, mapping, v) {
       <div><dt>Unit</dt><dd>${factor}</dd></div>
       <div><dt>Levels</dt><dd>${escapeHtml(levelsWords(v.appliesToSession, v.appliesToDrill))}</dd></div>
       ${kind && kind !== "none" ? `<div><dt>Bound</dt><dd>${escapeHtml(boundsWords(kind, v.sourceParameters, v.sourceParameters?.unit || ""))}</dd></div>` : ""}
-      ${v.conversionNote ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(v.conversionNote)}</dd></div>` : ""}
+      ${v.conversionNote ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${shown(v.conversionNote, 500)}</dd></div>` : ""}
       <div class="source-fields-wide"><dt>Dates</dt><dd>${escapeHtml(dates)}</dd></div>
     </dl>`;
 }
@@ -337,7 +348,7 @@ function actButton(primary, versionId, act, label, action, disabled) {
 }
 function versionActsHtml(s, mapping, v, ctx, primary) {
   // While the mapping is read again (after a change), its acts wait for the fresh state.
-  const busy = Boolean(s.write || s.panel || s.detail.loading);
+  const busy = Boolean(holds(s) || s.panel || s.detail.loading);
   const acts = [];
   const notes = [];
   const active = activeVersion(mapping);
@@ -348,7 +359,7 @@ function versionActsHtml(s, mapping, v, ctx, primary) {
     if (mayTransition(mapping, ctx)) {
       const blocker = activateBlocker(mapping, v, s);
       if (blocker) notes.push(blocker);
-      else acts.push(actButton(primary, v.id, "activate", active ? `Replace version ${active.versionNumber}` : "Activate", "metric-mappings-activate-open", busy));
+      else acts.push(actButton(primary, v.id, "activate", active ? `Replace version ${escapeHtml(String(active.versionNumber))}` : "Activate", "metric-mappings-activate-open", busy));
     } else if (mapping.ownerScope === "club" && !ctx.isPlatformAdmin) {
       notes.push(`Ask a platform administrator who also administers ${cleanName(ctx.clubName) || "this club"} to activate it in this workspace.`);
     } else if (mapping.ownerScope === "system" && ctx.owner === "club") {
@@ -391,7 +402,7 @@ function teamsHtml(s, mapping, v, ctx) {
         <li class="metric-mappings-team-row">
           <span>${groupByClub && clubOfRow(s, row) ? `${escapeHtml(clubOfRow(s, row))} · ` : ""}${escapeHtml(teamLabel(s, row))}</span>
           <span class="muted">${escapeHtml(REQUIREMENT_LABEL[row.requirement] || row.requirement || "")} · ${row.endedAt ? `${escapeHtml(END_REASON_LABEL[row.endReason] || "Switched off")} ${escapeHtml(fmtDate(row.endedAt))}` : `since ${escapeHtml(fmtDate(row.activatedAt))}`}</span>
-          ${row.endedAt ? "" : `<button class="plain-button ghost" type="button" data-action="metric-mappings-switch-off-open" data-activation-id="${escapeAttr(row.id)}" ${s.write || s.panel || s.detail.loading || t.loading ? "disabled" : ""}>Switch off</button>`}
+          ${row.endedAt ? "" : `<button class="plain-button ghost" type="button" data-action="metric-mappings-switch-off-open" data-activation-id="${escapeAttr(row.id)}" ${holds(s) || s.panel || s.detail.loading || t.loading ? "disabled" : ""}>Switch off</button>`}
         </li>`).join("")}</ul>` : ""}
       ${t.truncated ? `<p class="muted">More teams use this version than this screen lists.</p>` : ""}
       <button class="plain-button ghost" type="button" data-action="metric-mappings-teams-ended">${t.showEnded ? "Hide switched off" : "Show switched off"}</button>
@@ -477,17 +488,43 @@ function teamsReviewCardHtml(s, mapping, version, bindings, title) {
       <p class="muted">${escapeHtml(REQUIREMENT_MEANING)}</p>
     </div>`;
 }
-function offListHtml(s, p, ctx) {
+// What a replacement changes, against the active version (J16 5): the unit,
+// the levels, the bound and the note, or that none of them changes.
+function versionChanges(from, to) {
+  if (!from || !to) return "";
+  const unit = (v) => (v.sourceUnit === v.targetUnit ? `same unit (${v.sourceUnit || ""})` : `${v.sourceUnit || ""} → ${v.targetUnit || ""}`);
+  const factor = (v) => `${v.scale}/${v.scaleDivisor}/${v.offset}`;
+  const levels = (v) => levelsWords(v.appliesToSession, v.appliesToDrill);
+  const bound = (v) => (v.parameterKind && v.parameterKind !== "none" ? boundsWords(v.parameterKind, v.sourceParameters, v.sourceParameters?.unit || "") : "");
+  const out = [];
+  if (unit(from) !== unit(to) || factor(from) !== factor(to)) out.push(`unit ${unit(from)} → ${unit(to)}`);
+  if (levels(from) !== levels(to)) out.push(`levels ${levels(from)} → ${levels(to)}`);
+  if (bound(from) !== bound(to)) out.push(`bound ${bound(from) || "none"} → ${bound(to) || "none"}`);
+  if ((from.conversionNote || "") !== (to.conversionNote || "")) out.push("the conversion note");
+  return out.length ? `Changes from version ${from.versionNumber}: ${out.join("; ")}.` : `No change from version ${from.versionNumber} in the unit, the levels or the bound.`;
+}
+function offListHtml(s, p, ctx, mapping) {
   if (p.loading) return `<p class="muted" role="status">Loading the teams it switches off...</p>`;
   if (p.error) return `<div class="error" role="alert"><p>${escapeHtml(p.error)}</p></div>`;
   const groupByClub = ctx.owner === "system";
+  const n = p.rows.length;
+  const versions = mapping?.versions || [];
+  const from = versions.find((v) => v.id === p.activeVersionId);
+  const to = versions.find((v) => v.id === p.versionId);
+  const moving = p.kind === "replace" && p.keep && Object.keys(p.kept).length > 0;
+  const lead = p.truncated ? "More than 1,000 teams use this version; all of them are switched off."
+    : moving ? `${n === 1 ? "This team uses" : `These ${n} teams use`} version ${escapeHtml(String(from?.versionNumber ?? ""))}. Replacing it switches ${n === 1 ? "it" : "them"} off version ${escapeHtml(String(from?.versionNumber ?? ""))} and on for version ${escapeHtml(String(to?.versionNumber ?? ""))} in the same step:`
+      : `It switches off ${n === 1 ? "this team" : `these ${n} teams`}:`;
   return `
     ${p.changed ? `<p class="metric-variables-field-note">${escapeHtml(p.changed)}</p>` : ""}
-    ${p.rows.length ? `<p>${p.truncated ? "More than 1,000 teams use this version; all of them are switched off." : `It switches off ${p.rows.length === 1 ? "this team" : `these ${p.rows.length} teams`}:`}</p>
+    ${s.org.error ? `<p class="metric-variables-field-note">${escapeHtml(s.org.error)} Teams that cannot be named are listed as no longer listed.</p>` : ""}
+    ${p.kind === "replace" && n ? `<label class="source-fields-choice"><input type="checkbox" data-mm-field="keep" ${p.keep ? "checked" : ""} ${s.write?.busy || s.write?.unconfirmed || p.review ? "disabled" : ""}><span>Keep these teams on the new version</span></label>` : ""}
+    ${n ? `<p>${lead}</p>
       <ul class="metric-mappings-team-list">${p.rows.map((row) => `
         <li class="metric-mappings-team-row"><span>${groupByClub && clubOfRow(s, row) ? `${escapeHtml(clubOfRow(s, row))} · ` : ""}${escapeHtml(teamLabel(s, row))}</span>
-          ${p.kind === "replace" && p.keep ? (p.kept[row.bindingId] ? `<select data-mm-field="keptRequirement" data-binding-id="${escapeAttr(row.bindingId)}" aria-label="Requirement on the new version">
-            ${["required", "optional"].map((r) => `<option value="${r}" ${p.kept[row.bindingId] === r ? "selected" : ""}>${REQUIREMENT_LABEL[r]} (kept)</option>`).join("")}</select>`
+          ${p.kind === "replace" && p.keep ? (p.kept[row.bindingId] ? `<label class="metric-mappings-kept"><span class="muted">on version ${escapeHtml(String(to?.versionNumber ?? ""))} as</span>
+            <select data-mm-field="keptRequirement" data-binding-id="${escapeAttr(row.bindingId)}" aria-label="Requirement on version ${escapeAttr(String(to?.versionNumber ?? ""))}" ${p.review ? "disabled" : ""}>
+            ${["required", "optional"].map((r) => `<option value="${r}" ${p.kept[row.bindingId] === r ? "selected" : ""}>${REQUIREMENT_LABEL[r]}</option>`).join("")}</select></label>`
             : `<span class="muted">is switched off and not kept</span>`) : ""}
         </li>`).join("")}</ul>` : `<p class="muted">No team uses it now.</p>`}
     <p class="muted">Teams of archived clubs that use this version are switched off too; they are not listed.</p>`;
@@ -519,7 +556,7 @@ function panelHtml(s, mapping, ctx) {
            <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-confirm" ${locked ? "disabled" : ""}>Activate and switch on</button>
            <button class="plain-button ghost" type="button" data-action="metric-mappings-review-back" ${locked ? "disabled" : ""}>Back</button>${close}</div>`}`
       : `<h4>Activate version ${escapeHtml(String(version?.versionNumber ?? ""))}</h4>
-         <p class="muted">${ACTS_SENTENCE}</p>
+         <p class="muted">Activating makes version ${escapeHtml(String(version?.versionNumber ?? ""))} the mapping's current one. Switching it on for teams can be done now or later.</p>
          <label class="source-fields-choice"><input type="checkbox" data-mm-field="withTeams" ${p.withTeams ? "checked" : ""} ${locked ? "disabled" : ""}><span>Switch on for teams now</span></label>
          ${p.withTeams ? `${chooserHtml(s, p, ctx, version)}${reasonHtml(p, "Reason", locked)}` : ""}
          ${writeHtml(s)}
@@ -530,8 +567,8 @@ function panelHtml(s, mapping, ctx) {
     const title = p.kind === "replace" ? `Replace the active version with version ${version?.versionNumber ?? ""}` : `Disable version ${version?.versionNumber ?? ""}`;
     inner = `
       <h4>${escapeHtml(title)}</h4>
-      ${p.kind === "disable" && p.status !== "active" ? "" : offListHtml(s, p, ctx)}
-      ${p.kind === "replace" && !p.loading && !p.error ? `<label class="source-fields-choice"><input type="checkbox" data-mm-field="keep" ${p.keep ? "checked" : ""} ${locked || p.review ? "disabled" : ""}><span>Keep these teams on the new version</span></label>` : ""}
+      ${p.kind === "replace" ? `<p>${shown(versionChanges((mapping.versions || []).find((v) => v.id === p.activeVersionId), version), 500)}</p>` : ""}
+      ${p.kind === "disable" && p.status !== "active" ? "" : offListHtml(s, p, ctx, mapping)}
       ${refused}
       ${p.review && kept.length ? teamsReviewCardHtml(s, mapping, version, kept, `Replace and keep ${kept.length === 1 ? "1 team" : `${kept.length} teams`}`) : ""}
       ${p.review ? "" : reasonHtml(p, p.kind === "replace" ? "Reason for the replacement" : "Reason for disabling", locked)}
@@ -550,11 +587,11 @@ function panelHtml(s, mapping, ctx) {
       ${writeHtml(s)}
       ${s.write?.unconfirmed ? "" : `<div class="data-sources-form-actions"><button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-review" ${locked ? "disabled" : ""}>Switch off</button>${close}</div>`}`;
   } else if (p.kind === "preview") {
-    inner = previewHtml(s, p, ctx, version);
+    inner = previewHtml(s, p, ctx, version, mapping);
   }
   return `<div class="metric-mappings-panel" role="group" aria-label="${escapeAttr(p.kind)}">${inner}</div>`;
 }
-function previewHtml(s, p, ctx, version) {
+function previewHtml(s, p, ctx, version, mapping) {
   const entry = p.clubId ? s.connections[p.clubId] : null;
   const teams = (entry?.connections || []).flatMap((c) => (c.boundTeams || []).filter((t) => t.teamActive !== false));
   const chosen = p.candidates.find((c) => c.id === p.candidateId) || null;
@@ -564,7 +601,7 @@ function previewHtml(s, p, ctx, version) {
   const level = (name, l) => (!l ? "" : `
     <div><dt>${name}</dt><dd>${escapeHtml(`${l.athletesWithValue} athletes have a value`)}${l.min === null
       ? `<br><span class="muted">Fewer than 3 athletes have a value, so no range is shown.</span>`
-      : `<br>${escapeHtml(`${l.min}–${l.max} ${result.sourceUnit}`)} · ${escapeHtml(`${l.minCanonical}–${l.maxCanonical} ${result.targetUnit}`)}`}</dd></div>`);
+      : `<br>${escapeHtml(`${l.min}–${l.max} ${result.sourceUnit} in ${sourceOfMapping(s, mapping)}`)} = ${escapeHtml(`${l.minCanonical}–${l.maxCanonical} ${result.targetUnit} in`)} ${named(mapping?.target?.label || "the variable")}`}</dd></div>`);
   return `
     <h4>Check version ${escapeHtml(String(version?.versionNumber ?? ""))} with a saved session</h4>
     ${ctx.owner === "system" ? `${orgStateHtml(s)}
@@ -618,11 +655,11 @@ function renderDetailHtml(s, ctx) {
     ${back}
     <div class="metric-variables-head">
       <div>
-        <h2 id="metric-mappings-title" tabindex="-1">${escapeHtml(mapping.target?.label || "")} ${ownerBadge(mapping, ctx)}</h2>
-        <p class="muted">from ${escapeHtml(mapping.sourceMetric?.label || "")} · ${escapeHtml(sourceOfMapping(s, mapping))}</p>
+        <h2 id="metric-mappings-title" tabindex="-1">${shown(mapping.target?.label || "")} ${ownerBadge(mapping, ctx)}</h2>
+        <p class="muted">from ${shown(mapping.sourceMetric?.label || "")} · ${escapeHtml(sourceOfMapping(s, mapping))}</p>
         <p class="muted">${ACTS_SENTENCE}</p>
       </div>
-      ${inOwnerWorkspace(mapping, ctx) ? `<button class="plain-button" type="button" data-action="metric-mappings-new-version" ${s.write || s.panel || d.loading ? "disabled" : ""}>New version</button>` : ""}
+      ${inOwnerWorkspace(mapping, ctx) ? `<button class="plain-button" type="button" data-action="metric-mappings-new-version" ${holds(s) || s.panel || d.loading ? "disabled" : ""}>New version</button>` : ""}
     </div>
     ${noticeHtml(s)}
     ${s.panel ? "" : writeHtml(s)}

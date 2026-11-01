@@ -431,7 +431,16 @@ test("11. replace: every page of the teams switched off, named, the ended link a
   await open("detail");
   await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
   render();
-  assert.match(text(), /these 3 teams/);
+  assert.match(text(), /No change from version 1 in the unit, the levels or the bound\./);
+  assert.match(text(), /These 3 teams use version 1\. Replacing it switches them off version 1 and on for version 2 in the same step:/);
+  // Keep is the first control of the list, above the teams it governs.
+  const panelHtml = $(".metric-mappings-panel").innerHTML;
+  assert.ok(panelHtml.indexOf('data-mm-field="keep"') < panelHtml.indexOf('data-mm-field="keptRequirement"'));
+  await input('[data-mm-field="keep"]', false);
+  assert.match(text(), /It switches off these 3 teams:/);
+  assert.equal($('[data-mm-field="keptRequirement"]'), null);
+  await input('[data-mm-field="keep"]', true);
+  assert.match(text(), /on version 2 as/);
   assert.match(text(), /First team — linked to GPEXE team 980/);
   assert.match(text(), /U17 — no longer linked to GPEXE/);
   assert.match(text(), /Teams of archived clubs that use this version are switched off too; they are not listed\./);
@@ -466,7 +475,7 @@ test("12. the count is read again at the button; activationsEnded above the list
   await click('[data-action="metric-mappings-review"]');
   await click('[data-action="metric-mappings-confirm"]');
   render();
-  assert.match(text(), /5 teams were switched off\. The list showed 3\./);
+  assert.match(text(), /5 teams were switched off; the list showed fewer\./);
 });
 
 test("13. switch on: the club's teams by name, the ones that cannot be chosen, every team of a connection, one requirement, the review card", async () => {
@@ -704,4 +713,374 @@ test("22. after a change the mapping is read again: until that read answers, eve
   await submitted;
   render();
   assert.ok($(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`).disabled === false);
+});
+
+test("23. every row of the refusal table (J16 section 8) has its own sentence; read-again codes close the form; the team codes name the team", () => {
+  const rows = [
+    ["create", ["target_scope_mismatch", "target_not_active"], "This variable cannot be used here now.", true],
+    ["create", ["source_metric_retired"], "This field is retired.", true],
+    ["draft", ["unit_not_proven", "parameters_not_proven"], "The field's unit (or its bound) is not confirmed yet.", false],
+    ["draft", ["source_metric_unsupported", "parameters_unsupported"], "OptiMove cannot read this field with these settings.", false],
+    ["draft", ["level_not_allowed"], "The field or the variable does not allow this level.", false],
+    ["draft", ["conversion_unavailable", "bound_conversion_unavailable", "conversion_not_normal"], "There is no usable conversion between these units now.", false],
+    ["draft", ["parameters_not_equivalent", "condition_description_unsupported"], "The bound does not match the variable's bound.", false],
+    ["draft", ["canonical_not_numeric", "canonical_unit_missing", "canonical_unit_not_a_token", "target_not_active"], "This variable cannot be the target of a mapping now.", true],
+    ["draft", ["revision_not_usable"], "The field changed; choose it again.", true],
+    ["submit", ["version_not_draft", "revision_not_usable"], "This version changed meanwhile.", true],
+    ["activate", ["version_not_submitted", "active_version_changed"], "This mapping changed meanwhile.", true],
+    ["activate", ["revision_not_verified"], "The field's unit and meaning must be confirmed first.", false],
+    ["activate", ["canonical_version_changed"], "The variable has a newer version: make a new version.", true],
+    ["disable", ["version_status_changed"], "This version changed meanwhile.", true],
+    ["switchOn", ["version_not_active", "field_retired"], "This version is no longer active.", true],
+    ["switchOff", ["activation_not_open"], "This team was already switched off.", true],
+  ];
+  for (const [act, codes, sentence, readAgain] of rows) {
+    for (const code of codes) {
+      assert.equal(data.refusalText(act, { code, status: 409 }), sentence, `${act} ${code}`);
+      assert.equal(data.READ_AGAIN.has(code), readAgain || ["target_not_active", "revision_not_usable"].includes(code), `${act} ${code} read again`);
+    }
+  }
+  for (const code of ["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported"]) {
+    assert.match(data.refusalText("activate", { code, status: 409 }), /^This version cannot be activated now: /, code);
+  }
+  assert.match(data.refusalText("activate", { code: "source_metric_target_taken", status: 409 }), /already fills .+\. Only one of them can be active at a time\./);
+  assert.deepEqual([...data.TEAM_CODES].sort(), ["activation_exists", "binding_not_active", "binding_source_mismatch", "variable_taken_on_binding"]);
+  for (const code of data.TEAM_CODES) assert.ok(data.TEAM_CODE_TEXT[code], code);
+  for (const act of ["create", "draft", "submit", "activate", "disable", "switchOn", "switchOff"]) {
+    assert.equal(data.refusalText(act, { code: "invalid_body", status: 400 }), "The screen sent something the server does not accept. Nothing was saved.");
+    assert.equal(data.refusalText(act, { code: "invalid_query", status: 400 }), "The screen sent something the server does not accept. Nothing was saved.");
+    assert.equal(data.refusalText(act, { code: "brand_new_code", status: 409 }), "It was not saved: the server refused it.");
+  }
+});
+
+test("24. switch on: the same field with another fingerprint stays choosable, a drill-only row of the variable does not block a session-only version; a check loading or failed", async () => {
+  // Version 1 fills the session level only.
+  db.mappings[0].versions.find((v) => v.id === V1).appliesToDrill = false;
+  const B4 = id("b1b1b1b1", 4), B5 = id("b1b1b1b1", 5), B6 = id("b1b1b1b1", 6), B7 = id("b1b1b1b1", 7);
+  db.connections[CLUB][0].boundTeams.push(
+    { bindingId: B4, teamId: id("70707070", 4), teamName: "U17", sourceTeamId: "984", state: "active", teamActive: true },
+    { bindingId: B5, teamId: id("70707070", 5), teamName: "U15", sourceTeamId: "985", state: "active", teamActive: true },
+    { bindingId: B6, teamId: id("70707070", 6), teamName: "U13", sourceTeamId: "986", state: "active", teamActive: true },
+    { bindingId: B7, teamId: id("70707070", 7), teamName: "Women", sourceTeamId: "987", state: "active", teamActive: true },
+  );
+  // B2: the same field with another fingerprint into another variable (choosable).
+  const MO = id("e0e0e0e0", 8), VO = id("b0b0b0b0", 8);
+  db.mappings.push({ id: MO, ownerScope: "system", sourceMetric: { id: FA }, metricDefinitionId: TK, versions: [ver({ id: VO, mappingId: MO, status: "active", parameterFingerprint: "fp-b" })] });
+  db.activations.push(act({ id: id("ac000000", 8), mappingId: MO, versionId: VO, bindingId: B2, teamId: TEAM2 }));
+  // B4: the same variable at the drill level only (choosable for a session-only version).
+  const MD = id("e0e0e0e0", 9), VD = id("b0b0b0b0", 9);
+  db.mappings.push({ id: MD, ownerScope: "system", sourceMetric: { id: FU }, metricDefinitionId: TD, versions: [ver({ id: VD, mappingId: MD, status: "active", appliesToSession: false, appliesToDrill: true, parameterFingerprint: "fp-c" })] });
+  db.activations.push(act({ id: id("ac000000", 10), mappingId: MD, versionId: VD, bindingId: B4, teamId: id("70707070", 4), appliesToSession: false }));
+  // B7: the same variable at the session level (not choosable).
+  const MS = id("e0e0e0e0", 10), VS = id("b0b0b0b0", 10);
+  db.mappings.push({ id: MS, ownerScope: "system", sourceMetric: { id: FZ }, metricDefinitionId: TD, versions: [ver({ id: VS, mappingId: MS, status: "active", appliesToDrill: false, parameterFingerprint: "fp-d" })] });
+  db.activations.push(act({ id: id("ac000000", 11), mappingId: MS, versionId: VS, bindingId: B7, teamId: id("70707070", 7) }));
+  // B5's check never answers while the screen is looked at; B6's fails.
+  let releaseB5;
+  const heldB5 = new Promise((resolve) => { releaseB5 = resolve; });
+  overrides.push((c) => {
+    if (c.method !== "GET" || !c.url.startsWith(`${B}/activations?`)) return null;
+    const q = new URL(c.url, "http://x").searchParams;
+    if (q.get("bindingId") === B5) return heldB5.then(() => ok({ activations: [], nextCursor: null }));
+    if (q.get("bindingId") === B6) return ok({ error: "internal_error" }, 500);
+    return null;
+  });
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  render();
+  const choosing = actions.handleMappingsInput(Object.assign($('[data-mm-field="club"]'), { value: CLUB }), { render });
+  assert.equal(choosing, true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  const row = (bid) => $(`[data-mm-field="team"][data-binding-id="${bid}"]`).closest(".metric-mappings-team-row").textContent.replace(/\s+/g, " ");
+  const off = (bid) => $(`[data-mm-field="team"][data-binding-id="${bid}"]`).disabled;
+  assert.match(row(B5), /Checking…/);
+  assert.equal(off(B5), true);
+  releaseB5();
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.equal(off(B2), false, row(B2));
+  assert.doesNotMatch(row(B2), /Already/);
+  assert.equal(off(B4), false, row(B4));
+  assert.match(row(B7), /Already has this variable at this level\./);
+  assert.equal(off(B7), true);
+  assert.equal(off(B5), false, row(B5));
+  assert.match(row(B6), /Could not be checked; the server decides\./);
+  assert.equal(off(B6), false);
+});
+
+test("25. Every team of this connection checks at most 50 teams and says so", async () => {
+  const many = Array.from({ length: 55 }, (_, i) => ({ bindingId: id("b2b2b2b2", i + 1), teamId: id("71717171", i + 1), teamName: `Team ${i + 1}`, sourceTeamId: String(2000 + i), state: "active", teamActive: true }));
+  db.connections[CLUB][0].boundTeams = many;
+  db.activations = [];
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  render();
+  await input('[data-mm-field="club"]', CLUB);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click(`[data-action="metric-mappings-every-team"][data-connection-id="${CONN}"]`);
+  render();
+  assert.equal(Object.keys(data.mappingsState().panel.chooser.selected).length, 50);
+  assert.match(text(), /Only the first 50 teams are checked: one change takes at most 50\./);
+  assert.equal(posts().length, 0);
+});
+
+test("26. the teams a disable switches off: rows of two clubs with the same team name are told apart by their club", async () => {
+  const TEAM4 = id("70707070", 4), B4 = id("b1b1b1b1", 4);
+  db.org.teams.push({ id: TEAM4, name: "First team", club_id: CLUB2, club_name: "FK Drina" });
+  db.activations.push(act({ id: id("ac000000", 12), versionId: V1, bindingId: B4, teamId: TEAM4, requirement: "optional" }));
+  await open("detail");
+  await click(`[data-action="metric-mappings-disable-open"][data-version-id="${V1}"]`);
+  for (let i = 0; i < 6; i += 1) await settle();
+  render();
+  const rows = $$(".metric-mappings-panel .metric-mappings-team-row").map((r) => r.textContent.replace(/\s+/g, " ").trim());
+  assert.ok(rows.some((r) => /^FK Borac · First team/.test(r)), rows.join(" | "));
+  assert.ok(rows.some((r) => /^FK Drina · First team/.test(r)), rows.join(" | "));
+  assert.match($(".metric-mappings-panel").textContent, /Teams of archived clubs that use this version are switched off too; they are not listed\./);
+});
+
+test("27. result_too_large on the fields or the variables is a sentence naming who can help, never an empty step", async () => {
+  overrides.push((c) => (c.url === `${B}/fields` ? ok({ error: "result_too_large" }, 409) : null));
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  render();
+  assert.match(text(), /There are too many source fields to list here\. Ask a platform administrator\./);
+  assert.ok($('[data-action="metric-mappings-refs-reload"]'));
+  assert.equal($$('[data-action="metric-mappings-flow-field"]').length, 0);
+  overrides = [(c) => (c.url === `${B}/targets` ? ok({ error: "result_too_large" }, 409) : null)];
+  await click('[data-action="metric-mappings-refs-reload"]');
+  render();
+  assert.match(text(), /There are too many variables to list here\. Ask a platform administrator\./);
+});
+
+test("28. source_metric_target_taken names the variable the field already fills (same owner only); a club's flow is not warned about a system mapping", async () => {
+  const M7 = id("e0e0e0e0", 11);
+  db.mappings.push({ id: M7, ownerScope: "system", sourceMetric: { id: FA, label: "Total distance" }, metricDefinitionId: TK, target: { key: "distance_km", label: "Distance (km)" },
+    versions: [ver({ id: id("b0b0b0b0", 11), mappingId: M7, status: "active", parameterFingerprint: "fp-a" })] });
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "source_metric_target_taken" }, 409) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  await input('[data-mm-field="reason"]', "Replace it.");
+  await click('[data-action="metric-mappings-review"]');
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.match(text(), /This field already fills “Distance \(km\)”\. Only one of them can be active at a time\./);
+  // A club's new mapping of the same field: the system mapping is another owner's, so no warning.
+  actions.resetMappings();
+  asClub();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  render();
+  assert.doesNotMatch(text(), /already fills/);
+  // The platform's own flow is warned.
+  actions.resetMappings();
+  asPlatform();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TD}"]`);
+  render();
+  assert.equal(data.mappingsState().flow.step, 3);
+  data.mappingsState().flow.step = 2;
+  render();
+  assert.match(text(), /This field already fills Distance \(km\)\. Only one of them can be active at a time\./);
+});
+
+test("29. a write refused with a stated reason can be sent again from the same form: switch on after try_again, Save draft after try_again", async () => {
+  let refuse = true;
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/activations` && refuse ? ((refuse = false), ok({ error: "try_again" }, 409)) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="club"]', CLUB);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B2}"]`, true);
+  await input('[data-mm-field="requirement"][value="optional"]', true);
+  await input('[data-mm-field="reason"]', "U19 too.");
+  await click('[data-action="metric-mappings-review"]');
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.match(text(), /The server was busy\. Nothing was saved\. Try again\./);
+  assert.equal($('[data-action="metric-mappings-confirm"]').disabled, false);
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  const sent = posts().filter((c) => c.url === `${B}/activations`);
+  assert.equal(sent.length, 2);
+  assert.notEqual(sent[0].body.requestKey, sent[1].body.requestKey);
+  assert.deepEqual({ ...sent[0].body, requestKey: "" }, { ...sent[1].body, requestKey: "" });
+  assert.match(text(), /Switched on\./);
+  // The flow: Save draft refused, then sent again.
+  actions.resetMappings();
+  calls.length = 0;
+  let refuseCreate = true;
+  overrides = [(c) => (c.method === "POST" && c.url === `${B}/mappings` && refuseCreate ? ((refuseCreate = false), ok({ error: "try_again" }, 409)) : null)];
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TK}"]`);
+  await input('[data-mm-field="flow.conversionNote"]', "GPEXE gives metres; the variable is in km.");
+  await click('[data-action="metric-mappings-flow-review"]');
+  await click('[data-action="metric-mappings-flow-save"]');
+  render();
+  assert.match(text(), /The server was busy\. Nothing was saved\. Try again\./);
+  await click('[data-action="metric-mappings-flow-save"]');
+  render();
+  assert.equal(posts().filter((c) => c.url === `${B}/mappings`).length, 2);
+  assert.equal(posts().filter((c) => /\/mappings\/[^/]+\/versions$/.test(c.url)).length, 1);
+  assert.match(text(), /The draft is saved\./);
+});
+
+test("30. the teams a replacement switches off are compared by identity at the button: one team swapped for another with the same count is caught", async () => {
+  await open("detail");
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  await input('[data-mm-field="reason"]', "Replace it.");
+  await click('[data-action="metric-mappings-review"]');
+  // Meanwhile First team is switched off and U19 switched on: still one open row.
+  db.activations[0].endedAt = "2026-11-01T10:00:00Z";
+  db.activations.push(act({ id: id("ac000000", 20), versionId: V1, bindingId: B2, teamId: TEAM2, requirement: "optional" }));
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.equal(posts().length, 0);
+  assert.match(text(), /The teams of the active version changed meanwhile\. Check the list again\./);
+  assert.match(text(), /U19 — linked to GPEXE team 981/);
+});
+
+test("31. the preview: a late answer for the team chosen before never replaces the chosen team's sessions", async () => {
+  const TEAM2_CANDIDATE = cand({ id: id("ca000000", 9), label: "U19 training", approvalBlockers: ["import_switch_off"], status: "pending" });
+  db.candidates[TEAM2] = [TEAM2_CANDIDATE];
+  let releaseFirst;
+  const heldFirst = new Promise((resolve) => { releaseFirst = resolve; });
+  overrides.push((c) => (c.url === `/api/training-load/gpexe/teams/${TEAM1}/candidates` ? heldFirst.then(() => ok({ candidates: db.candidates[TEAM1] })) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-preview-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="previewClub"]', CLUB);
+  const panel = data.mappingsState().panel;
+  const firstChoice = Object.assign($('[data-mm-field="previewTeam"]'), { value: TEAM1 });
+  actions.handleMappingsInput(firstChoice, { render });
+  await settle();
+  await input('[data-mm-field="previewTeam"]', TEAM2);
+  assert.deepEqual(panel.candidates.map((c) => c.id), [TEAM2_CANDIDATE.id]);
+  releaseFirst();
+  for (let i = 0; i < 6; i += 1) await settle();
+  render();
+  assert.deepEqual(data.mappingsState().panel.candidates.map((c) => c.id), [TEAM2_CANDIDATE.id]);
+  assert.match(text(), /U19 training/);
+  assert.doesNotMatch(text(), /Training 05\.10/);
+});
+
+test("32. an unknown refusal keeps its sentence and code and reads the mapping again; a check answered with an unknown code stays not confirmed (per-route list)", async () => {
+  db.mappings[0].versions.unshift(ver({ id: V3, versionNumber: 3, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/submit") ? ok({ error: "brand_new_refusal" }, 409) : null));
+  await open("detail");
+  const reads = () => calls.filter((c) => c.method === "GET" && c.url === `${B}/mappings/${M1}`).length;
+  const before = reads();
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /It was not saved: the server refused it\./);
+  assert.match($("details.data-sources-tech").textContent, /brand_new_refusal/);
+  assert.equal(reads(), before + 1);
+  // A settled refusal does not hold the screen: the acts stay usable.
+  assert.equal($(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`).disabled, false);
+  assert.equal($('[data-action="metric-mappings-new-version"]').disabled, false);
+  // Per route: a code another route settles on does not settle a submit check.
+  assert.equal(data.checkSettles("submit", { code: "version_not_draft", status: 409 }), true);
+  assert.equal(data.checkSettles("submit", { code: "activation_not_open", status: 409 }), false);
+  assert.equal(data.checkSettles("switchOn", { code: "activation_exists", status: 409 }), true);
+  assert.equal(data.checkSettles("switchOff", { code: "activation_exists", status: 409 }), false);
+  assert.equal(data.checkSettles("draft", { code: "unit_not_proven", status: 409 }), true);
+  assert.equal(data.checkSettles("activate", { code: "brand_new_refusal", status: 409 }), false);
+  assert.equal(data.checkSettles("create", { code: "invalid_body", status: 400 }), true);
+  assert.equal(data.checkSettles("create", { code: "try_again", status: 409 }), false);
+  // A lost submit, then a check answered with an unknown code: still not confirmed.
+  overrides = [];
+  let lose = true;
+  overrides.push((c) => {
+    if (c.method !== "POST" || !c.url.endsWith("/submit")) return null;
+    if (lose) { lose = false; return { throwNetworkError: true }; }
+    return ok({ error: "brand_new_refusal" }, 409);
+  });
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /Result not confirmed/);
+  await click('[data-action="metric-mappings-check-result"]');
+  render();
+  assert.match(text(), /Result not confirmed/);
+});
+
+test("33. an old outcome's sentence never stands above a new act; a lone club is chosen; the levels both allow start ticked", async () => {
+  db.org.clubs = [{ id: CLUB, name: "FK Borac" }];
+  await open("detail");
+  data.mappingsState().notice = "Switched off.";
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.doesNotMatch(text(), /Switched off\./);
+  assert.equal(data.mappingsState().panel.chooser.clubId, CLUB);
+  assert.equal($('select[data-mm-field="club"]').value, CLUB);
+  assert.ok($(`[data-mm-field="team"][data-binding-id="${B2}"]`));
+  // The preview with the club's teams already read: the handler itself paints the
+  // chosen club's team picker (no render by the test).
+  await click('[data-action="metric-mappings-panel-close"]');
+  render();
+  await click(`[data-action="metric-mappings-preview-open"][data-version-id="${V1}"]`);
+  assert.equal(data.mappingsState().panel.clubId, CLUB);
+  assert.ok($('select[data-mm-field="previewTeam"]'), "the team picker is painted");
+  // The flow: both levels ticked when the variable allows both; the body sends them.
+  actions.resetMappings();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TK}"]`);
+  render();
+  assert.equal($('[data-mm-field="flow.session"]').checked, true);
+  assert.equal($('[data-mm-field="flow.drill"]').checked, true);
+});
+
+test("34. labels written by others are cleaned wherever they are shown: list row, heading, conversion note; the platform's step 4 names its own next step", async () => {
+  db.mappings[0].target.label = "Dist‮ance\u0007";
+  db.mappings[0].sourceMetric.label = "Total‮ distance";
+  db.mappings[0].versions[1].conversionNote = "Metres‮ to km";
+  await open();
+  assert.doesNotMatch(content.innerHTML, /‮|\u0007/);
+  assert.match(text(), /Distance/);
+  await click(`[data-action="metric-mappings-open"][data-mapping-id="${M1}"]`);
+  render();
+  assert.doesNotMatch(content.innerHTML, /‮|\u0007/);
+  assert.match($("#metric-mappings-title").textContent, /Distance/);
+  assert.match(text(), /Metres to km/);
+  // Step 4 for a platform admin; and the sentence after Submit.
+  db.mappings[0].versions.unshift(ver({ id: V3, versionNumber: 3, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  actions.resetMappings();
+  await open("detail");
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /Submitted for review\. You can activate it now\./);
+  // A club admin submitting the club's own mapping is not told to activate it.
+  db.mappings[0].ownerScope = "club";
+  db.mappings[0].versions[0].status = "draft";
+  asClub();
+  actions.resetMappings();
+  await open("detail");
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.doesNotMatch(text(), /You can activate it now/);
+});
+
+test("35. the preview says the two ranges as one; a New version's steps read 3. and 4.", async () => {
+  await open("detail");
+  await click(`[data-action="metric-mappings-preview-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="previewClub"]', CLUB);
+  await input('[data-mm-field="previewTeam"]', TEAM1);
+  await input('[data-mm-field="previewCandidate"]', CAND1);
+  data.mappingsState().panel.candidateId = CAND1;
+  await click('[data-action="metric-mappings-preview-run"]');
+  render();
+  assert.match(text(), /3100–7400\.5 m in GPEXE = 3100–7400\.5 m in “Distance”/);
+  await click('[data-action="metric-mappings-panel-close"]');
+  await click('[data-action="metric-mappings-new-version"]');
+  render();
+  assert.deepEqual($$(".metric-mappings-step-no").map((e) => e.textContent), ["3.", "4."]);
+  assert.match(text(), /Step 3 of 4/);
 });

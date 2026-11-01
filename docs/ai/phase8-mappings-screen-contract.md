@@ -537,10 +537,43 @@ Frontend only: no backend file, no API change, no migration.
   - **After a change, the mapping's acts wait for its re-read** (5, 8): while the mapping is read again after a write, every
     act of its versions, **New version** and **Switch off** are disabled and a click starts nothing, so no act starts from
     the state before the change. Found in the integration run.
-- **Tests (JSDOM).** 22 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
+- **Internal review round on head `41e35bc`** (`code-reviewer` NOT READY, one HIGH; `ux-design-reviewer`,
+  `security-reviewer` (R10) and `mobile-qa` READY WITH NON-BLOCKING NOTES). Applied in the next head:
+  - **HIGH — a refused write could not be sent again** (8): after a refusal with a stated reason (`try_again`, a state
+    code) the form kept the write and every send ignored it. A settled refusal now never holds the screen: its sentence
+    stays until the next act, and the same form sends again with a new key (nothing was saved). Only a write in flight
+    or not confirmed holds it.
+  - **The settle list of a Check result is per route** (8): only the refusals a route answers after reading its request
+    record, or for the body itself, settle a check; any other code leaves the result not confirmed.
+  - **A refusal the screen has no sentence for reads the mapping again** (8, last row) and keeps its sentence and code.
+  - **The R8 list is compared by identity at the button** (5.1): the same count with one team swapped for another is
+    caught, never only the number of rows.
+  - **A late answer for another team never replaces the chosen team's saved sessions** (7, 9).
+  - **"N teams were switched off; the list showed fewer."** as section 5.1 words it.
+  - **`source_metric_target_taken` names the variable** the field already fills when the mappings list shows it, and
+    only a mapping of the same owner counts (the server's rule is per owner), in the flow's notice too (4.3, 8).
+  - **UX:** an old outcome's sentence is cleared when a new act opens or a write starts; the levels both the field and
+    the variable allow start ticked (4.4 asks for at least one; the review card names them); a lone club is chosen in
+    the platform workspace; the replace panel puts **Keep these teams** first, says "These N teams use version M.
+    Replacing it switches them off version M and on for version N in the same step:" with "on version N as
+    [requirement]" per team, and names what changes from the active version (unit, levels, bound, note); the activate
+    panel has its own sentence; the platform administrator is told "You can activate it now." after Submit and on the
+    step-4 card; the preview reads "a–b s in GPEXE = c–d min in “variable”"; in step 1 the fields that can be chosen come
+    first, with the Source fields link for the platform. The **clicks to the first switch on of a system mapping fall
+    from 16 to 13** (measured again in the integration run). Not applied (a contract change, for the *Rukovodilac*):
+    "Save and submit for review" in one act, which would save two more.
+  - **Security (R10):** variable and field labels and the conversion note are cleaned wherever shown; the clubs read
+    in flight is awaited by a second caller (the names of the R8 list); the version number in a button is escaped.
+  - **Mobile:** field errors and hints in `.search-field` keep their own style; an unavailable choice's reason is not
+    faded; the step numbers are in the markup (a New version reads 3. and 4.); the version's acts have a gap; the
+    reason field is styled like the screen's other fields; the checkbox, rhythm and badge notes.
+- **Tests (JSDOM).** 35 tests over the real handlers and markup with a fake server that keeps the routes' contracts. Which
   items of section 10 they cover, and which the integration run covers, is listed in the pull request's description.
-  Mutations: the clubs-read sentence, the name cleaning in a team row and both halves of the re-read guard (the disabled
-  acts and the handler's refusal) each fail a test when removed.
+  Mutations, each removed and the suite failing: the clubs-read sentence, the name cleaning in a team row, both halves of
+  the re-read guard, the owner filter and the naming of `source_metric_target_taken`, the settled-write release, the
+  acts enabled after a settled refusal, the R8 identity, the stale team answer, the per-route settle list, the
+  unknown-refusal re-read, the notice cleared on a new act, the lone club, the ticked levels, the label cleaning and the
+  preview's repaint.
 - **Integration run** (the executor's scratch harness, not in the repository): this branch's backend in process on one
   disposable `optimove_tests_gpexe_*` database migrated through v50, the real frontend in Chromium, the seeded TIME and
   TotDist revisions confirmed on that database only, never a GPEXE request. Create → draft → submit → activate with a
@@ -552,9 +585,10 @@ Frontend only: no backend file, no API change, no migration.
   database's clubs and teams with the route's keys and workspace narrowing (plus decoy athletes and users the screen
   drops); `/api/notifications`, `/api/messages` and `/api/admin/athletes` answer 500 there for the same reason and are
   outside the screen. Browser QA at 1280, 390, 375 and 360 px on every state of the flow and the detail (no horizontal
-  overflow, 44 px targets, 16 px fields). The database was dropped afterwards.
+  overflow, 44 px targets, 16 px fields). The database was dropped afterwards. After the review fixes: 110 of 110 checks.
 - **The owner's acceptance criterion** („Stim sto ovo mora biti mnogo jednostavnijeg za korisnika”): from the Mappings list
-  to the first team switched on for a system mapping, the integration run counted 16 interactions — New mapping, the
-  field, the variable, the two levels, Review, Save draft, Submit for review and its confirm, Activate, **Switch on for
-  teams now**, the club, the team, Required, Review, **Activate and switch on** — plus typing the conversion note and the
-  reason. It is put to `ux-design-reviewer` as the *Rukovodilac* asked.
+  to the first team switched on for a system mapping, the integration run counted 16 interactions on the first head and
+  **13 after the review fixes** — New mapping, the field, the variable, Review, Save draft, Submit for review and its
+  confirm, Activate, **Switch on for teams now**, the team, Required, Review, **Activate and switch on** — plus typing the
+  conversion note and the reason. `ux-design-reviewer` judged it acceptable for a one-off setup per field by an
+  administrator.

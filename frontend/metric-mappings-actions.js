@@ -9,7 +9,7 @@ import {
   READ_AGAIN, TEAM_CODES, TEAM_CODE_TEXT, buildDraftBody, checkNoteText, checkSettles, chosenRevision, cleanName, cleanReason,
   emptyFlowDraft, emptyMappingsState, errorInfo, fetchActivations, fetchCandidates, fetchConnections, fetchConversions, fetchFields,
   fetchMapping, fetchMappings, fetchOrganization, fetchPreview, fetchTargets, fieldStatus, mappingsContext, mappingsState,
-  newRequestKey, notForImport, orgFacts, outcomeUnknown, previewRefusalText, reasonError, refusalText, revisionVerified, sendWrite,
+  levelsOf, newRequestKey, notForImport, orgFacts, outcomeUnknown, previewRefusalText, reasonError, refusalText, revisionVerified, sendWrite,
   targetStatus,
 } from "./metric-mappings-data.js";
 
@@ -107,20 +107,32 @@ export async function loadRefs(render, { force = false } = {}) {
   render();
 }
 
+// One read of the clubs at a time: a second caller waits for the read in
+// flight instead of going on without the names.
+let orgRead = null;
 export async function loadOrg(render) {
   const s = mappingsState();
-  if (s.org.loaded || s.org.loading) return;
+  if (s.org.loaded) return;
+  if (s.org.loading && orgRead) { await orgRead; return; }
   const generation = s.generation;
   s.org.loading = true;
-  try {
-    const facts = orgFacts(await fetchOrganization());
-    if (!live(s, generation)) return;
-    s.org = { ...facts, loaded: true, loading: false, error: null };
-  } catch {
-    if (!live(s, generation)) return;
-    s.org = { ...s.org, loading: false, error: "The clubs and teams could not be loaded." };
-  }
+  const read = (async () => {
+    try {
+      const facts = orgFacts(await fetchOrganization());
+      if (!live(s, generation)) return;
+      s.org = { ...facts, loaded: true, loading: false, error: null };
+    } catch {
+      if (!live(s, generation)) return;
+      s.org = { ...s.org, loading: false, error: "The clubs and teams could not be loaded." };
+    }
+  })();
+  orgRead = read;
+  try { await read; } finally { if (orgRead === read) orgRead = null; }
   render();
+}
+// In the platform workspace, a lone club is chosen for the administrator.
+function onlyClubId(s) {
+  return s.org.loaded && s.org.clubs.length === 1 ? s.org.clubs[0].id : "";
 }
 
 export async function loadConnections(clubId, render) {
@@ -309,9 +321,23 @@ function existingMapping(s, fieldId, targetId) {
   return s.list.items.find((m) => m.sourceMetric?.id === fieldId && m.metricDefinitionId === targetId) || null;
 }
 // Another mapping of this owner already has an active version of this field
-// (the cause of source_metric_target_taken).
-export function fieldTakenBy(s, fieldId, targetId) {
-  return s.list.items.find((m) => m.sourceMetric?.id === fieldId && m.metricDefinitionId !== targetId && m.activeVersionId) || null;
+// (the cause of source_metric_target_taken; the server's rule is per owner, so
+// a system mapping never takes a club's field and the other way round).
+export function fieldTakenBy(s, fieldId, targetId, ownerScope = null) {
+  return s.list.items.find((m) => m.sourceMetric?.id === fieldId && m.metricDefinitionId !== targetId && m.activeVersionId
+    && (!ownerScope || m.ownerScope === ownerScope)) || null;
+}
+// The variable the refused version's field already fills, named from the
+// mappings list (read once if the screen does not hold it); null when unknown.
+async function takenTargetLabel(s, mapping) {
+  if (!mapping?.sourceMetric?.id) return null;
+  let items = s.list.loaded ? s.list.items : null;
+  if (!items) {
+    try { items = (await fetchMappings())?.mappings || []; } catch { return null; }
+  }
+  const other = items.find((m) => m.sourceMetric?.id === mapping.sourceMetric.id && m.metricDefinitionId !== mapping.metricDefinitionId
+    && m.activeVersionId && m.ownerScope === mapping.ownerScope);
+  return other ? cleanName(other.target?.label || other.target?.key || "") || null : null;
 }
 function openFlow(s, { mapping = null, fixed = false } = {}) {
   const draft = emptyFlowDraft();
@@ -355,6 +381,7 @@ export function flowFacts(s = mappingsState()) {
 // Writes
 // ---------------------------------------------------------------------------
 function startWrite(s, act, target, body, after = {}) {
+  s.notice = "";
   s.write = { act, target, body, busy: false, unconfirmed: false, checkNote: "", error: "", after };
 }
 async function send(render) {
@@ -380,6 +407,12 @@ async function send(render) {
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// J16 5.1: more teams switched off than the list showed is said, never hidden.
+function endedSentence(ended, listed) {
+  return listed !== null && listed !== undefined && ended > listed
+    ? `${plural(ended, "team was", "teams were")} switched off; the list showed fewer.`
+    : `${plural(ended, "team was", "teams were")} switched off.`;
+}
 async function succeeded(w, data, render) {
   const s = mappingsState();
   const readError = data?.readError ? " It could not be read back; it is read again." : "";
@@ -400,15 +433,17 @@ async function succeeded(w, data, render) {
     return;
   }
   s.panel = null;
-  if (w.act === "submit") setNotice(s, `Submitted for review.${readError}`);
+  if (w.act === "submit") {
+    const ctx = mappingsContext();
+    setNotice(s, `Submitted for review.${s.detail.mapping && mayTransition(s.detail.mapping, ctx) ? " You can activate it now." : ""}${readError}`);
+  }
   if (w.act === "activate") {
     const ended = Number(data?.activationsEnded) || 0;
     const listed = w.after.listed ?? null;
     const started = Array.isArray(data?.activations) ? data.activations.length : 0;
     setNotice(s, [
       `Version ${w.after.versionNumber ?? ""} is active.`,
-      data?.replaced ? `${plural(ended, "team was", "teams were")} switched off.` : "",
-      listed !== null && ended > listed ? `The list showed ${listed}.` : "",
+      data?.replaced ? endedSentence(ended, listed) : "",
       started ? `${plural(started, "team is", "teams are")} switched on. Imports do not use mappings yet; nothing changes in imports until they do.` : "",
       readError,
     ].filter(Boolean).join(" "));
@@ -416,8 +451,7 @@ async function succeeded(w, data, render) {
   if (w.act === "disable") {
     const ended = Number(data?.activationsEnded) || 0;
     const listed = w.after.listed ?? null;
-    setNotice(s, [`Version ${w.after.versionNumber ?? ""} is disabled.`, ended ? `${plural(ended, "team was", "teams were")} switched off.` : "",
-      listed !== null && ended > listed ? `The list showed ${listed}.` : "", readError].filter(Boolean).join(" "));
+    setNotice(s, [`Version ${w.after.versionNumber ?? ""} is disabled.`, ended ? endedSentence(ended, listed) : "", readError].filter(Boolean).join(" "));
   }
   if (w.act === "switchOn") setNotice(s, `Switched on. Imports do not use mappings yet; nothing changes in imports until they do.${readError}`);
   if (w.act === "switchOff") setNotice(s, `Switched off.${readError}`);
@@ -446,7 +480,7 @@ async function refused(w, info, { render, check }) {
   const s = mappingsState();
   // A lost answer, or a Check result answered before the server read its
   // request record: what happened to the first write is still not known.
-  if (outcomeUnknown(info) || (check && !checkSettles(info))) {
+  if (outcomeUnknown(info) || (check && !checkSettles(w.act, info))) {
     w.unconfirmed = true;
     w.checkNote = check ? checkNoteText(info) : "";
     render();
@@ -508,8 +542,19 @@ async function refused(w, info, { render, check }) {
     return;
   }
   w.error = refusalText(w.act, info);
+  if (w.act === "activate" && info.code === "source_metric_target_taken") {
+    const label = await takenTargetLabel(s, s.detail.mapping);
+    if (label) w.error = `This field already fills “${label}”. Only one of them can be active at a time.`;
+  }
   w.code = info.code;
   render();
+  // A refusal the screen has no sentence for (J16 8, last row): the mapping is
+  // read again so the next attempt starts from what is saved.
+  if (unknownRefusal(w.act, info) && s.view === "detail" && s.detail.id) await loadMapping(s.detail.id, render);
+}
+function unknownRefusal(act, info) {
+  if (!(info.status >= 400 && info.status < 500) || info.status === 401 || info.status === 403) return false;
+  return refusalText(act, info) === "It was not saved: the server refused it.";
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +585,8 @@ export function chooserTeams(s, chooser, version) {
 // The pre-checks of a club's teams for a version (J16 6 step 2).
 async function checkTeams(s, chooser, mapping, version, render) {
   const entry = s.connections[chooser.clubId];
+  // A club changed meanwhile replaces the map: the old checks land in the old one.
+  const checks = chooser.checks;
   const cache = new Map();
   let resolved = 0;
   const resolve = async (mappingId) => {
@@ -552,7 +599,7 @@ async function checkTeams(s, chooser, mapping, version, render) {
   };
   const teams = (entry?.connections || []).flatMap((c) => c.boundTeams || []).filter((t) => t.teamActive !== false);
   await Promise.all(teams.map(async (team) => {
-    chooser.checks[team.bindingId] = { state: "loading" };
+    checks[team.bindingId] = { state: "loading" };
     try {
       const { rows } = await allActivations({ bindingId: team.bindingId, stateFilter: "open" });
       let verdict = { state: "ok" };
@@ -571,9 +618,9 @@ async function checkTeams(s, chooser, mapping, version, render) {
           break;
         }
       }
-      chooser.checks[team.bindingId] = verdict;
+      checks[team.bindingId] = verdict;
     } catch {
-      chooser.checks[team.bindingId] = { state: "failed" };
+      checks[team.bindingId] = { state: "failed" };
     }
   }));
   render();
@@ -636,15 +683,17 @@ async function loadCandidates(s, panel, render) {
   panel.candidateId = "";
   panel.result = null;
   render();
+  const teamId = panel.teamId;
+  const current = () => s.panel === panel && panel.teamId === teamId;
   try {
-    const data = await fetchCandidates(panel.teamId);
-    if (s.panel !== panel) return;
+    const data = await fetchCandidates(teamId);
+    if (!current()) return;
     panel.candidates = Array.isArray(data?.candidates) ? data.candidates : [];
   } catch (error) {
-    if (s.panel !== panel) return;
+    if (!current()) return;
     panel.candidatesError = errorInfo(error).code === "notFound" ? "This team's saved sessions are not available in this workspace." : "The saved sessions could not be loaded.";
   } finally {
-    if (s.panel === panel) panel.candidatesLoading = false;
+    if (current()) panel.candidatesLoading = false;
   }
   render();
 }
@@ -698,6 +747,10 @@ export async function handleMappingsAction(action, { render }) {
   const ctx = mappingsContext();
   if (!ctx) return true;
   const d = action.dataset;
+  // A write the server refused with a stated reason is settled: its sentence
+  // stays until the next act, which may send again (a new key; nothing was
+  // saved). Only a write in flight or not confirmed holds the screen.
+  if (s.write && !s.write.busy && !s.write.unconfirmed && type !== "metric-mappings-close-unchecked") s.write = null;
 
   // ---- reads and navigation
   if (type === "metric-mappings-reload") { await loadMappings(render); return true; }
@@ -765,7 +818,12 @@ export async function handleMappingsAction(action, { render }) {
     const { revision } = flowFacts(s);
     const target = s.refs.targets.find((t) => t.id === d.targetId);
     if (!revision || !target || !targetStatus(target, revision, s.refs.conversions).choosable) return true;
-    if (f.targetId !== target.id) f.draft = emptyFlowDraft();
+    if (f.targetId !== target.id) {
+      // The levels both the field and the variable allow start ticked; the
+      // review card names them and either can be unticked.
+      const levels = levelsOf(revision, target);
+      f.draft = { ...emptyFlowDraft(), session: levels.session, drill: levels.drill };
+    }
     f.targetId = target.id;
     f.mappingId = existingMapping(s, f.fieldId, target.id)?.id || null;
     f.step = 3;
@@ -851,8 +909,12 @@ export async function handleMappingsAction(action, { render }) {
   // ---- the detail's acts
   const mapping = s.detail.mapping;
   const version = d.versionId ? versionOf(s, d.versionId) : null;
-  // An act never starts from a mapping that is being read again after a change.
-  if (s.detail.loading && /-(open|submit)$/.test(type)) return true;
+  // An act never starts from a mapping that is being read again after a change,
+  // and an old outcome's sentence never stands above a new act.
+  if (/-(open|submit)$/.test(type)) {
+    if (s.detail.loading) return true;
+    if (!s.write && !s.panel) s.notice = "";
+  }
   if (type === "metric-mappings-submit") {
     if (s.write || !mapping || !version || version.status !== "draft" || !inOwnerWorkspace(mapping, ctx)) return true;
     const name = cleanName(mapping.target?.label || "");
@@ -895,7 +957,10 @@ export async function handleMappingsAction(action, { render }) {
     s.panel = { kind: "switchOn", versionId: version.id, chooser: emptyChooser(ctx), reason: "", errors: {}, review: false };
     render();
     await loadOrg(render);
-    if (s.panel?.chooser.clubId) await chooseClub(s, s.panel.chooser, s.panel.chooser.clubId, mapping, version, render);
+    const chooser = s.panel?.chooser;
+    if (chooser && !chooser.clubId) chooser.clubId = onlyClubId(s);
+    if (chooser?.clubId) await chooseClub(s, chooser, chooser.clubId, mapping, version, render);
+    else render();
     return true;
   }
   if (type === "metric-mappings-switch-off-open") {
@@ -912,7 +977,10 @@ export async function handleMappingsAction(action, { render }) {
     s.panel = { kind: "preview", versionId: version.id, clubId: ctx.owner === "club" ? ctx.clubId : "", teamId: "", candidates: [], candidateId: "", result: null };
     render();
     await loadOrg(render);
+    if (s.panel?.kind === "preview" && !s.panel.clubId) s.panel.clubId = onlyClubId(s);
     if (s.panel?.clubId) await loadConnections(s.panel.clubId, render);
+    // The club may have been chosen here with its teams already read: paint it.
+    render();
     return true;
   }
   if (type === "metric-mappings-org-reload") {
@@ -989,6 +1057,8 @@ export async function handleMappingsAction(action, { render }) {
   return true;
 }
 
+// The identity of an R8 list: each open row and its team link and requirement.
+const rowsKey = (rows) => rows.map((r) => `${r.id}|${r.bindingId}|${r.requirement}`).sort().join(",");
 async function confirmPanel(s, mapping, render) {
   const p = s.panel;
   if (!p || s.write || !mapping) return true;
@@ -1009,11 +1079,11 @@ async function confirmPanel(s, mapping, render) {
     }, { versionNumber: version.versionNumber });
   } else if (p.kind === "replace") {
     if (!p.review || p.loading || p.error) return true;
-    // The count is read again when the button is pressed (J16 5.1).
-    const before = p.rows.length;
+    // The list is read again when the button is pressed (J16 5.1) and must
+    // be the same rows, not only as many.
     try {
       const { rows } = await allActivations({ versionId: p.activeVersionId, stateFilter: "open" });
-      if (rows.length !== before) {
+      if (rowsKey(rows) !== rowsKey(p.rows)) {
         p.review = false;
         p.changed = "The teams of the active version changed meanwhile. Check the list again.";
         await loadOffList(s, p, p.activeVersionId, render);
@@ -1034,7 +1104,7 @@ async function confirmPanel(s, mapping, render) {
     if (version.status === "active") {
       try {
         const { rows } = await allActivations({ versionId: version.id, stateFilter: "open" });
-        if (rows.length !== p.rows.length) {
+        if (rowsKey(rows) !== rowsKey(p.rows)) {
           p.review = false;
           p.changed = "The teams of this version changed meanwhile. Check the list again.";
           await loadOffList(s, p, version.id, render);
@@ -1093,7 +1163,9 @@ async function applyInput(el, render) {
     repaint();
     if (p.withTeams && p.kind === "activate") {
       await loadOrg(repaint);
+      if (!p.chooser.clubId) p.chooser.clubId = onlyClubId(s);
       if (p.chooser.clubId && s.detail.mapping) await chooseClub(s, p.chooser, p.chooser.clubId, s.detail.mapping, versionOf(s, p.versionId), repaint);
+      else repaint();
     }
     return true;
   }

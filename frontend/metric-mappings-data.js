@@ -413,9 +413,25 @@ export const NOT_FOR_IMPORT_SENTENCE = "This session cannot be imported as it st
 // request record or for the body itself: a stated refusal with a code. Busy,
 // no access, signed out, a reused key and any 5xx say nothing about the first
 // write.
-const NEVER_SETTLES = new Set(["notFound", "try_again", "request_key_reused", "jsonRequired", "error", "no_answer"]);
-export function checkSettles(info) {
-  return info.status >= 400 && info.status < 500 && info.status !== 401 && info.status !== 403 && !NEVER_SETTLES.has(info.code);
+// Per route (J16 8): only the refusals that route answers after reading its
+// request record, or for the body itself, settle a check. Anything else -
+// another code included - leaves the result not confirmed.
+const BODY_CODES = ["invalid_body", "invalid_query"];
+const SETTLES_ON_CHECK = {
+  create: ["mapping_exists", "target_scope_mismatch", "target_not_active", "source_metric_retired"],
+  submit: ["version_not_draft", "revision_not_usable"],
+  activate: ["version_not_submitted", "active_version_changed", "revision_not_verified", "canonical_version_changed", "source_metric_target_taken",
+    "target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported",
+    "parameters_unsupported", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
+  disable: ["version_status_changed"],
+  switchOn: ["version_not_active", "field_retired", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
+  switchOff: ["activation_not_open"],
+};
+export function checkSettles(act, info) {
+  if (!(info.status >= 400 && info.status < 500) || info.status === 401 || info.status === 403) return false;
+  // A draft's own refusals are the table of section 8 (DRAFT_TEXT, below).
+  const codes = act === "draft" ? Object.keys(DRAFT_TEXT) : SETTLES_ON_CHECK[act] || [];
+  return BODY_CODES.includes(info.code) || codes.includes(info.code);
 }
 export function checkNoteText(info) {
   if (outcomeUnknown(info)) return "No answer again. The result is still not confirmed.";

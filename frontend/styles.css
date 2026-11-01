@@ -20999,17 +20999,15 @@ body.exercise-header-pinned #viewToolbar {
   margin: 6px 0 0;
   padding: 0;
   list-style: none;
-  counter-reset: mm-step;
 }
 .metric-mappings-steps li {
-  counter-increment: mm-step;
   display: flex;
   align-items: center;
   min-height: 44px;
   color: var(--muted, #5f6b7a);
 }
-.metric-mappings-steps li::before {
-  content: counter(mm-step) ".";
+/* The step's own number is in the markup, so a New version reads 3. and 4. */
+.metric-mappings-step-no {
   margin-right: 4px;
 }
 .metric-mappings-steps li.is-current {
@@ -21018,8 +21016,11 @@ body.exercise-header-pinned #viewToolbar {
 }
 .metric-mappings-choice.is-unavailable {
   cursor: default;
-  opacity: 0.75;
   background: var(--surface-muted, #f4f5f7);
+}
+/* The choice is faded; the sentence saying why stays at full contrast. */
+.metric-mappings-choice.is-unavailable > :not(.metric-mappings-reason) {
+  opacity: 0.75;
 }
 .metric-mappings-choice[aria-pressed="true"] {
   border-color: var(--accent, #2563eb);
@@ -21071,11 +21072,49 @@ body.exercise-header-pinned #viewToolbar {
   min-height: 44px;
   font-size: 16px;
 }
-/* A reason is a sentence: its field takes the panel's width. */
+/* A reason is a sentence: its field takes the panel's width and looks like
+   the screen's other fields. */
 .metric-mappings-panel textarea {
+  font: inherit;
+  font-size: 16px;
   box-sizing: border-box;
   width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
   resize: vertical;
+}
+/* The shared .search-field span rule would make an error and a hint small
+   grey bold text; on this screen they read as an error and as a hint. */
+.metric-mappings .search-field > span.metric-variables-field-error {
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+.metric-mappings .search-field > span.muted {
+  font-size: 14px;
+  font-weight: 400;
+}
+/* A version's acts: a clear gap between them, Disable included. */
+.metric-mappings .metric-variables-version .metric-variables-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* The flow's content: one rhythm between headings, sentences and fields. */
+div.metric-mappings-flow:not(.metric-variables-head) {
+  display: grid;
+  gap: 10px;
+}
+/* A kept team's requirement on the new version: "on version N as [select]". */
+.metric-mappings-kept {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
 }
 .metric-mappings-team-row .plain-button,
 .metric-mappings-teams > .plain-button,
@@ -21095,6 +21134,7 @@ body.exercise-header-pinned #viewToolbar {
   height: 20px;
   min-height: 0;
   margin: 0;
+  padding: 0;
 }
 .metric-mappings .item-badge.is-suggested {
   border-color: var(--accent, #2563eb);
@@ -21102,6 +21142,7 @@ body.exercise-header-pinned #viewToolbar {
 .metric-mappings .item-badge.is-warning {
   border-color: var(--tlc-warning, #8a5a00);
   color: var(--tlc-warning, #8a5a00);
+  font-size: 12px;
 }
 .metric-mappings-club-badge {
   border-color: #934c65;
