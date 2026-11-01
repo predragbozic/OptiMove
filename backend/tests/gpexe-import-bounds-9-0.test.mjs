@@ -500,6 +500,64 @@ test("6c. approval: an error the COMMIT itself raises goes through resolveUncert
   });
 });
 
+test("6d. approval: nothing is written between SET CONSTRAINTS ALL IMMEDIATE and the COMMIT - the approval's last two statements are exactly those two", async () => {
+  const { team, list } = await teamWithCandidates([9621]);
+  const candidate = await candidateDetail(team, list[0].id);
+  const wrapped = new Map();
+  const onAcquire = (c) => { if (!wrapped.has(c)) wrapped.set(c, timeStatements(c)); };
+  let approvalClient = null;
+  appPool.on("acquire", onAcquire);
+  try {
+    await withSwitchOn(async () => {
+      service.setApprovalObserver(({ client: c }) => { approvalClient = c; });
+      const r = await approve(team, candidate);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+    });
+  } finally {
+    appPool.off("acquire", onAcquire);
+    for (const w of wrapped.values()) w.restore();
+  }
+  // The statements the approval sent on its own client, in order of completion
+  // (sent one after another, so the same as the order sent).
+  const texts = wrapped.get(approvalClient).times.map((t) => t.text.replace(/\s+/g, " ").trim().toLowerCase());
+  const commit = texts.lastIndexOf("commit");
+  assert.ok(commit > 0, "the approval committed on its client");
+  assert.deepEqual(texts.slice(commit - 1, commit + 1), ["set constraints all immediate", "commit"]);
+  assert.equal(texts.indexOf("set constraints all immediate"), commit - 1, "sent once, right before the COMMIT");
+});
+
+test("6e. approval: a deferred check that refuses (23514) at SET CONSTRAINTS ALL IMMEDIATE is the existing refusal before the COMMIT - 500 internal_error, nothing written, never try_again or an unknown outcome", async () => {
+  const { team, list } = await teamWithCandidates([9631]);
+  const candidate = await candidateDetail(team, list[0].id);
+  const before = await allRowCounts();
+  await admin.query(`create table public.bounds_9_0_refuse (candidate_id uuid primary key)`);
+  await admin.query(`
+    create function public.bounds_9_0_refuse_fn() returns trigger language plpgsql as $$
+    begin
+      if exists (select 1 from public.bounds_9_0_refuse where candidate_id = new.candidate_id) then
+        raise exception 'bounds 9-0 deferred refusal' using errcode = 'check_violation';
+      end if;
+      return null;
+    end $$`);
+  await admin.query(`
+    create constraint trigger bounds_9_0_refuse_trg after insert on training_load.gpexe_import_approvals
+      deferrable initially deferred for each row execute function public.bounds_9_0_refuse_fn()`);
+  await admin.query(`insert into public.bounds_9_0_refuse values ($1)`, [candidate.id]);
+  try {
+    await withSwitchOn(async () => {
+      const r = await approve(team, candidate);
+      assert.deepEqual([r.status, r.body.error], [500, "internal_error"], JSON.stringify(r.body));
+      assert.match(r.body.message, /nothing was imported/);
+      assert.ok(!/bounds 9-0/.test(JSON.stringify(r.body)), "the database's text never reaches the caller");
+    });
+    assert.deepEqual(await allRowCounts(), { ...before, "public.bounds_9_0_refuse": 1 }, "nothing written");
+  } finally {
+    await admin.query(`drop trigger bounds_9_0_refuse_trg on training_load.gpexe_import_approvals`);
+    await admin.query(`drop function public.bounds_9_0_refuse_fn()`);
+    await admin.query(`drop table public.bounds_9_0_refuse`);
+  }
+});
+
 test("7. batch: a bounded wait stops the batch - the first candidate is refused try_again, the rest not_attempted, nothing written", async () => {
   // A batch takes clean Ready candidates only: no athlete on two tracks.
   const { team, list } = await teamWithCandidates([9701, 9702], { athletes: standardAthletes().slice(0, 2) });
