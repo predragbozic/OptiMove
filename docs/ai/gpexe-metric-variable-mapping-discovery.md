@@ -1894,7 +1894,8 @@ of C50; the rollback refuses unless these rows are exactly the seed.
 ## F. Required / optional and the fail-closed table
 
 **Amended for the pilot by C110 (2026-11-01):** row 4 (a `required` value missing) and a converted value outside the
-variable's `min` / `max` leave out only that value (form B), not the whole candidate; J17 builds it.
+variable's `min` / `max` leave out only that value (form B), not the whole candidate; the audience list and the
+skip-code paragraph below follow it (their plain reason is shown to every level on the Left-out entry); J17 builds it.
 
 | Case | Behaviour | Visibility |
 |---|---|---|
@@ -1932,7 +1933,8 @@ doubled zone is a property of the session, as section E says) → `source_thresh
 value of one athlete — `zones_missing`, `zones_not_ready`, `zone_distance_missing`,
 `events_missing`, `count_missing`, `details_not_fetched`, `field_missing`, `value_missing`,
 `total_time_missing`, `total_distance_missing`, `max_v_missing` → `required_value_missing` (whole
-candidate) under a `required` activation, a "Left out" entry under an `optional` one.
+candidate; in the pilot a Left-out entry of that value only, C110) under a `required` activation, a "Left out" entry
+under an `optional` one.
 
 ---
 

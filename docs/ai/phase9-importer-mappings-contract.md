@@ -240,7 +240,8 @@ steps 2a and 6b) and rolls back (R10).
    statistics or more than one whole-session row is left out as today, before any requirement is judged (C18,
    section F row 3).
 8. **Classification (section F), whole candidate first.** The whole-candidate blocks are checked first, in this order,
-   the first that applies deciding; then each value's "Left out" entries (C110):
+   the first that applies deciding; then each value's "Left out" entries (C110); **last**, `no_mapped_values` over what
+   remains:
    - a threshold-contract skip (`team_threshold_missing`, `team_threshold_split`, `threshold_mismatch`,
      `duration_mismatch`, `zone_boundary_missing`, `zone_boundary_ambiguous`) on any admitted athlete under any
      activation → `blocked`, `source_threshold_contract_mismatch`;
@@ -380,7 +381,9 @@ One source field may carry several mappings (the closed power zone serves 25–6
 
 A coach's Imports screen shows one sentence for all of them ("This session can't be imported until an administrator
 finishes its data setup."), a platform admin and the club's admin the precise reason (except the three instance codes
-above). No log on this path carries an error's message, a value or a value-bearing id (section 3, step 10).
+above) — **except the two Left-out codes `required_value_missing` and `canonical_value_out_of_range`** (C110): they
+block nothing, and every level sees their plain reason on the athlete's Left-out entry ("required value missing",
+"outside the variable's limits"), never the value; only the code itself is for the two admins. No log on this path carries an error's message, a value or a value-bearing id (section 3, step 10).
 
 ### 6.1 The audience mechanism
 
@@ -401,8 +404,8 @@ to every level). So 9-B adds:
   (`routes/gpexeImport.js:176-188`, which embeds `getCandidate`), and the stored candidate a check shows. The service
   never recomputes it; the parameter is **required, with no default**, and a missing or unknown level is treated as
   `other`.
-- **A projection of the stored preview per level.** For `other`: the codes of section 6 replaced by the stable code and
-  sentence, no `activationId`, `mappingVersionId`, `sourceParameterFingerprint` or instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
+- **A projection of the stored preview per level.** For `other`: the **blocking** codes of section 6 replaced by the
+  stable code and sentence (a Left-out entry of C110 keeps its plain reason; only its code is admin-only), no `activationId`, `mappingVersionId`, `sourceParameterFingerprint` or instance fact; values and their labels as section 4.1 says. For `club_admin`: the precise codes, except the three
   instance codes, which become `mapping_not_usable` with its sentence in `preview.blocked`, `blockedCode` and
   `blockedSourceCode`. `platform` sees the stored preview. The projection applies to every part of a preview a surface
   returns, stored or recomputed under the lock: also `changesToImported` in a `409 preview_changed`'s details
@@ -410,11 +413,14 @@ to every level). So 9-B adds:
   hash stays computed on the full preview, so an approval still compares equal; the approval route compares the hash
   the caller sent, never a projected one.
 - **A closed set of admin-only candidate codes** with a test that every code of section 6 is classified (as the
-  resolver's test does), and the new codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
-  `blockedSourceCode`.
-- **The discovery document's audience list** (`discovery:1892-1895`) gains `no_mapped_values`,
-  `canonical_value_out_of_range` and `source_instance_changed`, loses `nothing_to_import` and `source_metric_target_taken`
-  (neither is an importer refusal of a mapped value), and records the platform-admin-only level of the instance codes
+  resolver's test does), and the new **blocking** codes mapped into `BLOCKED_CODES` with a coach-safe `blockedCode` and
+  `blockedSourceCode`; the two Left-out codes of C110 are value-level reasons, never in `BLOCKED_CODES`
+  (`gpexeImportReasons.js:12-13`: that map is "why the whole session cannot be imported"), and a session that carries
+  only them has `blockedCode` null.
+- **The discovery document's audience list** (`discovery:1892-1895`) gains `no_mapped_values` and
+  `source_instance_changed`, loses `nothing_to_import` and `source_metric_target_taken` (neither is an importer refusal
+  of a mapped value) and `required_value_missing` (a Left-out reason under C110, its plain reason shown to every level),
+  records `canonical_value_out_of_range` the same way, and records the platform-admin-only level of the instance codes
   — in 9-B, with the code.
 
 ---
@@ -509,6 +515,8 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
 - F rows 1–2: an unactivated known field shows its label to the two admins and only a count to a coach.
 - Every mapped value left out (optional, required under C110, or out of range) → `blocked` `no_mapped_values`, never
   Ready.
+- C110 audience: a session carrying only Left-out entries of C110 has `blockedCode` null and is Ready; the coach's
+  projection keeps each entry's plain reason and never shows "This session can't be imported".
 - C110 (pilot form B): a `required` value missing for one athlete at one level → that value Left out with
   `required_value_missing`, every other value of the session imported and the candidate Ready; a converted value
   outside the variable's `min` / `max` (the owner's `maximal_running_speed` with max 40 km/h: an athlete at 41) → Left
@@ -770,7 +778,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   recorded at v21, with no GPEXE table. Recommendation: production, only after O2 and O3.
 - **O2 The Supabase backup and its restore check — decided by the owner (2026-11-01, section 12.3):** a manual
   `pg_dump` from the owner's own computer and a restore check into a local Postgres; the executor prepares the
-  procedure in 9-R (for Windows; `gpexe-backup-verify.mjs` adapted rather than a new tool). "Fresh" is defined in step
+  procedure in 9-R. *The executor's proposal, not the owner's words:* for Windows, by adapting
+  `gpexe-backup-verify.mjs` (today local-only) rather than writing a new tool, reviewed in 9-R. "Fresh" is defined in step
   10.
 - **O3 The way back.**
   - (a) A full restore is the only remedy for the pilot. It also rolls back every unrelated write since the backup
