@@ -1113,7 +1113,9 @@ order covers is merged under it; a migration PR that the standing order for migr
 
 ### Phase 9 ★★: M4, the importer integration
 - **Contract:** `docs/ai/phase9-importer-mappings-contract.md` (J17), proposed on 2026-11-01 on the *Rukovodilac*'s
-  order; with M6's red-zone steps for the owner (its section 10). No code before the owner accepts it.
+  order; with M6's red-zone steps for the owner (its section 10). Merged as PR #311 (`798d355`, exactly from
+  `e57f854d`) after the *Rukovodilac*'s and the *Nezavisni revizor*'s GOs; its status stays Proposed. No code before
+  the owner accepts it and decides O1–O16.
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.
 - **Acceptance:** a characterisation test:
   - the same numbers as today, within 1e-9;
