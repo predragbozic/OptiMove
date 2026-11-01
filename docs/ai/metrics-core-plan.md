@@ -1078,6 +1078,8 @@ order covers is merged under it; a migration PR that the standing order for migr
   taking the team import lock (`lockTeamForImport`) — conditions 2 and 3 under "Separate tasks" of `CURRENT_STATE.md`.
 
 ### Phase 8 ★: M3 Mappings tab, after 7b and 7d
+- **Contract of the minimal phase 8:** `docs/ai/phase8-mappings-screen-contract.md` (J16), proposed on 2026-11-01 on the
+  *Rukovodilac*'s order; frontend only, no API change, no migration.
 - **Acceptance:** an activation's confirmation names the source, the mapping version, the team and the binding.
 - **The owner's guidance** (owner turn `d9a0b800`, 2026-10-28, section 6): „Stim sto ovo mora biti mnogo jednostavnijeg
   za korisnika”.
