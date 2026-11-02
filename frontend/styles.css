@@ -2215,6 +2215,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
     justify-content: flex-start;
   }
 
+  /* D44: the archived teams' toggle and Restore keep a 44 px touch target. */
+  .plain-button[data-action="organization-toggle-archived-teams"],
+  .plain-button[data-action="organization-restore-team"] {
+    min-height: 44px;
+  }
+
   .organization-request-row .organization-row-actions {
     grid-column: 1;
   }

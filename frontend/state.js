@@ -1042,7 +1042,7 @@ export const createInitialState = () => ({
   exerciseEditor: emptyExerciseEditor(),
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   programInfo: { open: false, program: null },
-  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, showDisabledUsers: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, showArchivedTeams: false, showDisabledUsers: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
   // Settings -> Data sources (F3b), platform admin only: which OptiMove team
   // is being administered, its GPEXE connection, that connection's history
   // and who may approve its imports. The forms are drafts until a

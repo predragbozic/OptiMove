@@ -109,6 +109,19 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
       void renderOrganizationPanel({ refresh: false });
     } else if (type === "joinLink") {
       if (error) error.textContent = submitError.message || "Could not create the join link.";
+    } else if (error && submitError.data?.error === "team_name_taken" && (type === "team" || type === "edit-team")) {
+      // D44: a name already used in the club. On create, an archived team of
+      // that name is offered for restoring instead.
+      error.textContent = submitError.data.message || "A team with this name already exists in this club.";
+      if (type === "team" && submitError.data.archived && submitError.data.teamId && typeof document !== "undefined") {
+        const restore = document.createElement("button");
+        restore.type = "button";
+        restore.className = "plain-button compact-button";
+        restore.dataset.action = "organization-restore-team";
+        restore.dataset.teamId = submitError.data.teamId;
+        restore.textContent = "Restore";
+        error.append(" ", restore);
+      }
     } else if (error) {
       error.textContent = submitError.message || "Could not save.";
     }
@@ -320,6 +333,25 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-toggle-archived-athletes") {
     state.organization.showArchivedAthletes = !state.organization.showArchivedAthletes;
     void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-toggle-archived-teams") {
+    state.organization.showArchivedTeams = !state.organization.showArchivedTeams;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-restore-team") {
+    const teamId = action.dataset.teamId;
+    if (!teamId) return true;
+    action.disabled = true;
+    try {
+      await restoreAthleteRelationship(`/api/organization/teams/${encodeURIComponent(teamId)}/restore`, { loadAthletes, renderOrganizationPanel });
+      state.organization.addFormOpen = false;
+    } catch (error) {
+      window.alert(error?.data?.message || error?.message || "Could not restore this team.");
+    } finally {
+      action.disabled = false;
+    }
     return true;
   }
   if (type === "organization-toggle-archived-team-members") {

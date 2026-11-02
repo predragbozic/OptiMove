@@ -119,7 +119,13 @@ deploys and post-checks without a record in this file are as the stream manager 
     notifications would have reached the new club's athletes — is closed with it: teams cannot move.
   - D42 (a club event's team target only while the team is the club's) is suspended and stays on a local branch.
   - **Known limit:** the database still takes a raw `update` of `public.teams.club_id`; a trigger may come with a later
-    migration. v30 already refuses moving a team bound to a GPEXE connection.
+    migration. v27 (section 2b, trigger `teams_source_binding_guard_move`) already refuses moving a team while it has an active
+    binding through its club's connection; an unbound team can still be moved by a raw write.
+  - **D44** in the same pull request: a club's admin (or a platform admin, never the team's coach) restores an archived
+    team (`PUT /api/organization/teams/:teamId/restore`; its athletes' memberships are not touched), and a name taken
+    in the club, an archived team's included, is `409 team_name_taken` that offers the archived team for restoring.
+  - **Open question for the owner:** a team's coach can archive their own team today (`canManageTeamById` includes
+    `team_coach`); is that intended?
 - Next by the plan: K2b-1c and K2b-1d (the Settings screen and the event form), then K2b-2 (athlete questions through
   the Tests module, D40).
 
