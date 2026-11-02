@@ -612,6 +612,14 @@ test("4. D29, C110 and R17: a club variable with a maximum, activated alone - an
       assert.deepEqual(keys(a102.results[0]), ["drillIndex", "externalId", "level", "outcome", "values"], `${name}: a result's keys`);
       assert.deepEqual(keys(a102.results[0].values[0]), ["change", "label", "metricDefinitionId", "previous", "sourceMetricKey", "sourceUnit", "sourceValue", "unit", "value", "variableKey", "variableScope"], `${name}: a value's keys`);
       for (const sv of a101.skippedValues) assert.deepEqual(keys(sv), ["drillIndex", "label", "level", "message", "sourceMetricKey", "unit", "variableKey", "variableScope"], `${name}: a Left-out entry's keys`);
+      // The nested containers a coach reads, pinned the same way (code re-review of the 9-B fixes). A change to an
+      // already imported result carries values projected by the same projectValue as a result's (asserted above).
+      assert.deepEqual(keys(c.preview.session), ["categoryName", "drillsCount", "gpexeTeamSessionId", "name", "occurredLocalDate", "startTimestamp"], `${name}: the session's keys`);
+      assert.deepEqual(keys(c.preview.thresholdsUsed), ["id"], `${name}: thresholdsUsed's keys`);
+      assert.deepEqual(keys(c.preview.counts), ["already_recorded", "athletesManualReview", "athletesNotImported", "changesToImported", "corrected", "created", "needs_review", "skippedValues", "stale_resend_ignored", "supplemented", "unchanged"], `${name}: the counts' keys`);
+      assert.deepEqual(keys(a101.gps), ["reason", "status"], `${name}: gps's keys`);
+      assert.deepEqual(keys(a101.participation), ["status"], `${name}: participation's keys`);
+      assert.deepEqual(c.preview.changesToImported, [], `${name}: no earlier import here`);
       assert.ok(!detail.text.includes("canonical_value_out_of_range"), `${name}: the Left-out code is for the administrators`);
       for (const field of [...ADMIN_VALUE_FIELDS, "sourceReason"]) assert.ok(!detail.text.includes(`"${field}"`), `${name}: no ${field} anywhere`);
       assert.ok(!("unactivatedSourceMetrics" in c.preview), name);

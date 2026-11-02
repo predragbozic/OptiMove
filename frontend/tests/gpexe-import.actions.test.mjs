@@ -363,7 +363,7 @@ test("preview v3 (D29): an athlete the import keeps whose every value was left o
 
 test("preview v3: the GPEXE fields not switched on for the team - an administrator's answer names them, a coach's carries only their count, nothing without either", async () => {
   const cases = [
-    [{ unactivatedSourceMetrics: ["Max acceleration", "Speed <zone> 3"], unactivatedSourceMetricCount: 2 }, /2 GPEXE fields are not switched on for this team, so their values are not imported: Max acceleration, Speed &lt;zone&gt; 3\. Switch them on under Training Load &gt; Data configuration &gt; Mappings if the team needs them\.</],
+    [{ unactivatedSourceMetrics: ["Max acceleration", "Speed <zone> 3"], unactivatedSourceMetricCount: 2 }, /2 GPEXE fields are not switched on for this team, so their values are not imported: Max acceleration, Speed &lt;zone&gt; 3\. To import one, set up its mapping and switch it on for this team under Training Load &gt; Data configuration &gt; Mappings\.</],
     // UX L1 (9-B): a coach reads no administrator's word ("switched on"), only that the fields are not set up.
     [{ unactivatedSourceMetricCount: 2 }, /2 more GPEXE fields are not set up for import for this team; their values are not imported\.</],
     [{ unactivatedSourceMetricCount: 1 }, /1 more GPEXE field is not set up for import for this team; its values are not imported\.</],
@@ -846,7 +846,7 @@ const SETUP_BLOCKS = {
   source_threshold_contract_mismatch: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.",
   source_unit_mismatch: "A mapping's source unit is not the proven unit of its GPEXE field.",
   source_shape_mismatch: "GPEXE sent a mapped value in another shape than its field has.",
-  no_mapped_values: "No value of this session can be imported: either no mapping is switched on for this team, or every mapped value was left out (see Left out under each athlete).",
+  no_mapped_values: "No value of this session can be imported: either no mapping switched on for this team gives a value for this session, or every mapped value was left out (see Left out under each athlete).",
   source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
@@ -898,14 +898,17 @@ test("data setup (9-B): an administrator reads each mapping block's precise sent
   }
   assert.match(steps.mapping_not_usable, /Training Load &gt; Data configuration &gt; Mappings/);
   // UX M1 (9-B): no_mapped_values also covers "every mapped value left out", so the step names both.
-  assert.match(steps.no_mapped_values, /If no mapping is switched on, switch one on for this team .*; otherwise check the reasons under Left out\./);
+  assert.match(steps.no_mapped_values, /Check which mappings are switched on for this team and the levels they cover .*, and any reasons under Left out; then find new sessions\./);
   // UX M2: mapping_not_usable is a catch-all - the step names the binding too and the way out.
   assert.match(steps.mapping_not_usable, /Settings &gt; Source connections/);
   assert.match(steps.mapping_not_usable, /If both look right, ask a platform administrator/);
   // UX L3: a shape or instance problem is a platform administrator's step, never a screen where nothing is wrong.
   assert.match(steps.source_shape_mismatch, /ask a platform administrator to check that GPEXE field/);
   assert.match(steps.source_instance_held, /Ending a held source instance is a platform administrator(?:'|&#039;)s step/);
-  for (const code of ["source_instance_held", "source_instance_changed", "session_imported_under_another_instance"]) assert.match(steps[code], /Settings &gt; Source connections/, code);
+  for (const code of ["source_instance_held", "source_instance_changed"]) assert.match(steps[code], /Settings &gt; Source connections/, code);
+  // UX re-review LOW-c: ending an instance never lifts this one, so its step sends nobody there.
+  assert.match(steps.session_imported_under_another_instance, /OptiMove never imports one GPEXE session twice, so this session stays out; ending or changing a source instance does not change that\./);
+  assert.ok(!/Ending a held source instance/.test(steps.session_imported_under_another_instance));
 });
 
 test("data setup (9-B): a coach reads one sentence and one step for every mapping block - never a precise sentence, a code or a conflict with data already in OptiMove", async () => {
@@ -1462,6 +1465,21 @@ test("9-B internal review (UX M3, L2, D32; mobile note on fmtValue): the review 
     // A non-zero exact decimal below 0.005 keeps its digits.
     assert.match(html, /<td>Distance<\/td><td>0\.004 m<\/td><td>0\.004 m<\/td>/);
   }
+});
+
+test("fmtValue (9-B code re-review): a non-zero value below 0.005 keeps three significant digits, a negative one too, zero stays 0, and 0.005 rounds as before", async () => {
+  resetState();
+  const d = candidateDetail();
+  const row = (value) => ({ ...V3_DISTANCE, value, sourceValue: value, previous: null, change: "new" });
+  const a101 = { ...d.preview.athletes[0], results: [{ externalId: "athlete_session:1:full", level: "full", drillIndex: null, outcome: "created", values: [row("0.0012345"), row("0"), row("-0.004"), row("0.005")] }] };
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, athletes: [a101, d.preview.athletes[1]] } } } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<td>Distance<\/td><td>0\.00123 m<\/td><td>0\.00123 m<\/td>/);
+  assert.match(html, /<td>Distance<\/td><td>0 m<\/td><td>0 m<\/td>/);
+  assert.match(html, /<td>Distance<\/td><td>-0\.004 m<\/td><td>-0\.004 m<\/td>/);
+  assert.match(html, /<td>Distance<\/td><td>0\.01 m<\/td><td>0\.01 m<\/td>/);
 });
 
 test("approve: no athlete note when no athlete is imported through a link (unlinked or left out)", async () => {

@@ -20,7 +20,16 @@
 //   7 - T7 23505: another team's active instance of the same (server3, GPEXE
 //       team) lands while the import is held before its T7 lock: the insert's
 //       savepoint takes the 23505, the import is source_instance_held and the
-//       transaction stays usable.
+//       transaction stays usable;
+//   8 - the writer against a 7b A2 disable of the version its activation pins,
+//       both orders (DB review F1);
+//   9 - the writer against the revision lifecycle's pinned step (L5), both
+//       orders;
+//  10 - the writer against a canonical variable version create, both orders
+//       (always variable_pinned while a mapping pins the variable, decision 9).
+// Tests 8-10 disable versions and retire revisions of the memoized world, so
+// they stay last in the file: a test added after them must not start the
+// whole world on a binding.
 // A team move is not built for R16: v27 refuses moving a team bound through
 // its club's connection (and the move takes the team lock as a try-lock).
 // GPEXE is the fake server3 source (support/gpexe-fake-source.mjs); the
@@ -456,6 +465,166 @@ function endInstance(team, instance) {
       expected: { sourceSystem: "gpexe", sourceHostKey: instance.source_host_key, sourceInstanceKey: instance.source_instance_key },
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// 8-10: the registry writers that take the strongest locks on rows the import
+// holds FOR SHARE after step 5 (DB review F1) - A2 (7b), the lifecycle's
+// pinned step (L5) and a canonical variable version create, each called
+// through its service as a platform admin in the platform workspace
+// ---------------------------------------------------------------------------
+// The services import db.js, so they are loaded only inside a test (by then
+// DATABASE_URL names the disposable database); the module cache gives the
+// very instances support/mapped-world.mjs built the world with.
+async function registryWriters() {
+  const [mappings, lifecycle, variables] = await Promise.all([
+    import("../src/sourceMetricMappingService.js"),
+    import("../src/sourceRevisionLifecycleService.js"),
+    import("../src/canonicalVariableAdminService.js"),
+  ]);
+  return { mappings, lifecycle, variables };
+}
+
+// A2: the world's active version of one legacy key disabled (D6: its open
+// activations end first, mapping_version_disabled).
+function disableWorldVersion(mappings, userId, m) {
+  return mappings.disableVersion({
+    ctx: systemCtx(userId), mappingId: m.mappingId, versionId: m.versionId,
+    body: { requestKey: crypto.randomUUID(), expectedStatus: "active", reason: "9-B concurrency test disable." },
+  });
+}
+
+// L5: the active revision a world version pins, retired with no successor;
+// the pinned step disables that version and ends its open activations first.
+function retireWorldRevision(lifecycle, userId, m) {
+  return lifecycle.retireRevision({
+    ctx: systemCtx(userId), fieldId: m.fieldId, revisionId: m.revId,
+    body: { requestKey: crypto.randomUUID(), expectedState: "active", reason: "9-B concurrency test retirement." },
+  });
+}
+
+// POST /variables/:id/versions through its service: the current version as
+// the precondition, its unit and aggregation, and another maxValue (a new
+// semantic version, never version_unchanged).
+async function createWorldVariableVersion(variables, userId, variableId) {
+  const current = (await admin.query(
+    `select d.current_version_id, v.unit, v.daily_aggregation_method, trim_scale(v.max_value)::text as max_text
+       from training_load.metric_definitions d
+       join training_load.metric_definition_versions v on v.id = d.current_version_id
+      where d.id = $1`,
+    [variableId],
+  )).rows[0];
+  return variables.createVariableVersion({
+    ctx: systemCtx(userId), variableId: String(variableId),
+    body: {
+      requestKey: crypto.randomUUID(), expectedCurrentVersionId: String(current.current_version_id), unit: current.unit,
+      dailyAggregationMethod: current.daily_aggregation_method, maxValue: current.max_text === "1000" ? "999" : "1000",
+    },
+  });
+}
+
+const versionStatus = async (id) => (await admin.query(`select status from training_load.source_metric_mapping_versions where id = $1`, [id])).rows[0].status;
+const revisionState = async (id) => (await admin.query(`select state from training_load.source_metric_definition_versions where id = $1`, [id])).rows[0].state;
+const activationEnd = async (id) => (await admin.query(`select ended_at, end_reason from training_load.source_metric_mapping_activations where id = $1`, [id])).rows[0];
+const definitionState = async (id) => (await admin.query(
+  `select d.current_version_id, (select count(*)::int from training_load.metric_definition_versions v where v.metric_definition_id = d.id) as versions
+     from training_load.metric_definitions d where d.id = $1`,
+  [id],
+)).rows[0];
+
+// The tables holding the rows a waiting backend is queued on. A backend waiting
+// for a row lock takes (or waits for) that row's heavyweight 'tuple' lock
+// before it waits on the holder's transaction, so pg_locks names the table
+// where it stopped.
+async function tupleWaitTables(pid) {
+  return (await admin.query(
+    `select distinct n.nspname || '.' || c.relname as name
+       from pg_locks l
+       join pg_class c on c.oid = l.relation
+       join pg_namespace n on n.oid = c.relnamespace
+      where l.pid = $1 and l.locktype = 'tuple'
+      order by 1`,
+    [pid],
+  )).rows.map((r) => r.name);
+}
+
+// The import's values, asserted as 1a asserts them: exactly the oracle's
+// values of the one legacy key, each of the world's variable, and each with
+// its T6 row naming the activation it was written through.
+async function assertImportedThrough(org, bundle, summary, legacyKey, activationId) {
+  assert.ok(summary.counts.created > 0, JSON.stringify(summary.counts));
+  const expected = [...oracleOf(bundle).keys()].filter((k) => k.endsWith(`|${legacyKey}`));
+  assert.ok(expected.length > 0, `the oracle has ${legacyKey} values`);
+  const rows = await teamValueRows(org.teamId);
+  assert.equal(rows.length, expected.length, "exactly the values of the one activation, none missing, none added");
+  for (const r of rows) {
+    assert.equal(String(r.metric_definition_id), String(org.world[legacyKey].variableId));
+    assert.equal(String(r.activation_id), String(activationId), "every value's T6 row names the activation it was written through");
+  }
+}
+
+// (a) The import first (1a's pattern). The writer import is held after step 5,
+// with its T2b, T3, T4, metric_definitions and T5 rows FOR SHARE and before its
+// T7 lock. `startWriter()` then runs on another connection. The lock manager
+// must show the writer waiting on the import, at a row of `waitsOn`;
+// `whileHeld()` checks that nothing of the writer has landed. Then the import
+// is released. The seam is reset in the finally. Returns both promises; each
+// is already observed by settled(), so a rejection is never unhandled.
+async function importFirst({ org, bundle, waitsOn, startWriter, whileHeld = async () => {} }) {
+  const g = gate();
+  setSourceInstanceHoldForTests(g.hold);
+  let importing = null;
+  let writing = null;
+  try {
+    const client = await newClient();
+    const importPid = client.processID;
+    importing = importGpexeBundle(client, bundle, writerCtx(org)).finally(() => client.end().catch(() => {}));
+    const importDone = settled(importing);
+    await within(g.reached, 15_000, "the import reached its hold after step 5");
+    assert.equal(g.pid, importPid, "the hold is the import's own transaction");
+    writing = startWriter();
+    const writerDone = settled(writing);
+    const writerPid = await waiterBlockedBy(importPid);
+    assert.ok(writerPid, "the writer waits on a lock the import holds (FOR SHARE after step 5)");
+    assert.deepEqual(await tupleWaitTables(writerPid), [waitsOn], "the writer waits at the row the import locked in step 5");
+    await sleep(150);
+    assert.deepEqual([importDone(), writerDone()], [false, false], "both still waiting: the import at its hold, the writer on the import's lock");
+    await whileHeld();
+  } finally {
+    g.open();
+    setSourceInstanceHoldForTests(null);
+  }
+  return { importing, writing };
+}
+
+// (b) The writer first (1c's pattern). `setHold` is the writer's own seam: it
+// runs after every lock and check, right before the first write. Once the
+// writer holds, the import is started on another connection, and the lock
+// manager must show it waiting on the writer at a row of `waitsOn` in step 5.
+// Then the writer is released. Its seam is reset in the finally. Returns both
+// promises, already observed by settled().
+async function writerFirst({ org, bundle, waitsOn, setHold, startWriter }) {
+  const g = gate();
+  setHold(g.hold);
+  let writing = null;
+  let importing = null;
+  try {
+    writing = startWriter();
+    const writerDone = settled(writing);
+    await within(g.reached, 15_000, "the writer holds its locks before its first write");
+    const client = await newClient();
+    const importPid = client.processID;
+    importing = importGpexeBundle(client, bundle, writerCtx(org)).finally(() => client.end().catch(() => {}));
+    const importDone = settled(importing);
+    assert.equal(await waiterBlockedBy(g.pid), importPid, "the import waits on a lock the writer holds");
+    assert.deepEqual(await tupleWaitTables(importPid), [waitsOn], "the import waits at the writer's row in step 5");
+    await sleep(150);
+    assert.deepEqual([importDone(), writerDone()], [false, false], "both still waiting: the writer at its hold, the import on the writer's lock");
+  } finally {
+    g.open();
+    setHold(null);
+  }
+  return { writing, importing };
 }
 
 // ---------------------------------------------------------------------------
@@ -897,5 +1066,162 @@ test("7b. the same race inside an approval: the approval's insert takes the 2350
   assert.equal(stored.preview.blocked.code, "source_instance_held");
   assert.notEqual(stored.preview_hash, c.previewHash);
   assert.deepEqual(await teamCounts(team.teamId), ZERO, "nothing written");
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+// ---------------------------------------------------------------------------
+// 8-10. The registry writers against the import (DB review F1)
+// ---------------------------------------------------------------------------
+// Each writer takes a lock stronger than FOR SHARE on a row that step 5 locks:
+// - A2 takes T3 FOR NO KEY UPDATE, T4 FOR UPDATE and T5;
+// - the pinned step takes T2b FOR UPDATE, T4 FOR UPDATE and T5;
+// - the variable version create takes metric_definitions FOR UPDATE.
+// 8a, 8b and 9 leave their world entry unusable for good, because a disabled
+// version or a retired revision is never active again:
+// - gpexe_total_distance and gpexe_burst_events: versions disabled;
+// - gpexe_time_min and gpexe_brake_events: revisions retired, versions disabled.
+// So they must run after every test that starts the whole world on a binding.
+// 10 leaves gpexe_max_speed as it was: the create is refused in both orders
+// (decision 9).
+
+test("8a. the writer against a 7b A2 disable of the version its only activation pins, the import first: held after step 5 (its T2b-T5 rows FOR SHARE), the disable waits at the import's T3 row, the import finishes with exactly its values through that activation, and only then the disable commits, ending the activation as mapping_version_disabled - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const { mappings } = await registryWriters();
+  const org = await mappedTeam({ only: ["gpexe_total_distance"] });
+  const m = org.world.gpexe_total_distance;
+  const [activationId] = org.started.gpexe_total_distance;
+  assert.ok(activationId, "the one activation");
+  const pa = await worldPlatformAdmin(admin, "9b-conc-8a");
+  const bundle = writerBundle(org);
+  const { importing, writing } = await importFirst({
+    org, bundle, waitsOn: "training_load.source_metric_mappings",
+    startWriter: () => disableWorldVersion(mappings, pa, m),
+    whileHeld: async () => {
+      assert.equal(await versionStatus(m.versionId), "active", "the version is still active while the import holds it");
+      assert.equal((await activationEnd(activationId)).ended_at, null, "the activation is still open while the import holds it");
+    },
+  });
+  const summary = await within(importing, 20_000, "the import");
+  const disabled = await within(writing, 20_000, "the disable");
+  assert.deepEqual([disabled.replayed, disabled.version?.status], [false, "disabled"]);
+  assert.ok(disabled.activationsEnded >= 1, `the disable ended the activation it waited for (${disabled.activationsEnded})`);
+  assert.equal(await versionStatus(m.versionId), "disabled", "the disable committed after the import");
+  const end = await activationEnd(activationId);
+  assert.deepEqual([end.ended_at !== null, end.end_reason], [true, "mapping_version_disabled"]);
+  await assertImportedThrough(org, bundle, summary, "gpexe_total_distance", activationId);
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("8b. the writer against a 7b A2 disable that holds its locks first (T3 FOR NO KEY UPDATE, T4 FOR UPDATE, T5 FOR NO KEY UPDATE, held before its first write): the import waits at the disable's T3 row in step 5, the disable commits, and the import's re-check answers mapping_changed with nothing written and no source instance - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const { mappings } = await registryWriters();
+  const org = await mappedTeam({ only: ["gpexe_burst_events"] });
+  const m = org.world.gpexe_burst_events;
+  const [activationId] = org.started.gpexe_burst_events;
+  assert.ok(activationId, "the one activation");
+  const pa = await worldPlatformAdmin(admin, "9b-conc-8b");
+  const { writing, importing } = await writerFirst({
+    org, bundle: writerBundle(org), waitsOn: "training_load.source_metric_mappings",
+    setHold: (fn) => mappings.setMappingWriteHoldForTests(fn),
+    startWriter: () => disableWorldVersion(mappings, pa, m),
+  });
+  const disabled = await within(writing, 20_000, "the disable");
+  assert.deepEqual([disabled.replayed, disabled.version?.status], [false, "disabled"]);
+  assert.ok(disabled.activationsEnded >= 1, `the disable ended the activation (${disabled.activationsEnded})`);
+  assert.equal(await versionStatus(m.versionId), "disabled");
+  assert.equal((await activationEnd(activationId)).end_reason, "mapping_version_disabled");
+  await assert.rejects(within(importing, 20_000, "the import"), (error) => error instanceof ImportMappingChangedError && error.code === "mapping_changed");
+  assert.deepEqual(await teamCounts(org.teamId), ZERO, "nothing written");
+  assert.equal((await t7Keys(admin, org.teamId)).length, 0, "no source instance either");
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("9. the writer against the revision lifecycle's pinned step (L5 retires the revision its activation's version pins), both orders: an import holding the T2b row FOR SHARE makes the retirement wait there and finishes with exactly its values before the retirement disables the version and ends the activation; a retirement holding the field's revisions FOR UPDATE makes the import wait at that row in step 5 and answer mapping_changed with nothing written - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const { lifecycle } = await registryWriters();
+  const pa = await worldPlatformAdmin(admin, "9b-conc-9");
+
+  // (a) The import first (gpexe_time_min): the retirement waits at T2b.
+  const a = await mappedTeam({ only: ["gpexe_time_min"] });
+  const ma = a.world.gpexe_time_min;
+  const [activationA] = a.started.gpexe_time_min;
+  assert.ok(activationA, "the one activation of (a)");
+  const bundleA = writerBundle(a);
+  const first = await importFirst({
+    org: a, bundle: bundleA, waitsOn: "training_load.source_metric_definition_versions",
+    startWriter: () => retireWorldRevision(lifecycle, pa, ma),
+    whileHeld: async () => {
+      assert.equal(await revisionState(ma.revId), "active", "the revision is still active while the import holds it");
+      assert.equal(await versionStatus(ma.versionId), "active", "the pinned version is still active");
+      assert.equal((await activationEnd(activationA)).ended_at, null, "the activation is still open");
+    },
+  });
+  const summaryA = await within(first.importing, 20_000, "the import (a)");
+  const retiredA = await within(first.writing, 20_000, "the retirement (a)");
+  assert.deepEqual([retiredA.replayed, retiredA.revision?.state, retiredA.disabledVersions], [false, "retired", { system: 1, club: 0 }]);
+  assert.equal(await revisionState(ma.revId), "retired", "the retirement committed after the import");
+  assert.equal(await versionStatus(ma.versionId), "disabled", "the pinned step disabled the version");
+  assert.equal((await activationEnd(activationA)).end_reason, "mapping_version_disabled");
+  await assertImportedThrough(a, bundleA, summaryA, "gpexe_time_min", activationA);
+
+  // (b) The retirement first (gpexe_brake_events): the import waits at T2b.
+  const b = await mappedTeam({ only: ["gpexe_brake_events"] });
+  const mb = b.world.gpexe_brake_events;
+  const [activationB] = b.started.gpexe_brake_events;
+  assert.ok(activationB, "the one activation of (b)");
+  const second = await writerFirst({
+    org: b, bundle: writerBundle(b), waitsOn: "training_load.source_metric_definition_versions",
+    setHold: (fn) => lifecycle.setRevisionWriteHoldForTests(fn),
+    startWriter: () => retireWorldRevision(lifecycle, pa, mb),
+  });
+  const retiredB = await within(second.writing, 20_000, "the retirement (b)");
+  assert.deepEqual([retiredB.replayed, retiredB.revision?.state, retiredB.disabledVersions], [false, "retired", { system: 1, club: 0 }]);
+  assert.equal(await versionStatus(mb.versionId), "disabled");
+  assert.equal((await activationEnd(activationB)).end_reason, "mapping_version_disabled");
+  await assert.rejects(within(second.importing, 20_000, "the import (b)"), (error) => error instanceof ImportMappingChangedError && error.code === "mapping_changed");
+  assert.deepEqual(await teamCounts(b.teamId), ZERO, "nothing written");
+  assert.equal((await t7Keys(admin, b.teamId)).length, 0, "no source instance either");
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("10. the writer against a canonical variable version create on the variable its activation writes, both orders: an import holding the metric_definitions row FOR SHARE makes the create wait there, finishes with exactly its values, and the create is then refused 409 variable_pinned; a create holding the row FOR UPDATE makes the import wait at it in step 5, is refused 409 variable_pinned (decision 9: an active mapping version pins the current version) and rolls back, and the import then finishes with exactly its values - the definition unchanged, no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const { variables } = await registryWriters();
+  const pa = await worldPlatformAdmin(admin, "9b-conc-10");
+  const pinnedRefusal = (error) => error?.status === 409 && error?.code === "variable_pinned";
+
+  // (a) The import first: the create waits at metric_definitions.
+  const a = await mappedTeam({ only: ["gpexe_max_speed"] });
+  const variableId = a.world.gpexe_max_speed.variableId;
+  const definitionBefore = await definitionState(variableId);
+  const [activationA] = a.started.gpexe_max_speed;
+  assert.ok(activationA, "the one activation of (a)");
+  const bundleA = writerBundle(a);
+  const first = await importFirst({
+    org: a, bundle: bundleA, waitsOn: "training_load.metric_definitions",
+    startWriter: () => createWorldVariableVersion(variables, pa, variableId),
+    whileHeld: async () => {
+      assert.deepEqual(await definitionState(variableId), definitionBefore, "nothing of the create while the import holds the row");
+    },
+  });
+  const summaryA = await within(first.importing, 20_000, "the import (a)");
+  await assert.rejects(within(first.writing, 20_000, "the version create (a)"), pinnedRefusal);
+  assert.deepEqual(await definitionState(variableId), definitionBefore, "the refused create wrote nothing: the same current version, no new version");
+  await assertImportedThrough(a, bundleA, summaryA, "gpexe_max_speed", activationA);
+
+  // (b) The create first: the import waits at metric_definitions, then imports.
+  const b = await mappedTeam({ only: ["gpexe_max_speed"] });
+  const [activationB] = b.started.gpexe_max_speed;
+  assert.ok(activationB, "the one activation of (b)");
+  const bundleB = writerBundle(b);
+  const second = await writerFirst({
+    org: b, bundle: bundleB, waitsOn: "training_load.metric_definitions",
+    setHold: (fn) => variables.setVariableWriteHoldForTests(fn),
+    startWriter: () => createWorldVariableVersion(variables, pa, variableId),
+  });
+  await assert.rejects(within(second.writing, 20_000, "the version create (b)"), pinnedRefusal);
+  const summaryB = await within(second.importing, 20_000, "the import (b)");
+  assert.deepEqual(await definitionState(variableId), definitionBefore, "the refused create rolled back: the same current version, no new version");
+  await assertImportedThrough(b, bundleB, summaryB, "gpexe_max_speed", activationB);
   assert.deepEqual(deadlockLines(logFrom), []);
 });

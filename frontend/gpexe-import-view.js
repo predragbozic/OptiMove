@@ -1488,7 +1488,7 @@ function renderSourceFieldsNoteHtml(preview) {
   if (count <= 0) return "";
   if (!labels.length) return `<p class="muted gpexe-source-fields">${escapeHtml(`${plural(count, "more GPEXE field is", "more GPEXE fields are")} not set up for import for this team; ${count === 1 ? "its values are" : "their values are"} not imported.`)}</p>`;
   const head = `${plural(count, "GPEXE field is", "GPEXE fields are")} not switched on for this team, so ${count === 1 ? "its values are" : "their values are"} not imported`;
-  return `<p class="muted gpexe-source-fields">${escapeHtml(`${head}: ${labels.join(", ")}. Switch them on under Training Load > Data configuration > Mappings if the team needs them.`)}</p>`;
+  return `<p class="muted gpexe-source-fields">${escapeHtml(`${head}: ${labels.join(", ")}. To import one, set up its mapping and switch it on for this team under Training Load > Data configuration > Mappings.`)}</p>`;
 }
 
 function renderApprovalRecordHtml(c) {
@@ -1520,10 +1520,10 @@ const SETUP_ADMIN_TEXT = Object.freeze({
   source_threshold_contract_mismatch: { reason: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.", step: "Check the team's thresholds and zones in GPEXE against the mapping, then find new sessions." },
   source_unit_mismatch: { reason: "A mapping's source unit is not the proven unit of its GPEXE field.", step: "Check the mapping's source unit (Training Load > Data configuration > Mappings), then find new sessions." },
   source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, ask a platform administrator to check that GPEXE field (give them the Technical details)." },
-  no_mapped_values: { reason: "No value of this session can be imported: either no mapping is switched on for this team, or every mapped value was left out (see Left out under each athlete).", step: "If no mapping is switched on, switch one on for this team (Training Load > Data configuration > Mappings); otherwise check the reasons under Left out. Then find new sessions." },
+  no_mapped_values: { reason: "No value of this session can be imported: either no mapping switched on for this team gives a value for this session, or every mapped value was left out (see Left out under each athlete).", step: "Check which mappings are switched on for this team and the levels they cover (Training Load > Data configuration > Mappings), and any reasons under Left out; then find new sessions." },
   source_instance_held: { reason: "Another team's GPEXE source instance holds this GPEXE team.", step: SETUP_CONNECTION_STEP },
-  source_instance_changed: { reason: "This team's GPEXE source instance names another GPEXE team.", step: SETUP_CONNECTION_STEP },
-  session_imported_under_another_instance: { reason: "This session was imported earlier under another GPEXE source instance.", step: `The earlier import stays as it is. ${SETUP_CONNECTION_STEP}` },
+  source_instance_changed: { reason: "This team's GPEXE source instance names another GPEXE team.", step: "Check that this team's GPEXE binding names the right GPEXE team (Settings > Source connections). If it does, ending this team's earlier source instance is a platform administrator's step (an ended instance stays ended; docs/runbooks/source-instance-end-v50.md); then find new sessions." },
+  session_imported_under_another_instance: { reason: "This session was imported earlier under another GPEXE source instance.", step: "The earlier import stays as it is. OptiMove never imports one GPEXE session twice, so this session stays out; ending or changing a source instance does not change that." },
 });
 
 // The precise mapping code an administrator's answer carries (the list's

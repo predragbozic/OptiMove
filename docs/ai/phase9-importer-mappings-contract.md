@@ -1299,26 +1299,44 @@ NON-BLOCKING NOTES; none found a BLOCKER or HIGH. Fixed in the next commit, each
   Architecture test 5 also refuses `.detail`, `.hint`, `.where`, `.cause`, `.internalQuery` and `toString()` in a log
   call.
 - **Database, MEDIUM (F1):** the concurrency suite had no case of the importer against the 7b transitions, the revision
-  lifecycle's pinned step or a canonical variable version; tests 8–10 add them, both orders, no `40P01`.
+  lifecycle's pinned step or a canonical variable version. Tests 8–10 add them, both orders, no `40P01`:
+  - 8a / 8b: an A2 disable of the version the activation pins waits at the import's T3 row, or holds its locks first
+    and the import's step-5 re-read answers the change;
+  - 9: the lifecycle's L5 retirement waits at the T2b row, or holds it first;
+  - 10: a canonical variable version create waits at the `metric_definitions` row and is then refused
+    `variable_pinned` (decision 9: a variable a mapping pins keeps its current version), in both orders.
+  - They disable versions and retire revisions of the suite's shared world, so they stay last in the file.
+  - Removing the step-5 `FOR SHARE` fails 8a, 8b, 9 and 10 (and 1a, 1c, 5).
 - **Database, LOW (F2):** the approval, the check-time preview and the writer's entry open with
   `begin isolation level read committed` (steps 4–5 read, lock, read again and compare); architecture test 7 pins it.
 - **UX, MEDIUM M1–M5** (text and view only):
-  - M1: `no_mapped_values` says it covers "no mapping switched on" and "every mapped value left out", and its step
-    names both.
+  - M1: `no_mapped_values` says it covers "no mapping switched on for this team gives a value for this session" and
+    "every mapped value left out", and its step names the mappings with the levels they cover and the Left-out reasons.
   - M2: `mapping_not_usable` names the team's GPEXE binding as well as its mappings, and the step ends with "ask a
     platform administrator".
   - M3: the athlete's summary names its values left out, and the approval note names the session's count (D32).
   - M4: the value table's header is "OptiMove value" (or "Before | New value"), never "Imported" before an approval.
   - M5: Required / Optional say that both import the same way for now and differ only in the reason the review names.
   - **UX, LOW:**
-    - L1 in part: a coach reads "not set up for import" instead of "not switched on", and an administrator gets
-      where to switch the fields on. The C110 Left-out words stay as section 6 fixes them.
+    - L1 in part: a coach reads "not set up for import" instead of "not switched on", and an administrator reads
+      where to set up a mapping and switch it on. The C110 Left-out words stay as section 6 fixes them.
     - L2: a result with no value says "no value imported (see Left out)".
-    - L3: the shape and instance steps name a platform administrator.
+    - L3: the shape and instance steps name a platform administrator; `session_imported_under_another_instance` says
+      the session stays out (ending an instance never lifts it).
     - L4: a switch-on says "Imports use it from the next Find new sessions."
   - The coach's sentence is unchanged (section 6 fixes it).
 - **Mobile, LOW:** a v3 table's first column wraps a long unbroken label, and the field note is 0.9rem, full contrast
   and wraps. A non-zero value below 0.005 keeps three significant digits instead of reading "0".
+
+Narrow re-reviews of the fixes: `code-reviewer` and `ux-design-reviewer` answered READY WITH NON-BLOCKING NOTES.
+Applied:
+- `fmtValue` is pinned for 0.0012345, 0, -0.004 and 0.005;
+- the coach's key sets are also pinned for the session, `thresholdsUsed`, the counts, `gps` and `participation`;
+- `no_mapped_values` also covers "a mapping is switched on but gives no value for this session" (no level covered),
+  and its step names the levels;
+- the administrator's field note says to set up a mapping and switch it on;
+- `session_imported_under_another_instance` no longer points to ending an instance;
+- `source_instance_changed` points to the team's binding first.
 
 Recorded, not changed:
 - the pre-existing archived-club access (16.9);
