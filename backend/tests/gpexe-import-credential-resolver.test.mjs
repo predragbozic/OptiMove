@@ -2289,7 +2289,11 @@ test("38. an incomplete drill set keeps its reason for an administrator in a clo
       const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
       assert.ok(!JSON.stringify(status.body).includes("Diagnostic"), `${label}: no description in the coach's status`);
       assert.equal((await candidatesOf(o.teamId)).length, 0, `${label}: nothing recorded`);
-      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => l.includes(id)), `${label}: log line ${l.slice(0, 120)}`);
+      // An athlete id as a whole token only: the log lines carry random UUIDs,
+      // whose hex runs contain three-digit sequences like "101" (a substring
+      // match failed about 1.5% of the runs - CURRENT_STATE, Separate tasks).
+      const namesId = (line, id) => new RegExp(`(?<![0-9A-Za-z-])${id}(?![0-9A-Za-z-])`).test(line);
+      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => namesId(l, id)), `${label}: log line ${l.slice(0, 120)}`);
     } finally {
       src.state.faults.drillPlayers = null;
     }
