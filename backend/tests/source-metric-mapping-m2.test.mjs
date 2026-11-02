@@ -991,7 +991,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c), the activation service with its shared steps (phase 7d) and the source-instance end (phase 7g), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps), a Metrics Core source connection only by the import writer and the source-instance end (phase 7g); nothing in backend/src writes a T2a field or a T6 value provenance, and nothing switches a trigger off", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c), the activation service with its shared steps (phase 7d) and the source-instance end (phase 7g), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps), a Metrics Core source connection only by the import's mapping context (phase 9-B, the source instance) and the source-instance end (phase 7g), a T6 value provenance only by the import writer (phase 9-B); nothing in backend/src writes a T2a field, and nothing switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1013,17 +1013,19 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   // Phase 7d (J10): the writers of T5 - S2's end in the activation service, the
   // starts and the version-driven ends in the shared steps.
   assert.deepEqual(writers("source_metric_mapping_activations"), ["sourceMetricActivationService.js", "sourceMetricActivationSteps.js"]);
-  // Phase 7g (J13): the importer creates a Metrics Core connection; the end of
+  // Phase 7g (J13) and 9-B (J17 step 5): the import's mapping context creates
+  // and keys the Metrics Core connection (the source instance, T7); the end of
   // a held source instance is the one other writer.
-  assert.deepEqual(writers("metric_source_connections"), ["gpexeImportWriter.js", "sourceInstanceEndService.js"]);
+  assert.deepEqual(writers("metric_source_connections"), ["gpexeImportMapping.js", "sourceInstanceEndService.js"]);
+  // Phase 9-B (J17 step 11): every imported value gets its T6 provenance row
+  // from the import writer, in the same function as the value.
+  assert.deepEqual(writers("metric_value_source_provenance"), ["gpexeImportWriter.js"]);
   // Phase 7c (J9): the one writer of the unit conversions.
   assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
   // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
   assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "nothing in backend/src switches a trigger off (disable trigger, session_replication_role)");
   assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
-  for (const table of ["metric_value_source_provenance", "source_metric_definitions"]) {
-    assert.deepEqual(writers(table), [], table);
-  }
+  assert.deepEqual(writers("source_metric_definitions"), [], "source_metric_definitions");
 });
 
 test("21. the answer of a committed write follows the replay rule: the right, the user and the club are checked again on a new connection before the answer is read; a right lost meanwhile answers the identical 404 and shows nothing - after an uncertain COMMIT and after a confirmed one; a check that cannot finish answers readError without ids", async () => {
