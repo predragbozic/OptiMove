@@ -2707,6 +2707,30 @@ Technical details.
           before the switch); not tested on Windows, with PostgreSQL 17 tools, a real Supabase pooler or `verify-full`
           with a real CA, so that run fails closed on anything untested. The *Nezavisni revizor* recommends
           `verify-full` (the runbook does too).
+        - **9-B merged and deployed** (M4: the importer writes only through mapping activations, J17 sections 3–8 and
+          its "As built (9-B)", section 16): PR #326, merged `b6c2254` (parents `baa3c9a` and `fec1bde3`) exactly from
+          its head on 2026-11-02 at 08:38:27 UTC, under the standing merge order (no migration) after the GOs of the
+          *Nezavisni revizor* (turn `f449ffb6`, no BLOCKER, HIGH or MEDIUM; two LOW test notes) and the *Rukovodilac*
+          (turn `c99fea01`, its own runs and four mutations; one LOW test note). The three LOW test notes are closed by
+          the test-only PR #327, merged `f4f2772` (parents `b6c2254` and `33dc11bd`) exactly from its head at 08:43:12 UTC
+          after both narrow GOs (`ac584f75`, `f13d2924`); nothing to deploy for it.
+          - Before the deploy the *Rukovodilac* checked read-only (2026-11-02, about 08:40 UTC) that the open activations
+            are exactly three, all Required and of an active version, for both session and drill: `duration` ←
+            `athlete_session.total_time`, `maximal_running_speed` ← `athlete_session.max_v`, `total_distance` ←
+            `athlete_session.total_distance`. All three are on one active binding, First team ↔ GPEXE team 980, and no
+            other binding has an open activation.
+          - Deployed by the *Rukovodilac* through the Render API without a migration (none on the path since the served
+            `8fa0ea7`): `/api/health` first served `b6c2254` at 08:42:51 UTC, then `ok: true` three times in a row
+            (08:42:59, 08:43:09 and 08:43:20 UTC).
+          - Smoke, without a login and with zero UUIDs: `/api/auth/me` answered 200. These answered 401: the GPEXE
+            status, candidates, one candidate and source athletes, the mappings list, and `POST` approve and the batch
+            import with `{}`.
+          - No check run, no GPEXE request, no production write; the import switch untouched (off).
+          - What changed for a viewer: a bound team's candidates are judged through its activations at the next check;
+            the Imports review shows preview version 3; First team's sessions show the three mapped variables. Nothing
+            is imported while the switch is off.
+          - Next (J17 section 10.2, step 8): the owner runs one check with the switch off, on a small window that holds
+            the target session, by the *Rukovodilac*'s instructions.
       - **C112 (2026-11-01): mapping by drag and drop** — the owner's direction for mappings after the pilot, not a
         contract (discovery C112): after a first import, a confirmed drag of a source column onto a variable, checked
         on two athletes, is the evidence. The screen details (one screen from the import's review, one click to save
@@ -3632,6 +3656,18 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **A coach of a team whose club is archived still reaches the GPEXE team routes** (pre-existing, MEDIUM; found by
+  `security-reviewer` on the 9-B pull request and confirmed from the code; recorded on the *Rukovodilac*'s order of
+  2026-11-02, not yet assigned).
+  - **Cause:** the club archive (`DELETE /clubs/:id`, `routes/organization.js`) sets only `clubs.is_active`.
+    `loadAvailableWorkspaces` (`workspace.js`) still offers the team's workspace, and `resolveGpexeTeamAccess`
+    (`gpexeImportAccess.js`) checks the team, not its club.
+  - **What stays open to that coach:** the reads (status, candidates, source athletes, approvers) and Link / Unlink.
+    A check start is refused by the credential resolver (`team_club_active`), and since 9-B an approval is refused by
+    `lockApprovalTeam` with the identical 404.
+  - **Scope:** no other club's data is reachable.
+  - **Fix:** check the club's `is_active` in `resolveGpexeTeamAccess` and in the team-workspace query, with a test for
+    the reads and Link / Unlink.
 - **C110 form C: a session held for an administrator's choice** (the owner's target, 2026-11-01): for a value outside a
   variable's limits or a missing required value, the session waits; an administrator chooses "leave out only this
   value" (the default) or "import anyway" with a mandatory reason and a record of who approved it. After the pilot's
@@ -4296,9 +4332,11 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
      and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301), 7e-B (the
      aggregate preview, PR #303) and 7g-B (ending a held source instance, PR #305, migration v50, directly confirmed by
      the *Rukovodilac*'s post-check) are merged and deployed; the minimal phase 8, the Mappings screen (J16, PR #309), is
-     merged and deployed; phase 9's contract (J17, PR #311) is merged as Proposed. Next by the plan: the owner's
-     acceptance of J17 and the decisions O1–O16, then phase 9's code (9-0, 9-B) and M6; phases 7h and 7i come right after
-     the first import, before more clubs are brought on. A mapping version is activated in production only once its
+     merged and deployed; phase 9's contract (J17, PR #311) is merged as Proposed. J17 is accepted with the
+     decisions O1–O16. Phase 9's code is merged and deployed: 9-0 (PR #322) and 9-B (PR #326, with its test follow-up
+     PR #327). Next by J17 section 10.2, step 8: the owner runs one check with the import switch off, on a small window
+     that holds the target session. Then M6 (the first controlled import, J17 section 10). Phases 7h and 7i come right
+     after the first import, before more clubs are brought on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
      2026-11-10);

@@ -629,7 +629,7 @@ Frontend only: no backend file, no API change, no migration.
   confirm, Activate, **Switch on for teams now**, the team, Required, Review, **Activate and switch on** — plus typing the
   conversion note and the reason. `ux-design-reviewer` judged it acceptable for a one-off setup per field by an
   administrator.
-- **Changed by 9-B** (J17 R14 and D31; the 9-B pull request, not merged). `frontend/metric-mappings-actions.js` no
+- **Changed by 9-B** (J17 R14 and D31; the 9-B pull request, merged as PR #326 and deployed on 2026-11-02). `frontend/metric-mappings-actions.js` no
   longer says "Imports do not use mappings yet; nothing changes in imports until they do." after a switch on, an
   activation with teams or a replacement (R18 superseded); it says "Imports use it from the next Find new sessions."
   instead. `frontend/metric-mappings-data.js` `REQUIREMENT_MEANING` follows C110 form B: Required and Optional both
