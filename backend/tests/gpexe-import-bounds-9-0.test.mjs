@@ -528,6 +528,38 @@ test("6c. approval: an error the COMMIT itself raises goes through resolveUncert
   });
 });
 
+test("6c2. approval (the Nezavisni revizor's LOW-1 on 9-0): once the COMMIT is sent, no error is ever answered try_again - a lock wait (55P03), a deadlock (40P01), an administrator's end of the session (57P01), an aborted transaction (25P03) and a cancelled statement (57014) raised by the COMMIT are 503 import_outcome_unknown when it did not land and 200 verified when it did", async () => {
+  const codes = ["55P03", "40P01", "57P01", "25P03", "57014"];
+  const { team, list } = await teamWithCandidates(codes.flatMap((_, i) => [9621 + 2 * i, 9622 + 2 * i]));
+  const details = await Promise.all(list.map((c) => candidateDetail(team, c.id)));
+  for (const [i, code] of codes.entries()) {
+    const raised = () => Object.assign(new Error(`the COMMIT raised ${code}`), { code });
+    const before = await allRowCounts();
+    await withSwitchOn(async () => {
+      service.setApprovalCommitForTests(async (client) => { await client.query("rollback"); throw raised(); });
+      try {
+        const r = await approve(team, details[2 * i]);
+        assert.deepEqual([r.status, r.body.error], [503, "import_outcome_unknown"], `${code} (not landed): ${JSON.stringify(r.body)}`);
+        assert.notEqual(r.body.error, "try_again");
+        assert.ok(!/nothing was imported/i.test(JSON.stringify(r.body)), `${code}: never "nothing was imported" after the COMMIT was sent`);
+      } finally {
+        service.setApprovalCommitForTests(null);
+      }
+    });
+    assert.deepEqual(await allRowCounts(), before, `${code}: it did not land`);
+    await withSwitchOn(async () => {
+      service.setApprovalCommitForTests(async (client) => { await client.query("commit"); throw raised(); });
+      try {
+        const r = await approve(team, details[2 * i + 1]);
+        assert.equal(r.status, 200, `${code} (landed): ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.commitConfirmation, "verified_after_commit_error");
+      } finally {
+        service.setApprovalCommitForTests(null);
+      }
+    });
+  }
+});
+
 test("6d. approval: nothing is written between SET CONSTRAINTS ALL IMMEDIATE and the COMMIT - the approval's last two statements are exactly those two", async () => {
   const { team, list } = await teamWithCandidates([9621]);
   const candidate = await candidateDetail(team, list[0].id);
