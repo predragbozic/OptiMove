@@ -1243,10 +1243,17 @@ router.delete("/teams/:teamId", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // The archive never waits without a bound: a team held by a membership
+      // write or a stalled transaction is a 409 try_again, nothing written.
+      await client.query("set local lock_timeout = '5s'");
+      await client.query("set local statement_timeout = '15s'");
       // The lock a membership write's share lock waits for (lockActiveTeam), so
       // no member joins between the archive and the end of the memberships.
       const locked = (await client.query(
-        `select club_id, coalesce(is_active, true) as active from public.teams where id = $1 for no key update`,
+        `select t.club_id, coalesce(t.is_active, true) as active, coalesce(c.is_active, true) as club_active
+           from public.teams t left join public.clubs c on c.id = t.club_id
+          where t.id = $1
+          for no key update of t`,
         [teamId],
       )).rows[0];
       if (!locked || String(locked.club_id) !== String(row.club_id)) {
@@ -1257,12 +1264,22 @@ router.delete("/teams/:teamId", async (req, res, next) => {
         await client.query("rollback");
         return res.json({ ok: true, archived: false, membershipsArchived: 0 });
       }
+      // As the restore: a team of an archived club stays as it is (no route
+      // restores a club, so an archived team of it could never come back).
+      if (!locked.club_active) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "club_archived", message: "The team's club is archived." });
+      }
       await client.query(`update public.teams set is_active = false, updated_at = now() where id = $1`, [teamId]);
-      const ended = await archiveTeamMemberships(client, { teamId, userId: req.user.id, reason: "team_archived" });
+      const ended = await archiveTeamMemberships(client, { teamId, wholeTeam: true, userId: req.user.id, reason: "team_archived" });
       await client.query("commit");
       res.json({ ok: true, archived: true, membershipsArchived: ended.length });
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      // A bounded wait or a deadlock rolled everything back: nothing written.
+      if (["55P03", "57014", "40P01"].includes(error?.code)) {
+        return res.status(409).json({ error: "try_again", message: "The team is busy right now. Nothing was changed; try again in a moment." });
+      }
       throw error;
     } finally {
       client.release();
@@ -1303,13 +1320,16 @@ router.post("/athletes", async (req, res, next) => {
       // club/team access (see ensureActiveMembership). All in one
       // transaction so a failure partway never leaves the athlete row
       // created without its matching membership/coach-link rows.
-      // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
-      if (teamId) await ensureActiveMembership(client, result.rows[0].id, clubId, teamId, "team", req.user.id);
+      // The one lock order (D45): the team, the club membership, the team
+      // membership (the new athlete row is nobody else's yet).
+      if (teamId) await requireActiveTeam(client, teamId);
       if (clubId) await ensureActiveMembership(client, result.rows[0].id, clubId, null, "club", req.user.id);
+      if (teamId) await ensureActiveMembership(client, result.rows[0].id, clubId, teamId, "team", req.user.id);
       await client.query("commit");
       res.status(201).json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
@@ -1330,6 +1350,20 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // The one lock order (D45): the team, the club membership, the team
+      // membership, then the athlete row — the order of a team archive and of a
+      // club-membership archive, so neither can wait on this edit in a cycle.
+      if (!(await client.query(`select 1 from public.athletes where id = $1`, [req.params.athleteId])).rows[0]) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Athlete not found." });
+      }
+      if (teamId) await requireActiveTeam(client, teamId);
+      // Editing the club/team fields here only ever ADDS an active
+      // membership (an athlete may hold several at once) - it never
+      // archives whatever was there before. Use the dedicated team/club
+      // archive endpoints to end a specific membership.
+      if (clubId) await ensureActiveMembership(client, req.params.athleteId, clubId, null, "club", req.user.id);
+      if (teamId) await ensureActiveMembership(client, req.params.athleteId, clubId, teamId, "team", req.user.id);
       const result = await client.query(
         `update public.athletes
          set athlete_id = coalesce(nullif($2, ''), athlete_id),
@@ -1349,17 +1383,11 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
         await client.query("rollback");
         return res.status(404).json({ error: "Athlete not found." });
       }
-      // Editing the club/team fields here only ever ADDS an active
-      // membership (an athlete may hold several at once) - it never
-      // archives whatever was there before. Use the dedicated team/club
-      // archive endpoints to end a specific membership.
-      // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
-      if (teamId) await ensureActiveMembership(client, req.params.athleteId, clubId, teamId, "team", req.user.id);
-      if (clubId) await ensureActiveMembership(client, req.params.athleteId, clubId, null, "club", req.user.id);
       await client.query("commit");
       res.json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
@@ -1412,10 +1440,12 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
       // Adds an active membership rather than overwriting - an athlete may
       // already have other active club/team memberships, and this simply
       // adds one more (including a second team within the same club).
-      // The team first (ensureActiveMembership locks it), the archive's lock
-      // order: an archive that won the race leaves nothing to join (D45).
-      await ensureActiveMembership(client, athleteId, team.rows[0].club_id, teamId, "team", req.user.id);
+      // The one lock order (D45): the team, the club membership, the team
+      // membership, the athlete. An archive that won the race leaves nothing
+      // to join.
+      await requireActiveTeam(client, teamId);
       await ensureActiveMembership(client, athleteId, team.rows[0].club_id, null, "club", req.user.id);
+      await ensureActiveMembership(client, athleteId, team.rows[0].club_id, teamId, "team", req.user.id);
       const result = await client.query(
         `update public.athletes
          set club_id = $2, team_id = $3
@@ -2024,9 +2054,10 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       } else if (link.context_type === "team") {
         const teamRow = await client.query(`select club_id from public.teams where id = $1 limit 1`, [link.context_id]);
         const clubId = teamRow.rows[0]?.club_id;
-        // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
-        await ensureActiveMembership(client, resultingAthleteId, clubId, link.context_id, "team", req.user.id);
+        // The one lock order (D45): the team, the club membership, the team membership.
+        await requireActiveTeam(client, link.context_id);
         await ensureActiveMembership(client, resultingAthleteId, clubId, null, "club", req.user.id);
+        await ensureActiveMembership(client, resultingAthleteId, clubId, link.context_id, "team", req.user.id);
       }
       await syncLegacyAthletePointer(resultingAthleteId, { query: (text, params) => client.query(text, params) });
 
@@ -2045,6 +2076,7 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       res.json({ ok: true, userId: resultingUserId, athleteId: resultingAthleteId });
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
@@ -2358,6 +2390,14 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
         await client.query("rollback");
         return res.status(409).json(TEAM_ARCHIVED);
       }
+      // The club membership before the team membership: the one lock order
+      // (D45), the club-membership archive's too. Nothing is written here.
+      await client.query(
+        `select id from public.athlete_memberships
+         where athlete_id = $1 and club_id = $2 and membership_type = 'club'
+         for update`,
+        [req.params.athleteId, team.rows[0].club_id],
+      );
       // Lock the ONE row for this (athlete, team) identity, regardless of
       // its current status, then branch after the lock is held - not two
       // separate status-filtered SELECTs. That matters under concurrency:
@@ -3733,9 +3773,7 @@ async function resolveAthleteClubTeam(req, requestedClubId, requestedTeamId) {
 // function takes a row lock via FOR UPDATE, which only holds meaningfully
 // inside an explicit transaction) - never a bare pool/query.
 async function ensureActiveMembership(client, athleteId, clubId, teamId, membershipType, createdByUserId) {
-  if (membershipType === "team" && !(await lockActiveTeam(client, teamId))) {
-    throw Object.assign(new Error(TEAM_ARCHIVED.message), { status: 409, code: TEAM_ARCHIVED.error });
-  }
+  if (membershipType === "team") await requireActiveTeam(client, teamId);
   const existing = await client.query(
     `select id, status from public.athlete_memberships
      where athlete_id = $1 and club_id = $2 and membership_type = $3
@@ -3776,16 +3814,28 @@ async function lockActiveTeam(client, teamId) {
   )).rows[0] || null;
 }
 
+// The first lock of a transaction that makes a team membership active (D45):
+// the active team, or the TEAM_ARCHIVED refusal (409), so the team comes
+// before the club membership, the team membership and the athlete.
+async function requireActiveTeam(client, teamId) {
+  const team = await lockActiveTeam(client, teamId);
+  if (!team) throw Object.assign(new Error(TEAM_ARCHIVED.message), { status: 409, code: TEAM_ARCHIVED.error });
+  return team;
+}
+
 // The one way a team membership ends: Remove from team (one athlete) and the
-// team archive (every athlete, D45). Active team memberships of the team get
-// the archived status and its fields (the v25 trigger closes each membership's
-// period at archived_at), then each athlete's legacy pointer is re-pointed, in
-// athlete order, so two archives that share athletes take their rows in the
-// same order. Inside a transaction only; returns the ended rows.
-async function archiveTeamMemberships(client, { teamId, athleteId = null, userId, reason = null }) {
+// team archive (every athlete, D45, named by wholeTeam so a missing athlete id
+// can never end a whole team). Active team memberships of the team get the
+// archived status and its fields (the v25 trigger closes each membership's
+// period at archived_at, the time of this statement, after any wait), then each
+// athlete's legacy pointer is re-pointed, in athlete order, so two archives
+// that share athletes take their rows in the same order. Inside a transaction
+// only; returns the ended rows.
+async function archiveTeamMemberships(client, { teamId, athleteId = null, wholeTeam = false, userId, reason = null }) {
+  if (!athleteId === !wholeTeam) throw new Error("archiveTeamMemberships: one athlete or the whole team");
   const result = await client.query(
     `update public.athlete_memberships
-     set status = 'archived', archived_at = now(), archived_by_user_id = $1, archive_reason = $2, updated_at = now()
+     set status = 'archived', archived_at = clock_timestamp(), archived_by_user_id = $1, archive_reason = $2, updated_at = now()
      where team_id = $3 and membership_type = 'team' and status = 'active' and ($4::uuid is null or athlete_id = $4::uuid)
      returning id, athlete_id`,
     [userId, reason, teamId, athleteId],

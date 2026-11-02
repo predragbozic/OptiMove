@@ -266,3 +266,69 @@ test("6. an archive races an athlete joining the team: the archive first leaves 
     await side.end().catch(() => {});
   }
 });
+
+test("7. the archive's waits are bounded: a team held by another transaction answers 409 try_again with nothing written", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 busy ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  const before = await memberships(a.athleteId);
+  const side = new pg.Client({ connectionString: env.db.url });
+  await side.connect();
+  try {
+    await side.query("begin");
+    await side.query(`select id from public.teams where id = $1 for share`, [teamId]);
+    const started = Date.now();
+    const answer = await Promise.race([archive(roles.clubAdmin.cookie, teamId), new Promise((res) => setTimeout(() => res(null), 9000))]);
+    assert.ok(answer, "the archive answered while the team was still held");
+    assert.deepEqual([answer.status, answer.body.error], [409, "try_again"], answer.text);
+    assert.ok(Date.now() - started < 9000);
+  } finally {
+    await side.query("rollback").catch(() => {});
+    await side.end().catch(() => {});
+  }
+  assert.equal(await activeOf(teamId), true, "nothing written");
+  assert.deepEqual(await memberships(a.athleteId), before);
+});
+
+test("8. editing an athlete of the team while the team is archived: one lock order, so the archive goes through and the edit is 409 team_archived, never a 500", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 edited ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  const side = new pg.Client({ connectionString: env.db.url });
+  await side.connect();
+  try {
+    // The archive holds the team and waits on the memberships; the edit then
+    // waits for the team, holding nothing the archive needs (the athlete row
+    // comes after the team).
+    await side.query("begin");
+    await side.query("lock table public.athlete_memberships in exclusive mode");
+    const archived = archive(roles.clubAdmin.cookie, teamId);
+    await waitForLockWaiters(1);
+    const edited = env.api(`/api/organization/athletes/${a.athleteId}`, { method: "PUT", cookie: roles.clubAdmin.cookie, body: { fullName: "D45 edited athlete", clubId: clubs.c1, teamId } });
+    await waitForLockWaiters(2);
+    await side.query("commit");
+    const [ra, re] = await Promise.all([archived, edited]);
+    assert.deepEqual([ra.status, ra.body.archived], [200, true], ra.text);
+    assert.deepEqual([re.status, re.body.error], [409, "team_archived"], re.text);
+  } finally {
+    await side.query("rollback").catch(() => {});
+    await side.end().catch(() => {});
+  }
+  assert.equal(await activeTeamMembers(teamId), 0);
+  assert.deepEqual(await pointer(a.athleteId), { club_id: clubs.c1, team_id: null }, "the edit wrote nothing");
+});
+
+test("9. a team of an archived club is not archived (as it is not restored): 409 club_archived after the club's right, nothing written", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c3, `D45 archived club ${uid()}`);
+  const a = await member(clubs.c3, teamId);
+  const before = await memberships(a.athleteId);
+  for (const [who, cookie] of [["the archived club's admin", roles.archivedAdmin.cookie], ["a platform admin", roles.platformAdmin.cookie]]) {
+    const res = await archive(cookie, teamId);
+    assert.deepEqual([res.status, res.body.error], [409, "club_archived"], `${who}: ${res.text}`);
+  }
+  const foreign = await archive(roles.clubAdmin.cookie, teamId);
+  assert.deepEqual([foreign.status, foreign.body.error], [403, "Team is outside your access."], "another club's admin learns nothing");
+  assert.equal(await activeOf(teamId), true);
+  assert.deepEqual(await memberships(a.athleteId), before);
+});

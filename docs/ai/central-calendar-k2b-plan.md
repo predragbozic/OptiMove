@@ -907,11 +907,14 @@ prove marked "per the stream manager").
 The owner's decision (2026-11-02, through the manager), its own pull request after PR #332. No migration.
 
 - **The archive ends the team's memberships.** `DELETE /api/organization/teams/:teamId`, in one transaction:
-  - it locks the team row (`for no key update`) and archives it;
+  - it locks the team row (`for no key update`) and archives it. Its waits are bounded (`lock_timeout` 5 s,
+    `statement_timeout` 15 s): a team held by a membership write or a stalled transaction, or a deadlock, is
+    `409 try_again` with nothing written;
   - it ends every active team membership of the team the way Remove from team ends one. Both go through one helper,
-    `archiveTeamMemberships`: the archived status with its fields (`archived_by_user_id`, `archive_reason` =
-    `team_archived`), the v25 trigger closing each membership's period, and each athlete's legacy pointer re-pointed
-    (`syncLegacyAthletePointer`, in athlete order).
+    `archiveTeamMemberships` (the whole team named explicitly, so a missing athlete id never ends a team): the archived
+    status with its fields (`archived_at` the statement's `clock_timestamp()`, `archived_by_user_id`,
+    `archive_reason` = `team_archived`), the v25 trigger closing each membership's period, and each athlete's legacy
+    pointer re-pointed (`syncLegacyAthletePointer`, in athlete order).
   - The athletes' club memberships are not touched: the athletes stay in the club. Their history stays: the archived
     memberships and their closed periods. So the calendar and the roster, which judge membership on the day (K1a,
     v25), keep the team's earlier days and show none after the archive.
@@ -922,15 +925,21 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
     team, `403 Team is outside your access.` (a platform admin's unknown id `404`), and nothing is written.
   - An archived team answers `200` (`archived: false, membershipsArchived: 0`) and nothing new is written. A team
     moved by a raw write between the read and the lock is `409 team_changed`.
+  - A team of an archived club is not archived, as it is not restored: `409 club_archived` after the club's right (no
+    route restores a club, so the team could never come back).
   - The archive control (Settings → Organization → Teams) is offered only for a team in `manageableTeamIds`, the
     club's right the server already computes.
 - **No member joins an archived team.** `lockActiveTeam` takes the active team row `for share`, the lock the archive
-  waits for and that waits for the archive, before any team membership becomes active:
-  - every write through `ensureActiveMembership` (adding an athlete to a team, creating or editing an athlete with a
-    team, a team link's join approval) locks the team first, then the club membership: the archive's lock order;
-  - restoring one athlete's team membership locks the team first.
-  - So an archive that wins the race leaves nothing to join (`409 team_archived`), and a join that wins is ended by
-    the archive with the others.
+  waits for and that waits for the archive, before any team membership becomes active.
+  - **One lock order** (the internal reviews of this pull request): the team, the club membership, the team membership,
+    the athlete row. It is the order of the team archive (team, team memberships, athletes) and of the club-membership
+    archive (club membership, team memberships, athlete), so none of them can wait in a cycle.
+  - Adding an athlete to a team, creating or editing an athlete with a team, and a team link's join approval take the
+    team first (`requireActiveTeam`), then `ensureActiveMembership` for the club and the team. The athlete edit
+    writes the athlete row last.
+  - Restoring one athlete's team membership locks the team, then the club membership, then the team membership.
+  - So an archive that wins the race leaves nothing to join (`409 team_archived` on every such route), and a join
+    that wins is ended by the archive with the others.
 - **A restored team comes back without athletes.** The restore route is unchanged; its comment now says that the
   request's authorization context lists archived teams too (`managedTeamIds` is not filtered on `is_active`) but
   holds no team's club, so the club is read from the database.
@@ -941,9 +950,17 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - The archive's confirmation: "Archive this team? Its athletes leave the team; their history stays. You can restore
     the team later — it comes back without athletes."
   - The restore asks first, and the archived list says, that the team comes back without athletes.
-- **Known limit, low importance** (the owner's external review of PR #332, note 4): a team moved by a raw database
-  write, and the order of the checks on a rename. A rename checks the team's right from the authorization context
-  first, then the club's right on the stored club. No route moves a team (D43).
+- **Known limits, low importance:**
+  - (the owner's external review of PR #332, note 4) a team moved by a raw database write, and the order of the checks
+    on a rename. A rename checks the team's right from the authorization context first, then the club's right on the
+    stored club. No route moves a team (D43).
+  - A lost or failed COMMIT of the archive is a plain `500`, not "outcome unknown", as on the other organization
+    routes. Archiving again is safe and answers what is true (`archived: false` when the first one landed).
+  - An archived team archived again ends nothing. A team archived before D45 (raw writes, local or development data)
+    may keep active memberships and bring them back on a restore; production has none.
+  - Two archives that end one athlete's memberships at the same moment may leave that athlete's legacy pointer on an
+    archived team (the pointer is a display field, never read for authorization; the class predates D45).
+  - Only `active` memberships are ended, as Remove from team ends them; no code writes the `paused` status.
 - **Production:** no archived team exists today (the manager's read-only check, 2026-11-02), so no old membership needs a
   repair.
 - **Not run:** `backend/tests/athlete-membership-archive.test.mjs`, the older suite of Remove from team, is of the
@@ -956,6 +973,9 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - an archived team: archived again, renamed, a membership restored or added;
   - the calendar before and after, and the empty restored team;
   - Remove from team;
-  - the race of an archive with a join, in both orders, made deterministic by a held lock.
+  - the race of an archive with a join, in both orders, made deterministic by a held lock;
+  - the archive's bounded wait (`409 try_again`);
+  - an athlete edit during the archive (`409 team_archived`, never a deadlock);
+  - a team of an archived club (`409 club_archived`).
 
   `organization-team-club-fixed.test.mjs` test 7 now expects the empty restored team.
