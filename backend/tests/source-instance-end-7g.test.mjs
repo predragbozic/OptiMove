@@ -35,6 +35,9 @@ const V50 = "202610311200_training_load_v50_source_instance_end.sql";
 const V50_NAME = `migrations_v2/${V50}`;
 const V49_NAME = "migrations_v2/202610311000_calendar_v49_events.sql";
 const UP_TO_V49 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V50));
+// The suite's database stops at v50 (a later migration, v51 of K2b-1a, is
+// another part's): v50 is the last migration this suite's checks see.
+const UP_TO_V50 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V50) + 1);
 const V50_FILE = path.resolve(ROOT, "migrations_v2", V50);
 const RUNBOOKS = path.resolve(ROOT, "docs/runbooks");
 const ROLLBACK = path.join(RUNBOOKS, "source-instance-end-v50-rollback.sql");
@@ -83,11 +86,11 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V50), "v50 is a test migration");
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V50, "v50 is the last test migration");
+  assert.equal(UP_TO_V50.at(-1), V50, "the suite's database ends with v50");
   assert.equal(`migrations_v2/${UP_TO_V49.at(-1)}`, V49_NAME, "the rehearsal stops at v49");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50rb", migrations: UP_TO_V49 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50", migrations: UP_TO_V50 }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

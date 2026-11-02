@@ -58,8 +58,10 @@ export function eventOwnerOfRow(row) {
 // The basis on which THIS request may write the events of `owner`, or null.
 //   platform workspace → platform_admin (support), any owner;
 //   club workspace → club_admin for the club's own events AND for the events
-//     of its active teams (D18); a platform admin in the club's workspace
-//     writes as platform_admin;
+//     of its active teams (D18); a club workspace is offered only to the
+//     holders of that club's club_admin role (workspace.js), so a platform
+//     admin there writes as club_admin (K2b-1a, T6) — the platform_admin
+//     branch is reached only for an archived club;
 //   team workspace → team_coach for the team's own events; a club admin who
 //     opened the team's workspace writes as club_admin; never a club-owned
 //     event (the team coach reads it, the panel offers nothing);

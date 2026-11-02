@@ -255,12 +255,14 @@ export async function loadWorkspaceTeams(ctx) {
   if (workspace.type !== "club" && workspace.type !== "team") return [];
   const where = workspace.type === "club" ? "t.club_id = $1 and coalesce(t.is_active, true)" : "t.id = $1";
   const result = await query(
-    `select t.id, t.name,
+    `select t.id, t.name, ts.color_key,
             (select count(*)::int from public.athlete_memberships am where am.team_id = t.id and am.membership_type = 'team' and am.status = 'active') as athlete_count
        from public.teams t
+       left join calendar.team_settings ts on ts.team_id = t.id
       where ${where}
       order by t.name, t.id`,
     [workspace.scopeId],
   );
-  return result.rows.map((row) => ({ teamId: row.id, name: row.name, athleteCount: Number(row.athlete_count) }));
+  // colorKey: the club's chosen colour (K2b-1a, v51), null = the automatic one.
+  return result.rows.map((row) => ({ teamId: row.id, name: row.name, athleteCount: Number(row.athlete_count), colorKey: row.color_key ?? null }));
 }

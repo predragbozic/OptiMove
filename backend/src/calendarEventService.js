@@ -46,21 +46,17 @@ import {
   canManageExternalScheduleInScope, canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, WEEKLY_PLAN_SESSION_FILTER_SQL,
 } from "./trainingLoadAccess.js";
 import { writePublishedSessionFlags } from "./plannedSessionFlags.js";
-import {
-  COMMIT_ANSWER_TIMEOUT_MS, commitCertainlyRefused, NOTHING_SAVED, OUTCOME_UNKNOWN, UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
-} from "./activityRosterCommands.js";
+import { runCalendarCommand } from "./calendarCommandRunner.js";
 
 export const EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 export const EVENT_TARGET_KINDS = Object.freeze(["athlete", "team", "club"]);
 export const MAX_EVENT_TARGETS = 200;
-const LOCK_TIMEOUT = "15s";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const bad = (code, message) => new EventError(400, code, message);
 const conflict = (code, message, details) => new EventError(409, code, message, details);
-const requestKeyReused = () => conflict("request_key_reused", "This requestKey was already used for a different request.");
-const isUuid = (v) => typeof v === "string" && UUID_PATTERN.test(v);
+export const isUuid = (v) => typeof v === "string" && UUID_PATTERN.test(v);
 
 // Test-only seams (the roster commands' pattern): default no-ops.
 export const testHooks = {};
@@ -70,14 +66,14 @@ export const testHooks = {};
 // canonical body — exactly what the request asks, in a fixed shape; its
 // sha256, together with the event or the owner, is the request hash.
 // ---------------------------------------------------------------------------
-function requestKeyOf(body) {
+export function requestKeyOf(body) {
   if (!isUuid(body?.requestKey)) throw bad("invalid_request_key", "requestKey must be a UUID.");
   return body.requestKey.toLowerCase();
 }
 
 // A text field: trimmed, line breaks normalised; null for an empty value;
 // undefined when absent.
-function textField(body, field, max, code, { multiline = false, required = false } = {}) {
+export function textField(body, field, max, code, { multiline = false, required = false } = {}) {
   if (!(field in (body || {}))) {
     if (required) throw bad(code, `${field} is required.`);
     return undefined;
@@ -132,7 +128,7 @@ function timezoneField(body, { required = false } = {}) {
   return raw.trim();
 }
 
-function expectsField(body) {
+export function expectsField(body) {
   if (!("expects" in (body || {}))) return undefined;
   const raw = body.expects;
   if (raw === null) return null;
@@ -166,7 +162,7 @@ function targetsField(body, { required = false } = {}) {
   return out;
 }
 
-function uuidField(body, field, code) {
+export function uuidField(body, field, code) {
   if (!(field in (body || {}))) return undefined;
   const raw = body[field];
   if (raw === null || raw === "") return null;
@@ -174,7 +170,7 @@ function uuidField(body, field, code) {
   return raw.toLowerCase();
 }
 
-function revisionField(body) {
+export function revisionField(body) {
   const raw = body?.expectedRevision;
   if (!Number.isInteger(raw) || raw < 1) throw bad("invalid_revision", "expectedRevision must be a positive integer.");
   return raw;
@@ -262,11 +258,17 @@ function requestHash(canonical, { eventId, owner }) {
 // Reads
 // ---------------------------------------------------------------------------
 const EVENT_VIEW_SQL = `
-  select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id, e.event_type_id,
+  select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
+         -- The type's id, as its label: only on its own club's events (D41;
+         -- an edit keeps the stored type, read by EVENT_ROW_FOR_WRITE_SQL).
+         case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then e.event_type_id end as event_type_id,
          e.title, e.day, e.end_day, e.start_time, e.end_time, e.timezone, e.location, e.status,
          e.cancelled_at, e.cancel_reason, e.expects, e.notes, e.external_schedule_id, e.test_schedule_id, e.revision,
          e.created_at, e.updated_at,
-         et.kind as event_kind, et.label as event_type_label,
+         et.kind as event_kind,
+            -- A club's type is shown only on its own club's events (a team moved to
+            -- another club keeps its events and their type id; K2b-1a, security M1).
+            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then et.label end as event_type_label,
          t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
          coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active,
          (select coalesce(jsonb_agg(jsonb_build_object(
@@ -458,17 +460,28 @@ async function teamClubId(queryable, teamId) {
 // GET /types — the types the active workspace may use, non-archived. An
 // archived team's workspace, or a team workspace of an archived club (nothing
 // can be created there), gets the router's one 404, as every write there.
-export async function listEventTypes(ctx) {
+// The owner whose catalog the workspace's events use (K2b-1a: resolved once
+// for GET /types and the form's lists that come with it).
+export async function eventCatalogOwner(ctx) {
   if (ctx.type !== "coach") throw forbidden();
   const owner = eventOwnerForWorkspace(ctx);
   if (owner?.scope === "team") {
     owner.teamClubId = await teamClubId(pool, owner.teamId);
     if (!owner.teamClubId) throw notFound();
   }
+  return owner;
+}
+
+export async function listEventTypes(ctx, resolvedOwner) {
+  const owner = resolvedOwner === undefined ? await eventCatalogOwner(ctx) : resolvedOwner;
   const params = [];
   const ownerSql = eventTypesOwnerSql(owner, "t", params);
   const result = await pool.query(
-    `select t.id, t.kind, t.key, t.label, t.default_expects, t.icon_key, t.sort_order, t.owner_scope
+    `select t.id, t.kind, t.key, t.label, t.default_expects, t.icon_key, t.color_key, t.sort_order, t.owner_scope,
+            (select coalesce(array_agg(l.field_id order by l.position, l.field_id), '{}')
+               from calendar.event_type_fields l
+               join calendar.event_fields f on f.id = l.field_id and f.archived_at is null
+              where l.event_type_id = t.id) as default_field_ids
        from calendar.event_types t
       where ${ownerSql} and t.archived_at is null
       order by t.sort_order, t.label, t.id`,
@@ -476,6 +489,8 @@ export async function listEventTypes(ctx) {
   );
   return result.rows.map((r) => ({
     id: r.id, kind: r.kind, key: r.key, label: r.label, defaultExpects: r.default_expects || [], iconKey: r.icon_key, sortOrder: r.sort_order, ownerScope: r.owner_scope,
+    // K2b-1a (T2, additive): the type's colour and its live default details.
+    colorKey: r.color_key, defaultFieldIds: (r.default_field_ids || []).map(String),
   }));
 }
 
@@ -503,7 +518,9 @@ async function resolveType(client, owner, eventTypeId) {
   const params = [eventTypeId];
   const ownerSql = eventTypesOwnerSql(owner, "t", params);
   const row = (await client.query(
-    `select t.id, t.kind, t.default_expects from calendar.event_types t where t.id = $1 and ${ownerSql} and t.archived_at is null`,
+    // FOR SHARE (K2b-1a): a type archived in Settings meanwhile is waited for
+    // and then not available (the 400), never the trigger's refusal as a 500.
+    `select t.id, t.kind, t.default_expects from calendar.event_types t where t.id = $1 and ${ownerSql} and t.archived_at is null for share of t`,
     params,
   )).rows[0];
   if (!row) throw bad("type_not_available", "This event type is not available in this workspace.");
@@ -554,16 +571,8 @@ const ACTIVITY_LINK_CONSTRAINT = "event_activity_links_one_live_per_activity";
 const REQUEST_KEY_CONSTRAINT = "event_requests_one_per_key";
 
 // ---------------------------------------------------------------------------
-// The command runner
+// The command (calendarCommandRunner.js)
 // ---------------------------------------------------------------------------
-function withinBound(promise, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 const EVENT_ROW_FOR_WRITE_SQL = `
   select e.*, t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
          coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active, et.kind as event_kind
@@ -584,185 +593,103 @@ async function answerOf(queryable, ctx, stored, extra) {
   return { status: stored.httpStatus || 200, body: { event: view, ...(stored.counts || {}), ...extra } };
 }
 
+// The event commands' use of the calendar's one runner
+// (calendarCommandRunner.js, T3): who may write and the locks of plan 4.3
+// (the writer lock, then the event row FOR UPDATE with the right decided
+// again on the locked row), the replay bound to the event, the request and
+// change rows, the constraint names this service maps.
 async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
   if (ctx.type !== "coach") throw eventId ? notFound() : forbidden();
   const operation = canonical.operation;
-  const client = await pool.connect();
-  let commitSent = false;
-  let broken = false;
-  let released = false;
-  let hash = null;
-  const onClientError = () => { broken = true; };
-  client.on("error", onClientError);
-  try {
-    await client.query("begin");
-    await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
-
-    let owner;
-    let basis;
-    let row = null;
-    if (eventId) {
-      row = (await client.query(EVENT_ROW_FOR_WRITE_SQL, [eventId])).rows[0];
-      if (!row) throw notFound();
-      owner = eventOwnerOfRow(row);
-      basis = eventWriteBasis(ctx, owner);
-      if (!basis) throw notFound();
-    } else {
-      owner = eventOwnerForWorkspace(ctx);
-      if (!owner) {
-        if (ctx.workspace?.type === "platform") throw new EventError(403, "workspace_required", "Open the club's workspace to create or change its events.");
-        throw forbidden();
+  return runCalendarCommand({
+    userId: ctx.userId, requestKey, operation, label: "calendar", subject: `${operation} on event ${eventId ?? "(new)"}`,
+    requestsTable: "calendar.event_requests", requestKeyConstraint: REQUEST_KEY_CONSTRAINT,
+    busyMessage: "The event is being changed. Try again.", hooks: testHooks,
+    async prepare(client) {
+      let owner;
+      let basis;
+      let row = null;
+      if (eventId) {
+        row = (await client.query(EVENT_ROW_FOR_WRITE_SQL, [eventId])).rows[0];
+        if (!row) throw notFound();
+        owner = eventOwnerOfRow(row);
+        basis = eventWriteBasis(ctx, owner);
+        if (!basis) throw notFound();
+      } else {
+        owner = eventOwnerForWorkspace(ctx);
+        if (!owner) {
+          if (ctx.workspace?.type === "platform") throw new EventError(403, "workspace_required", "Open the club's workspace to create or change its events.");
+          throw forbidden();
+        }
+        if (owner.scope === "team") {
+          owner.teamClubId = await teamClubId(client, owner.teamId);
+          if (!owner.teamClubId) throw notFound();
+        }
+        basis = eventWriteBasis(ctx, owner);
+        if (!basis) throw forbidden();
       }
-      if (owner.scope === "team") {
-        owner.teamClubId = await teamClubId(client, owner.teamId);
-        if (!owner.teamClubId) throw notFound();
+      const hash = requestHash(canonical, { eventId, owner });
+      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
+      try {
+        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, owner.scope, eventOwnerId(owner), basis]);
+      } catch (error) {
+        if (error?.code === "42501") throw eventId ? notFound() : forbidden();
+        throw error;
       }
-      basis = eventWriteBasis(ctx, owner);
-      if (!basis) throw forbidden();
-    }
-    hash = requestHash(canonical, { eventId, owner });
-    if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
-    try {
-      await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, owner.scope, eventOwnerId(owner), basis]);
-    } catch (error) {
-      if (error?.code === "42501") throw eventId ? notFound() : forbidden();
-      throw error;
-    }
-    if (eventId) {
-      row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for update of e`, [eventId])).rows[0];
-      if (!row) throw notFound();
-      // The right is decided again on the locked row (an owner never changes,
-      // but the team's or the club's activity may have).
-      if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== basis) throw notFound();
-    }
-
-    const prior = (await client.query(
-      `select request_hash, event_id, result from calendar.event_requests where performed_by_user_id = $1 and request_key = $2`,
-      [ctx.userId, requestKey],
-    )).rows[0];
-    if (prior) {
-      if (prior.request_hash !== hash || (eventId && String(prior.event_id) !== String(eventId))) throw requestKeyReused();
-      const answer = await answerOf(client, ctx, prior.result, { replayed: true });
-      await client.query("rollback");
-      return { ...answer, replayed: true };
-    }
-
-    const requestId = crypto.randomUUID();
-    const out = await apply({ client, owner, basis, row, requestId });
-    const stored = { httpStatus: out.httpStatus, eventId: out.eventId, ...(out.counts ? { counts: out.counts } : {}) };
-    if (testHooks.beforeRequestRow) await testHooks.beforeRequestRow({ client, operation, requestKey, hash, eventId: out.eventId, userId: ctx.userId });
-    await client.query(
-      `insert into calendar.event_requests (id, request_key, request_hash, operation, performed_by_user_id, event_id, result)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
-      [requestId, requestKey, hash, operation, ctx.userId, out.eventId, JSON.stringify(stored)],
-    );
-    const revision = (await client.query(`select revision from calendar.events where id = $1`, [out.eventId])).rows[0].revision;
-    await client.query(
-      `insert into calendar.event_changes (event_id, kind, basis, performed_by_user_id, reason, details, request_id, revision)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [out.eventId, operation, basis, ctx.userId, out.reason ?? null, JSON.stringify(out.details || {}), requestId, revision],
-    );
-    if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation, eventId: out.eventId });
-    commitSent = true;
-    const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
-    committing.catch(() => {});
-    await withinBound(committing, testHooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
-    return { status: out.httpStatus, body: out.body };
-  } catch (error) {
-    if (!commitSent) {
-      await client.query("rollback").catch(() => { broken = true; });
-      if (error?.code === "55P03" || error?.code === "40P01") throw conflict("try_again", "The event is being changed. Try again.");
+      if (eventId) {
+        row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for update of e`, [eventId])).rows[0];
+        if (!row) throw notFound();
+        // The right is decided again on the locked row (an owner never changes,
+        // but the team's or the club's activity may have).
+        if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== basis) throw notFound();
+      }
+      return { hash, owner, basis, row };
+    },
+    sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && (!eventId || String(prior.event_id) === String(eventId)),
+    answer: (queryable, stored, extra) => answerOf(queryable, ctx, stored, extra),
+    apply: ({ client, owner, basis, row, requestId }) => apply({ client, owner, basis, row, requestId }),
+    async beforeRequestRow(client, out, prepared) {
+      if (testHooks.beforeRequestRow) await testHooks.beforeRequestRow({ client, operation, requestKey, hash: prepared.hash, eventId: out.eventId, userId: ctx.userId });
+    },
+    async writeRecord({ client, requestId, out, prepared, hash }) {
+      const stored = { httpStatus: out.httpStatus, eventId: out.eventId, ...(out.counts ? { counts: out.counts } : {}) };
+      await client.query(
+        `insert into calendar.event_requests (id, request_key, request_hash, operation, performed_by_user_id, event_id, result)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [requestId, requestKey, hash, operation, ctx.userId, out.eventId, JSON.stringify(stored)],
+      );
+      const revision = (await client.query(`select revision from calendar.events where id = $1`, [out.eventId])).rows[0].revision;
+      await client.query(
+        `insert into calendar.event_changes (event_id, kind, basis, performed_by_user_id, reason, details, request_id, revision)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [out.eventId, operation, prepared.basis, ctx.userId, out.reason ?? null, JSON.stringify(out.details || {}), requestId, revision],
+      );
+    },
+    async beforeCommit(client, out) {
+      if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation, eventId: out.eventId });
+    },
+    respond: (out) => ({ status: out.httpStatus, body: out.body }),
+    mapError(error) {
       // The time zone is checked by events_before_write alone (one scan of
       // pg_timezone_names per write, the invariant where it holds).
-      if (error?.code === "23514" && error.constraint === TIMEZONE_CONSTRAINT) throw bad("invalid_timezone", "timezone must be an IANA time zone name.");
+      if (error?.code === "23514" && error.constraint === TIMEZONE_CONSTRAINT) return bad("invalid_timezone", "timezone must be an IANA time zone name.");
       if (error?.code === "23505" && SCHEDULE_UNIQUE_CONSTRAINTS.has(error.constraint)) {
-        throw conflict("schedule_already_referenced", "Another planned event already refers to this schedule.");
+        return conflict("schedule_already_referenced", "Another planned event already refers to this schedule.");
       }
       // A slot or an activity linked by a concurrent command to another
       // event meanwhile (the pre-check under the plan locks saw it free).
       if (error?.code === "23505" && error.constraint === SESSION_LINK_CONSTRAINT) {
-        throw conflict("session_already_attached", "One of these sessions is already attached to another event.");
+        return conflict("session_already_attached", "One of these sessions is already attached to another event.");
       }
       if (error?.code === "23505" && error.constraint === ACTIVITY_LINK_CONSTRAINT) {
-        throw conflict("activity_already_attached", "This activity is already attached to another event.");
+        return conflict("activity_already_attached", "This activity is already attached to another event.");
       }
-      if (error?.code === "23505" && error.constraint === REQUEST_KEY_CONSTRAINT && hash) {
-        // The same key landed meanwhile (a double submit, a retry racing an
-        // in-flight COMMIT): the saved request decides, never a bare 500. A
-        // lookup that fails or times out says "try again", never that the
-        // key belongs to another request.
-        let found;
-        try {
-          found = await findStoredResult(ctx.userId, requestKey, hash, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
-        } catch (checkError) {
-          console.error(`[calendar] checking a racing ${operation} failed: ${checkError?.message}`);
-          throw conflict("try_again", "The event is being changed. Try again.");
-        }
-        if (found) return { ...(await answerOf(pool, ctx, found, { replayed: true })), replayed: true };
-        throw requestKeyReused();
-      }
-      throw error;
-    }
-    console.error(`[calendar] commit of ${operation} on event ${eventId ?? "(new)"} failed: ${error?.code ?? ""} ${error?.message}`);
-    if (commitCertainlyRefused(error)) {
-      await client.query("rollback").catch(() => { broken = true; });
-      throw new EventError(500, "internal_error", NOTHING_SAVED);
-    }
-    released = true;
-    client.removeListener("error", onClientError);
-    client.on("error", () => {});
-    client.release(true);
-    let found = null;
-    try {
-      found = await findStoredResult(ctx.userId, requestKey, hash, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
-    } catch (checkError) {
-      console.error(`[calendar] checking ${operation} after an unconfirmed COMMIT failed: ${checkError?.message}`);
-    }
-    if (found) return { ...(await answerOf(pool, ctx, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
-    throw new EventError(503, "outcome_unknown", OUTCOME_UNKNOWN);
-  } finally {
-    if (!released) {
-      client.removeListener("error", onClientError);
-      client.release(broken ? true : undefined);
-    }
-  }
+      return null;
+    },
+  });
 }
 
-// Is the request committed? Bounded as a whole on a new connection (the
-// roster commands' findStoredResult). Returns the stored ids, or null.
-async function findStoredResult(userId, requestKey, hash, ms) {
-  const deadline = Date.now() + ms;
-  const left = () => Math.max(1, deadline - Date.now());
-  const connecting = pool.connect();
-  let checker;
-  try {
-    checker = await withinBound(connecting, left());
-  } catch (error) {
-    connecting.then((late) => late.release(true), () => {});
-    throw error;
-  }
-  let bad_ = false;
-  const onErr = () => { bad_ = true; };
-  checker.on("error", onErr);
-  try {
-    if (testHooks.checkFault) await testHooks.checkFault(checker);
-    const answer = checker.query({
-      text: `select request_hash, result from calendar.event_requests where performed_by_user_id = $1 and request_key = $2`,
-      values: [userId, requestKey],
-      query_timeout: left(),
-    });
-    answer.catch(() => {});
-    const row = (await withinBound(answer, left())).rows[0];
-    return row && row.request_hash === hash ? row.result : null;
-  } catch (error) {
-    bad_ = true;
-    throw error;
-  } finally {
-    checker.removeListener("error", onErr);
-    if (bad_) checker.on("error", () => {});
-    checker.release(bad_ ? true : undefined);
-  }
-}
+
 
 // ---------------------------------------------------------------------------
 // The commands
@@ -945,7 +872,7 @@ export async function cancelEvent(ctx, eventId, body) {
 // ---------------------------------------------------------------------------
 export const MAX_LINKED_SESSIONS = 200;
 
-function uuidListField(body, field, code, { max }) {
+export function uuidListField(body, field, code, { max }) {
   const raw = body?.[field];
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > max) throw bad(code, `${field} must be a list of 1 to ${max} ids.`);
   const out = new Set();
@@ -955,7 +882,7 @@ function uuidListField(body, field, code, { max }) {
   }
   return [...out].sort();
 }
-function booleanField(body, field, code) {
+export function booleanField(body, field, code) {
   if (!(field in (body || {})) || body[field] === undefined) return false;
   if (typeof body[field] !== "boolean") throw bad(code, `${field} must be true or false.`);
   return body[field];
@@ -981,15 +908,13 @@ export function validateDetachSessionsBody(body) {
     },
   };
 }
-// The standalone alignment is audited as an `update` of the event (v49's
-// change kinds hold no `align_sessions`; the details say `align`), its
-// canonical body carrying `align: true` so its request hash never equals an
-// ordinary edit's.
+// The standalone alignment is audited with its own kind, `align_sessions`
+// (K2b-1a, T1: v51 adds it to v49's two CHECKs; the details say `align`).
 export function validateAlignSessionsBody(body) {
   return {
     requestKey: requestKeyOf(body),
     canonical: {
-      operation: "update", align: true, expectedRevision: revisionField(body),
+      operation: "align_sessions", expectedRevision: revisionField(body),
       confirmDisableWithResults: booleanField(body, "confirmDisableWithResults", "invalid_confirm"),
     },
   };

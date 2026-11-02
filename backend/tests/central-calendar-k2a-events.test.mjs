@@ -38,10 +38,13 @@ const EXTRA_TRAINING_LOAD_MIGRATIONS = [
   "202609011200_training_load_v6_external_schedule_event_type.sql",
   "202609030900_training_load_v8_specific_dates_group.sql",
 ];
-// The calendar's own migration is v49: this suite stops there, so a later
-// migration (v50, phase 7g) never sits between its rehearsal and its checks.
-const MIGRATIONS = [...TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...EXTRA_TRAINING_LOAD_MIGRATIONS].sort()
-  .filter((m) => m <= V49);
+// The suite's database takes every migration (the routes of a release need
+// its own: since v51, K2b-1a, the calendar code reads v51's tables). The
+// checks of v49 itself — its post-check, its objects, its rollback rehearsal
+// — run on databases that stop at v49 (V49_MIGRATIONS), so a later migration
+// never sits between a rehearsal and its checks.
+const MIGRATIONS = [...TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...EXTRA_TRAINING_LOAD_MIGRATIONS].sort();
+const V49_MIGRATIONS = MIGRATIONS.filter((m) => m <= V49);
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 const TZ = "Europe/Belgrade";
 
@@ -309,9 +312,15 @@ after(async () => {
 // 1. The migration
 // ---------------------------------------------------------------------------
 test("1a. v49 is recorded once, with its objects and seed; the post-check runbook reads as expected; the catalog is read-only and a system type is never deleted", async () => {
+  // On a database that stops at v49 (as the deploy of v49 left production).
+  const v49db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2av49", migrations: V49_MIGRATIONS });
+  const v49client = new pg.Client({ connectionString: v49db.url });
+  await v49client.connect();
+  const q49 = async (sql, params = []) => (await v49client.query(sql, params)).rows;
+  try {
   // The post-check runbook, block by block, on the fresh database (before any
   // event exists): the owner's expected values.
-  const post = await runbookBlocks(admin, "calendar-events-v49-postcheck.sql");
+  const post = await runbookBlocks(v49client, "calendar-events-v49-postcheck.sql");
   assert.equal(Number(post[0].v49_rows), 1);
   assert.equal(Number(post[0].later_rows), 0);
   assert.equal(post[0].last_migration, `migrations_v2/${V49}`);
@@ -328,25 +337,31 @@ test("1a. v49 is recorded once, with its objects and seed; the post-check runboo
   assert.equal(Number(post[5].tables_granted), 0, "block 6: no Data API role holds a privilege");
   assert.equal(Number(post[6].clubs_without_seven), 0, "block 7");
 
-  const rec = await q(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V49]);
+  const rec = await q49(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V49]);
   assert.equal(rec[0].n, 1);
-  const objs = (await q(`select (select count(*) from pg_tables where schemaname = 'calendar')::int as tables,
+  const objs = (await q49(`select (select count(*) from pg_tables where schemaname = 'calendar')::int as tables,
                                 (select count(*) from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'calendar' and not t.tgisinternal)::int as triggers,
                                 (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar')::int as functions`))[0];
   assert.deepEqual(objs, { tables: 7, triggers: 26, functions: 22 }, "the post-check runbook's block 2 names the same counts");
-  await assert.rejects(q(`delete from calendar.event_types where owner_scope = 'system' and kind = 'travel'`), (e) => e.code === "23514", "a system type is never deleted");
-  assert.equal((await q(`select count(*)::int as n from calendar.event_types where owner_scope = 'system'`))[0].n, 7);
-  const systemTypes = await q(`select kind, default_expects from calendar.event_types where owner_scope = 'system' order by sort_order`);
+  await assert.rejects(q49(`delete from calendar.event_types where owner_scope = 'system' and kind = 'travel'`), (e) => e.code === "23514", "a system type is never deleted");
+  assert.equal((await q49(`select count(*)::int as n from calendar.event_types where owner_scope = 'system'`))[0].n, 7);
+  const systemTypes = await q49(`select kind, default_expects from calendar.event_types where owner_scope = 'system' order by sort_order`);
   assert.deepEqual(systemTypes.map((t) => [t.kind, t.default_expects]), [
     ["training", ["rpe"]], ["match", ["rpe"]], ["travel", []], ["meeting", []], ["day_off", []], ["camp", []], ["test", ["test_result"]],
   ], "D19: the seeded defaults");
-  await assert.rejects(q(`update calendar.event_types set label = 'X' where owner_scope = 'system' and kind = 'training'`), (e) => e.code === "23514");
+  await assert.rejects(q49(`update calendar.event_types set label = 'X' where owner_scope = 'system' and kind = 'training'`), (e) => e.code === "23514");
+  } finally {
+    await v49client.end().catch(() => {});
+    await v49db.drop();
+  }
   // A type in use is kept by the events' foreign key; an unused copy goes
   // with its club (test 23). Here: a club's copy with an event cannot go.
   const c = await clubFixture("types-in-use");
   const training = await typeOf(c.clubAdmin.cookie, "training");
   assert.equal((await createEvent(c.clubAdmin.cookie, { eventTypeId: training.id, title: "Uses the type", day: FUTURE, targets: [{ kind: "club", id: c.clubId }] })).status, 201);
-  await assert.rejects(q(`delete from calendar.event_types where id = $1`, [training.id]), (e) => e.code === "23503");
+  // Since v51 (K2b-1a, D37) a club's type is never deleted on its own: the
+  // refusal now comes from its guard before the events' foreign key.
+  await assert.rejects(q(`delete from calendar.event_types where id = $1`, [training.id]), (e) => e.code === "23514" && /archived, never deleted/.test(e.message));
 });
 
 test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest identical -> re-apply; the rollback refuses once an event exists", async () => {
@@ -360,7 +375,7 @@ test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest id
       union all
       select 'idx:' || schemaname || '.' || indexname || ':' || indexdef from pg_indexes where schemaname not in ('pg_catalog', 'information_schema')
     ) s`;
-  const beforeOurs = MIGRATIONS.filter((m) => m !== V49);
+  const beforeOurs = V49_MIGRATIONS.filter((m) => m !== V49);
   const other = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2arb", migrations: beforeOurs });
   const client = new pg.Client({ connectionString: other.url });
   await client.connect();
@@ -405,6 +420,28 @@ test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest id
     await client.query(`insert into calendar.event_types (owner_scope, owner_club_id, kind, key, label) values ('club', $1, 'training', 'extra', 'Extra')`, [clubX]);
     await refused("a non-seed catalog row", /not the seed/);
     await client.query(`delete from calendar.event_types where owner_club_id = $1 and key = 'extra'`, [clubX]);
+    // An event exists (written raw, with its target, request and change):
+    // the rollback's guard refuses. (Before K2b-1a this ran on the suite's
+    // own database, which now carries the later migrations.)
+    const rbUser = (await client.query(`insert into public.users (email, full_name, display_name) values ($1, 'rb', 'rb') returning id`, [`rb-${uid()}@test.local`])).rows[0].id;
+    await client.query("begin");
+    const rbEvent = (await client.query(
+      `insert into calendar.events (owner_scope, owner_club_id, event_type_id, title, day, timezone, created_by_user_id)
+       values ('club', $1, (select id from calendar.event_types where owner_scope = 'system' and kind = 'meeting'), 'Board', current_date, 'UTC', $2) returning id`,
+      [clubX, rbUser],
+    )).rows[0].id;
+    await client.query(`insert into calendar.event_targets (event_id, target_kind, target_club_id) values ($1, 'club', $2)`, [rbEvent, clubX]);
+    const rbRequest = (await client.query(
+      `insert into calendar.event_requests (request_key, request_hash, operation, performed_by_user_id, event_id, result)
+       values (gen_random_uuid(), $1, 'create', $2, $3, '{}') returning id`,
+      ["a".repeat(64), rbUser, rbEvent],
+    )).rows[0].id;
+    await client.query(
+      `insert into calendar.event_changes (event_id, kind, basis, performed_by_user_id, request_id, revision) values ($1, 'create', 'platform_admin', $2, $3, 1)`,
+      [rbEvent, rbUser, rbRequest],
+    );
+    await client.query("commit");
+    await refused("an event exists", /row\(s\) exist/);
     const holder = new pg.Client({ connectionString: other.url });
     await holder.connect();
     try {
@@ -417,15 +454,6 @@ test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest id
     await client.end().catch(() => {});
     await other.drop();
   }
-
-  // On this suite's database an event exists: the rollback's guard refuses.
-  const c = await clubFixture("rb");
-  const created = await createEvent(c.clubAdmin.cookie, { eventTypeId: (await typeOf(c.clubAdmin.cookie, "meeting")).id, title: "Board", day: FUTURE, targets: [{ kind: "club", id: c.clubId }] });
-  assert.equal(created.status, 201, created.text);
-  const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/calendar-events-v49-rollback.sql"), "utf8");
-  await assert.rejects(admin.query(rollback), (e) => /rollback refused/.test(e.message) && /row\(s\) exist/.test(e.message));
-  await admin.query("rollback").catch(() => {});
-  assert.ok((await q(`select to_regclass('calendar.events') as t`))[0].t, "nothing was dropped");
 });
 
 // ---------------------------------------------------------------------------
