@@ -76,8 +76,9 @@ is null; the align command still writes `update`, which the widened CHECK keeps)
   them, but a raw writer could still write a value for one meanwhile. Recorded for the next calendar migration, which
   may add the club to the guard. In the same way `events_location_guard` judges a place only when `location_id`
   changes, so club A's place kept on a moved team's event is guarded by the service alone (plan 18.8).
-- **A club event's team target after the team moved** (K2b-1b, plan 18.8, until the owner decides): the event stays
-  visible to the team's new club and coach, the address and note of the owner club's place included.
+- **A club event's team target after the team moved** (K2b-1b, plan 18.8): settled by D43 (plan section 19) — a team's
+  club is fixed after creation, so only a raw database write can move a team; such a write would leave the event visible
+  to the team's new club and coach, the address and note of the owner club's place included.
 - A club that was archived before v51 (or v49) and is made active again by a direct database write has no copies:
   `select calendar.seed_club_event_types('<club id>')` (idempotent by seed key), on the owner's order only.
 - An address correction shows on every event of that place, past ones included (D34).

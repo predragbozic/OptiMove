@@ -252,6 +252,7 @@ export function renderOrganizationBrowser(data) {
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
+          ${section === "teams" && archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : ""}
           ${section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : ""}
           ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
         </div>
@@ -268,6 +269,7 @@ export function renderOrganizationBrowser(data) {
               : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin })
           : ""}
       </section>
+      ${section === "teams" && state.organization.showArchivedTeams && archivedTeamsOffered(data, isPlatformAdmin) ? renderArchivedTeamsList(data.archivedTeams) : ""}
       ${section === "athletes" && !selectedClub && !selectedTeam && state.organization.showArchivedAthletes ? renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(activeAthletes) : ""}
@@ -299,6 +301,47 @@ function renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfil
         ${archivedProfiles.length ? archivedProfiles.map(renderArchivedProfileRow).join("") : `<p class="muted">No archived profiles.</p>`}
       </div>
     </section>` : ""}
+  `;
+}
+
+// D44: the archived teams the server lists (only to whoever may restore
+// them: a platform admin, a club's admin). Restoring brings the team back,
+// never its athletes' memberships; a team of an archived club waits for its
+// club.
+function renderArchivedTeamsList(teams) {
+  return `
+    <section class="panel organization-list-card organization-archived-teams">
+      <div class="organization-list-head"><p class="eyebrow">Archived teams</p><strong>${teams.length}</strong></div>
+      <p class="muted organization-archived-teams-note">Restoring brings the team back as it was archived, with its coaches and athletes. A membership archived on its own stays archived.</p>
+      <div class="organization-list">
+        ${teams.length ? teams.map(renderArchivedTeamRow).join("") : `<p class="muted">No archived teams.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+// D44: the archived teams are a club manager's list. The server sends them to a
+// platform admin and a club's admin, narrowed to the workspace, so only the
+// platform and a club workspace offer them (a team workspace's empty list is no
+// "Show archived (0)").
+function archivedTeamsOffered(data, isPlatformAdmin) {
+  return Array.isArray(data.archivedTeams) && Boolean(isPlatformAdmin || data.canCreateTeam)
+    && ["platform", "club"].includes(state.currentUser?.activeWorkspace?.type);
+}
+
+function renderArchivedTeamRow(team) {
+  const title = team.name || "Untitled team";
+  // The server restores a team only into an active club: none for a team without one.
+  const restorable = Boolean(team.club_id) && team.club_active !== false;
+  const note = !team.club_id ? "No club" : team.club_active === false ? " - the club is archived" : "";
+  return `
+    <article class="organization-row is-archived">
+      <span class="organization-avatar">${escapeHtml(title.slice(0, 2).toUpperCase())}</span>
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(team.club_id ? team.club_name || "" : "")}${note}</small></span>
+      <span class="organization-row-actions">
+        ${restorable ? `<button class="plain-button compact-button" type="button" data-action="organization-restore-team" data-team-id="${escapeAttr(team.id)}" aria-label="Restore ${escapeAttr(title)}">Restore</button>` : ""}
+      </span>
+    </article>
   `;
 }
 
@@ -1623,11 +1666,13 @@ function renderOrganizationClubEditForm(row) {
   `;
 }
 
+// D43: a team's club is fixed after creation, so the edit form shows it as
+// text and sends no clubId (the server keeps the stored club).
 function renderOrganizationTeamEditForm(row, clubs) {
-  const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
+  const clubName = clubs.find((club) => String(club.id) === String(row.club_id))?.name || row.club_name || "";
   return `
     <form class="organization-form" data-organization-form="edit-team" data-organization-edit-id="${escapeAttr(row.id)}">
-      ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: row.club_id, required: true, placeholder: "Type club name" })}
+      <div class="search-field organization-fixed-club"><span>Club</span><p>${escapeHtml(clubName || "—")}</p><small class="muted">A team's club can't be changed.</small></div>
       <label class="search-field"><span>Team name</span><input name="name" required value="${escapeAttr(row.name || "")}"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>

@@ -1621,6 +1621,7 @@ test("25. a cancel still works after the referenced test schedule was deleted an
   const team3 = await makeTeam(c.clubId, "later T3");
   const coach3 = await coachOf(team3, "later coach 3");
   const moved = (await createEvent(coach3.cookie, { eventTypeId: training.id, title: "Before the move", day: FUTURE, targets: [{ kind: "team", id: team3 }] })).body.event;
+  // A raw write: since D43 the route no longer moves a team (a team's club is fixed); the test checks the calendar against such a write.
   await q(`update public.teams set club_id = $2 where id = $1`, [team3, other.clubId]);
   try {
     const afterMove = await cancelEvent(coach3.cookie, moved.id, { expectedRevision: 1, reason: "Moved" });

@@ -527,6 +527,8 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | **D39** | Q12 | A detail's value is filled in only by the event's managers (the `canManage` of K2a 4.1). |
 | **D40** | (2026-11-02, the owner through the manager) | Questions to athletes go **only through the Tests module** (a questionnaire is a test; `test_parameters` numeric / integer / boolean / ordinal / text, `athlete_self`, its schedules and reminders). **K2b-2 = "Ask athletes"** on an event: a questionnaire from the Tests library, scheduled in one click for the event's athletes on its day with a window after it; Tests' notifications; the results in Tests and on the event's card; plus the **mapping of Tests parameters into Metrics Core** so the answers reach the Training Load dashboards (no new registry; `.claude/rules/metrics-core-mapping.md`). Replaces the earlier idea of athlete fields through the RPE channel as new variables. The split: coach fields = Details (K2b-1); RPE = Training Load; other questions to athletes = Tests (+ the mapping). |
 | **D41** | (2026-11-02, the owner through the manager) | A team that has calendar events **may** move to another club (`PUT /api/organization/teams/:id`); its events go with it. The new club sees only the kind's word — never the old club's type label or id, place or details — and its admin chooses the club's own. Answers the open question of section 17. |
+| **D43** | (2026-11-02, the owner through the manager) | Teams do **not** move between clubs: a team's club is fixed after creation. Athletes still move from team to team and club to club through their memberships. Supersedes D41's premise and suspends D42 (section 19). |
+| **D44** | (2026-11-02, the owner through the manager) | A club may stop a team one season and bring it back the next: a club's admin (or a platform admin, never the team's coach) restores an archived team; a name taken in the club, an archived team's included, is a clear refusal that offers the archived team for restoring (section 19). |
 
 ## 17. K2b-1a as built (2026-11-01)
 
@@ -815,7 +817,7 @@ prove marked "per the stream manager").
   the place the event shows — is the only guard.
 - **Release order:** the "required" switch of K2b-1c ships with K2b-1d or after it (the event form where a coach enters
   the values); before that, an event could wait for a detail nobody has a place to fill.
-- **Known limit until the owner decides** (the independent review's MEDIUM, recorded without a change): an event of club
+- **Known limit — settled by D43** (section 19; the independent review's MEDIUM, recorded without a change): an event of club
   A that targets its team T stays visible after T moves to club B — club B's admin and T's coach see its title and time
   and, since K2b-1b, the address and note of A's library place. The cause is K2a's reader rule
   (`backend/src/calendarAccess.js`, the club and team branches of `calendarScheduleCandidateSql`: a team target of
@@ -827,3 +829,73 @@ prove marked "per the stream manager").
 - **Tests:** `backend/tests/central-calendar-k2b-event-details.test.mjs` (18.6, items 1–7 and 9; the regression of
   item 8 is the four earlier calendar suites, where the athlete's allowlist gained `place` and the settings suite's
   helper event chooses no details so its raw writes choose them).
+
+## 19. D43 — a team's club is fixed after creation (D42 suspended)
+
+**D43** (the owner, 2026-11-02, through the manager): moving a team between clubs is not an intended option.
+- **The rule:** a team's club is fixed after creation. `PUT /api/organization/teams/:teamId`:
+  - takes the same `clubId` as before, or none (the edit form no longer sends it);
+  - answers another `clubId` with `409 team_club_fixed` ("A team's club cannot be changed.") and writes nothing;
+  - decides the rights first (the team's, then its own club's, as before), so a caller who may not edit the team
+    learns nothing of its club.
+- **The edit form** (`renderOrganizationTeamEditForm`) shows the club as text. Creating a team still chooses the club.
+- **Athletes** still move between teams and clubs through their memberships, as before.
+- **D42 is suspended.** The plan-delta and the code of D42 (a club event's team target only while the team is the club's) stay on the local branch `central-calendar-k2b-team-target` (head `e093777`), not pushed and not released.
+- **D41's masking** (K2b-1a and K2b-1b) stays as an extra guard against a raw database write, unchanged. The calendar
+  suites that move a team by a raw `update public.teams set club_id` say so in a comment.
+- **Known limits:**
+  - the database still takes a raw `update` of a team's club. A trigger that refuses it may come with a later
+    migration; v27 (section 2b, trigger `teams_source_binding_guard_move`) already refuses moving a team while it has an active
+  binding through its club's connection; an unbound team can still be moved by a raw write.
+  - a team without a club (possible only after a club's hard delete, `on delete set null`) cannot be given one through
+    the app: any `clubId` is the 409 (code review of D43; accepted as D43 reads).
+- **D44, in the same pull request** (the owner, 2026-11-02): a club may stop a team one season and bring it back the next.
+  - `PUT /api/organization/teams/:teamId/restore`, for the club's admin or a platform admin, never the team's coach
+    (restoring is the club's decision, as assigning the coach role). The team's club is read from the database,
+    archived teams included (the request's authorization context holds active teams only). Answers:
+    - a team the caller may not restore, or an unknown id, gets the answer of a foreign team today
+      (`403 Team is outside your access.`; a platform admin's unknown id `404`);
+    - a team of an archived club gets `409 club_archived` (no route restores a club today). The club's state is checked
+      in the restoring statement itself, so a club archive committed before that statement leaves the team archived. An
+      archive committed after it gives the same state as "restore, then archive the club", which is allowed (a club's
+      archive does not archive its teams), so the statement takes no lock on the club;
+    - an active team gets `200` as it is (`restored: false`);
+    - `409 team_changed` when nothing was restored and the team is neither active nor of an archived club: its club changed
+      between the check and the write (only a raw database write can do that, D43), or an archive of the same team won a
+      race with the restore (the archive is the last write; the caller reads the list again).
+  - `PUT /teams/:teamId` answers an id that is not a UUID as an unknown team (`404 Team not found.` for a platform admin,
+    the only caller who gets past the right with one; everyone else's right is decided first, as before).
+  - Only the team row changes. An archive changes nothing but that row either (`DELETE /teams/:teamId`), so a restore
+    brings the team back as it was archived: its coaches' roles, its athletes' memberships and an active GPEXE binding
+    work again, each checked again at use. A membership archived on its own stays archived (a new season adds new
+    memberships). The GPEXE identities, dropped at the archive (`teams_drop_gpexe_athlete_identities`), are loaded
+    again on demand. The team triggers are safe for it: the identity trigger acts only when `is_active` becomes false,
+    and the move guard only on a change of `club_id`.
+  - Neither an archive nor a restore writes an audit row, as before D44.
+  - **A name taken in the club** (`teams_club_name_unique (club_id, name)`, the legacy schema, archived teams included)
+    is `409 { error: "team_name_taken", archived, teamId?, message }` on `POST /teams` and on a rename. `teamId` is
+    given only for an archived team ("An archived team with this name exists in this club — restore it instead."). The
+    club's right is decided before the write, so the id reaches only someone who manages that club. Any unique
+    violation of a team write is confirmed by reading the team that holds the name; the constraint's name is not relied
+    on, since no migration in the repository creates it.
+  - **Settings → Organization → Teams:**
+    - *Show archived* lists the archived teams. `GET /api/organization` gives them (`archivedTeams`) only to a
+      platform admin (every team, with its club's state) and a club's admin (its active clubs'), narrowed to the
+      workspace.
+    - *Show archived* is offered only in the platform and a club workspace (a team workspace's list is empty).
+    - *Restore* is offered except for a team of an archived club or a team without a club.
+    - The create form answers an archived team's name with the message and a *Restore* for it, which closes the form; a
+      *Restore* from the archived list leaves the add form as it is.
+  - Tests: `backend/tests/organization-team-club-fixed.test.mjs` (tests 4–11; 10 and 11 are the independent review's
+    E10, another unique rule is not `team_name_taken`, and E11, a team moved between the check and the write) and
+    `frontend/tests/organization-teams-archive.test.mjs`.
+- **Open questions for the owner** (D44's work, no code change):
+  - a team's coach can archive (*Delete*) their own team today, since `DELETE /teams/:teamId` takes
+    `canManageTeamById`, which includes `team_coach`; restoring it is the club's. Is the coach's archive intended?
+  - **the memberships of a restored team** (the independent review's finding 5): an archive ends no membership, so a
+    team restored a year later comes back with last season's athletes, who see its new events again. Should a restored
+    team come back empty? Asked by the stream manager; if the answer is "empty", it is a small pull request of its own.
+- **Recorded, not changed** (the independent review; on `main` before this pull request): the admin of an archived club
+  can still create a team in it, since `POST /teams` does not check the club's state.
+- **No migration.** Tests: `backend/tests/organization-team-club-fixed.test.mjs`, `frontend/tests/organization-view.render.test.mjs`
+  (the edit form) and `frontend/tests/organization-teams-archive.test.mjs`.

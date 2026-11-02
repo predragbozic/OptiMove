@@ -339,15 +339,17 @@ async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
 
 router.get("/", async (req, res, next) => {
   try {
-    const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }] = await Promise.all([
+    const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }, archivedTeams] = await Promise.all([
       loadClubs(req),
       loadTeams(req),
       loadManagedAthletes(req),
       loadUsers(req),
       loadProgramAccessRequests(req),
       resolveActiveWorkspace(req.user.id, req.authz),
+      loadArchivedTeams(req),
     ]);
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
+    const scopedArchivedTeams = archivedTeamsForWorkspace(activeWorkspace, archivedTeams);
     // Independent of each other - neither reads the other's result - so they
     // run concurrently instead of back-to-back. loadJoinApplicationsForWorkspace
     // still has to wait: it needs the actual joinLinks rows (their ids) to
@@ -377,6 +379,7 @@ router.get("/", async (req, res, next) => {
       manageableTeamIds: scoped.teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
       clubs: scoped.clubs,
       teams: scoped.teams,
+      archivedTeams: scopedArchivedTeams,
       athletes: athletesWithInviteStatus,
       users: scoped.users,
       accessRequests: scoped.accessRequests,
@@ -1064,10 +1067,12 @@ router.delete("/clubs/:clubId", async (req, res, next) => {
 });
 
 router.post("/teams", async (req, res, next) => {
+  let name;
+  let clubId;
   try {
     if (!(isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0)) return res.status(403).json({ error: "Only club admin can create teams." });
-    const name = clean(req.body?.name);
-    const clubId = clean(req.body?.clubId);
+    name = clean(req.body?.name);
+    clubId = clean(req.body?.clubId);
     if (!name) return res.status(400).json({ error: "Team name is required." });
     if (!clubId) return res.status(400).json({ error: "Club is required." });
     if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
@@ -1079,27 +1084,126 @@ router.post("/teams", async (req, res, next) => {
     );
     res.status(201).json({ team: result.rows[0] });
   } catch (error) {
+    try {
+      const taken = await teamNameTaken(error, clubId, name);
+      if (taken) return res.status(409).json(taken);
+    } catch {}
     next(error);
   }
 });
 
+// D44 (the owner, 2026-11-02): a team's name is unique in its club, archived
+// teams included (teams_club_name_unique, the legacy schema). A clash is a 409
+// that says whether the other team is archived — then the club restores it
+// instead — and, only then, its id. Both writers decide the club's right
+// before the write, so the id reaches only someone who manages that club. Any
+// unique violation of a team write is the name (the other keys are the
+// generated id), confirmed by reading the team that holds the name.
+async function teamNameTaken(error, clubId, name, exceptTeamId = null) {
+  if (error?.code !== "23505" || !clubId || !name) return null;
+  const other = (await query(
+    `select id, coalesce(is_active, true) as active from public.teams
+      where club_id = $1 and name = $2 and ($3::uuid is null or id <> $3::uuid) limit 1`,
+    [clubId, name, exceptTeamId],
+  )).rows[0];
+  if (!other) return null;
+  return other.active
+    ? { error: "team_name_taken", archived: false, message: "A team with this name already exists in this club." }
+    : { error: "team_name_taken", archived: true, teamId: String(other.id), message: "An archived team with this name exists in this club — restore it instead." };
+}
+
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// D43 (the owner, 2026-11-02): a team's club is fixed after creation — teams
+// never move between clubs (athletes do, through their memberships). The edit
+// keeps the stored club and never writes club_id: a `clubId` equal to it is
+// accepted as before (and may be left out, the edit form no longer sends it),
+// another one is a 409 and nothing is written. The rights are those of today's
+// edit of the same team (the team, then its own club), decided before the
+// comparison, so a caller who may not edit the team learns nothing of its club.
 router.put("/teams/:teamId", async (req, res, next) => {
+  let name;
+  let team;
   try {
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    const name = clean(req.body?.name);
-    const clubId = clean(req.body?.clubId);
+    name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Team name is required." });
-    if (!clubId) return res.status(400).json({ error: "Club is required." });
-    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    // Only a platform admin gets here with an id that is not a UUID: it is no team.
+    if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
+    team = (await query(`select club_id from public.teams where id = $1`, [req.params.teamId])).rows[0];
+    if (!team) return res.status(404).json({ error: "Team not found." });
+    if (!(await canManageClub(req, String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
+    const clubId = clean(req.body?.clubId);
+    if (clubId && clubId.toLowerCase() !== String(team.club_id).toLowerCase()) {
+      return res.status(409).json({ error: "team_club_fixed", message: "A team's club cannot be changed." });
+    }
     const result = await query(
       `update public.teams
-       set club_id = $2, name = $3, short_name = $4, logo_url = $5, updated_at = now()
+       set name = $2, short_name = $3, logo_url = $4, updated_at = now()
        where id = $1
        returning id, club_id, name, short_name, logo_url`,
-      [req.params.teamId, clubId, name, clean(req.body?.shortName), clean(req.body?.logoUrl)],
+      [req.params.teamId, name, clean(req.body?.shortName), clean(req.body?.logoUrl)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Team not found." });
     res.json({ team: result.rows[0] });
+  } catch (error) {
+    try {
+      const taken = team ? await teamNameTaken(error, String(team.club_id), name, req.params.teamId) : null;
+      if (taken) return res.status(409).json(taken);
+    } catch {}
+    next(error);
+  }
+});
+
+// D44 (the owner, 2026-11-02): a club may stop a team one season and bring it
+// back the next. Restoring is the club's decision — its admin or a platform
+// admin, never the team's coach (as assigning the coach role, authz.js). The
+// team's club is read from the database, archived teams included (the
+// request's authorization context holds active teams only). A team the caller
+// may not restore answers as a foreign team does today; a team of an archived
+// club is refused; an active team answers 200 as it is. Only the team row
+// changes: its athletes' memberships are not touched (a new season adds new
+// memberships), and its GPEXE identities, dropped at the archive, are loaded
+// again on demand.
+router.put("/teams/:teamId/restore", async (req, res, next) => {
+  try {
+    const teamId = clean(req.params.teamId);
+    const row = UUID_TEXT.test(teamId || "") ? (await query(
+      `select id, club_id from public.teams where id = $1`,
+      [teamId],
+    )).rows[0] : null;
+    if (!row) {
+      return isPlatformAdministrator(req.authz)
+        ? res.status(404).json({ error: "Team not found." })
+        : res.status(403).json({ error: "Team is outside your access." });
+    }
+    if (!row.club_id || !(await canManageClub(req, String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
+    // One statement restores the team, and only while it is still in the club
+    // whose right was checked and that club is active: a club archived after the
+    // read above never gets an active team back.
+    const result = await query(
+      `update public.teams t set is_active = true, updated_at = now()
+         from public.clubs c
+        where t.id = $1 and t.club_id = $2 and c.id = t.club_id
+          and coalesce(c.is_active, true) and not coalesce(t.is_active, true)
+        returning t.id, t.club_id, t.name, t.short_name, t.logo_url`,
+      [teamId, row.club_id],
+    );
+    if (result.rows[0]) return res.json({ team: result.rows[0], restored: true });
+    // Nothing restored: answered from the team's state now.
+    const current = (await query(
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url,
+              coalesce(t.is_active, true) as active, coalesce(c.is_active, true) as club_active
+         from public.teams t left join public.clubs c on c.id = t.club_id
+        where t.id = $1`,
+      [teamId],
+    )).rows[0];
+    if (current && String(current.club_id) === String(row.club_id)) {
+      const { active, club_active: clubActive, ...team } = current;
+      if (active) return res.json({ team, restored: false });
+      if (!clubActive) return res.status(409).json({ error: "club_archived", message: "The team's club is archived, so the team can't be restored." });
+    }
+    res.status(409).json({ error: "team_changed", message: "The team changed meanwhile. Reload and try again." });
   } catch (error) {
     next(error);
   }
@@ -2842,6 +2946,47 @@ async function loadClubs(req) {
        join public.clubs c on c.id = t.club_id
        where utr.user_id = $1 and utr.is_active = true and coalesce(c.is_active, true)
        order by c.name`,
+      [req.user.id],
+    );
+    return result.rows;
+  }
+  return [];
+}
+
+// D44: the platform workspace lists every archived team the viewer may
+// restore, a club workspace that club's; any other workspace none.
+export function archivedTeamsForWorkspace(workspace, archivedTeams) {
+  if (workspace?.type === "platform") return archivedTeams;
+  if (workspace?.type === "club") return archivedTeams.filter((team) => String(team.club_id) === String(workspace.scopeId));
+  return [];
+}
+
+// D44: the archived teams the viewer may restore — every one for a platform
+// admin, those of the active clubs the viewer administers otherwise; never a
+// coach's (restoring is the club's decision). `club_active` is false for a team
+// without a club too: the restore route refuses both, so the list offers neither.
+export async function loadArchivedTeams(req) {
+  const authz = req.authz;
+  if (isPlatformAdministrator(authz)) {
+    const result = await query(
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name,
+              (c.id is not null and coalesce(c.is_active, true)) as club_active
+       from public.teams t
+       left join public.clubs c on c.id = t.club_id
+       where not coalesce(t.is_active, true)
+       order by c.name nulls last, t.name`,
+    );
+    return result.rows;
+  }
+  if (authz.clubRoles.length) {
+    const result = await query(
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, true as club_active
+       from public.user_club_roles ucr
+       join public.teams t on t.club_id = ucr.club_id
+       join public.clubs c on c.id = t.club_id
+       where ucr.user_id = $1 and ucr.is_active = true and ucr.role = 'club_admin'
+         and coalesce(c.is_active, true) and not coalesce(t.is_active, true)
+       order by c.name nulls last, t.name`,
       [req.user.id],
     );
     return result.rows;
