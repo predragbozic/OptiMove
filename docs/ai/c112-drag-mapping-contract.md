@@ -5,7 +5,7 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 | | |
 |---|---|
 | Status | **Proposed** by the executor on 2026-11-01. It follows the *Rukovodilac*'s order of that day, 20:33 UTC. The order, paraphrased: write the contract now as a proposal, documentation only; code comes after phase 9; sections 1–4 of the plan stay untouched; answer questions (a)–(d) as recommendations for the owner. It was drafted from a discovery and design panel: five fact sheets, three competing designs, and three review lenses (owner intent, security and privacy, database integrity). **No code is written before the owner accepts this contract and decides Q1–Q11, Q13 and Q14. O16 (Q12) gates 18-3, and Q11's answer gates the first real confirmation. No code is written before phase 9 ends, unless the owner says otherwise** (Q10 proposes what "ends" means). |
-| Verified against commit | `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line, and the dates Imports pre-fills when the board's after-save link opens it, in `frontend/gpexe-import-view.js` (sections 3.1 and 3.8). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
+| Verified against commit | `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line, and the dates Imports pre-fills when the board's after-save link opens it, in `frontend/gpexe-import-view.js` (sections 3.1 and 3.8). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`, except references into the discovery document and `CURRENT_STATE.md`, which this PR also edits: those are to the lines with this PR's own changes in place. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
 | Mark | ★★, proposed. The triggers are 1, 2, 3 and 4 of `CLAUDE.md`, plus the five-point rule for a transaction with an external effect. Trigger 5 applies to the frontend slice unless an integration run against the real routes covers it. A mark, a phase entry and its "Start" line go into the plan only on the owner's direct word (`metrics-core-plan.md:432-435`). For a ★★ phase the owner approves the contract before any code (`:450-452`). |
 | Owner decisions | Section 11.1 (Q1–Q14). Q1–Q11, Q13 and Q14 become C113–C123, C124 and C125 once decided; Q12 stays O16. They are written into section C of the discovery document before any code (the plan's rule A3, `metrics-core-plan.md:458-460`). |
 | Decides | The owner decides Q1–Q14. The *Rukovodilac* decides R1–R9 (section 11.2). The *Nezavisni revizor* reviews this contract and every ★★ slice. |
@@ -101,7 +101,7 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
   - A binding may hold one open activation per field and parameters, and one per variable and level (`v34:1337-1345`; `sourceMetricActivationSteps.js:42-47, :138-158`).
 - **C9.** While an active mapping version pins a variable's current version, the variable gets no new version (`v34:1222-1240`).
 - **T6.** A fact's source unit must equal the revision's proven unit and the version's (`v34:1563-1566`).
-- **Nothing is ever activated automatically today.** The rules are C8 (`discovery:326-327`), C33 (`:375-380`), D6 (`:1555-1556`), and section G's "N explicit rows, each audited, never a future binding" (`:1984`).
+- **Nothing is ever activated automatically today.** The rules are C8 (`discovery:326-327`), C33 (`:375-380`), D6 (`:1558-1559`), and section G's "N explicit rows, each audited, never a future binding" (`:1987`).
 
 ### 1.3 The actor guards and the audit
 
@@ -111,8 +111,8 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
   - A write inside a savepoint is refused (`v35:47-50`).
 - **v43's G1 and G2** check that a replacement label is true and that transition times are consistent (`v43:12-27`).
 - **T8, the audit table.**
-  - Its list of actions is closed (`v34:1677-1683`). It has no value-bearing column (`v34:1743`; D10, `discovery:1763-1768`).
-  - Each operation has exactly one keyed request record (`discovery:1755-1762`).
+  - Its list of actions is closed (`v34:1677-1683`). It has no value-bearing column (`v34:1743`; D10, `discovery:1766-1771`).
+  - Each operation has exactly one keyed request record (`discovery:1758-1765`).
   - Every action except the mapping actions is checked by one revision guard. v50 checks its md5 before replacing it (`v50:84-99, :211-346`).
   - A club-admin row must name a club mapping, except activation rows, which v48 widened (`v34:1747-1753`; `v48:339-362`).
 - **`runWrite`** provides the per-user advisory lock, the request record, the actor setting, the statement and lock bounds, and a bounded COMMIT verified by the request key. A replay answers only after the right is checked again (`sourceMetricMappingService.js:763-847, :776-780`).
@@ -487,7 +487,7 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
     7. for every new row, the pair's values must be non-zero and distinct (`pair_not_distinct`);
     8. the stored values must be inside the variable's limits (`value_outside_limits`);
     9. a T5 collision not listed in `replaces` (`activation_exists`, `variable_taken_on_binding`; `sourceMetricActivationSteps.js:138-158`).
-16. **The writes, in this order.** Every existing row is locked by steps 7–14, before the first write, as D requires (`discovery:1274-1277`). So the guards' own `FOR SHARE` locks at the first protected write (the role, user and club rows of v35 and v48, `v35:131, :162`; `metric_definitions` in the T3 trigger, `v34:647-648`) find their rows already held.
+16. **The writes, in this order.** Every existing row is locked by steps 7–14, before the first write, as D requires (`discovery:1277-1280`). So the guards' own `FOR SHARE` locks at the first protected write (the role, user and club rows of v35 and v48, `v35:131, :162`; `metric_definitions` in the T3 trigger, `v34:647-648`) find their rows already held.
     1. the T3 insert of each missing mapping, in ascending (field id, variable id) order, and its `mapping_create` row; the T4 draft of each new version and its `mapping_version_create` row; its `needs_review` transition and its `mapping_status` row. Each audit row comes right after its own write, so v35's guard sees the version at its target status (`v35:268-276`);
     2. the listed T5 ends (`admin_ended`, by the actor, with the basis v48 derives), carrying the fixed reason "Replaced on the drag-and-drop board.", with their `activation_end` rows;
     3. the T9 confirmation, its session row, and its rows. The database computes each digest and checks each stored value against the raw one (section 5.4);
@@ -498,7 +498,7 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
 
 ### 4.4 Lock order and concurrency
 
-The order is D's (`discovery:1268-1277`). A1 takes its listed bindings after its rights check (`sourceMetricMappingService.js:1426, :1485`); this write takes them before, as D lists:
+The order is D's (`discovery:1271-1280`). A1 takes its listed bindings after its rights check (`sourceMetricMappingService.js:1426, :1485`); this write takes them before, as D lists:
 
 `unit_conversions → T2a → T2b → T3 → T4 → metric_definitions → scope capabilities → T5 (to end) → binding → team → role / user / club`, then the new rows.
 
@@ -605,7 +605,7 @@ There is no free text, and no athlete data.
   - `confirmed_basis` must equal `source_metric_actor_basis(actor, owner_club_id)` (`v35:82-110`). Otherwise the answer is `42501`. A `field_observation` row needs `platform_admin`.
   - For a `team_mapping` row: `source_metric_binding_club(binding_id)` must equal `owner_club_id`. The binding must be active. The connection must be the binding's.
   - A write inside a savepoint is refused.
-- **Plain reads.** Every v52 guard reads the connection, the binding, the check and the candidate as plain reads and never locks them. So an Unbind's order (the connection, then the binding; `CURRENT_STATE.md:824-827`) is never inverted, as v34's T5 trigger keeps it for the v27 rows (`discovery:1285-1287`).
+- **Plain reads.** Every v52 guard reads the connection, the binding, the check and the candidate as plain reads and never locks them. So an Unbind's order (the connection, then the binding; `CURRENT_STATE.md:824-827`) is never inverted, as v34's T5 trigger keeps it for the v27 rows (`discovery:1288-1290`).
 - **BEFORE INSERT on T9s and T9i:** the row's confirmation must have been written in this transaction by the same actor.
   - On T9s, the check's facts must hold. For `team_mapping`, the team must be the binding's, and the check must have run through the confirmation's binding. At insert the candidate exists, belongs to `team_id`, has `last_seen_check_id = check_id`, carries `candidate_bundle_hash`, and is not `superseded`. Each failure has its fixed message.
   - On T9i, the T4 and T2b facts must be equal; the T4's owner must be the confirmation's club for `club_mapping`, and `system` for `system_mapping`; the T2b revision must be active and verified.
@@ -630,7 +630,8 @@ There is no free text, and no athlete data.
   - has `checked = true`;
   - names exactly this version, so its levels too. The comparison is at the session level only; it is the evidence for the version's drill level as well (section 4.3 step 10, R9);
   - belongs to a confirmation written in this transaction by `activated_by_user_id`, for the mapping's club.
-- Otherwise it refuses with `23514`.
+- Otherwise it refuses with `23514` and one fixed message. M2's allowlist of database refusals (`sourceMetricMappingService.js:312-324`) maps that message to `409 confirmation_required`, "Switch this version on from *Map by drag and drop*.", so A1 answers a sentence, never a sanitized `500 internal_error` (C63).
+- J16's screen (under 7h) does not offer *Activate* or *Replace* to a club admin for such a version; it shows the same sentence with a link to the board (section 8.6).
 - The gate applies only to a version whose field has `parameter_kind = 'none'`. It comes on top of 7h's basis change, never instead of it, and a platform admin's A1 is unaffected.
 - A1 writes no T9 row (`sourceMetricMappingService.js:1465-1506`). So after v52 a club admin's A1 under 7h is refused for such a version, a replacement included. The owner decides the consequence in **Q13 → C124**:
   - option one: a club admin activates a parameter-less club version only through the board, and a replacement is "disable in Mappings, then place again";
@@ -682,7 +683,7 @@ There is no free text, and no athlete data.
   - It needs an active platform admin in the platform workspace. A platform admin who confirmed may erase too: erasure only reduces data, and the T8 row and its actor record who did it.
   - A confirmer or a club admin who is not a platform admin can never remove evidence.
 - **What survives.** The salted digest, the facts, who and when all stay. With the salt gone, the digest can no longer be tested against guessed values.
-- **Backups.** A backup keeps the values for its own retention. The removal runs before a restored copy is used (the v32 rule; `CURRENT_STATE.md:1214, :4213`).
+- **Backups.** A backup keeps the values for its own retention. The removal runs before a restored copy is used (the v32 rule; `CURRENT_STATE.md:1214, :4215`).
 
 ### 5.9 Rollback, preflight and post-check
 
@@ -879,7 +880,8 @@ There is no free text, and no athlete data.
 | C28, J11 OD2 and OD3, J16 sections 7 and 9 | A scoped exception (Q7): (a) the board, routes 1–3, for the club's admins and a platform admin in that club's workspace; (b) the stored values in the history, routes 4–5, for the same audience and for an active platform admin in the platform workspace; (c) with 18-P, route 10, for the platform workspace. The 7e preview and J16 stay aggregate. |
 | C23 | Kept in the database. The board prefills a visible per-row toggle (Q8). |
 | C8, D6 | Kept. "Automatic" means pre-placed and the same click (Q9). |
-| C33, G | Kept: none is activated automatically. Amended: "the platform admin chooses which one a binding uses" (`discovery:378-379, :1985-1986`) becomes the club admin's choice on its own binding (C106), shown as "Replaces …" (section 7). |
+| C33, G | Kept: none is activated automatically. Amended: "the platform admin chooses which one a binding uses" (`discovery:378-379, :1988-1989`) becomes the club admin's choice on its own binding (C106), shown as "Replaces …" (section 7). |
+| J16's screen under 7h (sections 4–5 of `phase8-mappings-screen-contract.md`) | Amended by the gate (Q13): for a club admin and a club version of a field without parameters, *Activate* and *Replace* are not offered; the screen says "Switch this version on from *Map by drag and drop*." with a link to the board. A direct call answers `409 confirmation_required`. Zones and thresholds are unchanged. |
 | J16 R14 (no default, `phase8-mappings-screen-contract.md:460`) | Amended by Q8: the board prefills *Required*, visible on every row. |
 | C61, D4 | Kept. A club uses a system variable only through the system mapping. |
 | C108 (7h) | A dependency, and amended. J18's gate adds a database condition to a club admin's activation of a club version of a field without parameters, which a club admin then activates only through the board (section 5.5, Q13). Zone and threshold versions keep 7h's J16 path. |
@@ -887,7 +889,7 @@ There is no free text, and no athlete data.
 | C74–C79 (v35: one acting user per write) | Kept for every write but one: the scheduled removal of expired evidence values runs with no actor, as v32's purge of GPEXE names does (`v32:325`). It can only null values past their date (section 5.8; Q6 → C118). |
 | C9, C13, C16, C22, C34, C55, C57, C58, C63, C76 | Kept |
 | The plan's order (`metrics-core-plan.md:1062-1074`) | 7h stays right after phase 9. J18 comes next, then the rest of 7i (Q10, on the owner's direct word). |
-| D10 (T8's closed column set, `discovery:1749-1768`) | Extended by one typed column, `confirmation_id`, a foreign key to T9 (section 5.6). No value-bearing column is added. |
+| D10 (T8's closed column set, `discovery:1752-1771`) | Extended by one typed column, `confirmation_id`, a foreign key to T9 (section 5.6). No value-bearing column is added. |
 
 ---
 
@@ -932,6 +934,7 @@ There is no free text, and no athlete data.
    - A club-admin activation fails without its row, and with a row of another version (another version of the same mapping included), another club, another transaction or `checked = false`.
    - A platform admin's A1 is unaffected.
    - A club admin's activation of a zone or threshold version is not gated. A club admin's A1 of a version without parameters is refused (Q13). A club admin's activation of a 7i copy, which has no T9i row, is refused until J15's proof exists (Q14).
+   - Through the real route: a club admin's `POST /mappings/:id/versions/:vid/activate` of a `needs_review` club version with `parameter_kind = 'none'` and no T9i row answers `409 confirmation_required`, with no SQL text in the body and nothing written; never `500 internal_error`.
 8. **T8.**
    - The new actions' shapes and the `confirmation_id` CHECK are enforced. `confirmation_values_erased` takes only its two reason codes, never typed text. A board's `activation_end` row without its reason is refused (`v50:304-306`).
    - The md5 check refuses a different body in force.
@@ -1126,7 +1129,7 @@ Each new guard has a mutation that the suite kills:
 |---|---|---|
 | **d1 (recommended)** | The new append-only T9, T9s and T9i (section 5), written in the save's transaction. Exact values sit in a separable column set with a salted database digest. No athlete identity is stored. Values are removed N days after the confirmation by a scheduled purge with no actor, as v32 removes GPEXE names, or erased earlier on request. Readers are as in section 6.2. | A new copy of personal performance data. They are the same athletes' GPS values that OptiMove imports. It needs guards, tests, and backup handling. While the server runs, a value stays in the live table at most N days plus 6 hours; dead row versions leave with vacuum. Backups keep it for their own retention, and the removal runs before a restored copy is used. |
 | d2 | Values in a `docs/` document, as for C97 | A pull request per confirmation, and athletes' values in the repository. Not possible. |
-| d3 | Values in T8 | D10 refuses it: T8 has no value column, and its rows cannot be erased (`discovery:1763-1768`). |
+| d3 | Values in T8 | D10 refuses it: T8 has no value column, and its rows cannot be erased (`discovery:1766-1771`). |
 | d4 | Only a digest, no values | Nothing readable is kept. "Ove dve vrednosti" is what the owner's sketch asked to keep. |
 
 **Why d1.** It keeps exactly what the owner named: who, when, and the two values. It shows them only to administrators. Names are never stored. It respects D2's and D10's reason, that values must not sit in rows that cannot be erased: here the values can be removed while the act stays.
@@ -1164,6 +1167,7 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
   - Option one: a club admin activates such a version only through the board, and a replacement is "disable in Mappings, then place again".
   - Option two: the board gains a version-replacement row with v43's G1 chain.
   - Zone and threshold versions keep 7h's J16 path either way.
+  - Either way, the gate's refusal is `409 confirmation_required` with its sentence, and J16's screen under 7h offers no *Activate* or *Replace* for such a version (section 8.6).
   - Recommended: option one. It matches step 10's `mapping_version_active` ("Disable it in Mappings first"), and option two can be added later.
 - **Q14 → C125. A 7i copy and the gate** (section 5.5). 7i's form (b) (OD7, `discovery:1188-1193`) copies a system mapping as the club's draft version. Its activation by a club admin has no T9i row, so the v52 gate refuses it.
   - Option one: J15 adds, in its own migration, a second proof the gate accepts: a typed link from the club version to the system T4 version it copies, with identical revision, fingerprint, units and factors.
