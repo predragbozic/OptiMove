@@ -180,3 +180,33 @@ export async function t7Keys(client, teamId) {
     [teamId],
   )).rows;
 }
+
+// One platform admin per database for the world and its activations
+// (memoized like the world itself).
+const worldAdmins = new Map();
+async function worldAdmin(client) {
+  await assertDisposable(client);
+  const dbName = (await client.query("select current_database() as db")).rows[0].db;
+  if (!worldAdmins.has(dbName)) worldAdmins.set(dbName, await platformAdmin(client, "9b-world"));
+  return worldAdmins.get(dbName);
+}
+
+// The 9-B path of a suite that imports or approves: the system world (built
+// once per database), then the activations on a binding. `activateBinding`
+// takes a binding made through the real Connect / Bind routes;
+// `mappedBinding` binds with raw SQL first (writer-level suites). The
+// bundle's GPEXE team must be the binding's source team (the D18 guard), and
+// gpexe_team_settings is unique on it: one source team id per OptiMove team.
+export async function activateBinding(client, bindingId, { requirement = "optional", only = null } = {}) {
+  const platformAdminId = await worldAdmin(client);
+  const world = await ensureMappedSystem(client, { platformAdminId });
+  const started = await activateOn(world, { bindingId: String(bindingId), platformAdminId, requirement, only });
+  return { world, started, platformAdminId };
+}
+
+export async function mappedBinding(client, { teamId, clubId, sourceTeamId, by, activate = true, requirement = "optional", only = null }) {
+  const platformAdminId = await worldAdmin(client);
+  const binding = await bindTeam(client, { teamId, clubId, sourceTeamId, by: by ?? platformAdminId });
+  const activated = activate ? await activateBinding(client, binding.bindingId, { requirement, only }) : { world: null, started: {}, platformAdminId };
+  return { ...binding, ...activated };
+}
