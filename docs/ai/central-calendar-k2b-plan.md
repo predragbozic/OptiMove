@@ -855,12 +855,18 @@ prove marked "per the stream manager").
     archived teams included (the request's authorization context holds active teams only). Answers:
     - a team the caller may not restore, or an unknown id, gets the answer of a foreign team today
       (`403 Team is outside your access.`; a platform admin's unknown id `404`);
-    - a team of an archived club gets `409 club_archived` (the club is restored first);
-    - an active team gets `200` as it is (`restored: false`).
-  - Only the team comes back. Its athletes' memberships are not touched (a new season adds new memberships), and its
-    GPEXE identities, dropped at the archive (`teams_drop_gpexe_athlete_identities`), are loaded again on demand. The
-    team triggers are safe for it: the identity trigger acts only when `is_active` becomes false, and the move guard
-    only on a change of `club_id`.
+    - a team of an archived club gets `409 club_archived` (no route restores a club today). The club's state is checked
+      in the restoring statement itself, so a club archived after the rights check never gets an active team back;
+    - an active team gets `200` as it is (`restored: false`);
+    - a team whose club changed between the check and the write (only a raw database write can do that, D43) gets
+      `409 team_changed`.
+  - Only the team row changes. An archive changes nothing but that row either (`DELETE /teams/:teamId`), so a restore
+    brings the team back as it was archived: its coaches' roles, its athletes' memberships and an active GPEXE binding
+    work again, each checked again at use. A membership archived on its own stays archived (a new season adds new
+    memberships). The GPEXE identities, dropped at the archive (`teams_drop_gpexe_athlete_identities`), are loaded
+    again on demand. The team triggers are safe for it: the identity trigger acts only when `is_active` becomes false,
+    and the move guard only on a change of `club_id`.
+  - Neither an archive nor a restore writes an audit row, as before D44.
   - **A name taken in the club** (`teams_club_name_unique (club_id, name)`, the legacy schema, archived teams included)
     is `409 { error: "team_name_taken", archived, teamId?, message }` on `POST /teams` and on a rename. `teamId` is
     given only for an archived team ("An archived team with this name exists in this club — restore it instead."). The

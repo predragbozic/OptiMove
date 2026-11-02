@@ -1158,18 +1158,16 @@ const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 // admin, never the team's coach (as assigning the coach role, authz.js). The
 // team's club is read from the database, archived teams included (the
 // request's authorization context holds active teams only). A team the caller
-// may not restore answers as a foreign team does today; an archived club is
-// restored first; an active team answers 200 as it is. Only the team comes
-// back: its athletes' memberships are not touched (a new season adds new
+// may not restore answers as a foreign team does today; a team of an archived
+// club is refused; an active team answers 200 as it is. Only the team row
+// changes: its athletes' memberships are not touched (a new season adds new
 // memberships), and its GPEXE identities, dropped at the archive, are loaded
 // again on demand.
 router.put("/teams/:teamId/restore", async (req, res, next) => {
   try {
     const teamId = clean(req.params.teamId);
     const row = UUID_TEXT.test(teamId || "") ? (await query(
-      `select t.id, t.club_id, coalesce(t.is_active, true) as active, coalesce(c.is_active, true) as club_active
-         from public.teams t left join public.clubs c on c.id = t.club_id
-        where t.id = $1`,
+      `select id, club_id from public.teams where id = $1`,
       [teamId],
     )).rows[0] : null;
     if (!row) {
@@ -1178,16 +1176,32 @@ router.put("/teams/:teamId/restore", async (req, res, next) => {
         : res.status(403).json({ error: "Team is outside your access." });
     }
     if (!row.club_id || !(await canManageClub(req, String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
-    if (!row.club_active) return res.status(409).json({ error: "club_archived", message: "The team's club is archived. Restore the club first." });
+    // One statement restores the team, and only while it is still in the club
+    // whose right was checked and that club is active: a club archived after the
+    // read above never gets an active team back.
     const result = await query(
-      `update public.teams set is_active = true, updated_at = now()
-        where id = $1 and not coalesce(is_active, true)
-        returning id, club_id, name, short_name, logo_url`,
-      [teamId],
+      `update public.teams t set is_active = true, updated_at = now()
+         from public.clubs c
+        where t.id = $1 and t.club_id = $2 and c.id = t.club_id
+          and coalesce(c.is_active, true) and not coalesce(t.is_active, true)
+        returning t.id, t.club_id, t.name, t.short_name, t.logo_url`,
+      [teamId, row.club_id],
     );
     if (result.rows[0]) return res.json({ team: result.rows[0], restored: true });
-    const current = (await query(`select id, club_id, name, short_name, logo_url from public.teams where id = $1`, [teamId])).rows[0];
-    res.json({ team: current, restored: false });
+    // Nothing restored: answered from the team's state now.
+    const current = (await query(
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url,
+              coalesce(t.is_active, true) as active, coalesce(c.is_active, true) as club_active
+         from public.teams t left join public.clubs c on c.id = t.club_id
+        where t.id = $1`,
+      [teamId],
+    )).rows[0];
+    if (current && String(current.club_id) === String(row.club_id)) {
+      const { active, club_active: clubActive, ...team } = current;
+      if (active) return res.json({ team, restored: false });
+      if (!clubActive) return res.status(409).json({ error: "club_archived", message: "The team's club is archived, so the team can't be restored." });
+    }
+    res.status(409).json({ error: "team_changed", message: "The team changed meanwhile. Reload and try again." });
   } catch (error) {
     next(error);
   }
@@ -2947,12 +2961,14 @@ export function archivedTeamsForWorkspace(workspace, archivedTeams) {
 
 // D44: the archived teams the viewer may restore — every one for a platform
 // admin, those of the active clubs the viewer administers otherwise; never a
-// coach's (restoring is the club's decision).
+// coach's (restoring is the club's decision). `club_active` is false for a team
+// without a club too: the restore route refuses both, so the list offers neither.
 export async function loadArchivedTeams(req) {
   const authz = req.authz;
   if (isPlatformAdministrator(authz)) {
     const result = await query(
-      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, coalesce(c.is_active, true) as club_active
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name,
+              (c.id is not null and coalesce(c.is_active, true)) as club_active
        from public.teams t
        left join public.clubs c on c.id = t.club_id
        where not coalesce(t.is_active, true)

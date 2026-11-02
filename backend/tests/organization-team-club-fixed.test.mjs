@@ -125,7 +125,9 @@ test("6. a team of an archived club is not restored before its club", async () =
   const res = await restore(roles.platformAdmin.cookie, teamId);
   assert.deepEqual([res.status, res.body.error], [409, "club_archived"], res.text);
   const own = await restore(roles.archivedAdmin.cookie, teamId);
-  assert.ok([403, 409].includes(own.status), `the archived club's admin is refused: ${own.text}`);
+  assert.deepEqual([own.status, own.body.error], [409, "club_archived"], `the archived club's own admin: ${own.text}`);
+  const stranger = await restore(roles.stranger.cookie, teamId);
+  assert.deepEqual([stranger.status, stranger.body.error], [403, "Team is outside your access."], `another club's admin learns nothing: ${stranger.text}`);
   assert.equal(await activeOf(teamId), false);
 });
 
@@ -193,8 +195,13 @@ test("9. the archived teams are listed only to whoever may restore them, in the 
   const forAdmin = await listed(roles.clubAdmin);
   assert.ok(forAdmin.some(([id]) => id === teamId), "the club's admin");
   assert.ok(!forAdmin.some(([id]) => id === archivedClubTeam), "not a team of an archived club");
+  const noClubTeam = await env.fx.makeTeam(clubs.c1, `D44 listed no club ${uid()}`);
+  await q(`update public.teams set is_active = false, club_id = null where id = $1`, [noClubTeam]);
   const forPlatform = await listed(roles.platformAdmin);
   assert.deepEqual(forPlatform.find(([id]) => id === archivedClubTeam), [archivedClubTeam, false], "a platform admin, with the club's state");
+  assert.deepEqual(forPlatform.find(([id]) => id === noClubTeam), [noClubTeam, false], "a team without a club is not restorable either");
+  const noClubRestore = await restore(roles.platformAdmin.cookie, noClubTeam);
+  assert.equal(noClubRestore.status, 403, `the route refuses it as the list says: ${noClubRestore.text}`);
   assert.deepEqual(await listed(coach), [], "never the coach");
   assert.ok(!(await listed(roles.stranger)).some(([id]) => id === teamId), "never another club's admin");
 

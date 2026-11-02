@@ -25,7 +25,7 @@ globalThis.FormData = class {
 };
 
 const { renderOrganizationBrowser } = await import("../organization-view.js");
-const { submitOrganizationForm } = await import("../organization-actions.js");
+const { handleOrganizationAction, submitOrganizationForm } = await import("../organization-actions.js");
 const { state } = await import("../state.js");
 
 function resetState(section = "teams") {
@@ -40,6 +40,7 @@ function resetState(section = "teams") {
 const archivedTeams = [
   { id: "team-u17", club_id: "club-1", name: "U17", club_name: "Club One", club_active: true },
   { id: "team-old", club_id: "club-2", name: "Old team", club_name: "Club Two", club_active: false },
+  { id: "team-orphan", club_id: null, name: "Orphan team", club_name: null, club_active: false },
 ];
 const baseData = (extra) => ({ isPlatformAdmin: false, canCreateTeam: true, clubs: [{ id: "club-1", name: "Club One" }], teams: [], athletes: [], users: [], ...extra });
 
@@ -47,7 +48,7 @@ test("the archived teams: a toggle for the club's admin, the list with Restore â
   resetState();
   let html = renderOrganizationBrowser(baseData({ archivedTeams }));
   assert.ok(html.includes('data-action="organization-toggle-archived-teams"'));
-  assert.ok(html.includes("Show archived (2)"));
+  assert.ok(html.includes("Show archived (3)"));
   assert.ok(!html.includes('data-action="organization-restore-team"'), "the list is folded until asked");
 
   state.organization.showArchivedTeams = true;
@@ -56,6 +57,8 @@ test("the archived teams: a toggle for the club's admin, the list with Restore â
   assert.ok(html.includes('data-action="organization-restore-team" data-team-id="team-u17"'), "Restore for the club's team");
   assert.ok(!html.includes('data-team-id="team-old"'), "no Restore while its club is archived");
   assert.ok(html.includes("the club is archived"));
+  assert.ok(!html.includes('data-team-id="team-orphan"'), "no Restore for a team without a club (the server refuses it)");
+  assert.ok(html.includes("No club"));
 });
 
 test("a coach (the server lists no archived teams) gets neither the toggle nor the list", () => {
@@ -113,5 +116,23 @@ test("a name taken by an active team, or a rename onto an archived team's name: 
     } finally {
       restoreFetch();
     }
+  }
+});
+
+test("Restore from the create form's message closes the form before the panel is drawn again", async () => {
+  resetState();
+  state.activeTab = "organization";
+  installFetchMock([{ status: 200, body: { team: { id: "team-u17" }, restored: true } }]);
+  try {
+    const seen = [];
+    const action = { dataset: { action: "organization-restore-team", teamId: "team-u17" }, disabled: false };
+    await handleOrganizationAction(action, {
+      loadAthletes: noop,
+      renderOrganizationPanel: async () => { seen.push(state.organization.addFormOpen); },
+    });
+    assert.deepEqual(seen, [false], "the one repaint shows the form closed");
+    assert.equal(action.disabled, false);
+  } finally {
+    restoreFetch();
   }
 });

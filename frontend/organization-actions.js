@@ -345,8 +345,11 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     if (!teamId) return true;
     action.disabled = true;
     try {
-      await restoreAthleteRelationship(`/api/organization/teams/${encodeURIComponent(teamId)}/restore`, { loadAthletes, renderOrganizationPanel });
+      await api(`/api/organization/teams/${encodeURIComponent(teamId)}/restore`, { method: "PUT" });
+      // Restore from the create form's message: the form closes in the same repaint.
       state.organization.addFormOpen = false;
+      await loadAthletes();
+      if (state.activeTab === "organization") await renderOrganizationPanel();
     } catch (error) {
       window.alert(error?.data?.message || error?.message || "Could not restore this team.");
     } finally {

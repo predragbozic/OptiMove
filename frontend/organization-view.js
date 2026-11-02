@@ -312,7 +312,7 @@ function renderArchivedTeamsList(teams) {
   return `
     <section class="panel organization-list-card organization-archived-teams">
       <div class="organization-list-head"><p class="eyebrow">Archived teams</p><strong>${teams.length}</strong></div>
-      <p class="muted organization-archived-teams-note">Restoring brings the team back. Its athletes' memberships are not restored.</p>
+      <p class="muted organization-archived-teams-note">Restoring brings the team back as it was archived, with its coaches and athletes. A membership archived on its own stays archived.</p>
       <div class="organization-list">
         ${teams.length ? teams.map(renderArchivedTeamRow).join("") : `<p class="muted">No archived teams.</p>`}
       </div>
@@ -322,12 +322,15 @@ function renderArchivedTeamsList(teams) {
 
 function renderArchivedTeamRow(team) {
   const title = team.name || "Untitled team";
+  // The server restores a team only into an active club: none for a team without one.
+  const restorable = Boolean(team.club_id) && team.club_active !== false;
+  const note = !team.club_id ? "No club" : team.club_active === false ? " - the club is archived" : "";
   return `
     <article class="organization-row is-archived">
       <span class="organization-avatar">${escapeHtml(title.slice(0, 2).toUpperCase())}</span>
-      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(team.club_name || "")}${team.club_active === false ? " - the club is archived" : ""}</small></span>
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(team.club_id ? team.club_name || "" : "")}${note}</small></span>
       <span class="organization-row-actions">
-        ${team.club_active === false ? "" : `<button class="plain-button compact-button" type="button" data-action="organization-restore-team" data-team-id="${escapeAttr(team.id)}" aria-label="Restore ${escapeAttr(title)}">Restore</button>`}
+        ${restorable ? `<button class="plain-button compact-button" type="button" data-action="organization-restore-team" data-team-id="${escapeAttr(team.id)}" aria-label="Restore ${escapeAttr(title)}">Restore</button>` : ""}
       </span>
     </article>
   `;
