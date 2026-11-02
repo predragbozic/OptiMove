@@ -990,3 +990,64 @@ test("13. undo: the platform admin is checked after the team lock - a revocation
   const imported = await importSession(org, 13002);
   assert.ok(imported.eventId);
 });
+
+test("12c. approval and undo of the same team (the Nezavisni revizor's LOW-2 on 9-0): both take the team import lock first and their rights after it (the approval's step 6b, the undo's platform admin row), so they serialize in both orders - the second waits on the advisory lock, never a deadlock - and both then finish", async () => {
+  const { team, list } = await teamWithCandidates([12101, 12102, 12103]);
+  const [c1, c2, c3] = await Promise.all(list.map((c) => candidateDetail(team, c.id)));
+  const undoer = { userId: team.padmin.id };
+  const anyAdvisoryWaiter = async (excludePid) => {
+    for (let i = 0; i < 200; i += 1) {
+      const n = (await admin.query(
+        `select count(*)::int as n from pg_locks l join pg_stat_activity a on a.pid = l.pid
+          where a.datname = current_database() and l.locktype = 'advisory' and not l.granted and l.pid <> $1`, [excludePid])).rows[0].n;
+      if (n > 0) return true;
+      await sleep(10);
+    }
+    return false;
+  };
+  // An imported event of the team, for the undo.
+  await withSwitchOn(async () => { const r = await approve(team, c1); assert.equal(r.status, 200, JSON.stringify(r.body)); });
+  const eventId = await eventOf(team, c1.gpexeTeamSessionId);
+
+  // (a) The approval holds the team lock and its rights (after step 6b): the undo waits on the advisory lock.
+  await withSwitchOn(async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let reached;
+    const atHold = new Promise((resolve) => { reached = resolve; });
+    service.setApprovalObserver(async () => { reached(); await gate; });
+    const approving = approve(team, c2);
+    await atHold;
+    let undoPid = null;
+    const undo = undoDryRun(undoer, eventId, { onPid: (pid) => { undoPid = pid; } });
+    const undoDone = settled(undo);
+    for (let i = 0; i < 100 && undoPid === null; i += 1) await sleep(10);
+    assert.ok(await waitsOnAdvisoryLock(undoPid), "the undo waits on the team's advisory import lock");
+    await sleep(200);
+    assert.equal(undoDone(), false, "the undo is still waiting");
+    release();
+    const r = await approving;
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal((await undo).outcome, "rolled_back", "the undo's dry run went through after the approval committed - no 40P01");
+  });
+
+  // (b) The undo holds the team lock: the approval waits on it after its candidate row, then imports.
+  await withSwitchOn(async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let locked;
+    const undoHasLock = new Promise((resolve) => { locked = resolve; });
+    let undoPid = null;
+    const holding = undoDryRun(undoer, eventId, { onPid: (pid) => { undoPid = pid; }, onTeamLocked: async () => { locked(); await gate; } });
+    await undoHasLock;
+    const approving = approve(team, c3);
+    const approvalDone = settled(approving);
+    assert.ok(await anyAdvisoryWaiter(undoPid), "the approval waits on the team's advisory import lock");
+    await sleep(200);
+    assert.equal(approvalDone(), false, "the approval is still waiting");
+    release();
+    assert.equal((await holding).outcome, "rolled_back");
+    const r = await approving;
+    assert.equal(r.status, 200, `the approval imports after the undo ended - no 40P01: ${JSON.stringify(r.body)}`);
+  });
+});
