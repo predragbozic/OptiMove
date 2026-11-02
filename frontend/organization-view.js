@@ -1623,11 +1623,13 @@ function renderOrganizationClubEditForm(row) {
   `;
 }
 
+// D43: a team's club is fixed after creation, so the edit form shows it as
+// text and sends no clubId (the server keeps the stored club).
 function renderOrganizationTeamEditForm(row, clubs) {
-  const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
+  const clubName = clubs.find((club) => String(club.id) === String(row.club_id))?.name || row.club_name || "";
   return `
     <form class="organization-form" data-organization-form="edit-team" data-organization-edit-id="${escapeAttr(row.id)}">
-      ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: row.club_id, required: true, placeholder: "Type club name" })}
+      <div class="search-field organization-fixed-club"><span>Club</span><p>${escapeHtml(clubName || "—")}</p><small class="muted">A team's club can't be changed.</small></div>
       <label class="search-field"><span>Team name</span><input name="name" required value="${escapeAttr(row.name || "")}"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>

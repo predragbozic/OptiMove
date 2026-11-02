@@ -108,9 +108,18 @@ deploys and post-checks without a record in this file are as the stream manager 
 - **K2b-1a**, Settings → Calendar and migration v51 (PR #325): merge `a01a116` (2026-11-02 08:44 UTC); deployed
   2026-11-02 and **v51 directly confirmed** by its read-only post-check, per the stream manager. Runbook
   `docs/runbooks/calendar-settings-v51.md`.
-- **K2b-1b**, the events use the club's places, details and values (plan section 18; no migration): the pull request
-  that adds this record, open. D41 holds on every read: a place, a detail or a value of another club (a team that
+- **K2b-1b**, the events use the club's places, details and values (plan section 18; no migration; PR #329): merge
+  `ca79b33` (2026-11-02 13:05 UTC); its deploy is the stream manager's. D41 holds on every read: a place, a detail or a value of another club (a team that
   moved) is never shown; club B's next edit detaches club A's choices and clears its place (finding 6, option A).
+- **D43** (the owner, 2026-11-02): teams do not move between clubs; a team's club is fixed after creation (plan section
+  19; no migration) — the pull request that adds this line, open.
+  - The organization route refuses another club (`409 team_club_fixed`), so the condition "teams are not moved in
+    production" is now held by the code.
+  - The open question of a club's external RPE or test schedule that targets a team which moved — its assignments and
+    notifications would have reached the new club's athletes — is closed with it: teams cannot move.
+  - D42 (a club event's team target only while the team is the club's) is suspended and stays on a local branch.
+  - **Known limit:** the database still takes a raw `update` of `public.teams.club_id`; a trigger may come with a later
+    migration. v30 already refuses moving a team bound to a GPEXE connection.
 - Next by the plan: K2b-1c and K2b-1d (the Settings screen and the event form), then K2b-2 (athlete questions through
   the Tests module, D40).
 

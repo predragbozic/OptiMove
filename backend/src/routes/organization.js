@@ -1083,20 +1083,31 @@ router.post("/teams", async (req, res, next) => {
   }
 });
 
+// D43 (the owner, 2026-11-02): a team's club is fixed after creation — teams
+// never move between clubs (athletes do, through their memberships). The edit
+// keeps the stored club and never writes club_id: a `clubId` equal to it is
+// accepted as before (and may be left out, the edit form no longer sends it),
+// another one is a 409 and nothing is written. The rights are those of today's
+// edit of the same team (the team, then its own club), decided before the
+// comparison, so a caller who may not edit the team learns nothing of its club.
 router.put("/teams/:teamId", async (req, res, next) => {
   try {
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     const name = clean(req.body?.name);
-    const clubId = clean(req.body?.clubId);
     if (!name) return res.status(400).json({ error: "Team name is required." });
-    if (!clubId) return res.status(400).json({ error: "Club is required." });
-    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    const team = (await query(`select club_id from public.teams where id = $1`, [req.params.teamId])).rows[0];
+    if (!team) return res.status(404).json({ error: "Team not found." });
+    if (!(await canManageClub(req, String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
+    const clubId = clean(req.body?.clubId);
+    if (clubId && clubId.toLowerCase() !== String(team.club_id).toLowerCase()) {
+      return res.status(409).json({ error: "team_club_fixed", message: "A team's club cannot be changed." });
+    }
     const result = await query(
       `update public.teams
-       set club_id = $2, name = $3, short_name = $4, logo_url = $5, updated_at = now()
+       set name = $2, short_name = $3, logo_url = $4, updated_at = now()
        where id = $1
        returning id, club_id, name, short_name, logo_url`,
-      [req.params.teamId, clubId, name, clean(req.body?.shortName), clean(req.body?.logoUrl)],
+      [req.params.teamId, name, clean(req.body?.shortName), clean(req.body?.logoUrl)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Team not found." });
     res.json({ team: result.rows[0] });

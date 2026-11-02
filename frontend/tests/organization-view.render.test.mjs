@@ -14,7 +14,7 @@ globalThis.document = {
   querySelectorAll: () => [],
 };
 
-const { renderOrganizationBrowser } = await import("../organization-view.js");
+const { renderOrganizationBrowser, renderOrganizationEditModal } = await import("../organization-view.js");
 const { state } = await import("../state.js");
 
 function resetOrganizationState() {
@@ -237,4 +237,18 @@ test("an archived-only athlete's id is excluded from the Access control modal's 
   const ids = idsMatch[1].split(",");
   assert.ok(ids.includes("athlete-access-active"), "the active athlete must be selectable");
   assert.ok(!ids.includes("athlete-access-archived"), "the archived-only athlete must not be offered for bulk access control");
+});
+
+// D43: a team's club is fixed after creation - the edit form shows it as text
+// and offers no club choice (so it sends no clubId).
+test("the team edit form shows the club as text and offers no club choice", () => {
+  resetOrganizationState();
+  state.organizationEditor = { open: true, type: "team", row: { id: "team-1", club_id: "club-1", club_name: "Club One", name: "First team", short_name: "FT", logo_url: "" } };
+  const html = renderOrganizationEditModal({ clubs: [{ id: "club-1", name: "Club One" }, { id: "club-2", name: "Club Two" }] });
+  state.organizationEditor = { open: false, type: "", row: null };
+  assert.ok(html.includes('data-organization-form="edit-team"'), "the team edit form renders");
+  assert.ok(html.includes("Club One"), "the team's club is named");
+  assert.ok(!html.includes('name="clubId"'), "no club field is sent");
+  assert.ok(!html.includes("Club Two"), "no other club is offered");
+  assert.ok(html.includes('name="name"') && html.includes('name="shortName"'), "the other fields stay editable");
 });

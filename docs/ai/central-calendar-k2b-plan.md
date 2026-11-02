@@ -526,6 +526,7 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | **D38** | Q11 | Colours come from the closed palette of 12 (section 2.5). |
 | **D39** | Q12 | A detail's value is filled in only by the event's managers (the `canManage` of K2a 4.1). |
 | **D40** | (2026-11-02, the owner through the manager) | Questions to athletes go **only through the Tests module** (a questionnaire is a test; `test_parameters` numeric / integer / boolean / ordinal / text, `athlete_self`, its schedules and reminders). **K2b-2 = "Ask athletes"** on an event: a questionnaire from the Tests library, scheduled in one click for the event's athletes on its day with a window after it; Tests' notifications; the results in Tests and on the event's card; plus the **mapping of Tests parameters into Metrics Core** so the answers reach the Training Load dashboards (no new registry; `.claude/rules/metrics-core-mapping.md`). Replaces the earlier idea of athlete fields through the RPE channel as new variables. The split: coach fields = Details (K2b-1); RPE = Training Load; other questions to athletes = Tests (+ the mapping). |
+| **D43** | (2026-11-02, the owner through the manager) | Teams do **not** move between clubs: a team's club is fixed after creation. Athletes still move from team to team and club to club through their memberships. Supersedes D41's premise and suspends D42 (section 19). |
 | **D41** | (2026-11-02, the owner through the manager) | A team that has calendar events **may** move to another club (`PUT /api/organization/teams/:id`); its events go with it. The new club sees only the kind's word — never the old club's type label or id, place or details — and its admin chooses the club's own. Answers the open question of section 17. |
 
 ## 17. K2b-1a as built (2026-11-01)
@@ -815,7 +816,7 @@ prove marked "per the stream manager").
   the place the event shows — is the only guard.
 - **Release order:** the "required" switch of K2b-1c ships with K2b-1d or after it (the event form where a coach enters
   the values); before that, an event could wait for a detail nobody has a place to fill.
-- **Known limit until the owner decides** (the independent review's MEDIUM, recorded without a change): an event of club
+- **Known limit — settled by D43** (section 19; the independent review's MEDIUM, recorded without a change): an event of club
   A that targets its team T stays visible after T moves to club B — club B's admin and T's coach see its title and time
   and, since K2b-1b, the address and note of A's library place. The cause is K2a's reader rule
   (`backend/src/calendarAccess.js`, the club and team branches of `calendarScheduleCandidateSql`: a team target of
@@ -827,3 +828,21 @@ prove marked "per the stream manager").
 - **Tests:** `backend/tests/central-calendar-k2b-event-details.test.mjs` (18.6, items 1–7 and 9; the regression of
   item 8 is the four earlier calendar suites, where the athlete's allowlist gained `place` and the settings suite's
   helper event chooses no details so its raw writes choose them).
+
+## 19. D43 — a team's club is fixed after creation (D42 suspended)
+
+**D43** (the owner, 2026-11-02, through the manager): moving a team between clubs is not an intended option.
+- **The rule:** a team's club is fixed after creation. `PUT /api/organization/teams/:teamId`:
+  - takes the same `clubId` as before, or none (the edit form no longer sends it);
+  - answers another `clubId` with `409 team_club_fixed` ("A team's club cannot be changed.") and writes nothing;
+  - decides the rights first (the team's, then its own club's, as before), so a caller who may not edit the team
+    learns nothing of its club.
+- **The edit form** (`renderOrganizationTeamEditForm`) shows the club as text. Creating a team still chooses the club.
+- **Athletes** still move between teams and clubs through their memberships, as before.
+- **D42 is suspended.** The plan-delta and the code of D42 (a club event's team target only while the team is the club's) stay on the local branch `central-calendar-k2b-team-target` (head `e093777`), not pushed and not released.
+- **D41's masking** (K2b-1a and K2b-1b) stays as an extra guard against a raw database write, unchanged. The calendar
+  suites that move a team by a raw `update public.teams set club_id` say so in a comment.
+- **Known limit:** the database still takes a raw `update` of a team's club. A trigger that refuses it may come with a
+  later migration; v30 already refuses moving a team bound to a GPEXE connection.
+- **No migration.** Tests: `backend/tests/organization-team-club-fixed.test.mjs` and
+  `frontend/tests/organization-view.render.test.mjs` (the edit form).

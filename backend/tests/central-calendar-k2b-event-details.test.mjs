@@ -568,6 +568,7 @@ test("8. D41 and finding 6: after a team moves, club B sees nothing of club A's 
   const gone = await mk("Moved and cancelled");
   assert.equal((await ev(coach.cookie, "POST", `/${gone.id}/cancel`, { expectedRevision: gone.revision })).status, 200);
 
+  // A raw write: since D43 the route no longer moves a team (a team's club is fixed); the test checks the calendar against such a write.
   await q(`update public.teams set club_id = $2 where id = $1`, [a.teamId, b.clubId]);
   const secrets = [placeA.id, placeA.name, "A street 1", reqA.id, optA.id, reqA.label, optA.label, "A secret answer"];
   const clean = (text, where) => { for (const s of secrets) assert.ok(!text.includes(s), `${where}: nothing of club A (${s})`); };
@@ -729,6 +730,7 @@ test("11. a team moved to another club between the first read and the writer loc
     hooks.beforeLocks = async (ctx) => {
       if (ctx.operation !== operation) return;
       delete hooks.beforeLocks;
+      // A raw write: since D43 the route no longer moves a team (a team's club is fixed); the test checks the calendar against such a write.
       await q(`update public.teams set club_id = $2 where id = $1`, [teamId, b.clubId]);
     };
   };

@@ -873,6 +873,7 @@ test("3k. a team moved to another club (security review M1, L1): its events neve
   });
   assert.equal(created.status, 201, created.text);
   assert.equal((await catalog(a.admin.cookie)).types.find((t) => t.id === training.id).eventCount, 1);
+  // A raw write: since D43 the route no longer moves a team (a team's club is fixed); the test checks the calendar against such a write.
   await q(`update public.teams set club_id = $2 where id = $1`, [a.teamId, b.clubId]);
 
   const card = (await calendarOf(b.admin.cookie)).body.days.flatMap((d) => d.items).find((i) => i.kind === "event" && (i.eventId === created.body.event.id));
