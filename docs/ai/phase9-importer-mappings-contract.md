@@ -1048,7 +1048,9 @@ by the executor.
 ## 16. As built (9-B)
 
 The 9-B pull request (branch `feature/phase9-b-mapped-writer`), built on `8fa0ea7` (merge of PR #322, 9-0; the base).
-Not merged and not deployed; no migration (O14); the import switch untouched. The *Rukovodilac* accepted the decisions
+Merged as PR #326 (`b6c2254`, exactly from `fec1bde3`, 2026-11-02 08:38:27 UTC, after both ★★ GOs) and deployed by
+the *Rukovodilac* the same morning (`/api/health` first served `b6c2254` at 08:42:51 UTC); its test follow-up, PR #327, is
+merged as `f4f2772`. No migration (O14); the import switch untouched. The *Rukovodilac* accepted the decisions
 D1–D38 of the executor's 9-B plan as recommended (2026-11-02), with the conditions on D9 and D29 written below. This
 section names functions and tests, not line numbers.
 
