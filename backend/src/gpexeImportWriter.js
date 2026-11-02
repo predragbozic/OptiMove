@@ -631,7 +631,9 @@ function checkMappedValues(plan, mapping) {
 // the transaction.
 export async function importGpexeBundle(client, bundle, ctx, hooks = {}) {
   if (!ctx?.ownerTeamId || !ctx?.performedByUserId) throw new GpexeImportError("context_missing", "ownerTeamId and performedByUserId are required.");
-  await client.query("begin");
+  // DB review F2 (9-B): READ COMMITTED for the read / lock / read-again
+  // compare of the mapping rows (steps 4-5), pinned, not left to a default.
+  await client.query("begin isolation level read committed");
   try {
     await lockTeamForImport(client, ctx.ownerTeamId);
     if (hooks.onLocked) await hooks.onLocked(client);

@@ -508,7 +508,7 @@ test("13. switch on: the club's teams by name, the ones that cannot be chosen, e
   await click('[data-action="metric-mappings-review"]');
   render();
   assert.match(text(), /Choose Required or Optional\./);
-  assert.match(text(), /Required: if GPEXE has no value for an athlete the import takes in, only that value is left out for that athlete and named “required value missing”/);
+  assert.match(text(), /Required and Optional import the same way for now: if GPEXE has no value for a linked athlete, only that value is left out for that athlete/);
   assert.doesNotMatch(text(), /the whole session is not imported/);
   await input('[data-mm-field="requirement"][value="required"]', true);
   await click('[data-action="metric-mappings-review"]');
@@ -526,6 +526,7 @@ test("13. switch on: the club's teams by name, the ones that cannot be chosen, e
   assert.deepEqual(Object.keys(post.body).sort(), ["bindings", "mappingId", "reason", "requestKey", "versionId"]);
   render();
   assert.match(text(), /Switched on\./);
+  assert.match(text(), /Switched on\. Imports use it from the next Find new sessions\./);
   assert.doesNotMatch(text(), /Imports do not use mappings|nothing changes in imports/);
 });
 
@@ -540,8 +541,11 @@ test("D31: no screen says that imports do not use mappings, and Required / Optio
     const source = fs.readFileSync(path.join(dir, name), "utf8");
     assert.doesNotMatch(source, /do not use mappings|nothing changes in imports until/i, name);
   }
-  assert.match(data.REQUIREMENT_MEANING, /only that value is left out for that athlete and named “required value missing”; the session and the athlete's other values are still imported/);
-  assert.match(data.REQUIREMENT_MEANING, /Optional: a missing value is simply left out\./);
+  assert.match(data.REQUIREMENT_MEANING, /only that value is left out for that athlete — never stored as a zero — and the athlete's other values and the session are still imported/);
+  // Code review LOW-1 (9-B): a session with no value left is blocked (no_mapped_values), and the text says so.
+  assert.match(data.REQUIREMENT_MEANING, /a session with no value left at all can't be imported/);
+  // UX M5: the two choices differ only in the reason the review names.
+  assert.match(data.REQUIREMENT_MEANING, /They differ only in how the session review names the gap: Required as “required value missing”, Optional with GPEXE's own reason/);
   assert.doesNotMatch(data.REQUIREMENT_MEANING, /whole session is not imported|When imports use this mapping/);
 });
 

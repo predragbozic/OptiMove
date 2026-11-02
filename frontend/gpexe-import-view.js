@@ -271,7 +271,9 @@ function fmtDateTime(value) {
 function fmtValue(value, unit) {
   if (value === null || value === undefined) return "-";
   const n = Number(value);
-  const text = Number.isFinite(n) ? n.toLocaleString("en-GB", { maximumFractionDigits: 2 }) : String(value);
+  // A non-zero value never reads as "0": below 0.005 it keeps 3 significant digits.
+  const tiny = Number.isFinite(n) && n !== 0 && Math.abs(n) < 0.005;
+  const text = Number.isFinite(n) ? n.toLocaleString("en-GB", tiny ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 2 }) : String(value);
   // "n" is a count: no unit after it.
   return unit && unit !== "n" ? `${text} ${unit}` : text;
 }
@@ -1484,8 +1486,9 @@ function renderSourceFieldsNoteHtml(preview) {
   const labels = Array.isArray(preview?.unactivatedSourceMetrics) ? preview.unactivatedSourceMetrics.filter((l) => typeof l === "string" && l.trim()) : [];
   const count = labels.length || (Number.isInteger(preview?.unactivatedSourceMetricCount) ? preview.unactivatedSourceMetricCount : 0);
   if (count <= 0) return "";
+  if (!labels.length) return `<p class="muted gpexe-source-fields">${escapeHtml(`${plural(count, "more GPEXE field is", "more GPEXE fields are")} not set up for import for this team; ${count === 1 ? "its values are" : "their values are"} not imported.`)}</p>`;
   const head = `${plural(count, "GPEXE field is", "GPEXE fields are")} not switched on for this team, so ${count === 1 ? "its values are" : "their values are"} not imported`;
-  return `<p class="muted gpexe-source-fields">${escapeHtml(labels.length ? `${head}: ${labels.join(", ")}.` : `${head}.`)}</p>`;
+  return `<p class="muted gpexe-source-fields">${escapeHtml(`${head}: ${labels.join(", ")}. Switch them on under Training Load > Data configuration > Mappings if the team needs them.`)}</p>`;
 }
 
 function renderApprovalRecordHtml(c) {
@@ -1510,14 +1513,14 @@ const SETUP_COACH_TEXT = Object.freeze({
   reason: "This session can't be imported until an administrator finishes its data setup.",
   step: "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.",
 });
-const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings), then find new sessions.";
-const SETUP_CONNECTION_STEP = "Check the team's GPEXE source connection and binding (Settings > Source connections), then find new sessions.";
+const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. If both look right, ask a platform administrator (give them the Technical details).";
+const SETUP_CONNECTION_STEP = "Check this team's GPEXE binding and the binding of the team that holds this GPEXE team (Settings > Source connections). Ending a held source instance is a platform administrator's step (docs/runbooks/source-instance-end-v50.md); then find new sessions.";
 const SETUP_ADMIN_TEXT = Object.freeze({
-  mapping_not_usable: { reason: "This session can't be imported through the team's mappings as they stand. Check the mappings switched on for this team.", step: SETUP_MAPPINGS_STEP },
+  mapping_not_usable: { reason: "This session can't be imported through the team's mappings and GPEXE binding as they stand.", step: SETUP_MAPPINGS_STEP },
   source_threshold_contract_mismatch: { reason: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.", step: "Check the team's thresholds and zones in GPEXE against the mapping, then find new sessions." },
   source_unit_mismatch: { reason: "A mapping's source unit is not the proven unit of its GPEXE field.", step: "Check the mapping's source unit (Training Load > Data configuration > Mappings), then find new sessions." },
-  source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, check the mapping of that GPEXE field (the code is under Technical details)." },
-  no_mapped_values: { reason: "No value of this session comes from a mapping switched on for this team.", step: "Switch on a mapping for this team (Training Load > Data configuration > Mappings), then find new sessions." },
+  source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, ask a platform administrator to check that GPEXE field (give them the Technical details)." },
+  no_mapped_values: { reason: "No value of this session can be imported: either no mapping is switched on for this team, or every mapped value was left out (see Left out under each athlete).", step: "If no mapping is switched on, switch one on for this team (Training Load > Data configuration > Mappings); otherwise check the reasons under Left out. Then find new sessions." },
   source_instance_held: { reason: "Another team's GPEXE source instance holds this GPEXE team.", step: SETUP_CONNECTION_STEP },
   source_instance_changed: { reason: "This team's GPEXE source instance names another GPEXE team.", step: SETUP_CONNECTION_STEP },
   session_imported_under_another_instance: { reason: "This session was imported earlier under another GPEXE source instance.", step: `The earlier import stays as it is. ${SETUP_CONNECTION_STEP}` },
@@ -1614,13 +1617,14 @@ function renderValueTableHtml(values, withPrevious, v3 = false) {
   `;
 }
 
-// v3: Variable | Before | Imported | GPEXE value, in the server's order. A
+// v3: Variable | OptiMove value | GPEXE value, or Variable | Before | New
+// value | GPEXE value for a result already imported, in the server's order. A
 // value the result had that this import does not write says why, never a zero.
-const EMPTY_CHANGE_TEXT = { left_out: "Left out", not_mapped: "No longer mapped", missing_in_gpexe: "Not in GPEXE" };
+const EMPTY_CHANGE_TEXT = { left_out: "Left out", not_mapped: "No longer imported for this team", missing_in_gpexe: "Not in GPEXE" };
 function renderVariableTableHtml(values, withPrevious) {
   return `
     <div class="gpexe-values-wrap"><table class="gpexe-values">
-      <thead><tr><th scope="col">Variable</th>${withPrevious ? `<th scope="col">Before</th>` : ""}<th scope="col">Imported</th><th scope="col">GPEXE value</th></tr></thead>
+      <thead><tr><th scope="col">Variable</th>${withPrevious ? `<th scope="col">Before</th><th scope="col">New value</th>` : `<th scope="col">OptiMove value</th>`}<th scope="col">GPEXE value</th></tr></thead>
       <tbody>
         ${values.map((v) => `<tr><td>${escapeHtml(variableName(v))}</td>${withPrevious ? `<td>${escapeHtml(fmtValue(v.previous, v.unit))}</td>` : ""}<td>${escapeHtml(v.value === null || v.value === undefined ? (EMPTY_CHANGE_TEXT[v.change] || "-") : fmtValue(v.value, v.unit))}</td><td>${escapeHtml(fmtValue(v.sourceValue, v.sourceUnit))}</td></tr>`).join("")}
       </tbody>
@@ -1768,6 +1772,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
   const outcomes = {};
   for (const r of a.results || []) outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
   const outcomeText = countsText(outcomes);
+  const leftOutCount = (a.skippedValues || []).length;
   const unlinked = a.notImported?.code === "athlete_not_linked";
   const v3 = isV3(c?.preview);
   // D29: an athlete the import keeps whose every mapped value was left out is
@@ -1787,14 +1792,14 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
     <details class="gpexe-athlete ${a.blocksSession ? "is-blocking" : ""}" ${open ? "open" : ""}>
       <summary>
         <span><strong>${escapeHtml(name)}</strong>${a.blocksSession ? ` <span class="gpexe-badge is-blocked">Blocks the session</span>` : ""}</span>
-        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : allLeftOut ? " · All values left out" : outcomeText ? ` · ${escapeHtml(outcomeText)}` : ""}</span>
+        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : allLeftOut ? " · All values left out" : outcomeText ? ` · ${escapeHtml(outcomeText)}${leftOutCount ? ` · ${escapeHtml(plural(leftOutCount, "value left out", "values left out"))}` : ""}` : ""}</span>
       </summary>
       ${a.gps?.reason ? `<p class="muted">${escapeHtml(a.gps.reason.message)}</p>` : ""}
       ${allLeftOut ? `<p class="muted">All values left out: participation is recorded, but no value is imported for this athlete. The reasons are listed under Left out.</p>` : ""}
       ${unlinked ? renderLinkHtml(a, c, unlinkedChoices) : ""}
       ${shownResults.map((r) => `
         <div class="gpexe-result">
-          <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}</p>
+          <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}${v3 && !(r.values || []).some((v) => v.value !== null && v.value !== undefined) ? " · no value imported (see Left out)" : ""}</p>
           ${renderValueTableHtml(r.values.filter((v) => v.change !== "same" || r.outcome === "created"), r.outcome !== "created", v3)}
         </div>
       `).join("")}
@@ -1873,6 +1878,15 @@ export function importsLinkedAthletes(c) {
   return (c?.preview?.athletes || []).some((a) => a.athleteId && !a.notImported);
 }
 
+// D32 (9-B): the number of values left out is named before an approval.
+function approveLeftOutText(c) {
+  const left = Number(c?.preview?.counts?.skippedValues ?? c?.counts?.skippedValues);
+  if (Number.isInteger(left) && left > 0) {
+    return `Approving imports this whole session exactly as shown. ${left === 1 ? "1 value is" : `${left} values are`} left out (listed under each athlete); ${left === 1 ? "it is" : "they are"} not imported and never stored as a zero. Athletes left out stay out.`;
+  }
+  return "Approving imports this whole session exactly as shown. Athletes and values left out stay out.";
+}
+
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
   if (detail.outcome?.error?.code === "already_imported") return "";
@@ -1905,7 +1919,7 @@ function renderApproveHtml(c, detail, status) {
           <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
         </label>
       ` : ""}
-      <p class="muted">Approving imports this whole session exactly as shown. Athletes and values left out stay out.</p>
+      <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
       ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving ? "disabled" : ""}>${detail.approving ? "Importing..." : "Approve import"}</button>
     </div>

@@ -143,11 +143,11 @@ const ATHLETE_ANOMALY = {
 // with one fixed sentence for the two administrators. A coach reads the
 // stable sentence instead (gpexeImportAudience.js).
 export const BLOCK_MESSAGES = Object.freeze({
-  mapping_not_usable: "This session can't be imported through the team's mappings as they stand. Check the mappings switched on for this team.",
+  mapping_not_usable: "This session can't be imported through the team's mappings and GPEXE binding as they stand.",
   source_threshold_contract_mismatch: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.",
   source_unit_mismatch: "A mapping's source unit is not the proven unit of its GPEXE field.",
   source_shape_mismatch: "GPEXE sent a mapped value in another shape than its field has.",
-  no_mapped_values: "No value of this session comes from a mapping switched on for this team.",
+  no_mapped_values: "No value of this session can be imported: either no mapping is switched on for this team, or every mapped value was left out (see Left out under each athlete).",
   source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
@@ -320,7 +320,9 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error);
   }
-  await client.query("begin");
+  // DB review F2 (9-B): READ COMMITTED for the read / lock / read-again
+  // compare of the mapping rows (steps 4-5), pinned, not left to a default.
+  await client.query("begin isolation level read committed");
   try {
     // Switch condition 2: bounded before the team lock (see above).
     await setImportTransactionBounds(client);

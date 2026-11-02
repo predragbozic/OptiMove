@@ -1109,8 +1109,10 @@ section names functions and tests, not line numbers.
   `gpexe-details-coverage-probe.mjs` (its own constants).
 - **Logs (step 10).** `dbErrorFields` and `formatDbError` (`gpexeImportService.js`): code, constraint, table, routine,
   the PL/pgSQL function name and the error's name; never the message, detail, hint, `where` or a stack. Every importer
-  log sink uses them, three older sinks included (the team settings, the retention schedule, link trigger errors), which
-  the architecture suite found.
+  log sink uses them, four older sinks included: the team settings, the retention schedule and link trigger errors,
+  which the architecture suite found, and the retention CLI (`gpexeRetentionCli.js`), which the internal code review
+  found. The suite's log test now takes as sinks every `backend/src` module that calls an importer entry point, not a
+  fixed list. The disposable-database operator scripts (`backend/scripts/gpexe-*.mjs`) still print an error's text.
 
 ### 16.2 Decisions D1–D38 (accepted as recommended)
 
@@ -1151,7 +1153,9 @@ section names functions and tests, not line numbers.
 - **D22** The API probe uses empty specs.
 - **D23** An unknown skip code throws a plain error (internal); the 18-code completeness test shows it is unreachable.
 - **D24** `unexpected_unit` is the only runtime shape code; the registry is unchanged.
-- **D25** A missing `events` object gives `threshold_mismatch`, which blocks the candidate (a known limit).
+- **D25** An empty `events` object (`{}`: present, without the version's threshold or duration fields) gives
+  `threshold_mismatch`, which blocks the candidate (a known limit). An absent `events` object is `events_missing`,
+  which leaves that value out (C110 form B).
 - **D26** R17 uses `resolveVariableEditor` unchanged, asked lazily; any error masks the name.
 - **D27** The activation set enters the preview hash only, not the preview JSON.
 - **D28** `importGpexePlan` removed; `importGpexeBundle` and `importGpexeBundleLocked` keep the athlete map strict
@@ -1265,9 +1269,64 @@ PostgreSQL 16 on a disposable database in the executor's container; PostgreSQL 1
 
 ### 16.9 Recorded, not changed
 
-- **For the security review (pre-existing):** a coach of a team whose club was archived by raw SQL still reaches the
-  GPEXE team routes, because `resolveGpexeTeamAccess` checks the team, not its club. 9-B does not change it.
+- **Pre-existing, confirmed by the security review (MEDIUM, a separate task):** a coach of a team whose club was
+  archived still reaches the GPEXE team routes. The club archive (`DELETE /clubs/:id`) sets only `clubs.is_active`;
+  `loadAvailableWorkspaces` still offers the team workspace and `resolveGpexeTeamAccess` checks the team, not its club.
+  Reads (status, candidates, source athletes, approvers) and Link / Unlink stay open to that coach; a check start is
+  refused by the credential resolver (`team_club_active`) and, since 9-B, an approval by `lockApprovalTeam` (the
+  identical 404). No other tenant's data is reachable. The fix (the club's `is_active` in `resolveGpexeTeamAccess` and in
+  the team-workspace query) is outside 9-B and is recorded for a separate task.
 - **Line references.** Sections 1–9 and 12 cite lines at `1932ad1`, as the header says. 9-0 moved
   `gpexeImportPreview.js` and `gpexeImportService.js` by about 70–80 lines (to `8fa0ea7`), and 9-B rewrote the mapper,
   the writer, the preview and much of the service, so most cited lines in those files no longer match. They are not
   rewritten: read them at `1932ad1`. The 9-B plan's own line numbers are at `8fa0ea7`.
+
+### 16.10 Internal review round (frozen head `71caa135`)
+
+`code-reviewer`, `db-reviewer`, `security-reviewer`, `mobile-qa` and `ux-design-reviewer` each answered READY WITH
+NON-BLOCKING NOTES; none found a BLOCKER or HIGH. Fixed in the next commit, each with a test:
+- **Code, LOW:** the Required / Optional text promised the session is always imported - a session with no value left
+  is blocked `no_mapped_values`; the text says so now. D25 here said "a missing `events` object" for what the code does
+  with an empty one (an absent one is `events_missing`, left out); reworded. The retention CLI (`gpexeRetentionCli.js`)
+  still logged an error's message; it uses `formatDbError` now, and architecture test 5 takes as log sinks every
+  `backend/src` module that calls an importer entry point (the CLI included), not a fixed list. **NIT:** routes test C
+  plants a real version 2 preview (values by `metricKey`, `derivedNotImported`, no version 3 field).
+- **Code and security, NIT / LOW:** the route no longer passes a dead `audience` to `approveCandidates` (the batch
+  answers the same neutral result for every level); architecture test 6 now asserts that neither approval call takes an
+  audience and that both pass `expectedClubId: access.clubId` (R16).
+- **Security, LOW:** the coach's projection removes named fields; audience test 4 now pins the exact key sets a coach
+  reads (the preview, an athlete, a result, a value, a Left-out entry), so a new field must be decided for that level.
+  Architecture test 5 also refuses `.detail`, `.hint`, `.where`, `.cause`, `.internalQuery` and `toString()` in a log
+  call.
+- **Database, MEDIUM (F1):** the concurrency suite had no case of the importer against the 7b transitions, the revision
+  lifecycle's pinned step or a canonical variable version; tests 8–10 add them, both orders, no `40P01`.
+- **Database, LOW (F2):** the approval, the check-time preview and the writer's entry open with
+  `begin isolation level read committed` (steps 4–5 read, lock, read again and compare); architecture test 7 pins it.
+- **UX, MEDIUM M1–M5** (text and view only):
+  - M1: `no_mapped_values` says it covers "no mapping switched on" and "every mapped value left out", and its step
+    names both.
+  - M2: `mapping_not_usable` names the team's GPEXE binding as well as its mappings, and the step ends with "ask a
+    platform administrator".
+  - M3: the athlete's summary names its values left out, and the approval note names the session's count (D32).
+  - M4: the value table's header is "OptiMove value" (or "Before | New value"), never "Imported" before an approval.
+  - M5: Required / Optional say that both import the same way for now and differ only in the reason the review names.
+  - **UX, LOW:**
+    - L1 in part: a coach reads "not set up for import" instead of "not switched on", and an administrator gets
+      where to switch the fields on. The C110 Left-out words stay as section 6 fixes them.
+    - L2: a result with no value says "no value imported (see Left out)".
+    - L3: the shape and instance steps name a platform administrator.
+    - L4: a switch-on says "Imports use it from the next Find new sessions."
+  - The coach's sentence is unchanged (section 6 fixes it).
+- **Mobile, LOW:** a v3 table's first column wraps a long unbroken label, and the field note is 0.9rem, full contrast
+  and wraps. A non-zero value below 0.005 keeps three significant digits instead of reading "0".
+
+Recorded, not changed:
+- the pre-existing archived-club access (16.9);
+- R17 resolving the workspace a second time (`resolveVariableEditor`), and comparing the viewer's club with the team's
+  current club, not the variable's owner (LOW; name-only, narrow precondition);
+- an optional / other Left-out entry keeps the extractor's code in `reason` for a coach (NIT; the same as version 2,
+  shown as plain words);
+- the step-3 refresh of a blocked preview before step 6b (D36, accepted);
+- one pre-existing statement that may grow with history, `assertNoIdentitiesMissingFromSource` (LOW; no EXPLAIN run);
+- a runtime canary test for a value-bearing database error on the approval path beyond the batch's `42P01` (LOW);
+- UX NIT (b) "its data setup" and NIT (c) `white-space: nowrap` for value cells.

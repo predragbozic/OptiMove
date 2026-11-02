@@ -300,7 +300,9 @@ test("preview v3: each value is named by its variable, in the server's order, wi
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /<thead><tr><th scope="col">Variable<\/th><th scope="col">Imported<\/th><th scope="col">GPEXE value<\/th><\/tr><\/thead>/);
+  // UX M4 (9-B): the value is not imported before the approval, so the header never says "Imported".
+  assert.match(html, /<thead><tr><th scope="col">Variable<\/th><th scope="col">OptiMove value<\/th><th scope="col">GPEXE value<\/th><\/tr><\/thead>/);
+  assert.ok(!/<th scope="col">Imported<\/th>/.test(html));
   assert.match(html, /<tr><td>Top speed<\/td><td>29\.52 km\/h<\/td><td>8\.2 m\/s<\/td><\/tr><tr><td>Distance<\/td><td>3,000 m<\/td><td>3,000 m<\/td><\/tr>/, "the server's order, not the old metric order");
   assert.match(html, /<li>Whole session · Bursts - drill details not in GPEXE yet<\/li>/);
   const mainText = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
@@ -361,9 +363,10 @@ test("preview v3 (D29): an athlete the import keeps whose every value was left o
 
 test("preview v3: the GPEXE fields not switched on for the team - an administrator's answer names them, a coach's carries only their count, nothing without either", async () => {
   const cases = [
-    [{ unactivatedSourceMetrics: ["Max acceleration", "Speed <zone> 3"], unactivatedSourceMetricCount: 2 }, /2 GPEXE fields are not switched on for this team, so their values are not imported: Max acceleration, Speed &lt;zone&gt; 3\.</],
-    [{ unactivatedSourceMetricCount: 2 }, /2 GPEXE fields are not switched on for this team, so their values are not imported\.</],
-    [{ unactivatedSourceMetricCount: 1 }, /1 GPEXE field is not switched on for this team, so its values are not imported\.</],
+    [{ unactivatedSourceMetrics: ["Max acceleration", "Speed <zone> 3"], unactivatedSourceMetricCount: 2 }, /2 GPEXE fields are not switched on for this team, so their values are not imported: Max acceleration, Speed &lt;zone&gt; 3\. Switch them on under Training Load &gt; Data configuration &gt; Mappings if the team needs them\.</],
+    // UX L1 (9-B): a coach reads no administrator's word ("switched on"), only that the fields are not set up.
+    [{ unactivatedSourceMetricCount: 2 }, /2 more GPEXE fields are not set up for import for this team; their values are not imported\.</],
+    [{ unactivatedSourceMetricCount: 1 }, /1 more GPEXE field is not set up for import for this team; its values are not imported\.</],
     [{ unactivatedSourceMetricCount: 0 }, null],
     [{}, null],
   ];
@@ -375,7 +378,7 @@ test("preview v3: the GPEXE fields not switched on for the team - an administrat
     await openCandidate();
     const html = renderTrainingLoadCoachHtml();
     if (expected) assert.match(html, expected, JSON.stringify(fields));
-    else assert.ok(!/not switched on/.test(html), JSON.stringify(fields));
+    else assert.ok(!/not switched on|not set up for import/.test(html), JSON.stringify(fields));
     if (!fields.unactivatedSourceMetrics) assert.ok(!/Max acceleration/.test(html), "a count never carries a label");
   }
 });
@@ -396,7 +399,7 @@ test("approve: changes to imported results are listed, and nothing is sent until
   assert.match(html, /Changes to results that were already imported \(1\)/);
   assert.match(html, /<th scope="col">Before<\/th>/);
   assert.match(html, /3,000 m<\/td><td>3,100 m/);
-  assert.match(html, /<th scope="col">Variable<\/th><th scope="col">Before<\/th><th scope="col">Imported<\/th><th scope="col">GPEXE value<\/th>/);
+  assert.match(html, /<th scope="col">Variable<\/th><th scope="col">Before<\/th><th scope="col">New value<\/th><th scope="col">GPEXE value<\/th>/);
   assert.match(html, /<td>Distance<\/td><td>3,000 m<\/td><td>3,100 m<\/td><td>3,100 m<\/td>/);
   assert.match(html, /I accept the 1 change to results that were already imported\./);
 
@@ -839,11 +842,11 @@ test("blocked sessions: the coach reads why and what to do; the server's message
 // J17 section 6 (9-B): the eight codes of a mapped import that block a whole session, with the server's sentences
 // (backend/src/gpexeImportPreview.js BLOCK_MESSAGES) and the coach's one sentence (gpexeImportAudience.js).
 const SETUP_BLOCKS = {
-  mapping_not_usable: "This session can't be imported through the team's mappings as they stand. Check the mappings switched on for this team.",
+  mapping_not_usable: "This session can't be imported through the team's mappings and GPEXE binding as they stand.",
   source_threshold_contract_mismatch: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.",
   source_unit_mismatch: "A mapping's source unit is not the proven unit of its GPEXE field.",
   source_shape_mismatch: "GPEXE sent a mapped value in another shape than its field has.",
-  no_mapped_values: "No value of this session comes from a mapping switched on for this team.",
+  no_mapped_values: "No value of this session can be imported: either no mapping is switched on for this team, or every mapped value was left out (see Left out under each athlete).",
   source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
@@ -894,7 +897,14 @@ test("data setup (9-B): an administrator reads each mapping block's precise sent
     assert.ok(setupBlock(renderTrainingLoadCoachHtml()).includes(esc(message)), `${code}: the screen's own sentence`);
   }
   assert.match(steps.mapping_not_usable, /Training Load &gt; Data configuration &gt; Mappings/);
-  assert.match(steps.no_mapped_values, /Switch on a mapping for this team/);
+  // UX M1 (9-B): no_mapped_values also covers "every mapped value left out", so the step names both.
+  assert.match(steps.no_mapped_values, /If no mapping is switched on, switch one on for this team .*; otherwise check the reasons under Left out\./);
+  // UX M2: mapping_not_usable is a catch-all - the step names the binding too and the way out.
+  assert.match(steps.mapping_not_usable, /Settings &gt; Source connections/);
+  assert.match(steps.mapping_not_usable, /If both look right, ask a platform administrator/);
+  // UX L3: a shape or instance problem is a platform administrator's step, never a screen where nothing is wrong.
+  assert.match(steps.source_shape_mismatch, /ask a platform administrator to check that GPEXE field/);
+  assert.match(steps.source_instance_held, /Ending a held source instance is a platform administrator(?:'|&#039;)s step/);
   for (const code of ["source_instance_held", "source_instance_changed", "session_imported_under_another_instance"]) assert.match(steps[code], /Settings &gt; Source connections/, code);
 });
 
@@ -1413,6 +1423,45 @@ test("approve: a calm note to check the athletes shows when the session imports 
   // D32: the values left out are named before an approval, like the athletes.
   assert.match(approveArea, /<p class="muted">Approving imports this whole session exactly as shown\. Athletes and values left out stay out\.<\/p>/);
   assert.ok(!/gpexe-warning/.test(approveArea.slice(0, approveArea.indexOf("</div>"))), "not styled as a warning");
+});
+
+test("9-B internal review (UX M3, L2, D32; mobile note on fmtValue): the review names the values left out on the athlete's summary and in the approval note, a result with no value says so, and a non-zero value never reads as 0", async () => {
+  for (const [left, sentence] of [
+    [3, /Approving imports this whole session exactly as shown\. 3 values are left out \(listed under each athlete\); they are not imported and never stored as a zero\. Athletes left out stay out\./],
+    [1, /Approving imports this whole session exactly as shown\. 1 value is left out \(listed under each athlete\); it is not imported and never stored as a zero\. Athletes left out stay out\./],
+  ]) {
+    resetState();
+    const d = candidateDetail();
+    const a101 = {
+      ...d.preview.athletes[0],
+      results: [
+        { externalId: "athlete_session:1:full", level: "full", drillIndex: null, outcome: "created", values: [{ ...V3_DISTANCE, value: "0.004", sourceValue: "0.004", previous: null, change: "new" }] },
+        { externalId: "athlete_session:1:drill:0", level: "drill", drillIndex: 0, outcome: "created", values: [] },
+      ],
+      skippedValues: [
+        { level: "drill", drillIndex: 0, label: "Distance", unit: "m", sourceMetricKey: "athlete_session.total_distance", reason: "total_distance_missing", message: "GPEXE has no value for this." },
+        { level: "full", drillIndex: null, label: "Bursts", unit: "n", sourceMetricKey: "details.tot_burst_events", reason: "details_not_fetched", message: "GPEXE has no value for this." },
+      ],
+    };
+    installFetchMock(gpexeServer({
+      teamStatus: { [TEAM_A]: { enabled: true } },
+      onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, counts: { created: 2, skippedValues: left, changesToImported: 0 }, athletes: [a101, d.preview.athletes[1]] } } } }),
+    }));
+    await openImports();
+    await openCandidate();
+    const html = renderTrainingLoadCoachHtml();
+    // M3: the closed athlete card's summary names the athlete's own values left out.
+    const summary = html.match(/<summary>[\s\S]*?Participation: recorded by GPEXE[^<]*<\/span>/)[0];
+    assert.match(summary, /· 2 values left out<\/span>/);
+    // D32 / M3: the approval note names the session's count.
+    const approveArea = html.slice(html.indexOf('class="gpexe-approve"'));
+    assert.match(approveArea, sentence);
+    // L2: a result the import keeps with no value never reads as a result with data.
+    assert.match(html, /<p>Drill 1 · [^<]* · no value imported \(see Left out\)<\/p>/);
+    assert.ok(!/<p>Whole session · [^<]*no value imported/.test(html), "a result with a value has no such note");
+    // A non-zero exact decimal below 0.005 keeps its digits.
+    assert.match(html, /<td>Distance<\/td><td>0\.004 m<\/td><td>0\.004 m<\/td>/);
+  }
 });
 
 test("approve: no athlete note when no athlete is imported through a link (unlinked or left out)", async () => {

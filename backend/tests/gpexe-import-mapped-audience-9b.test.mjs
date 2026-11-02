@@ -602,6 +602,16 @@ test("4. D29, C110 and R17: a club variable with a maximum, activated alone - an
       for (const field of ADMIN_VALUE_FIELDS) assert.equal(field in v, level !== "other", `${name}: ${field}`);
     }
     if (level === "other") {
+      // Security review LOW (9-B): the coach's projection removes named fields
+      // (a deny-list), so the exact key sets a coach reads are pinned here - a
+      // field added to the preview, a value or a Left-out entry must be decided
+      // for this level before it ships.
+      const keys = (o) => Object.keys(o).sort();
+      assert.deepEqual(keys(c.preview), ["anomalies", "athletes", "blocked", "changesToImported", "counts", "session", "status", "teamAthletesWithoutGpexeRecord", "thresholdsUsed", "unactivatedSourceMetricCount", "version"], `${name}: the preview's keys`);
+      assert.deepEqual(keys(a101), ["allValuesLeftOut", "athleteId", "blocksSession", "gpexeAthleteId", "gps", "notImported", "notes", "participation", "results", "skippedValues"], `${name}: an athlete's keys`);
+      assert.deepEqual(keys(a102.results[0]), ["drillIndex", "externalId", "level", "outcome", "values"], `${name}: a result's keys`);
+      assert.deepEqual(keys(a102.results[0].values[0]), ["change", "label", "metricDefinitionId", "previous", "sourceMetricKey", "sourceUnit", "sourceValue", "unit", "value", "variableKey", "variableScope"], `${name}: a value's keys`);
+      for (const sv of a101.skippedValues) assert.deepEqual(keys(sv), ["drillIndex", "label", "level", "message", "sourceMetricKey", "unit", "variableKey", "variableScope"], `${name}: a Left-out entry's keys`);
       assert.ok(!detail.text.includes("canonical_value_out_of_range"), `${name}: the Left-out code is for the administrators`);
       for (const field of [...ADMIN_VALUE_FIELDS, "sourceReason"]) assert.ok(!detail.text.includes(`"${field}"`), `${name}: no ${field} anywhere`);
       assert.ok(!("unactivatedSourceMetrics" in c.preview), name);

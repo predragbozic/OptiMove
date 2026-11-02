@@ -309,7 +309,7 @@ for (const role of ["coach", "club admin", "platform admin"]) {
       assert.match(outsideTech(html), /Top speed - required value missing/);
     } else {
       for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(!html.includes(marker), `coach: ${marker} is nowhere`);
-      assert.match(outsideTech(html), /1 GPEXE field is not switched on for this team, so its values are not imported\./);
+      assert.match(outsideTech(html), /1 more GPEXE field is not set up for import for this team; its values are not imported\./);
       assert.ok(!/Max acceleration|Left-out source codes/.test(html));
       assert.match(outsideTech(html), /Top speed - Required value missing/);
     }

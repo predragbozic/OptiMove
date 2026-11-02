@@ -2306,7 +2306,10 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
   const onClientError = () => { sessionLost = true; };
   client.on("error", onClientError);
   try {
-    await client.query("begin");
+    // DB review F2 (9-B): steps 4-5 read, lock, read again and compare, which
+    // needs a fresh snapshot per statement - READ COMMITTED, pinned here
+    // rather than left to the server's default.
+    await client.query("begin isolation level read committed");
     // Switch condition 2: every wait before the COMMIT is bounded by the
     // server (lock, statement, idle in transaction), set before the first
     // lock; the COMMIT keeps only its own 15 s client bound (COMMIT_ANSWER_TIMEOUT_MS), and its deferred work is

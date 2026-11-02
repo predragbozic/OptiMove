@@ -232,7 +232,9 @@ router.post("/teams/:teamId/imports", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   const { candidates } = service.parseBatchApproveBody(req.body);
-  res.json(await service.approveCandidates(access.teamId, candidates, { userId: req.user.id, expectedClubId: access.clubId, audience: req.gpexeImportAudience }));
+  // The batch answers the same neutral result for every level (blockedCode
+  // only, J17 section 6.1), so it takes no audience.
+  res.json(await service.approveCandidates(access.teamId, candidates, { userId: req.user.id, expectedClubId: access.clubId }));
 }));
 
 // One approval of the team, by id. With the candidate, this is how an

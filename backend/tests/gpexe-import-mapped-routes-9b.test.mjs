@@ -261,8 +261,30 @@ test("C. a stored version 2 preview (written before 9-B): the first approval ans
   const bundle = bundleFor(t);
   await check(t, [bundle]);
   const c = await candidateRow(t);
+  // A preview in the real version 2 shape (before 9-B): values keyed by the
+  // importer's own metricKey with Number values, Left-out entries by metricKey,
+  // derivedNotImported, and none of the version 3 fields.
+  const V3_ONLY = ["activationId", "mappingVersionId", "metricDefinitionId", "variableKey", "variableScope", "sourceMetricKey", "sourceParameterFingerprint", "sourceValue", "sourceUnit"];
+  const toV2 = (v3) => {
+    const v2 = structuredClone(v3);
+    v2.version = 2;
+    for (const key of ["unactivatedSourceMetrics", "unactivatedSourceMetricCount", "unmappedSourceFields"]) delete v2[key];
+    v2.derivedNotImported = [{ label: "m/min", formula: "gpexe_total_distance / gpexe_time_min" }];
+    const asNumber = (x) => (x === null || x === undefined ? null : Number(x));
+    for (const athlete of v2.athletes || []) {
+      delete athlete.allValuesLeftOut;
+      for (const result of athlete.results || []) {
+        result.values = (result.values || []).map((v) => ({ metricKey: `gpexe_${v.sourceMetricKey}`, label: v.label, unit: v.unit, previous: asNumber(v.previous), value: asNumber(v.value), change: v.change }));
+      }
+      athlete.skippedValues = (athlete.skippedValues || []).map((x) => ({ level: x.level, drillIndex: x.drillIndex, metricKey: `gpexe_${x.sourceMetricKey}`, label: x.label, reason: x.reason }));
+    }
+    const text = JSON.stringify(v2);
+    for (const key of V3_ONLY) assert.ok(!text.includes(`"${key}"`), `the planted v2 preview has no ${key}`);
+    assert.ok(text.includes('"metricKey"'), "the planted v2 preview names values by metricKey");
+    return v2;
+  };
   const plantV2 = async (id) => {
-    const v2 = { ...structuredClone((await q(`select preview from training_load.gpexe_import_candidates where id = $1`, [id]))[0].preview), version: 2 };
+    const v2 = toV2((await q(`select preview from training_load.gpexe_import_candidates where id = $1`, [id]))[0].preview);
     const hash = crypto.createHash("sha256").update(`v2-${id}-${crypto.randomUUID()}`).digest("hex");
     await q(`update training_load.gpexe_import_candidates set preview = $2, preview_hash = $3 where id = $1`, [id, v2, hash]);
     return hash;

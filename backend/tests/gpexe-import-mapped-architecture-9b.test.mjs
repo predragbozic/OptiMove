@@ -427,18 +427,23 @@ test("4. the 9-B test seams (setImportMappingHoldForTests, setSourceInstanceHold
   }
 });
 
-test("5. the importer's log sinks never print an error's text: no console call in the service, the writer, the mapper, the mapping context, the preview or the router passes .message or .stack, an error object itself, String(error) or JSON.stringify(error)", () => {
+test("5. the importer's log sinks never print an error's text: no console call in the service, the writer, the mapper, the mapping context, the preview, the router or any other backend/src module that calls an importer entry point (the retention CLI included) passes .message, .stack, .detail, .hint, .where, .cause or .internalQuery, calls toString(), or passes an error object itself, String(error) or JSON.stringify(error)", () => {
   const ERRORISH = "(?:e|err|error|[a-z][\\w$]*Error)";
   const offenders = [];
   let calls = 0;
-  for (const rel of [...IMPORTER, ROUTE]) {
+  // Every module that calls an importer entry point logs its errors too: the
+  // sinks are found from the calls, never from a hand-kept list.
+  const ENTRY_POINTS = ["runRetention", "runCheck", "startCheck", "approveCandidate", "approveCandidates", "importGpexeBundle", "importGpexePlanLocked"];
+  const callers = all().filter((f) => ENTRY_POINTS.some((name) => callsOf(f, name).length > 0)).map((f) => f.rel);
+  assert.ok(callers.includes("gpexeRetentionCli.js"), `the retention CLI is found as a caller: ${callers.join(", ")}`);
+  for (const rel of [...new Set([...IMPORTER, ROUTE, ...callers])]) {
     const f = source(rel);
     for (const m of f.code.matchAll(/\bconsole\s*\.\s*(?:error|warn|log|info|debug|trace)\s*\(/g)) {
       calls += 1;
       const open = m.index + m[0].length - 1;
       const args = f.code.slice(open + 1, matchClose(f.code, open));
       const snippet = f.raw.slice(m.index, matchClose(f.code, open) + 1).replace(/\s+/g, " ").slice(0, 160);
-      if (/(?:\?\.|\.)\s*(?:message|stack)\b/.test(args)) offenders.push(`${where(f, m.index)} (.message / .stack): ${snippet}`);
+      if (/(?:\?\.|\.)\s*(?:message|stack|detail|hint|where|cause|internalQuery)\b/.test(args) || /\.\s*toString\s*\(/.test(args)) offenders.push(`${where(f, m.index)} (.message / .stack / .detail / .hint / .where / .cause / toString): ${snippet}`);
       else if (new RegExp(`\\{\\s*${ERRORISH}\\s*\\}`).test(args)) offenders.push(`${where(f, m.index)} (an error interpolated): ${snippet}`);
       else if (new RegExp(`\\b(?:String|JSON\\.stringify)\\s*\\(\\s*${ERRORISH}\\b`).test(args)) offenders.push(`${where(f, m.index)} (an error converted to text): ${snippet}`);
       else if (topLevelArgs(args).some((a) => new RegExp(`^${ERRORISH}$`).test(a))) offenders.push(`${where(f, m.index)} (an error object passed): ${snippet}`);
@@ -456,7 +461,17 @@ test("6. the six surfaces take the request's one audience level: the router comp
   assert.equal(assignments.length, 1, "the level is assigned once");
   assert.match(route.code.slice(assignments[0].index), /^req\.gpexeImportAudience\s*=\s*importAudienceOf\(req\.authz,\s*access\);/);
   assert.equal(enclosing(route, assignments[0].index, { named: true })?.name, "teamAccess");
-  const minimum = { "service.listCandidates": 1, "service.getCandidate": 2, "service.approveCandidates": 1 };
+  const minimum = { "service.listCandidates": 1, "service.getCandidate": 2 };
+  // The batch (surface 4) answers the same neutral result for every level, so
+  // it takes no audience (a dead argument would read as a projection it does
+  // not do); both approval routes pass the club the route resolved, so R16's
+  // moved-team 404 can never be skipped by a call that forgets it.
+  for (const callee of ["service.approveCandidate", "service.approveCandidates"]) {
+    const calls = callsOf(route, callee);
+    assert.equal(calls.length, 1, `${callee}: ${calls.length} call(s) found`);
+    assert.doesNotMatch(calls[0].args, /(?<![\w$])audience\s*:/, `${where(route, calls[0].index)}: ${callee} takes no audience`);
+    assert.match(calls[0].args, /(?<![\w$])expectedClubId\s*:\s*access\.clubId\b/, `${where(route, calls[0].index)}: ${callee} without the route's club`);
+  }
   for (const [callee, least] of Object.entries(minimum)) {
     const calls = callsOf(route, callee);
     assert.ok(calls.length >= least, `${callee}: ${calls.length} call(s) found`);
@@ -503,4 +518,16 @@ test("6. the six surfaces take the request's one audience level: the router comp
   assert.ok(result, "the approval's answer is found");
   const start = approve.bodyStart + result.index + result[0].length - 1;
   assert.doesNotMatch(service.code.slice(start, matchClose(service.code, start) + 1), /\bpreview\b|\bblocked/, "the approval's answer carries no preview or blocked code");
+});
+
+test("7. DB review F2: the approval, the check-time preview and the writer's own entry each open their transaction with READ COMMITTED pinned (steps 4-5 read, lock, read again and compare, which needs a fresh snapshot per statement), and none opens a plain begin", () => {
+  const cases = [["gpexeImportService.js", "approveCandidate"], ["gpexeImportPreview.js", "buildCandidatePreview"], ["gpexeImportWriter.js", "importGpexeBundle"]];
+  for (const [rel, name] of cases) {
+    const f = source(rel);
+    const fn = functionsOf(f).find((x) => x.name === name);
+    assert.ok(fn, `${rel}: ${name} is found`);
+    const body = f.raw.slice(fn.bodyStart, matchClose(f.code, fn.bodyStart) + 1);
+    const begins = [...body.matchAll(/\.query\(\s*"(begin[^"]*)"/g)].map((m) => m[1]);
+    assert.deepEqual(begins, ["begin isolation level read committed"], `${rel}: ${name} opens one READ COMMITTED transaction`);
+  }
 });
