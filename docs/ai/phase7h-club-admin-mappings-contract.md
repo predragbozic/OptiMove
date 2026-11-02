@@ -1271,7 +1271,7 @@ deployed; until then the old text describes the system as it runs.
 The pull request 7h-V (branch `feature/7h-v-club-variable-names`, base `95c05199`, the merge of PR #335; no migration)
 builds O2 (a) / C127. Its design and scope were decided before the code by the *Rukovodilac* on 2026-11-02 (event
 `66518c44`, 21:14:30 UTC: „7h-V: dizajn je prihvaćen”, V1–V7 all as recommended). This section is "7h-V's contract
-section" that O2 names: the screens, exactly, and what the read returns.
+section" that O2 names: the screens, exactly, and what the read returns. **Merged and deployed:** merged as PR #337 (`d3dcb641`, parents `95c05199` and `f56cbdfc`, the tree the reviewed head's) exactly from `f56cbdfc` under the standing merge order after both ★★ GOs (the *Rukovodilac*'s event `28c48113`, the *Nezavisni revizor*'s event `1cf49e34`), and deployed by the *Rukovodilac* through the Render API on 2026-11-02 (live at 21:59:35 UTC; `/api/health` served `d3dcb641` with `ok: true` four times in a row, 21:59:50–22:00:28 UTC; without a login `/api/auth/me` answered 200 with no user and the activity read, its roster and the mappings list 401).
 
 - **The read.** `GET /api/training-activity/:activityId` gains `variableNamesById`, always present (`{}` by default),
   beside `athleteNamesById` (`backend/src/trainingActivityResults.js`). An entry is `{ label, shortLabel, unit }` (V3:
