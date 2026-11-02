@@ -727,6 +727,38 @@ test("1c. the writer against a 7d end that holds its T5 row lock first (held aft
   assert.deepEqual(deadlockLines(logFrom), []);
 });
 
+test("1d. the writer against an activation swapped for another between step 4 and step 5 (the Nezavisni revizor's L1 on PR #326): while the import holds after reading its one open activation unlocked, that activation ends and a new one of the same version opens on the binding - the same count, another id - and the import's re-check under the locks answers mapping_changed (the decision key differs, the length does not); nothing written, no source instance", async () => {
+  const logFrom = errorLines.length;
+  const org = await mappedTeam({ only: ["gpexe_total_distance"] });
+  const [activationId] = org.started.gpexe_total_distance;
+  const g = gate();
+  setImportMappingHoldForTests(g.hold);
+  const client = await newClient();
+  const importing = importGpexeBundle(client, writerBundle(org), writerCtx(org)).finally(() => client.end().catch(() => {}));
+  const importDone = settled(importing);
+  try {
+    await within(g.reached, 15_000, "the import read its one activation and holds before step 5");
+    // Neither writer waits: the import holds no registry row before step 5.
+    const ended = await within(endActivation(org.platformAdminId, activationId), 10_000, "the end");
+    assert.equal(ended.replayed, false);
+    const again = await within(activateBinding(admin, org.bindingId, { only: ["gpexe_total_distance"] }), 10_000, "the new activation");
+    const [reopened] = again.started.gpexe_total_distance;
+    assert.ok(reopened && String(reopened) !== String(activationId), "a new activation with another id");
+    const open = (await admin.query(
+      `select id::text from training_load.source_metric_mapping_activations where source_team_binding_id = $1 and ended_at is null`,
+      [org.bindingId],
+    )).rows.map((r) => r.id);
+    assert.deepEqual(open, [String(reopened)], "the binding has the same number of open activations as the import read, with another id");
+    assert.equal(importDone(), false, "the import is still at its hold");
+  } finally {
+    g.open();
+  }
+  await assert.rejects(within(importing, 20_000, "the import"), (error) => error instanceof ImportMappingChangedError && error.code === "mapping_changed");
+  assert.deepEqual(await teamCounts(org.teamId), ZERO, "nothing written");
+  assert.equal((await t7Keys(admin, org.teamId)).length, 0, "no source instance either");
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
 // ---------------------------------------------------------------------------
 // 2. An approval against an Unbind of the team's binding
 // ---------------------------------------------------------------------------
@@ -797,6 +829,28 @@ test("2. an approval against an Unbind of the same team's binding, both orders: 
   assert.ok(counts.metric_values > 0);
   assert.equal(counts.metric_values, counts.provenance);
   assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("2b. step 3's own short circuit (the Rukovodilac's LOW on PR #326): an approval of a pending candidate whose binding ended after its check stops at step 3 - 409 preview_changed, the stored preview blocked mapping_not_usable, nothing written - and never reaches the approver's locked right (6b) or the preview (the approval observer is never called); without step 3, prepareImportMapping's own legacy answer would give the same 409, so only the observer tells them apart", async () => {
+  const t = await teamWithCandidates(1);
+  const [c] = t.details;
+  const u = await within(unbind(t.team), 15_000, "the Unbind");
+  assert.equal(u.status, 200, u.text);
+  assert.equal(await bindingState(t.team.bindingId), "ended");
+  assert.equal((await candidateRow(c.id)).status, "pending", "the check's candidate is still pending");
+  const before = await allRowCounts();
+  let observed = 0;
+  await withSwitchOn(async () => {
+    service.setApprovalObserver(() => { observed += 1; });
+    const r = await within(approve(t.team, c), 20_000, "the approval");
+    assert.deepEqual([r.status, r.body.error], [409, "preview_changed"], r.text);
+  });
+  assert.equal(observed, 0, "step 3 short-circuits before step 6b and the preview of steps 7-11");
+  const stored = await candidateRow(c.id);
+  assert.equal(stored.status, "blocked");
+  assert.equal(stored.preview.blocked.code, "mapping_not_usable", "the refreshed preview: no binding to write through");
+  assert.deepEqual(await teamCounts(t.team.teamId), ZERO, "nothing imported");
+  assert.deepEqual(await allRowCounts(), before, "no row added or removed anywhere (the refreshed preview is an update of the candidate)");
 });
 
 // ---------------------------------------------------------------------------
