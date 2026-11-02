@@ -3775,8 +3775,10 @@ pre-existing; pass/fail counts don't belong in this file
   `66518c44`; found by 7h-V's discovery; before more clubs are brought on).** `GET /api/training-load/metrics/occasions/:id`
   (`trainingLoadMetricsMeasurements.js:913-931`) and `/metrics/results` (`:1096`, `:1147-1150`) return the name of any
   definition on the events in the caller's scope, with no catalog filter, and the roster still names other owners' user
-  and team variables (7h-V narrowed it for club variables only). No screen calls the two metrics routes. Its own
-  decisions and a security review; the security-reviewer gives it its severity.
+  and team variables (7h-V narrowed it for club variables only). No screen calls the two metrics routes. The occasion
+  read's athlete branch (`isOwnAthlete`, `trainingLoadMetricsMeasurements.js:925`) also names any definition to an
+  athlete on their own occasion (7h-V's internal security review, MEDIUM, out of 7h-V's scope). Its own decisions and
+  a security review; the security-reviewer gives it its severity.
 
 - **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
   the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought

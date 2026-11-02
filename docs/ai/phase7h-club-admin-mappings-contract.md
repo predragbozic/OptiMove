@@ -1304,9 +1304,11 @@ section" that O2 names: the screens, exactly, and what the read returns.
   `activityRoster.js` `loadRosterSnapshot`) names only the variables of the team's own club: a club-owned definition of
   another club reads with no key, label or short label, for every basis (the team's coach, the club's admin in its
   workspace, the platform admin). Each such value keeps a column of its own through a placeholder key `#unnamed-N`,
-  numbered in that answer only (no definition key has a `#`), and the screen shows "Value". System variables and the
-  team's own variables are unchanged; the other owners' user and team variables are the separate info-hiding task (V2,
-  CURRENT_STATE Separate tasks). No roster state reads a name.
+  numbered in that answer by the sorted definition ids (no definition key has a `#`), and the screen shows "Value".
+  The team's own club's variables are named as before to every roster basis: the roster is not gated by C99, only the
+  activity read's `variableNamesById` is. System variables and the team's own variables are unchanged; the other
+  owners' user and team variables are the separate info-hiding task (V2, CURRENT_STATE Separate tasks). No roster
+  state reads a name.
 - **Not changed.** `catalogVisibilitySql`, `listDefinitions`, the measurement write gate, the athletes' reads, the
   calendar grid and `/weekly` (they carry no definition id), and the dashboards: a team-workspace dashboard can never
   hold a club variable (the v16 trigger `dashboard_widget_series_validate_metric_visibility`, the application pre-check
@@ -1317,20 +1319,23 @@ section" that O2 names: the screens, exactly, and what the read returns.
   membership): an activity's facts come only from metric events of the identical owner (the v2 trigger
   `activity_metric_event_links_check_owner`; a merge or reparent never changes the owner), and the measurement write
   admits every definition the writer's role-wide catalog shows. So a user who also administers club B (or a platform
-  admin) and coaches team A1 can record B's variable in A1's results; a team moved between clubs by raw SQL is the
-  other path. The `owner_club_id` condition is what keeps B's name out of A1's results; the suite writes B's variable
-  exactly that way, through the real routes.
+  admin) and coaches team A1 can record B's variable in A1's results. A team cannot move to another club: the route
+  refuses it (`team_club_fixed`) and, once the team has a member, so does the database (the foreign key
+  `athlete_memberships_team_club_fkey`). The `owner_club_id` condition is what keeps B's name out of A1's results; the
+  suite writes B's variable exactly that way, through the real routes, and pins the refused move.
 - **Known limits.** A user who holds club B's admin role sees B's names through the catalog in every workspace,
   because `catalogVisibilitySql` is built from every role the user holds; unchanged by C127's decision. The column
   picker's layout is the existing one (CURRENT_STATE: "the 'Choose metrics' picker is unusable at about 515 px width");
   the added rows use the same template. The service's team-workspace gate and the route's workspace-team check guard
   the same fact; each alone is a second layer (a mutation of one of them alone is not killed, the two together are).
-- **Tests.** `backend/tests/club-variable-names-7h-v.test.mjs` (disposable, through the real server; 11 tests: the
+- **Tests.** `backend/tests/club-variable-names-7h-v.test.mjs` (disposable, through the real server; 14 tests: the
   coach of A1 gets exactly club A's variables of the facts; another team's and another club's coach get the identical
   `404`; the same coach in a second team's workspace gets `404` on A1 and, on B1's session, B's name and not A's; an
   archived club names nothing; club and platform workspaces and the athlete get `{}`; dual roles in A1's workspace get
   A's names only; the catalog is untouched (list, single read, write); the roster for four viewers; the dashboard's
   identical `404`; a label with markup comes back verbatim; a read bound is `503`, a broken read `500`, and a caller the
-  check does not concern never asks it) and seven new tests in `frontend/tests/training-load-calendar.actions.test.mjs`
+  check does not concern never asks it; an administrator with no coach role falls back to its club workspace and a
+  revoked coach loses the team workspace; the refused move between clubs; the placeholder columns numbered the same for
+  every viewer) and seven new tests in `frontend/tests/training-load-calendar.actions.test.mjs`
   (header, drawer, the catalog wins, the picker, escaping, a workspace switch, a `503` not cached). Twelve mutations,
   each killed by a named test, are listed in the pull request.

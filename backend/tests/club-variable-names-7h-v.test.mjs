@@ -358,3 +358,40 @@ test("11. the C99 check's errors propagate: a read bound reached is the stable 5
   }
   assert.ok((await names(W.coachA1, W.actX)).variableNamesById[W.clubVarA.id]);
 });
+
+test("12. an administrator with no coach role on the team gets no team workspace, so no name: club A's admin whose preference names A1 falls back to the club workspace and reads {}; a coach whose role on A1 is revoked no longer reads A1's session as its coach", async () => {
+  const stale = await person("club-admin-a-stale-team-pref", { clubAdminOf: [W.clubA], ws: ["team", W.teamA1] });
+  const body = await names(stale, W.actX);
+  assert.deepEqual(body.variableNamesById, {}, "the club workspace it falls back to names nothing");
+  const revoked = await person("coach-a1-revoked", { coachOf: [W.teamA1], ws: ["team", W.teamA1] });
+  assert.ok((await names(revoked, W.actX)).variableNamesById[W.clubVarA.id], "named while the role is active");
+  await k.query(`update public.user_team_roles set is_active = false where user_id = $1`, [revoked.id]);
+  const after = await read(revoked, W.actX);
+  assert.notEqual(after.status, 200, after.text);
+  assert.equal(after.body.variableNamesById, undefined);
+});
+
+test("13. a team with members cannot be moved to another club, not even by raw SQL (the route refuses it as team_club_fixed, the database by the memberships' foreign key): the old club's names stay the team's and the new club's never become them", async () => {
+  const teamA3 = await team(W.clubA);
+  const coachA3 = await person("coach-a3", { coachOf: [teamA3], ws: ["team", teamA3] });
+  const writer = await person("platform-admin-coach-a3", { platform: true, coachOf: [teamA3], ws: ["team", teamA3] });
+  const ath = await athleteIn(W.clubA, teamA3);
+  const act = await recorded(writer, ath.id, [W.clubVarA, W.clubVarB]);
+  assert.deepEqual((await names(coachA3, act)).variableNamesById, { [W.clubVarA.id]: entryOf(W.clubVarA) });
+  await assert.rejects(k.query(`update public.teams set club_id = $2 where id = $1`, [teamA3, W.clubB]), (e) => e.code === "23503" && /athlete_memberships_team_club_fkey/.test(e.message));
+  assert.deepEqual((await names(coachA3, act)).variableNamesById, { [W.clubVarA.id]: entryOf(W.clubVarA) }, "nothing moved");
+});
+
+test("14. the roster's placeholder columns are numbered by the sorted definition ids, the same for every viewer and every read", async () => {
+  const keysFor = async (who) => {
+    const res = await call(`/api/training-activity/${W.actX}/roster`, { cookie: who.cookie });
+    assert.equal(res.status, 200, res.text);
+    const athlete = [...res.body.athletes, ...(res.body.recordedOutsideRoster ?? [])].find((a) => String(a.athleteId) === String(W.athA1.id));
+    return athlete.values.filter((v) => v.label === null).map((v) => `${v.metricKey}=${v.value}`).sort();
+  };
+  const first = await keysFor(W.coachA1);
+  const sortedIds = [W.clubVarB.id, W.clubVarB2.id].sort();
+  const valueOf = (id) => (id === W.clubVarB.id ? 103 : 104); // X's values: sysVar 100, clubVarA 101, clubVarHtml 102, clubVarB 103, clubVarB2 104
+  assert.deepEqual(first, sortedIds.map((id, i) => `#unnamed-${i + 1}=${valueOf(id)}`).sort());
+  for (const who of [W.coachA1, W.caA, W.pa]) assert.deepEqual(await keysFor(who), first);
+});

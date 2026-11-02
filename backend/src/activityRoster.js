@@ -265,16 +265,6 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
 // reads a name.
 export async function loadRosterSnapshot(client, canonicalId) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
-  // An unnamed variable keeps a column of its own (the screen groups values
-  // by key): a placeholder key per definition, numbered in this answer only,
-  // in a shape no definition key has ("#"), so two unnamed variables never
-  // share a column and the definition's own key and id never leave here.
-  const unnamedKeys = new Map();
-  const unnamedKeyOf = (definitionId) => {
-    const id = String(definitionId ?? "");
-    if (!unnamedKeys.has(id)) unnamedKeys.set(id, `#unnamed-${unnamedKeys.size + 1}`);
-    return unnamedKeys.get(id);
-  };
   const roster = await one(
     `select r.athlete_id, r.member_from, r.member_to, r.left_at,
             coalesce(nullif(a.display_name, ''), a.full_name) as name
@@ -282,7 +272,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
        join public.athletes a on a.id = r.athlete_id`,
     [canonicalId],
   );
-  const facts = (await one(
+  const factRows = await one(
     `select r.athlete_id, r.detail ->> 'entryMethod' as entry_method, r.detail ->> 'occasionId' as occasion_id,
             r.detail ->> 'segmentId' as segment_id, r.detail ->> 'valueNumeric' as value_numeric,
             r.detail ->> 'valueText' as value_text, r.detail ->> 'unitAtCapture' as unit,
@@ -295,7 +285,18 @@ export async function loadRosterSnapshot(client, canonicalId) {
                                         where a.id = $1))
       where r.fact_kind = 'metric_value'`,
     [canonicalId],
-  )).map((r) => ({
+  );
+  // An unnamed variable keeps a column of its own (the screen groups values
+  // by key): a placeholder key per definition, in a shape no definition key
+  // has ("#"), numbered in this answer by the sorted definition ids - stable
+  // between reloads and viewers whatever the row order - so two unnamed
+  // variables never share a column and the definition's own key and id never
+  // leave here.
+  const unnamedKeys = new Map([...new Set(factRows.filter((r) => !r.metric_named).map((r) => String(r.metric_definition_id ?? "")))]
+    .sort()
+    .map((id, i) => [id, `#unnamed-${i + 1}`]));
+  const unnamedKeyOf = (definitionId) => unnamedKeys.get(String(definitionId ?? ""));
+  const facts = factRows.map((r) => ({
     athleteId: String(r.athlete_id), entryMethod: r.entry_method, occasionId: r.occasion_id,
     segmentId: r.segment_id ?? null, valueNumeric: numberOrNull(r.value_numeric), valueText: r.value_text ?? null,
     unit: r.unit ?? null, metricKey: r.metric_named ? (r.metric_key ?? null) : unnamedKeyOf(r.metric_definition_id),
