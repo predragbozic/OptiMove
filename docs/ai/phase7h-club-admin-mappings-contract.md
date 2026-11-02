@@ -594,13 +594,27 @@ the runner and the refusals compare migration names.
   - the canonical-variable service (`canonicalVariableAdminService.js:626`, `:702`, `:803`: M3-0 and R2 writes);
   - the classification service (`canonicalClassificationService.js:370`, `:394`, `:563`, `:616`).
 
-  **Not changed, and recorded as a separate task:** the same role-first inversion stays in the promotion probe and the
-  platform-admin branch (`for share of g, u`, `:123` and `:131`, against `loadQualifyingPlatformAdminIds`, `for update
-  of u, g`, `routes/organization.js:522-531`), in `coachRightsStillHold` (`g, u`, `r, u, c`, `r, u`), and in the
-  sibling checks of `sourceConnectionService.js:213-216`, `gpexeAthleteIdentityService.js:155-158` and
-  `routes/exerciseCollections.js:191-193` (`r, u` on the global role). 7h does not
-  make those paths more common: they pair a platform admin's or a coach's write with a revocation or a login disable
-  of that same user. Fixing them is one small pull request with its own route-against-route tests.
+  **Not changed in 7h-B, and recorded as a separate task (the "lock order" pull request; the *Rukovodilac*'s
+  decision of 2026-11-02):** the same role-first inversion stays in these queries.
+  - **Club-admin branches, against `revokeClubAdminRole` (`for update of u, r`, `routes/organization.js:2430-2437`):**
+    - `sourceConnectionService.js` `rightsStillHold`, `:216` (`user_club_roles r … for share of r, u`);
+    - `gpexeAthleteIdentityService.js` `rightHolds` with `lock = true`, `:155` and `:158` (`user_club_roles r …
+      for share of r, u`);
+    - `coachRightsStillHold`'s club-admin probe, `sourceMetricAccess.js:165` (`for share of r, u, c`).
+  - **Platform-admin branches, against `loadQualifyingPlatformAdminIds` (`for update of u, g`,
+    `routes/organization.js:522-531`, the platform-admin revocation and the login disable):**
+    - `sourceMetricAccess.js` `rightsStillHold`'s promotion probe and platform branch, `:123` and `:131`, and
+      `coachRightsStillHold`'s platform probe, `:157` (`for share of g, u`);
+    - `sourceConnectionService.js` `rightsStillHold`, `:211` (`for share of g, u`);
+    - `gpexeAthleteIdentityService.js` `rightHolds`, `:155` and `:157` (the global role is aliased `r`: `for share
+      of r, u`);
+    - `routes/exerciseCollections.js:191-193` (the global role aliased `r`: `for share of r,u`).
+  - **The team-coach branch:** `coachRightsStillHold`, `:177` (`user_team_roles r … for share of r, u`); the lock
+    order of a team-coach revocation is not checked here, and the lock-order pull request checks it first.
+
+  7h does not make those paths more common: none of them is a mapping transition. The lock-order pull request turns
+  every one of them into users first (`u, r`, `u, g`, `u, r, c`), with route-against-route tests for each revocation
+  it meets. It comes right after 7h-B and before more clubs are brought on.
 - **`submitVersion`** answers its state refusals (`409 version_not_draft` with `current.status`, `:1210`, and
   `409 revision_not_usable`, `:1211`) only after `rightsStillHold` (`:1212`), as A1 and A2 do (R5). This is a
   pre-existing ordering gap: a caller who lost the right meanwhile could see the current status or a revision refusal
@@ -798,6 +812,13 @@ mutated trigger.
 - caA's A1 / A2 against the pinned step on the pinned revision.
 - caA's A1 with starts against an Unbind, a team archive and a club archive (a peer client, 7d `:1252-1305`).
 - caA's A2 against club A's archive, both orders.
+- **The service locks the rights rows before any trigger does** (the *Nezavisni revizor*'s note): the database
+  functions `source_metric_actor_basis` and `source_metric_require_club_admin` lock `r, u, c`, the role row first, so
+  they are safe against a revocation only because the service has already taken `users` and `user_club_roles` in
+  `rightsStillHold` (`u, r`). A test asserts it for A1, A2 and A1's replacement: at the write hold seam (after
+  `rightsStillHold`, before the first T4 / T5 write and so before any trigger), a peer's `select … for update nowait`
+  on the admin's `users` row and on its `user_club_roles` row each fails with `55P03`. A mutation that moves the right
+  check after the writes must fail this test.
 - The rights hold seam (`setRightsHoldForTests`, before the right is checked again), for A1 plain, A1 replacement with
   starts, and A2 with open activations:
   - role revoked, club archived or user deactivated during the write → the identical 404; nothing in T4, T5 or T8;
@@ -1082,11 +1103,15 @@ Each has a recommendation.
 - **R13. `rightsStillHold`'s lock order** (section 5, db review F2). **Recommended:** 7h-B changes only the
   club-admin query to `for share of u, r`, with the route-against-route test of section 10.4. That also changes the
   existing club-admin path of every caller (section 7: mappings, activations, canonical variables, classification),
-  where the same deadlock exists today. The other branches with the same inversion (section 7) become a separate task.
+  where the same deadlock exists today. The other branches with the same inversion (section 7: the club-admin branches
+  of `sourceConnectionService.js` and `gpexeAthleteIdentityService.js` and of `coachRightsStillHold`, every
+  platform-admin branch, the team-coach branch) are the separate "lock order" pull request, right after 7h-B and
+  before more clubs are brought on.
   - *Alternative (a):* 7h-B also turns `g, u` into `u, g` and `r, u, c` into `u, r, c` in `rightsStillHold` and
     `coachRightsStillHold`, with a platform-admin route-against-route test — a wider change for paths 7h does not touch.
   - *Alternative (b):* leave the club-admin query as it is and record the deadlock as a known `try_again` / 500 race —
     not recommended, since 7h makes club-admin writes routine.
+  - **Decided by the *Rukovodilac* (2026-11-02):** as recommended; the lock-order pull request as above.
 
 ## 13. What this contract supersedes or amends (once accepted)
 
@@ -1190,3 +1215,10 @@ Each has a recommendation.
     the revocation race;
   - NIT: the plain A2 case in section 1.2; "the only code that ends a binding"; the race answer codes in section 5;
     two more comments to rewrite; the step-4 sentence; two citations; the C33 quote.
+- **The ★★ reviews of `44e47340`:** the *Rukovodilac*'s GO (no BLOCKER, HIGH or MEDIUM; two LOW for 7h-B: the
+  route-against-route test with its mutation in the 7h-B packet, and the runbook's steps for a `nowait` failure in
+  Serbian; R1–R13 decided as recommended) and the *Nezavisni revizor*'s GO (it reproduced the deadlock, 9 of 9 with
+  `r, u` under three join plans, 0 of 9 with `u, r`, and confirmed the four md5 values on v51; one LOW). The LOW: section
+  7 described the remaining inversions of `sourceConnectionService.js` and `gpexeAthleteIdentityService.js` as on the
+  global role only, while both also have a club-admin branch. On the *Rukovodilac*'s decision this head corrects section
+  7 and R13, puts those branches into the separate lock-order pull request, and adds the revisor's test to 10.4.
