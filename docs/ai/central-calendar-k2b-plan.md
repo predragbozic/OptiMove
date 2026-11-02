@@ -856,10 +856,15 @@ prove marked "per the stream manager").
     - a team the caller may not restore, or an unknown id, gets the answer of a foreign team today
       (`403 Team is outside your access.`; a platform admin's unknown id `404`);
     - a team of an archived club gets `409 club_archived` (no route restores a club today). The club's state is checked
-      in the restoring statement itself, so a club archived after the rights check never gets an active team back;
+      in the restoring statement itself, so a club archive committed before that statement leaves the team archived. An
+      archive committed after it gives the same state as "restore, then archive the club", which is allowed (a club's
+      archive does not archive its teams), so the statement takes no lock on the club;
     - an active team gets `200` as it is (`restored: false`);
-    - a team whose club changed between the check and the write (only a raw database write can do that, D43) gets
-      `409 team_changed`.
+    - `409 team_changed` when nothing was restored and the team is neither active nor of an archived club: its club changed
+      between the check and the write (only a raw database write can do that, D43), or an archive of the same team won a
+      race with the restore (the archive is the last write; the caller reads the list again).
+  - `PUT /teams/:teamId` answers an id that is not a UUID as an unknown team (`404 Team not found.` for a platform admin,
+    the only caller who gets past the right with one; everyone else's right is decided first, as before).
   - Only the team row changes. An archive changes nothing but that row either (`DELETE /teams/:teamId`), so a restore
     brings the team back as it was archived: its coaches' roles, its athletes' memberships and an active GPEXE binding
     work again, each checked again at use. A membership archived on its own stays archived (a new season adds new
@@ -877,12 +882,20 @@ prove marked "per the stream manager").
     - *Show archived* lists the archived teams. `GET /api/organization` gives them (`archivedTeams`) only to a
       platform admin (every team, with its club's state) and a club's admin (its active clubs'), narrowed to the
       workspace.
-    - *Restore* is offered except for a team of an archived club.
-    - The create form answers an archived team's name with the message and a *Restore* for it.
-  - Tests: `backend/tests/organization-team-club-fixed.test.mjs` (tests 4–9) and
+    - *Show archived* is offered only in the platform and a club workspace (a team workspace's list is empty).
+    - *Restore* is offered except for a team of an archived club or a team without a club.
+    - The create form answers an archived team's name with the message and a *Restore* for it, which closes the form; a
+      *Restore* from the archived list leaves the add form as it is.
+  - Tests: `backend/tests/organization-team-club-fixed.test.mjs` (tests 4–11; 10 and 11 are the independent review's
+    E10, another unique rule is not `team_name_taken`, and E11, a team moved between the check and the write) and
     `frontend/tests/organization-teams-archive.test.mjs`.
-- **An open question for the owner** (D44's work, no code change): a team's coach can archive (*Delete*) their own team
-  today, since `DELETE /teams/:teamId` takes `canManageTeamById`, which includes `team_coach`; restoring it is the
-  club's. Is the coach's archive intended?
+- **Open questions for the owner** (D44's work, no code change):
+  - a team's coach can archive (*Delete*) their own team today, since `DELETE /teams/:teamId` takes
+    `canManageTeamById`, which includes `team_coach`; restoring it is the club's. Is the coach's archive intended?
+  - **the memberships of a restored team** (the independent review's finding 5): an archive ends no membership, so a
+    team restored a year later comes back with last season's athletes, who see its new events again. Should a restored
+    team come back empty? Asked by the stream manager; if the answer is "empty", it is a small pull request of its own.
+- **Recorded, not changed** (the independent review; on `main` before this pull request): the admin of an archived club
+  can still create a team in it, since `POST /teams` does not check the club's state.
 - **No migration.** Tests: `backend/tests/organization-team-club-fixed.test.mjs`, `frontend/tests/organization-view.render.test.mjs`
   (the edit form) and `frontend/tests/organization-teams-archive.test.mjs`.

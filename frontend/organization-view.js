@@ -252,7 +252,7 @@ export function renderOrganizationBrowser(data) {
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
-          ${section === "teams" && Array.isArray(data.archivedTeams) && (isPlatformAdmin || data.canCreateTeam) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : ""}
+          ${section === "teams" && archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : ""}
           ${section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : ""}
           ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
         </div>
@@ -269,7 +269,7 @@ export function renderOrganizationBrowser(data) {
               : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin })
           : ""}
       </section>
-      ${section === "teams" && state.organization.showArchivedTeams && Array.isArray(data.archivedTeams) ? renderArchivedTeamsList(data.archivedTeams) : ""}
+      ${section === "teams" && state.organization.showArchivedTeams && archivedTeamsOffered(data, isPlatformAdmin) ? renderArchivedTeamsList(data.archivedTeams) : ""}
       ${section === "athletes" && !selectedClub && !selectedTeam && state.organization.showArchivedAthletes ? renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(activeAthletes) : ""}
@@ -318,6 +318,15 @@ function renderArchivedTeamsList(teams) {
       </div>
     </section>
   `;
+}
+
+// D44: the archived teams are a club manager's list. The server sends them to a
+// platform admin and a club's admin, narrowed to the workspace, so only the
+// platform and a club workspace offer them (a team workspace's empty list is no
+// "Show archived (0)").
+function archivedTeamsOffered(data, isPlatformAdmin) {
+  return Array.isArray(data.archivedTeams) && Boolean(isPlatformAdmin || data.canCreateTeam)
+    && ["platform", "club"].includes(state.currentUser?.activeWorkspace?.type);
 }
 
 function renderArchivedTeamRow(team) {

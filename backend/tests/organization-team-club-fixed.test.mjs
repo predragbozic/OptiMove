@@ -11,6 +11,7 @@
 // session cookies. Nothing touches OPTIMOVE or any persistent database.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
 
 let env;
@@ -74,6 +75,12 @@ test("3. the rights come first, as before: another club's admin and the team's o
   assert.deepEqual(await teamRow(teams.t1), before, "nothing written");
   const unknown = await put(roles.platformAdmin.cookie, "00000000-0000-4000-8000-000000000000", { name: "Ghost", clubId: clubs.c1 });
   assert.deepEqual([unknown.status, unknown.body.error], [404, "Team not found."]);
+  // An id that is not a UUID is no team either: a platform admin's 404, not a 500;
+  // anyone else's right is decided first, as before.
+  const notUuid = await put(roles.platformAdmin.cookie, "not-a-uuid", { name: "Ghost", clubId: clubs.c1 });
+  assert.deepEqual([notUuid.status, notUuid.body.error], [404, "Team not found."], notUuid.text);
+  const notUuidAdmin = await put(roles.clubAdmin.cookie, "not-a-uuid", { name: "Ghost" });
+  assert.deepEqual([notUuidAdmin.status, notUuidAdmin.body.error], [403, "Team is outside your access."], notUuidAdmin.text);
 });
 
 // ---------------------------------------------------------------------------
@@ -210,4 +217,54 @@ test("9. the archived teams are listed only to whoever may restore them, in the 
   assert.deepEqual(archivedTeamsForWorkspace({ type: "club", scopeId: "c2" }, rows), [rows[1]]);
   for (const type of ["team", "private_coach", "athlete"]) assert.deepEqual(archivedTeamsForWorkspace({ type, scopeId: "c1" }, rows), [], type);
   assert.deepEqual(archivedTeamsForWorkspace(null, rows), []);
+});
+
+// ---------------------------------------------------------------------------
+// The independent review of PR #332 (its E10 and E11)
+// ---------------------------------------------------------------------------
+
+test("10. a unique violation of another rule is not a team_name_taken, on create or on rename", async () => {
+  const { clubs, roles } = m;
+  // A second unique rule on teams, here a short name, stands for any rule but the name's.
+  await q(`create unique index zz_teams_short_unique on public.teams (club_id, short_name) where short_name = 'DUPSHORT'`);
+  try {
+    const first = await createTeam(roles.clubAdmin.cookie, { name: `D44 short ${uid()}`, clubId: clubs.c1, shortName: "DUPSHORT" });
+    assert.equal(first.status, 201, first.text);
+    const created = await createTeam(roles.clubAdmin.cookie, { name: `D44 short ${uid()}`, clubId: clubs.c1, shortName: "DUPSHORT" });
+    assert.notEqual(created.status, 201, created.text);
+    assert.notEqual(created.body.error, "team_name_taken", `create: ${created.text}`);
+    const other = await createTeam(roles.clubAdmin.cookie, { name: `D44 short ${uid()}`, clubId: clubs.c1 });
+    assert.equal(other.status, 201, other.text);
+    const renamed = await put(roles.clubAdmin.cookie, other.body.team.id, { name: `D44 short ${uid()}`, shortName: "DUPSHORT" });
+    assert.notEqual(renamed.status, 200, renamed.text);
+    assert.notEqual(renamed.body.error, "team_name_taken", `rename: ${renamed.text}`);
+  } finally {
+    await q(`drop index public.zz_teams_short_unique`);
+  }
+});
+
+test("11. a team moved by a raw write between the restore's rights check and its statement is not restored into the new club", async () => {
+  const oldClub = await env.fx.makeClub(`D44 moved from ${uid()}`);
+  const newClub = await env.fx.makeClub(`D44 moved to ${uid()}`);
+  const teamId = await env.fx.makeTeam(oldClub, `D44 moved ${uid()}`);
+  const admin = await env.fx.clubAdminOf(oldClub, "D44 moved admin");
+  assert.equal((await archive(admin.cookie, teamId)).status, 200);
+  const c = new pg.Client({ connectionString: env.db.url });
+  await c.connect();
+  try {
+    await c.query("begin");
+    // The restoring statement reads public.clubs; the team read and the rights check do not.
+    await c.query("lock table public.clubs in access exclusive mode");
+    const pending = restore(admin.cookie, teamId);
+    const raced = await Promise.race([pending.then(() => true), new Promise((res) => setTimeout(() => res(false), 1500))]);
+    assert.equal(raced, false, "the restore waits at its statement (otherwise the race is not shown)");
+    await c.query(`update public.teams set club_id = $2 where id = $1`, [teamId, newClub]);
+    await c.query("commit");
+    const answer = await pending;
+    assert.deepEqual([answer.status, answer.body.error], [409, "team_changed"], answer.text);
+    const row = (await q(`select club_id, coalesce(is_active, true) as active from public.teams where id = $1`, [teamId]))[0];
+    assert.deepEqual([row.club_id, row.active], [newClub, false], "the old club's admin restores nothing into the new club");
+  } finally {
+    await c.end().catch(() => {});
+  }
 });

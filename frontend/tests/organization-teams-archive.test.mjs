@@ -28,7 +28,8 @@ const { renderOrganizationBrowser } = await import("../organization-view.js");
 const { handleOrganizationAction, submitOrganizationForm } = await import("../organization-actions.js");
 const { state } = await import("../state.js");
 
-function resetState(section = "teams") {
+function resetState(section = "teams", workspaceType = "club") {
+  state.currentUser = { activeWorkspace: { type: workspaceType, scopeId: "club-1", label: "Club One" } };
   state.organization = {
     data: null, error: "", selectedClubId: "", selectedTeamId: "", section, addFormOpen: true, assignOpen: false, accessOpen: false,
     showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, showArchivedTeams: false,
@@ -64,9 +65,20 @@ test("the archived teams: a toggle for the club's admin, the list with Restore â
 test("a coach (the server lists no archived teams) gets neither the toggle nor the list", () => {
   resetState();
   state.organization.showArchivedTeams = true;
-  const html = renderOrganizationBrowser(baseData({ canCreateTeam: false, archivedTeams: undefined }));
+  const html = renderOrganizationBrowser(baseData({ canCreateTeam: false, archivedTeams: [] }));
   assert.ok(!html.includes("organization-toggle-archived-teams"));
   assert.ok(!html.includes("organization-restore-team"));
+});
+
+test("a club's admin in a team workspace (the server's list is empty there) gets no toggle; the platform workspace does", () => {
+  resetState("teams", "team");
+  state.organization.showArchivedTeams = true;
+  let html = renderOrganizationBrowser(baseData({ archivedTeams: [] }));
+  assert.ok(!html.includes("organization-toggle-archived-teams"), "no Show archived (0) in a team workspace");
+  assert.ok(!html.includes("Archived teams"));
+  resetState("teams", "platform");
+  html = renderOrganizationBrowser(baseData({ isPlatformAdmin: true, canCreateTeam: false, archivedTeams }));
+  assert.ok(html.includes("Show archived (3)"));
 });
 
 function fakeForm(type, values) {
@@ -96,6 +108,7 @@ test("a name taken by an archived team: the create form shows the message and of
     const restore = error.appended.find((part) => typeof part === "object");
     assert.ok(restore, "a Restore button is offered");
     assert.deepEqual([restore.dataset.action, restore.dataset.teamId, restore.textContent], ["organization-restore-team", "team-u17", "Restore"]);
+    assert.equal(restore.dataset.closeAddForm, "1", "Restore from the form closes the form");
   } finally {
     restoreFetch();
   }
@@ -125,13 +138,30 @@ test("Restore from the create form's message closes the form before the panel is
   installFetchMock([{ status: 200, body: { team: { id: "team-u17" }, restored: true } }]);
   try {
     const seen = [];
-    const action = { dataset: { action: "organization-restore-team", teamId: "team-u17" }, disabled: false };
+    const action = { dataset: { action: "organization-restore-team", teamId: "team-u17", closeAddForm: "1" }, disabled: false };
     await handleOrganizationAction(action, {
       loadAthletes: noop,
       renderOrganizationPanel: async () => { seen.push(state.organization.addFormOpen); },
     });
     assert.deepEqual(seen, [false], "the one repaint shows the form closed");
     assert.equal(action.disabled, false);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("Restore from the archived list leaves the add form as it is", async () => {
+  resetState();
+  state.activeTab = "organization";
+  installFetchMock([{ status: 200, body: { team: { id: "team-u17" }, restored: true } }]);
+  try {
+    const seen = [];
+    const action = { dataset: { action: "organization-restore-team", teamId: "team-u17" }, disabled: false };
+    await handleOrganizationAction(action, {
+      loadAthletes: noop,
+      renderOrganizationPanel: async () => { seen.push(state.organization.addFormOpen); },
+    });
+    assert.deepEqual(seen, [true], "the add form stays open");
   } finally {
     restoreFetch();
   }

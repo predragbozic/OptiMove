@@ -119,6 +119,7 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
         restore.className = "plain-button compact-button";
         restore.dataset.action = "organization-restore-team";
         restore.dataset.teamId = submitError.data.teamId;
+        restore.dataset.closeAddForm = "1";
         restore.textContent = "Restore";
         error.append(" ", restore);
       }
@@ -346,8 +347,9 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     action.disabled = true;
     try {
       await api(`/api/organization/teams/${encodeURIComponent(teamId)}/restore`, { method: "PUT" });
-      // Restore from the create form's message: the form closes in the same repaint.
-      state.organization.addFormOpen = false;
+      // Restore from the create form's message closes that form in the same
+      // repaint; Restore from the archived list leaves the add form as it is.
+      if (action.dataset.closeAddForm) state.organization.addFormOpen = false;
       await loadAthletes();
       if (state.activeTab === "organization") await renderOrganizationPanel();
     } catch (error) {

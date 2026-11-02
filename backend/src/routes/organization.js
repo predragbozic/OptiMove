@@ -1112,6 +1112,8 @@ async function teamNameTaken(error, clubId, name, exceptTeamId = null) {
     : { error: "team_name_taken", archived: true, teamId: String(other.id), message: "An archived team with this name exists in this club — restore it instead." };
 }
 
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // D43 (the owner, 2026-11-02): a team's club is fixed after creation — teams
 // never move between clubs (athletes do, through their memberships). The edit
 // keeps the stored club and never writes club_id: a `clubId` equal to it is
@@ -1126,6 +1128,8 @@ router.put("/teams/:teamId", async (req, res, next) => {
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Team name is required." });
+    // Only a platform admin gets here with an id that is not a UUID: it is no team.
+    if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
     team = (await query(`select club_id from public.teams where id = $1`, [req.params.teamId])).rows[0];
     if (!team) return res.status(404).json({ error: "Team not found." });
     if (!(await canManageClub(req, String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
@@ -1150,8 +1154,6 @@ router.put("/teams/:teamId", async (req, res, next) => {
     next(error);
   }
 });
-
-const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // D44 (the owner, 2026-11-02): a club may stop a team one season and bring it
 // back the next. Restoring is the club's decision — its admin or a platform
