@@ -88,10 +88,10 @@ function detailOf(c) {
     athletes: { "ath-1": { name: "Ana Example" } },
     approval: null,
     preview: {
-      version: 2, status: c.previewStatus === "no_changes" ? "no_changes" : "ready", blocked: null,
+      version: 3, status: c.previewStatus === "no_changes" ? "no_changes" : "ready", blocked: null,
       counts: { created: 4, changesToImported: 0 }, changesToImported: [],
       athletes: [{ gpexeAthleteId: "101", athleteId: "ath-1", participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null }, notImported: null, blocksSession: false,
-        results: [{ externalId: "athlete_session:1:full", level: "full", drillIndex: null, outcome: "created", values: [{ metricKey: "gpexe_total_distance", label: "TotDist", unit: "m", previous: null, value: 3000 }] }], skippedValues: [] }],
+        results: [{ externalId: "athlete_session:1:full", level: "full", drillIndex: null, outcome: "created", values: [{ metricDefinitionId: "def-distance", variableScope: "system", label: "Distance", unit: "m", value: "3000", sourceMetricKey: "athlete_session.total_distance", sourceValue: "3000", sourceUnit: "m", previous: null, change: "new" }] }], skippedValues: [] }],
       teamAthletesWithoutGpexeRecord: [], anomalies: [],
     },
   };

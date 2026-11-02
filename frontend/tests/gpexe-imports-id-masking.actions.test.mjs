@@ -265,6 +265,57 @@ for (const role of ["club admin", "platform admin"]) {
   });
 }
 
+// Preview v3 (9-B): an administrator's answer also carries each value's activation, mapping version and parameter
+// fingerprint, a Left-out entry's C110 code and source reason, and the labels of the GPEXE fields not switched on; a
+// coach's answer carries none of them (backend/src/gpexeImportAudience.js). Markers that occur nowhere else.
+const V3_MARK = { activation: "act-7731", version: "mv-7732", fingerprint: "fp7733", definition: "def-7734", key: "varkey7735" };
+function candidateDetailV3(admin) {
+  const d = candidateDetail();
+  const adminFields = admin ? { activationId: V3_MARK.activation, mappingVersionId: V3_MARK.version, sourceParameterFingerprint: V3_MARK.fingerprint } : {};
+  const value = (over = {}) => ({ ...adminFields, metricDefinitionId: V3_MARK.definition, variableKey: V3_MARK.key, variableScope: "system", label: "Distance", unit: "m", value: "5230", sourceMetricKey: "athlete_session.total_distance", sourceValue: "5230", sourceUnit: "m", previous: null, change: "added", ...over });
+  const skipped = [{ ...adminFields, level: "full", drillIndex: null, variableKey: V3_MARK.key, variableScope: "system", label: "Top speed", unit: "km/h", sourceMetricKey: "athlete_session.max_v", message: "Required value missing.", ...(admin ? { reason: "required_value_missing", sourceReason: "max_v_missing" } : {}) }];
+  return {
+    ...d,
+    helperValues: Object.fromEntries(d.preview.athletes.map((a) => [a.gpexeAthleteId, { duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }])),
+    preview: {
+      ...d.preview,
+      version: 3,
+      changesToImported: d.preview.changesToImported.map((ch) => ({ ...ch, values: [value({ previous: "5000", change: "changed" })] })),
+      athletes: d.preview.athletes.map((a) => ({ ...a, results: a.results.map((r) => ({ ...r, values: [value()] })), skippedValues: skipped })),
+      ...(admin ? { unactivatedSourceMetrics: ["Max acceleration"] } : {}),
+      unactivatedSourceMetricCount: 1,
+    },
+  };
+}
+
+for (const role of ["coach", "club admin", "platform admin"]) {
+  test(`${role}: a v3 session review shows no GPEXE id, activation, mapping version, parameter fingerprint, definition id or variable key outside Technical details; an administrator's appear only there, a coach's answer carries none`, async () => {
+    const admin = role !== "coach";
+    reset(VIEWERS[role]);
+    const base = server({ viewer: VIEWERS[role] });
+    responder = async (call) => (call.url.endsWith("/candidates/cand-1") ? { status: 200, body: { candidate: candidateDetailV3(admin), importSwitch: { enabled: true } } } : base(call));
+    await openReview();
+    const html = pageHtml();
+    const out = exposed(html);
+    for (const marker of Object.values(V3_MARK)) assert.ok(!out.includes(marker), `${role}: ${marker} is visible outside Technical details`);
+    assert.ok(!html.includes(V3_MARK.key) && !html.includes(V3_MARK.definition), `${role}: the variable's key and definition id are never in the page`);
+    assert.match(outsideTech(html), /<td>Distance<\/td>/, "the values are named by their variable");
+    if (admin) {
+      assertMasked(html, `${role}: v3 session review`);
+      const tech = insideTech(html);
+      for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(tech.includes(marker), `${role}: ${marker} under Technical details`);
+      assert.match(tech, /<dt>Left-out source codes<\/dt><dd>max_v_missing<\/dd>/);
+      assert.match(outsideTech(html), /not switched on for this team, so its values are not imported: Max acceleration\./);
+      assert.match(outsideTech(html), /Top speed - required value missing/);
+    } else {
+      for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(!html.includes(marker), `coach: ${marker} is nowhere`);
+      assert.match(outsideTech(html), /1 GPEXE field is not switched on for this team, so its values are not imported\./);
+      assert.ok(!/Max acceleration|Left-out source codes/.test(html));
+      assert.match(outsideTech(html), /Top speed - Required value missing/);
+    }
+  });
+}
+
 test("no stored identity at all (none loaded, or the team has no binding): an administrator sees stable, distinct 'GPEXE athlete N' labels for the list on screen, never the id; the same with the identity read refused (404)", async () => {
   for (const identities of [NO_IDENTITIES, () => ({ status: 404, body: { error: "notFound" } })]) {
     reset(VIEWERS["club admin"], { identities });

@@ -449,7 +449,6 @@ async function succeeded(w, data, render) {
       moved ? `${plural(started, "team", "teams")} moved to version ${v}.` : "",
       data?.replaced && !moved ? endedSentence(ended, listed) : "",
       started && !moved ? `${plural(started, "team is", "teams are")} switched on${data?.replaced ? ` for version ${v}` : ""}.` : "",
-      started ? "Imports do not use mappings yet; nothing changes in imports until they do." : "",
       readError,
     ].filter(Boolean).join(" "));
   }
@@ -458,7 +457,7 @@ async function succeeded(w, data, render) {
     const listed = w.after.listed ?? null;
     setNotice(s, [`Version ${w.after.versionNumber ?? ""} is disabled.`, ended ? endedSentence(ended, listed) : "", readError].filter(Boolean).join(" "));
   }
-  if (w.act === "switchOn") setNotice(s, `Switched on. Imports do not use mappings yet; nothing changes in imports until they do.${readError}`);
+  if (w.act === "switchOn") setNotice(s, `Switched on.${readError}`);
   if (w.act === "switchOff") setNotice(s, `Switched off.${readError}`);
   s.teams = { ...emptyMappingsState().teams, showEnded: s.teams.showEnded };
   await loadMapping(s.detail.id, render);
