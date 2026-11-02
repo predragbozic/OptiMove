@@ -291,7 +291,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     if (error instanceof GpexeImportServiceError) throw error;
     // Anything else (a database guard firing, a bug): a stable code, and the
     // database's own text never reaches the caller.
-    console.error(`[gpexe] the GPEXE team of ${teamId} could not be set: ${error?.code ?? ""} ${error?.message}`);
+    console.error(`[gpexe] the GPEXE team of ${teamId} could not be set: ${formatDbError(error)}`);
     throw new GpexeImportServiceError(500, "internal_error", "The GPEXE team could not be set; nothing was changed.");
   } finally {
     client.release();
@@ -700,7 +700,7 @@ export const RETENTION_INTERVAL_HOURS = 6;
 // In the web server process only (see server.js). Timers are unref'd, and a
 // failure is logged and recorded in gpexe_retention_runs, never thrown.
 export function startGpexeRetentionSchedule({ intervalHours = RETENTION_INTERVAL_HOURS, startupDelayMs = 30_000 } = {}) {
-  const tick = (trigger) => runRetention(trigger).catch((error) => console.error(`[gpexe] retention (${trigger}) failed: ${error?.message}`));
+  const tick = (trigger) => runRetention(trigger).catch((error) => console.error(`[gpexe] retention (${trigger}) failed: ${formatDbError(error)}`));
   const first = setTimeout(() => tick("startup"), startupDelayMs);
   first.unref();
   const every = setInterval(() => tick("interval"), intervalHours * 3_600_000);
@@ -1505,7 +1505,7 @@ function mapTriggerError(error, fallbackCode) {
   if (error.code === "P0001") return new GpexeImportServiceError(409, fallbackCode, "The change was refused by the database rules.");
   // Any other database code (a constraint nobody mapped, a bug): a stable
   // answer, and the database's own text stays in the log.
-  console.error(`[gpexe] ${fallbackCode}: unmapped database error ${error?.code ?? ""} ${error?.message}`);
+  console.error(`[gpexe] ${fallbackCode}: unmapped database error ${formatDbError(error)}`);
   return new GpexeImportServiceError(500, "internal_error", "The change failed on the server; nothing was written.");
 }
 
