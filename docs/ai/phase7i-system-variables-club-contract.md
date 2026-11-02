@@ -20,7 +20,7 @@ Nothing in J15 is merged before J14 is accepted.
 | The owner's decision | **C109 / OD7** (2026-10-30): „Sistemske kanonske varijable su pre svega zamisljene kao nesto sto klub moze vrlo brzo da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu odgovaraju, ako ne odgovaraju on moze i da ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti neki svoj skup core varijabli” (turn `bf4c6ce7`); the two forms (a) *use as is* and (b) *copy to own* are the *Rukovodilac*'s decision recorded in C109. Sections 2–4 make them concrete. |
 | Owner decisions | **O1–O9** (section 12), each with a recommendation. They become decisions with the next free C numbers after J14's once decided (R12). |
 | Decides | The *Rukovodilac*: R1–R12 (section 13). The owner: O1–O9 and, for a ★★ phase, the contract before any code (`metrics-core-plan.md`, section 3, A1). |
-| Migration | **One**, the next free number after J14's v52 and J18's migration (whichever lands first), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_vNN_system_variables_club.sql` (section 7, R1). |
+| Migration | **One**, the next free number after J14's v52 (J14 R1) and J18's migration (≥ v53 by J14 section 14; J18's own text still says "v52 after 7h's v51", which J14 renumbers), whichever lands first, proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_vNN_system_variables_club.sql` (section 7, R1). |
 
 ---
 
@@ -46,8 +46,9 @@ Nothing in J15 is merged before J14 is accepted.
   the variable request record by one operation, and replaces two guard bodies under md5 preconditions (the v36 request
   guard and the v48 T5 insert guard). It is the place where J18's Q14 → C125 option one lives: the typed link from a
   club version to the system version it copies.
-- **Charts of club variables are not possible today** (section 1.7, from the code, not tested). A copy makes a measure
-  that could be charted as a system variable unchartable. That is its own owner question (O7), not solved here.
+- **Charts of club variables are not possible today** (section 1.7, from the code, not tested). Copying changes
+  nothing for charts; **moving a team** to its copy stops new points on that team's existing charts of the system
+  variable, and the copy itself cannot be charted. That is its own owner question (O7), not solved here.
 
 ## 1. What exists (verified at `565fe097`)
 
@@ -183,8 +184,8 @@ archived system variable; a copy into a team; a copy into the platform workspace
 archived copy is restored (R2's restore), not copied again.
 
 **After the copy** the club submits and activates the drafts as its own versions — **under the condition that J14 is
-accepted with O1–O6 as recommended**, through J14's A1 by the club admin (7h-B). Until then a platform admin who also
-holds the club's admin role activates them, as today.
+accepted with O1–O6 as recommended**, through J14's A1 by the club admin (7h-B). 7i-B ships only after 7h-B is merged
+(section 11), so a club admin can always do it.
 
 ### 2.3 Hide / Show again
 
@@ -193,7 +194,11 @@ holds the club's admin role activates them, as today.
   pickers, the switch-on choosers and J18's board. It is returned **flagged**, so result names, dashboard series labels
   and the Activities drawer still name it.
 - **What hiding refuses:** switching the variable's system mapping on for any of the club's teams (S1, A1's listed
-  starts, J18's board), with `409 variable_hidden`.
+  starts, J18's board), with `409 variable_hidden`, **whoever starts it** — a platform admin in the platform workspace
+  included (it amends C106 for that club's bindings: section 14). The club's choice binds its own teams.
+- **What hiding is not:** an access boundary. `catalogVisibilitySql` and `isMetricVisibleToDashboard` are unchanged; a
+  dashboard series may still be bound to a hidden system variable through the API, and a template clone into a team
+  workspace still resolves it (section 4.4).
 - **What hiding never touches:** recorded values, T6 provenance, occasions, existing dashboard series (they keep
   reading), the club's existing classification links, manual measurements, the import of other variables, athletes'
   views, and anything outside that club.
@@ -221,11 +226,11 @@ and a platform admin in club X's workspace (which, as today, needs club X's admi
 
 | Act | Club X's admin | Platform admin in club X's workspace | Platform workspace | Coach (team workspace of club X) | Everyone else |
 |---|---|---|---|---|---|
-| Read system variables with club X's status (used / not used / hidden) | yes | yes | no per-club status | yes, read only, a *Hidden by the club* badge | as today |
+| Read system variables with club X's status (used / not used / no data source / hidden, and copied) | yes | yes | no per-club status | only *Hidden by the club* (no usage, no copy) | as today |
 | Copy a system variable into club X | **yes** | yes | 404 | 404 | 404 |
 | Hide / Show again for club X | **yes** | yes | 404 | 404 | 404 |
 | Switch a team to the copy | **yes** (after 7h-B) | yes | 404 | 404 | 404 |
-| Use as is (S1 of a system version) | yes (C106) | yes | yes | no | 404 |
+| Use as is (S1 of a system version) | yes (C106), refused while hidden | yes, refused while hidden | yes, refused on club X's bindings while club X hides it | 404 | 404 |
 
 - **The identical 404** (`{ "error": "notFound" }`, `Cache-Control: no-store`), before the body, with nothing written
   and the key left free, for: another club's admin; an admin of clubs A and B acting in B's workspace on A's copy or
@@ -234,6 +239,10 @@ and a platform admin in club X's workspace (which, as today, needs club X's admi
 - **Never revealed:** another club's hides, copies or usage. Hide and copy rows are read only for `ctx.owner.clubId`.
 - **A coach** keeps C99's rights on club variables (rename, archive, restore), so it may rename or archive a copy once
   it exists. It gets no act on system variables.
+- **The acts follow the view, never the basis.** In a team workspace the variable reads give a club admin or a
+  platform admin `view: "coach"` (`resolveVariableEditor`, `canonicalVariableAdminService.js:735-763`); the reads then
+  carry no `actions` and only `club.hidden`, and the write routes answer the identical 404 (their context is
+  `resolveMappingAdminWith`, which admits no team workspace).
 
 ## 4. Routes and answers
 
@@ -241,6 +250,12 @@ All under `/api/training-load/sources/metrics`, through the admin context of `re
 the workspace's club), with J8's order of answers: 401; the identical 404 before the body; 415 / 400; a malformed id the
 identical 404; 400 per body rule; the request record (`409 request_key_reused`, or the replay); the owner-filtered read;
 the locks; the right checked again; the state refusals.
+
+**Every request hash** is computed from the contract, the operation, the workspace's club, the path id and the body
+only — never from a state read in the database (the existing hashes, `canonicalVariableAdminService.js:610-617`,
+`:667-673`). The same key and body replay the saved answer whatever has changed since; the same key with another body,
+or in another club, is `409 request_key_reused`, which depends only on the caller's own earlier requests. A replay
+checks the right again and re-reads through the owner filter (`runWrite`, `sourceMetricMappingService.js:782-791`).
 
 ### 4.1 `POST /variables/:variableId/copy`
 
@@ -260,13 +275,16 @@ the copy (a variable answer) and `copiedMappings: [{ mappingId, versionId, sourc
 | `409 copy_too_large` | more than 10 mappings to copy |
 | `409 try_again` | a lock wait (55P03, 40P01, 57014) |
 
-The request hash names the source definition and version and every field of the body, so a replay after a new system
-version is `request_key_reused`, never a different copy.
+A copy that committed and whose answer was lost replays its saved answer with the same key and body, even after a new
+system version; an unsaved request whose `expectedSourceVersionId` is stale answers `source_version_changed`.
+`copy_mapping_not_reproducible` and the answer name source fields and system versions a club admin can already read
+(system mappings are readable in a club workspace, `readableOwnerKeys`, `sourceMetricAccess.js:109`).
 
 ### 4.2 `POST /variables/:variableId/hide` and `…/show`
 
 Body `{ requestKey }`. Answer `200 { variableId, hidden, hiddenAt }`; the same state again is `200` with
-`idempotent: true` and nothing written.
+`idempotent: true` and nothing written. A no-op is **not** a request record (as a refusal is not, F3c2f): its key may act
+later, and the screen never resends it by itself.
 
 | Refusal | When |
 |---|---|
@@ -275,29 +293,45 @@ Body `{ requestKey }`. Answer `200 { variableId, hidden, hiddenAt }`; the same s
 | `409 variable_in_use` (`current.activationCount`) | hide only: an open activation of its system mapping on the club's bindings |
 | `409 try_again` | a lock wait |
 
-The hide row itself is the request record (the T5 pattern: who, when, basis, key and hash on the row, section 7.3).
+The hide row itself is the request record (the T5 pattern: who, when, basis, key and hash on the row, section 7.3). A
+key is unique per user across both acts: the guard refuses a hide key already used as a show key and the reverse.
 
 ### 4.3 `POST /activations/:activationId/switch-to-copy`
 
-Body `{ requestKey, expectedState: "open", toVersionId, reason }` (the reason as S2's). Answer the ended and the new
-activation. Refusals: the identical 404 (scope as S2's); `409 activation_not_open`; `409 not_a_copy_of_this_version`
-(no copy link from `toVersionId` to the activation's version); `409 version_not_active`; S1's start codes. **Built in
-7i-B only after 7h-B is merged** (section 2.4).
+Body `{ requestKey, expectedState: "open", toVersionId, reason }` (the reason as S2's). One call moves one team; the
+screen sends one call per team (section 8.2). Answer the ended and the new activation.
+
+**The order of the answers** (no existence oracle on another club's versions): the activation through S2's scope —
+the identical 404 when out of scope; then `toVersionId` read **only among club X's own mapping versions**
+(`owner_key` = the workspace's club) — the identical 404 for an unknown id, another club's version (linked or not) or a
+system version; then `409 not_a_copy_of_this_version` (no copy link from `toVersionId` to the activation's version);
+`409 activation_not_open`; `409 version_not_active`; S1's start codes. The deep-equal test of section 10 covers an
+unknown id, a foreign linked version and a foreign unlinked one.
 
 ### 4.4 Reads
 
-- `GET /variables?scope=system` and `GET /variables/:id` in a club or team workspace of club X: each system row gains
-  `club: { hidden, usedByTeams, copyId }` for club X, and for an admin `actions` from `use`, `copy`, `hide`, `show`
-  (never for a coach). `?hidden=exclude|include|only` (default `exclude`) is bound into the `variables` cursor like the
-  other filters; a cursor without it reads as `exclude`.
+- `GET /variables?scope=system` and `GET /variables/:id` in club X's workspace (`view: "admin"`): each system row gains
+  `club: { hidden, usedByTeams, hasDataSource, copyId }` for club X, and `actions` from `use`, `copy`, `hide`, `show`.
+  In a team workspace of club X (`view: "coach"`, whatever the basis): only `club: { hidden }` and no `actions`.
+  `?hidden=exclude|include|only` (default `exclude`) is bound into the `variables` cursor like the other filters; a
+  cursor without it reads as `exclude`.
 - `GET /mappings` and `GET /activations` in club X: a system mapping row gains `targetHiddenInClub`.
-- The older `GET /api/training-load/metrics/definitions`: a system row gains `hiddenInClub` for the **active
-  workspace's** club (a club workspace's id, or a team workspace's club; none for platform, private coach and athlete
-  workspaces). `catalogVisibilitySql` is **not** changed. The two pickers drop flagged rows; every other caller keeps
-  them, so names stay.
-- Dashboard template clones into club X's data workspace leave out a system definition club X has hidden
-  (`trainingLoadDashboardWidgets.js:105-117`), so a copy that keeps the system key resolves instead of `ambiguous`
-  (O4).
+- The older `GET /api/training-load/metrics/definitions` (its only callers are the two picker loaders,
+  `training-load-analysis-data.js:1545` and `training-load-calendar-data.js:347`): a system row gains `hiddenInClub`
+  for the **active workspace's** club, resolved once for the request from the active workspace (a club workspace's id,
+  or a team workspace's club; none for platform, private coach and athlete workspaces), never from `req.authz`'s roles.
+  It also gains `ownerScope`, so a picker can mark OptiMove's row next to a same-named copy. `catalogVisibilitySql` is
+  **not** changed. **The loaders keep every row** (the same arrays name results in the Activities drawer and the
+  dashboard series); only the pickers' own render and selection leave flagged rows out.
+- **Dashboard template clones** (`trainingLoadDashboardWidgets.js:105-117`), case by case:
+  - **club X's data workspace, a copy with the system key, the original not hidden:** both are candidates, the series
+    is `ambiguous` (the existing status, never an auto-pick) until the club hides the original or picks one;
+  - **club X's data workspace, the original hidden:** the resolver leaves out system definitions club X has hidden, so
+    the copy resolves (O4);
+  - **a team data workspace of club X:** club definitions are never candidates there, and the resolver **does not**
+    apply the hide: a hidden system variable still resolves, so team templates keep working (hiding is not an access
+    boundary);
+  - every other data workspace: unchanged.
 
 ## 5. The writes, in the documented lock order
 
@@ -306,14 +340,23 @@ activation. Refusals: the identical 404 (scope as S2's); `409 activation_not_ope
   system T4 rows `FOR SHARE`, ascending → the system definition and its current version `FOR SHARE` → its scope
   capabilities `FOR SHARE` → the rights (`users`, `user_club_roles`, club `FOR SHARE`, in J14's 7h-B order) → the
   facts compared again under the locks (`source_version_changed`, `copy_mapping_not_reproducible`) → the inserts
-  (definition, version, capabilities, club T3s, club T4s, links, copy row, T8 rows, the request row last). This is D's
+  (definition, version, capabilities, **the copy row**, club T3s, club T4s, **then the links**, T8 rows, the request row
+  last; the link guard needs the copy row). This is D's
   order (v34 `:38-49`); a concurrent A1 / A2 of a copied system version or a new system variable version serializes
   with it at T4 or at the definition, and no cycle forms.
-- **Hide / show:** per-user advisory lock → the hide row's key → an advisory lock on `club-variable-hide:<club>:<variable>`
+- **Hide / show:** per-user advisory lock → the hide row's key → the transaction advisory lock
+  `pg_advisory_xact_lock(hashtextextended('club-variable-hide:' || club || ':' || variable, 0))` (the 64-bit form
+  `runWrite` uses)
   → the system definition `FOR KEY SHARE` → the open activations of its system mappings on the club's bindings (a
-  plain read under the advisory lock) → the rights → the insert or the end of the hide row. The v48 T5 insert guard,
-  replaced in section 7.5, takes the same advisory lock before it reads the hide row, so a hide and an S1 of the same
-  club and variable serialize; neither waits on anything the other holds exclusively, so no cycle forms.
+  plain read, a statement of its own after the lock, under READ COMMITTED) → the rights → the insert or the end of the
+  hide row. The v48 T5 insert guard, replaced in section 7.5, takes the same advisory lock before it reads the hide
+  row, so a hide and an S1 of the same club and variable serialize; neither waits on anything the other holds
+  exclusively, so no cycle forms between them.
+- **Several starts in one transaction** (S1 and A1 on several bindings; J18's board): before the first T5 insert the
+  service takes these advisory locks for every (binding club, variable) pair it will start, **in ascending order**; the
+  guard's own lock is then a repeat. Without that order two such transactions could take two keys in opposite order
+  (`40P01`, answered `try_again`). This adds a lock class to D's order (v34 `:38-49`): after T5's rows, before the
+  binding.
 - **Switch to copy:** S2's order for the system activation, then S1's for the new one (T2a / T2b, T3, T4 ascending over
   both versions, the old T5 `FOR NO KEY UPDATE`, the rights, the binding, team and club `FOR SHARE`), the end, the
   start, the T8 rows (`activation_end` unkeyed, `activation_start` keyed last).
@@ -360,7 +403,10 @@ version's mapping targets the club definition that `metric_definition_copies` re
 version's definition; and the two versions are **identical** in `source_metric_version_id`, `parameter_kind`,
 `source_parameters`, `parameter_fingerprint`, `source_unit`, `target_unit`, `scale`, `scale_divisor`, `offset`,
 `parameter_scale`, `parameter_scale_divisor`, `parameter_offset`, `applies_to_session`, `applies_to_drill` and, by
-value, `canonical_parameters`. A deferred check at COMMIT requires the club version's `mapping_version_create` T8 row.
+value, `canonical_parameters`, each compared null-safe (`is not distinct from`); and the system version pins the copy
+row's `system_version_id` while the club version pins the copy's version 1. `conversion_note` (free text) and
+`rounding_decimals` (presentation) are left out on purpose. A deferred check at COMMIT requires the club version's
+`mapping_version_create` T8 row.
 
 **J18's gate** then accepts this link as the second proof, beside a checked T9i row: a club admin's activation of a
 parameter-less club version passes when the version has a link row whose system version is **still active** at the
@@ -379,14 +425,18 @@ Its guards: BEFORE INSERT — the actor (v35 setting) is `hidden_by_user_id`; th
 `source_metric_actor_basis(actor, club_id)` and equals `hidden_basis`; the definition is `owner_scope = 'system'`;
 `hidden_at = now()`; under the advisory lock `club-variable-hide:<club>:<variable>`, no open T5 activation of a system
 mapping version targeting the definition on a binding whose `source_metric_binding_club` is `club_id`. BEFORE UPDATE —
-only the show facts, once, with the same actor and basis rules. No other writer.
+only the show facts, once, with the same actor and basis rules. BEFORE DELETE and BEFORE TRUNCATE — refused. The copy
+and link tables (7.1, 7.2) refuse UPDATE, DELETE and TRUNCATE the same way. No other writer.
 
 ### 7.4 The variable request record
 
-`metric_variable_requests` gains the operation `variable_copy` (its operation CHECK widened; its version rule admits a
-version for `variable_copy`; the one-create-per-definition index covers `variable_copy` too) and a nullable
-`operation_id` (set only for `variable_copy`, equal to the T8 rows' and the copy rows' `operation_id`, so a replay and
-the post-COMMIT check find every row the copy wrote). The v36 insert guard
+`metric_variable_requests` (in force: v36's table, v38's `version_iff` (`:274-275`) and trigger `WHEN`
+(`:291-296`), v45's operation list of six (`:119-130`)) gains the operation `variable_copy` (the operation CHECK
+widened from v45's list; `version_iff` admits a version for `variable_copy`; the index
+`metric_variable_requests_one_create_per_definition` gets the predicate `operation in ('variable_create',
+'variable_copy')`) and a nullable `operation_id` with the CHECK `(operation_id is not null) = (operation =
+'variable_copy')` (equal to the T8 rows' and the copy rows' `operation_id`, so a replay and the post-COMMIT check find
+every row the copy wrote). The v36 insert guard
 (`training_load.metric_variable_requests_insert_guard`, body in force v36, md5 `11095b44b633e9eb1262f5189c4ec9c5`) is
 replaced so that `variable_copy` is checked as `variable_create` is, plus: the copy row of the definition exists in this
 transaction with the same `operation_id`. Its trigger's `WHEN` gains `variable_copy`.
@@ -401,16 +451,27 @@ replace this body (it replaces the T5 update guard), so there is no conflict wit
 
 ### 7.6 Preconditions, locks, rollback
 
-- **md5 preconditions** on the two replaced bodies; refuse if J18's migration or another changed them.
-- **Locks:** `metric_variable_requests` and T5 `share row exclusive` for the replaced triggers; the three new tables are
-  new. No `access exclusive` on a table with production rows.
-- **Preflight / post-check / rollback** as v48 and v50, with a Serbian runbook for the owner. The rollback refuses once
-  any copy, link or hide row, or any `variable_copy` request, exists, or a later migration is recorded; otherwise it
-  drops the three tables, restores both bodies and the CHECKs byte for byte. Its SQL files get a `.gitattributes`
-  `eol=lf` line.
+- **md5 preconditions** on the two replaced bodies (an unknown md5 refuses the migration), and on **J18's gate body**
+  when J18's migration landed first: then this migration also replaces that body (to accept the link of 7.2), with the
+  md5 J18's migration gives it. When this migration lands first, J18's migration replaces its own gate body knowing the
+  link table (R7).
+- **Locks**, in a write's own order: `metric_variable_requests` in **ACCESS EXCLUSIVE with `nowait`** (its column,
+  CHECKs, index and trigger `WHEN` change; v45 `:59` is the precedent; the Variables screen's reads wait until the
+  migration commits, and a busy table fails it at once with nothing applied, as J14 R10); T5 in `share row exclusive`
+  (its guard body only); J18's T4 gate, when replaced, in `share row exclusive`; the three new tables are new. The
+  preflight's quiet-moment block is the gate, and the deploy follows it at once.
+- **Preflight / post-check / rollback** as v48 and v50, with a Serbian runbook for the owner (including what to do when
+  `nowait` fails: wait, repeat the deploy at a quiet moment, delete nothing). The rollback refuses once any copy, link or
+  hide row, or any `variable_copy` request, exists, or a later migration is recorded, or the gate body in force
+  references the link table and J18's previous body cannot be restored by md5. Otherwise it drops the three tables and
+  restores byte for byte: both replaced bodies; J18's gate body if this migration replaced it; the operation CHECK
+  (v45's six), `version_iff`, the index predicate, the trigger `WHEN` (v38's); and drops `operation_id`. Its SQL files
+  get a `.gitattributes` `eol=lf` line.
 - **A read-only preflight count** of system variables a copy would refuse (non-numeric, a `day` level, an unsupported
   condition, a non-token unit), so the owner knows before 7i-B what `copy_source_unsupported` will meet.
-- **Deploy compatibility:** the old code never writes the new operation or tables; old reads ignore them.
+- **Deploy compatibility:** the old code never writes the new operation or tables; old reads ignore them. After a code
+  rollback with hide rows in place, the old S1 on a hidden variable meets the new guard's `23514`, which the old code
+  does not map: a sanitized 500 instead of `409 variable_hidden`, nothing written.
 
 ## 8. The service and the screen (7i-B)
 
@@ -419,33 +480,69 @@ replace this body (it replaces the T5 update guard), so there is no conflict wit
 - `copyVariable` in `canonicalVariableAdminService.js`, through `runWrite` with the variable request table, reusing
   `createVariable`'s validation for the editable fields and `createVersion`'s derivation for each copied version.
 - `hideVariable` / `showVariable` with the hide row as the request record.
-- `switchToCopy` in the activation service (after 7h-B).
-- The readers of section 4.4; `listDefinitions` takes the active workspace's club; the template resolver takes the
-  hide set of the data workspace's club.
-- `actionsOf` keeps `[]` for a coach and for the platform workspace.
+- `switchToCopy` in the activation service.
+- **S1 and A1's listed starts** check the hide before the insert (`409 variable_hidden`), and the classifier maps the
+  T5 guard's new `23514` text to the same code; the advisory locks of section 5 in ascending order.
+- The readers of section 4.4: `listDefinitions` takes the club resolved once from the active workspace; the template
+  resolver applies club X's hide set only in club X's data workspace.
+- `actionsOf` gives the new acts only when `ctx.view === "admin"`, never from the basis; `[]` in a team workspace and
+  in the platform workspace.
 
 ### 8.2 The screen ("mora biti mnogo jednostavnije za korisnika")
 
+Every write on this screen follows the existing pattern of the Variables and Mappings screens (J16 section 8;
+`refused()`, `frontend/metric-variables-actions.js:556-566`): one write at a time; *Saved*; a stated refusal with its
+sentence; and for a lost answer, an uncoded 5xx or `outcome_unknown`, *Result not confirmed · Check result*, which
+repeats the same request key and never claims that nothing was saved.
+
 - **The tab** "System (reference)" becomes **From OptiMove** in a club workspace. Its intro: "OptiMove's ready-made
-  variables. Use them for your teams, copy one to make it your club's own, or hide the ones you don't need."
-- **Each row:** one chip — *Used by your teams*, *Not used*, or *Hidden*; *Copied* when the club holds a copy (a link
-  to it). A *Show: Shown / Hidden / All* select like the archive filter.
-- **The detail:** at most three buttons, the primary one by state:
-  - *Use for your teams* (primary when not used) — opens the system mapping at *Switch on for teams*, preset to the
-    club;
-  - *Copy to my club* — one review card: the name (prefilled, editable), the key (prefilled, editable), "Its N data
-    source connections come as drafts you activate.", "It will not follow later changes OptiMove makes.", the chart
-    note of O7, one button *Copy*. After it the copy's detail opens with the next step named;
-  - *Hide for my club* / *Show again* — one short confirmation naming what disappears (the lists and pickers) and what
-    stays (results, charts already made); while teams use it, the button is off with "Switch it off for your teams
-    first."
-- **On the copy's detail:** "Copied from OptiMove's <name>." and, while a team still uses the original, *Move your
-  teams to this copy* (the switch, after 7h-B).
-- **A coach** sees the chips and a *Hidden by the club* badge, no buttons.
-- **The pickers** drop hidden rows; results keep the names.
+  variables. Use one as it is if it measures what you need. Copy it only if your club wants its own name and to decide
+  itself when it changes. Hide the ones you don't need."
+- **Each row:** one status chip — *Used by this club's teams*, *Not used*, *No data source yet* (no active system
+  mapping), or *Hidden* — plus *Copied* when the club holds a copy (a link to it). A select *Available / Hidden by your
+  club / All* beside the existing *Active / Archived / All* select, which stays.
+- **The detail:** at most three buttons, one primary by state (*Use for your teams* when not used; *Copy to my club*
+  when used and not copied; none when hidden, where *Show again* is the only act):
+  - **Use for your teams** — opens the system mapping's panel titled "Use <name> for your teams", with the club chosen
+    and no team ticked, and a way back "← <name>". With no linked GPEXE team the detail says first "Link a team to GPEXE
+    first (Settings → Source connections)." and offers no button. With no data source: "OptiMove has not connected a
+    data source to it yet." and no button.
+  - **Copy to my club** — one review card: the name (prefilled, editable); "It comes with N links to GPEXE fields, as
+    drafts. Review them and switch them on for your teams on the copy's page." (N = 0: "It has no GPEXE field link
+    yet."); "It will not follow later changes OptiMove makes."; under **Advanced**, folded, the key, prefilled, with
+    "Keep it so ready-made dashboards use your copy once you hide OptiMove's. It cannot be changed later."; one button
+    *Copy*. After it the copy's detail opens and says "Copied. Next: open each draft link, submit it and switch it on."
+  - **Hide for my club / Show again** — one short confirmation: "<name> disappears from this club's lists and pickers,
+    and from those of its teams' coaches. Recorded values, results and charts already made stay." While teams use it,
+    the button is off with "Switch it off for your teams first." and a link *See the teams using it*.
+- **On the copy's detail:** "Copied from OptiMove's <name>. Sessions imported before your teams move stay under
+  OptiMove's <name>." While a team still uses the original: **Move your teams to this copy**, which opens one review
+  card:
+  - it names each team that uses the original and says its Required / Optional setting is kept;
+  - "Sessions already imported stay under OptiMove's <name>.";
+  - while O7 is open: "Your existing charts of <name> get no new points after the move.";
+  - a reason field, as *Switch off*;
+  - the button **Move N teams**, which sends one call per team, one at a time, with one result per team: *Moved*, *Not
+    moved* (the refusal's sentence), or *Result not confirmed · Check result* (the same key).
+  Once no team uses the original: "Hide OptiMove's <name> for your club" as a link to the hide confirmation.
+- **Sentences for the new codes**, each with its next step: `already_copied` "Your club already has a copy." *Open it*;
+  `variable_in_use` "Teams of this club still use it." *See the teams using it*; `variable_hidden` "This club hides
+  <name>. Show it again first."; `source_version_changed` "OptiMove changed this variable a moment ago. Open it again
+  and copy." ; `copy_mapping_not_reproducible` "One of its GPEXE field links can't be copied now (<field>). Ask a
+  platform administrator."; `copy_source_unsupported` "This variable can't be copied into a club."; `copy_too_large`
+  "It has too many links to copy at once. Ask a platform administrator."; `not_a_copy_of_this_version` "That version is
+  not this copy's first version. Switch the team off, then on with the version you want."; `try_again` as today.
+- **A coach** sees only *Hidden by the club* on a hidden row, and no buttons.
+- **The pickers** leave hidden rows out in their own render and selection (the loaders keep every row, so results keep
+  their names); while the club holds a same-named copy, OptiMove's row is marked "(OptiMove)".
+- **Replaced sentences** (section 14): `metric-variables-view.js:87` ("…are under System (reference).") and `:93` (the
+  club's empty list) become "This club has no variables of its own yet. Look in From OptiMove first: use one as it is, or
+  copy it. Create one here only for a measure that list does not have."; `:193` ("Read only here: system variables are
+  changed in the platform workspace.") becomes "OptiMove changes this variable. You can use it, copy it or hide it."
+  `metric-variables-data.js:246` stays true and stays.
 - Phones: buttons stack, 44 px targets, 16 px fields. Reviewers: `code-reviewer`, `ux-design-reviewer`, `mobile-qa`.
-  A browser check at 1280, 390, 375 and 360 px, and J16's interaction count for "copy, then use" measured against the
-  real routes.
+  A browser check at 1280, 390, 375 and 360 px, and J16's interaction count for "copy, then use" and for "move N
+  teams" measured against the real routes.
 
 ## 9. Relation to J14, J18 and C111
 
@@ -471,93 +568,120 @@ migration, a main one through all).
   in B's workspace, A's admin in a team workspace, revoked, archived club, coach, private coach, athlete, no role, the
   platform admin in the platform and in A's workspace, a revoked platform admin) × copy, hide, show, switch, the reads.
   Success only for A's admins and the platform admin in A's workspace; the identical 404, deep-equal (status, body,
-  headers) across a missing id, another club's variable and a foreign activation, for everyone else.
+  headers) across a missing id, another club's variable, a foreign activation and, for the switch, an unknown
+  `toVersionId`, another club's linked version and another club's unlinked one, for everyone else. A's admin in a team
+  workspace reads no `actions` and only `club.hidden`.
 - **Copy:** the variable, version 1 equal in every semantic fact, the capabilities, one club T3 and draft T4 per active
   system version, the link rows, the copy row, the T8 rows and the request row, all in one transaction; nothing for a
   draft, needs-review or disabled system version; each refusal of section 4.1 with nothing written and the key free;
-  replay and `request_key_reused`; the copy's drafts submitted and activated by the club admin (after 7h-B); a copy
-  that keeps the system key and a template clone into the club resolving once the original is hidden.
-- **Hide:** hide and show by each allowed actor; idempotent repeats; `variable_in_use` with an open activation; S1 and
-  A1's listed starts refused for a hidden variable (`variable_hidden`); the readers flag and the pickers drop; result
-  names, existing series and manual values unchanged; a coach in a team workspace of the club sees the badge; another
-  club sees nothing.
-- **Switch:** one transaction, no window (a check between is impossible), the requirement kept, the T8 pair; refusals.
+  replay and `request_key_reused` (a lost answer, then a new system version, then the same key and body: the saved
+  answer); the copy's drafts submitted and activated by the club admin; template clones in the four cases of section
+  4.4 (a same-key copy not hidden: `ambiguous`; hidden: the copy; a team data workspace: the system variable, hidden or
+  not).
+- **Hide:** hide and show by each allowed actor; idempotent repeats (a no-op key acting later, as section 4.2 says);
+  a key used for a hide refused for a show and the reverse; `variable_in_use` with an open activation; S1 and A1's
+  listed starts refused for a hidden variable (`variable_hidden`), the platform workspace's S1 on club A's binding
+  included; the readers flag, the loaders keep every row and the pickers drop in their render; result names, existing
+  series and manual values unchanged; a coach in a team workspace of the club sees the badge; another club sees
+  nothing; a user with roles in clubs A and B, in A's workspace, sees A's hides only; a `variables` cursor without
+  `hidden` reads as `exclude`.
+- **Switch:** one transaction, no window (a check between is impossible), the requirement kept, the T8 pair; each
+  refusal in the order of section 4.3.
 - **Direct SQL** (each with its first-firing guard, code and message): every guard of section 7 refuses a missing
   actor, another actor, a wrong basis, a system definition as a copy's club side, a non-identical link, a link to a
-  never-activated system version, a hide of a club variable, a hide with an open activation, a write inside a
-  savepoint, a copy row or a link row without its request or T8 row at COMMIT.
+  never-activated system version, a link whose pins differ, a link before its copy row, a hide of a club variable, a
+  hide with an open activation, a write inside a savepoint, a copy row or a link row without its request or T8 row at
+  COMMIT, an UPDATE, DELETE or TRUNCATE of each of the three tables (outside the show facts), and a `variable_copy`
+  request without `operation_id` or another operation with one.
 - **Races** (no `40P01`, the second request by another user): copy vs A1 / A2 of the copied system version; copy vs a
-  new system version and vs an archive; two copies by two admins; hide vs S1, both orders; switch vs an import
-  approval and vs S2; a club-role revocation during a copy (J14 R13's route-against-route pattern).
+  new system version and vs an archive; two copies by two admins; hide vs S1, both orders; two S1s of the same
+  variable on bindings of two clubs in opposite order (no `40P01`, thanks to the ascending advisory locks); switch vs an
+  import approval and vs S2; a club-role revocation during a copy (J14 R13's route-against-route pattern).
+- **J18's gate** (only when J18 is built): a club admin's activation of a copied parameter-less draft passes through
+  the link, and is refused (`23514`, `409 confirmation_required`) once the linked system version is disabled.
 - **History (inferred today):** after a switch, a session imported under the system variable whose content GPEXE
   changed is `needs_review` once, its system value stays current; an unchanged session stays `unchanged`.
-- **Migration rehearsal** as J14 section 10.5: preflight, apply under a held reader, the exact catalog delta, the
-  post-check, every rollback refusal, rollback to the previous catalog byte for byte, re-apply, LF endings.
+- **Migration rehearsal** as J14 section 10.5: preflight (its count of system variables a copy would refuse asserted on
+  planted rows), `nowait` failing at once under a held reader of `metric_variable_requests`, apply, the exact catalog
+  delta, the post-check, every rollback refusal, rollback to the previous catalog byte for byte (the operation CHECK,
+  `version_iff`, the index predicate, the trigger `WHEN`, no `operation_id`), re-apply, LF endings; and, once J18's
+  migration exists, both orders (J18 first: its gate body replaced under its md5 and restored by the rollback).
 - **Mutations**, each killed by a named test: every guard condition above; the shared advisory lock removed from the
-  T5 guard or from the hide; the copy's "active system versions only" filter widened; the reader flag ignored by a
-  picker; the template resolver ignoring the hide; the identical-404 gate widened.
-- **Frontend:** the From OptiMove tab, the chips, the three acts with their cards, the coach badge, the pickers
-  dropping hidden rows while results keep names; a mutation that shows the acts to a coach must fail.
+  T5 guard or from the hide, or taken in another order; the copy's "active system versions only" filter widened; the
+  reader flag ignored by a picker; the filter moved into a loader (results lose names); the template resolver ignoring
+  the hide in a club workspace or applying it in a team workspace; the switch's target read without the owner filter;
+  the acts keyed on the basis instead of the view; the identical-404 gate widened.
+- **Frontend:** the From OptiMove tab, the chips, the three acts with their cards, the move card with one result per
+  team, a sentence and next step for every new code, *Result not confirmed · Check result* on a lost answer with the
+  same key, the coach badge, the pickers dropping hidden rows while results keep names, "(OptiMove)" beside a
+  same-named copy; a mutation that shows the acts to a coach must fail.
 
 Regression by `--file`: the M3-0, R2, 12b, icon, M2, 7b, 7d and 9-B suites, and `test:frontend:fast`.
 
 ## 11. Rollout
 
-- **7i-B** (migration, backend, frontend) after J14 is accepted and **after 7h-B is merged**, as one ★★ pull request;
-  the switch route ships in it only if 7h-B is merged, otherwise in a follow-up.
+- **7i-B** (migration, backend, frontend, the switch included) comes after J14 is accepted and **after 7h-B is
+  merged**, as one ★★ pull request.
 - **The pilot club stays on form (a)** (O8): its three Required system mappings are not copied or moved; copy and hide
   are first used by a new club, with its own test data.
 - The frontend never ships before the backend (J14 R7).
 
 ## 12. Questions for the owner (O1–O9)
 
-Each has a recommendation, the consequence and the alternative.
+Each has a recommendation and the alternative, in plain words.
 
-- **O1. What hiding means.** **Recommended:** a per-club preference that takes a system variable out of the club's
-  lists and pickers and refuses switching it on; refused while the club's teams still use it (switch it off first);
-  never touches recorded values, results, provenance or existing charts. *Alternative:* hiding also switches it off
-  for the club's teams by itself — a heavier change (a new end reason and new audit rows).
-- **O2. Where hiding applies.** **Recommended:** in the club's workspace and in every team workspace of that club; the
-  club comes from the active workspace, never from all of a user's roles; no effect on athletes or the platform
-  workspace. *Alternative:* the club's workspace only (coaches keep seeing it).
-- **O3. What a copy copies.** **Recommended:** the system variable's current version, exactly in its unit, bounds,
-  condition, daily aggregation and levels (only the name, short name, description, icon and key may differ), and only
-  the mappings with an active system version, as the club's drafts; not the system's categories. *Alternative:* also
-  copy draft and waiting system versions — those carry no platform approval yet.
-- **O4. The copy's key.** **Recommended:** the system key by default, editable; and dashboard templates in the club
-  then use the club's copy once the club hides the original. *Alternative:* always a new key from the name — templates
-  then keep using the system variable.
-- **O5. How many copies.** **Recommended:** one per club and system variable; an archived copy is restored, not copied
-  again. *Alternative:* a new copy after archiving, with a new key.
-- **O6. Moving teams to the copy.** **Recommended:** one step that switches a team from the system variable to the copy
-  with the same Required / Optional setting and no gap, available once J14's 7h-B lets a club admin activate its copy.
-  *Alternative:* two steps (switch off, switch on), with a window in which a search finds the field unmapped.
-- **O7. Charts of club variables** (from the code, not tested). Today no dashboard can chart a club variable's imported
-  values; a copy therefore stops new points on the system variable's charts. **Recommended:** a separate pull request
-  before more clubs are brought on that lets a team dashboard use its own club's variables (a migration and a security
-  review), and until then the copy card says "Charts of club variables come later." *Alternatives:* accept it as a
-  lasting limitation; or hold back copying until charts exist.
-- **O8. The pilot club.** **Recommended:** it stays on OptiMove's variables (form a); copying and hiding are first used
-  by a new club. *Alternative:* move the pilot to copies — it would split its history at the switch date.
-- **O9. History after a switch** (from the code, not tested). Sessions imported before the switch stay under the
-  system variable; a re-import of one GPEXE later changed goes to review once and keeps the system value.
-  **Recommended:** accept, and say so on the copy's detail. *Alternative:* a re-import tool that moves old sessions to
-  the copy — against ADR-007 (a value is never reinterpreted).
+- **O1. What "hide" does.** **Recommended:** the club no longer sees the variable in its lists and pickers, and it cannot
+  be switched on for the club's teams; hiding is refused while the club's teams still use it (they are switched off
+  first); recorded values, results and charts already made are never touched; "Show again" restarts nothing.
+  *Alternative:* hiding switches the variable off for the club's teams by itself — more work, and easier to do by
+  mistake.
+- **O2. Who stops seeing a hidden variable.** **Recommended:** the club's administrators and the coaches of all its
+  teams; a coach of teams in two clubs sees it as decided by the club of the team they are working in. Athletes and other
+  clubs see no change. A club's hide also stops OptiMove's own administrators from switching it on for that club's
+  teams. *Alternative:* only the club's administrators (coaches keep seeing it).
+- **O3. What a copy takes over.** **Recommended:** the variable exactly as OptiMove defines it now (unit, limits,
+  zones, daily total, levels), and its working links to GPEXE fields, as drafts the club then switches on; the name,
+  short name, description and icon may be changed at once; categories are not copied. *Alternative:* also take
+  OptiMove's links that are not approved yet — they carry no platform check.
+- **O4. The copy's internal name** (the key ready-made dashboards look for). **Recommended:** it keeps OptiMove's
+  internal name, so ready-made dashboards of the club switch to the club's copy once the club hides OptiMove's.
+  *Alternative:* a new internal name from the copy's name — ready-made dashboards then keep using OptiMove's.
+- **O5. How many copies.** **Recommended:** one per club and OptiMove variable; an archived copy is brought back, not
+  copied again. *Alternative:* a new copy after archiving, under a new internal name.
+- **O6. Moving teams to the copy.** **Recommended:** one step per team that switches it from OptiMove's variable to the
+  club's copy, keeping Required / Optional, with no moment in which a search finds the field without a mapping;
+  available once club administrators can switch on their own mappings (phase 7h). *Alternative:* two steps (switch
+  off, switch on), with that gap.
+- **O7. Charts of club variables** (from the code, not tested). Today no dashboard can show a club variable's imported
+  values. Copying changes nothing for charts; **moving a team to its copy** stops new points on that team's existing
+  charts of OptiMove's variable, and the copy itself cannot be charted yet. **Recommended:** a separate pull request,
+  before more clubs are brought on, that lets a team's dashboards use its own club's variables (a migration and a
+  security review); until then the move card says "Your existing charts of <name> get no new points after the move."
+  *Alternatives:* accept it as a lasting limit; or allow copying but hold back moving teams until charts exist.
+- **O8. The pilot club.** **Recommended:** it stays on OptiMove's variables; copying and hiding are first used by a new
+  club. *Alternative:* move the pilot to copies — its history would split at the move.
+- **O9. History after a move** (from the code, not tested). Sessions imported before the move stay under OptiMove's
+  variable; if GPEXE later changes one of them, its re-import goes to review once and keeps OptiMove's value.
+  **Recommended:** accept it, and say so on the copy's page. *Alternative:* a tool that moves old sessions to the copy —
+  against the rule that a recorded value is never reinterpreted (ADR-007).
 
 ## 13. Decisions for the *Rukovodilac* (R1–R12)
 
-- **R1. The migration number:** the next free after v52 and J18's; the runbook file names wait for it.
+- **R1. The migration number:** the next free after J14's v52 and J18's; the runbook file names wait for it.
 - **R2. The request record:** a new operation `variable_copy` with `operation_id` (recommended) rather than a plain
   `variable_create`, which would lose that it is a copy.
 - **R3. The copy's size cap:** 10 mappings, `409 copy_too_large`.
-- **R4. The refusal codes** of section 4.
-- **R5. The lock order** of section 5 (D's order, the rights after the registry, J14's `u, r`).
+- **R4. The refusal codes and their order** of section 4, the switch's included.
+- **R5. The lock order** of section 5 (D's order, the rights after the registry, J14's `u, r`; the hide advisory locks
+  in ascending order before several starts).
 - **R6. The T5 insert guard replacement** (section 7.5), md5-preconditioned; J14's v52 does not touch it.
-- **R7. C125 option one** lives in this migration; J18's gate accepts the link; whichever lands second replaces the
-  other's body under an md5 precondition.
-- **R8. The pull requests:** 7i-B after J14's acceptance and 7h-B; the switch only with 7h-B merged; the charts
-  (O7) as their own pull request.
-- **R9. The readers** that honour a hide (section 4.4), and that `catalogVisibilitySql` is not changed.
+- **R7. C125 option one** lives in this migration. If J18's migration lands first, this one replaces J18's gate body
+  under J18's md5 and its rollback restores it; if this one lands first, J18's migration builds its gate knowing the
+  link table and its rollback handles it.
+- **R8. The pull requests:** 7i-B after J14's acceptance and 7h-B, the switch in it; the charts (O7) as their own pull
+  request.
+- **R9. The readers** that honour a hide (section 4.4), and that `catalogVisibilitySql` and `isMetricVisibleToDashboard`
+  are not changed.
 - **R10. Cursor compatibility** of `variables` with the new `hidden` filter.
 - **R11. `test:backend:shared`:** the same evidence as J14 R9 (no shared-kind suite imports the touched services);
   recommended not needed, on the *Rukovodilac*'s word otherwise.
@@ -568,11 +692,13 @@ Each has a recommendation, the consequence and the alternative.
 | Where | What | How |
 |---|---|---|
 | Discovery C88 | system variables in a club are a "read-only reference" | amended: the club also uses, copies and hides them; they stay unchangeable by the club and never a club mapping's target |
-| Discovery C109 | "hiding per club is likely a new table" | made concrete: section 2.3 and 7.3 |
+| Discovery C106 | a club admin and a platform admin start system activations on a club's bindings | amended: refused while that club hides the variable (`variable_hidden`), whoever starts it |
+| Discovery C109 | "hiding per club is likely a new table" | made concrete: sections 2.3 and 7.3 |
+| Discovery D (lock order, v34 `:38-49`) | no advisory lock class for the registry | amended: the hide advisory lock, after T5's rows and before the binding (section 5) |
 | J16 (`phase8`) club sentences | "System mappings come from a platform administrator; you switch them on for your teams." | amended: hidden ones are marked and cannot be switched on |
 | J18 §3.6 and §7 eligibility (`c112:279`, `:794-799`) | every eligible active system version is pre-placed | amended: not when hidden in the team's club |
-| J18 Q14 → C125 (`c112:640-643`, `:1172-1175`) | option one recommended, "decided with 7i" | carried: section 7.2 |
-| The Variables screen (`metric-variables-view.js:39-47`, `:62-67`) | "System (reference)", "this club's own mappings cannot target them" | superseded by section 8.2 |
+| J18 Q14 → C125 (`c112:640-643`, `:1172-1175`) | option one recommended, "decided with 7i" | carried: sections 7.2 and 7.6 |
+| The Variables screen (`metric-variables-view.js:39-47`, `:62-67`, `:87`, `:93`, `:193`) | "System (reference)", "this club's own mappings cannot target them", "Check System (reference) first …", "Read only here …" | superseded by section 8.2 |
 
 ## 15. Not in this contract
 
@@ -591,4 +717,23 @@ Each has a recommendation, the consequence and the alternative.
   importer, dashboards and tests — and a completeness critic, on J14's worktree (`565fe097` plus the J14 documents).
   The executor checked the facts this contract rests on in the code at `565fe097`, and the two md5 values against the
   migration files (the method reproduces v48's rollback constant for the T5 insert guard).
-- Internal reviews of this document: below, after they run.
+- **Round 1** of the internal reviews, on `53c85969` (each finding of MEDIUM or above checked again by an adversarial
+  verifier from the code). Verdicts: `code-reviewer` part A (sections 0–6) NOT READY and part B (sections 7–16) READY
+  WITH NON-BLOCKING NOTES; `db-reviewer`, `security-reviewer` and `ux-design-reviewer` NOT READY. After the
+  verifiers, one HIGH stood (ux: the move had no review card) and the rest were MEDIUM or lower. All applied on the next
+  head:
+  - **ux:** the move card with its teams, kept requirement, history and chart sentences, reason and per-team outcomes
+    (HIGH); O7 names the move, not the copy, as what stops chart points; the replaced screen sentences; the outcome
+    pattern and a sentence per code; "(OptiMove)" in the pickers beside a same-named copy; the status chip *No data
+    source yet*; the copy card's wording, its key under Advanced, the next step; plain words in O1–O9;
+  - **db:** the copy row before the links (the link guard needs it); `metric_variable_requests` in ACCESS EXCLUSIVE
+    with `nowait` (v45's precedent); J18's gate body in the md5 preconditions and the rollback; the in-force bases of
+    the request table and the `operation_id` CHECK; the null-safe "identical" predicate and its pins; the advisory locks
+    in ascending order, named and placed in D; append-only guards on the three tables; one key namespace for hide and
+    show; the code-rollback effect;
+  - **security:** the switch's order of answers (the target version read only among the club's own, before the link
+    check); the acts follow `view`, never the basis, and a coach gets only `club.hidden`; the hash rule with the club;
+    the platform path for a hidden variable stated and C106 amended; the pickers filter only in their own render;
+    the club resolved once from the active workspace; template resolution in a team data workspace;
+  - **code:** the hash sentence of 4.1; template resolution case by case; the no-op hide key; the migration numbering;
+    the 7i-B / 7h-B ordering made one.
