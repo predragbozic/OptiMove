@@ -27,6 +27,12 @@
 -- approvals table. Run block 3 first: every later block reads that row only
 -- while exactly one approval exists, and shows no row or zeros otherwise.
 --
+-- Pinned to main as written: block 1 names v51
+-- (202611011900_calendar_v51_settings.sql) and its checksum, and the expected
+-- values follow the three pilot mappings decided under O6. If main carries a
+-- later migration, or the decided mappings change, this file is re-issued
+-- under a new sha256 together with the preflight, before step 11.
+--
 -- On production the expected numbers come from step 8's preview of GPEXE
 -- session 190122: 39 results (13 athletes, each the whole session and two
 -- drills), 117 values, no value left out. The blocks also compare every
@@ -54,13 +60,14 @@ select
 
 -- 2. Nothing runs, and no check of the team started since the approval (a
 --    later check would move the candidate's last sighting).
---    Expected: running_checks = 0, running_identity_loads = 0,
---    team_checks_since_approval = 0.
+--    Expected: approvals_total = 1, running_checks = 0,
+--    running_identity_loads = 0, team_checks_since_approval = 0.
 with ap as (
   select * from training_load.gpexe_import_approvals
    where (select count(*) from training_load.gpexe_import_approvals) = 1
 )
 select
+  (select count(*) from training_load.gpexe_import_approvals) as approvals_total,
   (select count(*) from training_load.gpexe_import_checks where status = 'running') as running_checks,
   (select count(*) from training_load.gpexe_athlete_identity_requests where status = 'running') as running_identity_loads,
   (select count(*) from training_load.gpexe_import_checks k
@@ -75,9 +82,11 @@ select
 --    approval_basis = platform_admin (team_grant if a granted coach approved,
 --    and then no_grant = false), changes_to_imported = 0,
 --    changes_accepted = false, results_imported = the preview's results
---    (39 on production), import_ids_recorded = true.
---    approval_id, approved_by_user_id and approved_utc are shown only: they
---    are what the HTTP approval read shows.
+--    (39 on production), import_count_keys = created,
+--    import_ids_recorded = true.
+--    approval_id, approved_by_user_id, approved_by_name and approved_utc are
+--    shown only: the first, second and fourth are what the HTTP approval read
+--    shows, and the name is one the owner accepted at step 11.
 with bound as (
   select b.id as binding_id, b.team_id, b.source_team_id, c.host_key
     from training_load.source_team_bindings b
@@ -103,6 +112,8 @@ select
     where a.ended_at is null) as requirements,
   (select id from ap) as approval_id,
   (select approved_by_user_id from ap) as approved_by_user_id,
+  (select coalesce(nullif(btrim(u.display_name), ''), nullif(btrim(u.full_name), ''))
+     from ap join public.users u on u.id = ap.approved_by_user_id) as approved_by_name,
   (select to_char(approved_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') from ap) as approved_utc,
   (select approval_basis from ap) as approval_basis,
   (select approver_grant_id is null from ap) as no_grant,
@@ -144,8 +155,8 @@ select c.gpexe_team_session_id as gpexe_session_id,
 --    variable of one result.
 --    Expected: preview_results = approval_results = preview_results_created
 --    = batch_occasions = event_occasions (39 on production);
---    preview_values = written_values = t6_rows_of_the_import = t6_rows_total
---    (117 on production); preview_left_out = preview_left_out_entries (0 on
+--    preview_values = written_values = event_values = t6_rows_of_the_import
+--    = t6_rows_total (117 on production); preview_left_out = preview_left_out_entries (0 on
 --    production); imported_athletes = event_participants (13 on production);
 --    preview_changes_to_imported = 0.
 with ap as (
@@ -178,6 +189,10 @@ select
   (select count(*) from res, jsonb_array_elements(res.r -> 'values') as vs(e)
     where res.r ->> 'outcome' = 'created' and vs.e ->> 'value' is not null) as preview_values,
   (select count(*) from val) as written_values,
+  (select count(*) from training_load.metric_values v
+     join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+     join training_load.metric_event_participants p on p.id = o.event_participant_id
+     join ap on p.event_id = ap.metric_event_id) as event_values,
   (select count(*) from training_load.metric_value_source_provenance p join val on val.id = p.metric_value_id) as t6_rows_of_the_import,
   (select count(*) from training_load.metric_value_source_provenance) as t6_rows_total,
   (select (c.preview -> 'counts' ->> 'skippedValues')::int from c) as preview_left_out,
@@ -354,9 +369,10 @@ select ms.state as instance_state,
 
 -- 9. Where the preview left a value out, nothing is stored - above all, no
 --    zero.
---    Expected: left_out_entries = block 5's preview_left_out (0 on
---    production), left_out_with_a_stored_value = 0, left_out_stored_as_zero
---    = 0. left_out_by_reason is shown only ({} when nothing was left out).
+--    Expected: approvals_total = 1, left_out_entries = block 5's
+--    preview_left_out (0 on production), left_out_with_a_stored_value = 0,
+--    left_out_stored_as_zero = 0. left_out_by_reason is shown only ({} when
+--    nothing was left out).
 with ap as (
   select * from training_load.gpexe_import_approvals
    where (select count(*) from training_load.gpexe_import_approvals) = 1
@@ -389,6 +405,7 @@ hit as (
       or (lo.level = 'drill' and sg.segment_order = lo.drill_index + 1)
 )
 select
+  (select count(*) from training_load.gpexe_import_approvals) as approvals_total,
   (select count(*) from lo) as left_out_entries,
   (select count(*) from hit) as left_out_with_a_stored_value,
   (select count(*) from hit where hit.value_numeric = 0) as left_out_stored_as_zero,
@@ -396,14 +413,16 @@ select
      from (select lo.reason, count(*) as n from lo group by lo.reason) x) as left_out_by_reason;
 
 -- 10. No gpexe_* definition: the importer creates no variable (C46).
---     Expected: gpexe_team_definitions = 0, gpexe_named_definitions = 0 (both
---     as in step 11's block 8), definitions_created_since_approval = 0,
+--     Expected: approvals_total = 1, gpexe_team_definitions = 0,
+--     gpexe_named_definitions = 0 (both as in step 11's block 8),
+--     definitions_created_since_approval = 0,
 --     versions_created_since_approval = 0.
 with ap as (
   select * from training_load.gpexe_import_approvals
    where (select count(*) from training_load.gpexe_import_approvals) = 1
 )
 select
+  (select count(*) from training_load.gpexe_import_approvals) as approvals_total,
   (select count(*) from training_load.metric_definitions
     where starts_with(key, 'gpexe_') and owner_scope = 'team') as gpexe_team_definitions,
   (select count(*) from training_load.metric_definitions where starts_with(key, 'gpexe_')) as gpexe_named_definitions,

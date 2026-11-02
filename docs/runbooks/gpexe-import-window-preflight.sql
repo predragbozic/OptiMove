@@ -23,8 +23,8 @@
 --   (its VERIFIED output or .verify.json).
 --
 -- The First team is found without an id: the one active GPEXE binding that
--- holds an open mapping activation. Every block that needs the team prints
--- first_team_bindings, which must be 1.
+-- holds an open mapping activation. Blocks 6, 10, 12 and 13 print
+-- first_team_bindings, which must be 1; block 9 lists nothing unless it is 1.
 --
 -- Pinned to main as written: the last migrations_v2 file is v51
 -- (202611011900_calendar_v51_settings.sql), and block 5 names the three pilot
@@ -63,12 +63,18 @@ select
   (select count(*) from training_load.gpexe_import_check_observations) as staged_observations;
 
 -- 3. A quiet moment: no other session is idle in a transaction, and none holds
---    a lock on the tables an approval reads or writes.
---    Expected: idle_in_transaction = 0, import_table_locks = 0.
+--    or waits for a write lock on the tables an approval reads or writes
+--    (plain reads - ACCESS SHARE, ROW SHARE - are not counted).
+--    Expected: idle_in_transaction = 0, import_table_write_locks = 0. An
+--    ordinary write to one of these tables holds ROW EXCLUSIVE for a moment: a
+--    non-zero import_table_write_locks that is gone when the block is run again
+--    a few seconds later was such a write, not a blocker.
 --    advisory_locks is shown only (the importer's team lock is an advisory
 --    lock, held only while a check, an approval or a binding change runs).
---    A role without pg_read_all_stats sees only its own sessions in
---    pg_stat_activity, so idle_in_transaction can read 0 for that reason alone.
+--    A role without pg_read_all_stats sees only its own role's sessions in
+--    pg_stat_activity, so idle_in_transaction counts the application role's
+--    sessions; pg_locks is not limited that way, and is read for this database
+--    only (a relation id is unique per database).
 select
   (select count(*) from pg_stat_activity
     where datname = current_database() and state like 'idle in transaction%'
@@ -76,12 +82,18 @@ select
   (select count(*) from pg_locks l
      join pg_class c on c.oid = l.relation
      join pg_namespace n on n.oid = c.relnamespace
-    where l.pid <> pg_backend_pid() and n.nspname = 'training_load'
+    where l.pid <> pg_backend_pid()
+      and l.database = (select oid from pg_database where datname = current_database())
+      and (l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock',
+                      'ExclusiveLock', 'AccessExclusiveLock') or not l.granted)
+      and n.nspname = 'training_load'
       and c.relname in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_import_approvals',
                         'gpexe_import_check_observations', 'source_team_bindings',
                         'source_metric_mapping_activations', 'metric_source_connections',
-                        'metric_value_source_provenance', 'metric_values')) as import_table_locks,
-  (select count(*) from pg_locks where locktype = 'advisory' and pid <> pg_backend_pid()) as advisory_locks;
+                        'metric_value_source_provenance', 'metric_values')) as import_table_write_locks,
+  (select count(*) from pg_locks
+    where locktype = 'advisory' and pid <> pg_backend_pid()
+      and database = (select oid from pg_database where datname = current_database())) as advisory_locks;
 
 -- 4. The First team: every binding that holds an open mapping activation, in
 --    any binding state (an Unbind never ends an activation).
@@ -245,7 +257,8 @@ select
 --    succeeded check of the team, drill effect confirmed or not_required. The
 --    owner accepts each row by its candidate_id, or the window does not open.
 --    Expected (the Rukovodilac's reading after step 8, 2026-11-02): one row,
---    gpexe_session_id = 190122 (23.10.2026), last_check_is_newest = true,
+--    gpexe_session_id = 190122 (the session of 23.10.2026 that step 8's check
+--    of 23.10.2026 - 23.10.2026 found), last_check_is_newest = true,
 --    last_check_through_the_binding = true, drill_parameter_effect =
 --    confirmed or not_required, preview_version = 3, preview_status = ready,
 --    blocked_code = null, results_created = 39, left_out_values = 0,
@@ -339,9 +352,10 @@ select
 --     accepts each row, or the window does not open.
 --     Expected: only platform admins the owner knows, revoked_at_null = true.
 --     role_granted_utc is the role row's first grant, role_changed_utc its
---     last change (a global role keeps no separate grant time).
+--     last change (a global role keeps no separate grant time). A row with no
+--     name is accepted by its user_id, or the window does not open.
 select r.user_id,
-       coalesce(nullif(btrim(u.display_name), ''), u.full_name) as name,
+       coalesce(nullif(btrim(u.display_name), ''), nullif(btrim(u.full_name), '')) as name,
        'platform_admin' as basis,
        to_char(r.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as role_granted_utc,
        to_char(r.updated_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as role_changed_utc,
@@ -355,7 +369,9 @@ select r.user_id,
 --     not it gives the right today (a grant whose coach role is off gives it
 --     again when the role comes back). The owner accepts each row, or the
 --     window does not open.
---     Expected: only grants the owner knows (possibly no row).
+--     Expected: first_team_bindings = 1 on every row, and only grants the owner
+--     knows; one row with grant_id = null means the team has no such grant. A
+--     row with no name is accepted by its user_id, or the window does not open.
 with bound as (
   select b.team_id
     from training_load.source_team_bindings b
@@ -365,24 +381,32 @@ with bound as (
 ),
 first_team as (
   select * from bound where (select count(*) from bound) = 1
+),
+grants as (
+  select g.id, g.user_id, g.owner_team_id, g.granted_at,
+         coalesce(nullif(btrim(u.display_name), ''), nullif(btrim(u.full_name), '')) as name,
+         u.is_active as user_active
+    from first_team f
+    join training_load.gpexe_import_approvers g on g.owner_team_id = f.team_id and g.revoked_at is null
+    join public.users u on u.id = g.user_id
 )
-select g.id as grant_id,
+select fb.first_team_bindings,
+       g.id as grant_id,
        g.user_id,
-       coalesce(nullif(btrim(u.display_name), ''), u.full_name) as name,
-       'team_grant' as basis,
+       g.name,
+       case when g.id is not null then 'team_grant' end as basis,
        to_char(g.granted_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as granted_utc,
-       u.is_active as user_active,
+       g.user_active,
        exists (select 1 from public.user_team_roles tr
                 where tr.user_id = g.user_id and tr.team_id = g.owner_team_id
                   and tr.role = 'team_coach' and tr.is_active = true) as active_team_coach,
-       (u.is_active and exists (select 1 from public.user_team_roles tr
-                                 where tr.user_id = g.user_id and tr.team_id = g.owner_team_id
-                                   and tr.role = 'team_coach' and tr.is_active = true)) as gives_the_right_now,
+       (g.user_active and exists (select 1 from public.user_team_roles tr
+                                   where tr.user_id = g.user_id and tr.team_id = g.owner_team_id
+                                     and tr.role = 'team_coach' and tr.is_active = true)) as gives_the_right_now,
        exists (select 1 from public.user_global_roles r
                 where r.user_id = g.user_id and r.role = 'platform_admin' and r.is_active = true) as also_platform_admin
-  from first_team f
-  join training_load.gpexe_import_approvers g on g.owner_team_id = f.team_id and g.revoked_at is null
-  join public.users u on u.id = g.user_id
+  from (select count(*) as first_team_bindings from bound) fb
+  left join grants g on true
  order by g.granted_at, g.id;
 
 -- 13. The rights, counted.
@@ -432,7 +456,9 @@ select
 --     Metrics Core table, its row count and the newest time it records, in
 --     UTC (environment-wide: a restore would lose a write to any team).
 --     Expected: rows 1 to 13 and 34 = 0 with no time (nothing imported yet,
---     block 8), and every newest_utc earlier than the backup's time.
+--     block 8) - except rows 6 and 7 when block 6 shows an active instance of
+--     the First team (then 1, with its time) - and every newest_utc earlier
+--     than the backup's time.
 --     A time is the writing transaction's start (now()), except rows 24 and 26
 --     (clock_timestamp()). Writes that set no time (the T7 keys, a deleted or
 --     replaced row) show only in the counts. Rows 35 to 37 are the freeze's

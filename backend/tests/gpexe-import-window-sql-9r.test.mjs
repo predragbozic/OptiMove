@@ -47,6 +47,60 @@ const PILOT = [
   { key: "maximal_running_speed", label: "Maximal running speed", field: "athlete_session.max_v", sourceUnit: "m/s", unit: "km/h", daily: "max", maxValue: "40", note: "Metres per second to kilometres per hour." },
 ];
 
+// Every block's output columns, exactly: a new printed column (an email, a
+// credential, a stored source answer) fails a test before review.
+const COLUMNS = {
+  [PREFLIGHT]: {
+    1: ["v51_rows", "v51_checksum_ok", "later_rows", "last_migration", "v2_rows"],
+    2: ["running_checks", "running_identity_loads", "staged_observations"],
+    3: ["idle_in_transaction", "import_table_write_locks", "advisory_locks"],
+    4: ["source_system", "source_team_id", "binding_state", "team_name", "team_active", "club_active", "host_key", "api_family",
+      "connection_owner_scope", "connection_club_is_team_club", "connection_state", "open_activations", "open_required"],
+    5: ["variable_key", "source_metric_key", "requirement", "applies_to_session", "applies_to_drill", "version_number", "version_status",
+      "source_unit", "target_unit", "scale", "scale_divisor", "value_offset", "revision_number", "revision_state", "evidence_status",
+      "revision_source_unit", "variable_scope", "variable_state", "variable_unit", "min_value", "max_value", "as_decided"],
+    6: ["first_team_bindings", "active_instances", "active_keys", "other_keys", "inactive_with_the_keys", "keys_held_elsewhere"],
+    7: ["non_canonical_links"],
+    8: ["approvals", "imported_candidates", "t6_rows", "gpexe_events", "import_batches", "gpexe_team_definitions", "gpexe_named_definitions"],
+    9: ["candidate_id", "gpexe_session_id", "session_started_utc", "last_check_status", "last_check_is_newest", "last_check_through_the_binding",
+      "drill_parameter_effect", "preview_version", "preview_status", "blocked_code", "results_created", "left_out_values", "changes_to_imported",
+      "snapshot_available", "snapshot_expires_utc", "approval_id"],
+    10: ["first_team_bindings", "actionable", "actionable_v3_ready", "imported", "pending", "blocked", "superseded", "newest_check_status",
+      "newest_check_through_the_binding"],
+    11: ["user_id", "name", "basis", "role_granted_utc", "role_changed_utc", "revoked_at_null"],
+    12: ["first_team_bindings", "grant_id", "user_id", "name", "basis", "granted_utc", "user_active", "active_team_coach", "gives_the_right_now",
+      "also_platform_admin"],
+    13: ["first_team_bindings", "active_platform_admins", "unrevoked_grants", "grants_giving_the_right_now", "may_approve_now",
+      "unrevoked_grants_all_teams"],
+    14: ["row_no", "table_name", "row_count", "newest_utc", "time_column"],
+  },
+  [POSTCHECK]: {
+    1: ["v51_rows", "v51_checksum_ok", "later_rows", "last_migration", "v2_rows"],
+    2: ["approvals_total", "running_checks", "running_identity_loads", "team_checks_since_approval"],
+    3: ["approvals_total", "first_team_bindings", "approval_of_the_first_team", "bound_to", "open_activations", "requirements", "approval_id",
+      "approved_by_user_id", "approved_by_name", "approved_utc", "approval_basis", "no_grant", "changes_to_imported", "changes_accepted",
+      "results_imported", "import_count_keys", "import_ids_recorded"],
+    4: ["gpexe_session_id", "candidate_status", "imported_in_the_approval", "same_content", "stored_preview_is_the_approved_one",
+      "preview_version", "preview_status", "drill_parameter_effect", "imported_candidates_total", "other_imported_candidates"],
+    5: ["preview_results", "approval_results", "preview_results_created", "batch_occasions", "event_occasions", "preview_values",
+      "written_values", "event_values", "t6_rows_of_the_import", "t6_rows_total", "preview_left_out", "preview_left_out_entries",
+      "imported_athletes", "event_participants", "preview_changes_to_imported"],
+    6: ["preview_values", "stored_values", "unmatched", "differing"],
+    7: ["team_bindings", "team_instances", "values_of_the_import", "t6_rows", "values_without_t6", "t6_other_binding", "t6_other_instance",
+      "t6_not_an_open_activation", "t6_not_the_pinned_version", "t6_outside_the_approval", "values_not_on_a_system_variable",
+      "role_or_coverage_wrong", "activations_used", "open_activations"],
+    8: ["instance_state", "source_host_key", "source_instance_key", "keys_are_the_bindings", "is_the_event_instance",
+      "is_the_event_binding_instance", "identities_elsewhere", "rows_with_these_keys", "created_in_the_approval"],
+    9: ["approvals_total", "left_out_entries", "left_out_with_a_stored_value", "left_out_stored_as_zero", "left_out_by_reason"],
+    10: ["approvals_total", "gpexe_team_definitions", "gpexe_named_definitions", "definitions_created_since_approval",
+      "versions_created_since_approval"],
+    11: ["event_is_the_session", "event_owner_scope", "event_of_the_team", "scope_level", "event_created_in_the_approval",
+      "threshold_binding_rows", "batch_ok", "activity_origin", "activity_lifecycle", "activity_of_the_team", "activity_created_in_the_approval",
+      "confirmed_event_links", "activity_participants", "event_participants", "event_segments", "drill_components", "gpexe_events_total",
+      "identities", "identities_without_occasion", "occasions_not_plain_created", "roster_decisions"],
+  },
+};
+
 let db;
 let admin;
 let ro;
@@ -127,10 +181,11 @@ const sqlOf = (part) => part.split("\n").filter((line) => !/^\s*--/.test(line)).
 
 // Every block sent exactly as the connector sends it: one call of
 // "begin transaction read only;", the block verbatim, "rollback;".
-async function readOnlyBlocks(client, file) {
+async function readOnlyBlocks(client, file, numbers = null) {
   const { blocks } = await fileBlocks(file);
   const out = {};
   for (const { n, part } of blocks) {
+    if (numbers && !numbers.includes(n)) continue;
     let res;
     try {
       res = await client.query(`begin transaction read only;\n${part}\nrollback;`);
@@ -141,6 +196,7 @@ async function readOnlyBlocks(client, file) {
     assert.ok(Array.isArray(res) && res.length === 3, `${path.basename(file)} block ${n} is exactly one statement`);
     assert.equal(res[0].command, "BEGIN");
     assert.equal(res[2].command, "ROLLBACK");
+    assert.deepEqual(res[1].fields.map((f) => f.name), COLUMNS[file][n], `${path.basename(file)} block ${n}: exactly its columns`);
     out[n] = res[1].rows;
   }
   return out;
@@ -289,7 +345,9 @@ test("0. both files: LF only, a comment-only header, blocks numbered 1..N once e
       assert.doesNotMatch(sql, /\$\d/, `${where} has no placeholder`);
       assert.doesNotMatch(sql, /^\s*\\/m, `${where} has no psql meta-command`);
       assert.doesNotMatch(sql, /\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|copy|call|do|vacuum|lock|set_config|nextval|setval|pg_advisory\w*|for\s+(update|share|no\s+key\s+update|key\s+share))\b/i, `${where} writes nothing and takes no lock`);
-      assert.doesNotMatch(sql, /\b(email|password_hash|raw_bundle\s*(->|,|\)|$)|credential_ciphertext|grant_reason|revoke_reason)\b/i, `${where} reads no email, credential or free text`);
+      assert.doesNotMatch(sql, /\b(email|password_hash|credential_\w+|grant_reason|revoke_reason|error_message)\b/i, `${where} reads no email, credential or free text`);
+      assert.doesNotMatch(sql, /\braw_bundle\b(?!\s+is\s+not\s+null)/i, `${where} prints no stored source answer`);
+      assert.equal(Object.keys(COLUMNS[file]).length, count);
     }
   }
 });
@@ -331,7 +389,7 @@ test("1. step 11 on a world built like production's pilot: every block of the pr
   assert.deepEqual(pre[1], [{ v51_rows: "1", v51_checksum_ok: true, later_rows: "0", last_migration: V51, v2_rows: (await q(`select count(*)::text as n from public.schema_migrations where migration_name like 'migrations_v2/%'`))[0].n }]);
   assert.deepEqual(pre[2], [{ running_checks: "0", running_identity_loads: "0", staged_observations: "0" }]);
   assert.equal(pre[3][0].idle_in_transaction, "0");
-  assert.equal(pre[3][0].import_table_locks, "0");
+  assert.equal(pre[3][0].import_table_write_locks, "0");
   assert.deepEqual(pre[4], [{
     source_system: "gpexe", source_team_id: "980", binding_state: "active", team_name: "First team", team_active: true, club_active: true,
     host_key: "server3", api_family: "rest_v1", connection_owner_scope: "club", connection_club_is_team_club: true, connection_state: "verified",
@@ -376,9 +434,10 @@ test("1. step 11 on a world built like production's pilot: every block of the pr
   assert.equal(pilot.revoked_at_null, true);
   assert.match(pilot.role_granted_utc, /^\d{4}-\d\d-\d\d \d\d:\d\d$/);
   assert.equal(pre[12].length, 1);
+  assert.match(pre[12][0].grant_id, /^[0-9a-f-]{36}$/);
   assert.deepEqual({ ...pre[12][0], grant_id: undefined, granted_utc: undefined }, {
-    grant_id: undefined, user_id: granted.id, name: "Granted Coach", basis: "team_grant", granted_utc: undefined, user_active: true,
-    active_team_coach: true, gives_the_right_now: true, also_platform_admin: false,
+    first_team_bindings: "1", grant_id: undefined, user_id: granted.id, name: "Granted Coach", basis: "team_grant", granted_utc: undefined,
+    user_active: true, active_team_coach: true, gives_the_right_now: true, also_platform_admin: false,
   });
   assert.deepEqual(pre[13], [{ first_team_bindings: "1", active_platform_admins: String(admins.length), unrevoked_grants: "1", grants_giving_the_right_now: "1", may_approve_now: String(admins.length + 1), unrevoked_grants_all_teams: "1" }]);
   const fresh = Object.fromEntries(pre[14].map((r) => [Number(r.row_no), r]));
@@ -404,10 +463,10 @@ test("2. steps 13-16: one approval through the single route with the switch on, 
 
   const post = await readOnlyBlocks(ro, POSTCHECK);
   assert.deepEqual(post[1], S.pre[1], "the migrations are unchanged");
-  assert.deepEqual(post[2], [{ running_checks: "0", running_identity_loads: "0", team_checks_since_approval: "0" }]);
+  assert.deepEqual(post[2], [{ approvals_total: "1", running_checks: "0", running_identity_loads: "0", team_checks_since_approval: "0" }]);
   assert.deepEqual({ ...post[3][0], approved_utc: undefined }, {
     approvals_total: "1", first_team_bindings: "1", approval_of_the_first_team: true, bound_to: "980 @ server3", open_activations: "3",
-    requirements: "required", approval_id: approvalRow.id, approved_by_user_id: t.padmin.id, approved_utc: undefined,
+    requirements: "required", approval_id: approvalRow.id, approved_by_user_id: t.padmin.id, approved_by_name: "Pilot Admin", approved_utc: undefined,
     approval_basis: "platform_admin", no_grant: true, changes_to_imported: 0, changes_accepted: false, results_imported: n.results,
     import_count_keys: "created", import_ids_recorded: true,
   });
@@ -418,7 +477,7 @@ test("2. steps 13-16: one approval through the single route with the switch on, 
   }]);
   assert.deepEqual(post[5], [{
     preview_results: n.results, approval_results: n.results, preview_results_created: String(n.results), batch_occasions: String(n.results),
-    event_occasions: String(n.results), preview_values: String(n.values), written_values: String(n.values),
+    event_occasions: String(n.results), preview_values: String(n.values), written_values: String(n.values), event_values: String(n.values),
     t6_rows_of_the_import: String(n.values), t6_rows_total: String(n.values), preview_left_out: n.leftOut,
     preview_left_out_entries: String(n.leftOut), imported_athletes: String(n.athletes), event_participants: String(n.athletes),
     preview_changes_to_imported: 0,
@@ -433,9 +492,9 @@ test("2. steps 13-16: one approval through the single route with the switch on, 
     instance_state: "active", source_host_key: "server3", source_instance_key: "980", keys_are_the_bindings: true, is_the_event_instance: true,
     is_the_event_binding_instance: true, identities_elsewhere: "0", rows_with_these_keys: "1", created_in_the_approval: true,
   }]);
-  assert.deepEqual(post[9], [{ left_out_entries: String(n.leftOut), left_out_with_a_stored_value: "0", left_out_stored_as_zero: "0",
+  assert.deepEqual(post[9], [{ approvals_total: "1", left_out_entries: String(n.leftOut), left_out_with_a_stored_value: "0", left_out_stored_as_zero: "0",
     left_out_by_reason: n.leftOut === 0 ? {} : post[9][0].left_out_by_reason }]);
-  assert.deepEqual(post[10], [{ gpexe_team_definitions: "0", gpexe_named_definitions: "0", definitions_created_since_approval: "0", versions_created_since_approval: "0" }]);
+  assert.deepEqual(post[10], [{ approvals_total: "1", gpexe_team_definitions: "0", gpexe_named_definitions: "0", definitions_created_since_approval: "0", versions_created_since_approval: "0" }]);
   const drills = (await q(`select count(*)::text as n from training_load.metric_event_segments where event_id = $1`, [r.body.import.eventId]))[0].n;
   assert.ok(Number(drills) > 0, "the session has drills");
   assert.deepEqual(post[11], [{
@@ -475,11 +534,13 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
               applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason
          from training_load.source_metric_mapping_activations where source_team_binding_id = $1 and ended_at is null limit 1`,
       [t.bindingId, b2.id, b2.team_id]);
-    return blocksIn(admin, PREFLIGHT, [4, 6, 9, 10, 13]);
+    return blocksIn(admin, PREFLIGHT, [4, 6, 9, 10, 12, 13]);
   });
   assert.equal(two[4].length, 2, "block 4 lists both bindings");
-  for (const b of [6, 10, 13]) assert.equal(two[b][0].first_team_bindings, "2", `block ${b} shows two First-team candidates`);
+  for (const b of [6, 10, 12, 13]) assert.equal(two[b][0].first_team_bindings, "2", `block ${b} shows two First-team candidates`);
   assert.equal(two[9].length, 0, "block 9 lists nothing for an ambiguous team");
+  assert.equal(two[12].length, 1);
+  assert.equal(two[12][0].grant_id, null, "block 12 says so itself instead of listing no grant");
 
   const running = await planted(async () => {
     await admin.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to) values ($1,$2,$3,$3)`,
@@ -557,7 +618,63 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
     return blocksIn(admin, PREFLIGHT, [11, 12, 13]);
   });
   assert.ok(!rights[11].some((r) => r.user_id === t.padmin.id), "an inactive user is not an active platform admin");
-  assert.equal(rights[12].length, 0, "a revoked grant is not listed");
+
+  // The migrations: a later migration recorded, v51's checksum changed, v51 missing (both files' block 1).
+  const later = await planted(async () => {
+    await admin.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611021000_later.sql', repeat('a', 64), '9-R test')`);
+    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
+  });
+  for (const r of [later.pre[1][0], later.post[1][0]]) {
+    assert.equal(r.later_rows, "1");
+    assert.equal(r.last_migration, "migrations_v2/202611021000_later.sql");
+    assert.equal(r.v51_checksum_ok, true);
+  }
+  const checksum = await planted(async () => {
+    await admin.query(`update public.schema_migrations set checksum = repeat('b', 64) where migration_name = $1`, [V51]);
+    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
+  });
+  for (const r of [checksum.pre[1][0], checksum.post[1][0]]) assert.equal(r.v51_checksum_ok, false);
+  const missing = await planted(async () => {
+    await admin.query(`delete from public.schema_migrations where migration_name = $1`, [V51]);
+    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
+  });
+  for (const r of [missing.pre[1][0], missing.post[1][0]]) {
+    assert.equal(r.v51_rows, "0");
+    assert.equal(r.v51_checksum_ok, null);
+    assert.notEqual(r.last_migration, V51);
+  }
+
+  // A running identity load (block 2 of both files).
+  const identity = await planted(async () => {
+    await admin.query(`insert into training_load.gpexe_athlete_identity_requests (owner_team_id, binding_id, requested_by_user_id, request_key, targets)
+                       values ($1,$2,$3,gen_random_uuid(),1)`, [t.teamId, t.bindingId, t.coach.id]);
+    return { pre: await blocksIn(admin, PREFLIGHT, [2]), post: await blocksIn(admin, POSTCHECK, [2]) };
+  });
+  assert.equal(identity.pre[2][0].running_identity_loads, "1");
+  assert.equal(identity.post[2][0].running_identity_loads, "1");
+
+  // A real other session: idle in a transaction that holds a write lock on an
+  // import table and an advisory lock, while the connector's session runs
+  // block 3; a plain read lock alone is not counted.
+  const other = new pg.Client({ connectionString: db.url });
+  await other.connect();
+  try {
+    await other.query("begin");
+    await other.query("select count(*) from training_load.metric_values");
+    const reading = await readOnlyBlocks(ro, PREFLIGHT, [3]);
+    assert.equal(reading[3][0].idle_in_transaction, "1");
+    assert.equal(reading[3][0].import_table_write_locks, "0", "a plain read is not a write lock");
+    await other.query("lock table training_load.metric_values in row exclusive mode");
+    await other.query("select pg_advisory_xact_lock(9119)");
+    const writing = await readOnlyBlocks(ro, PREFLIGHT, [3]);
+    assert.equal(writing[3][0].idle_in_transaction, "1");
+    assert.equal(writing[3][0].import_table_write_locks, "1");
+    assert.equal(writing[3][0].advisory_locks, "1");
+  } finally {
+    await other.query("rollback").catch(() => {});
+    await other.end().catch(() => {});
+  }
+  assert.deepEqual(rights[12].map((r) => [r.first_team_bindings, r.grant_id]), [["1", null]], "a revoked grant is not listed");
   assert.equal(rights[13][0].unrevoked_grants, "0");
 });
 
@@ -570,9 +687,9 @@ test("3b. the post-check stops on what it must stop on: a second approval, a val
        select c.id, c.owner_team_id, c.gpexe_team_session_id, c.bundle_hash, c.preview_hash, a.approved_by_user_id,
               a.approval_basis, 0, false, a.metric_event_id, a.activity_id, a.import_batch_id, a.import_counts
          from training_load.gpexe_import_candidates c, training_load.gpexe_import_approvals a where c.id = $1`, [S.candidates[1].id]);
-    return blocksIn(admin, POSTCHECK, [3, 4, 5, 7, 11]);
+    return blocksIn(admin, POSTCHECK, [2, 3, 4, 5, 7, 9, 10, 11]);
   });
-  assert.equal(second[3][0].approvals_total, "2");
+  for (const b of [2, 3, 9, 10]) assert.equal(second[b][0].approvals_total, "2", `block ${b} shows the second approval itself`);
   assert.equal(second[3][0].approval_of_the_first_team, false);
   assert.equal(second[3][0].approval_id, null);
   assert.equal(second[4].length, 0);
@@ -623,9 +740,54 @@ test("3b. the post-check stops on what it must stop on: a second approval, a val
     return blocksIn(admin, POSTCHECK, [9]);
   });
   const stored = await leftOut(false);
-  assert.deepEqual(stored[9], [{ left_out_entries: "1", left_out_with_a_stored_value: "1", left_out_stored_as_zero: "0", left_out_by_reason: { required_value_missing: 1 } }]);
+  assert.deepEqual(stored[9], [{ approvals_total: "1", left_out_entries: "1", left_out_with_a_stored_value: "1", left_out_stored_as_zero: "0", left_out_by_reason: { required_value_missing: 1 } }]);
   const zeroed = await leftOut(true);
   assert.equal(zeroed[9][0].left_out_stored_as_zero, "1");
+
+  // The drill branch: a Left-out entry at the first drill result's level and
+  // index, where a value is stored.
+  const drillLeftOut = await planted(async () => {
+    const row = (await admin.query(
+      `select c.id, ath.idx - 1 as a_idx, (r.res ->> 'drillIndex')::int as drill_index
+         from training_load.gpexe_import_candidates c
+         join training_load.gpexe_import_approvals ap on ap.candidate_id = c.id,
+              jsonb_array_elements(c.preview -> 'athletes') with ordinality as ath(a, idx),
+              jsonb_array_elements(ath.a -> 'results') as r(res)
+        where ath.a ->> 'notImported' is null and r.res ->> 'level' = 'drill' and r.res ->> 'outcome' = 'created'
+        order by ath.idx, (r.res ->> 'drillIndex')::int limit 1`)).rows[0];
+    const activation = (await admin.query(
+      `select a.id from training_load.source_metric_mapping_activations a
+         join training_load.metric_definitions d on d.id = a.metric_definition_id
+        where a.source_team_binding_id = $1 and a.ended_at is null and d.key = 'total_distance'`, [t.bindingId])).rows[0];
+    await admin.query(
+      `update training_load.gpexe_import_candidates
+          set preview = jsonb_set(preview, array['athletes', $2::text, 'skippedValues'],
+                                  jsonb_build_array(jsonb_build_object('level', 'drill', 'drillIndex', $3::int, 'activationId', $4::text, 'reason', 'required_value_missing')))
+        where id = $1`, [row.id, String(row.a_idx), row.drill_index, activation.id]);
+    return blocksIn(admin, POSTCHECK, [9]);
+  });
+  assert.equal(drillLeftOut[9][0].left_out_entries, "1");
+  assert.equal(drillLeftOut[9][0].left_out_with_a_stored_value, "1", "the drill branch finds the stored drill value");
+
+  // An occasion of the approved event outside the import's batch: the event's
+  // values and the batch's values differ.
+  const outsideBatch = await planted(async () => {
+    await admin.query(`update training_load.metric_measurement_occasions set import_batch_id = null
+                        where id = (select o.id from training_load.metric_measurement_occasions o
+                                      join training_load.metric_values v on v.occasion_id = o.id
+                                     where o.import_batch_id is not null order by o.id limit 1)`);
+    return blocksIn(admin, POSTCHECK, [5]);
+  });
+  assert.ok(Number(outsideBatch[5][0].event_values) > Number(outsideBatch[5][0].written_values), "event_values counts by the event, not the batch");
+
+  // A check running after the approval (post-check block 2).
+  const runningAfter = await planted(async () => {
+    await admin.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to) values ($1,$2,$3,$3)`,
+      [t.teamId, t.coach.id, DAY]);
+    return blocksIn(admin, POSTCHECK, [2]);
+  });
+  assert.equal(runningAfter[2][0].running_checks, "1");
+  assert.equal(runningAfter[2][0].team_checks_since_approval, "1");
 
   // A stored value that differs from its preview entry.
   const changed = await planted(async () => {

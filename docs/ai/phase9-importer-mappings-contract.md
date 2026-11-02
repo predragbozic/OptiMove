@@ -746,7 +746,7 @@ They are merged only on the owner's word (section 2's 9-R row, step 6a).
 - **`docs/runbooks/gpexe-import-window-preflight.sql`** (step 11), 14 numbered blocks:
   1. the migrations: v51 last, with its checksum, nothing later;
   2. nothing running: checks and identity loads;
-  3. a quiet moment: idle transactions, locks on the import's tables, advisory locks;
+  3. a quiet moment: idle transactions, write locks on the import's tables, advisory locks;
   4. every binding with an open activation, in any binding state; one row expected, 980 on `server3`;
   5. the open activations against O6: each row `as_decided`;
   6. the First team's T7 instance: none, `NULL / NULL` or `server3 / 980`;
@@ -772,31 +772,38 @@ They are merged only on the owner's word (section 2's 9-R row, step 6a).
   9. no stored value, and above all no zero, where the preview left one out;
   10. no `gpexe_*` definition;
   11. the event, the threshold binding, the batch, the activity, the identities, and no roster decision.
-- **No parameter, no id.** The First team is the one active GPEXE binding with an open activation; every block that
-  needs it prints `first_team_bindings`. The approval is the only row of the append-only approvals table, since
-  step 11's block 8 shows none. Each post-check block reads that row only while exactly one exists, so a second
-  approval shows as no row or zeros, never an error. Every block is one plain SELECT, valid inside the connector's
-  `begin transaction read only;` … `rollback;`.
+- **No parameter, no id.**
+  - The First team is the one active GPEXE binding with an open activation. Blocks 6, 10, 12 and 13 print
+    `first_team_bindings`; block 9 lists nothing unless it is 1.
+  - The approval is the only row of the append-only approvals table, since step 11's block 8 shows none. Each
+    post-check block reads that row only while exactly one exists. Blocks 2, 3, 9 and 10 print `approvals_total`, so
+    a second approval shows itself rather than as an error.
+  - Every block is one plain SELECT, valid inside the connector's `begin transaction read only;` … `rollback;`.
 - **Pinned.** The files name v51 and its checksum, and the three decided mappings (`duration`, `total_distance`,
   `maximal_running_speed`, with their units and factors). If main gains a migration, or the decided mappings change,
-  before step 11, the files are re-issued under a new sha256.
+  before step 11, both files are re-issued under new sha256s; both headers say so.
 - **Kept out.**
   - Neither file prints an email, a credential column, a grant or revoke reason, or a stored source answer.
-  - The rights blocks print the user's display name: the owner accepts each row by person (the *Rukovodilac*'s
-    decision, 2026-11-02).
+  - The rights blocks, and the approver in post-check block 3, print the user's display name (else the full name,
+    never the email): the owner accepts each row by person (the *Rukovodilac*'s decision, 2026-11-02).
   - Read outside the files: the served commit (`/api/health`), the approval read
     (`GET …/approvals/:approvalId`) and the switch (`importSwitch`).
 - **Evidence.** `backend/tests/gpexe-import-window-sql-9r.test.mjs` (disposable `optimove_tests_gpexe_*`, fake
-  `server3` source, no GPEXE request) runs every block exactly as the connector sends it:
+  `server3` source, no GPEXE request). These runs send every block exactly as the connector does, and each asserts
+  the block's exact list of output columns:
   - the pilot built as production's: the three system variables under their production keys, Required, at both
     levels; one team bound to 980;
   - the preflight after one succeeded check;
   - one approval through the single-candidate route, with the switch on and then off;
-  - the post-check, then the preflight again;
-  - 21 planted cases, each rolled back, for every stop the files must show.
+  - the post-check, then the preflight again (block 8 and the freshness rows then name the import);
+  - block 3 again while a real second session holds a read, then a write lock and an advisory lock.
 
-  The file-shape check (LF, blocks 1..N, one SELECT each, no parameter, no write, no lock) runs without a database.
-  28 mutations of the two files are all killed: 16 of the preflight and 12 of the post-check.
+  28 planted cases are each rolled back, and run the same block text inside the planting transaction. They cover the
+  stops of both files' blocks 1 and 2, preflight blocks 4 to 7 and 9 to 13, and post-check blocks 3 to 11.
+  The file-shape check (LF, blocks 1..N, one SELECT each, no parameter, no write, no lock, no email or credential
+  column) needs no data.
+  39 mutations of the two files are all killed: 22 of the preflight and 17 of the post-check.
+  The staged observations of preflight block 2 are shown only and are not planted.
 
 ---
 
