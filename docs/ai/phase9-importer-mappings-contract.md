@@ -1352,3 +1352,15 @@ Recorded, not changed:
   timeout (a flake risk on a very slow machine, not a correctness gap); A1 replace is not a separate case (it takes only
   `FOR SHARE` locks the import does not conflict with, so it never waits on the import); a behavioural proof of the
   READ COMMITTED pin under a `repeatable read` server default is not built (architecture test 7 is static).
+
+### 16.11 After the external review of PR #326
+
+The *Nezavisni revizor* gave GO on the frozen head `fec1bde` with two LOW test-coverage notes, both code correct;
+their two surviving mutations (M4, M8) are now killed by a test each (a test-only follow-up pull request):
+- **L1:** concurrency test 1d swaps the binding's one open activation for a new one of the same version between step 4
+  and step 5 (the same count, another id). Only the decision-key compare in `lockActivations` catches that, and the
+  import answers `mapping_changed` with nothing written. With the compare replaced by a no-op, 1d fails.
+- **L2:** writer test B8 tampers with a built plan before `importGpexePlanLocked`: a value that is not the exact
+  conversion, another target unit, or another mapping version. Each is refused `mapping_not_usable` before anything is
+  written. Without the conversion re-check, B8 fails: the T6 trigger then refuses the row with a database error instead
+  of the stable code.

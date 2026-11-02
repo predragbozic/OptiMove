@@ -14,7 +14,8 @@ import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposabl
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { SPEC_REGISTRY } from "./support/gpexe-legacy-specs.mjs";
 import { activateOn, bindTeam, definitionDigest, ensureMappedSystem, platformAdmin, t7Keys } from "./support/mapped-world.mjs";
-import { importGpexeBundle, importGpexeBundleLocked, lockTeamForImport, GpexeImportError } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle, importGpexeBundleLocked, importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "../src/gpexeImportWriter.js";
+import { buildGpexeImportPlan, mappedMetricSpecs } from "../src/gpexeImportMapper.js";
 import { PARAMS_AS_TEXT, prepareImportMapping, readOpenActivations, setSourceInstanceHoldForTests } from "../src/gpexeImportMapping.js";
 import { canonicalDecimal } from "../src/sourceMetricExtractors.js";
 
@@ -637,6 +638,52 @@ test("B7. R6: the team's source instance ends (7g, every trigger on) between the
   assert.ok(isImportError("mapping_not_usable")(outcome.error), `got ${outcome.error?.code}`);
   assert.deepEqual((await instanceRows(s2.org.teamId)).map((r) => [r.id, r.state]), [[s2.instanceId, "inactive"]]);
   await assertNothingWritten(s2.org.teamId, "R6 (d)");
+});
+
+// ---------------------------------------------------------------------------
+// B8. The writer's own re-check of every planned value (C55, before any write)
+// ---------------------------------------------------------------------------
+// The plan and the writer read the same locked mapping rows, so a planned
+// value is right by construction; the writer checks it again before it writes
+// anything (checkMappedValues). These plans are tampered with after they are
+// built, the one way to reach that check: each is refused mapping_not_usable
+// inside the transaction, before any identity, event or value, and the
+// untouched plan then imports.
+test("B8. the writer re-checks every planned value against its locked activation before it writes anything (the Nezavisni revizor's L2 on PR #326): a planned value that is not the exact conversion of its GPEXE value, or that names another target unit or mapping version, is refused mapping_not_usable and nothing is written; the untouched plan then imports", async () => {
+  const org = await mappedTeam({ only: ["gpexe_total_distance"] });
+  const bundle = makeBundle({ athletes: standardAthletes(), gpexeTeamId: Number(org.sourceTeamId) });
+  const ctx = ctxOf(org);
+  const tamperings = [
+    ["value", (v) => { v.value = v.value === "0" ? "1" : `${v.value}1`; }],
+    ["unit", (v) => { v.unit = `${v.unit}x`; }],
+    ["mappingVersionId", (v) => { v.mappingVersionId = crypto.randomUUID(); }],
+  ];
+  for (const [label, tamper] of tamperings) {
+    const client = await newClient();
+    try {
+      await client.query("begin isolation level read committed");
+      await lockTeamForImport(client, org.teamId);
+      const gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+      const mapping = await prepareImportMapping(client, {
+        teamId: org.teamId, bindingId: org.bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
+      });
+      assert.equal(mapping.block, null, `${label}: the mapping context is usable`);
+      const specs = mappedMetricSpecs(mapping.rows);
+      assert.equal(specs.block ?? null, null, `${label}: the specs are usable`);
+      const plan = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs });
+      const target = plan.participants.flatMap((p) => p.results).flatMap((r) => r.values)[0];
+      assert.ok(target, `${label}: the plan carries a mapped value`);
+      tamper(target);
+      await assert.rejects(importGpexePlanLocked(client, plan, { ...ctx, mapping }), isImportError("mapping_not_usable"), label);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      await client.end();
+    }
+    await assertNothingWritten(org.teamId, `B8 ${label}`);
+  }
+  // Control: the same session, through the writer's own entry, imports.
+  const own = await runImport(org, bundle);
+  assert.ok(own.counts.created > 0, JSON.stringify(own.counts));
 });
 
 // ---------------------------------------------------------------------------
