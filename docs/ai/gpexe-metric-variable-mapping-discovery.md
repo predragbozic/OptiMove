@@ -1324,8 +1324,10 @@ decisions.*
     - Each is its own small pull request; neither blocks 7h's code, merge or deploy while one club exists.
 131. **O6: how simple the screen becomes for a club admin**
     - (a) *Activate*, *Replace* and *Disable* for the club's admin in 7h-B; (b) *Save and activate* as its own
-      frontend pull request, 7h-F — O6 says right after 7h-B; the *Rukovodilac*'s order of 2026-11-02 (event `011e7d13`),
-      its sequencing decision and not O6's text, places it after the lock-order pull request; (c) J18's board later.
+      frontend pull request, 7h-F, right after 7h-B; (c) J18's board later.
+    - **The *Rukovodilac*'s sequencing** (its order of 2026-11-02, event `783e3591`, correcting its earlier `011e7d13`),
+      which does not change O6: 7h-F and the lock-order pull request come after 7h-B in either order, and 7i-B only
+      after the lock-order pull request (C132).
 132. **J15 accepted; O1: what hiding a system variable does (phase 7i)**
     - **The contract:** J15, `docs/ai/phase7i-system-variables-club-contract.md`, merged as PR #334 (`93f36615`)
       exactly from `aa0b2589` after both narrow ★★ GOs; built in 7i-B with its own migration (the next free number
@@ -4234,7 +4236,8 @@ and A2 to a club admin today, and what 7h-B changes in each: migration v52 (two 
 preconditions, the T4 table comment, T4 locked with `nowait`), the service (`mayTransitionMappings`, the version-driven ends
 with the caller's basis, `rightsStillHold`'s club-admin re-check users first), and the Mappings screen's predicate. Its
 section 13 lists what it amends here; each place carries its mark. Not built; the order of the pull requests is 7h-V →
-7h-B → the lock-order pull request → 7h-F → 7i-B (J15's R13; the *Rukovodilac*'s order `011e7d13`).
+7h-B → 7h-F and the lock-order pull request in either order → 7i-B after the lock-order pull request (C131, J15's
+R13, the *Rukovodilac*'s order event `783e3591`).
 
 ### J15. A club uses, copies or hides a system variable — phase 7i (accepted, C132–C140)
 

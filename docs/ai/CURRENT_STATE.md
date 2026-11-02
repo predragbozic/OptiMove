@@ -62,18 +62,20 @@ UTC, relayed by its order `011e7d13`). J14 (`docs/ai/phase7h-club-admin-mappings
 lets a club's active admin activate, replace and disable its club's mapping versions, with migration v52; J15
 (`docs/ai/phase7i-system-variables-club-contract.md`, PR #334, `93f3661`) lets a club use, copy or hide a system
 variable, with its own migration after v52 and J18's. The decisions are C126–C131 and C132–C140 of the discovery
-document. **The order of the pull requests is mandatory** (J15's R13 for 7h-B → the lock-order pull request → 7i-B; the
-*Rukovodilac*'s order of 2026-11-02, event `011e7d13`, for 7h-V and 7h-F):
+document. **The order of the pull requests** (C127 and C131, the owner's; J15's R13 for 7i-B after the lock-order pull
+request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, for the rest):
 - **7h-V** (C127): a team coach sees a club variable's name and unit in the team's results; small, merged and deployed
   before 7h-B's deploy;
 - **7h-B** (★★): migration v52, the backend and the minimal frontend; internal reviews, J14 section 10's tests with
   real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
   after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
   between the merge and the post-check;
-- **the lock-order pull request** (Separate tasks): every remaining role-first rights lock turned users first, and A1
-  in D's order;
-- **7h-F** (C131 (b)): *Save and activate*;
-- **7i-B**: never before the lock-order pull request.
+- then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B) and **the lock-order
+  pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
+  Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
+  end in `40P01` with an Unbind and a revocation at once (`try_again` or a 500, nothing written); the *Rukovodilac*
+  accepts that risk (J14 section 15);
+- **7i-B**: only after the lock-order pull request.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
@@ -3765,7 +3767,7 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
-  the same day): right after 7h-B and before 7i-B — 7i-B never comes before it — and before more clubs are brought
+  the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought
   on.** It also moves **A1 to D's order**: its listed bindings and teams locked before its rights, and every lock
   before its first end (today the rights at `sourceMetricMappingService.js:1426`, the ends at `:1465`, the listed
   bindings at `:1485`), with a route-against-route test of A1 against an Unbind and a club-admin revocation (J15
@@ -4483,7 +4485,8 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
      PR #327). Step 8 passed, and M6, the first controlled import, ran on 2026-11-02 (J17 section 10.5): one session
      imported, the switch off again. Phases 7h and 7i come right after the first import, before more clubs are brought
      on: their contracts J14 and J15 are accepted (C126–C140, 2026-11-02), and their pull requests follow in the
-     mandatory order 7h-V → 7h-B → the lock-order pull request → 7h-F → 7i-B (see the active phase). A mapping version is activated in production only once its
+     order 7h-V → 7h-B → 7h-F and the lock-order pull request in either order → 7i-B only after the lock-order pull
+     request (see the active phase). A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
      2026-11-10);

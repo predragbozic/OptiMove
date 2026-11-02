@@ -1055,8 +1055,9 @@ Each has a recommendation, the consequence and the alternative. **All six were d
   - **(c)** J18's board, later, for the club's whole team at once.
   - **Recommended: (a) in 7h-B, and (b) as its own frontend pull request, 7h-F, right after 7h-B.** J18 Q13 may later
     move parameter-less club versions to the board.
-  **Sequenced by the *Rukovodilac*'s order of 2026-11-02 (event `011e7d13`), its sequencing decision, not O6's text:**
-  7h-F comes after the lock-order pull request, not right after 7h-B (C131).
+  **Decided as recommended (C131):** 7h-F may come right after 7h-B. The *Rukovodilac*'s order of 2026-11-02 (event `783e3591`,
+  correcting its earlier `011e7d13`) adds only that 7h-F and the lock-order pull request come in either order after
+  7h-B, and that 7i-B waits for the lock-order pull request.
   - *Alternative:* (a) only, leaving the simplification to J18 and J16's recorded "Save and submit".
 
 ## 12. Decisions for the *Rukovodilac* (R1–R13)
@@ -1066,8 +1067,8 @@ recommended.** R13 was widened by J15's R13 (the *Rukovodilac*'s decision of 202
 event `360823e4`; recorded in J15 section 13): the lock-order pull request also moves A1 to D's order — its listed
 bindings and teams before its rights, every lock before its first end — with a route-against-route test of A1 against
 an Unbind and a club-admin revocation; and **the order of the pull requests is mandatory: 7h-B → the lock-order pull
-request → 7i-B** (7h-V before 7h-B's deploy; 7h-F, by the *Rukovodilac*'s order of 2026-11-02, event `011e7d13`,
-after the lock-order pull request and before 7i-B).
+request → 7i-B** (7h-V before 7h-B's deploy; 7h-F right after 7h-B, as O6 decides (C131), before or after the
+lock-order pull request — the *Rukovodilac*'s order of 2026-11-02, event `783e3591`).
 
 - **R1. The migration number.** v52; the next free number if another migration lands first. J18's numbers move by one
   (section 9).
@@ -1092,7 +1093,7 @@ after the lock-order pull request and before 7i-B).
     - **7h-B:** migration, backend and the minimal frontend, in one ★★ pull request;
     - **7h-V:** O2 (a), before 7h-B's deploy;
     - **7h-F:** O6 (b), after 7h-B.
-      **Sequenced by the *Rukovodilac*'s order `011e7d13`:** after the lock-order pull request.
+      **Decided as recommended (C131):** right after 7h-B; before or after the lock-order pull request (event `783e3591`).
   - The frontend never ships before the backend.
 - **R8. Decision numbers.** C113–C125 stay reserved for J18. **Recommended:** J14's decisions take the next free numbers
   (C126 and on) in the order they are decided.
@@ -1256,7 +1257,9 @@ deployed; until then the old text describes the system as it runs.
     in `40P01` (A1 and the Unbind answer `try_again`, the revocation a 500; nothing is written), because A1 locks its
     rights before its listed bindings (J15 section 5 and R13); the lock-order pull request removes it;
   - R9's grep repeated at 7h-B's head, and the real `--file` results of every suite of 10.8 with their counts.
-  - **The order of the pull requests is mandatory** (J15's R13 for 7h-B → the lock-order pull request → 7i-B; the
-    *Rukovodilac*'s order of 2026-11-02, event `011e7d13`, for 7h-V and 7h-F): 7h-V before 7h-B's deploy; 7h-B; the
-    lock-order pull request (every remaining role-first rights lock turned users first, and A1
-    in D's order with a route-against-route test of A1 against an Unbind and a club-admin revocation); 7h-F; 7i-B.
+  - **The order of the pull requests** (C127, C131, J15's R13 and the *Rukovodilac*'s order of 2026-11-02, event `783e3591`):
+    7h-V before 7h-B's deploy; 7h-B; then 7h-F (right after 7h-B, as O6 decides) and the lock-order pull request
+    (every remaining role-first rights lock turned users first, and A1 in D's order with a route-against-route test of
+    A1 against an Unbind and a club-admin revocation), in either order; 7i-B only after the lock-order pull request.
+    The *Rukovodilac* accepts that, while 7h-F is out and the lock-order pull request is not, the known limit above
+    can meet a club's admin who saves and activates with listed starts (`try_again` or a 500, nothing written).

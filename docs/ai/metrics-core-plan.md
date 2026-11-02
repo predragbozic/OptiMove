@@ -1070,8 +1070,8 @@ order covers is merged under it; a migration PR that the standing order for migr
   and D9 stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
   **Accepted on 2026-11-02 (J14, C126–C131), and made exact by it:** v43 and v35 need no change; v52 changes the T4
   guard, the two CHECKs, `row_ok` and the version-driven ends (J14 section 6). The order of the pull requests is 7h-V
-  → 7h-B → the lock-order pull request → 7h-F → 7i-B (J15's R13; the *Rukovodilac*'s order of 2026-11-02, event
-  `011e7d13`).
+  → 7h-B → 7h-F and the lock-order pull request in either order → 7i-B after the lock-order pull request (C131, J15's
+  R13, the *Rukovodilac*'s order of 2026-11-02, event `783e3591`).
 - **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
   (the copied mappings are the club's drafts, approved under OD6), before more clubs are brought on. A copy is a club variable with the system
   variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
