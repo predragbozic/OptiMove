@@ -66,11 +66,10 @@ document. **The order of the pull requests** (C127 and C131, the owner's; J15's 
 request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, for the rest):
 - **7h-V** (C127): a team coach sees a club variable's name and unit in the team's results; small, merged and deployed
   before 7h-B's deploy;
-  **built in its pull request, not yet merged** (branch `feature/7h-v-club-variable-names`, base `95c05199`; no
-  migration; the *Rukovodilac*'s V1–V7 of 2026-11-02, event `66518c44`; J14 section 16): `variableNamesById` on the
-  activity read for C99's audience, the three calendar places, the roster names no other club's variable; ★★ (the
-  *Rukovodilac* and the *Nezavisni revizor*), merged under the standing order after both GOs and deployed by the
-  *Rukovodilac*;
+  **done:** merged as PR #337 (`d3dcb641`, parents `95c05199` and `f56cbdfc`, the tree the reviewed head's) exactly from `f56cbdfc` under the standing merge order after both ★★ GOs (the *Rukovodilac*'s event `28c48113`, the *Nezavisni revizor*'s event `1cf49e34`), and deployed by the *Rukovodilac* through the Render API on 2026-11-02 (live at 21:59:35 UTC; `/api/health` served `d3dcb641` with `ok: true` four times in a row, 21:59:50–22:00:28 UTC; without a login `/api/auth/me` answered 200 with no user and the activity read, its roster and the mappings list 401). No migration; the *Rukovodilac*'s V1–V7 of 2026-11-02, event `66518c44`; J14 section 16:
+  `variableNamesById` on the activity read for C99's audience, the three calendar places, the roster names no other
+  club's variable. Before this deploy production served `92cd813` (PR #332); the documentation-only merges of PR #333–#335
+  were not deployed on their own and did not need to be;
 - **7h-B** (★★): migration v52, the backend and the minimal frontend; internal reviews, J14 section 10's tests with
   real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
   after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
@@ -3770,6 +3769,12 @@ pre-existing; pass/fail counts don't belong in this file
   - The cause is not established; a run near midnight UTC is the candidate. Not fixed; a separate task.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **R17 resolves the workspace twice (7h-V's internal security review, LOW; accepted by the *Rukovodilac* as a small
+  follow-up, event `28c48113`).** `routes/gpexeImport.js:44` calls `resolveVariableEditor(req)` without `known`, while the
+  check before it uses `access.workspace`, so a workspace switch between the two resolutions is possible in theory. The
+  fix passes `access.workspace` as `known`, as 7h-V's activity route does. To be done in the lock-order pull request or
+  in the V2 info-hiding task, whichever is cleaner.
 
 - **Info hiding of other owners' variable names in team results (the *Rukovodilac*'s V2 (a) of 2026-11-02, event
   `66518c44`; found by 7h-V's discovery; before more clubs are brought on).** `GET /api/training-load/metrics/occasions/:id`
