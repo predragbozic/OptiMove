@@ -1975,19 +1975,30 @@ export function formatDbError(error) {
   return Object.entries(f).filter(([, v]) => v !== null).map(([k, v]) => `${k}=${v}`).join(" ") || "error";
 }
 
-// Approves one candidate as a whole and imports it, in ONE transaction:
-//   1. the approver's right, held FOR SHARE (lock_gpexe_import_approver);
+// Approves one candidate as a whole and imports it, in ONE transaction, in
+// the order of contract J17 (phase 9, 9-B):
+//   1. outside the transaction, the caller's right (canApproveGpexeImport) -
+//      a fast refusal only; the right that counts is the one locked at 6b;
 //   2. the candidate, FOR UPDATE: pending, snapshot not expired, the stored
 //      preview is the one the caller reviewed, and every change to an
 //      already imported result is accepted (acceptChanges);
-//   3. the team's import lock, the import itself, and the preview recomputed
-//      from what the import did (previewLocked);
-//   4. the recomputed preview hash must equal the approved one; otherwise
-//      EVERYTHING is rolled back, including what the import had written, and
-//      the caller is sent back to review the candidate;
-//   5. the approval row and the candidate becoming 'imported' (its snapshot
-//      kept 90 more days); commit.
-// Nothing is written before step 3, and nothing survives a refusal.
+//   3. the team's import lock; then (2a) the team and its club FOR SHARE and
+//      still the club the route resolved (R16: else the identical 404);
+//   4. (step 3) the binding the candidate's last check read through; (steps
+//      4-6) the open activations and their mapping rows FOR SHARE in the
+//      order T2b -> T3 -> T4 -> definitions -> T5, read again and compared
+//      (a change since the preview is preview_changed), the scope
+//      capabilities (R11) and the team's source instance (T7);
+//   5. (6b) the approver's right FOR SHARE (lock_gpexe_import_approver) - a
+//      right revoked meanwhile is 403, nothing written;
+//   6. the import itself and the preview recomputed from what it did
+//      (previewLocked); the recomputed hash must equal the approved one,
+//      otherwise EVERYTHING is rolled back, including what the import had
+//      written, and the caller is sent back to review the candidate;
+//   7. the approval row and the candidate becoming 'imported' (its snapshot
+//      kept 90 more days); the deferred work fired under the statement bound;
+//      commit - once it is sent, the outcome is never "nothing was imported".
+// Nothing is written before the import in step 6, and nothing survives a refusal.
 // What the roster learns from a preview (Phase 5a1): an athlete is
 // "unusable" only when GPEXE's own data says so (two tracks, statistics not
 // valid, several whole-session rows) AND the GPEXE athlete is linked to an
