@@ -1,4 +1,4 @@
-# J14 — phase 7h: a club's admin activates, replaces and disables its club's mapping versions (proposed ★★ contract)
+# J14 — phase 7h: a club's admin activates, replaces and disables its club's mapping versions (accepted ★★ contract)
 
 This is the contract of phase 7h of `docs/ai/metrics-core-plan.md` (phase 7: "7h ★★: a club's admin approves, disables
 and replaces its club's mapping versions (OD6, C108)"). It extends `docs/ai/gpexe-metric-variable-mapping-discovery.md`
@@ -14,11 +14,11 @@ before this contract is accepted.
 
 | | |
 |---|---|
-| Status | **Proposed** by the executor on 2026-11-02, on the *Rukovodilac*'s order of that day (queued at 13:35:02 UTC), which relays the owner's order „počni sa 7h i 7i” and adds: „Ne piši kod ni migraciju dok ne prihvatim ugovor.” Documentation only. |
+| Status | **Accepted** by the owner on 2026-11-02: „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (owner turn `95c006f2` in the *Rukovodilac*'s chat, 20:16:10 UTC; relayed with its event id by the *Rukovodilac*'s order `011e7d13`, 20:16:22 UTC; the executor checked it in the transcript). Proposed by the executor earlier that day, on the *Rukovodilac*'s order queued at 13:35:02 UTC („počni sa 7h i 7i”; „Ne piši kod ni migraciju dok ne prihvatim ugovor.”); merged as PR #333 (`f0578a72`) from head `3a4f7933` after both ★★ GOs. The decisions are C126–C131 (section 11). The implementation is 7h-B (R7). |
 | Verified against commit | `565fe097` (merge of PR #331). Every file and line reference below is to that commit unless it names another. |
 | Mark | ★★: external-review triggers 1 (a migration), 2 (auth, role, `owner_scope`, info hiding) and 4 (transactions, lock order, idempotency). Reviewed by the *Rukovodilac* and the *Nezavisni revizor*. |
 | The owner's decision | **C108 / OD6** (2026-10-30): „Povezivanje veza i raskidanje veza izmedju varijabli radi pre svega klupski admin, moze i sistemski ali pre svega klupski jer je to njegov posao.” (turn `122a4df5`); „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`); „znaci promeni u skladu sta sam hteo, ne vidim problem, da li ti vidis” (turn `88ad60ca`). Section 2 is the *Rukovodilac*'s reading of it (discovery C108), made concrete. |
-| Owner decisions | **O1–O6** (section 11), each with a recommendation. They become decisions with the next free C numbers once decided (R8). |
+| Owner decisions | **O1–O6** (section 11), decided as recommended on 2026-11-02: **C126–C131** in the discovery document's section C (R8). |
 | Decides | The *Rukovodilac*: R1–R13 (section 12) and the acceptance under its order. The owner: O1–O6; for a ★★ phase the owner also approves the contract before any code (`metrics-core-plan.md`, section 3, A1). |
 | Migration | **v52** (the next free number: v51 is `migrations_v2/202611011900_calendar_v51_settings.sql`), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v52_club_mapping_transitions.sql`. No open pull request carries a migration at the time of writing (PR #332 has none). If another migration lands first, 7h takes the next number (R1). |
 
@@ -903,7 +903,9 @@ mutated trigger.
   binding → the identical 404, nothing written";
 - the `skip_end` fault kind ignored in A2 (the definite-refusal test of 10.4 must then fail);
 - `rightsStillHold`: the club-role query always true; the club row check dropped; the promotion probe removed; the
-  club-admin query back to `for share of r, u`;
+  club-admin query back to `for share of r, u` — killed **only** by R13's route-against-route revocation test of 10.4
+  (the *Nezavisni revizor*'s note on `3a4f7933`): a test that checks the rights before the triggers holds both rows
+  and cannot see their order, so 7h-B's packet names that test as the one that kills this mutation;
 - `endOpenActivations` / `endAuditRows` back to the constant;
 - the pinned step passing a caller's basis other than `platform_admin`;
 - `submitVersion`'s state refusals moved back before the right.
@@ -974,7 +976,9 @@ mutated trigger.
 
 ## 11. Questions for the owner (O1–O6)
 
-Each has a recommendation, the consequence and the alternative.
+Each has a recommendation, the consequence and the alternative. **All six were decided as recommended by the owner on
+2026-11-02** („J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora”, turn `95c006f2`): O1 → **C126**, O2 (a) →
+**C127**, O3 → **C128**, O4 → **C129**, O5 → **C130**, O6 (a) in 7h-B and (b) as 7h-F → **C131**.
 
 - **O1. The scope is the *Rukovodilac*'s reading of C108.**
   - **Recommended: accept section 2 as written.** Club X's active admin, in club X's workspace, activates, replaces
@@ -1051,11 +1055,19 @@ Each has a recommendation, the consequence and the alternative.
   - **(c)** J18's board, later, for the club's whole team at once.
   - **Recommended: (a) in 7h-B, and (b) as its own frontend pull request, 7h-F, right after 7h-B.** J18 Q13 may later
     move parameter-less club versions to the board.
+  **Sequenced by the *Rukovodilac*'s order of 2026-11-02 (event `011e7d13`), its sequencing decision, not O6's text:**
+  7h-F comes after the lock-order pull request, not right after 7h-B (C131).
   - *Alternative:* (a) only, leaving the simplification to J18 and J16's recorded "Save and submit".
 
 ## 12. Decisions for the *Rukovodilac* (R1–R13)
 
-Each has a recommendation.
+Each has a recommendation. **Decided by the *Rukovodilac* on 2026-11-02 (its GO on `44e47340`): R1–R13 as
+recommended.** R13 was widened by J15's R13 (the *Rukovodilac*'s decision of 2026-11-02, its GO on J15's `aa0b2589`,
+event `360823e4`; recorded in J15 section 13): the lock-order pull request also moves A1 to D's order — its listed
+bindings and teams before its rights, every lock before its first end — with a route-against-route test of A1 against
+an Unbind and a club-admin revocation; and **the order of the pull requests is mandatory: 7h-B → the lock-order pull
+request → 7i-B** (7h-V before 7h-B's deploy; 7h-F, by the *Rukovodilac*'s order of 2026-11-02, event `011e7d13`,
+after the lock-order pull request and before 7i-B).
 
 - **R1. The migration number.** v52; the next free number if another migration lands first. J18's numbers move by one
   (section 9).
@@ -1080,6 +1092,7 @@ Each has a recommendation.
     - **7h-B:** migration, backend and the minimal frontend, in one ★★ pull request;
     - **7h-V:** O2 (a), before 7h-B's deploy;
     - **7h-F:** O6 (b), after 7h-B.
+      **Sequenced by the *Rukovodilac*'s order `011e7d13`:** after the lock-order pull request.
   - The frontend never ships before the backend.
 - **R8. Decision numbers.** C113–C125 stay reserved for J18. **Recommended:** J14's decisions take the next free numbers
   (C126 and on) in the order they are decided.
@@ -1113,7 +1126,11 @@ Each has a recommendation.
     not recommended, since 7h makes club-admin writes routine.
   - **Decided by the *Rukovodilac* (2026-11-02):** as recommended; the lock-order pull request as above.
 
-## 13. What this contract supersedes or amends (once accepted)
+## 13. What this contract supersedes or amends (accepted 2026-11-02; each row marked in its document)
+
+The acceptance pull request marks every row below in its own document, next to the text it changes, and erases nothing
+(R11). A mark names J14 and its decision (C126 for the scope) and says that it holds once 7h-B is merged and v52 is
+deployed; until then the old text describes the system as it runs.
 
 | Where | What | How |
 |---|---|---|
@@ -1222,3 +1239,24 @@ Each has a recommendation.
   7 described the remaining inversions of `sourceConnectionService.js` and `gpexeAthleteIdentityService.js` as on the
   global role only, while both also have a club-admin branch. On the *Rukovodilac*'s decision this head corrects section
   7 and R13, puts those branches into the separate lock-order pull request, and adds the revisor's test to 10.4.
+- **Accepted on 2026-11-02.** The owner: „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (turn
+  `95c006f2`, 20:16:10 UTC, relayed by the *Rukovodilac*'s order `011e7d13`). PR #333 merged as `f0578a72` exactly
+  from `3a4f7933`. The acceptance pull request records C126–C131, marks section 13's rows in their documents (R11),
+  and fixes **what 7h-B's packet must carry** (the *Rukovodilac*'s two LOW notes on `44e47340` and the *Nezavisni
+  revizor*'s note on `3a4f7933`):
+  - **L1:** the route-against-route revocation test of 10.4, with the mutation of 10.6 that returns the club-admin
+    query to `for share of r, u` and that only this test kills (the rights-before-triggers test holds both rows and
+    proves nothing about their order);
+  - **L2:** the Serbian runbook's steps for a lock failure of v52 — `nowait` on T4 ("could not obtain lock on
+    relation") or the runner's 30 s `lock_timeout` on T5 / T8 ("canceling statement due to lock timeout"): both leave
+    nothing applied and the old instance serving; wait for a quiet moment, run the preflight's quiet-moment block again,
+    deploy again; nothing is deleted;
+  - **a known limit until the lock-order pull request**, named in the packet and the runbook: a club's admin's A1 with
+    listed starts, an Unbind of one of those bindings and a revocation of the club's admins at the same moment can end
+    in `40P01` (A1 and the Unbind answer `try_again`, the revocation a 500; nothing is written), because A1 locks its
+    rights before its listed bindings (J15 section 5 and R13); the lock-order pull request removes it;
+  - R9's grep repeated at 7h-B's head, and the real `--file` results of every suite of 10.8 with their counts.
+  - **The order of the pull requests is mandatory** (J15's R13 for 7h-B → the lock-order pull request → 7i-B; the
+    *Rukovodilac*'s order of 2026-11-02, event `011e7d13`, for 7h-V and 7h-F): 7h-V before 7h-B's deploy; 7h-B; the
+    lock-order pull request (every remaining role-first rights lock turned users first, and A1
+    in D's order with a route-against-route test of A1 against an Unbind and a club-admin revocation); 7h-F; 7i-B.

@@ -1,4 +1,4 @@
-# J15 — phase 7i: a club uses, copies or hides a system variable (proposed ★★ contract)
+# J15 — phase 7i: a club uses, copies or hides a system variable (accepted ★★ contract)
 
 This is the contract of phase 7i of `docs/ai/metrics-core-plan.md` (phase 7: "7i ★★: a club uses a system variable as it
 is or copies it into its own set, or hides it (OD7, C109)"). It extends
@@ -8,17 +8,19 @@ C104, C106, C108 and C109, and the decision 9 pin guard. It builds on the propos
 (`docs/ai/c112-drag-mapping-contract.md`, section 5.5), and it amends what J16 (`docs/ai/phase8-mappings-screen-contract.md`)
 and the canonical-variable screens say about system variables in a club.
 
-**Written while J14 is still Proposed.** Everything here that depends on J14 holds **under the condition that J14 is
+**Written while J14 was still Proposed.** Everything here that depends on J14 holds **under the condition that J14 is
 accepted with O1–O6 as recommended** (J14 section 11). Where an answer to J14 would change J15, the section says so.
-Nothing in J15 is merged before J14 is accepted.
+Nothing in J15 is merged before J14 is accepted. *(Kept as written. The condition is met: the owner accepted J14 with
+O1–O6 as recommended on 2026-11-02, in the same words that accept this contract (C126–C131), and PR #334 was merged
+after that, on the *Rukovodilac*'s merge GO `011e7d13`.)*
 
 | | |
 |---|---|
-| Status | **Proposed** by the executor on 2026-11-02, on the *Rukovodilac*'s orders of that day: KORAK 2 of its order queued at 13:35:02 UTC ("J15 za 7i … kao poseban PR"), and its permission queued at 16:57:27 UTC to write it before J14 is accepted ("novi worktree iz main-a; PR otvaraš tek kao Proposed; svuda gde J15 zavisi od J14 piši „pod uslovom da J14 bude prihvaćen sa O1–O6 kako su preporučeni"; ništa se ne merguje pre prihvatanja J14"). Documentation only. |
+| Status | **Accepted** by the owner on 2026-11-02: „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (owner turn `95c006f2` in the *Rukovodilac*'s chat, 20:16:10 UTC; relayed with its event id by the *Rukovodilac*'s order `011e7d13`, 20:16:22 UTC; the executor checked it in the transcript). Merged as PR #334 (`93f36615`) exactly from head `aa0b2589` after both narrow ★★ GOs. The decisions are C132–C140 (section 12). The implementation is 7i-B (section 11), after the lock-order pull request (R13). Proposed by the executor on 2026-11-02, on the *Rukovodilac*'s orders of that day: KORAK 2 of its order queued at 13:35:02 UTC ("J15 za 7i … kao poseban PR"), and its permission queued at 16:57:27 UTC to write it before J14 is accepted ("novi worktree iz main-a; PR otvaraš tek kao Proposed; svuda gde J15 zavisi od J14 piši „pod uslovom da J14 bude prihvaćen sa O1–O6 kako su preporučeni"; ništa se ne merguje pre prihvatanja J14"). Documentation only. |
 | Verified against commit | `565fe097` (merge of PR #331). Every file and line reference below is to that commit unless it names J14's head `3a4f7933` (PR #333). |
 | Mark | ★★: external-review triggers 1 (a migration), 2 (`owner_scope`, information hiding), 3 (a **copy**: canonical identity and materialization) and 4 (transactions, lock order, idempotency). Reviewed by the *Rukovodilac* and the *Nezavisni revizor*. |
 | The owner's decision | **C109 / OD7** (2026-10-30): „Sistemske kanonske varijable su pre svega zamisljene kao nesto sto klub moze vrlo brzo da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu odgovaraju, ako ne odgovaraju on moze i da ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti neki svoj skup core varijabli” (turn `bf4c6ce7`); the two forms (a) *use as is* and (b) *copy to own* are the *Rukovodilac*'s decision recorded in C109. Sections 2–4 make them concrete. |
-| Owner decisions | **O1–O9** (section 12), each with a recommendation. They become decisions with the next free C numbers after J14's once decided (R12). |
+| Owner decisions | **O1–O9** (section 12), decided as recommended on 2026-11-02: **C132–C140** in the discovery document's section C (R12). |
 | Decides | The *Rukovodilac*: R1–R13 (section 13). The owner: O1–O9 and, for a ★★ phase, the contract before any code (`metrics-core-plan.md`, section 3, A1). |
 | Migration | **One**, the next free number after J14's v52 (J14 R1) and J18's migration (≥ v53 by J14 section 14; J18's own text still says "v52 after 7h's v51", which J14 renumbers), whichever lands first, proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_vNN_system_variables_club.sql` (section 7, R1). |
 
@@ -401,6 +403,18 @@ reads the hide of the **binding's** club (`source_metric_binding_club`, as the T
     the start's insert waited on the board's uncommitted end, and the board on the start's hide lock (2 of 2
     deadlocked with the board locking after its end; 0 of 2 with the board taking the hide lock before its first
     write, where the start's insert gets a plain `23505`, which `insertStarts` already maps to `activation_exists`).
+- **No new row lock after the hide lock** (the *Nezavisni revizor*'s note on `aa0b2589`, accepted by the
+  *Rukovodilac*). Once a path holds its hide locks, neither its service nor any guard takes a row lock it does not
+  already hold: the guards' re-locks find rows the path took earlier in D's order (T4 `FOR SHARE`, the rights rows, the
+  binding), and every new fact is a plain read. In particular the hide and show guards (section 7.3) read the
+  definition's `owner_scope` with a plain read; the service holds that row `FOR KEY SHARE` from before. The rule is a
+  defence in depth: a lock there that conflicts with `FOR SHARE` (`FOR NO KEY UPDATE`, `FOR UPDATE`) would deadlock,
+  by construction, with an A1 that holds the definition `FOR SHARE` (D's step) and waits for the hide lock. A
+  `FOR SHARE` there would not: PostgreSQL grants a share request compatible with every lock held on the row at once,
+  even with a writer waiting (a new system version takes the definition `FOR UPDATE`,
+  `canonicalVariableAdminService.js:688-689`) — the internal review of the acceptance pull request ran the hide, an A1
+  and a new version 7 of 7 times without a wait (so the reviewers' example of a three-way cycle through `FOR SHARE`
+  does not form; section 16).
 - **A1 at `565fe097` does not follow D's order:** it checks the rights (`sourceMetricMappingService.js:1426`), ends
   the old version's activations (`:1465`) and only then locks its listed bindings (`:1485`). Its listed starts get
   hide locks in 7i-B only once A1 takes its listed bindings and teams before its rights and every lock before its
@@ -436,7 +450,7 @@ A copy's total length is bounded by the 10-mapping cap. The F2 COMMIT discipline
 | Hide (or show), an S1 of the same club and variable, and a revocation of that club's admins, all three at once | No cycle. The revocation's only advisory lock is the club-admin headcount lock (`organization.js:2417-2421`, taken before its `FOR UPDATE OF u, r` at `:2430-2437`; a two-key lock of another family), which no hide, show, start, copy or switch takes. So the three share only the rights rows, and both the hide and the start take those before the hide lock. The revocation waits for both, or they wait for it; the side that lost its right answers the identical 404. (With the hide lock before the rights this is a three-way deadlock, section 5.) |
 | Copy vs a club-admin revocation, alone or with a hide, a show or a start at the same time | No cycle. The copy takes no hide lock and not the headcount lock. Its registry rows are `FOR SHARE` and come before its rights; after its rights it only inserts its own new rows (the club definition, its version and capabilities, the copy and link rows, club T3 / T4, T8 and the request row), which nobody else waits for. The revocation and the copy meet only at the copying admin's rights rows, both in `u, r` order: the two-party case of J14 R13, and the copy answers the identical 404 when the revocation commits first. Its shared registry locks are compatible with a start's, and the hide's read of open activations is a plain read, so no third party closes a cycle. |
 | Switch to copy vs a club-admin revocation, alone or with an Unbind or a hide at the same time | No cycle, with the switch in D's order (section 5): it locks the binding and its team before its rights, as S1 does, so an Unbind holding the binding stops the switch before the switch holds any rights row. It starts a club version, so it takes no hide lock, and the hide's read of open activations is a plain read. With the rights before the binding this is a three-way deadlock with an Unbind and the revocation (section 5). |
-| A start (S1 or A1's listed starts) and J18's board or A1 ending a T5 row on the same binding and field, while a hide of that variable holds the hide lock | No cycle: every path takes its hide locks before its state checks and its first write (section 5), so the board or A1 never holds an uncommitted end while it waits for a hide lock. A start whose insert meets a row another transaction only holds locked gets `23505` at once, mapped to `activation_exists`. |
+| A start (S1 or A1's listed starts) and J18's board or A1 ending a T5 row on the same binding and field, while a hide of that variable holds the hide lock | No cycle: every path takes its hide locks before its state checks and its first write (section 5), so the board or A1 never holds an uncommitted end while it waits for a hide lock. A start whose insert meets a row another transaction only holds **locked** gets `23505` at once, mapped to `activation_exists`. That holds only for a row that is merely locked: an insert that meets a row another transaction has already **updated** and not committed (an uncommitted end) waits for that transaction instead. This order rules out the cycle: no path that holds an uncommitted write ever waits for a hide lock, because every path that takes one takes it before its first write (the *Rukovodilac*'s note on `aa0b2589`). A hide-lock holder may still wait, bounded by the 2 s row-lock bound (`try_again`), behind an end by a path that takes no hide lock (a switch to a copy, S2, A2); that path waits for nothing the holder has, so no cycle forms. |
 | Switch to copy vs an import approval or a check-time preview | As S1 and J18's board against the importer (`c112` §4.4): the importer holds its T5 rows `FOR SHARE`, which the switch's `FOR NO KEY UPDATE` of the old row waits for; the switch holds only shared registry and binding locks, which the importer never waits for, so no cycle forms. The approval answers `preview_changed` when the switch lands first. |
 | Switch to copy vs S2 of the same activation | They serialize at the T5 row; the second answers `activation_not_open`. |
 
@@ -490,7 +504,8 @@ One table for state and history, shaped like T5. Columns: `id`, `club_id` (FK `p
 index on `(club_id, metric_definition_id) where shown_at is null` (one open hide); never deleted.
 
 Its guards: BEFORE INSERT — the actor (v35 setting) is `hidden_by_user_id`; the basis is
-`source_metric_actor_basis(actor, club_id)` and equals `hidden_basis`; the definition is `owner_scope = 'system'`;
+`source_metric_actor_basis(actor, club_id)` and equals `hidden_basis`; the definition is `owner_scope = 'system'` (a
+**plain read**, never a lock: the service already holds that row `FOR KEY SHARE`, section 5's rule below);
 `hidden_at = now()`; under the hide lock of section 5 for `(club_id, metric_definition_id)`, no open T5 activation of a
 system mapping version targeting the definition on a binding whose `source_metric_binding_club` is `club_id`. BEFORE
 UPDATE — only the show facts, once, with the same actor and basis rules. **The guards' advisory locks, in this order:**
@@ -737,7 +752,15 @@ migration, a main one through all).
     locked and answers `activation_exists`. Mutation: the board's (or A1's) hide lock after its first T5 end →
     `40P01`;
   - two S1s of the same variable on bindings of two clubs in opposite order (no `40P01`, thanks to the ascending
-    advisory locks); a club-role revocation during a copy (J14 R13's route-against-route pattern).
+    advisory locks), **and the same with two A1s with listed starts** on several bindings in opposite order, route
+    against route (the *Rukovodilac*'s first note on `61347a51`); a club-role revocation during a copy (J14 R13's
+    route-against-route pattern);
+  - **a hide, and an A1 of the hidden variable's system mapping that waits for the hide lock** (the *Nezavisni
+    revizor*'s note on `aa0b2589`, as corrected): hold the hide after its hide lock; start the A1 and wait until it
+    waits for the hide lock (it holds the definition `FOR SHARE`); release the hide. Expected: no `40P01`, and while the
+    hide's guard runs, `pg_locks` / `pgrowlocks` show only `For Key Share` from the hide on the definition row.
+    Mutations: a lock in the hide guard that conflicts with `FOR SHARE` (`FOR NO KEY UPDATE`) → `40P01`; a `FOR SHARE`
+    there → killed by the lock-mode assertion, not by a deadlock (none forms, section 5).
 - **J18's gate** (only when J18 is built): a club admin's activation of a copied parameter-less draft passes through
   the link, and is refused (`23514`, `409 confirmation_required`) once the linked system version is disabled.
 - **History (inferred today):** after a switch, a session imported under the system variable whose content GPEXE
@@ -757,7 +780,9 @@ migration, a main one through all).
   sorted by the hash in one path and by `(club, definition)` in another (the race of two S1s in opposite order must end
   without `40P01`); the acts keyed on the basis instead of the view, or shown in the platform workspace; the cross-act
   key check removed from either guard, or the guards taking the key lock before the hide lock; the switch's binding
-  taken after its rights; the board's or A1's hide lock taken after its first write (each killed by its race above); the
+  taken after its rights; the board's or A1's hide lock taken after its first write; the service's ascending order of
+  the hide locks removed; a lock on the definition in the hide guard (each killed by its race above; a `FOR SHARE` there
+  by that race's lock-mode assertion); the
   club-admin branch of `rightsStillHold` back to `r, u` (a test pins `u, r`); the J18 gate's read of the linked system
   version taking a lock; the identical-404 gate widened.
 - **md5 preconditions:** a test computes the md5 of the v36 request guard (`ae5bf5e22620546a83cf955b8b1d9a9d`) and
@@ -786,7 +811,9 @@ Regression by `--file`: the M3-0, R2, 12b, icon, M2, 7b, 7d and 9-B suites, and 
 
 ## 12. Questions for the owner (O1–O9)
 
-Each has a recommendation and the alternative, in plain words.
+Each has a recommendation and the alternative, in plain words. **All nine were decided as recommended by the owner on
+2026-11-02** („J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora”, turn `95c006f2`): O1 → **C132**, O2 →
+**C133**, O3 → **C134**, O4 → **C135**, O5 → **C136**, O6 → **C137**, O7 → **C138**, O8 → **C139**, O9 → **C140**.
 
 - **O1. What "hide" does.** **Recommended:** the club no longer sees the variable in its lists and pickers, and it cannot
   be switched on for the club's teams; hiding is refused while the club's teams still use it (they are switched off
@@ -827,6 +854,12 @@ Each has a recommendation and the alternative, in plain words.
 
 ## 13. Decisions for the *Rukovodilac* (R1–R13)
 
+**Decided by the *Rukovodilac*:** R1–R12 as recommended (its GO on `61347a51`, event `8dc1fac6`, 17:44:03 UTC, kept on
+the corrected head); R13 as recommended, with the order of the pull requests made **mandatory: 7h-B → the lock-order
+pull request (A1 in D's order, with a route-against-route test of A1 against an Unbind and a club-admin revocation) →
+7i-B**; 7i-B never comes before the lock-order pull request (its narrow GO on `aa0b2589`, event `360823e4`, 20:13:22
+UTC). J14's R13 and `CURRENT_STATE.md`'s lock-order task carry the same order.
+
 - **R1. The migration number:** the next free after J14's v52 and J18's; the runbook file names wait for it.
 - **R2. The request record:** a new operation `variable_copy` with `operation_id` (recommended) rather than a plain
   `variable_create`, which would lose that it is a copy.
@@ -853,7 +886,11 @@ Each has a recommendation and the alternative, in plain words.
   before the rights, every lock and its hide locks before its first end) in the lock-order pull request recorded with
   J14, after 7h-B and before 7i-B, with a route-against-route test; 7i-B adds A1's hide locks only on that order.
 
-## 14. What this contract supersedes or amends (once accepted)
+## 14. What this contract supersedes or amends (accepted 2026-11-02; each row marked in its document)
+
+The acceptance pull request marks every row below in its own document, next to the text it changes, and erases nothing.
+A mark names J15 and says that it holds once 7i-B is merged and its migration deployed; until then the old text
+describes the system as it runs. The Variables screen's row is code, changed by 7i-B itself.
 
 | Where | What | How |
 |---|---|---|
@@ -964,3 +1001,15 @@ Each has a recommendation and the alternative, in plain words.
     race; the guards take the hide lock before the key lock, and the request key is a plain read; the races driven by
     hold seams and lock waits, not by timing (a LOW after its verifier); the J18 gate's read a plain read; the line
     range of §4.4.
+- **Accepted on 2026-11-02.** The owner: „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (turn
+  `95c006f2`, 20:16:10 UTC, relayed by the *Rukovodilac*'s order `011e7d13`). PR #334 merged as `93f36615` exactly from
+  `aa0b2589`. The acceptance pull request records C132–C140, marks section 14's rows in their documents, and applies
+  the three notes the reviewers left for it: the *Rukovodilac*'s on `aa0b2589` (`23505` only for a row that is merely
+  locked, section 6), the *Nezavisni revizor*'s on `aa0b2589` (no new row lock after the hide lock, sections 5, 7.3 and
+  10; its example cycle corrected after the acceptance pull request's internal review, which ran it 7 of 7 times without
+  a wait) and R13's mandatory order (section 13). **What 7i-B's packet must carry** (the *Rukovodilac*'s two notes on
+  `61347a51`):
+  - **L1:** the route-against-route test of two S1s and of two A1s with listed starts on several bindings in opposite
+    order, with no `40P01`, and the mutation that removes the service's ascending order of the hide locks, killed by it;
+  - **L2:** the Serbian runbook says that after a code rollback, while hide rows exist, the old S1 on a hidden variable
+    answers a sanitized 500: this is expected, and nothing is deleted.

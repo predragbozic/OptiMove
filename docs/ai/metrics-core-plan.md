@@ -1068,10 +1068,15 @@ order covers is merged under it; a migration PR that the standing order for migr
   `club_admin` basis for a club mapping, with the v43 guards and `mayTransitionMappings`; A1 and A2 then also end and
   start activations for a club's admin. System mappings, the source fields' unit and meaning, the unit conversions
   and D9 stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
+  **Accepted on 2026-11-02 (J14, C126–C131), and made exact by it:** v43 and v35 need no change; v52 changes the T4
+  guard, the two CHECKs, `row_ok` and the version-driven ends (J14 section 6). The order of the pull requests is 7h-V
+  → 7h-B → the lock-order pull request → 7h-F → 7i-B (J15's R13; the *Rukovodilac*'s order of 2026-11-02, event
+  `011e7d13`).
 - **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
   (the copied mappings are the club's drafts, approved under OD6), before more clubs are brought on. A copy is a club variable with the system
   variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
   contract (J15) is written on the *Rukovodilac*'s order.
+  **Accepted on 2026-11-02 (J15, C132–C140).** 7i-B comes after the lock-order pull request (J15 R13).
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
   its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
   approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script

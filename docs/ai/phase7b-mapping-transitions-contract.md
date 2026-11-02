@@ -28,6 +28,8 @@ the open points of section K. It follows phase 4's pattern (`docs/ai/v39-revisio
     replaces it (D6);
   - **disable** a version.
 - Only an active platform admin may do either, in the workspace of the mapping's owner (C60).
+  - **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** on a club mapping,
+    the club's active admin in its club's workspace may do either too.
 - The database already decides almost everything:
   - v34 checks every condition of an activation and a disable, and allows only `draft → needs_review → active →
     disabled` (forward only);
@@ -172,12 +174,18 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
 | A1 | `POST /mappings/:mappingId/versions/:versionId/activate` | an active platform admin, in the workspace of the mapping's owner (platform workspace for a system mapping; club X's workspace for a club X mapping) | `requestKey` (uuid); `expectedActiveVersionId` (the mapping's active version the caller saw, or `null`); `reason` (1–500, C41/C53; required when `expectedActiveVersionId` is not null, refused otherwise) | `activated_by` / `_at` / `_basis`; for a replacement N's `disabled_by` / `_at` / `_basis` and `disable_reason` = the request's `reason`; T8 rows; `operation_id` | `200 {version, replaced: <id> or null, replayed: false}`; replay or verified COMMIT `200` |
 | A2 | `POST /mappings/:mappingId/versions/:versionId/disable` | as A1 | `requestKey`; `expectedStatus` (`draft`, `needs_review` or `active`: the status the caller saw); `reason` (1–500, required) | `disabled_by` / `_at` / `_basis`, `disable_reason`; T8 row | `200 {version, replayed: false}`; replay or verified COMMIT `200` |
 
+**Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** for a club mapping,
+"Who / workspace" of A1 and A2 also admits the club's active admin in its club's workspace (basis `club_admin`).
+
 **The order of the answers** (R3; the lifecycle routes' order):
 1. no session: the router's `401`;
 2. no admin context for the active workspace, or a caller who is not an active platform admin (a club admin, a team
    coach, anyone else): the identical `404 {"error":"notFound"}`, **before the body is looked at**. The gate is a new
    helper (for example `mayTransitionMappings(ctx)`: basis `platform_admin`, in the platform or a club workspace), not
    the lifecycle's `mayChangeRevisions`, which admits the platform workspace only (O1);
+   **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** the gate also admits
+   a club's active admin in its club's workspace for its club's mappings (basis `club_admin`, J14 section 7); a club
+   admin gets the identical `404` here only for a system mapping or another owner's (J14 section 2.3).
 3. a request without a JSON body: `415 jsonRequired`; a body that is not an object: `400 invalid_body`;
 4. a path id that is not a uuid: the identical `404`; then the body's shape: `400 invalid_body`;
 5. the request record (`409 request_key_reused`, or a replay);
@@ -343,6 +351,8 @@ T4 `FOR UPDATE` → the acting user's rows → the pinned clubs.
 
 - The identical `404` for:
   - a caller who is not an active platform admin, before the body is read (section 2);
+    **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** or, on a club
+    mapping in its club's workspace, that club's active admin.
   - a path that is not a uuid, or names a version of another mapping;
   - a mapping of another owner than the workspace's;
   - an archived club's workspace (it has no admin context);
@@ -350,6 +360,9 @@ T4 `FOR UPDATE` → the acting user's rows → the pinned clubs.
 - A club admin can read its club's versions (J1 rows 4–5) but cannot activate or disable them (D6). The routes answer
   the same `404`, so they reveal nothing beyond the reads (R3). The Mappings screen (phase 8) offers the actions only
   to a platform admin.
+  **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** a club's admin also
+  activates and disables its own club's versions in its club's workspace (J14 section 2), and the Mappings screen
+  offers it those actions (J14 section 8); everything else stays the identical `404` (J14 section 2.3).
 - No refusal names another owner's mapping, version or club:
   - `source_metric_target_taken` names only the owner scope of the caller's own mapping (D6);
   - `current.activeVersionId` is a version of the caller's own mapping;
@@ -573,6 +586,8 @@ Each question has one recommendation and its consequence. The owner decided all 
     - the answer carries counts only;
     - after 7d and M4, the club's imports through that mapping stop until a platform admin, in the club's workspace,
       activates a version on the new revision. The club's admin can only create and submit one (D6, R3).
+      **Superseded by J14 (C126, accepted 2026-11-02; once 7h-B is deployed):** the club's admin can also activate
+      one.
   - *Alternative:* the pinned step refuses while a club's version is active (`version_active` with a count). A
     platform admin first disables it with A2 in the club's workspace, then retires the revision. A field could then be
     stopped only club by club.
@@ -593,6 +608,9 @@ Each question has one recommendation and its consequence. The owner decided all 
   (C63 unchanged; it is readable in the database).
 - **R3:** a club admin gets the identical `404` from A1 and A2 (J1's convention for "may not write"), before the body
   is looked at, as the lifecycle routes do.
+  **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** on its club's own
+  mapping a club's admin is admitted; the identical `404` stays for a system mapping, another club's mapping and every
+  other workspace (J14 section 2.3).
 - **R4:** `activation_open` is a fail-closed refusal in 7b, replaced by D6's T5 steps in 7d.
 - **R5:** the code names of section 2. New ones: `version_not_submitted`, `active_version_changed`,
   `version_status_changed`, `revision_not_verified`, `canonical_version_changed`, `source_metric_target_taken`. J1's
