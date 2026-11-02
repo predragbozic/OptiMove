@@ -647,7 +647,7 @@ function timeStatements(client) {
     const started = performance.now();
     const answer = original.apply(this, args);
     if (answer && typeof answer.then === "function") {
-      answer.then(() => times.push({ text, ms: performance.now() - started }), () => times.push({ text, ms: performance.now() - started, failed: true }));
+      answer.then(() => times.push({ text, ms: performance.now() - started, started, ended: performance.now() }), () => times.push({ text, ms: performance.now() - started, started, ended: performance.now(), failed: true }));
     }
     return answer;
   };
@@ -658,7 +658,19 @@ function summarize(times) {
   const commit = times.filter((t) => /^\s*commit\s*$/i.test(t.text));
   const others = times.filter((t) => !/^\s*commit\s*$/i.test(t.text));
   const longest = others.reduce((a, b) => (b.ms > a.ms ? b : a), { ms: 0, text: "" });
+  // LOW-3 (the Nezavisni revizor on 9-0): the longest time the connection sat
+  // idle in its transaction between one statement's answer and the next
+  // statement - the JavaScript work of the import and the preview - which the
+  // 10 s idle_in_transaction bound watches.
+  const ordered = [...times].sort((a, b) => a.started - b.started);
+  let longestGap = { ms: 0, after: "" };
+  for (let i = 1; i < ordered.length; i += 1) {
+    const gap = ordered[i].started - ordered[i - 1].ended;
+    if (gap > longestGap.ms) longestGap = { ms: gap, after: ordered[i - 1].text };
+  }
   return {
+    longestGapMs: Math.round(longestGap.ms * 10) / 10,
+    longestGapAfter: longestGap.after.replace(/\s+/g, " ").slice(0, 60),
     statements: others.length,
     longestMs: Math.round(longest.ms * 10) / 10,
     longest: longest.text.replace(/\s+/g, " ").slice(0, 80),
@@ -730,7 +742,49 @@ test("8. Arm A1 commits under the production bounds: the writer on J17's Arm A1 
   for (const m of [armA1, route]) {
     assert.ok(m.longestMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the longest statement (${m.longestMs} ms) is far below the bound`);
     assert.ok(m.commitMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the COMMIT (${m.commitMs} ms) is far below the bound`);
+    assert.ok(m.longestGapMs < IMPORT_IDLE_IN_TRANSACTION_MS / 4, `the longest idle gap in the transaction (${m.longestGapMs} ms) is far below the idle bound`);
   }
+});
+
+test("8b. LOW-3 (the Nezavisni revizor on 9-0): a synthetic session of 40 athletes on 6 levels (the whole session and 5 drills) with the eleven activations - every value with its T6 row - commits with its longest statement and its longest idle gap far below the 10 s bounds", async () => {
+  const names = Array.from({ length: 40 }, (_, i) => `Synthetic ${i + 1}`);
+  const org = await createGpexePilotOrg(admin, { athleteNames: names });
+  const sourceTeamId = String(nextGpexeTeamId++);
+  await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId });
+  const [base] = standardAthletes();
+  const whole = base.parts.find((p) => p.drill === null);
+  const athletes = names.map((_, i) => ({
+    id: 4000 + i, tracks: [84000 + i],
+    parts: [{ ...whole }, ...[0, 1, 2, 3, 4].map((drill) => ({ ...whole, drill, time: 480, distance: 600 + i }))],
+  }));
+  const bundle = makeBundle({ sessionId: 9901, gpexeTeamId: Number(sourceTeamId), athletes, drillsCount: 5, detailsDrills: [0, 1, 2, 3, 4] });
+  const athleteIdByGpexeId = Object.fromEntries(athletes.map((a, i) => [String(a.id), org.athleteIds[i]]));
+  const client = await newClient();
+  const timed = timeStatements(client);
+  try {
+    await client.query("begin");
+    await setImportTransactionBounds(client);
+    await lockTeamForImport(client, org.teamId);
+    await importGpexeBundleLocked(client, bundle, { ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId, batchFilename: "bounds 9-0 synthetic 40x6" });
+    await client.query("commit");
+  } finally {
+    timed.restore();
+    await client.end();
+  }
+  const m = summarize(timed.times);
+  const written = (await admin.query(
+    `select count(*)::int as n, count(pr.metric_value_id)::int as provenance from training_load.metric_values v
+       join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+       join training_load.metric_events e on e.id = p.event_id
+       left join training_load.metric_value_source_provenance pr on pr.metric_value_id = v.id
+      where e.owner_team_id = $1`, [org.teamId])).rows[0];
+  console.log(`[9-B measurement] synthetic 40 athletes x 6 levels: ${JSON.stringify({ ...m, values: written.n })}`);
+  assert.ok(written.n >= 40 * 6 * 9, `about eleven values per athlete and level (${written.n})`);
+  assert.equal(written.provenance, written.n, "one T6 row per value");
+  assert.ok(m.longestMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the longest statement (${m.longestMs} ms) is far below the bound`);
+  assert.ok(m.commitMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the COMMIT (${m.commitMs} ms) is far below the bound`);
+  assert.ok(m.longestGapMs < IMPORT_IDLE_IN_TRANSACTION_MS / 4, `the longest idle gap (${m.longestGapMs} ms) is far below the idle bound`);
 });
 
 // ---------------------------------------------------------------------------
