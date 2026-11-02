@@ -1,7 +1,7 @@
 # Central calendar — K2b-1 plan: Settings → Calendar (types, details, places, colours)
 
 Status: **accepted (2026-11-01).** The manager accepted the structure and the slices 1a → 1c → 1d → 1e and decided
-T1–T6; the owner accepted every recommendation of Q1–Q12, recorded as **D28–D39** (section 16). **K2b-1a is built in
+T1–T6; the owner accepted every recommendation of Q1–Q12, recorded as **D28–D39** (section 16), and on 2026-11-02 **D40** (questions to athletes only through the Tests module). **K2b-1a is built in
 this pull request.** Written against the checked-out code at `17dc46d` (merge of PR #313, `main`; `origin/main` moved to
 `656cf88` with documents only, no migration). No persistent database was touched.
 
@@ -27,7 +27,7 @@ this pull request.** Written against the checked-out code at `17dc46d` (merge of
 | 2 | Event types (D24) | the club's admin (and the platform admin in the club's workspace) adds types beside the seven, renames, sets icon, colour, default expectations (D19) and the default details; **archives, never deletes**; `kind` stays write-once |
 | 3 | The library of details | `calendar.event_fields` (+ options), owned like the types (`system` set + a copy per club); five value kinds; optional by default, required only when the admin says so (D25) |
 | 4 | "The meaning is frozen" | enforced **by the database whoever writes**: once a detail has a value, its label, kind, unit, bounds and option labels never change; options may be added (and hidden); anything else is archive + a new detail |
-| 5 | Athlete-filled details (D26) | **not in K2b-1, not even as definitions** — they are Training Load measurements and belong to Metrics Core (ADR-007); the column `filled_by` exists with `coach` only, K2b-2 widens it (section 10) |
+| 5 | Athlete-filled details (D26) | **not in K2b-1, not even as definitions** — they are measurements of the athlete; since **D40** an athlete's questions are asked only through the **Tests module** (K2b-2, "Ask athletes" on an event), their parameters mapped into Metrics Core; `filled_by` holds `coach` only (section 10) |
 | 6 | Places (D27) | `calendar.locations` per club (name, address, note); a team's default place; an event takes a library place **or** a one-off text (today's `location`), never both; archive, never delete |
 | 7 | Team colours (D11) and type colours | a closed palette of 12 keys (the 8 of today's automatic palette first), checked by the database; a team without a choice keeps the automatic colour, never one another team chose |
 | 8 | The event's details | the event carries its own ordered list (copied from the type at create, editable per event — as `expects`), and the coach's values; a required detail without a value after the event's last day makes the card *Awaiting details* |
@@ -348,9 +348,16 @@ switch with unsaved values. Phones: 360 / 375 / 390 px, every control 44 px, eve
   `calendar.event_fields` would be exactly that parallel registry, and K2b-2 would have to migrate or map it.
 - A definition without collection misleads: a coach would add *Sleep quality* to an event and wait for answers that
   nothing asks for (the K2a principle: never expect what nobody can answer).
-- So K2b-1 builds only coach details; `filled_by` exists with the one value `coach` and is shown on the screen, so
-  the model's word is in place; **K2b-2** decides the shape (most likely an event detail that *refers to* a Metrics
-  Core variable, collected through the RPE request) and widens the CHECK in its own migration.
+- So K2b-1 builds only coach details; `filled_by` exists with the one value `coach` and is shown on the screen.
+  **Superseded by D40 (2026-11-02):** questions to athletes go only through the **Tests module** (a questionnaire is a
+  test; its `test_parameters` — numeric, integer, boolean, ordinal, text, `athlete_self` — the schedules and the
+  reminders exist). **K2b-2 is "Ask athletes" on an event:** choose a questionnaire from the Tests library and, in one
+  click, schedule that test for the event's athletes on that day with a window after it; the notifications are Tests';
+  the results live in Tests and show on the event's card; and the Tests parameters are **mapped into Metrics Core** so the
+  answers reach the Training Load dashboards (no new registry, the metrics flow of
+  `.claude/rules/metrics-core-mapping.md`). The calendar's `filled_by` therefore stays `coach`; the earlier idea of
+  athlete fields through the RPE channel as new variables (D26's first reading) is dropped. The split: coach fields =
+  Details in the calendar (K2b-1); RPE = Training Load; every other question to athletes = Tests (+ the mapping).
 - The coach's details are **event context**, not athlete metrics (weather, surface, opponent, score): they stay in the
   calendar and never reach Training Load or a dashboard in K2b-1. The owner confirms the boundary (Q2).
 
@@ -438,9 +445,9 @@ built from the address only (and absent without one), the auto-colour rule, no `
 
 - **Risks:** an address correction shows on past events too (Q7); a catalog that only grows (archive, never delete;
   *Show archived* keeps the lists short); the seven seeded types' new icons change what a club sees on day one (the same
-  icons as today, so nothing visible moves); `filled_by` widened later by a migration (K2b-2); a coach in a team
+  icons as today, so nothing visible moves); a coach in a team
   workspace cannot edit the club's catalog by design (D24); the colours are one palette for light and dark.
-- **Out of K2b-1:** athlete questions and their collection (K2b-2), notifications of a change of place or time, a
+- **Out of K2b-1:** questions to athletes (K2b-2 through the Tests module and its mapping into Metrics Core, D40), notifications of a change of place or time, a
   private coach's own places and details (Q6), groups of athletes (Q-C), absence reasons (D10), recurring events and
   copying, a club's edit of the `system` set, analytics over the details, the K2c roster rule, external schedules.
 
@@ -452,7 +459,8 @@ built from the address only (and absent without one), the auto-colour rule, no `
    now (recommended: the owner asked for the athlete's maps button, and today the athlete sees no event anywhere), or
    with K2b-2.
 2. **The boundary of D26** — coach details are event context kept in the calendar; anything an athlete answers is a
-   Metrics Core variable collected in K2b-2; no `filled_by = athlete` row in K2b-1 (recommended, section 10).
+   Metrics Core variable collected in K2b-2; no `filled_by = athlete` row in K2b-1 (recommended, section 10). *Answered:
+   D29, then refined by D40 — the questions go through the Tests module.*
 3. **Hiding an option of an answered detail** — allowed (recommended: old answers keep their label, new events cannot
    choose it), or never.
 4. **Required details and the status** — a required detail left empty after the event makes the card *Awaiting details*
@@ -505,7 +513,7 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | | Question | Decision |
 |---|---|---|
 | **D28** | Q1 | The athlete's *Upcoming events* on Athlete Home (14 days, name, type, day, time, place with its address and note, *Open in maps*) is built now, as the fifth slice **K2b-1e**. |
-| **D29** | Q2 | No athlete-filled details in K2b-1, not even as definitions: the coach's details are event context kept in the calendar; anything an athlete answers is a Metrics Core variable collected in K2b-2 (section 10). `filled_by` holds `coach` only. |
+| **D29** | Q2 | No athlete-filled details in K2b-1, not even as definitions: the coach's details are event context kept in the calendar; anything an athlete answers is a Metrics Core variable collected in K2b-2 (section 10). `filled_by` holds `coach` only. *How K2b-2 collects them: D40.* |
 | **D30** | Q3 | An option of a detail that already has answers may be hidden: old answers keep its label, new events cannot choose it; it may be shown again. |
 | **D31** | Q4 | A required detail left empty after the event's last day makes the card *Awaiting details*; optional details only show "n of m filled" in the panel. No reminder notification in K2b-1. |
 | **D32** | Q5 | The seed of section 3, with D23's match fields as seeded details of the *Match* type (opponent, home or away, our score, their score); no `is_match` column. |
@@ -516,6 +524,7 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | **D37** | Q10 | Types, details, options and places are archived, never deleted — used or not. |
 | **D38** | Q11 | Colours come from the closed palette of 12 (section 2.5). |
 | **D39** | Q12 | A detail's value is filled in only by the event's managers (the `canManage` of K2a 4.1). |
+| **D40** | (2026-11-02, the owner through the manager) | Questions to athletes go **only through the Tests module** (a questionnaire is a test; `test_parameters` numeric / integer / boolean / ordinal / text, `athlete_self`, its schedules and reminders). **K2b-2 = "Ask athletes"** on an event: a questionnaire from the Tests library, scheduled in one click for the event's athletes on its day with a window after it; Tests' notifications; the results in Tests and on the event's card; plus the **mapping of Tests parameters into Metrics Core** so the answers reach the Training Load dashboards (no new registry; `.claude/rules/metrics-core-mapping.md`). Replaces the earlier idea of athlete fields through the RPE channel as new variables. The split: coach fields = Details (K2b-1); RPE = Training Load; other questions to athletes = Tests (+ the mapping). |
 
 ## 17. K2b-1a as built (2026-11-01)
 
@@ -570,3 +579,35 @@ reviews READY WITH NON-BLOCKING NOTES, the code review NOT READY on one HIGH tha
 | Code LOW: 4d never resent the lost request's key | the same body with the same key writes as a first request | 4d |
 | Code LOW: the plan's §2.4, §5.1 and §6 disagreed with the code; an unused `LOCK_TIMEOUT` | corrected; removed | — |
 | Notes: `settingsClub` accepted the unreachable `platform_admin` basis; `eventWriteBasis`'s comment contradicted T6 | `club_admin` only (T6 enforced); the comment aligned | 2g |
+
+**The narrow re-reviews of the fixes** (`b78f95f..038fbd8`): `code-reviewer` READY WITH NON-BLOCKING NOTES (three LOW),
+`security-reviewer` READY, `db-reviewer` READY (one nit). Applied on the manager's order, without a new round:
+
+| Finding | Fix | Test |
+|---|---|---|
+| Code LOW: club B's first write on a moved team cleared club A's stored default without a trace in the change row | `details.staleDefaultCleared = true` (never A's place id) | 3k |
+| Code LOW: `savedAnswer` had no test | a test seam (`testHooks.answerFault`): a replay whose view cannot be read is `503 outcome_unknown`, then the plain replay | 4d |
+| DB nit: the rollback's "in the writers' order" overclaimed; a garbled phrase in the runbook | "best effort; a deadlock aborts one side (lock_timeout / deadlock detection)"; the phrase fixed | 1b |
+| DB note: M33 (the clubs lock's place) survived | a text assertion: the migration's first two statements are the lock_timeout and the clubs lock | 1a |
+
+**Mutations** (a scratch script outside the repository: each edits one source file, runs the K2b suite on a disposable
+database through the T1 runner, restores the file byte for byte): 33 run on `038fbd8`, **28 killed**, each by a named
+test of the suite (the freeze, the owner match, the place's club, a lost right at the lock, an archived detail as a new
+entry, the value's FOR SHARE, the palette, the seed, the last live type and its lock, the change log's club, the audit
+pair, the type FOR SHARE, a foreign subject or body id, a foreign or hidden option, the freeze pre-check, a direct
+delete, the same-key lock, the moved team's label, counts and default); **4 equivalent** — M6 (a team workspace let into
+`settingsClub`: the basis check still refuses), M7 / M7b (the hash without the club, the replay check without the
+club: each is the other's double guard), M24 (the team's club checked before the lock: the check after it still
+refuses); M33 (the clubs lock moved) survived then and is killed since by test 1a's text assertion. Two more on the
+final head: M34 (a saved answer's read failure answered as "nothing saved") killed by 4d, M35 (the stale default's
+clearing not audited) killed by 3k. **In all 35: 31 killed, 4 equivalent.**
+
+**Follow-ups recorded for the next slices (not done here):**
+- **K2b-1d:** the event form's static *Type* line falls back to the kind's word when `eventTypeLabel` is null (a moved
+  team's event), as the calendar card already does (`frontend/central-calendar-event-form.js`; the code and security
+  re-reviews).
+- **K2b-1b:** a moved team's events keep their old club's `location_id` and chosen details (the database judges them
+  only when set or changed); every read of an event's place, details and values shows them only when they belong to the
+  event owner's current club — otherwise club B would see club A's place, address and detail labels (the db and
+  security re-reviews' forward note). Whether a team with calendar events may move to another club at all is an owner
+  question.

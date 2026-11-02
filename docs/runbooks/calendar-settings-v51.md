@@ -30,8 +30,8 @@ The runner applies the migration in its own transaction and stops at the first f
 a few seconds: the seed is ten details, seventeen options and thirteen list entries per active club) v51 holds SHARE ROW
 EXCLUSIVE on `public.clubs` (taken first, so no club is created meanwhile and `POST /clubs` cannot deadlock with it),
 ACCESS EXCLUSIVE on `calendar.event_types`, `calendar.events`, `calendar.event_requests` and `calendar.event_changes`,
-and SHARE ROW EXCLUSIVE on the tables its new foreign keys reference (`users`, `teams`, `locations`' and the catalog's
-own); the old server's calendar traffic and writes to those tables queue behind it, and `lock_timeout = 5s` makes the
+and SHARE ROW EXCLUSIVE on the tables its new foreign keys reference (`users`, `teams`, and its own new tables); the old
+server's calendar traffic and writes to those tables queue behind it, and `lock_timeout = 5s` makes the
 migration fail rather than queue behind a long transaction (preflight block 7 is the quiet-moment check). While v51 is applied and the old server still serves during the
 deploy: its calendar reads and event writes work on v51 (no column they read or write changed; `events.location_id`
 is null; the align command still writes `update`, which the widened CHECK keeps); it has no settings route (`404`).

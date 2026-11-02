@@ -511,7 +511,7 @@ async function runSettingsCommand(ctx, { requestKey, canonical, subject }, apply
         // club's admin could write on for an event) takes no settings.
         const team = (await client.query(`select coalesce(t.is_active, true) as active, t.club_id from public.teams t where t.id = $1`, [subject.id])).rows[0];
         if (!team?.active || String(team.club_id) !== clubId) throw notFound();
-        row = (await client.query(`select team_id, revision from calendar.team_settings where team_id = $1 for update`, [subject.id])).rows[0] ?? null;
+        row = (await client.query(`select team_id, revision, default_location_id from calendar.team_settings where team_id = $1 for update`, [subject.id])).rows[0] ?? null;
       } else if (withId) {
         row = (await client.query(SUBJECT_ROW_SQL[subject.kind], [subject.id, clubId])).rows[0];
         if (!row) throw notFound();
@@ -520,6 +520,7 @@ async function runSettingsCommand(ctx, { requestKey, canonical, subject }, apply
     },
     sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && String(prior.club_id) === clubId,
     answer: async (queryable, stored, extra) => {
+      if (testHooks.answerFault) await testHooks.answerFault();
       if (String(stored.clubId) !== clubId) throw notFound();
       const view = await subjectView(queryable, clubId, stored.subjectKind, stored.subjectId);
       return { status: stored.httpStatus || 200, body: { ...view, ...extra } };
@@ -927,6 +928,12 @@ export async function updateTeam(ctx, teamId, body) {
     const details = {};
     if (after.colorKey !== before.colorKey) details.colorKey = pair(before.colorKey, after.colorKey);
     if (after.defaultLocationId !== before.defaultLocationId) details.defaultLocationId = pair(before.defaultLocationId, after.defaultLocationId);
+    // A stored default of another club (the team was moved) that the view
+    // masked and this write cleared: recorded as a flag, never with that
+    // club's place id (code re-review of K2b-1a, LOW).
+    if (row?.default_location_id && before.defaultLocationId === null && String(row.default_location_id) !== String(after.defaultLocationId ?? "")) {
+      details.staleDefaultCleared = true;
+    }
     if (!Object.keys(details).length) details.unchanged = true;
     return { httpStatus: 200, body: { team: after }, subjectKind: "team", subjectId: id, changes: [{ kind: "team", id, details }] };
   });

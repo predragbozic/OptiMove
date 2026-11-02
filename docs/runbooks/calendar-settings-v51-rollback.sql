@@ -14,12 +14,14 @@
 --     place, a team setting, an event's chosen detail or value, an event with
 --     a library place, a request or change of kind set_fields or
 --     align_sessions (the data would be lost).
--- The tables are locked ACCESS EXCLUSIVE before the row checks, in the
--- writers' order (an event command takes the event, then its type), so a row
--- written between the check and the drop is impossible and a writer in flight
--- waits or fails with its own bounded lock_timeout. Run it only after the
--- previous release serves again (the K2b-1a server stopped): the drops also
--- lock the tables the new foreign keys reference (users, clubs, teams). The seeded rows' updated_at (touched by v51's icon update)
+-- The tables are locked ACCESS EXCLUSIVE before the row checks, so a row
+-- written between the check and the drop is impossible. The order (events
+-- first, then the types) is best effort: no single order is free of a
+-- deadlock with an event command in flight, so a deadlock aborts one side
+-- (lock_timeout 10 s, or PostgreSQL's deadlock detection) and nothing is
+-- lost. Run it only after the previous release serves again (the K2b-1a
+-- server stopped): the drops also lock the tables the new foreign keys
+-- reference (users, clubs, teams). The seeded rows' updated_at (touched by v51's icon update)
 -- is not restored. Rehearsed on a disposable database by
 -- backend/tests/central-calendar-k2b-settings.test.mjs (apply -> rollback ->
 -- the v50 catalog digest identical -> re-apply; every refusal). The code of

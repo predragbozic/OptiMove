@@ -269,6 +269,12 @@ test("1a. v51 is recorded once, with its objects and the seed exactly; the post-
   assert.equal(Number(post[4].locks_on_calendar), 0, "block 5");
   assert.equal(Number(post[5].tables_granted), 0, "block 6");
   assert.equal(Number(post[6].clubs_without_details), 0, "block 7");
+  // The clubs lock is the migration's first statement after its lock_timeout
+  // (db review F1: before any DDL on calendar.*, in POST /clubs' order).
+  const migration = (await fsp.readFile(path.resolve(__dirname, "../../migrations_v2", V51), "utf8"))
+    .split(/\r?\n/).filter((line) => !line.trim().startsWith("--")).join("\n")
+    .split(/;\s*\n/).map((x) => x.trim()).filter(Boolean);
+  assert.deepEqual(migration.slice(0, 2), ["set local lock_timeout = '5s'", "lock table public.clubs in share row exclusive mode"]);
   // The system set is final (D35).
   await assert.rejects(q(`update calendar.event_fields set required = true, revision = revision + 1 where owner_scope = 'system' and key = 'weather'`), (e) => e.code === "23514");
   await assert.rejects(q(`update calendar.event_types set color_key = 'teal', revision = revision + 1 where owner_scope = 'system' and key = 'match'`), (e) => e.code === "23514");
@@ -869,6 +875,9 @@ test("3k. a team moved to another club (security review M1, L1): its events neve
   const written = await send(b.admin.cookie, "PUT", `/teams/${a.teamId}`, { expectedRevision: 1, colorKey: "sky" });
   assert.equal(written.status, 200, written.text);
   assert.equal((await q(`select default_location_id from calendar.team_settings where team_id = $1`, [a.teamId]))[0].default_location_id, null, "the stale default is cleared on B's write");
+  const audit = (await q(`select details from calendar.settings_changes where team_id = $1 order by revision desc limit 1`, [a.teamId]))[0].details;
+  assert.equal(audit.staleDefaultCleared, true, "the clearing is audited");
+  assert.ok(!JSON.stringify(audit).includes(place.body.location.id), "never with club A's place id");
   assert.deepEqual((await typesOf(coach.cookie)).body.teamDefaults, {});
 });
 
@@ -1034,6 +1043,17 @@ test("4d. the bounded COMMIT of the shared runner: a lost answer after a real CO
   const again = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
   assert.equal(again.status, 201, again.text);
   assert.equal(again.body.replayed, undefined);
+  // A saved request whose view cannot be read now: 503 outcome_unknown (Check
+  // result repeats the key), never "nothing was saved".
+  try {
+    hooks.answerFault = () => { throw new Error("read failed"); };
+    const unreadable = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
+    assert.deepEqual([unreadable.status, unreadable.body.error], [503, "outcome_unknown"], unreadable.text);
+  } finally {
+    delete hooks.answerFault;
+  }
+  const replayed = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
+  assert.deepEqual([replayed.status, replayed.body.replayed], [201, true]);
 });
 
 test("4e. the same key twice at once (a double submit while the first is before its COMMIT): one write, the second replays it — a create, and a team's first row", async () => {
