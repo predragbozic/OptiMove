@@ -168,53 +168,53 @@ export function mappedMetricSpecs(rows) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
   const notUsable = (blockReason) => ({ block: "mapping_not_usable", blockReason });
   const seen = new Set();
-  for (const row of rows) {
-    if (!REQUIREMENTS.has(row.requirement)) return notUsable("requirement");
-    if (row.versionStatus !== "active") return notUsable("version_not_active");
-    if (row.fieldState !== "active" || row.revisionState !== "active" || row.revisionEvidence !== "verified") return notUsable("revision_not_usable");
-    if (row.definitionState !== "active" || row.valueType !== "numeric") return notUsable("definition_not_usable");
-    if (row.definitionCurrentVersionId !== row.metricDefinitionVersionId) return notUsable("definition_version_changed");
-    if (!row.appliesToSession && !row.appliesToDrill) return notUsable("no_level");
-    const extractor = extractorFor({ sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey });
+  for (const activation of rows) {
+    if (!REQUIREMENTS.has(activation.requirement)) return notUsable("requirement");
+    if (activation.versionStatus !== "active") return notUsable("version_not_active");
+    if (activation.fieldState !== "active" || activation.revisionState !== "active" || activation.revisionEvidence !== "verified") return notUsable("revision_not_usable");
+    if (activation.definitionState !== "active" || activation.valueType !== "numeric") return notUsable("definition_not_usable");
+    if (activation.definitionCurrentVersionId !== activation.metricDefinitionVersionId) return notUsable("definition_version_changed");
+    if (!activation.appliesToSession && !activation.appliesToDrill) return notUsable("no_level");
+    const extractor = extractorFor({ sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey });
     if (!extractor) return notUsable("no_extractor");
     if (extractabilityCode({
-      sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey,
-      valueShape: row.revisionValueShape, parameterKind: row.revisionParameterKind, sourceParameters: row.sourceParameters,
+      sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey,
+      valueShape: activation.revisionValueShape, parameterKind: activation.revisionParameterKind, sourceParameters: activation.sourceParameters,
     }) !== null) return notUsable("not_extractable");
-    for (const [level, covered] of [["full", row.appliesToSession], ["drill", row.appliesToDrill]]) {
+    for (const [level, covered] of [["full", activation.appliesToSession], ["drill", activation.appliesToDrill]]) {
       if (!covered) continue;
-      const key = `${row.metricDefinitionId}|${level}`;
+      const key = `${activation.metricDefinitionId}|${level}`;
       if (seen.has(key)) return notUsable("target_twice");
       seen.add(key);
     }
-    if ([row.scale, row.scaleDivisor, row.offset].some((f) => canonicalDecimal(f) === null)) return notUsable("factors");
-    if ([row.minValue, row.maxValue].some((b) => b !== null && b !== undefined && canonicalDecimal(b) === null)) return notUsable("range");
+    if ([activation.scale, activation.scaleDivisor, activation.offset].some((f) => canonicalDecimal(f) === null)) return notUsable("factors");
+    if ([activation.minValue, activation.maxValue].some((b) => b !== null && b !== undefined && canonicalDecimal(b) === null)) return notUsable("range");
   }
-  if (rows.some((row) => row.sourceUnit !== row.revisionSourceUnit)) return { block: "source_unit_mismatch", blockReason: "source_unit" };
-  const specs = rows.map((row) => {
-    const extractor = extractorFor({ sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey });
-    const sourceParameters = row.sourceParameters;
+  if (rows.some((activation) => activation.sourceUnit !== activation.revisionSourceUnit)) return { block: "source_unit_mismatch", blockReason: "source_unit" };
+  const specs = rows.map((activation) => {
+    const extractor = extractorFor({ sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey });
+    const sourceParameters = activation.sourceParameters;
     return Object.freeze({
-      activationId: row.activationId,
-      mappingVersionId: row.mappingVersionId,
-      mappingId: row.mappingId,
-      sourceMetricVersionId: row.sourceMetricVersionId,
-      metricDefinitionId: row.metricDefinitionId,
-      metricDefinitionVersionId: row.metricDefinitionVersionId,
-      variableKey: row.definitionKey,
-      variableScope: row.definitionOwnerScope,
-      label: row.definitionLabel,
-      unit: row.targetUnit,
-      sourceUnit: row.revisionSourceUnit,
-      sourceMetricKey: row.sourceMetricKey,
-      sourceLabel: row.sourceLabel,
-      sourceParameterFingerprint: row.sourceParameterFingerprint,
-      requirement: row.requirement,
-      levels: Object.freeze({ full: row.appliesToSession === true, drill: row.appliesToDrill === true }),
-      factors: Object.freeze({ scale: canonicalDecimal(row.scale), divisor: canonicalDecimal(row.scaleDivisor), offset: canonicalDecimal(row.offset) }),
+      activationId: activation.activationId,
+      mappingVersionId: activation.mappingVersionId,
+      mappingId: activation.mappingId,
+      sourceMetricVersionId: activation.sourceMetricVersionId,
+      metricDefinitionId: activation.metricDefinitionId,
+      metricDefinitionVersionId: activation.metricDefinitionVersionId,
+      variableKey: activation.definitionKey,
+      variableScope: activation.definitionOwnerScope,
+      label: activation.definitionLabel,
+      unit: activation.targetUnit,
+      sourceUnit: activation.revisionSourceUnit,
+      sourceMetricKey: activation.sourceMetricKey,
+      sourceLabel: activation.sourceLabel,
+      sourceParameterFingerprint: activation.sourceParameterFingerprint,
+      requirement: activation.requirement,
+      levels: Object.freeze({ full: activation.appliesToSession === true, drill: activation.appliesToDrill === true }),
+      factors: Object.freeze({ scale: canonicalDecimal(activation.scale), divisor: canonicalDecimal(activation.scaleDivisor), offset: canonicalDecimal(activation.offset) }),
       range: Object.freeze({
-        min: row.minValue === null || row.minValue === undefined ? null : canonicalDecimal(row.minValue),
-        max: row.maxValue === null || row.maxValue === undefined ? null : canonicalDecimal(row.maxValue),
+        min: activation.minValue === null || activation.minValue === undefined ? null : canonicalDecimal(activation.minValue),
+        max: activation.maxValue === null || activation.maxValue === undefined ? null : canonicalDecimal(activation.maxValue),
       }),
       extract: (input) => extractor.extract(input, sourceParameters),
     });
@@ -319,8 +319,10 @@ export function buildGpexeImportPlan(bundle, { metricSpecs } = {}) {
         const extracted = spec.extract({ row, more, thresholds: bundle.teamThresholds, playerDetails });
         const at = { gpexeAthleteId, athleteSessionId: String(row.id), level, drillIndex };
         if (extracted.skip) {
-          const category = SKIP_CATEGORY[extracted.skip];
-          if (!category) throw new Error("an extractor answered an unknown skip code");
+          // A mapped spec's extractor is the registry's, whose every code has a
+          // category; a raw spec (the 7e preview, J11 R3) keeps its skip as it is.
+          const category = SKIP_CATEGORY[extracted.skip] ?? null;
+          if (!category && !spec.raw) throw new Error("an extractor answered an unknown skip code");
           leftOut.push({ ...at, ...(spec.raw ? { key: spec.key } : { activationId: spec.activationId }), category, code: extracted.skip });
           continue;
         }
@@ -437,7 +439,7 @@ export function classifyMappedPlan(plan, { importableIds, activationCount }) {
   if (records.some((record) => record.category === "shape")) return { block: "source_shape_mismatch" };
   const values = plan.participants
     .filter((p) => admitted.has(p.gpexeAthleteId))
-    .reduce((n, p) => n + p.results.reduce((m, r) => m + r.values.length, 0), 0);
+    .reduce((n, p) => n + p.results.reduce((m, result) => m + result.values.length, 0), 0);
   if (values === 0) return { block: "no_mapped_values" };
   return { block: null };
 }

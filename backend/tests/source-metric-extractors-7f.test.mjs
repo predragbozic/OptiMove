@@ -3,7 +3,8 @@
 // Pure: no database, no network. The registry against its table, the exact
 // decimal comparison (R2), the zone rules J7 leaves to 7f, the event
 // thresholds, two teams with two variables (OD1), a characterisation against
-// today's mapper (GPEXE_METRIC_SPECS) on the synthetic GPEXE bundles of
+// the frozen pre-9-B specs (support/gpexe-legacy-specs.mjs, the oracle since
+// 9-B removed them from the mapper) on the synthetic GPEXE bundles of
 // _gpexe-fixtures.mjs, and the architecture guards. The route enforcement (T4
 // create, A1, GET /fields) is source-metric-extractors-routes-7f.test.mjs.
 import { test } from "node:test";
@@ -14,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import {
   EXTRACTORS, ExtractorError, canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, sameDecimal, setExtractorFallbackForTests,
 } from "../src/sourceMetricExtractors.js";
-import { GPEXE_METRIC_SPECS, buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
+import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
+import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { BUNDLE_FIELDS, projectMore } from "../src/gpexeRestV1Adapter.js";
 import { defaultThresholds, makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 
@@ -235,8 +237,8 @@ const SPEC_TO_KEY = {
   gpexe_max_speed: ["athlete_session.max_v", {}, (raw) => raw * 3.6],
 };
 
-test("9. characterisation against today's mapper: on every row of the fixtures (whole session and drills), also as the rest_v1 adapter stores them with the real 1473 team thresholds, the registry with each spec's own bounds gives the same raw value and the same skip code", () => {
-  assert.deepEqual(Object.keys(SPEC_TO_KEY).sort(), GPEXE_METRIC_SPECS.map((s) => s.key).sort(), "every spec has its key");
+test("9. characterisation against the frozen pre-9-B specs: on every row of the fixtures (whole session and drills), also as the rest_v1 adapter stores them with the real 1473 team thresholds, the registry with each spec's own bounds gives the same raw value and the same skip code", () => {
+  assert.deepEqual(Object.keys(SPEC_TO_KEY).sort(), LEGACY_SPECS.map((s) => s.key).sort(), "every spec has its key");
   const variants = [
     makeBundle({ athletes: standardAthletes() }),
     makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 24], [24, 60], [60, 75], [75, null]], accThreshold: 3 }),
@@ -260,7 +262,7 @@ test("9. characterisation against today's mapper: on every row of the fixtures (
       const moreRow = bundle.more[String(row.id)];
       const details = row.drill === null ? bundle.details.full : bundle.details.drills?.[String(row.drill)];
       const input = { row, more: moreRow, thresholds: bundle.teamThresholds, playerDetails: details?.players?.[String(row.athlete)] ?? null };
-      for (const spec of GPEXE_METRIC_SPECS) {
+      for (const spec of LEGACY_SPECS) {
         const [key, params, convert] = SPEC_TO_KEY[spec.key];
         const today = spec.extract(input);
         const ours = G(key).extract(input, params);
@@ -271,8 +273,9 @@ test("9. characterisation against today's mapper: on every row of the fixtures (
     }
   }
   assert.ok(compared > 150, `compared ${compared}`);
-  // The plan built by today's mapper is unchanged by 7f (the importer is M4's).
-  assert.equal(buildGpexeImportPlan(variants[0]).participants.length, 2);
+  // The plan's gates keep the same participants with the oracle specs (raw).
+  const raw = LEGACY_SPECS.map((s) => ({ raw: true, key: s.key, levels: { full: true, drill: true }, extract: s.extract }));
+  assert.equal(buildGpexeImportPlan(variants[0], { metricSpecs: raw }).participants.length, 2);
 });
 
 test("10. extract only ever answers a finite number or a skip code, whatever the bundle holds", () => {
@@ -329,14 +332,14 @@ function sourceFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? sourceFiles(path.join(dir, d.name)) : d.name.endsWith(".js") ? [path.join(dir, d.name)] : []));
 }
 
-test("13. architecture: no module of backend/src sets the test seam; only the registry, today's mapper (until M4) and the adapter's projection name the /more/ zone and event fields; the M2 services check through the registry", () => {
+test("13. architecture: no module of backend/src sets the test seam; only the registry and the adapter's projection name the /more/ zone and event fields (the 9-B mapper reads them only through the registry); the M2 services check through the registry", () => {
   const files = sourceFiles(SRC);
   const rel = (f) => path.relative(SRC, f).replace(/\\/g, "/");
   for (const f of files) {
     const text = fs.readFileSync(f, "utf8");
     if (rel(f) !== "sourceMetricExtractors.js") assert.doesNotMatch(text, /setExtractorFallbackForTests/, `${rel(f)} sets the test seam`);
     if (/complementary_data|_events_count|_events_threshold_value/.test(text)) {
-      assert.ok(["sourceMetricExtractors.js", "gpexeImportMapper.js", "gpexeRestV1Adapter.js"].includes(rel(f)), `${rel(f)} reads a /more/ zone or event field outside the registry`);
+      assert.ok(["sourceMetricExtractors.js", "gpexeRestV1Adapter.js"].includes(rel(f)), `${rel(f)} reads a /more/ zone or event field outside the registry`);
     }
   }
   const service = fs.readFileSync(path.join(SRC, "sourceMetricMappingService.js"), "utf8");
