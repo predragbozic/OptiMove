@@ -191,7 +191,9 @@ async function world() {
 
   // X: A1's session with the system, team, two club-A and two club-B
   // variables, written by a platform admin who coaches A1, in A1's workspace.
-  W.actX = await recorded(W.paCoachA1, W.athA1.id, [W.sysVar, W.clubVarA, W.clubVarHtml, W.clubVarB, W.clubVarB2, W.teamVarA1]);
+  // Club B's two variables are written larger id first (test 14).
+  W.clubBDesc = [W.clubVarB, W.clubVarB2].sort((a, b) => (a.id < b.id ? 1 : -1));
+  W.actX = await recorded(W.paCoachA1, W.athA1.id, [W.sysVar, W.clubVarA, W.clubVarHtml, ...W.clubBDesc, W.teamVarA1]);
   // Y: A1's session with club B's variable, written by club B's admin who
   // coaches A1, in A1's workspace (the role-wide catalog admits it).
   W.actY = await recorded(W.caBcoachA1, W.athA1.id, [W.sysVar, W.clubVarB]);
@@ -359,7 +361,7 @@ test("11. the C99 check's errors propagate: a read bound reached is the stable 5
   assert.ok((await names(W.coachA1, W.actX)).variableNamesById[W.clubVarA.id]);
 });
 
-test("12. an administrator with no coach role on the team gets no team workspace, so no name: club A's admin whose preference names A1 falls back to the club workspace and reads {}; a coach whose role on A1 is revoked no longer reads A1's session as its coach", async () => {
+test("12. an administrator with no coach role on the team gets no name: club A's admin whose stored preference names A1 (a team workspace needs a coach role) reads {}; a coach whose role on A1 is revoked loses the team workspace at the next request (403, no names)", async () => {
   const stale = await person("club-admin-a-stale-team-pref", { clubAdminOf: [W.clubA], ws: ["team", W.teamA1] });
   const body = await names(stale, W.actX);
   assert.deepEqual(body.variableNamesById, {}, "the club workspace it falls back to names nothing");
@@ -367,11 +369,11 @@ test("12. an administrator with no coach role on the team gets no team workspace
   assert.ok((await names(revoked, W.actX)).variableNamesById[W.clubVarA.id], "named while the role is active");
   await k.query(`update public.user_team_roles set is_active = false where user_id = $1`, [revoked.id]);
   const after = await read(revoked, W.actX);
-  assert.notEqual(after.status, 200, after.text);
+  assert.equal(after.status, 403, after.text);
   assert.equal(after.body.variableNamesById, undefined);
 });
 
-test("13. a team with members cannot be moved to another club, not even by raw SQL (the route refuses it as team_club_fixed, the database by the memberships' foreign key): the old club's names stay the team's and the new club's never become them", async () => {
+test("13. a team with a membership row cannot be moved to another club, not even by raw SQL (the memberships' foreign key; the route's own team_club_fixed is pinned by organization-team-club-fixed): the old club's names stay the team's and the new club's never become them", async () => {
   const teamA3 = await team(W.clubA);
   const coachA3 = await person("coach-a3", { coachOf: [teamA3], ws: ["team", teamA3] });
   const writer = await person("platform-admin-coach-a3", { platform: true, coachOf: [teamA3], ws: ["team", teamA3] });
@@ -383,6 +385,17 @@ test("13. a team with members cannot be moved to another club, not even by raw S
 });
 
 test("14. the roster's placeholder columns are numbered by the sorted definition ids, the same for every viewer and every read", async () => {
+  // The numbering itself, whatever order the rows arrive in (the result
+  // function has no ORDER BY, so the database's order is not controllable).
+  // Imported here: the module's database pool must see the disposable URL.
+  const { unnamedMetricKeys } = await import("../src/activityRoster.js");
+  const ids = ["c0000000-0000-4000-8000-000000000000", "a0000000-0000-4000-8000-000000000000", "b0000000-0000-4000-8000-000000000000", "a0000000-0000-4000-8000-000000000000"];
+  assert.deepEqual([...unnamedMetricKeys(ids)], [
+    ["a0000000-0000-4000-8000-000000000000", "#unnamed-1"],
+    ["b0000000-0000-4000-8000-000000000000", "#unnamed-2"],
+    ["c0000000-0000-4000-8000-000000000000", "#unnamed-3"],
+  ]);
+  assert.deepEqual([...unnamedMetricKeys([...ids].reverse())], [...unnamedMetricKeys(ids)]);
   const keysFor = async (who) => {
     const res = await call(`/api/training-activity/${W.actX}/roster`, { cookie: who.cookie });
     assert.equal(res.status, 200, res.text);
@@ -391,7 +404,9 @@ test("14. the roster's placeholder columns are numbered by the sorted definition
   };
   const first = await keysFor(W.coachA1);
   const sortedIds = [W.clubVarB.id, W.clubVarB2.id].sort();
-  const valueOf = (id) => (id === W.clubVarB.id ? 103 : 104); // X's values: sysVar 100, clubVarA 101, clubVarHtml 102, clubVarB 103, clubVarB2 104
+  // X's values by position: sysVar 100, clubVarA 101, clubVarHtml 102, then club B's larger id 103 and smaller id 104,
+  // so #unnamed-1 (the smaller id) must carry 104: numbering by the written order would give it 103.
+  const valueOf = (id) => (id === W.clubBDesc[0].id ? 103 : 104);
   assert.deepEqual(first, sortedIds.map((id, i) => `#unnamed-${i + 1}=${valueOf(id)}`).sort());
   for (const who of [W.coachA1, W.caA, W.pa]) assert.deepEqual(await keysFor(who), first);
 });

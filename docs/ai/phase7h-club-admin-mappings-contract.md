@@ -1319,10 +1319,11 @@ section" that O2 names: the screens, exactly, and what the read returns.
   membership): an activity's facts come only from metric events of the identical owner (the v2 trigger
   `activity_metric_event_links_check_owner`; a merge or reparent never changes the owner), and the measurement write
   admits every definition the writer's role-wide catalog shows. So a user who also administers club B (or a platform
-  admin) and coaches team A1 can record B's variable in A1's results. A team cannot move to another club: the route
-  refuses it (`team_club_fixed`) and, once the team has a member, so does the database (the foreign key
-  `athlete_memberships_team_club_fkey`). The `owner_club_id` condition is what keeps B's name out of A1's results; the
-  suite writes B's variable exactly that way, through the real routes, and pins the refused move.
+  admin) and coaches team A1 can record B's variable in A1's results. Moving a team to another club: the route refuses
+  it (`team_club_fixed`); the database refuses it for any team with a membership row (the foreign key
+  `athlete_memberships_team_club_fkey`, archived memberships included); a team with none can still be moved by raw SQL
+  (section 1.4), and its results then follow its new club. The `owner_club_id` condition is what keeps B's name out of
+  A1's results; the suite writes B's variable exactly that way, through the real routes, and pins the refused move.
 - **Known limits.** A user who holds club B's admin role sees B's names through the catalog in every workspace,
   because `catalogVisibilitySql` is built from every role the user holds; unchanged by C127's decision. The column
   picker's layout is the existing one (CURRENT_STATE: "the 'Choose metrics' picker is unusable at about 515 px width");

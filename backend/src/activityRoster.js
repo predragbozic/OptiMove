@@ -251,6 +251,14 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
   return { canonicalId, activity, team, basis, hasRoster };
 }
 
+// 7h-V: the placeholder keys of the unnamed variables of one answer, by the
+// sorted definition ids (exported for its test).
+export function unnamedMetricKeys(definitionIds) {
+  return new Map([...new Set(definitionIds.map((id) => String(id ?? "")))]
+    .sort()
+    .map((id, i) => [id, `#unnamed-${i + 1}`]));
+}
+
 // Everything the roster rests on, read with the given client: inside the
 // read's REPEATABLE READ snapshot, or inside a command's transaction after
 // its locks (and after its own writes, which it then sees).
@@ -288,13 +296,13 @@ export async function loadRosterSnapshot(client, canonicalId) {
   );
   // An unnamed variable keeps a column of its own (the screen groups values
   // by key): a placeholder key per definition, in a shape no definition key
-  // has ("#"), numbered in this answer by the sorted definition ids - stable
-  // between reloads and viewers whatever the row order - so two unnamed
+  // has ("#"), numbered in this answer by the sorted definition ids - the same
+  // for every viewer and read of the same facts, whatever the row order (a new
+  // unnamed variable may renumber; the screen groups by key within one answer
+  // only and keeps nothing) - so two unnamed
   // variables never share a column and the definition's own key and id never
   // leave here.
-  const unnamedKeys = new Map([...new Set(factRows.filter((r) => !r.metric_named).map((r) => String(r.metric_definition_id ?? "")))]
-    .sort()
-    .map((id, i) => [id, `#unnamed-${i + 1}`]));
+  const unnamedKeys = unnamedMetricKeys(factRows.filter((r) => !r.metric_named).map((r) => r.metric_definition_id));
   const unnamedKeyOf = (definitionId) => unnamedKeys.get(String(definitionId ?? ""));
   const facts = factRows.map((r) => ({
     athleteId: String(r.athlete_id), entryMethod: r.entry_method, occasionId: r.occasion_id,
