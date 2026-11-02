@@ -1,6 +1,6 @@
-// GPEXE -> Training Load import plan (pilot). Pure: no database, no
-// network, no file access — it turns already-fetched GPEXE REST responses
-// into a provider-neutral plan that gpexeImportWriter.js writes.
+// GPEXE -> Training Load import plan. Pure: no database, no network, no file
+// access - it turns already-fetched GPEXE REST responses into a
+// provider-neutral plan that gpexeImportWriter.js writes.
 //
 // Every rule below was verified against real GPEXE v6 responses (team 980,
 // session 186942), not against the 2020 handbook, whose examples differ:
@@ -16,15 +16,19 @@
 //   the whole session, drill === n is drill n. Every row's teamsession is
 //   the parent session. The whole-session value already equals the sum of
 //   the drills, so the two levels are stored separately and never added.
-// - /more/ carries per-row zone distances (complementary_data) with each
-//   zone's boundaries, and event counts with their thresholds.
+// - The /more/ answer carries per-row zone distances with each zone's
+//   boundaries, and event counts with their thresholds.
 //
-// Only values GPEXE itself reports are imported: one GPEXE field, or one
-// GPEXE zone exactly as GPEXE delimits it, at most unit-converted. Values
-// computed from several GPEXE values (m/min, Acc+Dec, Burst+brakes, and
-// HMLD / EXP as sums of power zones) are NOT imported: they belong to a
-// future OptiMove derived metrics feature with a formula and a formula
-// version (GPEXE_DERIVED_NOT_IMPORTED).
+// Since phase 9 (9-B, contract J17) the importer has no metric list of its
+// own: every value comes from an open mapping activation of the team's GPEXE
+// binding, read by the extractor registry (sourceMetricExtractors.js) with the
+// version's source parameters, converted exactly at the storage scale and
+// written as the version's pinned canonical variable. mappedMetricSpecs()
+// turns the locked activation rows into those specs; buildGpexeImportPlan()
+// applies them at the levels each version covers; classifyMappedPlan() sorts
+// the outcome into the whole-candidate blocks and the values left out.
+import { canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, SKIP_CATEGORY } from "./sourceMetricExtractors.js";
+import { convertAtStorageScale } from "./sourceMetricPreview.js";
 
 export const GPEXE_SOURCE_SYSTEM = "gpexe";
 
@@ -55,37 +59,6 @@ function finiteNumber(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Distance of the ONE GPEXE zone whose extremes are exactly [lower, upper]
-// (upper null = open top zone), as GPEXE reports it. Both boundaries must be
-// team thresholds valid on the session date and the zone must exist with
-// exactly those extremes, so a changed or added threshold (e.g. 25 -> 24
-// W/kg, or a new 50 W/kg split) skips the metric instead of importing a
-// zone with a different meaning. Nothing is summed.
-function zoneDistance(zones, configuredThresholds, [lower, upper]) {
-  if (!Array.isArray(configuredThresholds) || [lower, upper].some((b) => b !== null && !configuredThresholds.includes(b))) return { skip: "team_threshold_missing" };
-  if (configuredThresholds.some((t) => t > lower && (upper === null || t < upper))) return { skip: "team_threshold_split" };
-  if (!Array.isArray(zones) || zones.length === 0) return { skip: "zones_missing" };
-  const matching = zones.filter((z) => Array.isArray(z?.extremes) && z.extremes[0] === lower && (z.extremes[1] ?? null) === upper);
-  if (matching.length > 1) return { skip: "zone_boundary_ambiguous" };
-  if (matching.length === 0) return { skip: "zone_boundary_missing" };
-  if (matching[0].is_ready !== true) return { skip: "zones_not_ready" };
-  const distance = finiteNumber(matching[0].distance);
-  return distance === null ? { skip: "zone_distance_missing" } : { value: distance };
-}
-
-function powerZoneSpec(lower, upper) {
-  const range = upper === null ? `≥${lower}` : `${lower}–${upper}`;
-  return {
-    key: upper === null ? `gpexe_power_zone_${lower}_plus_distance` : `gpexe_power_zone_${lower}_${upper}_distance`,
-    label: `GPEXE zona snage ${range} W/kg`, unit: "m", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: {
-      field: "more.complementary_data.power[].distance", sourceUnit: "m", zoneUnit: "W/kg", gpexeZoneExtremes: [lower, upper],
-      teamThresholdField: "power_thresholds", conversion: null,
-    },
-    extract: ({ more, thresholds }) => zoneDistance(more?.complementary_data?.power, thresholds?.power_thresholds, [lower, upper]),
-  };
-}
-
 // GPEXE may report a threshold as a number or as a numeric string. The set is
 // stored and hashed as provenance, so it is normalized to numbers first: a
 // changed representation of the same set must not read as a changed set.
@@ -98,92 +71,6 @@ function numberArrayOrNull(raw) {
   const numbers = raw.map(finiteNumber);
   return numbers.some((n) => n === null) ? null : numbers;
 }
-
-function eventCount(events, prefix, expectedThreshold, expectedDuration) {
-  if (!events) return { skip: "events_missing" };
-  if (events[`${prefix}_threshold_value`] !== expectedThreshold) return { skip: "threshold_mismatch" };
-  if (events[`${prefix}_duration`] !== expectedDuration) return { skip: "duration_mismatch" };
-  const count = finiteNumber(events[`${prefix}_count`]);
-  if (count === null) return { skip: "count_missing" };
-  return { value: count };
-}
-
-function detailsNumber(playerDetails, field) {
-  if (!playerDetails) return { skip: "details_not_fetched" };
-  const entry = playerDetails[field];
-  if (!entry) return { skip: "field_missing" };
-  if (entry.unit !== "number") return { skip: "unexpected_unit" };
-  const value = finiteNumber(entry.value);
-  return value === null ? { skip: "value_missing" } : { value };
-}
-
-// definition: "confirmed" = source field, unit and meaning proven on real
-// responses; "unconfirmed" = a real GPEXE value whose own definition is not
-// confirmed yet — imported under a label that says so.
-// sourceContext is stored with the metric definition version and is part of
-// every imported value's content hash.
-export const GPEXE_METRIC_SPECS = [
-  {
-    key: "gpexe_time_min", label: "TIME", unit: "min", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: { field: "athlete_session.total_time", sourceUnit: "s", conversion: "divide by 60" },
-    extract: ({ row }) => {
-      const seconds = finiteNumber(row.total_time);
-      return seconds === null ? { skip: "total_time_missing" } : { value: seconds / 60 };
-    },
-  },
-  {
-    key: "gpexe_total_distance", label: "TotDist", unit: "m", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: { field: "athlete_session.total_distance", sourceUnit: "m", conversion: null },
-    extract: ({ row }) => {
-      const meters = finiteNumber(row.total_distance);
-      return meters === null ? { skip: "total_distance_missing" } : { value: meters };
-    },
-  },
-  powerZoneSpec(25, 60),
-  powerZoneSpec(60, 75),
-  powerZoneSpec(75, null),
-  {
-    key: "gpexe_acceleration_events", label: "GPEXE acceleration events ≥2.5 m/s²", unit: "n", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: { field: "more.events.acceleration_events_count", sourceUnit: "n", thresholdMps2: 2.5, minDurationS: 0.3, conversion: null },
-    extract: ({ more }) => eventCount(more?.events, "acceleration_events", 2.5, 0.3),
-  },
-  {
-    key: "gpexe_deceleration_events", label: "GPEXE deceleration events ≤−2.5 m/s²", unit: "n", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: { field: "more.events.deceleration_events_count", sourceUnit: "n", thresholdMps2: -2.5, minDurationS: 0.3, conversion: null },
-    extract: ({ more }) => eventCount(more?.events, "deceleration_events", -2.5, 0.3),
-  },
-  {
-    key: "gpexe_sprint_distance_7mps", label: "Sprint distanca ≥25,2 km/h", unit: "m", dailyAggregationMethod: "sum", definition: "confirmed",
-    sourceContext: { field: "more.complementary_data.speed[].distance", sourceUnit: "m", zoneUnit: "m/s", gpexeZoneExtremes: [7, null], gpexeThresholdMps: 7, equalsKmh: 25.2, teamThresholdField: "speed_thresholds", conversion: null },
-    extract: ({ more, thresholds }) => zoneDistance(more?.complementary_data?.speed, thresholds?.speed_thresholds, [7, null]),
-  },
-  {
-    key: "gpexe_burst_events", label: "GPEXE burst events (definicija nepotvrđena)", unit: "n", dailyAggregationMethod: "sum", definition: "unconfirmed",
-    sourceContext: { field: "details.players[athlete].tot_burst_events", sourceUnit: "n", thresholds: "not reported by the GPEXE API", conversion: null },
-    extract: ({ playerDetails }) => detailsNumber(playerDetails, "tot_burst_events"),
-  },
-  {
-    key: "gpexe_brake_events", label: "GPEXE brake events (definicija nepotvrđena)", unit: "n", dailyAggregationMethod: "sum", definition: "unconfirmed",
-    sourceContext: { field: "details.players[athlete].tot_brake_events", sourceUnit: "n", thresholds: "not reported by the GPEXE API", conversion: null },
-    extract: ({ playerDetails }) => detailsNumber(playerDetails, "tot_brake_events"),
-  },
-  {
-    key: "gpexe_max_speed", label: "SPEEDmax", unit: "km/h", dailyAggregationMethod: "max", definition: "confirmed",
-    sourceContext: { field: "athlete_session.max_v", sourceUnit: "m/s", conversion: "multiply by 3.6" },
-    extract: ({ row }) => {
-      const mps = finiteNumber(row.max_v);
-      return mps === null ? { skip: "max_v_missing" } : { value: mps * 3.6 };
-    },
-  },
-];
-
-export const GPEXE_DERIVED_NOT_IMPORTED = [
-  { label: "m/min", formula: "gpexe_total_distance / gpexe_time_min" },
-  { label: "Acc+Dec", formula: "gpexe_acceleration_events + gpexe_deceleration_events" },
-  { label: "Burst&brakes", formula: "gpexe_burst_events + gpexe_brake_events" },
-  { label: "HMLD ≥25 W/kg (m)", formula: "gpexe_power_zone_25_60_distance + gpexe_power_zone_60_75_distance + gpexe_power_zone_75_plus_distance" },
-  { label: "EXPDist ≥60 W/kg (m)", formula: "gpexe_power_zone_60_75_distance + gpexe_power_zone_75_plus_distance" },
-];
 
 function parseNaiveUtc(naive, field) {
   if (typeof naive !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(naive)) {
@@ -266,6 +153,75 @@ function validateTeamThresholds(thresholds, session, startInstant) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The specs: one per open activation of the binding (J17 section 3, step 7)
+// ---------------------------------------------------------------------------
+const REQUIREMENTS = new Set(["required", "optional"]);
+
+// rows: the locked activation rows of gpexeImportMapping.js
+// (readOpenActivations), in T5 id order. Answers { specs } or
+// { block, blockReason } - "mapping_not_usable" when a row cannot be read or
+// written as it stands, "source_unit_mismatch" when the version's source unit
+// is not its revision's proven unit (defence in depth beside the T6 guard).
+// Never a bound, threshold or factor from code: every one is the version's.
+export function mappedMetricSpecs(rows) {
+  if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
+  const notUsable = (blockReason) => ({ block: "mapping_not_usable", blockReason });
+  const seen = new Set();
+  for (const row of rows) {
+    if (!REQUIREMENTS.has(row.requirement)) return notUsable("requirement");
+    if (row.versionStatus !== "active") return notUsable("version_not_active");
+    if (row.fieldState !== "active" || row.revisionState !== "active" || row.revisionEvidence !== "verified") return notUsable("revision_not_usable");
+    if (row.definitionState !== "active" || row.valueType !== "numeric") return notUsable("definition_not_usable");
+    if (row.definitionCurrentVersionId !== row.metricDefinitionVersionId) return notUsable("definition_version_changed");
+    if (!row.appliesToSession && !row.appliesToDrill) return notUsable("no_level");
+    const extractor = extractorFor({ sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey });
+    if (!extractor) return notUsable("no_extractor");
+    if (extractabilityCode({
+      sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey,
+      valueShape: row.revisionValueShape, parameterKind: row.revisionParameterKind, sourceParameters: row.sourceParameters,
+    }) !== null) return notUsable("not_extractable");
+    for (const [level, covered] of [["full", row.appliesToSession], ["drill", row.appliesToDrill]]) {
+      if (!covered) continue;
+      const key = `${row.metricDefinitionId}|${level}`;
+      if (seen.has(key)) return notUsable("target_twice");
+      seen.add(key);
+    }
+    if ([row.scale, row.scaleDivisor, row.offset].some((f) => canonicalDecimal(f) === null)) return notUsable("factors");
+    if ([row.minValue, row.maxValue].some((b) => b !== null && b !== undefined && canonicalDecimal(b) === null)) return notUsable("range");
+  }
+  if (rows.some((row) => row.sourceUnit !== row.revisionSourceUnit)) return { block: "source_unit_mismatch", blockReason: "source_unit" };
+  const specs = rows.map((row) => {
+    const extractor = extractorFor({ sourceSystem: row.sourceSystem, apiFamily: row.apiFamily, sourceMetricKey: row.sourceMetricKey });
+    const sourceParameters = row.sourceParameters;
+    return Object.freeze({
+      activationId: row.activationId,
+      mappingVersionId: row.mappingVersionId,
+      mappingId: row.mappingId,
+      sourceMetricVersionId: row.sourceMetricVersionId,
+      metricDefinitionId: row.metricDefinitionId,
+      metricDefinitionVersionId: row.metricDefinitionVersionId,
+      variableKey: row.definitionKey,
+      variableScope: row.definitionOwnerScope,
+      label: row.definitionLabel,
+      unit: row.targetUnit,
+      sourceUnit: row.revisionSourceUnit,
+      sourceMetricKey: row.sourceMetricKey,
+      sourceLabel: row.sourceLabel,
+      sourceParameterFingerprint: row.sourceParameterFingerprint,
+      requirement: row.requirement,
+      levels: Object.freeze({ full: row.appliesToSession === true, drill: row.appliesToDrill === true }),
+      factors: Object.freeze({ scale: canonicalDecimal(row.scale), divisor: canonicalDecimal(row.scaleDivisor), offset: canonicalDecimal(row.offset) }),
+      range: Object.freeze({
+        min: row.minValue === null || row.minValue === undefined ? null : canonicalDecimal(row.minValue),
+        max: row.maxValue === null || row.maxValue === undefined ? null : canonicalDecimal(row.maxValue),
+      }),
+      extract: (input) => extractor.extract(input, sourceParameters),
+    });
+  });
+  return { block: null, specs };
+}
+
 // bundle = {
 //   teamSession: GET team_session/:id/,
 //   athleteSessions: [GET athlete_session/:id/, ...] (whole + drill rows),
@@ -274,7 +230,13 @@ function validateTeamThresholds(thresholds, session, startInstant) {
 //   teamThresholds: GET team/:team/thresholds/?valid_on=<session day>,
 //   details: { full: GET team_session/:id/details/, drills: { [n]: ...details/?drill=n } },
 // }
-export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS } = {}) {
+//
+// metricSpecs (required): the specs of mappedMetricSpecs(), or test / preview
+// specs { raw: true, key, levels, extract } whose values are kept unconverted
+// (the 7e preview and the characterisation oracle). A result exists only for a
+// row whose level at least one spec covers; [] builds the gates alone.
+export function buildGpexeImportPlan(bundle, { metricSpecs } = {}) {
+  if (!Array.isArray(metricSpecs)) throw new TypeError("metricSpecs must be an array");
   const session = bundle?.teamSession;
   if (!session?.id) throw new GpexeMappingError("session_missing", "teamSession is required.");
   if (session.is_stats_valid !== true) throw new GpexeMappingError("session_stats_invalid", `team_session ${session.id} has is_stats_valid=${session.is_stats_valid}.`);
@@ -307,7 +269,7 @@ export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS 
 
   const timezones = new Set();
   const participants = [];
-  const metricSkips = [];
+  const leftOut = [];
   for (const [gpexeAthleteId, athleteRows] of [...byAthlete.entries()].sort(([a], [b]) => Number(a) - Number(b))) {
     const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
     if (trackIds.length > 1) {
@@ -350,14 +312,51 @@ export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS 
       }
       const details = level === "full" ? bundle.details?.full : bundle.details?.drills?.[String(drillIndex)];
       const playerDetails = details?.players?.[gpexeAthleteId] ?? null;
+      const covering = metricSpecs.filter((spec) => spec.levels?.[level] === true);
+      if (covering.length === 0) continue;
       const values = [];
-      for (const spec of metricSpecs) {
+      for (const spec of covering) {
         const extracted = spec.extract({ row, more, thresholds: bundle.teamThresholds, playerDetails });
+        const at = { gpexeAthleteId, athleteSessionId: String(row.id), level, drillIndex };
         if (extracted.skip) {
-          metricSkips.push({ gpexeAthleteId, athleteSessionId: String(row.id), level, drillIndex, metricKey: spec.key, reason: extracted.skip });
+          const category = SKIP_CATEGORY[extracted.skip];
+          if (!category) throw new Error("an extractor answered an unknown skip code");
+          leftOut.push({ ...at, ...(spec.raw ? { key: spec.key } : { activationId: spec.activationId }), category, code: extracted.skip });
           continue;
         }
-        values.push({ metricKey: spec.key, value: extracted.value, unit: spec.unit, sourceContext: spec.sourceContext });
+        if (spec.raw) {
+          values.push({ key: spec.key, value: extracted.value });
+          continue;
+        }
+        const sourceValue = canonicalDecimal(extracted.value);
+        if (sourceValue === null) throw new Error("an extracted value is not a decimal");
+        // D8: exact, rounded once at the storage scale; the stored value is
+        // this text, never a binary double (J17 section 3, step 10).
+        const value = convertAtStorageScale(sourceValue, spec.factors);
+        // R8: a converted value outside the pinned canonical version's limits is
+        // left out (C110 form B); it is never returned, logged or written.
+        if ((spec.range.min !== null && compareDecimal(value, spec.range.min) < 0)
+          || (spec.range.max !== null && compareDecimal(value, spec.range.max) > 0)) {
+          leftOut.push({ ...at, activationId: spec.activationId, category: "range", code: "canonical_value_out_of_range" });
+          continue;
+        }
+        values.push({
+          activationId: spec.activationId,
+          mappingVersionId: spec.mappingVersionId,
+          mappingId: spec.mappingId,
+          sourceMetricVersionId: spec.sourceMetricVersionId,
+          metricDefinitionId: spec.metricDefinitionId,
+          metricDefinitionVersionId: spec.metricDefinitionVersionId,
+          variableKey: spec.variableKey,
+          variableScope: spec.variableScope,
+          label: spec.label,
+          unit: spec.unit,
+          value,
+          sourceValue,
+          sourceUnit: spec.sourceUnit,
+          sourceMetricKey: spec.sourceMetricKey,
+          sourceParameterFingerprint: spec.sourceParameterFingerprint,
+        });
       }
       results.push({
         externalId: level === "full" ? `athlete_session:${row.id}:full` : `athlete_session:${row.id}:drill:${drillIndex}`,
@@ -408,26 +407,79 @@ export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS 
       timezone,
       sourceReportedAt: sourceReportedAt.toISOString(),
     },
-    metrics: metricSpecs.map(({ key, label, unit, dailyAggregationMethod, definition, sourceContext }) => ({ key, label, unit, dailyAggregationMethod, definition, sourceContext })),
     segments,
     participants,
     anomalies,
-    metricSkips,
-    derivedNotImported: GPEXE_DERIVED_NOT_IMPORTED,
+    leftOut,
+    // The preview hash's activation set (J17 section 3, step 11).
+    activationSet: metricSpecs
+      .filter((spec) => !spec.raw)
+      .map((spec) => [spec.activationId, spec.mappingVersionId])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Classification (J17 section 3, step 8; decision D3 of 9-B)
+// ---------------------------------------------------------------------------
+// The whole-candidate outcome of a mapped plan: the first block that applies
+// to the athletes the import admits (the linked active members, importableIds;
+// when none is linked, every participant, so a session nobody is linked to
+// yet keeps today's "link athletes" answer when the mapping gives values):
+// a threshold-contract skip, then a shape skip, then no value at all. Values
+// left out (C110) never block.
+export function classifyMappedPlan(plan, { importableIds, activationCount }) {
+  if (!activationCount) return { block: "no_mapped_values" };
+  const importable = new Set([...(importableIds ?? [])].map(String));
+  const admitted = importable.size > 0 ? importable : new Set(plan.participants.map((p) => p.gpexeAthleteId));
+  const records = plan.leftOut.filter((record) => admitted.has(record.gpexeAthleteId));
+  if (records.some((record) => record.category === "threshold_contract")) return { block: "source_threshold_contract_mismatch" };
+  if (records.some((record) => record.category === "shape")) return { block: "source_shape_mismatch" };
+  const values = plan.participants
+    .filter((p) => admitted.has(p.gpexeAthleteId))
+    .reduce((n, p) => n + p.results.reduce((m, r) => m + r.values.length, 0), 0);
+  if (values === 0) return { block: "no_mapped_values" };
+  return { block: null };
+}
+
+// The reason of one value left out (C110, form B): a required value that is
+// missing reads required_value_missing, a value outside the variable's
+// limits canonical_value_out_of_range, any other the extractor's own code.
+// sourceReason (the extractor's code) is for the two administrators only.
+export function leftOutReason(spec, record) {
+  if (record.category === "range") return { reason: "canonical_value_out_of_range", sourceReason: record.code };
+  if (record.category === "missing" && spec?.requirement === "required") return { reason: "required_value_missing", sourceReason: record.code };
+  return { reason: record.code, sourceReason: record.code };
+}
+
+// R12: the Link athletes helper values of one whole-session row, read through
+// the three athlete_session extractors in the source units (s, m, m/s),
+// independent of any activation; null where the row has none.
+const HELPER_FIELDS = [
+  ["totalTime", "athlete_session.total_time"],
+  ["totalDistance", "athlete_session.total_distance"],
+  ["maxV", "athlete_session.max_v"],
+];
+export function wholeRowHelperValues(row) {
+  const out = {};
+  for (const [name, sourceMetricKey] of HELPER_FIELDS) {
+    const extracted = extractorFor({ sourceSystem: GPEXE_SOURCE_SYSTEM, apiFamily: "rest_v1", sourceMetricKey }).extract({ row: row ?? {} }, {});
+    out[name] = extracted.skip ? null : extracted.value;
+  }
+  return out;
 }
 
 // Phase 7e (J11, R3): the values one extractor gives each athlete the import
 // keeps, per level, through the import's own session and athlete gates - the
-// plan above with that extractor in place of GPEXE_METRIC_SPECS (the seam M4
-// uses). Only a refusal's stable code leaves: the plan's messages, anomalies
+// plan above with one raw spec at both levels. Only a refusal's stable code
+// leaves: the plan's messages, anomalies
 // and skips name session, track, row and athlete ids, and none of them is
 // returned. `extract` gets the plan's per-row input and returns { value } or
 // { skip }.
 export function gpexeLevelValues(bundle, extract) {
   let plan;
   try {
-    plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ key: "preview", extract }] });
+    plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ raw: true, key: "preview", levels: { full: true, drill: true }, extract }] });
   } catch (error) {
     if (error instanceof GpexeMappingError) return { code: error.code };
     throw error;

@@ -1,4 +1,4 @@
-// GPEXE import plan -> Training Load (pilot). Writes one plan from
+// GPEXE import plan -> Training Load. Writes one plan from
 // gpexeImportMapper.js in ONE transaction on a caller-owned pg client.
 // Deliberately does not import db.js: the caller decides which database
 // the client is connected to (see backend/scripts/gpexe-import-pilot.mjs for the
@@ -27,7 +27,9 @@
 //   into existence at all; metric_event_source_bindings is unique on
 //   (connection, external_id) and holds one row per event;
 //   metric_source_connections has a partial unique index that allows one
-//   ACTIVE gpexe connection per team. v12's generic contract is unchanged:
+//   ACTIVE gpexe connection per team (since 9-B the importer only uses it:
+//   gpexeImportMapping.js locks it and writes its source-instance keys, T7).
+//   v12's generic contract is unchanged:
 //   metric_events itself still carries descriptive provenance only.
 //   Drill segment links are additionally protected by
 //   activity_component_metric_links_one_confirmed_idx.
@@ -38,10 +40,19 @@
 //   automatic rewrite.
 // - Each imported result set has its own source identity:
 //   athlete_session:<id>:full and athlete_session:<id>:drill:<n>.
+// - Since phase 9 (9-B, contract J17) every value comes from an open mapping
+//   activation of the team's binding (C55): the canonical definition and
+//   version the mapping version pins, never one this writer creates (C46 -
+//   it creates no definition, version or scope capability); the value is the
+//   exact decimal text of the version's conversion at the storage scale, and
+//   every value has its provenance row (T6) in the same function, naming the
+//   activation, mapping version, binding, revision, source instance, source
+//   unit and source value. The T6 trigger is the backstop of every one of
+//   those facts.
 // - The occasion content hash covers level, drill index, and per value the
-//   metric key, definition/version, value, unit, aggregation_role, coverage
-//   and the GPEXE source context (field, source unit, thresholds), so a
-//   change in meaning is never treated as "unchanged".
+//   canonical definition and version, the mapping version, value, unit, the
+//   source value and unit, aggregation_role and coverage, so a value under a
+//   new mapping version is never "unchanged" (needs_review, J17 step 11).
 // - Imported values are GPEXE's own values: is_derived is always false.
 //
 // Re-import of an existing identity (current occasion kept or superseded):
@@ -56,6 +67,10 @@
 //   older source_reported_at                -> stale_resend_ignored (flagged)
 // A flagged result with the same hash and status is written only once.
 import crypto from "crypto";
+import { buildGpexeImportPlan, classifyMappedPlan, mappedMetricSpecs } from "./gpexeImportMapper.js";
+import { prepareImportMapping } from "./gpexeImportMapping.js";
+import { canonicalDecimal } from "./sourceMetricExtractors.js";
+import { convertAtStorageScale } from "./sourceMetricPreview.js";
 
 export class GpexeImportError extends Error {
   constructor(code, message) {
@@ -97,19 +112,20 @@ export function referenceSetHash(thresholdsUsed) {
 }
 
 export function importedOccasionContentHash({ level, drillIndex, values }) {
-  const sorted = [...values].sort((a, b) => a.metricKey.localeCompare(b.metricKey));
+  const sorted = [...values].sort((a, b) => (String(a.metricDefinitionId) < String(b.metricDefinitionId) ? -1 : String(a.metricDefinitionId) > String(b.metricDefinitionId) ? 1 : 0));
   const canon = {
     level,
     drillIndex: drillIndex ?? null,
     values: sorted.map((v) => ({
-      metricKey: v.metricKey,
       metricDefinitionId: v.metricDefinitionId,
       metricDefinitionVersionId: v.metricDefinitionVersionId,
+      mappingVersionId: v.mappingVersionId,
       value: v.value,
       unit: v.unit,
+      sourceValue: v.sourceValue,
+      sourceUnit: v.sourceUnit,
       aggregationRole: v.aggregationRole,
       coverage: v.coverage,
-      sourceContext: v.sourceContext ?? null,
     })),
   };
   return crypto.createHash("sha256").update(JSON.stringify(canonicalize(canon))).digest("hex");
@@ -132,95 +148,6 @@ async function assertAthletesInTeam(client, ownerTeamId, athleteIds) {
   const found = new Set(r.rows.map((row) => String(row.id)));
   const missing = athleteIds.filter((id) => !found.has(String(id)));
   if (missing.length) throw new GpexeImportError("athlete_not_in_team", `athlete(s) ${missing.join(", ")} have no active membership in team ${ownerTeamId}.`);
-}
-
-async function ensureSourceConnection(client, { sourceSystem, ownerTeamId }) {
-  const existing = await client.query(
-    `select id from training_load.metric_source_connections
-     where source_system = $1 and owner_scope = 'team' and owner_team_id = $2 and state = 'active'`,
-    [sourceSystem, ownerTeamId],
-  );
-  if (existing.rowCount > 1) throw new GpexeImportError("ambiguous_source_connection", `team ${ownerTeamId} has ${existing.rowCount} active ${sourceSystem} connections.`);
-  if (existing.rowCount === 1) return { id: existing.rows[0].id, created: false };
-  try {
-    const inserted = await client.query(
-      `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ($1,'team',$2) returning id`,
-      [sourceSystem, ownerTeamId],
-    );
-    return { id: inserted.rows[0].id, created: true };
-  } catch (error) {
-    // v20 partial unique index: one active gpexe connection per team.
-    if (error.code === "23505") {
-      throw new GpexeImportError("source_connection_conflict", `another import created an active ${sourceSystem} connection for team ${ownerTeamId} at the same time — retry the import.`);
-    }
-    throw error;
-  }
-}
-
-function conditionDescriptionFor(metric) {
-  return { source: "gpexe", definition: metric.definition, sourceContext: metric.sourceContext };
-}
-
-// Existing definitions are reused only when their current version has the
-// same label, unit, value type, daily aggregation, GPEXE source context
-// (condition_description) and the needed scope capabilities; anything else
-// stops the import rather than writing under a changed meaning.
-async function ensureMetricDefinitions(client, { metrics, ownerTeamId, performedByUserId, scopeLevels }) {
-  const byKey = new Map();
-  const created = [];
-  // FOR SHARE on every existing definition, sorted, BEFORE reading the fields
-  // the reuse decision depends on: it conflicts with the FOR UPDATE that
-  // archiveDefinition / createDefinitionVersion / setDefinitionScopeCapabilities
-  // take first, so a catalog change either commits before the reads below (and
-  // is seen) or waits until this import commits. Same pattern as
-  // resolveValueEntries in trainingLoadMetricsMeasurements.js; it also covers
-  // the FOR KEY SHARE the manual value-write paths take.
-  await client.query(
-    `select id from training_load.metric_definitions
-     where owner_scope = 'team' and owner_team_id = $1 and key = any($2::text[])
-     order by id for share`,
-    [ownerTeamId, metrics.map((m) => m.key)],
-  );
-  for (const metric of metrics) {
-    const existing = await client.query(
-      `select d.id, d.label, d.state, d.current_version_id, v.unit, v.value_type, v.daily_aggregation_method, v.condition_description,
-              coalesce((select array_agg(sc.scope_level) from training_load.metric_definition_scope_capabilities sc where sc.metric_definition_id = d.id), array[]::varchar[]) as scope_capabilities
-       from training_load.metric_definitions d
-       join training_load.metric_definition_versions v on v.id = d.current_version_id
-       where d.owner_scope = 'team' and d.owner_team_id = $1 and d.key = $2`,
-      [ownerTeamId, metric.key],
-    );
-    const row = existing.rows[0];
-    if (row) {
-      const caps = new Set(row.scope_capabilities);
-      const sameCondition = JSON.stringify(canonicalize(row.condition_description)) === JSON.stringify(canonicalize(conditionDescriptionFor(metric)));
-      if (row.state !== "active" || row.label !== metric.label || row.unit !== metric.unit || row.value_type !== "numeric"
-        || row.daily_aggregation_method !== metric.dailyAggregationMethod || !sameCondition || scopeLevels.some((s) => !caps.has(s))) {
-        throw new GpexeImportError("metric_definition_mismatch", `existing definition ${metric.key} (state ${row.state}, label ${row.label}, unit ${row.unit}, aggregation ${row.daily_aggregation_method}, scopes ${[...caps].join("/")}) does not match the import mapping.`);
-      }
-      byKey.set(metric.key, { metricDefinitionId: row.id, metricDefinitionVersionId: row.current_version_id });
-      continue;
-    }
-    const definition = await client.query(
-      `insert into training_load.metric_definitions (key, label, short_label, description, owner_scope, owner_team_id, created_by_user_id)
-       values ($1,$2,$3,$4,'team',$5,$6) returning id`,
-      [metric.key, metric.label, metric.label, `Imported from GPEXE: ${metric.sourceContext.field}`, ownerTeamId, performedByUserId],
-    );
-    const definitionId = definition.rows[0].id;
-    const version = await client.query(
-      `insert into training_load.metric_definition_versions
-         (metric_definition_id, version_number, unit, value_type, condition_description, daily_aggregation_method, created_by_user_id)
-       values ($1,1,$2,'numeric',$3,$4,$5) returning id`,
-      [definitionId, metric.unit, JSON.stringify(conditionDescriptionFor(metric)), metric.dailyAggregationMethod, performedByUserId],
-    );
-    await client.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [version.rows[0].id, definitionId]);
-    for (const scopeLevel of scopeLevels) {
-      await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [definitionId, scopeLevel]);
-    }
-    byKey.set(metric.key, { metricDefinitionId: definitionId, metricDefinitionVersionId: version.rows[0].id });
-    created.push(metric.key);
-  }
-  return { byKey, created };
 }
 
 async function ensureEvent(client, { plan, connectionId, ownerTeamId, performedByUserId }) {
@@ -403,7 +330,7 @@ async function ensureDrillComponents(client, { activityId, segmentsByDrillIndex,
   }
 }
 
-async function insertOccasionWithValues(client, { participantId, segmentId, identityId, contentHash, sourceReportedAt, batch, performedByUserId, values, supersedesOccasionId = null, conflictStatus = null }) {
+async function insertOccasionWithValues(client, { participantId, segmentId, identityId, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, supersedesOccasionId = null, conflictStatus = null }) {
   const batchId = await batch.id();
   const occasion = await client.query(
     `insert into training_load.metric_measurement_occasions
@@ -413,8 +340,15 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
   );
   const occasionId = occasion.rows[0].id;
   if (values.length) {
+    // The values, then one T6 row per value, in the same function (J17
+    // section 3, step 10; C55). A value without its provenance row never
+    // stays: a refused T6 row fails the statement and the transaction.
     const { text, params } = metricValuesInsert(occasionId, values);
-    await client.query(text, params);
+    const inserted = await client.query(text, params);
+    const idByDefinition = new Map(inserted.rows.map((row) => [String(row.metric_definition_id), row.id]));
+    const t6 = metricValueProvenanceInsert(values.map((v) => ({ ...v, metricValueId: idByDefinition.get(String(v.metricDefinitionId)) })), provenance);
+    const written = await client.query(t6.text, t6.params);
+    if (written.rowCount !== values.length) throw new GpexeImportError("provenance_incomplete", "Not every imported value has its provenance row.");
   }
   return occasionId;
 }
@@ -442,8 +376,14 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
 // error with the same internal_error whatever its SQLSTATE (the check, the
 // approval and the batch; only 42501 is told apart at approval).
 // Parameter layout: $1 the occasion, then six per value - tests that replay
-// the old per-value statements rely on it.
+// the old per-value statements rely on it. Since 9-B a value is the exact
+// decimal text of the mapping's conversion (never a JavaScript double), and
+// the statement returns each row's id with its definition, which matches a
+// T6 row to its value (unique (occasion_id, metric_definition_id), v13).
 export function metricValuesInsert(occasionId, values) {
+  for (const v of values) {
+    if (typeof v.value !== "string" || canonicalDecimal(v.value) !== v.value) throw new GpexeImportError("value_not_decimal", "An imported value must be canonical decimal text.");
+  }
   const params = [occasionId];
   const rows = values.map((v) => {
     const n = params.length;
@@ -453,6 +393,28 @@ export function metricValuesInsert(occasionId, values) {
   return {
     text: `insert into training_load.metric_values
          (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, is_derived, aggregation_role, coverage)
+       values ${rows.join(",")}
+     returning id, metric_definition_id`,
+    params,
+  };
+}
+
+// One T6 row per value (v34 metric_value_source_provenance), in one statement.
+// provenance = { bindingId, connectionId }: the binding the import reads
+// through and the team's Metrics Core source instance.
+export function metricValueProvenanceInsert(values, provenance) {
+  if (!provenance?.bindingId || !provenance?.connectionId) throw new GpexeImportError("provenance_missing", "An imported value needs its binding and source instance.");
+  const params = [provenance.bindingId, provenance.connectionId];
+  const rows = values.map((v) => {
+    if (!v.metricValueId) throw new GpexeImportError("provenance_incomplete", "Not every imported value has its provenance row.");
+    const n = params.length;
+    params.push(v.metricValueId, v.activationId, v.mappingVersionId, v.mappingId, v.sourceMetricVersionId, v.sourceUnit, v.sourceValue);
+    return `($${n + 1},$${n + 2},$${n + 3},$1,$${n + 4},$${n + 5},$2,$${n + 6},$${n + 7})`;
+  });
+  return {
+    text: `insert into training_load.metric_value_source_provenance
+         (metric_value_id, activation_id, mapping_version_id, source_team_binding_id, mapping_id, source_metric_version_id,
+          metric_source_connection_id, source_unit, source_value_numeric)
        values ${rows.join(",")}`,
     params,
   };
@@ -505,12 +467,14 @@ async function assertNoIdentitiesMissingFromSource(client, { connectionId, event
   }
 }
 
-// A supplement only ADDS metrics to an imported result: every value of the
+// A supplement only ADDS values to an imported result: every value of the
 // current occasion is present in the new result with the same definition,
-// definition version (which carries the GPEXE source context), value, unit,
-// aggregation_role and coverage, and at least one metric is new. Any
-// removed or changed value is not a supplement. Returns the added metric
-// keys, or null.
+// definition version, value (compared as exact decimal text, never as a
+// double), unit, aggregation_role and coverage, and the same provenance -
+// mapping version, source value and source unit (a value from before 9-B has
+// no T6 row and is never part of a supplement) - and at least one value is
+// new. Any removed or changed value is not a supplement. Returns the added
+// values by definition and activation, or null.
 function isPureSupplement(currentValues, newValues) {
   if (newValues.length <= currentValues.length) return null;
   const byDefinition = new Map(newValues.map((v) => [String(v.metricDefinitionId), v]));
@@ -518,11 +482,18 @@ function isPureSupplement(currentValues, newValues) {
     const v = byDefinition.get(String(row.metric_definition_id));
     if (!v
       || String(row.metric_definition_version_id) !== String(v.metricDefinitionVersionId)
-      || row.value_numeric === null || Number(row.value_numeric) !== v.value
-      || row.unit_at_capture !== v.unit || row.aggregation_role !== v.aggregationRole || row.coverage !== v.coverage) return null;
+      || row.value_numeric === null || canonicalDecimal(row.value_numeric) !== v.value
+      || row.unit_at_capture !== v.unit || row.aggregation_role !== v.aggregationRole || row.coverage !== v.coverage
+      || row.mapping_version_id === null || String(row.mapping_version_id) !== String(v.mappingVersionId)
+      || canonicalDecimal(row.source_value_numeric) !== v.sourceValue || row.source_unit !== v.sourceUnit) return null;
   }
   const currentIds = new Set(currentValues.map((r) => String(r.metric_definition_id)));
-  return { addedMetricKeys: newValues.filter((v) => !currentIds.has(String(v.metricDefinitionId))).map((v) => v.metricKey).sort() };
+  return {
+    addedValues: newValues
+      .filter((v) => !currentIds.has(String(v.metricDefinitionId)))
+      .map((v) => ({ metricDefinitionId: String(v.metricDefinitionId), activationId: String(v.activationId) }))
+      .sort((a, b) => (a.metricDefinitionId < b.metricDefinitionId ? -1 : a.metricDefinitionId > b.metricDefinitionId ? 1 : 0)),
+  };
 }
 
 // The new occasion supersedes the current one and becomes the identity's
@@ -534,11 +505,11 @@ async function supersede(client, { common, currentOccasionId, identityId }) {
   return occasionId;
 }
 
-async function importResult(client, { result, identity, participantId, segmentId, sourceReportedAt, definitions, batch, performedByUserId }) {
-  const values = result.values.map((v) => ({ ...v, ...definitions.byKey.get(v.metricKey), ...roleForLevel(result.level) }));
+async function importResult(client, { result, identity, participantId, segmentId, sourceReportedAt, provenance, batch, performedByUserId }) {
+  const values = result.values.map((v) => ({ ...v, ...roleForLevel(result.level) }));
   const contentHash = importedOccasionContentHash({ level: result.level, drillIndex: result.drillIndex, values });
 
-  const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values };
+  const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance };
   if (!identity.current_occasion_id) {
     const occasionId = await insertOccasionWithValues(client, common);
     await client.query(`update training_load.metric_source_identities set current_occasion_id = $1 where id = $2`, [occasionId, identity.id]);
@@ -555,12 +526,22 @@ async function importResult(client, { result, identity, participantId, segmentId
   if (current.content_hash === contentHash) return { outcome: "unchanged", occasionId: current.id };
 
   const currentValues = (await client.query(
-    `select metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage
-     from training_load.metric_values where occasion_id = $1`,
+    `select v.metric_definition_id, v.metric_definition_version_id, v.value_numeric::text as value_numeric, v.unit_at_capture, v.aggregation_role, v.coverage,
+            p.mapping_version_id, p.source_value_numeric::text as source_value_numeric, p.source_unit
+       from training_load.metric_values v
+       left join training_load.metric_value_source_provenance p on p.metric_value_id = v.id
+      where v.occasion_id = $1`,
     [current.id],
   )).rows;
   const currentMetricIds = new Set(currentValues.map((r) => String(r.metric_definition_id)));
   const sameMetricSet = currentMetricIds.size === values.length && values.every((v) => currentMetricIds.has(String(v.metricDefinitionId)));
+  // D17: a current value under another mapping version, or with no
+  // provenance (imported before 9-B), is never silently corrected: the
+  // meaning of the stored fact may differ, so the new one waits for review.
+  const sameMappings = currentValues.every((row) => {
+    const v = values.find((x) => String(x.metricDefinitionId) === String(row.metric_definition_id));
+    return row.mapping_version_id !== null && (!v || String(row.mapping_version_id) === String(v.mappingVersionId));
+  });
   const reported = new Date(sourceReportedAt).getTime();
   const currentReported = current.source_reported_at ? new Date(current.source_reported_at).getTime() : null;
   const supplement = isPureSupplement(currentValues, values);
@@ -571,8 +552,8 @@ async function importResult(client, { result, identity, participantId, segmentId
   // handled above and must never be replaced by an import.
   else if (supplement && current.entry_method === "api_import" && currentReported !== null && reported >= currentReported) {
     const occasionId = await supersede(client, { common, currentOccasionId: current.id, identityId: identity.id });
-    return { outcome: "supplemented", occasionId, addedMetricKeys: supplement.addedMetricKeys };
-  } else if (!sameMetricSet || currentReported === null || reported === currentReported) conflictStatus = "needs_review";
+    return { outcome: "supplemented", occasionId, addedValues: supplement.addedValues };
+  } else if (!sameMetricSet || !sameMappings || currentReported === null || reported === currentReported) conflictStatus = "needs_review";
   else if (reported < currentReported) conflictStatus = "stale_resend_ignored";
 
   if (conflictStatus) {
@@ -609,17 +590,52 @@ function checkImportContext(plan, ctx) {
   return athleteIdByGpexeId;
 }
 
-// ctx = { ownerTeamId, performedByUserId, athleteIdByGpexeId: Map|object, batchFilename }
+// C55, before any write: every value comes from one of the locked open
+// activations of the binding, at a level it covers, as the canonical version
+// its mapping version pins, in the version's target unit, and is the exact
+// conversion of its source value. The T6 trigger checks the same facts again
+// for every row; this check gives the stable code.
+function checkMappedValues(plan, mapping) {
+  const byActivation = new Map(mapping.rows.map((row) => [row.activationId, row]));
+  let count = 0;
+  for (const participant of plan.participants) {
+    for (const result of participant.results) {
+      for (const v of result.values) {
+        const row = byActivation.get(String(v.activationId));
+        const covered = row && (result.level === "full" ? row.appliesToSession : row.appliesToDrill);
+        if (!row || !covered
+          || String(row.mappingVersionId) !== String(v.mappingVersionId)
+          || String(row.metricDefinitionId) !== String(v.metricDefinitionId)
+          || String(row.metricDefinitionVersionId) !== String(v.metricDefinitionVersionId)
+          || row.targetUnit !== v.unit || row.revisionSourceUnit !== v.sourceUnit
+          || convertAtStorageScale(v.sourceValue, { scale: row.scale, divisor: row.scaleDivisor, offset: row.offset }) !== v.value) {
+          throw new GpexeImportError("mapping_not_usable", "A value does not come from an open activation of the team's binding.");
+        }
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+// The writer's own entry (9-B, D28; the pilot CLI, the disposable runs and the
+// suites): one bundle, one transaction under the team import lock, through the
+// team's mapping activations exactly as the approval writes it (J17 steps
+// 3-10, without the approval's own steps). ctx = { ownerTeamId,
+// performedByUserId, athleteIdByGpexeId: Map|object, batchFilename,
+// bindingId? (default: the team's one active gpexe binding), onlyMapped? }.
+// onlyMapped (tests) imports only the participants athleteIdByGpexeId names;
+// otherwise every participant must be mapped (athlete_not_mapped).
 // Test hooks: onLocked(client) runs right after the import lock is held;
 // onResultImported(result) runs after each result is written, still inside
 // the transaction.
-export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImported } = {}) {
-  checkImportContext(plan, ctx);
+export async function importGpexeBundle(client, bundle, ctx, hooks = {}) {
+  if (!ctx?.ownerTeamId || !ctx?.performedByUserId) throw new GpexeImportError("context_missing", "ownerTeamId and performedByUserId are required.");
   await client.query("begin");
   try {
     await lockTeamForImport(client, ctx.ownerTeamId);
-    if (onLocked) await onLocked(client);
-    const summary = await importGpexePlanLocked(client, plan, ctx, { onResultImported });
+    if (hooks.onLocked) await hooks.onLocked(client);
+    const summary = await importGpexeBundleLocked(client, bundle, ctx, hooks);
     await client.query("commit");
     return summary;
   } catch (error) {
@@ -628,18 +644,46 @@ export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImp
   }
 }
 
-// The import itself, for a caller that has already begun the transaction and
-// taken lockTeamForImport(). It neither commits nor rolls back: the caller
-// decides (the preview always rolls back; F2 commits after its own checks).
+export async function importGpexeBundleLocked(client, bundle, ctx, hooks = {}) {
+  let bindingId = ctx.bindingId ?? null;
+  if (!bindingId) {
+    const bindings = (await client.query(
+      `select id from training_load.source_team_bindings where team_id = $1 and source_system = 'gpexe' and state = 'active'`,
+      [ctx.ownerTeamId],
+    )).rows;
+    bindingId = bindings.length === 1 ? String(bindings[0].id) : null;
+  }
+  const gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+  const mapping = await prepareImportMapping(client, {
+    teamId: ctx.ownerTeamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
+  });
+  if (mapping.block) throw new GpexeImportError(mapping.block, "The session cannot be imported through the team's mapping activations.");
+  const specs = mappedMetricSpecs(mapping.rows);
+  if (specs.block) throw new GpexeImportError(specs.block, "The session cannot be imported through the team's mapping activations.");
+  const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs });
+  const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));
+  const plan = ctx.onlyMapped ? { ...full, participants: full.participants.filter((p) => athleteIdByGpexeId.has(p.gpexeAthleteId)) } : full;
+  const classified = classifyMappedPlan(plan, { importableIds: plan.participants.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });
+  if (classified.block) throw new GpexeImportError(classified.block, "The session cannot be imported through the team's mapping activations.");
+  return importGpexePlanLocked(client, plan, { ...ctx, mapping }, hooks);
+}
+
+// The import itself, for a caller that has already begun the transaction,
+// taken lockTeamForImport() and prepared the mapping context
+// (gpexeImportMapping.js prepareImportMapping, with no block; ctx.mapping).
+// It neither commits nor rolls back: the caller decides (the preview always
+// rolls back; the approval commits after its own checks). It creates no
+// metric definition (C46): every value names the canonical version its
+// mapping version pins.
 export async function importGpexePlanLocked(client, plan, ctx, { onResultImported } = {}) {
   const athleteIdByGpexeId = checkImportContext(plan, ctx);
+  const mapping = ctx.mapping;
+  if (!mapping || mapping.block || !mapping.connection || !mapping.binding) throw new GpexeImportError("mapping_not_usable", "The import has no usable mapping context.");
+  if (checkMappedValues(plan, mapping) === 0) throw new GpexeImportError("no_mapped_values", "No value of the session comes from the team's mapping activations.");
   {
     await assertAthletesInTeam(client, ctx.ownerTeamId, plan.participants.map((p) => athleteIdByGpexeId.get(p.gpexeAthleteId)));
-    const connection = await ensureSourceConnection(client, { sourceSystem: plan.sourceSystem, ownerTeamId: ctx.ownerTeamId });
-    // Always both levels, so a later session with drills can reuse the
-    // definitions a session without drills created.
-    const scopeLevels = ["session", "component"];
-    const definitions = await ensureMetricDefinitions(client, { metrics: plan.metrics, ownerTeamId: ctx.ownerTeamId, performedByUserId: ctx.performedByUserId, scopeLevels });
+    const connection = { id: mapping.connection.id, created: mapping.connection.created === true };
+    const provenance = { bindingId: mapping.binding.id, connectionId: mapping.connection.id };
     // The session itself is reserved as an identity too: its row is what two
     // concurrent first imports collide on inside the database, independently
     // of the advisory lock. It never receives an occasion.
@@ -683,7 +727,7 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
         if (result.level === "drill" && !segmentId) throw new GpexeImportError("segment_missing", `no segment for drill ${result.drillIndex}.`);
         const outcome = await importResult(client, {
           result, identity: identities.get(result.externalId), participantId: participantIds.get(participant.gpexeAthleteId), segmentId,
-          sourceReportedAt: plan.event.sourceReportedAt, definitions, batch, performedByUserId: ctx.performedByUserId,
+          sourceReportedAt: plan.event.sourceReportedAt, provenance, batch, performedByUserId: ctx.performedByUserId,
         });
         results.push({ externalId: result.externalId, gpexeAthleteId: participant.gpexeAthleteId, ...outcome });
         if (onResultImported) await onResultImported(results[results.length - 1]);
@@ -693,8 +737,8 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
     const counts = {};
     for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
     return {
-      connectionId: connection.id, connectionCreated: connection.created,
-      definitionsCreated: definitions.created, thresholdsUsed: plan.thresholdsUsed,
+      connectionId: connection.id, connectionCreated: connection.created, instanceKeysSet: mapping.connection.keysSet === true,
+      thresholdsUsed: plan.thresholdsUsed,
       eventId: event.id, eventCreated: event.created, activityId,
       bindingCreated: binding.created, referenceSetHash: binding.hash, referenceSetWindowChanged: binding.windowChanged ?? false,
       boundReferenceSet: binding.storedReferenceSet,

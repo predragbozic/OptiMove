@@ -1,6 +1,6 @@
-// Preview of one GPEXE import candidate (in-app import, phase F1): what an
-// approved import would write or change, per athlete and per value, and why
-// anything is left out. Nothing is written: the importer runs every
+// Preview of one GPEXE import candidate (in-app import, phase F1; preview
+// version 3 since 9-B): what an approved import would write or change, per
+// athlete and per value, and why anything is left out. Nothing is written: the importer runs every
 // statement of a real import under the team's import lock, and the
 // transaction is then rolled back, so the preview is exactly what the
 // approval in F2 would do against the same state.
@@ -15,11 +15,16 @@
 //     is not linked to an OptiMove athlete is left out with that reason and
 //     does not stop the others.
 import crypto from "node:crypto";
-import { buildGpexeImportPlan, GpexeMappingError, GPEXE_METRIC_SPECS } from "./gpexeImportMapper.js";
+import { buildGpexeImportPlan, classifyMappedPlan, GpexeMappingError, leftOutReason, mappedMetricSpecs } from "./gpexeImportMapper.js";
+import { ImportBindingNotActiveError, prepareImportMapping } from "./gpexeImportMapping.js";
 import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gpexeImportWriter.js";
+import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
 
-// 2: changesToImported (phase F2).
-export const PREVIEW_VERSION = 2;
+// 2: changesToImported (phase F2). 3: values through mapping activations (9-B,
+// J17 section 4): each value names its activation, mapping version, canonical
+// variable, source field and source value; values left out are listed with
+// their reason (C110); the preview hash binds the activation set.
+export const PREVIEW_VERSION = 3;
 
 // Switch condition 2 (J17 section 9): the server-side bounds of every
 // transaction that takes the team import lock to run the importer - the
@@ -114,8 +119,6 @@ export function changeToImportedRule(outcome) {
   return rule;
 }
 
-const METRIC_BY_KEY = new Map(GPEXE_METRIC_SPECS.map((m) => [m.key, m]));
-
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -136,6 +139,30 @@ const ATHLETE_ANOMALY = {
   whole_session_row_count: { gps: "needs_manual_review", review: true, message: "GPEXE has more than one whole-session row for this athlete; needs manual review." },
 };
 
+// The whole-candidate blocks of a mapped import (J17 sections 3 and 6), each
+// with one fixed sentence for the two administrators. A coach reads the
+// stable sentence instead (gpexeImportAudience.js).
+export const BLOCK_MESSAGES = Object.freeze({
+  mapping_not_usable: "This session can't be imported through the team's mappings as they stand. Check the mappings switched on for this team.",
+  source_threshold_contract_mismatch: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.",
+  source_unit_mismatch: "A mapping's source unit is not the proven unit of its GPEXE field.",
+  source_shape_mismatch: "GPEXE sent a mapped value in another shape than its field has.",
+  no_mapped_values: "No value of this session comes from a mapping switched on for this team.",
+  source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
+  source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
+  session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
+});
+
+// The plain words of a value left out (C110, form B): the same for every
+// viewer; the code itself is for the two administrators only.
+const LEFT_OUT_MESSAGES = Object.freeze({
+  required_value_missing: "Required value missing.",
+  canonical_value_out_of_range: "Outside the variable's limits.",
+  missing: "GPEXE has no value for this.",
+  threshold_contract: "GPEXE's thresholds do not match this mapping.",
+  shape: "GPEXE sent this value in another shape.",
+});
+
 async function activeLinks(client, ownerTeamId) {
   const rows = (await client.query(
     `select gpexe_athlete_id, athlete_id from training_load.gpexe_athlete_links
@@ -155,15 +182,18 @@ async function activeTeamAthleteIds(client, ownerTeamId) {
 
 // Current imported values of the identities this plan would touch: what
 // "old" means in the preview, and the state the preview hash is bound to.
+// Keyed by canonical definition (9-B): a value is exact decimal text.
 async function currentState(client, ownerTeamId, externalIds) {
   const rows = (await client.query(
     `select si.source_external_id, si.current_occasion_id, o.content_hash, o.entry_method,
-            d.key as metric_key, v.value_numeric
+            v.metric_definition_id, d.key as definition_key, d.label as definition_label, d.owner_scope as definition_owner_scope,
+            v.value_numeric::text as value_numeric, v.unit_at_capture, p.mapping_version_id
      from training_load.metric_source_connections c
      join training_load.metric_source_identities si on si.source_connection_id = c.id
      left join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id
      left join training_load.metric_values v on v.occasion_id = o.id
      left join training_load.metric_definitions d on d.id = v.metric_definition_id
+     left join training_load.metric_value_source_provenance p on p.metric_value_id = v.id
      where c.source_system = 'gpexe' and c.owner_scope = 'team' and c.owner_team_id = $1 and c.state = 'active'
        and si.source_external_id = any($2::text[])`,
     [ownerTeamId, externalIds],
@@ -178,7 +208,16 @@ async function currentState(client, ownerTeamId, externalIds) {
         values: new Map(),
       });
     }
-    if (r.metric_key) byId.get(r.source_external_id).values.set(r.metric_key, r.value_numeric === null ? null : Number(r.value_numeric));
+    if (r.metric_definition_id) {
+      byId.get(r.source_external_id).values.set(String(r.metric_definition_id), {
+        value: r.value_numeric === null ? null : canonicalDecimal(r.value_numeric),
+        variableKey: r.definition_key,
+        label: r.definition_label,
+        variableScope: r.definition_owner_scope,
+        unit: r.unit_at_capture,
+        mappingVersionId: r.mapping_version_id === null ? null : String(r.mapping_version_id),
+      });
+    }
   }
   return byId;
 }
@@ -195,29 +234,65 @@ function sessionSummary(bundle, plan) {
   };
 }
 
-function valueDiff(result, outcome, previous) {
-  const newByKey = new Map(result.values.map((v) => [v.metricKey, v.value]));
-  const keys = new Set([...newByKey.keys(), ...(previous ? previous.values.keys() : [])]);
-  return [...keys].sort().map((metricKey) => {
-    const spec = METRIC_BY_KEY.get(metricKey);
-    const next = newByKey.has(metricKey) ? newByKey.get(metricKey) : null;
-    const prev = previous && previous.values.has(metricKey) ? previous.values.get(metricKey) : null;
+// The value entries of one result (J17 section 4; decision D13 of 9-B): every
+// value the import writes, and every value the result had before, compared
+// as exact decimal text. A value the result had that the import does not
+// write is left_out (its activation left it out), not_mapped (no activation
+// covers its variable at this level any more) or missing_in_gpexe.
+function valueEntry(v) {
+  return {
+    activationId: v.activationId,
+    mappingVersionId: v.mappingVersionId,
+    metricDefinitionId: String(v.metricDefinitionId),
+    variableKey: v.variableKey,
+    variableScope: v.variableScope,
+    label: v.label,
+    unit: v.unit,
+    value: v.value,
+    sourceMetricKey: v.sourceMetricKey,
+    sourceParameterFingerprint: v.sourceParameterFingerprint,
+    sourceValue: v.sourceValue,
+    sourceUnit: v.sourceUnit,
+  };
+}
+function valueDiff(result, outcome, previous, { specsByDefinitionAtLevel, leftOutDefinitions }) {
+  const next = new Map(result.values.map((v) => [String(v.metricDefinitionId), v]));
+  const definitions = new Set([...next.keys(), ...(previous ? previous.values.keys() : [])]);
+  const entries = [];
+  for (const definitionId of definitions) {
+    const v = next.get(definitionId) ?? null;
+    const prev = previous?.values.get(definitionId) ?? null;
+    const prevValue = prev?.value ?? null;
     let change;
     if (outcome === "created") change = "new";
-    else if (prev === null && next !== null) change = "added";
-    else if (prev !== null && next === null) change = "missing_in_gpexe";
-    else if (prev !== null && next !== null && Math.abs(prev - next) > 1e-9) change = "changed";
+    else if (prevValue === null && v) change = "added";
+    else if (prevValue !== null && !v) {
+      change = leftOutDefinitions.has(definitionId) ? "left_out" : specsByDefinitionAtLevel.has(definitionId) ? "missing_in_gpexe" : "not_mapped";
+    } else if (prevValue !== null && v && compareDecimal(prevValue, v.value) !== 0) change = "changed";
     else change = "same";
-    return { metricKey, label: spec?.label ?? metricKey, unit: spec?.unit ?? null, previous: prev, value: next, change };
-  });
+    const base = v ? valueEntry(v) : {
+      activationId: null, mappingVersionId: prev?.mappingVersionId ?? null, metricDefinitionId: definitionId,
+      variableKey: prev?.variableKey ?? null, variableScope: prev?.variableScope ?? null, label: prev?.label ?? null, unit: prev?.unit ?? null,
+      value: null, sourceMetricKey: null, sourceParameterFingerprint: null, sourceValue: null, sourceUnit: null,
+    };
+    entries.push({ ...base, previous: prevValue, change });
+  }
+  return entries.sort((a, b) => (a.metricDefinitionId < b.metricDefinitionId ? -1 : a.metricDefinitionId > b.metricDefinitionId ? 1 : 0));
 }
 
-export function blockedByMapping(bundle, error) {
+function hashOf(preview, state, activationSet) {
+  return sha256Hex(canonicalJson({ preview, state, activations: activationSet ?? [] }));
+}
+
+// A session the import's own gates refuse (the mapper's GpexeMappingError):
+// nothing about its athletes can be said.
+export function blockedByMapping(bundle, error, { activationSet = [], unactivated = [] } = {}) {
   const preview = {
     version: PREVIEW_VERSION, status: "blocked", blocked: { code: error.code, message: error.message },
     session: sessionSummary(bundle, null), counts: {}, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [],
+    unmappedSourceFields: 0, unactivatedSourceMetrics: [...unactivated], unactivatedSourceMetricCount: unactivated.length,
   };
-  return { preview, previewHash: sha256Hex(canonicalJson({ preview, state: [] })), summary: null };
+  return { preview, previewHash: hashOf(preview, [], activationSet), summary: null };
 }
 
 // Tests hold the check-time preview right after it took the team lock (to
@@ -228,13 +303,19 @@ export function setCheckPreviewHoldForTests(fn) {
 }
 
 // Returns { preview, previewHash }. `client` must not be inside a
-// transaction: this opens one, takes the team's import lock, reads everything
-// the preview depends on, runs the import, and always rolls back — so the
-// "before" values and the outcomes come from one locked snapshot.
-export async function buildCandidatePreview(client, { bundle, ownerTeamId, performedByUserId }) {
-  let plan;
+// transaction: this opens one, takes the team's import lock, reads and locks
+// the team's mapping context (J17 steps 3-6), reads everything the preview
+// depends on, runs the import, and always rolls back - so the "before" values
+// and the outcomes come from one locked snapshot (R10). importPath is the
+// check's source identity (sourceImportCredentialResolver.importSourceIdentity):
+// a legacy_env check has no binding, so its candidates are mapping_not_usable
+// (C2); a binding found ended under the lock throws
+// ImportBindingNotActiveError, and a mapping that changed under the locks
+// ImportMappingChangedError - the caller fails the check, nothing staged.
+export async function buildCandidatePreview(client, { bundle, ownerTeamId, performedByUserId, importPath = null }) {
+  let gates;
   try {
-    plan = buildGpexeImportPlan(bundle);
+    gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
   } catch (error) {
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error);
@@ -245,19 +326,55 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
     await setImportTransactionBounds(client);
     await lockTeamForImport(client, ownerTeamId);
     if (checkPreviewHold) await checkPreviewHold(client);
-    const { preview, previewHash } = await previewLocked(client, { bundle, plan, ownerTeamId, performedByUserId });
+    const bindingId = importPath?.path === "source_connection" ? importPath.bindingId : null;
+    const mapping = await prepareImportMapping(client, {
+      teamId: ownerTeamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
+    });
+    if (bindingId && mapping.blockReason === "binding_not_active") throw new ImportBindingNotActiveError();
+    const { preview, previewHash } = await previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId });
     return { preview, previewHash };
   } finally {
     await client.query("rollback").catch(() => {});
   }
 }
 
-// The preview for a caller that has begun a transaction and taken
-// lockTeamForImport(). It runs the import inside that transaction and leaves
-// the transaction open: the preview rolls back; the approval in F2 compares
-// previewHash with the approved one and commits only if they are equal.
-// `summary` is the importer's own result (null when nothing was run).
-export async function previewLocked(client, { bundle, plan, ownerTeamId, performedByUserId }) {
+// The preview for a caller that has begun a transaction, taken
+// lockTeamForImport() and prepared the mapping context (prepareImportMapping,
+// J17 steps 3-6). It runs the import inside that transaction (in a savepoint)
+// and leaves the transaction open: the check-time preview rolls back; the
+// approval compares previewHash with the approved one and commits only if
+// they are equal. `summary` is the importer's own result (null when nothing
+// was run). The plan is built only now, after the locks (J17 step 7).
+export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId }) {
+  const activationSet = mapping?.activationSet ?? [];
+  const unactivated = mapping?.unactivated ?? [];
+  let gates;
+  try {
+    gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+  } catch (error) {
+    if (!(error instanceof GpexeMappingError)) throw error;
+    return blockedByMapping(bundle, error, { activationSet, unactivated });
+  }
+  let plan = gates;
+  let blocked = null;
+  let specs = [];
+  const block = (code) => ({ code, message: BLOCK_MESSAGES[code] ?? BLOCK_MESSAGES.mapping_not_usable });
+  if (!mapping || mapping.block) {
+    blocked = block(mapping?.block ?? "mapping_not_usable");
+  } else {
+    const built = mappedMetricSpecs(mapping.rows);
+    if (built.block) blocked = block(built.block);
+    else {
+      specs = built.specs;
+      try {
+        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs });
+      } catch (error) {
+        if (!(error instanceof GpexeMappingError)) throw error;
+        return blockedByMapping(bundle, error, { activationSet, unactivated });
+      }
+    }
+  }
+
   const links = await activeLinks(client, ownerTeamId);
   const teamAthletes = await activeTeamAthleteIds(client, ownerTeamId);
   const sessionId = String(bundle.teamSession.id);
@@ -273,10 +390,14 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
   const externalIds = plan.participants.flatMap((p) => p.results.map((r) => r.externalId));
   const before = await currentState(client, ownerTeamId, externalIds);
 
+  if (!blocked) {
+    const classified = classifyMappedPlan(plan, { importableIds: importable.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });
+    if (classified.block) blocked = block(classified.block);
+  }
+
   let outcomes = new Map();
-  let blocked = null;
   let summary = null;
-  if (importable.length) {
+  if (!blocked && importable.length) {
     // A savepoint, so an import refused by an SQL error (e.g. a concurrent
     // connection conflict) leaves the caller's transaction usable and the
     // caller's own reads/commit decision well defined.
@@ -286,7 +407,7 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
         client,
         { ...plan, participants: importable },
         {
-          ownerTeamId, performedByUserId,
+          ownerTeamId, performedByUserId, mapping,
           athleteIdByGpexeId: new Map(importable.map((p) => [p.gpexeAthleteId, links.get(p.gpexeAthleteId)])),
           batchFilename: `gpexe import team_session:${sessionId}`,
         },
@@ -295,7 +416,7 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     } catch (error) {
       await client.query("rollback to savepoint gpexe_preview_import");
       if (!(error instanceof GpexeImportError)) throw error;
-      blocked = { code: error.code, message: error.message };
+      blocked = { code: error.code, message: error.code in BLOCK_MESSAGES ? BLOCK_MESSAGES[error.code] : error.message };
       // Results imported earlier that this import would leave behind (the
       // athlete is now unlinked, out of the team, or needs manual review):
       // the session waits, and the athletes causing it are named.
@@ -332,6 +453,7 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     anomaliesByAthlete.get(a.gpexeAthleteId).push(a);
   }
   const participantById = new Map(plan.participants.map((p) => [p.gpexeAthleteId, p]));
+  const specByActivation = new Map(specs.map((spec) => [spec.activationId, spec]));
   const counts = { created: 0, unchanged: 0, supplemented: 0, corrected: 0, needs_review: 0, stale_resend_ignored: 0, already_recorded: 0, skippedValues: 0, athletesNotImported: 0, athletesManualReview: 0, changesToImported: 0 };
   const changesToImported = [];
 
@@ -370,7 +492,12 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
           const bucket = outcome.endsWith("_already_recorded") ? "already_recorded" : outcome;
           counts[bucket] = (counts[bucket] || 0) + 1;
         }
-        const values = valueDiff(result, outcome, previous);
+        const atLevel = specs.filter((spec) => spec.levels[result.level]);
+        const leftOutHere = plan.leftOut.filter((r) => r.gpexeAthleteId === gpexeAthleteId && r.athleteSessionId === result.athleteSessionId && r.level === result.level);
+        const values = valueDiff(result, outcome, previous, {
+          specsByDefinitionAtLevel: new Set(atLevel.map((spec) => String(spec.metricDefinitionId))),
+          leftOutDefinitions: new Set(leftOutHere.map((r) => specByActivation.get(r.activationId)).filter(Boolean).map((spec) => String(spec.metricDefinitionId))),
+        });
         entry.results.push({
           externalId: result.externalId,
           level: result.level,
@@ -392,9 +519,22 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
         }
       }
     }
-    for (const skip of plan.metricSkips.filter((s) => s.gpexeAthleteId === gpexeAthleteId)) {
+    // The values left out of this athlete (C110 form B, D12): listed for
+    // every participant, for information; a Left-out entry never sets
+    // notImported and never carries the value.
+    for (const record of plan.leftOut.filter((r) => r.gpexeAthleteId === gpexeAthleteId && r.activationId)) {
+      const spec = specByActivation.get(record.activationId);
+      if (!spec) continue;
+      const { reason, sourceReason } = leftOutReason(spec, record);
       counts.skippedValues += 1;
-      entry.skippedValues.push({ level: skip.level, drillIndex: skip.drillIndex, metricKey: skip.metricKey, label: METRIC_BY_KEY.get(skip.metricKey)?.label ?? skip.metricKey, reason: skip.reason });
+      entry.skippedValues.push({
+        level: record.level, drillIndex: record.drillIndex,
+        activationId: spec.activationId, mappingVersionId: spec.mappingVersionId, sourceParameterFingerprint: spec.sourceParameterFingerprint,
+        variableKey: spec.variableKey, variableScope: spec.variableScope, label: spec.label, unit: spec.unit, sourceMetricKey: spec.sourceMetricKey,
+        reason,
+        message: LEFT_OUT_MESSAGES[reason] ?? LEFT_OUT_MESSAGES[record.category] ?? LEFT_OUT_MESSAGES.missing,
+        sourceReason,
+      });
     }
     athletes.push(entry);
   }
@@ -454,10 +594,19 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     athletes,
     teamAthletesWithoutGpexeRecord,
     anomalies: plan.anomalies.filter((a) => !a.gpexeAthleteId),
-    derivedNotImported: plan.derivedNotImported,
+    // Section F rows 1-2 (J17 section 4). The rest_v1 snapshot holds only the
+    // fields the extractor registry reads (the adapter's BUNDLE_FIELDS), so no
+    // field without a source-metric identity reaches it: the count is 0 by
+    // construction. The known fields with no open activation on the binding
+    // are named for the two administrators (the projection keeps only the
+    // count for everyone else).
+    unmappedSourceFields: 0,
+    unactivatedSourceMetrics: [...unactivated],
+    unactivatedSourceMetricCount: unactivated.length,
   };
-  // Bound to the state the preview was computed against: F2 recomputes it
-  // under the import lock and refuses the approval if anything differs.
+  // Bound to the state the preview was computed against and to the activation
+  // set (J17 step 11): the approval recomputes it under the same locks and
+  // refuses if anything differs.
   const state = [...before.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, s]) => [id, s.currentOccasionId, s.contentHash]);
-  return { preview, previewHash: sha256Hex(canonicalJson({ preview, state })), summary };
+  return { preview, previewHash: hashOf(preview, state, activationSet), summary };
 }
