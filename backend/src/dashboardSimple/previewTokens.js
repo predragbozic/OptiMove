@@ -117,7 +117,7 @@ export function createPreviewTokenService({ keyId, key, verificationKeys = {}, n
     const signature = createHmac('sha256', signingKey).update(payload).digest('base64url');
     return { previewToken: `${payload}.${signature}`, expiresAt, requestIssuedAt: issuedAt, serverNow: issuedAt };
   }
-  function verify(previewToken, expectedBinding) {
+  function verifyEnvelope(previewToken) {
     try {
       if (typeof previewToken !== 'string' || previewToken.length > PREVIEW_TOKEN_MAX_LENGTH) throw previewRequired('invalidToken');
       const segments = previewToken.split('.');
@@ -145,6 +145,15 @@ export function createPreviewTokenService({ keyId, key, verificationKeys = {}, n
         || Date.parse(envelope.binding.evaluatedAt) > issuedTime) throw previewRequired('invalidToken');
       if (issuedTime > currentTime) throw previewRequired('tokenNotYetValid');
       if (currentTime >= expiresTime || previousKey && (issuedTime > previousKey.retiredAt || currentTime >= previousKey.retiredAt + PREVIEW_TOKEN_TTL_MS)) throw previewRequired('tokenExpired');
+      return envelope;
+    } catch (error) {
+      if (error?.code === 'previewRequired' && error.status === 409) throw error;
+      throw previewRequired('invalidToken');
+    }
+  }
+  function verify(previewToken, expectedBinding) {
+    try {
+      const envelope = verifyEnvelope(previewToken);
       const validatedExpected = validateBinding(JSON.parse(canonicalJson(expectedBinding)));
       if (canonicalJson(envelope.binding.resolvedPeriod) !== canonicalJson(validatedExpected.resolvedPeriod)) throw previewRequired('effectivePeriodChanged');
       const fieldsExceptPeriod = PREVIEW_TOKEN_BINDING_FIELDS.filter(field => field !== 'resolvedPeriod');
@@ -155,5 +164,5 @@ export function createPreviewTokenService({ keyId, key, verificationKeys = {}, n
       throw previewRequired('invalidToken');
     }
   }
-  return Object.freeze({ issue, verify });
+  return Object.freeze({ issue, verify, verifyEnvelope });
 }

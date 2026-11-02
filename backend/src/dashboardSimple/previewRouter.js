@@ -7,9 +7,12 @@ export function captureSimplePreviewRequestBytes(req, res, buffer) {
   originalRequestBytes.set(req, buffer.byteLength);
 }
 
+export const simpleRequestByteLength = req => originalRequestBytes.get(req);
+
 export function createSimplePreviewRouter({ service }) {
   if (!service || !['capabilities', 'validate', 'preview'].every(method => typeof service[method] === 'function')) throw new TypeError('Preview service required');
   const router = Router({ mergeParams: true });
+  router.use((req, res, next) => /^\/(capabilities|validate|preview)\/?$/.test(req.path) ? next() : next('router'));
   router.use((req, res, next) => req.user?.id ? next() : res.status(401).json({ error: 'unauthorized' }));
   const parseJson = json({ limit: 65536, strict: true, verify: captureSimplePreviewRequestBytes });
   router.use((req, res, next) => req.method === 'POST' ? parseJson(req, res, next) : next());
