@@ -955,10 +955,13 @@ test("4a. a value racing a detail's edit, both orders: the edit sees a value com
     const valueWrite = rawEventWrite(valueClient, { eventId: ev2.id, userId: admin.id }, async (c) => {
       await c.query(`insert into calendar.event_field_values (event_id, field_id, number_value, updated_by_user_id) values ($1, $2, 120, $3)`, [ev2.id, travel.id, admin.id]);
     });
+    // The check is attached at once: the write may be refused while the test
+    // still awaits the edit (an unhandled rejection otherwise).
+    const valueRefused = assert.rejects(valueWrite, (e) => e.constraint === "event_field_values_bounds");
     await new Promise((resolve) => setTimeout(resolve, 300));
     g.open();
     assert.equal((await narrowing).status, 200);
-    await assert.rejects(valueWrite, (e) => e.constraint === "event_field_values_bounds");
+    await valueRefused;
   } finally {
     delete hooks.beforeCommit;
     g.open();
@@ -977,10 +980,14 @@ test("4b. a place archived while an event sets it: the event waits and is refuse
     const archiving = send(admin.cookie, "POST", `/locations/${place.body.location.id}/archive`, { expectedRevision: 1 });
     await g.arrived;
     const setting = rawEventWrite(client, { eventId: ev.id, userId: admin.id, bump: false }, (c) => c.query(`update calendar.events set location_id = $2, revision = revision + 1 where id = $1`, [ev.id, place.body.location.id]));
+    // The check is attached at once: the write may be refused while the test
+    // still awaits the archive (an unhandled rejection otherwise; the owner's
+    // external review of PR #325).
+    const settingRefused = assert.rejects(setting, (e) => e.constraint === "events_location_usable");
     await new Promise((resolve) => setTimeout(resolve, 300));
     g.open();
     assert.equal((await archiving).status, 200);
-    await assert.rejects(setting, (e) => e.constraint === "events_location_usable");
+    await settingRefused;
   } finally {
     delete hooks.beforeCommit;
     g.open();
