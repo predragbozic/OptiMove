@@ -78,12 +78,41 @@ placeholder bindings. Regressions include real PostgreSQL disconnects in child
 processes, installed pg protocol checkout-boundary tests without sockets, and
 clone/repair cases. The original external reproductions were rerun unchanged.
 
-The pre-existing Builder unit failure remains a failure; it is not waived or
-reclassified here. Before activation, reconcile the stacked branch with current
-main, apply/test the full migration sequence in an isolated integration environment,
-confirm dedicated signing/rotation configuration and preview coordination/budgets,
-and load-test save/recovery capacity. Current main was inspected at
-`e7d7e4f67f6a34bb545549da05d849dd1bbda0e7`; it contains v43 and v44 migrations absent
-from the pinned stack. This change uses a unique timestamp migration rather than
-reserving a numbered v45. No claim of current-main integration or production
-readiness follows from the pinned-stack tests.
+The stacked branch had a pre-existing Builder unit failure; it remains recorded
+in the historical results. The isolated integration on main `5a2b39d` passed
+579 backend unit tests, including Builder. This does not change the old results.
+
+## Main compatibility corrections
+
+The unpublished S2c migration is now
+`202611011300_dashboard_simple_atomic_save.sql`, avoiding a timestamp collision
+with main's v46 migration. It is an unmerged Draft candidate, not a migration
+upgrade for any database that already recorded the old filename. Before any
+activation, verify the target ledger has neither S2c identity; if the old identity
+exists, stop and prepare a separate forward migration. No such target inspection
+or production execution is authorized by this change.
+
+On schemas with v50 source-instance end, an existing single resolved series may
+retain its exact ended source pin during title, presentation, aggregation and
+widget-type edits. The capability reader derives eligibility from the stored
+widget on the authorized dashboard. The compiler and SQL independently require
+the same widget, series, metric, source policy and connection identity; request
+body claims do not grant eligibility. The SQL path keeps the original series ID
+when type and aggregation change together. Creating, cloning or rebinding to an
+ended connection remains refused. A preview made before source end cannot be
+used afterward; a fresh preview is required. Actual retained-pin editing depends
+on v50 trigger behavior, so activation on the older stacked schema is unsupported.
+
+Ten pure compiler/reader regressions run on the stacked PR. The full real HTTP
+source-end scenario is exercised separately against the current-main integration
+fixture, with historical reads, both type/aggregation transitions, stale preview,
+create/rebind/clone refusal and authorization controls. That integration fixture
+is not imported into the older stacked test suite.
+
+Before activation, reconcile the stack with the then-current pinned main and test
+the full migration sequence on a verified baseline. Confirm dedicated signing
+and rotation, preview coordination and budgets, and load-test save/recovery.
+The synthetic legacy reconstruction used for investigation is unverified and is
+not a substitute for production-data or staging rehearsal. Factories remain
+unmounted and new saves disabled by default. No production-readiness claim is
+made by these compatibility corrections.

@@ -35,7 +35,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (envelope.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
       if (existing && existing.revision !== envelope.editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
       const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
-      const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: envelope.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null });
+      const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: envelope.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
       const evaluatedAt = new Date(now()).toISOString();
       const context = await loadPreviewContext(queryRunner, target, envelope, existing, evaluatedAt);
       const compiled = compileSimpleDraft(envelope.draft, snapshot, context, existing);

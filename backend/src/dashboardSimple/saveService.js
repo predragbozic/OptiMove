@@ -112,7 +112,7 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         if (existing && existing.revision !== editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
         await lockCatalog(queryRunner, body.input, existing);
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
-        const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: body.input.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null });
+        const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: body.input.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
         const context = await loadPreviewContext(queryRunner, target, body.input, existing, new Date(currentTime()).toISOString());
         const compiled = compileSimpleDraft(body.input.draft, snapshot, context, existing);
         if (compiled.status !== 'valid') throw Object.assign(previewError(compiled.status === 'advancedRequired' ? 'advancedRequired' : 'invalidDraft', compiled.status === 'advancedRequired' ? 409 : 400), { issues: compiled.issues });

@@ -46,7 +46,7 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
     const page = rows.slice(0, limit);
     return { metrics: page.map(withAggregations), nextCursor: rows.length > limit ? page.at(-1).id : null };
   }
-  async function load({ req, dataWorkspace, dashboardId, metricRef, sourceConnectionId = null }) {
+  async function load({ req, dataWorkspace, dashboardId, metricRef, sourceConnectionId = null, existingWidgetId = null }) {
     const d = await target(req, dataWorkspace, dashboardId);
     if (!validateContract('metricRef', metricRef).valid || sourceConnectionId !== null && !isUuid(sourceConnectionId)) throw new SimpleContractError('invalidRequest', 400);
     const widgetTypes = (await query('select * from training_load.dashboard_widget_types where is_active = true order by key', [])).rows;
@@ -59,12 +59,23 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
       from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id
       where d.state='active' and ${visibleSql('d')} and d.id=$5`, [...targetParams(d), metricRef.metricDefinitionId])).rows[0];
     if (!metric || !TYPES.includes(metric.value_type)) throw new SimpleContractError('notFound');
+    let retainedPin = null;
+    if (existingWidgetId !== null) {
+      if (!isUuid(existingWidgetId)) throw new SimpleContractError('notFound');
+      const pins = (await query(`select s.* from training_load.dashboard_widget_series s
+        join training_load.dashboard_widgets w on w.id=s.widget_id
+        where w.id=$1 and w.dashboard_id=$2 order by s.series_order, s.id`, [existingWidgetId, dashboardId])).rows;
+      const pin = pins.length === 1 ? pins[0] : null;
+      if (pin?.resolution_status === 'resolved' && pin.source_policy === 'source_connection'
+        && pin.source_connection_id === sourceConnectionId && metricRef.kind === 'metric'
+        && pin.metric_definition_id === metricRef.metricDefinitionId.toLowerCase() && pin.built_in_series_key == null) retainedPin = pin;
+    }
     let connection = null;
     if (sourceConnectionId) {
-      connection = (await query(`select c.* from training_load.metric_source_connections c where c.state='active' and ${visibleSql('c')} and c.id=$5`, [...targetParams(d), sourceConnectionId])).rows[0];
+      connection = (await query(`select c.* from training_load.metric_source_connections c where (c.state='active' or c.state='inactive' and $6::boolean) and ${visibleSql('c')} and c.id=$5`, [...targetParams(d), sourceConnectionId, retainedPin !== null])).rows[0];
       if (!connection) throw new SimpleContractError('notFound');
     }
-    return { dashboard: d, metric, metricRef: structuredClone(metricRef), connection, widgetTypes, builtins, capabilities: { contractVersion: 1, chartComposition: ['athletes-v1'], maxChartAthletes: 20, pages: false, backendReference: false, referencePercent: false } };
+    return { dashboard: d, metric, metricRef: structuredClone(metricRef), connection, retainedPin, widgetTypes, builtins, capabilities: { contractVersion: 1, chartComposition: ['athletes-v1'], maxChartAthletes: 20, pages: false, backendReference: false, referencePercent: false } };
   }
   return { listMetrics, load };
 }

@@ -316,6 +316,7 @@ declare
   placement_x smallint;
   placement_y smallint;
   binding_changed boolean;
+  retained_pin boolean := false;
   series_changed boolean;
   widget_changed boolean;
   period_start date;
@@ -450,10 +451,21 @@ begin
     end if;
   end if;
   if desired_series.source_connection_id is not null then
-    perform 1 from training_load.metric_source_connections connection where connection.id = desired_series.source_connection_id for share;
+    select connection.state = 'inactive' into retained_pin from training_load.metric_source_connections connection
+      where connection.id = desired_series.source_connection_id for share;
     if not found then raise exception 'notFound' using errcode = 'S2C07'; end if;
+    retained_pin := retained_pin and p_widget_id is not null
+      and locked_series.widget_id = locked_widget.id
+      and desired_series.id = locked_series.id
+      and (p_widget ->> 'id')::uuid = locked_widget.id
+      and locked_series.source_policy = 'source_connection'
+      and desired_series.source_policy = locked_series.source_policy
+      and desired_series.source_connection_id = locked_series.source_connection_id
+      and desired_series.metric_definition_id is not distinct from locked_series.metric_definition_id
+      and desired_series.built_in_series_key is not distinct from locked_series.built_in_series_key;
     if not exists (select 1 from training_load.metric_source_connections connection
-      where connection.id = desired_series.source_connection_id and connection.state = 'active' and (
+      where connection.id = desired_series.source_connection_id
+      and (connection.state = 'active' or connection.state = 'inactive' and retained_pin) and (
         connection.owner_scope = 'system'
         or connection.owner_scope = 'user' and locked_dashboard.owner_scope = 'user' and connection.owner_user_id = locked_dashboard.owner_user_id
         or connection.owner_scope = 'club' and locked_dashboard.data_workspace_type = 'club' and connection.owner_club_id = locked_dashboard.data_workspace_scope_id
@@ -517,8 +529,8 @@ begin
         update training_load.dashboard_widgets set presentation_config=null where id=actual_widget_id;
       end if;
     end if;
-    if binding_changed or locked_widget.widget_type is distinct from desired_widget.widget_type
-      and series_changed then
+    if not retained_pin and (binding_changed
+      or locked_widget.widget_type is distinct from desired_widget.widget_type and series_changed) then
       delete from training_load.dashboard_widget_series series where series.id = locked_series.id;
       actual_series_id := null;
     end if;

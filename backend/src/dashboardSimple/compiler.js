@@ -90,7 +90,12 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   const connectionId = previous?.source_connection_id ?? null;
   if (!sourcePolicies.includes(sourcePolicy) || builtin && sourcePolicy !== 'not_applicable' || !builtin && sourcePolicy === 'not_applicable') issue('sourcePolicy', '$.metricRef');
   if ((sourcePolicy === 'source_connection') !== (connectionId !== null)) issue('sourceConnectionRequired', '$.metricRef');
-  if (connectionId && (snapshot.connection?.id !== connectionId || snapshot.connection.state !== 'active' || !bindingVisible(snapshot.dashboard, snapshot.connection))) issue('notFound', '$.metricRef');
+  const pin = snapshot.retainedPin;
+  const retainedPin = existing && existing.dashboard_id === snapshot.dashboard.id && pin && pin.widget_id === existing.id && pin.id === previous?.id
+    && pin.source_policy === sourcePolicy && sourcePolicy === 'source_connection'
+    && pin.source_connection_id === connectionId && pin.metric_definition_id === m.id
+    && previous.metric_definition_id === m.id && pin.built_in_series_key == null && !builtin;
+  if (connectionId && (snapshot.connection?.id !== connectionId || (snapshot.connection.state !== 'active' && !(snapshot.connection.state === 'inactive' && retainedPin)) || !bindingVisible(snapshot.dashboard, snapshot.connection))) issue('notFound', '$.metricRef');
   const rolePolicy = previous?.aggregation_role_policy ?? 'standalone_and_source_rollup';
   const coveragePolicy = previous?.coverage_policy ?? 'complete_and_partial';
   if (!['standalone_only', 'standalone_and_source_rollup', 'all_including_derived'].includes(rolePolicy)) issue('aggregationRolePolicy', '$.metricRef');
