@@ -936,9 +936,10 @@ environment:
 
 | Environment | Backup path or identifier | `.verify.json` (path, sha256) | Verified at | Confirmed by | Switch on at | Switch off at |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — |
+| Deployed (Supabase; Render service `optimove-eu`) | `OptiMove-backups/optimove-production-2026-11-02.dump` on the owner's computer; sha256 `8dde239d08c83c901c4a39f1a8e6ac875f752aebcb914674ff2cabd6578547e3`, 11,218,665 bytes | Beside the dump, kept by the owner (its sha256 was not relayed) | 2026-11-02, between about 12:45 and 12:55 UTC (the exact time is in the `.verify.json`) | The owner (VERIFIED: 222 tables, 92,490 rows, 0 differences, `verify-full`; the restored copy dropped); read by the *Rukovodilac* | 2026-11-02 13:05:00 UTC (the owner's manual deploy of `9908fe55` with the variable set) | 2026-11-02 13:17:06 UTC: the owner saved `false`, which took effect when the *Rukovodilac*'s deploy of `ca79b33` went live |
 
-No row yet: the switch has not been turned on in any environment.
+One row: the first controlled import (M6), recorded in J17
+(`docs/ai/phase9-importer-mappings-contract.md`) section 10.5.
 
 ## Checking the real GPEXE API (read only)
 

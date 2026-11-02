@@ -48,7 +48,9 @@ at `5a2b39d` (merge of PR #305), with the gpexe baseline reproduction on `04fc17
 PR #307 (those facts), the contract of the minimal phase 8 (J16, PR #308) and phase 8's 8-B, the Mappings screen (PR
 #309), with the deploy of `a0b4436`, were added at `a0b4436` (merge of PR #309), with the frontend baseline reproduction
 on `f8ebb28`; nothing else was re-derived then. The central calendar entries (K1a to K2b-1a, and K2b-1b) were added
-on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothing else was re-derived then.
+on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothing else was re-derived then. PR #330
+(the import window's SQL files) and the record of the first controlled import (M6) were added on 2026-11-02 at `ca79b33`
+(merge of PR #329); nothing else was re-derived then.
 
 ## Active phase
 
@@ -2753,8 +2755,52 @@ Technical details.
           - What changed for a viewer: a bound team's candidates are judged through its activations at the next check;
             the Imports review shows preview version 3; First team's sessions show the three mapped variables. Nothing
             is imported while the switch is off.
-          - Next (J17 section 10.2, step 8): the owner runs one check with the switch off, on a small window that holds
-            the target session, by the *Rukovodilac*'s instructions.
+          - Step 8 (J17 section 10.2) passed (2026-11-02, about 09:15 UTC). The owner ran one check with the switch
+            off for 23.10.2026, which found 1 session, unchanged. The *Rukovodilac* read the candidate of GPEXE session
+            190122 read-only: version 3 preview, `ready`, 39 results, 117 values, 13 athletes. Details are in J17
+            section 10.5.
+        - **The 9-B facts** (PR #328, docs only): merged `64f6640` on 2026-11-02 at 09:00:28 UTC, exactly from its head,
+          after the *Rukovodilac*'s GO. The merge waited for v51's deploy and post-check.
+        - **9-R, the import window's two SELECT files** (J17 section 10.4, "As built"): PR #330, merged `9908fe5`
+          (parents `64f6640` and `34e9e18`) on 2026-11-02 at 12:44:52 UTC, exactly from its head.
+          - It merged under the standing merge order after the *Rukovodilac*'s GO (`626a678a`). It did not wait for the
+            *Nezavisni revizor*, on the *Rukovodilac*'s order (`1aead6b6`), since step 6a comes before the freeze.
+          - The files are `docs/runbooks/gpexe-import-window-preflight.sql` (step 11, 14 blocks, sha256 `837cf527…cb11`)
+            and `docs/runbooks/gpexe-import-window-postcheck.sql` (step 16, 11 blocks, sha256 `a6532b5a…263e`). Both are
+            SELECT-only and parameter-free, run one block at a time inside the connector's read-only wrapper.
+          - They are tested on a disposable database before and after one real approval: 5 tests passed, and all 43
+            mutations were killed. Nothing to deploy.
+        - **M6, the first controlled import (2026-11-02; J17 section 10.5, the record).** One GPEXE session (190122,
+          23.10.2026) of the First team is imported into the deployed database through the mappings.
+          - The backup (O2, the owner) was VERIFIED: 222 tables, 92,490 rows, 0 differences. The dump has sha256
+            `8dde239d…47e3`. Its row is in the operational gate's table of `docs/runbooks/gpexe-in-app-import.md`.
+          - The preflight (about 12:50 UTC): blocks 1 to 8 and 14 passed. Block 9 listed 15 actionable candidates, 14 of
+            them with a version 2 preview from before 9-B (see departure 1 below). Blocks 11 to 13 showed 2 platform
+            admins and 1 grant, which the owner confirmed as theirs.
+          - The switch went on at 13:05:00 UTC (the owner's manual deploy of `9908fe5`).
+          - One approval, `679000d9-027f-4da0-aab8-e25e7f144690`, at 13:10:10 UTC on basis `platform_admin`: 39 results,
+            117 values, 13 athletes, nothing left out.
+          - The switch went off at 13:17:06 UTC: the owner saved `false`, and it took effect with the *Rukovodilac*'s
+            deploy of `ca79b33` through the Render API. `/api/health` answered `ok` three times on `ca79b33`.
+          - The post-check (on `ca79b33`) passed all 11 blocks:
+            - T6 117 of 117, with no difference from the preview;
+            - T7 `server3 / 980`;
+            - no `gpexe_*` definition;
+            - the activity `source_import` and `confirmed`, with 13 participants, 2 drills, 40 identities and no roster
+              decision.
+          - Afterwards: approvals 1, T6 117. The switch is off.
+          - **Departures, recorded in J17 section 10.5:**
+            1. Block 9's 15 candidates. The window went on under the *Rukovodilac*'s rule "only 23.10.2026, one
+               approval, no second click", not with the owner accepting each id.
+            2. **A freeze breach:** PR #329 (the calendar's K2b-1b, `ca79b33`, no migration, calendar code only) was
+               merged at 13:05:54 UTC and deployed by a deploy hook, live at 13:06:56 UTC. So the approval ran on
+               `ca79b33`.
+            3. The approval went through the Imports dialog for several sessions with one session selected, that is the
+               batch route, not the single-candidate route step 14 names. It is the same `approveCandidate`, and one
+               approval was written. The owner used it on the *Rukovodilac*'s instruction, after showing the dialog
+               with one session selected.
+            4. The switch stayed effective until the deploy of 13:17:06 UTC, because a Render environment change takes
+               effect only with a deploy. No other approval was made.
       - **C112 (2026-11-01): mapping by drag and drop** — the owner's direction for mappings after the pilot, not a
         contract (discovery C112): after a first import, a confirmed drag of a source column onto a variable, checked
         on two athletes, is the evidence. The screen details (one screen from the import's review, one click to save
@@ -3680,6 +3726,21 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **14 candidates with a version 2 preview (after M6, 2026-11-02).** The First team holds 14 candidates of sessions
+  from 05.10.2026 to 21.10.2026 that are still actionable, with the version 2 preview written before 9-B.
+  - Only a new check of their dates refreshes them to version 3.
+  - Until then, a first approval of one answers `preview_changed` and stores the version 3 preview, and a second
+    approval would import it.
+  - The import switch is off, so neither can happen today.
+- **The 13 athletes of the imported session wait for their roster state** (the coach's step in the activity's Roster
+  tab; J17 step 14: no roster decision until the post-check passed, which it now has).
+- **Two additions to the M6 procedure (J17 section 10.3), from the first window.**
+  - A Render environment change takes effect only with a deploy, both for on and for off.
+  - The freeze (step 9) binds every session, the calendar's included: no merge and no deploy hook.
+
+  The *Rukovodilac* also accepted, for the M6 runbook:
+  - blocks 11 to 13 of the preflight are read again right before step 14;
+  - the freeze covers rights too (platform-admin roles and approver grants).
 - **A coach of a team whose club is archived still reaches the GPEXE team routes** (pre-existing, MEDIUM; found by
   `security-reviewer` on the 9-B pull request and confirmed from the code; recorded on the *Rukovodilac*'s order of
   2026-11-02, not yet assigned).
@@ -4358,9 +4419,9 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
      the *Rukovodilac*'s post-check) are merged and deployed; the minimal phase 8, the Mappings screen (J16, PR #309), is
      merged and deployed; phase 9's contract (J17, PR #311) is merged as Proposed. J17 is accepted with the
      decisions O1–O16. Phase 9's code is merged and deployed: 9-0 (PR #322) and 9-B (PR #326, with its test follow-up
-     PR #327). Next by J17 section 10.2, step 8: the owner runs one check with the import switch off, on a small window
-     that holds the target session. Then M6 (the first controlled import, J17 section 10). Phases 7h and 7i come right
-     after the first import, before more clubs are brought on. A mapping version is activated in production only once its
+     PR #327). Step 8 passed, and M6, the first controlled import, ran on 2026-11-02 (J17 section 10.5): one session
+     imported, the switch off again. Phases 7h and 7i come right after the first import, before more clubs are brought
+     on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
      2026-11-10);
@@ -4372,7 +4433,7 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 
    No production field is confirmed through M2b before the owner-run evidence (C97) exists. Before the first
    production confirmation (M6), the owner also decides the pinned step's cap (see Separate tasks). The import
-   switch stays off throughout.
+   switch is off; it was on once, for the M6 window of 2026-11-02.
 2. The production-use gate and the two gates before a link: stated on 2026-11-01 (J17 section 12.3, O10) — the
    production-use gate not required (the owner's assessment), gate (2) met by the C97 comparison, gate (1) a line
    of the pre-switch preflight. When the links of 05.10–06.10.2026 were made is still not recorded here.

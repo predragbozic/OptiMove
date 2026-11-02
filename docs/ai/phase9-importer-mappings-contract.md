@@ -810,6 +810,92 @@ They merge under the standing merge order after the *Rukovodilac*'s GO: the owne
   column) needs no data.
   43 mutations of the two files are all killed: 25 of the preflight and 18 of the post-check.
   The staged observations of preflight block 2 are shown only and are not planted.
+- **Merged:** PR #330, merge `9908fe5` (parents `64f6640` and `34e9e18`), 2026-11-02 12:44:52 UTC. It was merged exactly
+  from its head under the standing merge order, after the *Rukovodilac*'s GO (`626a678a`). It merged before the
+  *Nezavisni revizor*'s GO on the *Rukovodilac*'s order (`1aead6b6`): step 6a came before the freeze.
+
+### 10.5 The record of the window (2026-11-02)
+
+Steps 9 to 16 ran on 2026-11-02 for the First team (GPEXE team 980). The facts are as the *Rukovodilac* relayed them on
+2026-11-02. It read the database and Render, and the owner worked in the UI. No athlete is named here.
+
+- **Step 8 (before the window).**
+  - The owner ran one check with the switch off, for 23.10.2026 – 23.10.2026, at 10:15 local time. It found
+    1 session: 0 new, 0 changed, 1 unchanged.
+  - The *Rukovodilac* then read the candidate of GPEXE session 190122 read-only: `pending`, its last check
+    `succeeded`, preview version 3, `ready` and not blocked, 39 results, 13 athletes.
+  - The preview's values matched the GPEXE UI's for the same session at the extremes: whole session 13 values per
+    variable, drills 26. That is 117 values, none left out. The unchanged session's preview was refreshed to version
+    3 by the finalization (section 7.1; inferred from the code, not observed directly).
+- **Step 9 (the freeze)** began after PR #330's merge (section 10.4). It ended when the *Rukovodilac* announced the
+  end of the window.
+- **Step 10 (the backup, O2).**
+  - The owner ran `gpexe-backup-verify.mjs --remote-source` from their own computer. The result was VERIFIED: 222
+    tables, 92,490 rows, 0 differences, `verify-full`, and the restored copy was dropped.
+  - The dump has sha256 `8dde239d08c83c901c4a39f1a8e6ac875f752aebcb914674ff2cabd6578547e3` and 11,218,665 bytes.
+    It was made at about 12:45–12:55 UTC; the exact time is in the owner's `.verify.json`.
+  - The record row is in the operational gate's table of `docs/runbooks/gpexe-in-app-import.md`.
+- **Step 11 (the preflight).** The *Rukovodilac* ran it at about 12:50 UTC from the merged file (sha256 `837cf527…cb11`).
+  Each block was sent alone inside `begin transaction read only;` … `rollback;`.
+  - Blocks 1 to 8 passed.
+  - Block 9 listed **15** actionable candidates, not the one expected. Only 190122 had preview version 3, `ready`,
+    39 results. The other 14, of sessions from 05.10.2026 to 21.10.2026, still carry the version 2 preview written
+    before 9-B.
+  - Block 10 therefore showed `actionable = 15`, `actionable_v3_ready = 1`, against its expectation.
+  - Blocks 11 to 13 showed 2 platform admins and 1 approver grant; the owner confirmed all three are theirs.
+  - Block 14 passed: every newest time was before the backup.
+  - The served-commit check: the *Rukovodilac* reads "served commit = main" as the code. Between the served
+    `a01a116` and main `9908fe5` only documents, tests and `.gitattributes` changed (PRs #328 and #330), with no code
+    and no migration.
+- **Steps 13 to 15.**
+  - **On:** the owner added the variable to the web service `optimove-eu` (not to the cron job) and deployed
+    `9908fe5` by hand at 13:05:00 UTC.
+  - **One approval** in Imports: approval `679000d9-027f-4da0-aab8-e25e7f144690` at 13:10:10 UTC, basis
+    `platform_admin`. It imported candidate `5222d270` (GPEXE session 190122, 23.10.2026): 39 results, 117 values,
+    13 athletes, nothing left out. The answer was "1 imported".
+  - **Off:** the owner saved `false` without a deploy. The *Rukovodilac* started a deploy of `ca79b33` through the Render
+    API (no migration), which went live at 13:17:06 UTC. `/api/health` answered `ok` three times in a row on `ca79b33`,
+    and the owner saw the switch-off message again.
+  - **Unauthenticated smoke (13:14 UTC):** `/api/auth/me` answered 200; the GPEXE status (zero UUID), the
+    source-connection list and the mappings list answered 401.
+- **Step 16 (the post-check).** The *Rukovodilac* ran it from the merged file (sha256 `a6532b5a…263e`), on the served
+  `ca79b33`. All 11 blocks passed:
+  - T6: 117 of 117 values, none without its row, no difference from the preview;
+  - T7: `server3 / 980`, written in the approval;
+  - no `gpexe_*` definition;
+  - the activity: `source_import`, `confirmed`, 13 participants, 2 drills, 40 identities, no roster decision.
+
+  Approvals stayed at 1 and T6 at 117 after the switch-off. The freeze ended.
+
+**Departures from section 10.3:**
+
+1. **Step 11, block 9.** Step 11 asks the owner to accept every actionable candidate by id, or the window does not
+   open (O15). Block 9 showed 15, and the window went on under the *Rukovodilac*'s assessment and a rule: only
+   23.10.2026, one approval, no second click.
+   - The assessment: a first approval of a version 2 candidate answers `preview_changed` and imports nothing, but
+     stores the version 3 preview, so a second approval would import it.
+   - The record holds that rule; it does not hold the owner accepting the 14 ids.
+2. **The freeze (step 9).** PR #329 (the calendar's K2b-1b, merge `ca79b33`) was merged at 13:05:54 UTC. A deploy hook
+   put it live at 13:06:56 UTC, during the window.
+   - It carries no migration and changes calendar code only; the GPEXE import service is untouched.
+   - The *Rukovodilac* judged that it does not affect the import and went on.
+   - So the approval at 13:10:10 UTC ran on `ca79b33`, not on the `9908fe5` the switch was deployed with.
+3. **Step 14.** It names the single-candidate route, never the batch. The owner approved through the Imports dialog for
+   several sessions with exactly one session selected ("Import 1 session"), that is the batch route with one
+   candidate. That route approves each candidate through the same `approveCandidate`, and exactly one approval was
+   written. The owner used it on the *Rukovodilac*'s instruction, after showing the dialog with one session selected.
+4. **Step 15.** It asks for the switch off at once. A change of a Render environment variable takes effect only with a
+   deploy, so the switch stayed effective from the approval (13:10:10) until `ca79b33` went live again (13:17:06).
+   No approval was made in that time (approvals 1, T6 117).
+
+**Left open** (CURRENT_STATE, Separate tasks):
+
+- the 14 candidates with a version 2 preview;
+- the 13 imported athletes waiting for their roster state;
+- two additions to this procedure: a Render environment change needs a deploy, and the freeze binds every session,
+  the calendar's included;
+- the two M6-runbook points the *Rukovodilac* accepted: blocks 11 to 13 read again right before step 14, and the
+  freeze covering rights (platform-admin roles and approver grants).
 
 ---
 
