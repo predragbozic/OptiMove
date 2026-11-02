@@ -171,3 +171,38 @@ export async function resolveEventTargets(client, owner, targets, day) {
   }
   return targets;
 }
+
+// D41 (K2b-1a and K2b-1b): what an event shows of its club's catalog. A team
+// that moved to another club keeps its events, and an event keeps the type,
+// place and details it was given; every read shows them only when they
+// belong to the event owner's CURRENT club — the event's club, or its owner
+// team's club today — and never anything of the old club (no name, id,
+// value or count). `e` is the event's alias, `t` its owner team's
+// (`left join public.teams t on t.id = e.owner_team_id`).
+export function eventClubNowSql(e, t) {
+  return `coalesce(${e}.owner_club_id, ${t}.club_id)`;
+}
+// A type: the system set, or a type of the event's club now.
+export function eventShowsTypeSql(e, t, et) {
+  return `(${et}.owner_scope = 'system' or ${et}.owner_club_id = ${eventClubNowSql(e, t)})`;
+}
+// A place: one of the event's club now (a private coach's event has none).
+export function eventShowsPlaceSql(e, t, l) {
+  return `(${l}.owner_club_id = ${eventClubNowSql(e, t)})`;
+}
+// An event's place as every read shows it (K2b-1b, D27, D41), from the
+// columns place_id / place_name / place_address / place_note of a
+// `left join calendar.locations` under eventShowsPlaceSql, and the one-off
+// text: a library place of the event's club now, or the text, or none. A
+// place of another club (the team moved) is none — never its name, address
+// or id.
+export function eventPlaceOf(row) {
+  if (row.place_id) return { source: "library", locationId: String(row.place_id), name: row.place_name, address: row.place_address ?? null, note: row.place_note ?? null };
+  if (row.location) return { source: "one_off", text: row.location };
+  return null;
+}
+// A detail: one of the event's club now; the system set for a private
+// coach's event (v51's rule when a detail is chosen).
+export function eventShowsFieldSql(e, t, f) {
+  return `((${e}.owner_scope = 'user' and ${f}.owner_scope = 'system') or (${f}.owner_scope = 'club' and ${f}.owner_club_id = ${eventClubNowSql(e, t)}))`;
+}

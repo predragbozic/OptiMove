@@ -70,6 +70,11 @@ is null; the align command still writes `update`, which the widened CHECK keeps)
   write is outside their guarantee (the v31 note's rule).
 - The pairing of a child row reads the parent's `xmin`: a write inside a savepoint carries a subtransaction's xid and
   is refused (fail-closed; no application path uses one).
+- **A value only for a detail of the event owner's CURRENT club** is the service's rule (K2b-1b; plan 18.1 and 18.7),
+  not the database's: the value guard checks that the detail is chosen on the event, not its club. After a team moves
+  (D41) club A's chosen details stay on its events until club B's next edit detaches them; the values command refuses
+  them, but a raw writer could still write a value for one meanwhile. Recorded for the next calendar migration, which
+  may add the club to the guard.
 - A club that was archived before v51 (or v49) and is made active again by a direct database write has no copies:
   `select calendar.seed_club_event_types('<club id>')` (idempotent by seed key), on the owner's order only.
 - An address correction shows on every event of that place, past ones included (D34).

@@ -632,7 +632,7 @@ Mutations of this round: 4 run, 4 killed. **In all 39: 35 killed, 4 equivalent**
 - **K2b-1d:** the event form treats a null `eventTypeId` (a moved team's event, D41) as "choose a type"; an edit that
   does not send a type keeps the stored one (test 3k).
 
-## 18. K2b-1b — plan-delta (proposed 2026-11-02; no code before the manager's GO)
+## 18. K2b-1b — plan-delta (accepted 2026-11-02 with the decisions of 18.7)
 
 K2b-1a is merged and deployed (PR #325, `a01a116`, v51 directly confirmed by its post-check, per the stream manager).
 K2b-1b makes the events **use** the catalog: a library place, the chosen details and their values, on create, on edit,
@@ -755,3 +755,46 @@ Reviewers: `code-reviewer` + `security-reviewer` (no migration, so no `db-review
 owner's external review (triggers 2 and 4). `docs/ai/CURRENT_STATE.md` gains a short record of the calendar stream in
 the same pull request (the merges and deploys K1a → K2b-1a as the manager listed them, what the repository cannot
 prove marked "per the stream manager").
+
+### 18.7 The manager's decisions (2026-11-02) — GO for K2b-1b
+
+- **Finding 6 → option A.** The reads hide club A's place, choices and values. The next edit of the event by a manager
+  of the new club — the platform admin as support included — detaches club A's choices and clears club A's place in the
+  same transaction, audited by flags only (`foreignFieldsDetached: n`, `foreignPlaceCleared: true`), never by A's ids.
+  Club A's values stay; the values command refuses A's details. A cancelled event stays as it is (hidden on every
+  read).
+- **T7 → managers only** see the details; the reduced view gets `place` only.
+- **T8 → every PATCH** by the new club normalizes the event, a change of the title alone included: the event is clean
+  afterwards whatever was changed, and the behaviour is deterministic.
+- **18.1 accepted as a known limit:** "a value only for a detail of the owner's current club" is the service's rule,
+  not the database's; recorded for the next calendar migration (runbook `docs/runbooks/calendar-settings-v51.md`).
+- **A change of the event's type** (`PATCH` with `eventTypeId`) changes nothing in the event's list of details: the list
+  changes only through `fieldIds`. The event form of K2b-1d offers to replace the list by the new type's default
+  details. (The server already behaves so: `updateEvent` writes no selection.)
+
+### 18.8 As built (K2b-1b)
+
+- **Code:** `backend/src/calendarEventService.js` (`locationId` and `fieldIds` on create and edit, the normalization of
+  finding 6, the values command `setEventFields`, the manager's view with `place`, `locationId` and `fields`, the
+  reduced view with `place`), `backend/src/routes/calendarEvents.js` (`POST /:eventId/fields`),
+  `backend/src/calendarQuery.js` (the card's `place`, `location` and the manager's `details`, the status rule of 18.3,
+  the athlete's `place`), `backend/src/calendarEventAccess.js` (the D41 predicates `eventShowsTypeSql`,
+  `eventShowsPlaceSql`, `eventShowsFieldSql` and `eventPlaceOf`, shared by every read). No migration.
+- **The calendar's statements:** one more, not two — the place joins the events statement, and the details' counts are
+  one statement for the events the coach manages (asked only when `event` is in `kinds`).
+- **The status:** the required details are one more check on a manager's card, judged when `span.to` is before today;
+  before that an event that expects nothing but has a required detail reads `planned`, and the K2a checks decide as
+  before. A cleared value is no value; `false` is a value.
+- **The request hash** of a create without `locationId` or `fieldIds` is the one K2a computed (the keys enter the
+  canonical body only when sent), so a create retried across the deploy replays.
+- **A place sent on an edit** is judged against the place the event shows: club A's id that a moved team's event still
+  holds is a new place for club B and refused (`location_not_available`), so nothing of A comes back through an edit.
+- **v51's guards behind the service's checks** (reached only by a race the locks do not order) answer as the service
+  does: `event_field_values_kind` / `_bounds` / `_option` → `400 invalid_value`, `events_location_usable` → `400
+  location_not_available`, `event_selected_fields_max` → `400 invalid_fields`.
+- **The athlete and a moved team:** only a team without memberships can move (a membership's `(team, club)` key and its
+  immutability), so no athlete reads a moved team's events today; the athlete's card takes the place from the coach
+  card's statement, under the same predicate.
+- **Tests:** `backend/tests/central-calendar-k2b-event-details.test.mjs` (18.6, items 1–7 and 9; the regression of
+  item 8 is the four earlier calendar suites, where the athlete's allowlist gained `place` and the settings suite's
+  helper event chooses no details so its raw writes choose them).

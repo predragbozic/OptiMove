@@ -875,7 +875,8 @@ test("9. GET /api/calendar: event cards per workspace with canManage, kinds, inc
   assert.deepEqual(teamsByEvent[clubEvent.id], [], "a club target names no team");
   assert.deepEqual(teamsByEvent[directClub.id], [], "a direct athlete target on a club-owned event names no team");
   assert.deepEqual(teamsByEvent[directTeam.id], [c.team1], "a direct athlete target on a team-owned event names the owner team");
-  const allowed = ["key", "kind", "date", "title", "eventKind", "eventTypeLabel", "span", "startTime", "endTime", "location", "status", "cancelled", "teamIds", "links"].sort();
+  // K2b-1b adds the place (D27); never a detail or a value.
+  const allowed = ["key", "kind", "date", "title", "eventKind", "eventTypeLabel", "span", "startTime", "endTime", "location", "place", "status", "cancelled", "teamIds", "links"].sort();
   for (const card of athleteCards) {
     assert.deepEqual(Object.keys(card).sort(), allowed, `the athlete's card carries only the allowed fields: ${Object.keys(card).join(",")}`);
     assert.deepEqual(Object.keys(card.links), ["eventId"]);

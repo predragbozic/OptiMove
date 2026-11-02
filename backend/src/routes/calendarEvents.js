@@ -7,7 +7,7 @@
 // codes only — a database message is logged, never sent.
 import { Router } from "express";
 import {
-  alignSessions, attachActivity, attachSessions, cancelEvent, createEvent, detachActivity, detachSessions, getEvent, updateEvent,
+  alignSessions, attachActivity, attachSessions, cancelEvent, createEvent, detachActivity, detachSessions, getEvent, setEventFields, updateEvent,
 } from "../calendarEventService.js";
 import { eventFormOptions } from "../calendarSettingsService.js";
 import { calendarCommand, calendarContextOf, respondCalendarError } from "./calendarRouteErrors.js";
@@ -46,5 +46,8 @@ router.post("/:eventId/sessions/detach", command((ctx, req) => detachSessions(ct
 router.post("/:eventId/sessions/align", command((ctx, req) => alignSessions(ctx, req.params.eventId, req.body)));
 router.post("/:eventId/activities", command((ctx, req) => attachActivity(ctx, req.params.eventId, req.body)));
 router.post("/:eventId/activities/detach", command((ctx, req) => detachActivity(ctx, req.params.eventId, req.body)));
+// K2b-1b: the values of the event's chosen details (plan section 18.2; D39:
+// the event's managers only).
+router.post("/:eventId/fields", command((ctx, req) => setEventFields(ctx, req.params.eventId, req.body)));
 
 export default router;

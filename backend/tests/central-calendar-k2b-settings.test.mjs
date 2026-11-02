@@ -80,11 +80,13 @@ async function catalog(cookie) {
 const byKey = (list, key) => list.find((x) => x.key === key);
 
 // An event through the K2a route (the club's own, targeting the club).
+// No details chosen (K2b-1b would copy the type's defaults): the raw writes
+// of this suite choose them themselves.
 async function clubEvent(admin, clubId, kind = "training") {
   const types = (await typesOf(admin.cookie)).body.types;
   const res = await api("/api/calendar/events", {
     method: "POST", cookie: admin.cookie,
-    body: { requestKey: newKey(), timezone: TZ, eventTypeId: types.find((t) => t.kind === kind).id, title: `Event ${uid()}`, day: FUTURE, targets: [{ kind: "club", id: clubId }] },
+    body: { requestKey: newKey(), timezone: TZ, eventTypeId: types.find((t) => t.kind === kind).id, title: `Event ${uid()}`, day: FUTURE, targets: [{ kind: "club", id: clubId }], fieldIds: [] },
   });
   assert.equal(res.status, 201, res.text);
   return res.body.event;

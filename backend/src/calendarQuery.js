@@ -41,7 +41,7 @@ import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
   calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql,
 } from "./calendarAccess.js";
-import { eventOwnerOfRow, eventWriteBasis } from "./calendarEventAccess.js";
+import { eventOwnerOfRow, eventPlaceOf, eventShowsFieldSql, eventShowsPlaceSql, eventShowsTypeSql, eventWriteBasis } from "./calendarEventAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
 // /calendar of routes/trainingLoad.js.
 import { WEEKLY_PLAN_SESSION_FILTER_SQL } from "./trainingLoadAccess.js";
@@ -456,19 +456,22 @@ async function readEventRows(ctx, { from, to }) {
   const result = await query(
     `select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
             -- The type's id, as its label: only on its own club's events (D41).
-            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then e.event_type_id end as event_type_id,
+            case when ${eventShowsTypeSql("e", "t", "et")} then e.event_type_id end as event_type_id,
             e.title, e.day, e.end_day, e.start_time, e.end_time, e.location, e.status, e.expects, e.notes,
             e.external_schedule_id, e.test_schedule_id, e.revision,
             et.kind as event_kind,
             -- A club's type is shown only on its own club's events (a team moved to
             -- another club keeps its events and their type id; K2b-1a, security M1).
-            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then et.label end as event_type_label,
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.label end as event_type_label,
+            -- K2b-1b: the library place, only of the event's club now (D41).
+            pl.id as place_id, pl.name as place_name, pl.address as place_address, pl.note as place_note,
             t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
             coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active,
             (${structural}) as structural
        from calendar.events e
        join calendar.event_types et on et.id = e.event_type_id
        left join public.teams t on t.id = e.owner_team_id
+       left join calendar.locations pl on pl.id = e.location_id and ${eventShowsPlaceSql("e", "t", "pl")}
        left join public.clubs c on c.id = e.owner_club_id
        left join public.clubs tc on tc.id = t.club_id
       where e.day <= $2::date and coalesce(e.end_day, e.day) >= $1::date
@@ -477,6 +480,31 @@ async function readEventRows(ctx, { from, to }) {
     params,
   );
   return result.rows;
+}
+
+// The chosen details of the window's MANAGED events (K2b-1b; T7: a manager's
+// card only), counted — only the details of the event's club now (D41): how
+// many are chosen, how many hold a value, how many are required and how many
+// of those hold one. A value row whose columns are all null (cleared) holds
+// none. One statement.
+async function readEventDetailCounts(eventIds) {
+  const result = await query(
+    `select s.event_id, count(*)::int as selected,
+            count(*) filter (where num_nonnulls(v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value) > 0)::int as filled,
+            count(*) filter (where f.required)::int as required,
+            count(*) filter (where f.required and num_nonnulls(v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value) > 0)::int as filled_required
+       from calendar.event_selected_fields s
+       join calendar.events e on e.id = s.event_id
+       left join public.teams t on t.id = e.owner_team_id
+       join calendar.event_fields f on f.id = s.field_id
+       left join calendar.event_field_values v on v.event_id = s.event_id and v.field_id = s.field_id
+      where s.event_id = any($1::uuid[]) and ${eventShowsFieldSql("e", "t", "f")}
+      group by s.event_id`,
+    [eventIds],
+  );
+  return new Map(result.rows.map((r) => [String(r.event_id), {
+    selected: r.selected, filled: r.filled, required: r.required, filledRequired: r.filled_required,
+  }]));
 }
 
 // The team targets of the window's events (a club event addressed to a team
@@ -607,12 +635,19 @@ export function deriveStatus(card, today) {
 // `gaps` names the declared expectations that have no channel. A cancelled
 // event is cancelled; an event that expects nothing is `none`; one whose
 // every expectation is a gap reads `planned` before its day and `none` after.
+// K2b-1b (D31): the chosen REQUIRED details of the event's club are one more
+// check, on a manager's card only (T7) and judged only after the event's last
+// day (`span.to`): a required detail without a value is then unmet, so the
+// event awaits its entry (*Awaiting details*), and an event that expects
+// nothing but has a required detail waits for it (`planned` before). Optional
+// details never change the status.
 export function deriveEventStatus(card, today) {
   const gaps = [];
   card.gaps = gaps;
   if (card.cancelled) return "cancelled";
   const expects = card.expects || [];
-  if (!expects.length) return "none";
+  const required = card.canManage === true && card.details ? card.details.required : 0;
+  if (!expects.length && !required) return "none";
   const checks = [];
   let unmet = 0;
   let terminal = 0;
@@ -637,7 +672,12 @@ export function deriveEventStatus(card, today) {
     checks.push(card.deviceData === true);
     if (card.deviceData !== true) unmet += 1;
   }
-  if (!checks.length) return card.date < today ? "none" : "planned";
+  if (required && card.span && card.span.to < today) {
+    const missing = Math.max(0, required - card.details.filledRequired);
+    checks.push(missing === 0);
+    unmet += missing;
+  }
+  if (!checks.length) return card.date < today && !required ? "none" : "planned";
   if (checks.every(Boolean)) return "done";
   if (!(card.date < today)) return "planned";
   if (unmet > 0 && terminal >= unmet) return "missed";
@@ -820,6 +860,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   // folds nothing either: a linked session or activity is then its own card,
   // never gone from that response (security review of K2a-1b).
   const coachView = ctx.type !== "athlete";
+  // K2b-1b: the details of the events this coach manages and gets cards of.
+  const managedEventIds = coachView && kinds.has("event")
+    ? uniq(eventDays.filter(({ row }) => eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null).map(({ row }) => String(row.id)))
+    : [];
+  const detailCounts = managedEventIds.length ? await readEventDetailCounts(managedEventIds) : new Map();
   const foldsLinks = coachView && kinds.has("event") && eventRows.length > 0;
   const sessionLinks = foldsLinks ? await readEventSessionLinks(eventRows.map((r) => r.id)) : [];
   const activityLinks = foldsLinks ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
@@ -1112,7 +1157,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const canManage = ctx.type === "coach" && eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null;
     const card = newCard({
       key: `event:${row.id}:${day}`, kind: "event", date: day, title: row.title,
-      startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), location: row.location,
+      startTime: timeStr(row.start_time), endTime: timeStr(row.end_time),
+      // K2b-1b: the place (D41) and, for the K2a-2 screen, its one line.
+      place: eventPlaceOf(row), location: row.place_id ? row.place_name : row.location,
+      details: canManage ? (detailCounts.get(String(row.id)) ?? { selected: 0, filled: 0, required: 0, filledRequired: 0 }) : undefined,
       eventId: String(row.id), eventKind: row.event_kind, eventTypeId: row.event_type_id ? String(row.event_type_id) : null, eventTypeLabel: row.event_type_label,
       span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
       expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
@@ -1219,7 +1267,7 @@ function publicCard(card, includeAthletes) {
     return {
       key: card.key, kind: "event", date: card.date, title: card.title,
       eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel, span: card.span,
-      startTime: card.startTime, endTime: card.endTime, location: card.location,
+      startTime: card.startTime, endTime: card.endTime, location: card.location, place: card.place,
       status: card.cancelled ? "cancelled" : "planned", cancelled: card.cancelled,
       teamIds: [...card.teamIds].sort(),
       links: { eventId: card.eventId },
@@ -1246,6 +1294,7 @@ function publicCard(card, includeAthletes) {
     out.eventTypeLabel = card.eventTypeLabel;
     out.endTime = card.endTime;
     out.location = card.location;
+    out.place = card.place;
     out.span = card.span;
     out.gaps = card.gaps || [];
     // Whether the referenced schedule's day card is folded under this card
@@ -1257,6 +1306,7 @@ function publicCard(card, includeAthletes) {
     if (card.canManage) {
       out.eventTypeId = card.eventTypeId;
       out.notes = card.notes ?? null;
+      out.details = card.details;
       out.alignment = card.alignment ?? { pending: 0 };
     } else {
       // A reader who may not manage the event gets no id of its type or of

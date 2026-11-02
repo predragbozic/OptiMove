@@ -39,8 +39,8 @@ import {
   calendarActivityScopeSql, calendarAthleteScopeSql, calendarScheduleCandidateSql, loadWorkspaceTeams, membershipOnDaySql,
 } from "./calendarAccess.js";
 import {
-  EventError, eventOwnerForWorkspace, eventOwnerId, eventOwnerOfRow, eventTypesOwnerSql, eventWriteBasis, forbidden,
-  notFound, resolveEventTargets,
+  EventError, eventOwnerForWorkspace, eventOwnerId, eventOwnerOfRow, eventPlaceOf, eventShowsFieldSql, eventShowsPlaceSql, eventShowsTypeSql,
+  eventTypesOwnerSql, eventWriteBasis, forbidden, notFound, resolveEventTargets,
 } from "./calendarEventAccess.js";
 import {
   canManageExternalScheduleInScope, canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, WEEKLY_PLAN_SESSION_FILTER_SQL,
@@ -51,6 +51,8 @@ import { runCalendarCommand } from "./calendarCommandRunner.js";
 export const EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 export const EVENT_TARGET_KINDS = Object.freeze(["athlete", "team", "club"]);
 export const MAX_EVENT_TARGETS = 200;
+// K2b-1b: an event's chosen details (v51's cap) and its values per command.
+export const MAX_EVENT_FIELDS = 30;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -170,6 +172,24 @@ export function uuidField(body, field, code) {
   return raw.toLowerCase();
 }
 
+// An ordered list of distinct detail ids (K2b-1b), at most 30; undefined when
+// absent (on create: the type's default details).
+function fieldIdsField(body) {
+  if (!("fieldIds" in (body || {}))) return undefined;
+  const raw = body.fieldIds;
+  if (!Array.isArray(raw) || raw.length > MAX_EVENT_FIELDS) throw bad("invalid_fields", `fieldIds must be a list of at most ${MAX_EVENT_FIELDS} ids.`);
+  const out = [];
+  for (const value of raw) {
+    if (!isUuid(value)) throw bad("invalid_fields", "fieldIds must hold UUIDs.");
+    const id = value.toLowerCase();
+    if (out.includes(id)) throw bad("invalid_fields", "fieldIds must not repeat an id.");
+    out.push(id);
+  }
+  return out;
+}
+
+const BOTH_PLACES = "Choose a place from the club's list or type one, not both.";
+
 export function revisionField(body) {
   const raw = body?.expectedRevision;
   if (!Number.isInteger(raw) || raw < 1) throw bad("invalid_revision", "expectedRevision must be a positive integer.");
@@ -208,6 +228,14 @@ export function validateCreateBody(body) {
     externalScheduleId: uuidField(body, "externalScheduleId", "invalid_schedule") ?? null,
     testScheduleId: uuidField(body, "testScheduleId", "invalid_schedule") ?? null,
   };
+  // K2b-1b: a library place OR the one-off text; the chosen details (absent:
+  // the type's default details). Added to the canonical body only when sent,
+  // so the request hash of a body without them is the one K2a computed.
+  const locationId = uuidField(body, "locationId", "invalid_location") ?? null;
+  const fieldIds = fieldIdsField(body);
+  if (locationId) canonical.locationId = locationId;
+  if (fieldIds !== undefined) canonical.fieldIds = fieldIds;
+  if (locationId && canonical.location) throw bad("invalid_location", BOTH_PLACES);
   checkDaysAndTimes(canonical);
   return { requestKey, canonical };
 }
@@ -234,6 +262,9 @@ export function validateUpdateBody(body) {
   put("targets", targetsField(body));
   put("externalScheduleId", uuidField(body, "externalScheduleId", "invalid_schedule"));
   put("testScheduleId", uuidField(body, "testScheduleId", "invalid_schedule"));
+  put("locationId", uuidField(body, "locationId", "invalid_location"));
+  put("fieldIds", fieldIdsField(body));
+  if (fields.locationId && fields.location) throw bad("invalid_location", BOTH_PLACES);
   if (!Object.keys(fields).length) throw bad("nothing_to_change", "Send at least one field to change.");
   return { requestKey, canonical: { operation: "update", expectedRevision, fields } };
 }
@@ -261,14 +292,16 @@ const EVENT_VIEW_SQL = `
   select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
          -- The type's id, as its label: only on its own club's events (D41;
          -- an edit keeps the stored type, read by EVENT_ROW_FOR_WRITE_SQL).
-         case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then e.event_type_id end as event_type_id,
+         case when ${eventShowsTypeSql("e", "t", "et")} then e.event_type_id end as event_type_id,
          e.title, e.day, e.end_day, e.start_time, e.end_time, e.timezone, e.location, e.status,
          e.cancelled_at, e.cancel_reason, e.expects, e.notes, e.external_schedule_id, e.test_schedule_id, e.revision,
          e.created_at, e.updated_at,
          et.kind as event_kind,
             -- A club's type is shown only on its own club's events (a team moved to
             -- another club keeps its events and their type id; K2b-1a, security M1).
-            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then et.label end as event_type_label,
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.label end as event_type_label,
+         -- K2b-1b: the library place, only of the event's club now (D41).
+         pl.id as place_id, pl.name as place_name, pl.address as place_address, pl.note as place_note,
          t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
          coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active,
          (select coalesce(jsonb_agg(jsonb_build_object(
@@ -319,20 +352,61 @@ const EVENT_VIEW_SQL = `
     from calendar.events e
     join calendar.event_types et on et.id = e.event_type_id
     left join public.teams t on t.id = e.owner_team_id
+    left join calendar.locations pl on pl.id = e.location_id and ${eventShowsPlaceSql("e", "t", "pl")}
     left join public.clubs c on c.id = e.owner_club_id
     left join public.clubs tc on tc.id = t.club_id
    where e.id = $1`;
 
+// The chosen details of one event with their values, in their order — only
+// the event's club's now (D41; a private coach's event: the system set). For
+// the event's managers only (T7). A hidden option (D30) is still named when
+// a value chose it.
+const EVENT_FIELDS_SQL = `
+  select f.id, f.label, f.description, f.value_kind, f.unit, f.min_value, f.max_value, f.required,
+         f.archived_at is not null as archived, s.position,
+         v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value,
+         (select coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'label', o.label, 'hidden', o.archived_at is not null)
+                   order by o.sort_order, o.created_at, o.id), '[]'::jsonb)
+            from calendar.event_field_options o where o.field_id = f.id and (o.archived_at is null or o.id = v.option_id)) as options
+    from calendar.event_selected_fields s
+    join calendar.events e on e.id = s.event_id
+    left join public.teams t on t.id = e.owner_team_id
+    join calendar.event_fields f on f.id = s.field_id
+    left join calendar.event_field_values v on v.event_id = s.event_id and v.field_id = s.field_id
+   where s.event_id = $1 and ${eventShowsFieldSql("e", "t", "f")}
+   order by s.position, f.id`;
+
+const numberOrNull = (v) => (v === null || v === undefined ? null : Number(v));
+function fieldValueOf(r) {
+  switch (r.value_kind) {
+    case "choice": return r.option_id ? String(r.option_id) : null;
+    case "number": return numberOrNull(r.number_value);
+    case "scale_1_5": return numberOrNull(r.scale_value);
+    case "yes_no": return r.bool_value ?? null;
+    default: return r.text_value ?? null;
+  }
+}
+async function readEventFields(queryable, eventId) {
+  const rows = (await queryable.query(EVENT_FIELDS_SQL, [eventId])).rows;
+  return rows.map((r) => ({
+    fieldId: String(r.id), label: r.label, description: r.description, valueKind: r.value_kind, unit: r.unit,
+    minValue: numberOrNull(r.min_value), maxValue: numberOrNull(r.max_value), required: r.required, archived: r.archived,
+    options: r.options || [], value: fieldValueOf(r),
+  }));
+}
+
 // The manager's view: everything the event holds; a linked activity's name
 // and origin only when the caller may read that activity
 // (`readableActivityIds`).
-function viewOf(row, readableActivityIds) {
+function viewOf(row, readableActivityIds, fields = []) {
   return {
     id: row.id,
     ownerScope: row.owner_scope, ownerClubId: row.owner_club_id, ownerTeamId: row.owner_team_id, ownerUserId: row.owner_user_id,
     eventTypeId: row.event_type_id, eventKind: row.event_kind, eventTypeLabel: row.event_type_label,
     title: row.title, day: dateStr(row.day), endDay: dateStr(row.end_day),
     startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), timezone: row.timezone, location: row.location,
+    // K2b-1b: the place (D41) and the chosen details with their values (T7).
+    locationId: row.place_id ? String(row.place_id) : null, place: eventPlaceOf(row), fields,
     status: row.status, cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null, cancelReason: row.cancel_reason,
     expects: row.expects || [], externalScheduleId: row.external_schedule_id, testScheduleId: row.test_schedule_id,
     revision: row.revision, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
@@ -414,6 +488,8 @@ async function reducedViewOf(row, ctx, queryable) {
     eventKind: row.event_kind, eventTypeLabel: row.event_type_label,
     title: row.title, day: span.from, endDay: dateStr(row.end_day),
     startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), timezone: row.timezone, location: row.location,
+    // K2b-1b: the place (D41); never the details (T7: managers only).
+    place: eventPlaceOf(row),
     status: row.status, cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
     expects: row.expects || [], revision: row.revision,
     targets, canManage: false,
@@ -436,7 +512,7 @@ async function readableActivityIdsOf(queryable, ctx, row) {
   return new Set(result.rows.map((r) => String(r.id)));
 }
 async function managerViewOf(queryable, ctx, row) {
-  return viewOf(row, await readableActivityIdsOf(queryable, ctx, row));
+  return viewOf(row, await readableActivityIdsOf(queryable, ctx, row), await readEventFields(queryable, row.id));
 }
 
 async function readEventView(queryable, ctx, eventId) {
@@ -684,6 +760,9 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
       if (error?.code === "23505" && error.constraint === ACTIVITY_LINK_CONSTRAINT) {
         return conflict("activity_already_attached", "This activity is already attached to another event.");
       }
+      if (error?.code === "23514" && VALUE_CONSTRAINTS.has(error.constraint)) return invalidValue(null);
+      if (error?.code === "23514" && error.constraint === "events_location_usable") return bad("location_not_available", LOCATION_NOT_AVAILABLE);
+      if (error?.code === "23514" && error.constraint === "event_selected_fields_max") return bad("invalid_fields", `fieldIds must be a list of at most ${MAX_EVENT_FIELDS} ids.`);
       return null;
     },
   });
@@ -703,15 +782,23 @@ export async function createEvent(ctx, body) {
     const expects = canonical.expects ?? (type.default_expects || []);
     await checkScheduleRefs(client, ctx, owner, { externalScheduleId: canonical.externalScheduleId, testScheduleId: canonical.testScheduleId, kind: type.kind });
     const targets = await resolveEventTargets(client, owner, canonical.targets, canonical.day);
+    // K2b-1b: the place and the details, both of the owner's club (D24, D27).
+    const club = ownerClubOf(owner);
+    const locationId = canonical.locationId ?? null;
+    if (locationId) await lockOwnPlace(client, club, locationId);
+    const fieldIds = canonical.fieldIds ?? await typeDefaultFieldIds(client, type.id);
+    if (canonical.fieldIds) await lockOwnLiveFields(client, club, canonical.fieldIds);
     const inserted = await client.query(
       `insert into calendar.events (owner_scope, owner_user_id, owner_club_id, owner_team_id, event_type_id, title, day, end_day, start_time, end_time,
-                                    timezone, location, expects, notes, external_schedule_id, test_schedule_id, created_by_user_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id`,
+                                    timezone, location, expects, notes, external_schedule_id, test_schedule_id, created_by_user_id, location_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning id`,
       [owner.scope, owner.userId, owner.clubId, owner.teamId, type.id, canonical.title, canonical.day, canonical.endDay, canonical.startTime, canonical.endTime,
-        canonical.timezone, canonical.location, expects, canonical.notes, canonical.externalScheduleId, canonical.testScheduleId, ctx.userId],
+        canonical.timezone, canonical.location, expects, canonical.notes, canonical.externalScheduleId, canonical.testScheduleId, ctx.userId,
+        locationId],
     );
     const eventId = inserted.rows[0].id;
     await insertTargets(client, eventId, targets);
+    await writeEventFields(client, eventId, fieldIds);
     const view = await readEventView(client, ctx, eventId);
     return {
       eventId, httpStatus: 201, body: { event: view },
@@ -719,6 +806,7 @@ export async function createEvent(ctx, body) {
         eventTypeId: type.id, kind: type.kind, day: canonical.day, endDay: canonical.endDay, startTime: canonical.startTime, endTime: canonical.endTime,
         timezone: canonical.timezone, expects, targetIds: targets.map((t) => t.id), targetKinds: targets.map((t) => t.kind),
         externalScheduleId: canonical.externalScheduleId, testScheduleId: canonical.testScheduleId,
+        locationId, fieldIds,
       },
     };
   });
@@ -802,6 +890,36 @@ export async function updateEvent(ctx, eventId, body) {
       });
     }
     const before = await readEventView(client, ctx, row.id);
+    // K2b-1b, finding 6 (option A) and T8: every edit by a manager of the
+    // event's club now leaves nothing of another club on it — another club's
+    // chosen details are detached and another club's place is cleared (a
+    // team moved, D41). Audited by flags only, never by the other club's ids.
+    const club = ownerClubOf(owner);
+    const foreignFieldsDetached = (await client.query(
+      `delete from calendar.event_selected_fields s
+         using calendar.event_fields f, calendar.events e left join public.teams t on t.id = e.owner_team_id
+        where s.event_id = $1 and f.id = s.field_id and e.id = s.event_id and not ${eventShowsFieldSql("e", "t", "f")}`,
+      [row.id],
+    )).rowCount;
+    const foreignPlaceCleared = Boolean(row.location_id) && before.locationId === null;
+    // The place: a library place OR the one-off text; choosing one clears the
+    // other unless the body sends both (refused by the validation).
+    let locationId = foreignPlaceCleared ? null : (row.location_id ? String(row.location_id) : null);
+    if ("locationId" in f) {
+      locationId = f.locationId;
+      if (f.locationId && !("location" in f)) next.location = null;
+    }
+    if ("location" in f && f.location && !("locationId" in f)) locationId = null;
+    if (locationId && next.location) throw bad("invalid_location", BOTH_PLACES);
+    if (locationId && locationId !== before.locationId) await lockOwnPlace(client, club, locationId);
+    // The details: a NEW entry is a live detail of the club now; a kept one
+    // may be archived (plan 2.6). Nothing else changes the list — a change of
+    // the type included (18.7).
+    if ("fieldIds" in f) {
+      const kept = new Set(before.fields.map((x) => x.fieldId));
+      await lockOwnLiveFields(client, club, f.fieldIds.filter((id) => !kept.has(id)));
+      await writeEventFields(client, row.id, f.fieldIds);
+    }
     let targets = null;
     if ("targets" in f) targets = await resolveEventTargets(client, owner, f.targets, next.day);
     else if (next.day !== dateStr(row.day)) {
@@ -811,10 +929,10 @@ export async function updateEvent(ctx, eventId, body) {
     await client.query(
       `update calendar.events
           set event_type_id = $2, title = $3, day = $4, end_day = $5, start_time = $6, end_time = $7, timezone = $8, location = $9,
-              expects = $10, notes = $11, external_schedule_id = $12, test_schedule_id = $13, revision = revision + 1
+              expects = $10, notes = $11, external_schedule_id = $12, test_schedule_id = $13, location_id = $14, revision = revision + 1
         where id = $1`,
       [row.id, next.eventTypeId, next.title, next.day, next.endDay, next.startTime, next.endTime, next.timezone, next.location,
-        expects, next.notes, next.externalScheduleId, next.testScheduleId],
+        expects, next.notes, next.externalScheduleId, next.testScheduleId, locationId],
     );
     if (targets) {
       await client.query(`delete from calendar.event_targets where event_id = $1`, [row.id]);
@@ -822,9 +940,14 @@ export async function updateEvent(ctx, eventId, body) {
     }
     const after = await readEventView(client, ctx, row.id);
     const details = {};
-    for (const key of ["eventTypeId", "title", "day", "endDay", "startTime", "endTime", "timezone", "location", "externalScheduleId", "testScheduleId"]) {
+    for (const key of ["eventTypeId", "title", "day", "endDay", "startTime", "endTime", "timezone", "location", "locationId", "externalScheduleId", "testScheduleId"]) {
       if (String(before[key] ?? "") !== String(after[key] ?? "")) details[key] = [scalarDetail(before[key]), scalarDetail(after[key])];
     }
+    const fieldIdsBefore = before.fields.map((x) => x.fieldId);
+    const fieldIdsAfter = after.fields.map((x) => x.fieldId);
+    if (JSON.stringify(fieldIdsBefore) !== JSON.stringify(fieldIdsAfter)) { details.fieldIdsBefore = fieldIdsBefore; details.fieldIdsAfter = fieldIdsAfter; }
+    if (foreignFieldsDetached) details.foreignFieldsDetached = foreignFieldsDetached;
+    if (foreignPlaceCleared) details.foreignPlaceCleared = true;
     if (JSON.stringify(before.expects) !== JSON.stringify(after.expects)) { details.expectsBefore = before.expects; details.expectsAfter = after.expects; }
     if ((before.notes ?? null) !== (after.notes ?? null)) details.notesChanged = true;
     if (targets) {
@@ -832,6 +955,185 @@ export async function updateEvent(ctx, eventId, body) {
       details.targetsAfter = after.targets.map((t) => String(t.id));
     }
     return { eventId: row.id, httpStatus: 200, body: { event: after }, details };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// K2b-1b: places, details and values (plan section 18)
+// ---------------------------------------------------------------------------
+const FIELD_NOT_AVAILABLE = "One of these details is not available in this workspace.";
+const invalidValue = (fieldId) => new EventError(400, "invalid_value", "This value is not valid for its detail.", fieldId ? { fieldId } : undefined);
+// v51's guards behind the service's own checks (K2b-1b): reached only by a
+// race the locks do not order, answered as the same refusals.
+const VALUE_CONSTRAINTS = new Set(["event_field_values_kind", "event_field_values_bounds", "event_field_values_option"]);
+const LOCATION_NOT_AVAILABLE = "This place is not available in this workspace.";
+
+// The club whose catalog the owner's events use NOW: a club event's club, a
+// team event's team's club; none for a private coach (the system details, no
+// places, D33).
+function ownerClubOf(owner) {
+  if (owner.scope === "club") return owner.clubId;
+  if (owner.scope === "team") return owner.teamClubId;
+  return null;
+}
+
+// A live place of the club, FOR SHARE (an archive waits behind the write);
+// a missing, foreign or archived place is the one 400.
+async function lockOwnPlace(client, club, locationId) {
+  const row = club ? (await client.query(
+    `select id from calendar.locations where id = $1 and owner_club_id = $2 and archived_at is null for share`, [locationId, club],
+  )).rows[0] : null;
+  if (!row) throw bad("location_not_available", LOCATION_NOT_AVAILABLE);
+}
+
+// Live details of the club (the system set for a private coach), FOR SHARE in
+// ascending id; a missing, foreign, system (on a club event) or archived id
+// is the one 400.
+async function lockOwnLiveFields(client, club, fieldIds) {
+  if (!fieldIds.length) return;
+  const sorted = [...fieldIds].sort();
+  const rows = (await client.query(
+    club
+      ? `select f.id from calendar.event_fields f where f.id = any($1::uuid[]) and f.archived_at is null
+           and f.owner_scope = 'club' and f.owner_club_id = $2 order by f.id for share`
+      : `select f.id from calendar.event_fields f where f.id = any($1::uuid[]) and f.archived_at is null
+           and f.owner_scope = 'system' order by f.id for share`,
+    club ? [sorted, club] : [sorted],
+  )).rows;
+  if (rows.length !== sorted.length) throw bad("field_not_available", FIELD_NOT_AVAILABLE);
+}
+
+// A type's live default details, in their order (the type is the owner's).
+async function typeDefaultFieldIds(client, typeId) {
+  return (await client.query(
+    `select l.field_id from calendar.event_type_fields l
+       join calendar.event_fields f on f.id = l.field_id and f.archived_at is null
+      where l.event_type_id = $1 order by l.position, l.field_id`,
+    [typeId],
+  )).rows.map((r) => String(r.field_id));
+}
+
+// An event's list rewritten by difference (as a type's list in 1a): the
+// entries left out removed (their values stay, v51), the kept ones moved,
+// the new ones added. Three statements.
+async function writeEventFields(client, eventId, fieldIds) {
+  await client.query(`delete from calendar.event_selected_fields where event_id = $1 and not (field_id = any($2::uuid[]))`, [eventId, fieldIds]);
+  await client.query(
+    `update calendar.event_selected_fields s set position = f.ord - 1
+       from unnest($2::uuid[]) with ordinality as f(id, ord)
+      where s.event_id = $1 and s.field_id = f.id and s.position <> f.ord - 1`,
+    [eventId, fieldIds],
+  );
+  await client.query(
+    `insert into calendar.event_selected_fields (event_id, field_id, position)
+     select $1, f.id, f.ord - 1 from unnest($2::uuid[]) with ordinality as f(id, ord)
+      where not exists (select 1 from calendar.event_selected_fields x where x.event_id = $1 and x.field_id = f.id)`,
+    [eventId, fieldIds],
+  );
+}
+
+// POST /:id/fields — the coach's values of the event's details (D39: the
+// event's managers only). One value per detail, by its kind; null clears
+// (the row stays: a detail once answered stays answered, plan 2.3).
+export function validateSetFieldsBody(body) {
+  const requestKey = requestKeyOf(body);
+  const expectedRevision = revisionField(body);
+  const raw = body?.values;
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_EVENT_FIELDS) {
+    throw bad("invalid_values", `values must be a list of 1 to ${MAX_EVENT_FIELDS} { fieldId, value }.`);
+  }
+  const values = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || !isUuid(entry.fieldId)) throw bad("invalid_values", "Every value needs a fieldId (UUID).");
+    const fieldId = entry.fieldId.toLowerCase();
+    if (values.some((v) => v.fieldId === fieldId)) throw bad("invalid_values", "A detail is named twice.");
+    const value = entry.value === undefined ? null : entry.value;
+    if (value !== null && !["string", "number", "boolean"].includes(typeof value)) throw invalidValue(fieldId);
+    values.push({ fieldId, value });
+  }
+  values.sort((a, b) => a.fieldId.localeCompare(b.fieldId));
+  return { requestKey, canonical: { operation: "set_fields", expectedRevision, values } };
+}
+
+export async function setEventFields(ctx, eventId, body) {
+  if (!isUuid(eventId)) throw notFound();
+  const { requestKey, canonical } = validateSetFieldsBody(body);
+  return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, row }) => {
+    await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
+    const ids = canonical.values.map((v) => v.fieldId);
+    // Chosen on the event AND of the event's club now (D41: another club's
+    // detail on a moved team's event is refused, 18.1) — FOR SHARE in
+    // ascending id, as a value's own guard takes it.
+    const fields = (await client.query(
+      `select f.id, f.value_kind, f.min_value, f.max_value
+         from calendar.event_selected_fields s
+         join calendar.events e on e.id = s.event_id
+         left join public.teams t on t.id = e.owner_team_id
+         join calendar.event_fields f on f.id = s.field_id
+        where s.event_id = $1 and f.id = any($2::uuid[]) and ${eventShowsFieldSql("e", "t", "f")}
+        order by f.id for share of f`,
+      [row.id, ids],
+    )).rows;
+    if (fields.length !== ids.length) throw bad("field_not_available", FIELD_NOT_AVAILABLE);
+    const fieldById = new Map(fields.map((r) => [String(r.id), r]));
+    const current = new Map((await client.query(
+      `select field_id, option_id from calendar.event_field_values where event_id = $1 and field_id = any($2::uuid[])`, [row.id, ids],
+    )).rows.map((r) => [String(r.field_id), r]));
+    const chosenOptions = canonical.values.filter((v) => fieldById.get(v.fieldId).value_kind === "choice" && v.value !== null);
+    for (const v of chosenOptions) if (!isUuid(v.value)) throw invalidValue(v.fieldId);
+    const liveOptions = new Map(chosenOptions.length ? (await client.query(
+      `select id, field_id from calendar.event_field_options where id = any($1::uuid[]) and archived_at is null`,
+      [chosenOptions.map((v) => v.value.toLowerCase())],
+    )).rows.map((r) => [String(r.id), String(r.field_id)]) : []);
+    const cleared = [];
+    for (const v of canonical.values) {
+      const field = fieldById.get(v.fieldId);
+      const columns = { option_id: null, number_value: null, scale_value: null, bool_value: null, text_value: null };
+      if (v.value === null) {
+        cleared.push(v.fieldId);
+      } else if (field.value_kind === "choice") {
+        const optionId = v.value.toLowerCase();
+        // A hidden option kept as it is passes; a new choice is a live option of this detail (D30).
+        const unchanged = current.get(v.fieldId)?.option_id && String(current.get(v.fieldId).option_id) === optionId;
+        if (!unchanged && liveOptions.get(optionId) !== v.fieldId) throw invalidValue(v.fieldId);
+        columns.option_id = optionId;
+      } else if (field.value_kind === "number") {
+        const n = v.value;
+        const min = field.min_value === null ? null : Number(field.min_value);
+        const max = field.max_value === null ? null : Number(field.max_value);
+        if (typeof n !== "number" || !Number.isFinite(n) || Math.abs(n) >= 1e9 || Math.round(n * 1000) / 1000 !== n
+          || (min !== null && n < min) || (max !== null && n > max)) throw invalidValue(v.fieldId);
+        columns.number_value = n;
+      } else if (field.value_kind === "scale_1_5") {
+        if (!Number.isInteger(v.value) || v.value < 1 || v.value > 5) throw invalidValue(v.fieldId);
+        columns.scale_value = v.value;
+      } else if (field.value_kind === "yes_no") {
+        if (typeof v.value !== "boolean") throw invalidValue(v.fieldId);
+        columns.bool_value = v.value;
+      } else {
+        const text = typeof v.value === "string" ? v.value.trim() : null;
+        if (!text || /[\r\n]/.test(text) || !boundedText(text, 200)) throw invalidValue(v.fieldId);
+        columns.text_value = text;
+      }
+      if (current.has(v.fieldId)) {
+        await client.query(
+          `update calendar.event_field_values
+              set option_id = $3, number_value = $4, scale_value = $5, bool_value = $6, text_value = $7, updated_by_user_id = $8
+            where event_id = $1 and field_id = $2`,
+          [row.id, v.fieldId, columns.option_id, columns.number_value, columns.scale_value, columns.bool_value, columns.text_value, ctx.userId],
+        );
+      } else if (v.value !== null) {
+        await client.query(
+          `insert into calendar.event_field_values (event_id, field_id, option_id, number_value, scale_value, bool_value, text_value, updated_by_user_id)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [row.id, v.fieldId, columns.option_id, columns.number_value, columns.scale_value, columns.bool_value, columns.text_value, ctx.userId],
+        );
+      }
+    }
+    await bumpRevision(client, row.id);
+    const view = await readEventView(client, ctx, row.id);
+    // The change row names the details, never a value (plan 2.2).
+    return { eventId: row.id, httpStatus: 200, body: { event: view }, details: { fieldIds: ids, cleared } };
   });
 }
 
