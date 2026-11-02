@@ -31,7 +31,6 @@ import { pathToFileURL } from "node:url";
 import { assertNoSecretInReport, describeResponse, discoveryProfile, DiscoveryUsageError } from "./gpexe-auth-discovery.mjs";
 import { BUNDLE_FIELDS, readBounded, teamScopedPath } from "../src/gpexeRestV1Adapter.js";
 import { redactGpexe } from "../src/gpexeClient.js";
-import { GPEXE_METRIC_SPECS } from "../src/gpexeImportMapper.js";
 import { dayOf, LIST_LIMIT, MAX_EXCHANGE_BYTES, maskProbePath, PROBE_HOST, PROBE_TEAM, REQUEST_TIMEOUT_MS, safeId } from "./gpexe-rest-v1-capability-probe.mjs";
 
 // 1 exchange + list, parent, athlete list, 2 details, thresholds, 4 /more/ = 11; + the drill's api/ form only when its rest/v1 form fails.
@@ -44,22 +43,22 @@ const LEVELS = Object.freeze(["whole", "drill"]);
 export const LEGACY_API_PREFIX = "api/";
 export const LEGACY_DRILL_PATH = /^team_session\/(0|[1-9][0-9]{0,11})\/details\/\?drill=0$/;
 
-// The importer's own rules for what it takes from /more/ and from a row, read from its metric specs,
-// so the probe can never compare against a rule the importer does not apply.
-export const IMPORTED_MORE_RULES = Object.freeze((() => {
-  const events = [];
-  const zones = [];
-  for (const spec of GPEXE_METRIC_SPECS) {
-    const c = spec.sourceContext ?? {};
-    const ev = /^more\.events\.(acceleration|deceleration)_events_count$/.exec(c.field ?? "");
-    if (ev) events.push(Object.freeze({ metric: ev[1], prefix: `${ev[1]}_events`, threshold: c.thresholdMps2, duration: c.minDurationS }));
-    const zn = /^more\.complementary_data\.(power|speed)\[\]\.distance$/.exec(c.field ?? "");
-    if (zn) zones.push(Object.freeze({ family: zn[1], band: Object.freeze([...c.gpexeZoneExtremes]), thresholdField: c.teamThresholdField }));
-  }
-  return Object.freeze({ events: Object.freeze(events), zones: Object.freeze(zones) });
-})());
-export const IMPORTED_ROW_SCALARS = Object.freeze(GPEXE_METRIC_SPECS
-  .map((s) => /^athlete_session\.(total_time|total_distance|max_v)$/.exec(s.sourceContext?.field ?? "")?.[1]).filter(Boolean));
+// The rules the importer applied to /more/ and to a row before phase 9 (its specs then; since 9-B
+// every rule is a mapping version's parameters). The probe's own frozen copy of those values: it
+// imports nothing and compares against these, as it did when they were read from the specs.
+export const IMPORTED_MORE_RULES = Object.freeze({
+  events: Object.freeze([
+    Object.freeze({ metric: "acceleration", prefix: "acceleration_events", threshold: 2.5, duration: 0.3 }),
+    Object.freeze({ metric: "deceleration", prefix: "deceleration_events", threshold: -2.5, duration: 0.3 }),
+  ]),
+  zones: Object.freeze([
+    Object.freeze({ family: "power", band: Object.freeze([25, 60]), thresholdField: "power_thresholds" }),
+    Object.freeze({ family: "power", band: Object.freeze([60, 75]), thresholdField: "power_thresholds" }),
+    Object.freeze({ family: "power", band: Object.freeze([75, null]), thresholdField: "power_thresholds" }),
+    Object.freeze({ family: "speed", band: Object.freeze([7, null]), thresholdField: "speed_thresholds" }),
+  ]),
+});
+export const IMPORTED_ROW_SCALARS = Object.freeze(["total_time", "total_distance", "max_v"]);
 
 // The details' field names the old Google Apps Script read: hypotheses to test, never evidence.
 export const DETAILS_EVENT_FIELDS = Object.freeze({ acceleration: "acceleration_events", deceleration: "deceleration_events" });

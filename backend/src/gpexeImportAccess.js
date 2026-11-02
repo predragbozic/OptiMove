@@ -53,3 +53,40 @@ export async function canApproveGpexeImport({ query }, userId, teamId) {
   if (row.granted) return { canApprove: true, basis: "team_grant" };
   return { canApprove: false, basis: null };
 }
+
+// J17 step 2a (R16), the approval only, after the team import lock: the team
+// and its club FOR SHARE. A team or club archived, missing, or a team moved
+// to another club since the route's access check is the identical 404. The
+// archive writers are single statements and a team move takes the team lock
+// as a try-lock, so this read waits behind no cycle. expectedClubId: the club
+// the route resolved the access in (null for a team without a club;
+// undefined when the caller is not a route - the club is then not compared).
+export class ApprovalTeamGoneError extends Error {
+  constructor() {
+    super("Not found.");
+    this.code = "notFound";
+  }
+}
+export async function lockApprovalTeam(client, teamId, expectedClubId = undefined) {
+  const team = (await client.query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 for share`, [teamId])).rows[0];
+  if (!team || team.active !== true) throw new ApprovalTeamGoneError();
+  const clubId = team.club_id ? String(team.club_id) : null;
+  if (expectedClubId !== undefined && clubId !== (expectedClubId === null ? null : String(expectedClubId))) throw new ApprovalTeamGoneError();
+  if (clubId) {
+    const club = (await client.query(`select coalesce(is_active, true) as active from public.clubs where id = $1 for share`, [clubId])).rows[0];
+    if (!club || club.active !== true) throw new ApprovalTeamGoneError();
+  }
+}
+
+// J17 section 6.1: the audience of one request, computed once from the route's
+// own access snapshot (resolveGpexeTeamAccess) - "platform" for an active
+// platform admin; "club_admin" for the owning club's active admin acting in
+// that club's workspace (D8: not in a team workspace, where a club admin who
+// also coaches the team acts as its coach); "other" for everyone else.
+export function importAudienceOf(authz, access) {
+  if (!access) return "other";
+  if (access.platformAdmin) return "platform";
+  if (access.clubId && holdsClubAdminRole(authz, access.clubId)
+    && access.workspace?.type === "club" && String(access.workspace.scopeId) === String(access.clubId)) return "club_admin";
+  return "other";
+}

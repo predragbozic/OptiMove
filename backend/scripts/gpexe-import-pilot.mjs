@@ -1,11 +1,15 @@
 // GPEXE pilot import CLI.
 //
-//   Dry run (default) — reads saved GPEXE JSON, prints the import plan.
-//   Opens no database connection and creates nothing (no definitions,
-//   no connection, no rows):
+//   Dry run (default) — reads saved GPEXE JSON, prints the import's own
+//   gates (session, athletes, drills, anomalies). Since phase 9 (9-B) every
+//   value comes from a mapping activation of the team's binding, which a dry
+//   run has none of, so it prints no value. Opens no database connection and
+//   creates nothing:
 //     node backend/scripts/gpexe-import-pilot.mjs --raw-dir <dir> --team-session 186942
 //
-//   Apply — only to a disposable test database in this phase:
+//   Apply — only to a disposable test database in this phase, whose team has
+//   an active GPEXE binding and open mapping activations on it (the values
+//   come from those activations, exactly as an approval writes them):
 //     node backend/scripts/gpexe-import-pilot.mjs --raw-dir <dir> --team-session 186942 --apply \
 //       --database-url <url> --owner-team-id <uuid> --performed-by-user-id <uuid> --athlete-map <json>
 //
@@ -20,8 +24,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
-import { buildGpexeImportPlan, GPEXE_METRIC_SPECS } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 
 const MARKER_TABLE = "public.optimove_disposable_test_database";
 const DISPOSABLE_NAME = /^optimove_tests_gpexe_[a-z0-9_]+$/;
@@ -101,38 +105,31 @@ export function loadGpexeBundle(rawDir, teamSessionId) {
   };
 }
 
-function round(value) {
-  return Math.round(value * 100) / 100;
-}
-
 export function formatPlan(plan) {
   const lines = [];
   lines.push(`Session ${plan.teamSessionId}: ${plan.event.name} (${plan.event.occurredInstant} UTC, ${plan.event.timezone}, local date ${plan.event.occurredLocalDate})`);
   lines.push(`Activity type: ${plan.event.activityTypeKey}; source updated_on: ${plan.event.sourceReportedAt}`);
   lines.push(`Drill segments: ${plan.segments.map((s) => s.label).join(", ") || "none"}`);
   lines.push(`GPEXE team thresholds used: id ${plan.thresholdsUsed.id}, valid ${plan.thresholdsUsed.validityStart} – ${plan.thresholdsUsed.validityEnd ?? "open"}`);
-  lines.push("GPEXE metrics imported:");
-  for (const m of plan.metrics) lines.push(`  ${m.key} "${m.label}" [${m.unit}, daily ${m.dailyAggregationMethod}, definition ${m.definition}] <- ${JSON.stringify(m.sourceContext)}`);
-  lines.push("Derived metrics NOT imported (future OptiMove derived metrics):");
-  for (const m of plan.derivedNotImported) lines.push(`  ${m.label} = ${m.formula}`);
+  lines.push(`Athletes the import keeps: ${plan.participants.map((p) => p.gpexeAthleteId).join(", ") || "none"}`);
   for (const p of plan.participants) {
-    lines.push(`Athlete ${p.gpexeAthleteId}:`);
-    for (const r of p.results) lines.push(`  ${r.externalId}: ${r.values.map((v) => `${v.metricKey}=${round(v.value)}`).join(" ")}`);
+    for (const r of p.results) lines.push(`  ${r.externalId}: ${r.values.map((v) => `${v.variableKey}=${v.value} (source ${v.sourceValue} ${v.sourceUnit}, activation ${v.activationId})`).join(" ")}`);
   }
   lines.push(`Anomalies: ${plan.anomalies.length ? "" : "none"}`);
   for (const a of plan.anomalies) lines.push(`  ${a.kind}${a.gpexeAthleteId ? ` athlete ${a.gpexeAthleteId}` : ""}: ${a.detail}`);
-  lines.push(`Skipped values: ${plan.metricSkips.length}`);
-  for (const s of plan.metricSkips) lines.push(`  ${s.athleteSessionId} ${s.metricKey}: ${s.reason}`);
+  lines.push(`Values left out: ${plan.leftOut.length}`);
+  for (const l of plan.leftOut) lines.push(`  ${l.athleteSessionId} activation ${l.activationId ?? l.key}: ${l.code}`);
   return lines.join("\n");
 }
 
 export async function main(argv) {
   const opts = parseArgs(argv);
   if (!opts.rawDir || !opts.teamSession) throw new Error("--raw-dir and --team-session are required");
-  const plan = buildGpexeImportPlan(loadGpexeBundle(opts.rawDir, opts.teamSession));
+  const bundle = loadGpexeBundle(opts.rawDir, opts.teamSession);
+  const plan = buildGpexeImportPlan(bundle, { metricSpecs: [] });
   console.log(formatPlan(plan));
   if (!opts.apply) {
-    console.log("\nDry run: no database connection was opened, nothing was written.");
+    console.log("\nDry run: no database connection was opened, nothing was written. The values come from the team's mapping activations; run --apply on a disposable database whose team has them.");
     return { plan };
   }
 
@@ -145,12 +142,13 @@ export async function main(argv) {
   try {
     await assertDisposableApplyTarget(client, target);
     console.log(`Connected server: address ${target.connectedServer.address}, port ${target.connectedServer.port}, database ${target.connectedServer.database}`);
-    const summary = await importGpexePlan(client, plan, {
+    const summary = await importGpexeBundle(client, bundle, {
       ownerTeamId: opts.ownerTeamId, performedByUserId: opts.performedByUserId, athleteIdByGpexeId,
       batchFilename: `gpexe team_session ${plan.teamSessionId}`,
     });
     console.log(JSON.stringify({
-      counts: summary.counts, eventId: summary.eventId, activityId: summary.activityId, definitionsCreated: summary.definitionsCreated,
+      counts: summary.counts, eventId: summary.eventId, activityId: summary.activityId,
+      connectionCreated: summary.connectionCreated, instanceKeysSet: summary.instanceKeysSet,
       bindingCreated: summary.bindingCreated,
       // What the immutable binding records, plus the incoming set when the
       // two differ in their validity window.
@@ -172,4 +170,3 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   });
 }
 
-export { GPEXE_METRIC_SPECS };
