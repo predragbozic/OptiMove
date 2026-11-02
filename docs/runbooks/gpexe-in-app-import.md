@@ -14,6 +14,9 @@ Code:
 - `backend/src/gpexeImportPreview.js` — the preview;
 - `backend/src/gpexeImportService.js` — checks, candidates, retention, the approval (`approveCandidate`) and the batch approval (`approveCandidates`, Imports phase 4a);
 - `backend/src/gpexeImportAccess.js` — who may do what;
+- `backend/src/gpexeImportMapping.js`, `gpexeImportMapper.js`, `gpexeImportWriter.js` — since 9-B, the mapping
+  context, the plan and the writer that import through mapping activations;
+- `backend/src/gpexeImportAudience.js` — since 9-B, who reads what of a candidate;
 - `backend/src/routes/gpexeImport.js` — the routes, under `/api/training-load/gpexe`;
 - `backend/src/gpexeRetentionCli.js` — the retention CLI.
 
@@ -23,6 +26,9 @@ Schema: `migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql` (
 Proof:
 - `backend/tests/gpexe-in-app-import.test.mjs` — on a disposable database, through the real server;
 - `backend/tests/gpexe-batch-approve.test.mjs` — the batch approval, the same way;
+- `backend/tests/gpexe-import-mapped-9b.test.mjs`, `gpexe-import-mapped-routes-9b.test.mjs`,
+  `gpexe-import-mapped-audience-9b.test.mjs`, `gpexe-import-mapped-plan-9b.test.mjs` and
+  `gpexe-import-mapped-architecture-9b.test.mjs` — the import through mapping activations (9-B);
 - `backend/tests/gpexe-client.test.mjs` — no network.
 
 ## Environment
@@ -299,9 +305,10 @@ linked OptiMove athlete is no longer an active member of the team), the link (th
 OptiMove name comes only from it; GPEXE names are never stored, so none is returned),
 `lastSeen` (with `evidence`, `candidateStatus` and the session's own
 `sessionDrillsCount` from the raw snapshot's field) and the athlete's own helper values
-for telling athletes apart (`values`: `duration` min, `distance` m, `maxSpeed` km/h from
-the whole-session result of that sighting; a value the source did not give is `null`,
-never a zero). "Last seen" is the newest session by session date among the team's
+for telling athletes apart (`values`: `duration` min, `distance` m, `maxSpeed` km/h; since 9-B
+read from the athlete's one whole-session row of that sighting in the stored snapshot, through the
+three `athlete_session` extractors, whatever the team's mappings, and only for an athlete the import
+measured; a value the source did not give is `null`, never a zero). "Last seen" is the newest session by session date among the team's
 candidates whose snapshot is still available — not purged and not expired, the same rule
 the candidate routes apply (`snapshotState`); same date: a current version before a
 replaced one, then the later `last_seen_at`, then the larger candidate id. A session the
@@ -335,8 +342,9 @@ therefore come from one state.
   - its outcome: `created`, `unchanged`, `supplemented`, `corrected`,
     `needs_review`, ... or `not_imported`;
   - each value with **previous** and **new** next to each other.
-- **Every value left out**, with the mapper's reason (e.g. `details_not_fetched`,
-  `team_threshold_missing`). A left-out value is absent, **never a zero**.
+- **Every value left out**, with its reason in plain words. Since 9-B each one is a
+  `skippedValues` entry naming the variable (see "Importing through mapping
+  activations" below). A left-out value is absent, **never a zero**.
 - **Athletes not imported**, with the reason:
   - `multiple_tracks` — two tracks in one session. This is manual review, and
     it does not stop the others;
@@ -390,6 +398,113 @@ therefore come from one state.
 - The preview stores athlete ids, not names. Names are read at request time,
   for the team's own athletes only.
 
+## Importing through mapping activations (phase 9, 9-B)
+
+Since 9-B (J17, `docs/ai/phase9-importer-mappings-contract.md`, sections 3–7 and section 16) an import writes a
+value only through an open mapping activation (T5) of the team's binding. The import switch is unchanged and stays
+off. What changes at once is what a check shows.
+
+**What a team needs.** A binding to its GPEXE team through a source connection (Settings → Source connections), and
+at least one open activation on that binding (Data configuration → Mappings → Switch on for teams).
+- A team without a binding (the `legacy_env` path) has no activation: every candidate is `blocked`
+  `mapping_not_usable`, at a check and at an approval. No source creates a definition.
+- A bound team without an open activation: `blocked` `no_mapped_values`.
+- Nothing is written in either case.
+
+**Preview version 3.** `preview.version` is 3; the screen still reads version 2. Each value entry of a result
+carries:
+- `activationId` and `mappingVersionId`: the activation and mapping version that write it;
+- `metricDefinitionId`, `variableKey`, `variableScope` (`system` or `club`), `label` and `unit`: the canonical
+  variable, in the mapping version's target unit;
+- `value`: the converted value as an exact decimal string at the storage scale (9 decimals, half away from zero);
+- `sourceMetricKey`, `sourceParameterFingerprint`, `sourceValue` (an exact decimal string) and `sourceUnit`: the
+  GPEXE field, its parameters, and its value in the field's proven unit;
+- `previous` and `change`: `new`, `added`, `changed` or `same`, compared as exact decimals with no tolerance; for a
+  value the result had before and this import does not write, `left_out`, `not_mapped` (no activation covers it at
+  this level now) or `missing_in_gpexe`.
+
+`skippedValues` lists every value left out, for every participant, and `counts.skippedValues` counts them. An entry
+names the level, the drill index, the variable's label and unit and the GPEXE field, and gives `message` in plain
+words; `reason` and `sourceReason` are for administrators. It never sets `notImported` and never carries the value.
+An athlete whose every mapped value was left out has `allValuesLeftOut: true`: participation is recorded, no value
+is imported, and the screen says "All values left out" with the reasons. The preview also carries:
+- `unactivatedSourceMetrics`: the labels of known GPEXE fields not switched on for the binding (administrators only),
+  and `unactivatedSourceMetricCount`;
+- `unmappedSourceFields`: always 0 on server3, because the snapshot keeps only the fields the importer reads.
+
+`metricKey` and `derivedNotImported` are gone. The preview hash also covers the open activations and their mapping
+versions, so an activation switched on or off between a review and an approval answers `preview_changed`.
+
+**Left out, never a zero (C110, form B).** Only that athlete's value at that level is left out, and the rest of the
+session imports, when:
+- a `required` activation has no value: `required_value_missing`, "Required value missing.";
+- the converted value is outside the variable's minimum or maximum (both inclusive): `canonical_value_out_of_range`,
+  "Outside the variable's limits."; the value is in no answer, preview or log line;
+- an `optional` activation has no value: the extractor's own code (for example `details_not_fetched`), "GPEXE has
+  no value for this.".
+
+A drill an athlete has no row for is not a missing value. A level no activation covers gets no result at all: no
+identity, occasion or segment.
+
+**The eight blocking codes.** The whole candidate is `blocked` and nothing is written.
+
+| Code | When |
+|---|---|
+| `mapping_not_usable` | A legacy team; a binding ended or not this team's; a bundle of another GPEXE team; a mapping that cannot be used (no extractor, a version, revision, field or variable not active, the variable's current version not the pinned one, a variable that is not numeric, two activations for one variable and level); a variable without the scope capability of a level it is switched on for; an inactive or ambiguous Metrics Core source instance |
+| `source_threshold_contract_mismatch` | The team's GPEXE thresholds or zones for the session are not the ones a mapping is defined for (any admitted athlete) |
+| `source_unit_mismatch` | A mapping version's source unit is not its field revision's proven unit |
+| `source_shape_mismatch` | GPEXE sent a mapped value in another shape, for example a details `unit` other than `"number"` |
+| `no_mapped_values` | No open activation, or every mapped value of the admitted athletes left out |
+| `source_instance_held` | Another team's Metrics Core source instance holds this GPEXE team |
+| `source_instance_changed` | This team's source instance names another GPEXE team |
+| `session_imported_under_another_instance` | The session was imported earlier under another source instance |
+
+When nobody is linked yet and the mappings give values, the session stays `no_changes` with the "link athletes"
+reason, as before.
+
+**Who reads what.** Each request has one level, from the route's own access check (`importAudienceOf`). The same
+level applies to the list, the detail, the approval's refusals, the batch results, the candidate inside a successful
+approval's answer, and the list read again after a check.
+
+| Level | Who | Reads |
+|---|---|---|
+| `platform` | An active platform admin | The stored preview as it is: every precise code in `blockedSourceCode` and `preview.blocked`, the admin fields, and the preview hash of a blocked candidate |
+| `club_admin` | The owning club's active admin, in that club's workspace only | The same, except: the three instance codes read `mapping_not_usable` with its sentence, and a blocked candidate has no preview hash |
+| `other` | Every coach, a granted coach included, and a club admin acting in a team workspace | `data_setup_incomplete` and "This session can't be imported until an administrator finishes its data setup." for every blocking code; no `activationId`, `mappingVersionId`, `sourceParameterFingerprint`, `sourceReason`, Left-out `reason` code, `unmappedSourceFields` or `unactivatedSourceMetrics` (the count stays); a club variable shown as "Club variable" unless the viewer is an active coach of that club's team in the team's workspace; no preview hash for a blocked candidate |
+
+`blockedCode` is `data_setup_incomplete` for all eight codes at every level. A refusal's `changesToImported` is a
+count only. A check's own answer carries no candidate. A failed check's precise connection code is shown to the two
+administrator levels, so since 9-B a club admin sees it only in the club's workspace.
+
+**What is written per value and per team.**
+- **Per value:** one `metric_values` row (the canonical variable and version the mapping version pins, `value_numeric`
+  the exact decimal, `unit_at_capture` the version's target unit) and one T6 row in
+  `training_load.metric_value_source_provenance`: the activation, the mapping version, the binding, the mapping, the
+  field revision, the Metrics Core source instance, the source unit and the source value. The writer checks these
+  facts before it writes; the T6 trigger refuses a row whose facts do not hold. No definition, version or scope
+  capability is created; the old team-owned `gpexe_*` definitions are left as they are.
+- **Per team (T7):** the team's active team-owned Metrics Core connection for `gpexe` gets its source-instance keys
+  once: `source_host_key` is the credential connection's host key (`server3`), `source_instance_key` the binding's
+  source team id as stored. A team without that connection gets one, with its keys, at the first import (a
+  check-time preview does the same and rolls it back). The keys are write-once.
+- **The occasion's content hash** covers the canonical variable and version, the mapping version, the value and unit,
+  and the source value and unit. A session imported again under a new mapping version is `needs_review`, never a
+  silent replacement.
+
+**What the first check after the 9-B deploy shows** (J17 section 7.3). A check has no switch: from the first check, a
+bound team's sessions are judged through its activations.
+- A session the check sees with the same content is reported **unchanged** (the snapshot is the same). Its stored
+  candidate still gets the new version 3 preview and hash when the check succeeds, and its status follows that
+  preview (`pending` or `blocked`).
+- A candidate no check has seen since the deploy keeps its version 2 preview. An approval of it recomputes version
+  3, answers `preview_changed` and stores the new preview; the next approval with the new hash imports once.
+- Sessions of a team with activations show those variables with their GPEXE values; a missing or out-of-range value
+  is a Left-out entry and the session can still be Ready. Without any activation every session reads
+  `no_mapped_values`.
+- The *Link athletes* helper values (Time, Distance, Top speed) stay; they come from the snapshot, not from the
+  mapped values.
+- Nothing is imported while the switch is off.
+
 ## Approving a candidate (F2)
 
 `POST /api/training-load/gpexe/teams/:teamId/candidates/:candidateId/approve`
@@ -408,11 +523,14 @@ therefore come from one state.
 
 ### What the server does, in one transaction
 
-1. Holds the approver's right (`training_load.lock_gpexe_import_approver`):
-   an active platform admin, or an active grant for the team whose holder
-   still actively coaches it. The role, grant and user rows are held
-   `FOR SHARE`, so a revoke, the end of the role or deactivating the user
-   waits until the approval has finished.
+1. Checks the approver's right without a lock, for an early 403
+   `not_an_approver`: an active platform admin, or an active grant for the
+   team whose holder still actively coaches it. Since 9-B the role, grant
+   and user rows (`training_load.lock_gpexe_import_approver`) are held
+   `FOR SHARE` only in step 3, after the mapping rows. A revoke, the end of
+   the role or deactivating the user that lands after that waits until the
+   approval has finished; one that lands before it is 403
+   `not_an_approver`, with nothing written.
 2. Locks the candidate row (`FOR UPDATE`) and checks, before anything is
    written, that:
    - it is `pending` (not `imported`, `superseded`, or `blocked`);
@@ -420,8 +538,12 @@ therefore come from one state.
    - its stored `preview_hash` is the one the approver sent;
    - its preview would write something;
    - changes to imported results are accepted.
-3. Takes the team's import lock, runs the import, and **recomputes the
-   preview from what the import did** (`previewLocked`).
+3. Takes the team's import lock. Since 9-B it then holds the team and its
+   club, the binding the candidate's last check read through, the mapping
+   rows, the team's Metrics Core source instance and the approver's right
+   (see "Importing through mapping activations"). Then it runs the import
+   and **recomputes the preview from what the import did**
+   (`previewLocked`).
 4. Compares the recomputed preview hash with the approved one. **If they
    differ, the whole transaction is rolled back**, including every row the
    import had already written in step 3, and no approval is recorded.
@@ -441,10 +563,13 @@ therefore come from one state.
    OptiMove athlete, and nothing here touches a coach's roster decision. Then
    commits.
 
-Lock order: role and grant rows → candidate → team import lock → the
-importer's own order. A check running at the same time only takes the team
-import lock for its preview and the candidate row afterwards, so the two
-cannot deadlock.
+Lock order (since 9-B, J17 section 3): candidate → team import lock → team
+and club → binding → T2b → T3 → T4 → canonical definition → T5 → Metrics
+Core source instance → the approver's role, grant and user rows → the
+importer's own order. A check running at the same time takes the team
+import lock for its preview (and the same binding, mapping and instance
+rows, without the team, club and approver rows) and the candidate row
+afterwards, so the two cannot deadlock.
 
 **Every server-side wait before the COMMIT is bounded** (switch condition 2, phase 9-0;
 `backend/src/gpexeImportPreview.js`, `setImportTransactionBounds`). Right after
@@ -493,6 +618,7 @@ same time: the second waits for the candidate row and is then refused with
 | 409 `nothing_to_import` | The import would write nothing. | Nothing. |
 | 409 `changes_need_acceptance` | Changes to imported results were not accepted. | Review them and send `acceptChanges: true`. |
 | 409 `preview_changed` | The preview is not the one reviewed, or what the import would do changed between the review and the approval. | Open `reviewAgain.href`, review the candidate again, approve the new `previewHash`. |
+| 404 `notFound` | Since 9-B: the team or its club was archived, or the team moved to another club, after the route's access check. Nothing was imported. | Nothing. |
 | 409 `try_again` | A wait before the COMMIT reached its bound: another check, import or change of the team held the team lock or a row, the server ended an idle session, or a statement ran too long. Nothing was imported. | Try again in a moment. |
 | 500 `internal_error` | Anything unexpected **before the COMMIT was sent**, e.g. a database guard firing. Nothing was imported; the server log has the detail. | Report it; do not retry blindly. |
 | 503 `import_outcome_unknown` | The COMMIT was sent but not confirmed, and the import could not be found yet. **It may or may not have been imported.** | Follow "When the outcome is uncertain" below. |
@@ -625,8 +751,8 @@ only known safe details, never a server message:
 |---|---|---|---|
 | `imported` | `null` | Imported and committed (or verified after an unconfirmed COMMIT). | `approvalId`, `commitConfirmation` |
 | `already_imported` | `already_imported` | Imported before (perhaps by this same request sent earlier, or another approval at the same time). Nothing new was written; treat it as success. | `approvalId` when readable |
-| `refused` | `superseded_by_newer_data`, `blocked`, `snapshot_expired_check_again`, `nothing_to_import`, `not_ready`, `changes_need_acceptance`, `preview_changed`, `notFound` | Not imported, for certain; the batch goes on with the next candidate. `preview_changed` also when the preview is not the one the approver saw. | `reviewAgain`, `changesToImported`, `reasons`, `blockedCode` |
-| `refused` | `import_switch_off`, `not_an_approver`, `internal_error`, `try_again` | Not imported, for certain; the switch was turned off, the right was lost, the server failed **before** a COMMIT, or a wait before the COMMIT reached its bound — **the batch stops**. | — |
+| `refused` | `superseded_by_newer_data`, `blocked`, `snapshot_expired_check_again`, `nothing_to_import`, `not_ready`, `changes_need_acceptance`, `preview_changed` | Not imported, for certain; the batch goes on with the next candidate. `preview_changed` also when the preview is not the one the approver saw. | `reviewAgain`, `changesToImported`, `reasons`, `blockedCode` |
+| `refused` | `import_switch_off`, `not_an_approver`, `internal_error`, `try_again`, `notFound` | Not imported, for certain; the switch was turned off, the right was lost, the server failed **before** a COMMIT, a wait before the COMMIT reached its bound, or (since 9-B) the team or its club was archived or the team moved — **the batch stops**. | — |
 | `import_outcome_unknown` | `import_outcome_unknown` | The COMMIT was sent but not confirmed and the import could not be found yet. **It may or may not be imported. The batch stops.** | `approvalId`, `verify` (as in the 503 above) |
 | `not_attempted` | `null` | The batch stopped before this candidate. Nothing was tried. | — |
 

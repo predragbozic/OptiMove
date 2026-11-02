@@ -1977,8 +1977,9 @@ export function formatDbError(error) {
 
 // Approves one candidate as a whole and imports it, in ONE transaction, in
 // the order of contract J17 (phase 9, 9-B):
-//   1. outside the transaction, the caller's right (canApproveGpexeImport) -
-//      a fast refusal only; the right that counts is the one locked at 6b;
+//   1. the caller's right (canApproveGpexeImport), read UNLOCKED on the
+//      transaction's client - a fast refusal only; the right that counts is
+//      the one locked at 6b;
 //   2. the candidate, FOR UPDATE: pending, snapshot not expired, the stored
 //      preview is the one the caller reviewed, and every change to an
 //      already imported result is accepted (acceptChanges);

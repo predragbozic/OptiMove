@@ -274,17 +274,21 @@ Shown on the active version, for the callers of section 2.
      lists only the mappings this workspace can read, so the server's refusal of step 6 remains the last word. **Every team of this connection** checks the connection's
      choosable teams explicitly; above 50 it checks the first 50 and says so (one send takes at most 50); the sentence
      beside it says it never includes a team linked later.
-  3. **Required** or **Optional**: one choice for all checked teams, with no default (R14), its meaning beside it:
-     "When imports use this mapping — Required: if an athlete the import admits has no value, the whole session is not
-     imported. Optional: athletes without a value get no value for this variable; this alone does not stop the session
-     from being imported." A single team's requirement can be changed in the card.
+  3. **Required** or **Optional**: one choice for all checked teams, with no default (R14), its meaning beside it.
+     Since 9-B (C110 form B; J17 D31): "Required: if GPEXE has no value for an athlete the import takes in, only that
+     value is left out for that athlete and named “required value missing”; the session and the athlete's other values
+     are still imported. Optional: a missing value is simply left out. A missing value is never stored as a zero."
+     Before 9-B it read: "When imports use this mapping — Required: if an athlete the import admits has no value, the
+     whole session is not imported. Optional: athletes without a value get no value for this variable; this alone does
+     not stop the session from being imported." A single team's requirement can be changed in the card.
   4. A reason (required, with an example and the free-text sentence).
   5. The review card (the acceptance of phase 8) names **the source** (the connection's `hostLabel`, e.g. "GPEXE
      server3"), **the mapping version** ("<variable> from <field>, version N"), and for each **team** its **link**
      ("<team> — linked to GPEXE team <sourceTeamId>") and its requirement; one primary button "Switch on for N teams".
   6. A refusal of the batch names its team (from `current.bindingId`, never the id), unticks it and offers "Switch on for
      the other N".
-  7. After success: "Switched on. Imports do not use mappings yet; nothing changes in imports until they do." (R18).
+  7. After success: "Switched on." (R18: the second sentence, "Imports do not use mappings yet; nothing changes in
+     imports until they do.", was removed in 9-B.)
 - **Switch off** a team (`POST /activations/:id/end`, `expectedState:'open'`): a reason, and a short confirmation naming
   the team, its link and the version; offered also for a team no longer linked or archived (a remedy).
 
@@ -466,7 +470,8 @@ Every write follows the pattern of Source fields and Variables (`frontend/source
   the check stays, but the admin's own statement would become a click. Recommendation: no button; show the value
   beside the input.
 - **R18. The after-success sentence** of a switch on ("Imports do not use mappings yet; nothing changes in imports until
-  they do."). Recommendation: yes, removed once phase 9 is merged.
+  they do."). Recommendation: yes, removed once phase 9 is merged. *Superseded by 9-B (J17 R14): the sentence is
+  removed from every notice in the 9-B pull request, which ships with the importer that uses mappings.*
 - **R19. A kept team keeps its own requirement** on a replacement: the team's earlier explicit choice is carried over,
   shown and changeable; C23's "no default" is read as "never a requirement nobody chose". Recommendation: yes.
 
@@ -617,3 +622,10 @@ Frontend only: no backend file, no API change, no migration.
   confirm, Activate, **Switch on for teams now**, the team, Required, Review, **Activate and switch on** — plus typing the
   conversion note and the reason. `ux-design-reviewer` judged it acceptable for a one-off setup per field by an
   administrator.
+- **Changed by 9-B** (J17 R14 and D31; the 9-B pull request, not merged). `frontend/metric-mappings-actions.js` no
+  longer says "Imports do not use mappings yet; nothing changes in imports until they do." after a switch on, an
+  activation with teams or a replacement (R18 superseded). `frontend/metric-mappings-data.js` `REQUIREMENT_MEANING`
+  follows C110 form B: a missing required value is left out for that athlete and named "required value missing", the
+  session and the other values are still imported, and a missing value is never stored as a zero (section 6, step 3).
+  `frontend/tests/metric-mappings.actions.test.mjs` checks the new sentence and that no frontend file says that
+  imports do not use mappings.
