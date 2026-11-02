@@ -831,6 +831,28 @@ test("2. an approval against an Unbind of the same team's binding, both orders: 
   assert.deepEqual(deadlockLines(logFrom), []);
 });
 
+test("2b. step 3's own short circuit (the Rukovodilac's LOW on PR #326): an approval of a pending candidate whose binding ended after its check stops at step 3 - 409 preview_changed, the stored preview blocked mapping_not_usable, nothing written - and never reaches the approver's locked right (6b) or the preview (the approval observer is never called); without step 3, prepareImportMapping's own legacy answer would give the same 409, so only the observer tells them apart", async () => {
+  const t = await teamWithCandidates(1);
+  const [c] = t.details;
+  const u = await within(unbind(t.team), 15_000, "the Unbind");
+  assert.equal(u.status, 200, u.text);
+  assert.equal(await bindingState(t.team.bindingId), "ended");
+  assert.equal((await candidateRow(c.id)).status, "pending", "the check's candidate is still pending");
+  const before = await allRowCounts();
+  let observed = 0;
+  await withSwitchOn(async () => {
+    service.setApprovalObserver(() => { observed += 1; });
+    const r = await within(approve(t.team, c), 20_000, "the approval");
+    assert.deepEqual([r.status, r.body.error], [409, "preview_changed"], r.text);
+  });
+  assert.equal(observed, 0, "step 3 short-circuits before step 6b and the preview of steps 7-11");
+  const stored = await candidateRow(c.id);
+  assert.equal(stored.status, "blocked");
+  assert.equal(stored.preview.blocked.code, "mapping_not_usable", "the refreshed preview: no binding to write through");
+  assert.deepEqual(await teamCounts(t.team.teamId), ZERO, "nothing imported");
+  assert.deepEqual(await allRowCounts(), before, "no row added or removed anywhere (the refreshed preview is an update of the candidate)");
+});
+
 // ---------------------------------------------------------------------------
 // 3. An approval against a 7g end of the team's source instance
 // ---------------------------------------------------------------------------

@@ -1364,3 +1364,9 @@ their two surviving mutations (M4, M8) are now killed by a test each (a test-onl
   conversion, another target unit, or another mapping version. Each is refused `mapping_not_usable` before anything is
   written. Without the conversion re-check, B8 fails: the T6 trigger then refuses the row with a database error instead
   of the stable code.
+- **The Rukovodilac's LOW (step 3):** his mutation of step 3 (`if (!binding)` → `if (false)`) survived, because
+  `prepareImportMapping` answers a missing binding with the same blocked preview, and step 12 then gives the same
+  `preview_changed`. Concurrency test 2b ends the binding after the check, then approves the still-pending candidate:
+  409 `preview_changed`, the stored preview blocked `mapping_not_usable`, no row added or removed. The approval observer
+  is never called, so the approval stops before step 6b and the preview. With the mutation the observer is called, and
+  2b fails.
