@@ -83,10 +83,11 @@ select
 --    and then no_grant = false), changes_to_imported = 0,
 --    changes_accepted = false, results_imported = the preview's results
 --    (39 on production), import_count_keys = created,
---    import_ids_recorded = true.
---    approval_id, approved_by_user_id, approved_by_name and approved_utc are
---    shown only: the first, second and fourth are what the HTTP approval read
---    shows, and the name is one the owner accepted at step 11.
+--    import_ids_recorded = true, and approved_by_user_id a user_id of step
+--    11's block 11 (or of its block 12 when approval_basis = team_grant).
+--    approval_id, approved_by_name and approved_utc are shown only: the id and
+--    the time are what the HTTP approval read shows; a null name is matched
+--    by approved_by_user_id.
 with bound as (
   select b.id as binding_id, b.team_id, b.source_team_id, c.host_key
     from training_load.source_team_bindings b
@@ -415,8 +416,10 @@ select
 -- 10. No gpexe_* definition: the importer creates no variable (C46).
 --     Expected: approvals_total = 1, gpexe_team_definitions = 0,
 --     gpexe_named_definitions = 0 (both as in step 11's block 8),
---     definitions_created_since_approval = 0,
---     versions_created_since_approval = 0.
+--     definitions_written_by_the_approval = 0,
+--     versions_written_by_the_approval = 0 (a row the approval's transaction
+--     wrote carries its approved_at; a later administrator's variable is not
+--     the import's).
 with ap as (
   select * from training_load.gpexe_import_approvals
    where (select count(*) from training_load.gpexe_import_approvals) = 1
@@ -426,8 +429,8 @@ select
   (select count(*) from training_load.metric_definitions
     where starts_with(key, 'gpexe_') and owner_scope = 'team') as gpexe_team_definitions,
   (select count(*) from training_load.metric_definitions where starts_with(key, 'gpexe_')) as gpexe_named_definitions,
-  (select count(*) from training_load.metric_definitions d, ap where d.created_at >= ap.approved_at) as definitions_created_since_approval,
-  (select count(*) from training_load.metric_definition_versions dv, ap where dv.created_at >= ap.approved_at) as versions_created_since_approval;
+  (select count(*) from training_load.metric_definitions d, ap where d.created_at = ap.approved_at) as definitions_written_by_the_approval,
+  (select count(*) from training_load.metric_definition_versions dv, ap where dv.created_at = ap.approved_at) as versions_written_by_the_approval;
 
 -- 11. The rest of what the import wrote: the event, the threshold binding, the
 --     batch, the activity, the identities, and no roster decision yet.

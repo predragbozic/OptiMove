@@ -63,12 +63,13 @@ select
   (select count(*) from training_load.gpexe_import_check_observations) as staged_observations;
 
 -- 3. A quiet moment: no other session is idle in a transaction, and none holds
---    or waits for a write lock on the tables an approval reads or writes
+--    or waits for a write lock on the main tables an approval reads or writes
 --    (plain reads - ACCESS SHARE, ROW SHARE - are not counted).
 --    Expected: idle_in_transaction = 0, import_table_write_locks = 0. An
---    ordinary write to one of these tables holds ROW EXCLUSIVE for a moment: a
---    non-zero import_table_write_locks that is gone when the block is run again
---    a few seconds later was such a write, not a blocker.
+--    ordinary write to one of these tables, or an autovacuum of it, holds its
+--    lock for a moment: a non-zero import_table_write_locks that is gone when
+--    the block is run again a few seconds later was such a write, not a
+--    blocker.
 --    advisory_locks is shown only (the importer's team lock is an advisory
 --    lock, held only while a check, an approval or a binding change runs).
 --    A role without pg_read_all_stats sees only its own role's sessions in
@@ -84,8 +85,8 @@ select
      join pg_namespace n on n.oid = c.relnamespace
     where l.pid <> pg_backend_pid()
       and l.database = (select oid from pg_database where datname = current_database())
-      and (l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock',
-                      'ExclusiveLock', 'AccessExclusiveLock') or not l.granted)
+      and l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock',
+                     'ExclusiveLock', 'AccessExclusiveLock')
       and n.nspname = 'training_load'
       and c.relname in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_import_approvals',
                         'gpexe_import_check_observations', 'source_team_bindings',
@@ -257,8 +258,8 @@ select
 --    succeeded check of the team, drill effect confirmed or not_required. The
 --    owner accepts each row by its candidate_id, or the window does not open.
 --    Expected (the Rukovodilac's reading after step 8, 2026-11-02): one row,
---    gpexe_session_id = 190122 (the session of 23.10.2026 that step 8's check
---    of 23.10.2026 - 23.10.2026 found), last_check_is_newest = true,
+--    gpexe_session_id = 190122 (found by step 8's check of 23.10.2026;
+--    session_started_utc is in UTC), last_check_is_newest = true,
 --    last_check_through_the_binding = true, drill_parameter_effect =
 --    confirmed or not_required, preview_version = 3, preview_status = ready,
 --    blocked_code = null, results_created = 39, left_out_values = 0,
@@ -411,7 +412,8 @@ select fb.first_team_bindings,
 
 -- 13. The rights, counted.
 --     Expected: first_team_bindings = 1, active_platform_admins = the rows of
---     block 11, unrevoked_grants = the rows of block 12,
+--     block 11, unrevoked_grants = the rows of block 12 with a grant_id (0 when
+--     block 12 shows its one row with grant_id = null),
 --     grants_giving_the_right_now = the rows of block 12 with
 --     gives_the_right_now = true.
 --     may_approve_now (distinct users) and unrevoked_grants_all_teams are
@@ -456,9 +458,10 @@ select
 --     Metrics Core table, its row count and the newest time it records, in
 --     UTC (environment-wide: a restore would lose a write to any team).
 --     Expected: rows 1 to 13 and 34 = 0 with no time (nothing imported yet,
---     block 8) - except rows 6 and 7 when block 6 shows an active instance of
---     the First team (then 1, with its time) - and every newest_utc earlier
---     than the backup's time.
+--     block 8), and every newest_utc earlier than the backup's time. Two
+--     exceptions follow block 6: when it shows active_instances = 1, row 6 is
+--     1 with its time; when its active_keys = server3 / 980, row 7 is 1 (row 7
+--     never shows a time).
 --     A time is the writing transaction's start (now()), except rows 24 and 26
 --     (clock_timestamp()). Writes that set no time (the T7 keys, a deleted or
 --     replaced row) show only in the counts. Rows 35 to 37 are the freeze's

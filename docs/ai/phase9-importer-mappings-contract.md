@@ -784,8 +784,10 @@ They are merged only on the owner's word (section 2's 9-R row, step 6a).
   before step 11, both files are re-issued under new sha256s; both headers say so.
 - **Kept out.**
   - Neither file prints an email, a credential column, a grant or revoke reason, or a stored source answer.
-  - The rights blocks, and the approver in post-check block 3, print the user's display name (else the full name,
-    never the email): the owner accepts each row by person (the *Rukovodilac*'s decision, 2026-11-02).
+  - The rights blocks print the user's display name (else the full name, never the email): the owner accepts each
+    row by person (the *Rukovodilac*'s decision, 2026-11-02). Post-check block 3 prints the approver's name the same
+    way, so that it can be compared with step 11's list (the executor's addition).
+  - Re-reading blocks 11 to 13 right before step 14 belongs to the M6 runbook, outside these files.
   - Read outside the files: the served commit (`/api/health`), the approval read
     (`GET …/approvals/:approvalId`) and the switch (`importSwitch`).
 - **Evidence.** `backend/tests/gpexe-import-window-sql-9r.test.mjs` (disposable `optimove_tests_gpexe_*`, fake
@@ -796,13 +798,16 @@ They are merged only on the owner's word (section 2's 9-R row, step 6a).
   - the preflight after one succeeded check;
   - one approval through the single-candidate route, with the switch on and then off;
   - the post-check, then the preflight again (block 8 and the freshness rows then name the import);
-  - block 3 again while a real second session holds a read, then a write lock and an advisory lock.
+  - block 3 again while a real second session holds a read, then a write lock and an advisory lock, and a third
+    session holds an advisory lock in another database (not counted).
 
-  28 planted cases are each rolled back, and run the same block text inside the planting transaction. They cover the
-  stops of both files' blocks 1 and 2, preflight blocks 4 to 7 and 9 to 13, and post-check blocks 3 to 11.
+  30 planted cases are each rolled back, and run the same block text inside the planting transaction. They cover:
+  - the stops of both files' blocks 1 and 2;
+  - preflight blocks 4 to 7, 9 to 14 (block 14 only for an instance with no keys);
+  - post-check blocks 3 to 10, and block 11 only for a second approval.
   The file-shape check (LF, blocks 1..N, one SELECT each, no parameter, no write, no lock, no email or credential
   column) needs no data.
-  39 mutations of the two files are all killed: 22 of the preflight and 17 of the post-check.
+  43 mutations of the two files are all killed: 25 of the preflight and 18 of the post-check.
   The staged observations of preflight block 2 are shown only and are not planted.
 
 ---

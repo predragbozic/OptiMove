@@ -92,8 +92,8 @@ const COLUMNS = {
     8: ["instance_state", "source_host_key", "source_instance_key", "keys_are_the_bindings", "is_the_event_instance",
       "is_the_event_binding_instance", "identities_elsewhere", "rows_with_these_keys", "created_in_the_approval"],
     9: ["approvals_total", "left_out_entries", "left_out_with_a_stored_value", "left_out_stored_as_zero", "left_out_by_reason"],
-    10: ["approvals_total", "gpexe_team_definitions", "gpexe_named_definitions", "definitions_created_since_approval",
-      "versions_created_since_approval"],
+    10: ["approvals_total", "gpexe_team_definitions", "gpexe_named_definitions", "definitions_written_by_the_approval",
+      "versions_written_by_the_approval"],
     11: ["event_is_the_session", "event_owner_scope", "event_of_the_team", "scope_level", "event_created_in_the_approval",
       "threshold_binding_rows", "batch_ok", "activity_origin", "activity_lifecycle", "activity_of_the_team", "activity_created_in_the_approval",
       "confirmed_event_links", "activity_participants", "event_participants", "event_segments", "drill_components", "gpexe_events_total",
@@ -128,6 +128,12 @@ before(async () => {
                        add column if not exists granted_by_user_id uuid references public.users(id) on delete set null,
                        add column if not exists created_at timestamptz not null default now(),
                        add column if not exists updated_at timestamptz not null default now()`);
+  // Block 3 counts an autovacuum's lock on the import's tables: none may run
+  // on them while this test asserts a quiet moment.
+  for (const table of ["gpexe_import_checks", "gpexe_import_candidates", "gpexe_import_approvals", "gpexe_import_check_observations",
+    "source_team_bindings", "source_metric_mapping_activations", "metric_source_connections", "metric_value_source_provenance", "metric_values"]) {
+    await admin.query(`alter table training_load.${table} set (autovacuum_enabled = false)`);
+  }
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
@@ -423,6 +429,12 @@ test("1. step 11 on a world built like production's pilot: every block of the pr
     assert.equal(r.changes_to_imported, 0);
     assert.equal(r.snapshot_available, true);
     assert.equal(r.approval_id, null);
+    const source = (await q(`select to_char(session_started_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as started,
+                                    to_char(raw_expires_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') as expires
+                               from training_load.gpexe_import_candidates where id = $1`, [r.candidate_id]))[0];
+    assert.equal(r.session_started_utc, source.started, "the date the owner recognises the session by");
+    assert.equal(r.snapshot_expires_utc, source.expires);
+    assert.ok(r.session_started_utc.startsWith(DAY));
   }
   assert.deepEqual(pre[10], [{ first_team_bindings: "1", actionable: "2", actionable_v3_ready: "2", imported: "0", pending: "2", blocked: "0", superseded: "0", newest_check_status: "succeeded", newest_check_through_the_binding: true }]);
   const admins = await q(`select r.user_id::text as id from public.user_global_roles r join public.users u on u.id = r.user_id
@@ -494,7 +506,7 @@ test("2. steps 13-16: one approval through the single route with the switch on, 
   }]);
   assert.deepEqual(post[9], [{ approvals_total: "1", left_out_entries: String(n.leftOut), left_out_with_a_stored_value: "0", left_out_stored_as_zero: "0",
     left_out_by_reason: n.leftOut === 0 ? {} : post[9][0].left_out_by_reason }]);
-  assert.deepEqual(post[10], [{ approvals_total: "1", gpexe_team_definitions: "0", gpexe_named_definitions: "0", definitions_created_since_approval: "0", versions_created_since_approval: "0" }]);
+  assert.deepEqual(post[10], [{ approvals_total: "1", gpexe_team_definitions: "0", gpexe_named_definitions: "0", definitions_written_by_the_approval: "0", versions_written_by_the_approval: "0" }]);
   const drills = (await q(`select count(*)::text as n from training_load.metric_event_segments where event_id = $1`, [r.body.import.eventId]))[0].n;
   assert.ok(Number(drills) > 0, "the session has drills");
   assert.deepEqual(post[11], [{
@@ -658,7 +670,12 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
   // block 3; a plain read lock alone is not counted.
   const other = new pg.Client({ connectionString: db.url });
   await other.connect();
+  assert.equal((await other.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  const elsewhere = new pg.Client({ connectionString: ORIGINAL_DATABASE_URL }); // another database of the same server
+  await elsewhere.connect();
+  assert.notEqual((await elsewhere.query("select current_database() as db")).rows[0].db, db.name);
   try {
+    await elsewhere.query("select pg_advisory_lock(9120)");
     await other.query("begin");
     await other.query("select count(*) from training_load.metric_values");
     const reading = await readOnlyBlocks(ro, PREFLIGHT, [3]);
@@ -669,11 +686,28 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
     const writing = await readOnlyBlocks(ro, PREFLIGHT, [3]);
     assert.equal(writing[3][0].idle_in_transaction, "1");
     assert.equal(writing[3][0].import_table_write_locks, "1");
-    assert.equal(writing[3][0].advisory_locks, "1");
+    assert.equal(writing[3][0].advisory_locks, "1", "an advisory lock in another database is not counted");
   } finally {
     await other.query("rollback").catch(() => {});
     await other.end().catch(() => {});
+    await elsewhere.query("select pg_advisory_unlock_all()").catch(() => {});
+    await elsewhere.end().catch(() => {});
   }
+
+  // The First team's instance with no keys yet (written before M4): block 6
+  // accepts it, block 14 counts it in row 6 and not in row 7.
+  const noKeys = await planted(async () => {
+    await admin.query(`update training_load.metric_source_connections set source_host_key = null, source_instance_key = null
+                        where owner_team_id = $1 and source_system = 'gpexe'`, [t.teamId]);
+    return blocksIn(admin, PREFLIGHT, [6, 14]);
+  });
+  assert.equal(noKeys[6][0].active_instances, "1");
+  assert.equal(noKeys[6][0].active_keys, "NULL / NULL");
+  assert.equal(noKeys[6][0].other_keys, "0");
+  const rowsNoKeys = Object.fromEntries(noKeys[14].map((r) => [Number(r.row_no), r]));
+  assert.equal(rowsNoKeys[6].row_count, "1");
+  assert.notEqual(rowsNoKeys[6].newest_utc, null);
+  assert.equal(rowsNoKeys[7].row_count, "0");
   assert.deepEqual(rights[12].map((r) => [r.first_team_bindings, r.grant_id]), [["1", null]], "a revoked grant is not listed");
   assert.equal(rights[13][0].unrevoked_grants, "0");
 });
@@ -851,14 +885,22 @@ test("3b. the post-check stops on what it must stop on: a second approval, a val
   assert.equal(keys[8][0].keys_are_the_bindings, false);
   assert.equal(keys[8][0].rows_with_these_keys, "0");
 
-  // A team-owned gpexe_* definition, and a check of the team after the approval.
+  // An administrator's variable created after the approval is not the import's.
+  const later = await planted(async () => {
+    await admin.query(`insert into training_load.metric_definitions (key, label, owner_scope, created_at) values ('later_variable', 'Later', 'system', now() + interval '1 second')`);
+    return blocksIn(admin, POSTCHECK, [10]);
+  });
+  assert.equal(later[10][0].definitions_written_by_the_approval, "0");
+
+  // A team-owned gpexe_* definition written in the approval, and a check of the team after the approval.
   const definition = await planted(async () => {
-    await admin.query(`insert into training_load.metric_definitions (key, label, owner_scope, owner_team_id) values ('gpexe_time_min', 'TIME', 'team', $1)`, [t.teamId]);
+    await admin.query(`insert into training_load.metric_definitions (key, label, owner_scope, owner_team_id, created_at)
+                       select 'gpexe_time_min', 'TIME', 'team', $1, approved_at from training_load.gpexe_import_approvals`, [t.teamId]);
     await admin.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, status, finished_at)
                        values ($1,$2,$3,$3,'succeeded', now() + interval '1 second')`, [t.teamId, t.coach.id, DAY]);
     return blocksIn(admin, POSTCHECK, [2, 10]);
   });
   assert.equal(definition[10][0].gpexe_team_definitions, "1");
-  assert.equal(definition[10][0].definitions_created_since_approval, "1");
+  assert.equal(definition[10][0].definitions_written_by_the_approval, "1");
   assert.equal(definition[2][0].team_checks_since_approval, "1");
 });
