@@ -1255,6 +1255,9 @@ transcript; J11 section 0.1 holds the table):
       else.
     - **When:** the contract ("mapping by drag and drop") is the first work after phase 9, together with the automatic
       switching-on of system mappings and C111. Nothing of it is built before its contract is accepted.
+    - **Its contract:** J18, `docs/ai/c112-drag-mapping-contract.md`, proposed on 2026-11-01 on the *Rukovodilac*'s
+      order (status Proposed, documentation only). Not accepted and nothing built; until it is accepted, this entry
+      and C91–C97, M2b and J16 stand as written.
 
 ---
 
@@ -4087,6 +4090,15 @@ J M4 row's "the stored candidates turn *changed* exactly once" (its R13, section
 `no_mapped_values` in place of `nothing_to_import` for a session with no mapped value (its R4), `unexpected_unit` as
 `source_shape_mismatch` (its R7) and the audience list
 with the platform-admin-only instance codes (its R18, section 6.1). Amended on 2026-11-01 for the owner's decisions C110 (form B in the pilot) and O2 (its section 12.3).
+
+### J18. Mapping by drag and drop (C112) — proposed
+
+`docs/ai/c112-drag-mapping-contract.md`, proposed on 2026-11-01 on the *Rukovodilac*'s order: status Proposed,
+documentation only, code only after phase 9 and after the owner accepts it. One board per team for the team's club
+administrators, a stored two-athlete confirmation as the evidence, and the switching-on of system mappings; C112's
+questions (a)–(d) answered as recommendations; owner questions Q1–Q14 (decisions C113–C125 once decided; Q12 is
+J17's O16) and *Rukovodilac* items R1–R9. Nothing it proposes is recorded in this document as decided until the owner accepts it.
+J19 is proposed for C111.
 
 ## K. Open, but not blocking M1
 
