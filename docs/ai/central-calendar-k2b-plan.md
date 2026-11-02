@@ -631,3 +631,127 @@ Mutations of this round: 4 run, 4 killed. **In all 39: 35 killed, 4 equivalent**
   colour club A gave it (test 3k asserts it on purpose); club B's admin chooses its own.
 - **K2b-1d:** the event form treats a null `eventTypeId` (a moved team's event, D41) as "choose a type"; an edit that
   does not send a type keeps the stored one (test 3k).
+
+## 18. K2b-1b — plan-delta (proposed 2026-11-02; no code before the manager's GO)
+
+K2b-1a is merged and deployed (PR #325, `a01a116`, v51 directly confirmed by its post-check, per the stream manager).
+K2b-1b makes the events **use** the catalog: a library place, the chosen details and their values, on create, on edit,
+in a new values command, and in every read. Branch `central-calendar-k2b-1b` from `origin/main` `64f6640` (documents
+only above `a01a116`).
+
+### 18.1 No migration
+
+v51 already holds everything K2b-1b writes: `events.location_id` with `events_location_guard`,
+`event_selected_fields`, `event_field_values` with their guards and pairing, and the `set_fields` operation and kind.
+**K2b-1b has no migration** (so v52 / v53 stay the metrics stream's). One rule stays the service's, not the
+database's: a value is written only for a detail of the event owner's **current** club (v51's value guard checks that
+the detail is chosen on the event, not its club — after a team moved, D41, an old club's choice may still be there
+until club B's next edit, 18.4). Recorded as a known limit; a later calendar migration may add it.
+
+### 18.2 The commands
+
+- **`POST /api/calendar/events`** gains `locationId` (a live place of the event owner's club — a club event: its
+  club; a team event: its team's club; a private coach: none, D33) beside `location` (never both: `400
+  invalid_location`), and `fieldIds` (ordered, at most 30; absent → the type's live default details, D19's sibling;
+  each a live detail of the owner's club — the `system` set for a private coach). Refusals, one answer for a missing,
+  foreign, archived or system id: `400 location_not_available`, `400 field_not_available`.
+- **`PATCH /api/calendar/events/:id`** gains `locationId` (`null` clears) and `fieldIds` (the list rewritten by
+  difference, as a type's list in 1a: entries kept may be archived, a NEW entry is a live detail of the owner's current
+  club). A detail taken off keeps its values (never deleted, v51); choosing it again shows them again.
+- **New: `POST /api/calendar/events/:id/fields`** `{ requestKey, expectedRevision, values: [{ fieldId, value }] }` (1–30
+  entries, each detail once) — D39: the event's managers only (`canManage` of K2a 4.1; the club's admin also on its
+  teams' events, D18). By kind: `choice` → an option id (a live option of that detail, D30), `number` → a number with
+  at most three decimals inside the detail's bounds, `scale_1_5` → an integer 1–5, `yes_no` → a boolean,
+  `short_text` → 1–200 visible characters on one line; `null` clears (the row stays, all columns null). Refusals:
+  `400 field_not_available` (not chosen on the event, or not of the owner's current club — one answer), `400
+  invalid_value { fieldId }`, `409 event_changed { current }`, `409 event_cancelled`, the one 404. One K2a command
+  through the shared runner: the writer lock → the event `FOR UPDATE` → the same-key lock → the replay → the details
+  `FOR SHARE` in ascending id (a detail's edit takes `FOR UPDATE`, 1a) → upsert of the values → the event's revision
+  bumped → the request and change rows, kind `set_fields`, details `{ fieldIds, cleared }` — never a value.
+- The writes of the edit go through the existing event command (the change row's details gain `locationId` before /
+  after when it is the owner's club's, `locationTextChanged`, `fieldIdsBefore` / `After`).
+
+### 18.3 The reads (D41 on every one)
+
+A place, a chosen detail or a value is shown **only when it belongs to the event owner's current club** (the event's
+club, or its team's club now; the `system` details for a private coach's event). Otherwise it is not there at all: no
+name, address, note, label, value, id or count. One SQL predicate, shared by every read:
+`<the row's club> = coalesce(e.owner_club_id, t.club_id)` (`t` the owner team), as the type label and id in 1a.
+
+- **The calendar card** (`GET /api/calendar`): `place` (`{ source: "library", locationId, name, address, note }`, `{
+  source: "one_off", text }` or `null`) and `location` (the place's name or the text, for the K2a-2 screen); a
+  manager's card also `details: { selected, filled, required, filledRequired }`. Two more statements when the window
+  holds an event and `event` is asked for (the places join the events statement; the details are one statement), so
+  the count stays independent of the number of events.
+- **The status (D31):** after the event's last day, a chosen **required** detail of the owner's club without a value
+  is an unmet check: `awaiting_entry` (the screen's word, K2b-1d: *Awaiting details*); optional details never change the
+  status; a cancelled event stays cancelled. An event that expects nothing but has a required detail waits for it.
+- **`GET /api/calendar/events/:id`:** the manager's view gains `place`, `locationId` and `fields` (each chosen detail of
+  the owner's club in its order: label, description, kind, unit, bounds, required, archived, its live options plus the
+  one a value names even if hidden, and the value or null). The reduced view (another coach) gains `place` only — **no
+  details** (T7, below).
+- **The command answers** (create, edit, values, a replay, a verified COMMIT) return the same manager's view.
+- **The athlete** (D21 + D27): the event card gains `place` (a library place's name, address and note, or the one-off
+  text) — never a detail, a value, a team default or another place. The allowlist test is extended key by key.
+
+### 18.4 Finding 6 — another club's place, choices and values on a moved team's events (options; the manager decides)
+
+After a team moves (D41) its events keep club A's `location_id`, chosen details and values: v51 judges them only when
+they are set or changed, and a value is never deleted.
+
+| Option | Reads | Writes | Cost / risk |
+|---|---|---|---|
+| **A (recommended; the manager's starting point)** | hidden (18.3) | club B's **next edit** of the event (any PATCH by its manager) detaches club A's choices and clears club A's place, in the same transaction, audited as `foreignFieldsDetached: n` and `foreignPlaceCleared: true` (never A's ids); club A's values stay (never deleted); the values command refuses A's details (`field_not_available`) | one more step in the edit; nothing outside the calendar; A's answered details stay frozen for good (their meaning was answered — fail-closed) |
+| B | hidden | nothing is ever detached: A's rows stay inert under the event | simplest; A's choices keep counting against the event's 30 (the trigger counts them), and a later re-move to club A would show them again |
+| C | — | the team move (`PUT /api/organization/teams/:id`) detaches and clears in its own transaction | a cross-domain write in the organization route, outside the calendar's command and audit (the change row needs a request row of a calendar command) — not recommended |
+
+Recommendation: **A**. Also recorded: a cancelled event is final, so a moved team's cancelled event keeps A's rows
+(hidden on every read); club A's `eventCount` for its detail stays 0 (1a).
+
+### 18.5 Open technical points (for the manager)
+
+- **T7 — details in the reduced view.** Recommended: **managers only** (as the notes, K2a): a coach who reads an event
+  without managing it (a team coach on a club event, a coach who reaches it through a targeted athlete) sees its place
+  but not its details. Section 5.4 said "read-only"; the narrower rule is the fail-closed one. The alternative is
+  read-only details for every coach of the owner's club.
+- **T8 — what the edit normalizes.** Under option A, any PATCH by club B detaches A's rows, even an edit of the title
+  alone (the event is then clean whatever B changed). The alternative is to detach only when the PATCH sends `fieldIds`
+  or `locationId` (A's rows would linger otherwise).
+
+### 18.6 Tests and reviews
+
+New suite `backend/tests/central-calendar-k2b-event-details.test.mjs` (the shared fixture; disposable databases, the
+real routes):
+
+1. **Create:** `locationId` / the one-off text / both (400); a place of another club, an archived place, a random id —
+   the byte-identical 400; a private coach's `locationId` (400); `fieldIds` absent → the type's live defaults in order;
+   an explicit list; a detail of another club, an archived one, a `system` one on a club event — the identical 400.
+2. **Edit:** the place changed, cleared, the text swapped for a place; the list rewritten (an archived kept entry
+   stays, an archived new one is refused, positions follow); stale revision; a cancelled event; the change row's
+   details carry ids of the owner's club only.
+3. **Values:** each kind accepted and refused by its rule (bounds, scale, a hidden option, a foreign option); `null`
+   clears and the row stays; a detail not chosen, or another club's → the identical 400; replay, `request_key_reused`,
+   stale revision; who may (the club admin on its team's event, D18; the team coach on its own team's; never on a club
+   event; a private coach on their own; the platform admin from the platform workspace as support); the one 404 for
+   strangers; the change row holds no value.
+4. **Reads:** the card's `place` and `location`, the manager's `details` counts (absent for a non-manager and the
+   athlete), the status (*Awaiting details* after the last day for a required detail, not for an optional one, not
+   before the day, cancelled stays cancelled, an event expecting nothing waits for its required detail), `GET /:id`
+   fields with values and a hidden option still named, the reduced view (place, no details, T7), the athlete's
+   allowlist (`place` added, nothing of the details).
+5. **D41 and finding 6:** a team moves from club A to club B: club B's card, panel, `GET /:id`, edit answer and the
+   athlete's card show no place, detail, value, id or count of club A (texts scanned for A's ids and labels); B's
+   values command on A's detail → 400; B's next edit detaches and clears (audited by flags, no A id); A's values remain
+   and A's detail stays answered; B then chooses its own.
+6. **Races:** a value racing a detail's edit through the routes (both orders); a place archived while an edit sets it →
+   400; the same key twice at once → one write and a replay.
+7. **No write on read** (the K1a digest guard extended to the new tables), the statement count for 1 and 12 events.
+8. **Regression:** the K2b-1a, K2a and K1a suites; `--preset backend-fast`.
+9. **Mutations** on: the D41 predicate in each read (card place, card details, view fields, athlete place, edit
+   answer), the values command's club check, the detach-on-edit, the status check for required details, the kind
+   rules, the managers-only details (T7), the default list copy at create.
+
+Reviewers: `code-reviewer` + `security-reviewer` (no migration, so no `db-reviewer`); then the Independent review and the
+owner's external review (triggers 2 and 4). `docs/ai/CURRENT_STATE.md` gains a short record of the calendar stream in
+the same pull request (the merges and deploys K1a → K2b-1a as the manager listed them, what the repository cannot
+prove marked "per the stream manager").
