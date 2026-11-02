@@ -7,6 +7,8 @@
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function httpError(status, message) {
   const e = new Error(message);
   e.httpStatus = status;
@@ -27,7 +29,7 @@ function httpError(status, message) {
 // the activities of the club's active teams — owner decision D8). A missing
 // activity, another club's team, an archived team and every other caller
 // get the identical 404 (ADR-006).
-export async function getCanonicalActivityResults(readContext, activityId) {
+export async function getCanonicalActivityResults(readContext, activityId, { clubVariableNamesAllowed } = {}) {
   const activityRow = await query(
     `select a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id,
             t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active
@@ -81,6 +83,45 @@ export async function getCanonicalActivityResults(readContext, activityId) {
     athleteNamesById = Object.fromEntries(names.rows.map((r) => [r.id, r.name]));
   }
 
+  // 7h-V (C127, J14 O2 (a) and its 7h-V section): the name and unit of a club
+  // variable in the team's own results. The Metrics Core catalog
+  // (catalogVisibilitySql) hides a club-owned definition from a team coach,
+  // and it is not touched; instead this read names, for an active coach of
+  // the activity's active team in that team's workspace (C99's predicate,
+  // resolveVariableEditor, asked by the route through
+  // `clubVariableNamesAllowed`), exactly the club-owned definitions of the
+  // team's own club that appear in the facts already scoped above - never
+  // the club's catalog, never another club's variable, never a key, icon or
+  // description. Every other caller (an athlete, a club or platform
+  // workspace, a private coach) gets {}, whether or not the activity holds
+  // a club variable. The predicate is asked only when such a definition is
+  // present; its errors propagate (the route answers a busy database with
+  // the stable 503, so no "Metric" answer is cached). Archived variables
+  // are named too: results are history. The unit is the current version's,
+  // as the catalog gives it.
+  let variableNamesById = {};
+  const activity = activityRow.rows[0];
+  if (!readContext.isAthleteSelf && typeof clubVariableNamesAllowed === "function"
+      && readContext.scope?.type === "team" && activity.owner_scope === "team" && activity.owner_team_club_id
+      && String(activity.owner_team_id).toLowerCase() === String(readContext.scope.teamId).toLowerCase()) {
+    const definitionIds = [...new Set(scoped
+      .filter((f) => f.factKind === "metric_value")
+      .map((f) => f.detail?.metricDefinitionId)
+      .filter((id) => typeof id === "string" && UUID_PATTERN.test(id)))];
+    if (definitionIds.length) {
+      const names = await query(
+        `select d.id, d.label, d.short_label, v.unit
+           from training_load.metric_definitions d
+           left join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+          where d.id = any($1::uuid[]) and d.owner_scope = 'club' and d.owner_club_id = $2`,
+        [definitionIds, activity.owner_team_club_id],
+      );
+      if (names.rowCount && await clubVariableNamesAllowed({ teamId: String(activity.owner_team_id), clubId: String(activity.owner_team_club_id) })) {
+        variableNamesById = Object.fromEntries(names.rows.map((r) => [r.id, { label: r.label, shortLabel: r.short_label ?? null, unit: r.unit ?? null }]));
+      }
+    }
+  }
+
   // Training Load Frontend 3A — another compatible, additive extension: the
   // canonical read contract's own component-related fact kinds
   // (component_performance, component_metric_segment_link) only surface a
@@ -114,7 +155,7 @@ export async function getCanonicalActivityResults(readContext, activityId) {
     actualDurationSeconds: r.actual_duration_seconds === null ? null : Number(r.actual_duration_seconds),
   }));
 
-  return { canonicalActivityId, facts: scoped, athleteNamesById, components };
+  return { canonicalActivityId, facts: scoped, athleteNamesById, variableNamesById, components };
 }
 
 const LIST_MAX_PAGE_SIZE = 200;

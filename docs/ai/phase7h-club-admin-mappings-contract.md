@@ -1016,6 +1016,8 @@ Each has a recommendation, the consequence and the alternative. **All six were d
       it ever arises;
     - **tests:** a coach of another club's team, and the same coach in a second team's workspace, get no name; nor
       does a result row of an athlete in the coach's team that carries another club's variable.
+    - **As built (7h-V):** section 16 — the screens exactly, the roster narrowed (V1), the dashboards unreachable, and
+      the path by which another club's variable reaches a team's results (a dual-role writer, not an older membership).
   - *Alternative (b):* defer O16, and 7h-B carries a code guard: S1 and A1's listed starts refuse a club mapping until
     O16 is decided. This narrows C106.
   - *Alternative (c):* keep O16 procedural — not recommended once 7h is live.
@@ -1263,3 +1265,78 @@ deployed; until then the old text describes the system as it runs.
     A1 against an Unbind and a club-admin revocation), in either order; 7i-B only after the lock-order pull request.
     The *Rukovodilac* accepts that, while 7h-F is out and the lock-order pull request is not, the known limit above
     can meet a club's admin who saves and activates with listed starts (`try_again` or a 500, nothing written).
+
+## 16. 7h-V as built (C127)
+
+The pull request 7h-V (branch `feature/7h-v-club-variable-names`, base `95c05199`, the merge of PR #335; no migration)
+builds O2 (a) / C127. Its design and scope were decided before the code by the *Rukovodilac* on 2026-11-02 (event
+`66518c44`, 21:14:30 UTC: „7h-V: dizajn je prihvaćen”, V1–V7 all as recommended). This section is "7h-V's contract
+section" that O2 names: the screens, exactly, and what the read returns.
+
+- **The read.** `GET /api/training-activity/:activityId` gains `variableNamesById`, always present (`{}` by default),
+  beside `athleteNamesById` (`backend/src/trainingActivityResults.js`). An entry is `{ label, shortLabel, unit }` (V3:
+  the name, the short name and the unit of the definition's current version, as the catalog gives it); never a key,
+  icon, description or the club's catalog. It is filled only when every one holds:
+  - the caller is not an athlete on their own result, and the active workspace is a team workspace of the
+    activity's own team (the activity `owner_scope = 'team'`, its team in an active club row);
+  - the definition appears in a `metric_value` fact this read already scoped and authorized (the ids come from the
+    facts, never from the request);
+  - the definition is `owner_scope = 'club'` with `owner_club_id` = the activity team's club;
+  - C99's predicate admits the caller for that team and club (`resolveVariableEditor`, asked by the route with the
+    workspace this request already resolved, through its new optional `known` argument; asked only when such a
+    definition is present). That is: the team, its club, the caller's `team_coach` role and the user are all active.
+  Archived club variables are named (V4: results are history). Everyone else (an athlete, a club, platform or
+  private-coach workspace, a coach of another team or club) gets `{}`, whether or not the activity holds a club
+  variable; the activity's own identical `404` is unchanged.
+- **Errors (V5).** The C99 check's errors propagate. A pool checkout timeout is the global `503 database_busy`; the
+  check's own read bound (`try_again`) is mapped by the route to the same `503 database_busy` with `Retry-After`; any
+  other error is a `500`. The frontend's activity cache keeps only a successful answer, so a nameless "Metric" is never
+  cached.
+- **The screens, exactly** (`frontend/training-load-calendar-view.js`; the activity's names stand behind the catalog,
+  the catalog wins for an id it has, and nothing is written into `metricPicker.definitions`):
+  1. the Activities results table's column header (`metricColumnsFromRows` / `pickedMetricColumns`): the short name
+     or name, and the unit;
+  2. the athlete drawer (`athleteMetricGroups`): the short name or name, with the captured unit as before;
+  3. the column picker (`renderMetricPickerHtml`, V6): the open activity's named club variables are offered too, so
+     one can be chosen when the activity has more than four variables (the smart default then shows none); another
+     activity does not offer them.
+- **The roster (V1).** The Roster tab of the same drawer (`GET /api/training-activity/:activityId/roster`,
+  `activityRoster.js` `loadRosterSnapshot`) names only the variables of the team's own club: a club-owned definition of
+  another club reads with no key, label or short label, for every basis (the team's coach, the club's admin in its
+  workspace, the platform admin). Each such value keeps a column of its own through a placeholder key `#unnamed-N`,
+  numbered in that answer by the sorted definition ids (no definition key has a `#`), and the screen shows "Value".
+  The team's own club's variables are named as before to every roster basis: the roster is not gated by C99, only the
+  activity read's `variableNamesById` is. System variables and the team's own variables are unchanged; the other
+  owners' user and team variables are the separate info-hiding task (V2, CURRENT_STATE Separate tasks). No roster
+  state reads a name.
+- **Not changed.** `catalogVisibilitySql`, `listDefinitions`, the measurement write gate, the athletes' reads, the
+  calendar grid and `/weekly` (they carry no definition id), and the dashboards: a team-workspace dashboard can never
+  hold a club variable (the v16 trigger `dashboard_widget_series_validate_metric_visibility`, the application pre-check
+  `assertMetricReferenceOk` and the template resolution), so there is nothing to name; C138's later pull request, which
+  lets a team's dashboards use its own club's variables, carries the same rule. `GET /metrics/occasions/:id` and
+  `/metrics/results` (no screen calls them) are V2's.
+- **How another club's variable reaches a team's results** (correcting O2's wording, which named an athlete's older
+  membership): an activity's facts come only from metric events of the identical owner (the v2 trigger
+  `activity_metric_event_links_check_owner`; a merge or reparent never changes the owner), and the measurement write
+  admits every definition the writer's role-wide catalog shows. So a user who also administers club B (or a platform
+  admin) and coaches team A1 can record B's variable in A1's results. Moving a team to another club: the route refuses
+  it (`team_club_fixed`); the database refuses it for any team with a membership row (the foreign key
+  `athlete_memberships_team_club_fkey`, archived memberships included); a team with none can still be moved by raw SQL
+  (section 1.4), and its results then follow its new club. The `owner_club_id` condition is what keeps B's name out of
+  A1's results; the suite writes B's variable exactly that way, through the real routes, and pins the refused move.
+- **Known limits.** A user who holds club B's admin role sees B's names through the catalog in every workspace,
+  because `catalogVisibilitySql` is built from every role the user holds; unchanged by C127's decision. The column
+  picker's layout is the existing one (CURRENT_STATE: "the 'Choose metrics' picker is unusable at about 515 px width");
+  the added rows use the same template. The service's team-workspace gate and the route's workspace-team check guard
+  the same fact; each alone is a second layer (a mutation of one of them alone is not killed, the two together are).
+- **Tests.** `backend/tests/club-variable-names-7h-v.test.mjs` (disposable, through the real server; 14 tests: the
+  coach of A1 gets exactly club A's variables of the facts; another team's and another club's coach get the identical
+  `404`; the same coach in a second team's workspace gets `404` on A1 and, on B1's session, B's name and not A's; an
+  archived club names nothing; club and platform workspaces and the athlete get `{}`; dual roles in A1's workspace get
+  A's names only; the catalog is untouched (list, single read, write); the roster for four viewers; the dashboard's
+  identical `404`; a label with markup comes back verbatim; a read bound is `503`, a broken read `500`, and a caller the
+  check does not concern never asks it; an administrator with no coach role falls back to its club workspace and a
+  revoked coach loses the team workspace; the refused move between clubs; the placeholder columns numbered the same for
+  every viewer) and seven new tests in `frontend/tests/training-load-calendar.actions.test.mjs`
+  (header, drawer, the catalog wins, the picker, escaping, a workspace switch, a `503` not cached). Twelve mutations,
+  each killed by a named test, are listed in the pull request.

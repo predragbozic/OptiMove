@@ -66,6 +66,11 @@ document. **The order of the pull requests** (C127 and C131, the owner's; J15's 
 request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, for the rest):
 - **7h-V** (C127): a team coach sees a club variable's name and unit in the team's results; small, merged and deployed
   before 7h-B's deploy;
+  **built in its pull request, not yet merged** (branch `feature/7h-v-club-variable-names`, base `95c05199`; no
+  migration; the *Rukovodilac*'s V1–V7 of 2026-11-02, event `66518c44`; J14 section 16): `variableNamesById` on the
+  activity read for C99's audience, the three calendar places, the roster names no other club's variable; ★★ (the
+  *Rukovodilac* and the *Nezavisni revizor*), merged under the standing order after both GOs and deployed by the
+  *Rukovodilac*;
 - **7h-B** (★★): migration v52, the backend and the minimal frontend; internal reviews, J14 section 10's tests with
   real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
   after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
@@ -3765,6 +3770,15 @@ pre-existing; pass/fail counts don't belong in this file
   - The cause is not established; a run near midnight UTC is the candidate. Not fixed; a separate task.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Info hiding of other owners' variable names in team results (the *Rukovodilac*'s V2 (a) of 2026-11-02, event
+  `66518c44`; found by 7h-V's discovery; before more clubs are brought on).** `GET /api/training-load/metrics/occasions/:id`
+  (`trainingLoadMetricsMeasurements.js:913-931`) and `/metrics/results` (`:1096`, `:1147-1150`) return the name of any
+  definition on the events in the caller's scope, with no catalog filter, and the roster still names other owners' user
+  and team variables (7h-V narrowed it for club variables only). No screen calls the two metrics routes. The occasion
+  read's athlete branch (`isOwnAthlete`, `trainingLoadMetricsMeasurements.js:925`) also names any definition to an
+  athlete on their own occasion (7h-V's internal security review, MEDIUM, out of 7h-V's scope). Its own decisions and
+  a security review; the security-reviewer gives it its severity.
 
 - **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
   the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought

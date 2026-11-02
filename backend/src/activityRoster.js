@@ -251,9 +251,26 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
   return { canonicalId, activity, team, basis, hasRoster };
 }
 
+// 7h-V: the placeholder keys of the unnamed variables of one answer, by the
+// sorted definition ids (exported for its test).
+export function unnamedMetricKeys(definitionIds) {
+  return new Map([...new Set(definitionIds.map((id) => String(id ?? "")))]
+    .sort()
+    .map((id, i) => [id, `#unnamed-${i + 1}`]));
+}
+
 // Everything the roster rests on, read with the given client: inside the
 // read's REPEATABLE READ snapshot, or inside a command's transaction after
 // its locks (and after its own writes, which it then sees).
+//
+// 7h-V (C127, the Rukovodilac's V1 (a)): a team's results name only the
+// variables of the team's own club - a club-owned definition of another club
+// (one written into this team's results by a user who also administers that
+// club, or left by a team moved between clubs) reads with no key, label or
+// short label, for every basis, the platform admin's included. System and
+// the other scopes are unchanged here (the other owners' user and team
+// variables are a separate info-hiding task). Display only: no roster state
+// reads a name.
 export async function loadRosterSnapshot(client, canonicalId) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
   const roster = await one(
@@ -263,19 +280,35 @@ export async function loadRosterSnapshot(client, canonicalId) {
        join public.athletes a on a.id = r.athlete_id`,
     [canonicalId],
   );
-  const facts = (await one(
+  const factRows = await one(
     `select r.athlete_id, r.detail ->> 'entryMethod' as entry_method, r.detail ->> 'occasionId' as occasion_id,
             r.detail ->> 'segmentId' as segment_id, r.detail ->> 'valueNumeric' as value_numeric,
             r.detail ->> 'valueText' as value_text, r.detail ->> 'unitAtCapture' as unit,
+            r.detail ->> 'metricDefinitionId' as metric_definition_id, d.id is not null as metric_named,
             d.key as metric_key, d.label as metric_label, d.short_label as metric_short_label
        from training.canonical_activity_results($1) r
        left join training_load.metric_definitions d on d.id = (r.detail ->> 'metricDefinitionId')::uuid
+            and (d.owner_scope <> 'club'
+                 or d.owner_club_id = (select t.club_id from training.activities a join public.teams t on t.id = a.owner_team_id
+                                        where a.id = $1))
       where r.fact_kind = 'metric_value'`,
     [canonicalId],
-  )).map((r) => ({
+  );
+  // An unnamed variable keeps a column of its own (the screen groups values
+  // by key): a placeholder key per definition, in a shape no definition key
+  // has ("#"), numbered in this answer by the sorted definition ids - the same
+  // for every viewer and read of the same facts, whatever the row order (a new
+  // unnamed variable may renumber; the screen groups by key within one answer
+  // only and keeps nothing) - so two unnamed
+  // variables never share a column and the definition's own key and id never
+  // leave here.
+  const unnamedKeys = unnamedMetricKeys(factRows.filter((r) => !r.metric_named).map((r) => r.metric_definition_id));
+  const unnamedKeyOf = (definitionId) => unnamedKeys.get(String(definitionId ?? ""));
+  const facts = factRows.map((r) => ({
     athleteId: String(r.athlete_id), entryMethod: r.entry_method, occasionId: r.occasion_id,
     segmentId: r.segment_id ?? null, valueNumeric: numberOrNull(r.value_numeric), valueText: r.value_text ?? null,
-    unit: r.unit ?? null, metricKey: r.metric_key ?? null, metricLabel: r.metric_label ?? null, metricShortLabel: r.metric_short_label ?? null,
+    unit: r.unit ?? null, metricKey: r.metric_named ? (r.metric_key ?? null) : unnamedKeyOf(r.metric_definition_id),
+    metricLabel: r.metric_label ?? null, metricShortLabel: r.metric_short_label ?? null,
   }));
   const needsReview = new Set((await one(
     `select distinct ap.athlete_id
