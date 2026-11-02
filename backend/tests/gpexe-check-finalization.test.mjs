@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { activateBinding } from "./support/mapped-world.mjs";
 import * as cryptoMod from "../src/sourceCredentialCrypto.js";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -265,8 +266,23 @@ const useSource = () => {
   return src;
 };
 const legacyTrap = () => importer.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a team with an active binding"); });
-const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release, reached: false }; };
-const until = async (fn, ms = 6_000) => {
+// Every gate is bounded (9-B): a gate that is never released rejects after its
+// bound, so neither a test nor a held source read can wait forever. The
+// rejection is handled here (no unhandled rejection) and still reaches every
+// await of the gate; the timer never keeps the process alive by itself.
+const GATE_BOUND_MS = 90_000;
+const gate = (ms = GATE_BOUND_MS) => {
+  let release;
+  let timer;
+  const p = new Promise((resolve, reject) => {
+    release = () => { clearTimeout(timer); resolve(); };
+    timer = setTimeout(() => reject(new Error(`a gate was not released within ${ms} ms`)), ms);
+    timer.unref?.();
+  });
+  p.catch(() => {});
+  return { p, release, reached: false };
+};
+const until = async (fn, ms = 15_000) => {
   for (let i = 0; i < ms / 25; i += 1) { if (await fn()) return; await new Promise((r) => setTimeout(r, 25)); }
   assert.fail("the awaited condition did not come");
 };
@@ -336,14 +352,21 @@ async function bound(o) {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const b = await api(`/sources/gpexe/connections/${c.body.connection.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
   assert.equal(b.status, 201, JSON.stringify(b.body));
-  return c.body.connection;
+  const bindingId = b.body.result?.binding?.bindingId;
+  assert.ok(bindingId, "the bind answer names its binding");
+  return { connection: c.body.connection, bindingId: String(bindingId) };
 }
+// 9-B (J17 section 3): a candidate is importable only through the team's
+// binding and its mapping activations, so a bound team here also gets the
+// eleven legacy-spec activations on its binding (support/mapped-world.mjs);
+// without them every candidate would be stored blocked no_mapped_values.
 async function boundOrg() {
   const o = await org();
   useSource();
-  await bound(o);
+  const { bindingId } = await bound(o);
+  await activateBinding(admin, bindingId);
   legacyTrap();
-  return o;
+  return { ...o, bindingId };
 }
 const legacyFake = (sourceTeamId, bundles) => {
   importer.setGpexeClientFactory(() => ({
@@ -709,7 +732,10 @@ test("6. the withdrawal is exact: same team, pending / blocked only, the session
   assert.equal(afterC["34001"][0].status, "imported");
   assert.deepEqual([afterC["34003"][0].status, afterC["34003"][0].by_check], ["pending", null], "a row outside the period is untouched");
   const otherRow = (await candidates(other.teamId))[0];
-  assert.deepEqual([otherRow.status, otherRow.by_check], ["pending", null], "another team is never touched");
+  // 9-B: the other team was never bound, so its candidate is stored blocked
+  // mapping_not_usable (the legacy path); what matters here is that the
+  // withdrawal of team o never touched it.
+  assert.deepEqual([otherRow.status, otherRow.by_check], ["blocked", null], "another team is never touched");
   void cb;
 });
 
@@ -791,22 +817,27 @@ test("8. a busy candidate row or team lock at the finalization: lock_timeout / t
   assert.ok(actionable(await summaryOf(o, rows["36004"][0].id)));
 });
 
-test("9. the legacy path does not withdraw: a session its list no longer shows stays pending; supersede by newer content of the same session and the publication still happen at the finalization", async () => {
+test("9. the legacy path does not withdraw: a never-bound team's candidates are stored blocked mapping_not_usable (9-B), a session its list no longer shows stays as it was; supersede by newer content of the same session and the publication still happen at the finalization", async () => {
   const o = await org();
   const s1 = sessionOf(o.sourceTeamId, 37001, D1);
   legacyFake(o.sourceTeamId, [s1]);
   const first = await runCheck(o);
   assert.equal(first.status, "succeeded");
+  assert.equal(first.source_path, "legacy_env", "a never-bound team's check reads through the legacy path");
   const [c1] = await candidates(o.teamId);
   assert.equal(c1.effect, "confirmed", "the legacy bundle's full drill maps were compared");
+  // 9-B (J17 section 3): the importer writes only through a binding's
+  // activations, so a legacy-path candidate is stored, published by the
+  // finalization, and blocked mapping_not_usable.
+  assert.deepEqual([c1.status, c1.seen, c1.preview?.status, c1.preview?.blocked?.code], ["blocked", first.id, "blocked", "mapping_not_usable"]);
   legacyFake(o.sourceTeamId, [sessionOf(o.sourceTeamId, 37002, D1)]);
   assert.equal((await runCheck(o)).status, "succeeded");
   const rows = await bySession(o.teamId);
-  assert.deepEqual([rows["37001"][0].status, rows["37001"][0].by_check], ["pending", null], "no withdrawal on the legacy path");
+  assert.deepEqual([rows["37001"][0].status, rows["37001"][0].by_check, rows["37001"][0].seen], ["blocked", null, first.id], "no withdrawal on the legacy path");
   legacyFake(o.sourceTeamId, [sessionOf(o.sourceTeamId, 37001, D1, { updatedOn: `${D1}T23:30:00.000` })]);
   const third = await runCheck(o);
   const [old, changed] = (await bySession(o.teamId))["37001"];
-  assert.deepEqual([old.status, old.by_cand, changed.status, changed.seen], ["superseded", changed.id, "pending", third.id]);
+  assert.deepEqual([old.status, old.by_cand, changed.status, changed.seen], ["superseded", changed.id, "blocked", third.id]);
   // A legacy bundle whose two drills carry the same players is refused like the binding path.
   const twin = sessionOf(o.sourceTeamId, 37003, D1);
   twin.details.drills["1"] = structuredClone(twin.details.drills["0"]);
@@ -1051,7 +1082,14 @@ test("16. an approval and the finalization on the same candidate, through the re
   importer.setApprovalObserver(async () => { approved.release(); await releaseApproval.p; });
   const approving = approve(o, x.id);
   try {
-    await approved.p;
+    // Bounded: an approval that ends before it holds its locks fails here at
+    // once instead of leaving the test waiting for the observer.
+    let heldLocks = false;
+    const early = approving.then((r) => r, (e) => ({ status: 0, body: { error: String(e?.message ?? e) } }));
+    await Promise.race([
+      approved.p.then(() => { heldLocks = true; }),
+      early.then((r) => { if (!heldLocks) throw new Error(`the approval ended before it held its locks: ${r.status} ${JSON.stringify(r.body)}`); }),
+    ]);
     list.release();
     await run.done.p;
     const row = await checkRow(run.id);
