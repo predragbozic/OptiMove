@@ -50,9 +50,34 @@ PR #307 (those facts), the contract of the minimal phase 8 (J16, PR #308) and ph
 on `f8ebb28`; nothing else was re-derived then. The central calendar entries (K1a to K2b-1a, and K2b-1b) were added
 on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothing else was re-derived then. PR #330
 (the import window's SQL files) and the record of the first controlled import (M6) were added on 2026-11-02 at `ca79b33`
-(merge of PR #329); nothing else was re-derived then.
+(merge of PR #329); nothing else was re-derived then. The acceptance of the 7h and 7i contracts (J14 and J15, C126–C140;
+PR #333 and PR #334) and the order of their pull requests were added on 2026-11-02 at `93f36615` (merge of PR #334);
+nothing else was re-derived then.
 
 ## Active phase
+
+**Metrics Core phases 7h and 7i: contracts accepted (2026-11-02), not built.** The owner accepted both in one turn:
+„J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (turn `95c006f2` in the *Rukovodilac*'s chat, 20:16:10
+UTC, relayed by its order `011e7d13`). J14 (`docs/ai/phase7h-club-admin-mappings-contract.md`, PR #333, `f0578a7`)
+lets a club's active admin activate, replace and disable its club's mapping versions, with migration v52; J15
+(`docs/ai/phase7i-system-variables-club-contract.md`, PR #334, `93f3661`) lets a club use, copy or hide a system
+variable, with its own migration after v52 and J18's. The decisions are C126–C131 and C132–C140 of the discovery
+document. **The order of the pull requests** (C127 and C131, the owner's; J15's R13 for 7i-B after the lock-order pull
+request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, for the rest):
+- **7h-V** (C127): a team coach sees a club variable's name and unit in the team's results; small, merged and deployed
+  before 7h-B's deploy;
+- **7h-B** (★★): migration v52, the backend and the minimal frontend; internal reviews, J14 section 10's tests with
+  real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
+  after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
+  between the merge and the post-check;
+- then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B) and **the lock-order
+  pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
+  Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
+  end in `40P01` with an Unbind and a revocation at once (`try_again` or a 500, nothing written); the *Rukovodilac*
+  accepts that risk (J14 section 15);
+- **7i-B**: only after the lock-order pull request.
+
+No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
 **Exercise media on Cloudflare R2 (the Exercise Library and the Builder) — merged, deployed and piloted
 (2026-10-19).** A coach with a storage quota uploads a video or a picture of an exercise straight to R2
@@ -3741,8 +3766,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13): right after 7h-B,
-  before more clubs are brought on.** Several rights checks lock the role row before the `users` row, while the
+- **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
+  the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought
+  on.** It also moves **A1 to D's order**: its listed bindings and teams locked before its rights, and every lock
+  before its first end (today the rights at `sourceMetricMappingService.js:1426`, the ends at `:1465`, the listed
+  bindings at `:1485`), with a route-against-route test of A1 against an Unbind and a club-admin revocation (J15
+  section 5 and R13: today A1 has the three-way deadlock J15 found for the switch to a copy). Several rights checks lock the role row before the `users` row, while the
   revocations lock `users` first, so a revocation can deadlock against a write by the same user (`40P01`: the write
   answers `try_again`, the revocation a 500). 7h-B fixes only the club-admin query of `sourceMetricAccess.js`
   `rightsStillHold`. The rest, each turned users first, with route-against-route tests:
@@ -4455,7 +4484,9 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
      decisions O1–O16. Phase 9's code is merged and deployed: 9-0 (PR #322) and 9-B (PR #326, with its test follow-up
      PR #327). Step 8 passed, and M6, the first controlled import, ran on 2026-11-02 (J17 section 10.5): one session
      imported, the switch off again. Phases 7h and 7i come right after the first import, before more clubs are brought
-     on. A mapping version is activated in production only once its
+     on: their contracts J14 and J15 are accepted (C126–C140, 2026-11-02), and their pull requests follow in the
+     order 7h-V → 7h-B → 7h-F and the lock-order pull request in either order → 7i-B only after the lock-order pull
+     request (see the active phase). A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
      `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
      2026-11-10);

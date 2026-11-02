@@ -10,6 +10,13 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 | Owner decisions | Section 11.1 (Q1–Q14). Q1–Q11, Q13 and Q14 become C113–C123, C124 and C125 once decided; Q12 stays O16. They are written into section C of the discovery document before any code (the plan's rule A3, `metrics-core-plan.md:458-460`). |
 | Decides | The owner decides Q1–Q14. The *Rukovodilac* decides R1–R9 (section 11.2). The *Nezavisni revizor* reviews this contract and every ★★ slice. |
 
+**Renumbered by J14 (C126, accepted 2026-11-02):** phase 7h is migration v52, not v51, so J18's own migration and its
+runbook names are ≥ v53 wherever this document says v52 for them (lines at `565fe097`: `:46`, `:182-183`, `:479`, `:548`, `:550`, `:608`,
+`:636`, `:690`, `:692`, `:701`, `:834`, `:947`, `:979`, `:1166`, `:1172`), and its "v51" for 7h reads v52 (`:46`,
+`:182`, `:550`). **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):**
+sections 3.6 and 7 (a mapping of a variable the team's club hides is not eligible), Q14 (answered, option one) and
+section 4.4's lock order (the hide lock), each marked in place.
+
 ---
 
 ## 0. In short
@@ -278,6 +285,8 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 
 - **Which rows are pre-placed.** Every system mapping that is eligible for the team (section 7) is already placed when the board opens. Its badge reads *OptiMove mapping*. Q9 recommends one exception: a system mapping switched off on this binding by an administrator is not placed again. That is a *Switch off* (S2) or a replacement on the board. It reads "Switched off by <name> on <date> · *Add*". An end that the platform causes by disabling or replacing a version (A2, the pinned step, a G1 replacement) does not count (section 7).
   - R4 decides whether the club's own active mappings are pre-placed on another team's board in the same way, with the badge *Your club's mapping*.
+  - **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** a system
+    mapping of a variable the team's club hides is not eligible, so it is not pre-placed (section 7).
 - **What the admin can do.** Each row has *Remove*. It shows the two athletes' values like any other row, but they are not stored (section 5.3). It needs no comparison: its field is proven globally, and its version is active (a system version; under R4, the club's own).
 - **Collisions.** A row that would collide with an open activation on the team (same field and parameters, or same variable and level) reads "Replaces <old column> → <variable> for <team>". It is not pre-placed silently. The admin may keep or remove it. After the save it reads "<old column> → <variable> is switched off for <team> and replaced."
 
@@ -502,6 +511,11 @@ The order is D's (`discovery:1271-1280`). A1 takes its listed bindings after its
 
 `unit_conversions → T2a → T2b → T3 → T4 → metric_definitions → scope capabilities → T5 (to end) → binding → team → role / user / club`, then the new rows.
 
+**Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** after the
+role, user and club rows (step 14) and before step 15's state checks and step 16's writes, the board takes the hide
+lock for every (team's club, target definition) pair it starts, ascending by `(club, definition)`; after it no new row
+lock is taken (J15 section 5).
+
 The candidate, the team import lock and the Metrics Core connection (v11) are never locked. A row-lock wait is bounded at 2 s, the per-user lock at 5 s, and every statement at 10 s (`sourceMetricMappingService.js:93-95`). `55P03`, `40P01` and `57014` before the COMMIT answer `try_again` with nothing written.
 
 | Against | Outcome |
@@ -641,6 +655,8 @@ There is no free text, and no athlete data.
   - option one: J15 adds, in its own migration, a second proof the gate accepts: a typed link from the club version to the system T4 version it copies, with identical revision, fingerprint, units and factors;
   - option two: the copy goes through the board, with a two-athlete check.
   - Recommended: option one, decided with 7i. Until then the gate refuses a copy's activation.
+  - **Answered by J15's acceptance (2026-11-02):** option one, in 7i's migration (J15 sections 7.2 and 7.6); C125
+    itself is recorded with J18's other decisions.
 
 ### 5.6 T8
 
@@ -796,6 +812,8 @@ There is no free text, and no athlete data.
 - its field has an extractor for the binding's family, and a value in the board's session;
 - the team has no open activation of the same field and parameters, and none of the same variable and level (`sourceMetricActivationSteps.js:42-47`);
 - under Q9's recommendation, the mapping was not switched off on this binding by an administrator. That is an activation on this binding ended with `end_reason = 'admin_ended'` (`v34:1317-1319`): a *Switch off* (S2, `sourceMetricActivationService.js:193-194`) or a replacement on the board (section 4.3 step 16.2). A version-driven end does not count: A2, the pinned step and a G1 replacement end with `mapping_version_disabled` or `mapping_version_replaced` (`sourceMetricMappingService.js:1465, :1555`; `sourceRevisionLifecycleService.js:245`). Such a mapping reads "Switched off by <name> on <date> · *Add*" and is placed only on *Add*.
+- **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** the
+  variable is not hidden in the team's club.
 
 **How they are switched on:**
 - The board shows every eligible system mapping already placed, with the badge *OptiMove mapping*.
@@ -1173,6 +1191,8 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
   - Option one: J15 adds, in its own migration, a second proof the gate accepts: a typed link from the club version to the system T4 version it copies, with identical revision, fingerprint, units and factors.
   - Option two: the copy goes through the board, with a two-athlete check.
   - Recommended: option one, decided with 7i. Until then the gate refuses a copy's activation.
+  - **Answered by J15's acceptance (2026-11-02):** option one, in 7i's migration (J15 sections 7.2 and 7.6); C125
+    itself is recorded with J18's other decisions.
 
 ### 11.2 For the *Rukovodilac* (R1–R9)
 

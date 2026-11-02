@@ -52,6 +52,9 @@ checkout timeout `409 try_again` with `Retry-After` (`:49-53`).
 | activations (S1, S2, S3) | `POST /activations`, `POST /activations/:id/end`, `GET /activations?bindingId|versionId&state&cursor` | a platform admin in either workspace, or the club's admin in its club (`mayManageActivations`, `sourceMetricAccess.js:46-61`) | the scope table of J10 §2.1: the platform workspace starts only system mappings, on any club's binding; club X's workspace starts system or X's mappings, on X's bindings only; S3 pages of 100 and leaves out the rows of archived clubs (`backend/src/sourceMetricActivationService.js:270-288`); rows carry `teamId`, `bindingId`, `bindingState`, `requirement`, `basis` and an `endReason` code, never a team name, a reason or a user; S1 refuses the whole batch with the first failing binding named in `current.bindingId` (`binding_not_active`, `binding_source_mismatch`, `activation_exists` — an open activation of the same field with the same parameter fingerprint on that binding, from any mapping — or `variable_taken_on_binding` — an open activation of the same variable at an overlapping level; `sourceMetricActivationSteps.js:141-156`) |
 | preview | `GET /mappings/:mappingId/versions/:versionId/preview?candidateId=` | as S1 (`mayManageActivations`) | `{preview:{candidateId, versionId, sourceUnit, targetUnit, minimumAthletes:3, levels:{session, drill}}}`; no status gate on the version or the candidate; the candidate's scope by the team's current club; the identical 404 before `snapshot_expired` (`backend/src/sourceMetricPreviewService.js:50-149`) |
 
+**Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** A1 and A2 also admit
+the club's active admin, in its club's workspace, for its club's mappings (`mayTransitionMappings`, J14 section 7).
+
 Reads outside this router that the screen needs, unchanged:
 - **The club's GPEXE teams (bindings):** `GET /api/training-load/sources/gpexe/connections?clubId=` (a platform admin in
   the platform workspace or a club workspace, or the club's admin in its workspace; `clubId` required) answers
@@ -88,6 +91,8 @@ So a club's own mapping can be activated today only by a platform admin who also
 mapping owner's workspace, and a club workspace exists only for a club admin); until phase 7h every other club waits for
 such a person (R12). The first import (M6) uses system variables and system mappings, which the platform workspace
 activates.
+**Superseded by J14 (C126, accepted 2026-11-02; once 7h-B is deployed):** club X's admin activates, replaces and
+disables X's versions in X's workspace; the table above and this paragraph give way to J14 section 8.
 
 The card and the section are offered from the active workspace exactly as Source fields is (`sourceFieldsContext()`:
 the platform workspace, or a club workspace with a `scopeId`); a team workspace never gets them (C99). Every act is
@@ -114,6 +119,9 @@ offered only to the caller the table names; a hidden act is never the protection
 - One sentence of introduction: "A mapping tells OptiMove which source field fills which of your variables." In a club
   workspace a second sentence, as Variables does: "System mappings come from a platform administrator; you switch them on
   for your teams.".
+  **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** a system
+  variable the club hides is marked, and its system mappings cannot be switched on for the club's teams
+  (`variable_hidden`).
 - Rows: the variable's label, "from" the field's label and source (the source's name from the `/fields` read), a
   **System** or club badge (the club colour of the visual proposal), and the state in words from `activeVersionId`,
   `latestVersion` and `versionCounts`: "Active: version 2", "Active: version 2 · version 3 waiting for review",
@@ -213,6 +221,8 @@ offered only to the caller the table names; a hidden act is never the protection
 - Acts per version, each offered only to the caller of section 2 (the primary one in bold):
   - **Draft:** **Submit for review** (a short confirmation naming the variable, the field and the version); Check with a
     saved session; Disable (a platform admin, with a reason).
+    **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** Disable also for
+    the club's admin, on its club's own mapping (J14 section 8).
   - **Waiting for review**, a platform admin in the mapping owner's workspace:
     - **Activate**, offered only when the reads show the field's revision active and verified and the variable's
       current version still the one the draft was made against; otherwise the sentence of what is missing ("The field's
@@ -225,8 +235,12 @@ offered only to the caller the table names; a hidden act is never the protection
     who also administers <club> to activate it in this workspace." (R12); on a system mapping a club's admin reads "A
     platform administrator activates system mappings in the platform workspace.", and a platform admin in a club
     workspace reads "Activate it in the platform workspace.".
+    **Superseded by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** on its club's own
+    mapping a club's admin gets *Activate*, *Replace* and *Disable*, not the note (J14 section 8).
   - **Active:** with no team switched on, **Switch on for teams** with "Active, but no team uses it yet."; otherwise the
     teams of section 6; Disable (a platform admin, section 5.1).
+    **Amended by J14 (C126, accepted 2026-11-02; in force once 7h-B is merged and v52 deployed):** Disable also for
+    the club's admin, on its club's own mapping (J14 section 8).
   - **Disabled:** read-only.
 - `expectedActiveVersionId` and `expectedStatus` come from the version the screen shows; a `409 active_version_changed` or
   `version_status_changed` closes the form and reads the mapping again.
@@ -464,6 +478,8 @@ Every write follows the pattern of Source fields and Variables (`frontend/source
 - **R12. A club's own mapping** can be activated only by a platform admin who also administers the club, until phase 7h.
   Options: (a) accept until 7h — the first import uses system mappings; (b) bring 7h forward (a migration, after phase
   9 in today's order). Recommendation: (a).
+  **Closed by J14 (C126, accepted 2026-11-02):** 7h is built right after the first import; until 7h-B is deployed (a)
+  holds.
 - **R13. A club's admin reads every version of a system mapping**, drafts and conversion notes included, as the API
   answers today. Options: (a) accept, with the conversion note's label saying so; (b) show a club's admin only the
   active version of a system mapping (a client filter, not a protection: the API would still answer the rest).
