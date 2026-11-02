@@ -19,7 +19,7 @@ before this contract is accepted.
 | Mark | ★★: external-review triggers 1 (a migration), 2 (auth, role, `owner_scope`, info hiding) and 4 (transactions, lock order, idempotency). Reviewed by the *Rukovodilac* and the *Nezavisni revizor*. |
 | The owner's decision | **C108 / OD6** (2026-10-30): „Povezivanje veza i raskidanje veza izmedju varijabli radi pre svega klupski admin, moze i sistemski ali pre svega klupski jer je to njegov posao.” (turn `122a4df5`); „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`); „znaci promeni u skladu sta sam hteo, ne vidim problem, da li ti vidis” (turn `88ad60ca`). Section 2 is the *Rukovodilac*'s reading of it (discovery C108), made concrete. |
 | Owner decisions | **O1–O6** (section 11), each with a recommendation. They become decisions with the next free C numbers once decided (R8). |
-| Decides | The *Rukovodilac*: R1–R12 (section 12) and the acceptance under its order. The owner: O1–O6; for a ★★ phase the owner also approves the contract before any code (`metrics-core-plan.md`, section 3, A1). |
+| Decides | The *Rukovodilac*: R1–R13 (section 12) and the acceptance under its order. The owner: O1–O6; for a ★★ phase the owner also approves the contract before any code (`metrics-core-plan.md`, section 3, A1). |
 | Migration | **v52** (the next free number: v51 is `migrations_v2/202611011900_calendar_v51_settings.sql`), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v52_club_mapping_transitions.sql`. No open pull request carries a migration at the time of writing (PR #332 has none). If another migration lands first, 7h takes the next number (R1). |
 
 ---
@@ -33,17 +33,21 @@ before this contract is accepted.
   its club's mappings, and start and end activations (C106); the step to `active` needs a platform admin.
 - **What does not change.** System mappings, a source field's unit and meaning (M2b), the revision lifecycle and its
   pinned step (L1–L5), unit conversions and D9 stay the platform admin's. The platform admin keeps everything it has,
-  including support in club X's workspace on the basis `platform_admin`. Everyone else gets the identical 404.
+  including support in club X's workspace on the basis `platform_admin` — which, as today, needs a platform admin who
+  also holds club X's admin role (section 2.1). Everyone else gets the identical 404.
 - **Where the refusals sit today** (section 1.2): the route and service gate `mayTransitionMappings`; v34's T4 update
   guard (two `source_metric_require_platform_admin` calls); v34's two T4 basis CHECKs; T8's `source_metric_audit_row_ok`
   (v48 body) for three branches; and the club-less basis of a version-driven activation end (v48's T5 update guard and
   T8 actor guard, plus a constant in the service). v35's actor guards, v43's G1 and G2 and v48's T8 insert guard
   already handle `club_admin` and are **not** changed.
 - **v52** widens the two CHECKs and replaces four function bodies in place, each behind an md5 precondition: v34's T4
-  update guard, v48's `source_metric_audit_row_ok`, v48's T5 update guard and v48's T8 actor guard. It adds no table,
-  column, trigger or index. Its rollback refuses once a row only 7h can write exists.
-- **The service** changes one predicate (`mayTransitionMappings`) and lets the version-driven ends carry the caller's
-  basis. Lock order, idempotency, replay and the COMMIT discipline are 7b's and 7d's, unchanged.
+  update guard, v48's `source_metric_audit_row_ok`, v48's T5 update guard and v48's T8 actor guard. It also rewrites
+  T4's table comment. It adds no table, column, trigger or index. Its rollback refuses once a row only 7h can write
+  exists.
+- **The service** changes one predicate (`mayTransitionMappings`), lets the version-driven ends carry the caller's
+  basis, and locks a club admin's `users` row before its role row in `rightsStillHold`, which removes a deadlock with
+  a club-admin revocation that exists today (section 5). The replay, the request record and the COMMIT discipline are
+  7b's and 7d's, unchanged.
 - **The screen** shows Activate, Replace and Disable on the club's own mappings to its admin: one person, one
   workspace, no hand-off (section 8).
 - **The importer** is unchanged: it never reads who activated a version (section 1.5). The owner's O16 question
@@ -177,6 +181,13 @@ first (v48 `:222`, a text not in `ACTOR_REFUSALS`) and answer a sanitized 500.
 and v35's derivation). "Platform admin" is an active platform admin in the platform workspace (system mappings) or in
 club X's workspace (club X's mappings, support), as today.
 
+**Platform support in a club, as it is today and stays:** a club workspace exists only for a user's own `club_admin`
+role (`backend/src/workspace.js:46-58`), so a platform admin acts on one club version only if it also holds club X's
+admin role. It may grant itself that role (`canManageClub`, `authz.js:131-133`; `grantClubAdminRole`,
+`routes/organization.js:2506-2531`, audited). Without the role, its levers on a club's versions are blunt: the pinned
+step (every version on a revision), an Unbind of the team's binding, and D9. There is no platform veto on a single
+club version without that grant.
+
 | Operation | Club X's admin, on club X's mapping | Club X's admin, on a system mapping or another club's | Platform admin (owner's workspace) |
 |---|---|---|---|
 | Create a mapping, a version; submit | yes (today) | 404 (today) | yes (today) |
@@ -222,8 +233,9 @@ key left free, goes to:
 - an admin of clubs A and B acting in B's workspace on A's mapping;
 - club X's admin in a team workspace of club X;
 - a revoked club role, a revoked platform admin role, and an archived club, for both bases;
-- a coach, an athlete, a user with no role;
+- a coach, a private coach, an athlete, a user with no role;
 - club X's admin on a system mapping, on a version of another mapping, or on an unknown id;
+- a user who holds both roles, in the platform workspace, on club X's mapping (that workspace's owner is the system);
 - a replay from another workspace.
 
 An inactive user gets the router's 401, as today.
@@ -255,23 +267,30 @@ The routes are 7b's: `POST /api/training-load/sources/metrics/mappings/:mappingI
 and `…/disable` (A2), with the bodies, hashes and answers of J8 and J10 unchanged. No field names an owner, an actor
 or a basis (C60). The request hash carries no basis or workspace (`sourceMetricMappingService.js:1394-1397`, `:1534`).
 
-**The order of the answers for a club admin** (J8's order; `routes/sourceMetrics.js:241-255`):
+**The order of the answers for a club admin** (J8's order, as the code runs it: `routes/sourceMetrics.js:241-255`,
+`sourceMetricMappingService.js:1368-1397`, `:1525-1534`, then `runWrite` `:779-791` and the operation's body):
 
 1. no session → 401;
 2. no context, or a context the gate refuses → the identical 404, before the body;
 3. 415, then 400 `invalid_body` for a non-object;
 4. a malformed id → the identical 404;
 5. 400 per body rule;
-6. the owner-filtered read (`transitionTarget`) → the identical 404 for a system mapping, another club's mapping, a
-   version of another mapping or an unknown id;
-7. the request record (replay or `request_key_reused`);
+6. the request record, looked up by the caller's own user and key after the per-user lock:
+   - another action or hash under the same key → `409 request_key_reused`;
+   - the same → the replay: the right is checked again, then the current state is read through the owner filter
+     (`writableVersion`, `:707-715`) — the identical 404 when it is outside the workspace;
+7. the owner-filtered read (`transitionTarget`, `:1274-1288`) → the identical 404 for a system mapping, another
+   club's mapping, a version of another mapping or an unknown id;
 8. the locks;
 9. the right checked again;
 10. the state refusals (`version_not_submitted`, `active_version_changed`, `version_status_changed`, …), only after
     the right is confirmed.
 
-Step 6 after step 5 is today's order for a platform admin in the platform workspace who names a club mapping
-(7b test 9). A 400 does not depend on the id, so it reveals nothing.
+The 400s of step 5 and the 409 of step 6 come before the owner-filtered read. Neither reveals anything of another
+tenant: a 400 does not depend on the id, and the request record is the caller's own (`performed_by_user_id`), so
+`request_key_reused` depends only on the caller's own earlier requests. The same order holds today for a platform
+admin in the platform workspace who names a club mapping (7b test 9). Tests use a fresh request key per attempt, or
+assert the 409 for a reused key on purpose.
 
 **Replay.** The key is per user (`source_metric_audit_one_request_per_key`). A replay checks the right again in the
 current workspace (`runWrite`, `:786`) and answers the current state.
@@ -291,9 +310,12 @@ answer is the identical 404.
 
 - If the grant commits before the right is checked again (`rightsStillHold`'s probe, `sourceMetricAccess.js:117-127`),
   the answer is `409 try_again`.
-- If it commits after that check and before the T4 or T5 write, v35's or v48's actor guard refuses
-  "the basis is not the acting user's own" (not in `ACTOR_REFUSALS`). The answer is a sanitized 500 with nothing
-  written, as discovery `:4053-4054` already accepts for 7d.
+- If it commits after that check and before the writes, the first guard to see the new role refuses: v52's T5 guard
+  ("source metric activation: the acting user may not write this activation", for a replacement or a disable with
+  open activations) or v35's T4 actor guard ("the basis is not the acting user's own"). Neither text is in
+  `ACTOR_REFUSALS`, so the answer is a sanitized 500 with nothing written, as discovery `:4053-4054` already accepts
+  for 7d. (M3-0 maps its own basis text to `try_again`, `canonicalVariableAdminService.js:765-774`; here the race
+  meets two guards, and the T5 text is shared with genuine refusals, so a partial mapping would be inconsistent.)
 
 ## 4. The write, in the documented lock order (unchanged)
 
@@ -309,21 +331,26 @@ A club admin's A1 and A2 take exactly the platform admin's order. Only the right
 8. the open T5 rows `FOR NO KEY UPDATE`, ascending (a replacement or a disable);
 9. `rightsStillHold`, in order:
    - the promotion probe (global role and user `FOR SHARE`);
-   - `user_club_roles` and `users` `FOR SHARE`;
+   - `users` and `user_club_roles` `FOR SHARE` (7h-B changes the order to users first, section 7; today it is the role
+     row first);
    - the club `FOR SHARE`;
-10. A1's listed starts:
-    - bindings `FOR SHARE`, then their teams `FOR SHARE`;
-    - the bindings' clubs `FOR SHARE` (`bindingClubHolds`);
-11. the writes, in this order:
+10. the writes and A1's listed starts, in J10 section 4.3's order (`sourceMetricMappingService.js:1458-1500`):
     - the T5 ends;
-    - the T4 status changes;
-    - the T5 starts;
+    - the T4 status changes (N disabled, then N+1 activated);
+    - A1's listed starts: the bindings `FOR SHARE`, then their teams `FOR SHARE`, then the bindings' clubs `FOR SHARE`
+      (`bindingClubHolds`), then the checks and the T5 inserts;
     - the unkeyed T8 rows;
     - the keyed T8 row last.
 
-The triggers derive the basis again on the rows step 9 already holds. v52 moves v34's T3 `FOR SHARE` in the disable
-branch to before its role check (section 6.1). That restores D's header order (T3 before the acting user's rows)
-inside the trigger chain. The service already holds T3 more strongly from step 5, so nothing new waits.
+Any refusal in step 10 throws and rolls everything back. The right and the workspace's club are held from step 9, so
+the starts' locks add no authorization decision; they only serialize with an Unbind, a team archive or another
+club's archive.
+
+The triggers derive the basis again on the rows step 9 already holds. v52 **adds** a T3 `FOR SHARE` read to v34's
+disable branch, before its role check (section 6.1); v34 has none there today. A1 and A2 hold T3 `FOR NO KEY UPDATE`
+from step 5 and the pinned step holds T3 `FOR SHARE` (`sourceRevisionLifecycleService.js:196-209`), so the re-lock is
+a no-op on every service path. A raw writer that updates T4 without taking T3 first now takes T3 after its T4 row
+lock, against D's order, and can meet `40P01` rather than wait.
 
 The rights rows come after every registry row, as the importer's step 6b does (J17 R5). No 7h write takes the team
 import lock, a binding `FOR UPDATE` or the Metrics Core connection.
@@ -339,7 +366,7 @@ row for their ends … an archive never blocks them"**, which is false for a clu
 | A2 or a replacement against S2 ending the same activation | J10's row, unchanged: they serialize at T3 (or at T4 for the pinned step) before the T5 row. |
 | Club X's admin's A1 or A2 against the pinned step (L4 / L5) on the pinned revision | They serialize at T2b (`FOR UPDATE` against `FOR SHARE`), then at T3 and T4 in the same order. If the pinned step goes first, the A1 / A2 reads a disabled version or a retired revision. If the A1 / A2 goes first, the pinned step disables what it finds. |
 | **A club archive** against club X's admin's A1 / A2 | The club row is held `FOR SHARE` in step 9, and again in the triggers' `source_metric_actor_basis`. The archive waits for the write, or lands first, and the write then answers the identical 404. The archive takes no T3, T4, T5 or binding lock, so no cycle forms. |
-| **A club-role revocation** against club X's admin's A1 / A2 | The revocation (`routes/organization.js:2549-2583`) takes `users` and `user_club_roles` `FOR UPDATE`; the write holds them `FOR SHARE` from step 9. One waits for the other. If the revocation lands first, the write answers the identical 404 with nothing written. A deadlock between the two rows of the same user is possible but not proven (the row order depends on the join plan); `40P01` answers `409 try_again` with nothing written. |
+| **A club-role revocation** against club X's admin's A1 / A2 | The revocation (`revokeClubAdminRole`, `routes/organization.js:2549-2589`; `loadQualifyingClubAdminUserIds`, `:2430-2437`) locks `for update of u, r`: the `users` row first, then `user_club_roles`. **Today** `rightsStillHold` locks `for share of r, u` (`sourceMetricAccess.js:134-137`): the role row first. PostgreSQL locks a row's relations in the order of the `OF` list, whatever the join plan, so the two orders can deadlock. The internal review reproduced it on a disposable PostgreSQL: 3 of 3 runs ended in `40P01`, with the revocation as the victim (its route answers 500). The same inversion exists today for every club-admin write (M2, S1, S2). **7h-B** changes `rightsStillHold`'s club-admin query to `for share of u, r` (section 7): the same order as the revocation, so one waits for the other and no cycle forms. With that fix the reviewer's reproduction ran without a deadlock in 3 of 3 runs. The triggers' later `r, u, c` re-locks (`source_metric_require_club_admin`, `source_metric_actor_basis`) find both rows already held, so they add no wait. If the revocation lands first, the write answers the identical 404 with nothing written. |
 | A promotion | Section 3. |
 | An Unbind, or a team archive, against A1's listed starts | J10's rows, unchanged: the starts hold the bindings and teams `FOR SHARE`. |
 | An Unbind, or a team archive, against A2 or a replacement | No binding or team row is locked: the ends go through (section 2.3). |
@@ -392,9 +419,10 @@ unchanged):
    - `basis := source_metric_actor_basis(actor, null)`;
    - when that is NULL, read the T3 row's `owner_scope` and `owner_club_id` by `new.mapping_id` with a plain read (T3
      is immutable, v34 `:643-645`);
-   - if it is a club mapping, assert `source_metric_binding_club(new.source_team_binding_id) = owner_club_id` (`23514`
-     "source_metric_mapping_activations: a club version's activation is on another club's binding", R3) and then
-     `basis := source_metric_actor_basis(actor, owner_club_id)`.
+   - if it is a club mapping, refuse when `source_metric_binding_club(new.source_team_binding_id) is distinct from
+     owner_club_id` (`23514` "source_metric_mapping_activations: a club version's activation is on another club's
+     binding", R3) — `is distinct from`, so a binding with no club (the function's NULL) is refused too, never passed —
+     and then `basis := source_metric_actor_basis(actor, owner_club_id)`.
 
    The rest (the actor equals `ended_by_user_id`, the derived basis equals `ended_basis`, `ended_at = now()`) is
    unchanged.
@@ -415,8 +443,11 @@ unchanged):
 - v43's G1 and G2;
 - v50's revision guard: v50's md5 precondition on it stays true.
 
-It also updates the comments that state the old rule: the column comments of `activated_basis` and `disabled_basis`,
-and v48's comment of the T5 guard.
+**One catalog comment changes:** T4's table comment (v34 `:899-900`) says "only a platform admin activates or
+disables"; v52 replaces it with the same text plus "v52 (C108, J14): a club mapping's version also by its club's
+active admin". T5's table comment (v48 `:101-102`) already names both and stays. The T5 guard's explanation is a code
+comment inside its body (v48 `:208-213`), rewritten with the body. No column or function comment exists for these
+objects, and v52 adds none.
 
 **Fixed texts and their answers.** Through 7h-B's routes a club admin cannot reach the two new `else` texts, because
 `transitionTarget` filters by owner and the gate admits only a club scope. They are reachable only by a raw writer.
@@ -438,7 +469,9 @@ database built through v51:
 | `source_metric_audit_actor_guard` | v48 | `3622725a1b0d454767704b2021db731c` |
 | `source_metric_activations_update_guard` | v48 | `f4ce8781c0f1797663064cd4e5c63929` |
 
-It also refuses unless both CHECK definitions are v34's (`pg_get_constraintdef`).
+Three of the four values equal the constants v48's rollback already restores against
+(`docs/runbooks/mapping-activations-v48-rollback.sql:109-114`); the fourth, v34's T4 update guard, was computed the
+same way. It also refuses unless both CHECK definitions are v34's (`pg_get_constraintdef`).
 
 J18's later migration md5-checks the bodies in force (`c112-drag-mapping-contract.md:550`). After v52 its baselines
 are v52's bodies; J14's 7h-B records them in its "As built".
@@ -449,11 +482,19 @@ are v52's bodies; J14's 7h-B records them in its "As built".
   1. T4 `access exclusive` (the CHECK swap; it scans T4, which holds production rows since M6);
   2. T5 `share row exclusive`;
   3. T8 `share row exclusive` (the replaced trigger functions, to serialize with their writers, as v48 and v50 did).
-- The runner's `lock_timeout` bounds the wait; a wait beyond it fails the migration with nothing applied.
+- The old instance keeps serving while the new one migrates (`npm start` runs the migrator before the server). A
+  queued `access exclusive` request makes every later reader of T4 wait behind it — the Mappings screen, A1, A2, S1,
+  S2 and the importer — up to the runner's `lock_timeout` (30 s, `backend/src/migrate.js:543-547`), after which the
+  migration fails with nothing applied. **v52 takes the T4 lock with `nowait`** (R10): a busy T4 fails the migration at
+  once, nothing is applied, the old instance keeps serving, and the deploy is repeated at a quiet moment. T5 and T8
+  take the runner's bound as v48 and v50 did.
 - The importer reads T4 `FOR SHARE` at an approval and in a check's preview. So **the deploy window needs the import
-  switch off, no running check and no open approval** (the preflight's quiet-moment block). With the switch off since
-  M6 and no check until the end of this track (the owner's order of 2026-11-02), this holds by default.
+  switch off, no running check and no open approval**, and the deploy follows the preflight's quiet-moment block at
+  once. With the switch off since M6 and no check until the end of this track (the owner's order of 2026-11-02), this
+  holds by default.
 - `NOT VALID` plus `VALIDATE` gains nothing on a table this small.
+- The order T4 → T5 → T8 forms no cycle with any writer: A1, A2, S1 and S2 take T4 before any T5 write, the importer
+  T4 before T5, and the pinned step T3, T4, T5.
 
 ### 6.4 Deploy compatibility
 
@@ -474,7 +515,7 @@ transaction (the connector rule of 9-R):
 3. the four bodies in force by md5 (section 6.2);
 4. the two CHECK definitions are v34's;
 5. no disabled trigger on T4, T5 and T8, and no v52 object collision;
-6. the migrator role owns T4, T5 and T8;
+6. the migrator role owns T4, T5 and T8 and the four functions v52 replaces;
 7. no default for `optimove.source_metric_actor` at the database or role level;
 8. a quiet moment:
    - no running check;
@@ -505,14 +546,24 @@ then the record check and the same locks as v52. It refuses, with every reason c
   - a T8 `mapping_status` row to `active` or `disabled` with basis `club_admin`;
   - a T8 `mapping_version_replaced` row with basis `club_admin`;
   - a T5 row with `ended_basis` `club_admin` and `end_reason` in (`mapping_version_replaced`,
-    `mapping_version_disabled`).
+    `mapping_version_disabled`);
+  - a T8 `activation_end` row with basis `club_admin` whose activation's `end_reason` is one of those two (implied by
+    the T5 row unless triggers were disabled; counted anyway).
 
 It does **not** refuse on the `club_admin` rows that 7d and M2 already write: `mapping_create`,
 `mapping_version_create`, `draft → needs_review`, `activation_start`, and `activation_end` with `admin_ended`.
-Otherwise it restores v34's two CHECKs and the four bodies byte for byte, and deletes v52's record.
+Otherwise it restores v34's two CHECKs, v34's T4 table comment verbatim and the four bodies byte for byte, and
+deletes v52's record.
 
-**Rehearsed** in 7h-B's suite: apply → rollback → the v51 catalog exactly → re-apply → the v52 catalog exactly. A
-migration whose last statement fails leaves nothing behind. All four files have LF line endings.
+**Rehearsed** in 7h-B's suite: apply → rollback → the v51 catalog exactly (comments included) → re-apply → the v52
+catalog exactly. A migration whose last statement fails leaves nothing behind.
+
+**The files of 7h-B's runbook:** the three SQL files above, `docs/runbooks/club-mapping-transitions-v52.md` (the
+steps, as v48's and v50's), and a `.gitattributes` line `docs/runbooks/club-mapping-transitions-v52*.sql text eol=lf`.
+The owner's checkout uses `core.autocrlf=true` (`.gitattributes:3`), and the rollback and the post-check compare
+function bodies by md5, so a CRLF checkout would break them. The test asks `git check-attr eol` for the three SQL
+files, not only the bytes of a Linux worktree. v52's file name sorts after `202611011900_calendar_v51_settings.sql`:
+the runner and the refusals compare migration names.
 
 ## 7. The service (7h-B)
 
@@ -526,13 +577,19 @@ migration whose last statement fails leaves nothing behind. All four files have 
   - The pinned step's context is always a platform admin's in the platform workspace (its own gate), so it still
     writes `platform_admin`; its T4 disable and its T8 row keep their constant.
   - The comment at `:222-229` is rewritten.
-- **`submitVersion`** answers its state refusal (`409 version_not_draft`, `:1210`) only after `rightsStillHold`
-  (`:1212`), as A1 and A2 do (R5). This is a pre-existing ordering gap: a caller who lost the right meanwhile could
-  see the current status instead of the identical 404.
+- **`rightsStillHold`'s club-admin query** (`sourceMetricAccess.js:134-137`) locks `for share of u, r` instead of
+  `r, u`: the `users` row first, as the club-admin revocation does (`routes/organization.js:2430-2437`) and as the
+  promotion probe already does for `g, u` (R13; section 5). The rows, the conditions and the answers stay the same.
+  It changes the lock order of every caller of this branch (M2's writes, S1, S2, A1 and A2), removing a deadlock that
+  exists today; the triggers' `r, u, c` re-locks find both rows held.
+- **`submitVersion`** answers its state refusals (`409 version_not_draft` with `current.status`, `:1210`, and
+  `409 revision_not_usable`, `:1211`) only after `rightsStillHold` (`:1212`), as A1 and A2 do (R5). This is a
+  pre-existing ordering gap: a caller who lost the right meanwhile could see the current status or a revision refusal
+  instead of the identical 404.
 - **The comments** at `sourceMetricAccess.js:33-37`, `sourceMetricMappingService.js:1226-1244` and
   `routes/sourceMetrics.js:236-240` state the new rule.
 - **No change to:**
-  - `resolveMappingAdminWith`, `rightsStillHold`, `activationInScope` and `bindingClubHolds`;
+  - `resolveMappingAdminWith`, `activationInScope`, `bindingClubHolds`, and the rest of `rightsStillHold`;
   - `runWrite`, the request record, the hashes and `answerAfterCommit`;
   - `TRIGGER_REFUSALS` and `ACTOR_REFUSALS` (R2);
   - the lifecycle, conversion, verification and source-instance services;
@@ -546,9 +603,13 @@ not known".
 
 - **One predicate** (`frontend/metric-mappings-actions.js:263`):
   `mayTransition = (mapping, ctx) => Boolean(ctx && inOwnerWorkspace(mapping, ctx) && (ctx.isPlatformAdmin || (ctx.owner === "club" && mapping.ownerScope === "club")))`.
-  - This equals the server's rule. In the platform workspace the caller is always a platform admin. In a club
-    workspace, a club mapping is always the workspace's own club's.
-  - A test pins the two predicates together (R12: no new API field).
+  - For any non-null context this equals `inOwnerWorkspace(mapping, ctx)`: a context exists only for the platform
+    workspace (always a platform admin) or a club workspace, where a club mapping is always the workspace's own club's
+    (`frontend/metric-mappings-data.js:23-32`). It is written out anyway, so a later context kind cannot widen it.
+  - The client's `isPlatformAdmin` comes from the workspace list; the server derives the basis from the roles. One
+    shared fixture table (workspace, roles, mapping owner — including a user who holds both roles, and a platform
+    admin in a club workspace on a system mapping) is asserted against the server's `mayTransitionMappings` plus the
+    owner filter in the backend suite, and against the client predicate in the frontend suite (R12: no new API field).
   - With it, club X's admin gets, on club X's own mappings: *Activate* (with the optional *Switch on for teams now*
     chooser, preset to the club), *Replace version N* (*Keep these teams*), *Disable* on draft, waiting and active
     versions, the primary act *Activate*, and "You can activate it now." after a submit.
@@ -560,8 +621,8 @@ not known".
   - **step 4** (`:276-278`) keys on the same predicate, so the club admin reads "…submit it for review, then you can
     activate it.";
   - **the dead note** "Ask a platform administrator who also administers <club>…" (`:363-364`) is removed;
-  - **the meaning blocker** (`actions.js:274`) gets the next step for a club workspace: "A platform administrator
-    confirms it in the platform workspace." (the pattern of `view.js:171`);
+  - **the meaning blocker** (`activateBlocker`, `actions.js:275`) gets the next step for a club workspace: "A
+    platform administrator confirms it in the platform workspace." (the pattern of `view.js:171`);
   - **a missing conversion** (`data.js:284`) gets "Ask a platform administrator to add it.";
   - **the Imports screen's step for `mapping_not_usable`** (`frontend/gpexe-import-view.js:1516`): "Your club's admin
     fixes the club's own mappings; a platform administrator fixes system mappings and field confirmations."
@@ -634,8 +695,10 @@ A fixture meant as a club admin never carries a global `platform_admin` row: the
 - an admin of A and B in B's workspace;
 - caA in a team workspace; caA with a revoked role;
 - club C's admin with club C archived;
-- a coach, an athlete, a user with no role;
-- a platform admin in a team workspace; a revoked platform admin.
+- a coach, an athlete, a private coach (`workspace.js:42-44`), a user with no role;
+- a platform admin in a team workspace; a revoked platform admin;
+- a user who holds both roles, in the platform workspace, naming its own club's version (the identical 404: the
+  platform workspace's owner is the system).
 
 **Targets:**
 
@@ -663,7 +726,9 @@ A fixture meant as a club admin never carries a global `platform_admin` row: the
   - listed starts with `activated_basis` `club_admin`.
 - caA2 may replace or disable what caA or a platform admin activated (O4).
 - **caA with a listed club B binding** → the identical 404, nothing written.
-- **caA on any other target** → the identical 404, as section 3 orders it.
+- **caA on any other target** → the identical 404, as section 3 orders it. "Identical" is asserted by deep equality
+  of the status, the body and the headers (`Cache-Control: no-store`, no `Retry-After`) across a missing id, a system
+  version, another club's version and a foreign binding (`testing-evidence.md`).
 - **Every other actor on club A's versions** → the identical 404 (401 for no session and an inactive user), nothing
   written, the key left free.
 - **A platform admin in club A's workspace** → 200 with basis `platform_admin` (unchanged).
@@ -675,7 +740,13 @@ v34's guard fires before v35's by name, so each case must reach the layer it tes
 mutated trigger.
 
 1. Club A's admin activates, disables and replaces a club A version, with its T8 rows → passes.
-2. The same with basis `platform_admin` → `42501`, "the basis is not the acting user's own".
+2. A wrong basis, each at the layer that fires first:
+   - club A's admin writes T4 with basis `platform_admin` → `42501` from v34's guard,
+     `source_metric_require_platform_admin`'s text ("the acting user is not an active platform admin");
+   - a user who holds both roles writes T4 with basis `club_admin` → passes v34's split (`require_club_admin` does
+     not exclude a platform admin), then `42501` from v35's T4 actor guard, "the basis is not the acting user's own";
+   - club A's admin writes T4 with `club_admin` (passes) and its T8 row with `platform_admin` → `42501` from v48's T8
+     actor guard, "the basis is not the acting user's own".
 3. Club A's admin on a system version:
    - with basis `club_admin` → `42501` from v52's new `else` text in the T4 guard;
    - a T8 row → refused by the insert guard (`23514`, "a club-admin row names a club mapping"), which fires first by
@@ -686,8 +757,9 @@ mutated trigger.
    - of club A's version, inside its own disable → passes;
    - of a system version → `42501` (7d `:1076`, kept);
    - of club B's version → `42501`.
-7. The R3 backstop: a planted club version activation on another club's binding (triggers off for the plant only) →
-   `23514`.
+7. The R3 backstop, with planted rows (triggers off for the plant only): a club version's activation on another
+   club's binding, and one on a binding whose connection is not club-owned (the function's NULL) → `23514` in the T5
+   guard and in the T8 actor guard.
 8. v43's G1 and G2 with `club_admin` rows behave as in 7b test 16.
 9. **The J18 chain** (section 9): T3 + T4 + submit + activate in one transaction, committed.
 10. A club-role revocation against a club admin's T4 activation in raw SQL, both orders (v35 test 9's pattern).
@@ -700,11 +772,24 @@ mutated trigger.
 - caA's A1 / A2 against the pinned step on the pinned revision.
 - caA's A1 with starts against an Unbind, a team archive and a club archive (a peer client, 7d `:1252-1305`).
 - caA's A2 against club A's archive, both orders.
-- The rights hold seam (`setRightsHoldForTests`), for A1 plain, A1 replacement with starts, and A2 with open
-  activations:
+- The rights hold seam (`setRightsHoldForTests`, before the right is checked again), for A1 plain, A1 replacement with
+  starts, and A2 with open activations:
   - role revoked, club archived or user deactivated during the write → the identical 404; nothing in T4, T5 or T8;
     the key free;
   - a promotion → `409 try_again`; the retry writes `platform_admin`.
+- The write hold seam (`setMappingWriteHoldForTests`, after the right was checked, `sourceMetricMappingService.js:1460`,
+  `:1554`):
+  - a promotion committed there → a sanitized 500, nothing in T4, T5 or T8, the key free; the retry writes
+    `platform_admin` (R4);
+  - a club-role revocation from a peer client there → it waits on the rows the write holds and lands after the
+    COMMIT; the write succeeds.
+- **The real revocation route against the real write** (db review F2), as the reviewer reproduced it: a third client
+  holds the admin's `users` row; the revocation route (`revokeClubAdminRole`) queues on it; then A1 plain (or A2 with
+  open activations) reaches `rightsStillHold`; the third client releases. Both orders of the two requests → no `40P01`
+  in either; the write answers the identical 404 when the revocation wins, and succeeds when it wins. With the old
+  `r, u` order this test must deadlock (the mutation in 10.6).
+- `submitVersion` by a caller whose right was revoked during the request → the identical 404, never
+  `version_not_draft` or `revision_not_usable` (R5).
 - The COMMIT trio on a club admin's replacement with starts and on A2 with open activations:
   - `verified_after_commit_error`;
   - `outcome_unknown`, then a replay;
@@ -735,7 +820,8 @@ mutated trigger.
 6. **Rollback** to the v51 catalog byte for byte.
 7. **Re-apply.**
 8. A failing last statement leaves nothing.
-9. LF line endings.
+9. `git check-attr eol` gives `lf` for the three runbook SQL files and the migration (section 6.5).
+10. A busy T4 (a reader holding it) fails v52 at once through `nowait`, with nothing applied (section 6.3).
 
 ### 10.6 Mutations (each killed by a named test)
 
@@ -744,9 +830,15 @@ mutated trigger.
 - `mayTransitionMappings` back to platform-only;
 - `mayTransitionMappings` widened to `club_admin` on a system scope, or to any basis;
 - the route gate moved after the body check;
-- the promotion probe removed from `rightsStillHold`;
+- the owner filter dropped from `transitionTarget` (`m.owner_key`, `:1284`), and separately from `writableVersion`
+  (`:711`, the replay path) — the single application-level barrier between a club admin and a system or other club's
+  mapping;
+- `activationInScope` comparing the binding's club to anything;
+- `rightsStillHold`: the club-role query always true; the club row check dropped; the promotion probe removed; the
+  club-admin query back to `for share of r, u`;
 - `endOpenActivations` / `endAuditRows` back to the constant;
-- the pinned step passing the caller's basis.
+- the pinned step passing a caller's basis other than `platform_admin`;
+- `submitVersion`'s state refusals moved back before the right.
 
 **v52:**
 
@@ -762,7 +854,8 @@ mutated trigger.
   - the club derived for a system version (it must stay NULL);
   - the NULL club kept for a club version;
   - the club taken from the binding instead of the mapping;
-  - the R3 backstop dropped.
+  - the R3 backstop dropped, or written with `<>` (a NULL club passes);
+- T4's table comment not restored by the rollback.
 
 **The rollback:**
 
@@ -810,7 +903,10 @@ Each has a recommendation, the consequence and the alternative.
   - **Recommended: accept section 2 as written.** Club X's active admin, in club X's workspace, activates, replaces
     and disables club X's own mapping versions, with A1's listed starts on club X's bindings and the ends those
     write. System mappings, unit and meaning, conversions, D9 and the revision lifecycle stay the platform admin's,
-    and the platform admin keeps everything, including support in the club's workspace.
+    and the platform admin keeps everything it has today. Support on one club version needs, as today, a platform
+    admin who also holds club X's admin role (it may grant itself that role, audited); without it, the platform's
+    levers are the pinned step, an Unbind and D9 (section 2.1). There is no platform veto on a single club version
+    without that grant.
   - „moze i sistemski” is read as "a platform admin may also do it", not as "a club admin may touch system mappings".
   - *Alternative:* a club admin also changes system mappings — against C60 and the plan's 7h line, and every club
     would change every club's imports.
@@ -821,9 +917,20 @@ Each has a recommendation, the consequence and the alternative.
     platform admin to become active. After 7h a club admin alone can activate and switch on a club mapping (S1
     already allows the switch-on). No code enforces O16 (no hit in `backend/src` or the frontend).
   - **Recommended (a):** yes — an active coach of an active team of that club, in that team's workspace (C99's
-    audience, which already renames, archives and restores the club's variables), sees the club variable's name and
-    unit in that team's activity results. The read change is its own small pull request (7h-V), merged and deployed
-    before 7h-B's deploy.
+    audience, which already lists, renames, archives and restores the club's variables, and already sees their names
+    in the import preview through R17), sees the club variable's name and unit in that team's activity results. The
+    read change is its own small pull request (7h-V), merged and deployed before 7h-B's deploy, under these rules:
+    - **the predicate** is C99's, `resolveVariableEditor` (`canonicalVariableAdminService.js:735-763`: the team, the
+      club, the coach role and the user all active, from the active team workspace), as R17 already uses it
+      (`routes/gpexeImport.js:39-50`); `catalogVisibilitySql` (`trainingLoadMetricsAccess.js:116-134`) is **not**
+      touched — it is built from every role the user holds, not the workspace, and it also gates measurement writes;
+    - **what is returned** is only the name and unit of definitions that appear in results the caller already reads,
+      never the club's catalog;
+    - **where:** every screen that names a result's variable — the Activities drawer, the calendar and the dashboards
+      (`training-load-calendar-view.js`, `training-load-analysis-data.js`), listed exactly in 7h-V's contract section;
+    - **athletes:** unchanged by 7h-V; whether an athlete's own results name a club variable is decided separately if
+      it ever arises;
+    - **tests:** a coach of another club's team, and the same coach in a second team's workspace, get no name.
   - *Alternative (b):* defer O16, and 7h-B carries a code guard: S1 and A1's listed starts refuse a club mapping until
     O16 is decided. This narrows C106.
   - *Alternative (c):* keep O16 procedural — not recommended once 7h is live.
@@ -832,12 +939,15 @@ Each has a recommendation, the consequence and the alternative.
     for platform admins.
   - Every act is attributed (T8). A club with one admin would otherwise be stuck. J18's one-transaction save depends
     on it.
+  - **The compensating control:** an active mapping writes nothing by itself. Importing stays separately approved by
+    an active platform admin or a coach with the team's grant (v23), and an approval recomputes the preview under the
+    locks (section 1.5).
   - *Alternative:* the activating admin must differ from the submitting one: one-admin clubs could never go live.
 - **O4. Which of the club's admins.**
   - **Recommended: any.** Any active admin of the club may replace or disable any version of the club's mappings,
     including one another admin of the club or a platform admin (in support) activated. C108 gives the club its own
-    versions without an author restriction, and the platform admin keeps the pinned step and A1 / A2 in the club's
-    workspace.
+    versions without an author restriction. The platform admin keeps the pinned step, and A1 / A2 in the club's
+    workspace when it also holds the club's admin role (section 2.1).
   - *Alternative:* only the activating admin — a club would be stuck when that admin leaves.
 - **O5. Q1(c) and the pinned step's cap.** Both were waived for the pilot only (J17 O5, `CURRENT_STATE.md`).
   - **The questions:**
@@ -862,7 +972,7 @@ Each has a recommendation, the consequence and the alternative.
     move parameter-less club versions to the board.
   - *Alternative:* (a) only, leaving the simplification to J18 and J16's recorded "Save and submit".
 
-## 12. Decisions for the *Rukovodilac* (R1–R12)
+## 12. Decisions for the *Rukovodilac* (R1–R13)
 
 Each has a recommendation.
 
@@ -872,11 +982,16 @@ Each has a recommendation.
   - **Recommended:** fixed texts, **not** in `ACTOR_REFUSALS`. They are reachable only by a raw writer, so a
     sanitized 500, as 7d's T5 text.
   - *Alternative:* add them (a 404, like submit's text).
-- **R3. The backstop in the version-driven derivation.** The binding's club equals the mapping's club, `23514`,
-  checked in the T5 and T8 guards. **Recommended: yes**, tested by a planted row.
+- **R3. The backstop in the version-driven derivation.** The binding's club must not be distinct from the mapping's
+  club (`is distinct from`, so a binding with no club is refused too), `23514`, checked in the T5 and T8 guards.
+  **Recommended: yes**, tested by planted rows.
 - **R4. A promotion after the right was checked again.** **Recommended:** it stays a sanitized 500 with nothing
-  written, as accepted for 7d (section 3). It is not mapped to `try_again`.
-- **R5. `submitVersion`'s answer order** (the state after the right). **Recommended:** fixed in 7h-B, with a test.
+  written, as accepted for 7d (section 3). It is not mapped to `try_again`: the race meets the T5 guard or the T4
+  actor guard, and the T5 text is shared with genuine refusals.
+  - *Alternative:* map the one T4 / T8 basis text to `409 try_again`, as M3-0 does for its own text — partial, since a
+    replacement or a disable with open activations meets the T5 text first.
+- **R5. `submitVersion`'s answer order** (`version_not_draft` and `revision_not_usable` after the right).
+  **Recommended:** fixed in 7h-B, with a test.
 - **R6. A2 and a replacement end activations on an archived team's binding, or on a moved team's ended binding** (not
   a 404). **Recommended: accept** (section 2.3). The scope is the connection's club; starts there stay refused.
 - **R7. The pull requests.**
@@ -890,12 +1005,20 @@ Each has a recommendation.
 - **R9. `test:backend:shared`.** **Recommended: not needed.** 7h touches no auth, organization, builder or Tests module,
   and the mapping suites run on disposable databases. It runs on the *Rukovodilac*'s word. It writes to the local
   development database.
-- **R10. The deploy window** (section 6.3). The import switch is off, and there is no running check or open approval.
-  The preflight's quiet-moment block is the gate.
+- **R10. The deploy window** (section 6.3). The import switch is off, and there is no running check or open approval;
+  the deploy follows the preflight's quiet-moment block at once. **Recommended:** v52 takes T4 with `nowait`, so a
+  busy table fails the migration at once (nothing applied, the old instance serving) instead of stalling every T4
+  reader for up to 30 s.
+  - *Alternative:* the runner's 30 s `lock_timeout`, as v48 and v50.
 - **R11. The amendments of section 13.** **Recommended:** made in this contract's acceptance pull request, by marking
   the superseded text, never by erasing it.
-- **R12. The screen's predicate.** **Recommended:** a client predicate mirrored by a test, rather than a server
-  `actions` hint (no API change).
+- **R12. The screen's predicate.** **Recommended:** a client predicate mirrored by a shared fixture table in both
+  suites, rather than a server `actions` hint (no API change).
+- **R13. `rightsStillHold`'s lock order** (section 5, db review F2). **Recommended:** 7h-B changes the club-admin query
+  to `for share of u, r`, with the route-against-route test of section 10.4. It also changes M2's, S1's and S2's
+  existing club-admin path, where the same deadlock exists today.
+  - *Alternative:* leave it, and record the deadlock as a known `try_again` / 500 race — not recommended, since 7h
+    makes club-admin writes routine.
 
 ## 13. What this contract supersedes or amends (once accepted)
 
@@ -942,4 +1065,23 @@ Each has a recommendation.
   - a binding's club is immutable (v27), and a team archive does not end bindings;
   - a promotion after the right was checked again is a sanitized 500, not `try_again`;
   - the rollback's hard assertion counts only 7h-only rows.
-- Internal reviews of this document (`code-reviewer`, `db-reviewer`, `security-reviewer`): below, after they run.
+- **Round 1** of the internal reviews, on `523aac77` (each MEDIUM checked again by an adversarial verifier from the
+  code). `code-reviewer` ended without an answer and runs again on the next head.
+  - **`db-reviewer`: READY WITH NON-BLOCKING NOTES**, no BLOCKER or HIGH. Its findings, all applied:
+    - MEDIUM F1, the catalog comment: the T4 table comment, restored by the rollback;
+    - MEDIUM F2, the club-role revocation deadlock: fixed-order, not plan-dependent; the verifier reproduced it on a
+      disposable PostgreSQL (3 of 3 runs, the revocation the victim) and saw the fix pass (3 of 3); it became section
+      5's row, section 7's `rightsStillHold` change, R13 and the route-against-route test of 10.4;
+    - LOW F3, the first-firing guard in 10.3 item 2;
+    - LOW F4, `.gitattributes` and the runbook `.md`;
+    - LOW F5, "adds", not "moves", the T3 lock;
+    - LOW F6, the deploy window and `nowait` (R10);
+    - notes: the migrator role owns the four functions; the rollback also counts T8 `activation_end` rows.
+  - **`security-reviewer`: READY WITH NON-BLOCKING NOTES**, no BLOCKER or HIGH. Its findings, all applied:
+    - S1 (MEDIUM; the verifier rated it LOW), platform support in a club needs the club role: sections 0, 2.1, O1 and
+      O4;
+    - S2 (MEDIUM, confirmed), the order of the answers: section 3, the request record before the owner-filtered read;
+    - S3 (MEDIUM; the verifier rated it LOW), 7h-V's access rule: O2 (a);
+    - LOW S4 to S11: the test plan (the write hold, the revocation peer, R5's test, deep-equal 404s, a user with both
+      roles, a private coach), the mutations, the `is distinct from` backstop, both submit refusals, J10 section 4.3's
+      write order in section 4, the M3-0 precedent in R4, the predicate's fixture table, and `actions.js:275`.
