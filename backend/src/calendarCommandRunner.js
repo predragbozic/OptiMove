@@ -93,7 +93,10 @@ export async function runCalendarCommand(spec) {
     if (prior) {
       if (!spec.sameRequest(prior, prepared)) throw requestKeyReused();
       const answer = await savedAnswer(spec, client, prior.result, { replayed: true });
-      await client.query("rollback");
+      // The replay only read: a lost ROLLBACK destroys the connection (the
+      // server ends the transaction) and the saved answer stands — never
+      // "nothing was saved" for a saved request (Independent review of #325).
+      await client.query("rollback").catch(() => { broken = true; });
       return { ...answer, replayed: true };
     }
 

@@ -518,7 +518,10 @@ async function runSettingsCommand(ctx, { requestKey, canonical, subject }, apply
       }
       return { hash, row };
     },
-    sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && String(prior.club_id) === clubId,
+    // The hash binds the club and the subject; the saved club and subject are
+    // compared too, as a second guard (the Independent review of PR #325).
+    sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && String(prior.club_id) === clubId
+      && (!withId || String(prior.result?.subjectId ?? "") === subject.id),
     answer: async (queryable, stored, extra) => {
       if (testHooks.answerFault) await testHooks.answerFault();
       if (String(stored.clubId) !== clubId) throw notFound();

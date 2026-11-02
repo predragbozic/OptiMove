@@ -454,7 +454,9 @@ async function readEventRows(ctx, { from, to }) {
   if (candidate === "false") return [];
   const structural = calendarScheduleStructuralSql(ctx, "e", "calendar.event_targets", params, "event_id");
   const result = await query(
-    `select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id, e.event_type_id,
+    `select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
+            -- The type's id, as its label: only on its own club's events (D41).
+            case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then e.event_type_id end as event_type_id,
             e.title, e.day, e.end_day, e.start_time, e.end_time, e.location, e.status, e.expects, e.notes,
             e.external_schedule_id, e.test_schedule_id, e.revision,
             et.kind as event_kind,
@@ -1111,7 +1113,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const card = newCard({
       key: `event:${row.id}:${day}`, kind: "event", date: day, title: row.title,
       startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), location: row.location,
-      eventId: String(row.id), eventKind: row.event_kind, eventTypeId: String(row.event_type_id), eventTypeLabel: row.event_type_label,
+      eventId: String(row.id), eventKind: row.event_kind, eventTypeId: row.event_type_id ? String(row.event_type_id) : null, eventTypeLabel: row.event_type_label,
       span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
       expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
       revision: row.revision, canManage, notes: canManage ? row.notes : undefined,

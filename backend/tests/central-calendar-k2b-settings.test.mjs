@@ -34,11 +34,13 @@ const SEEDED_ICONS = ["run", "trophy", "route", "team", "bed", "mountain", "clip
 let env;
 let m;
 let settingsService;
+let eventService;
 const raws = [];
 
 before(async () => {
   env = await startCalendarApp({ label: "k2b" });
   settingsService = await import("../src/calendarSettingsService.js");
+  eventService = await import("../src/calendarEventService.js");
   m = await calendarRoleMatrix(env, "k2b");
 });
 
@@ -804,6 +806,17 @@ test("3g. requestKey: the same key and body replays once (one row), another body
   }
 });
 
+test("3l. the same key and body sent for ANOTHER subject is request_key_reused, never the first subject's answer", async () => {
+  const { admin } = await freshClub("subject");
+  const [x, y] = (await catalog(admin.cookie)).types;
+  const body = { requestKey: newKey(), expectedRevision: 1, colorKey: "coral" };
+  const first = await api(`/api/calendar/settings/types/${x.id}`, { method: "PATCH", cookie: admin.cookie, body });
+  assert.equal(first.status, 200, first.text);
+  const second = await api(`/api/calendar/settings/types/${y.id}`, { method: "PATCH", cookie: admin.cookie, body });
+  assert.deepEqual([second.status, second.body.error], [409, "request_key_reused"], second.text);
+  assert.equal((await catalog(admin.cookie)).types.find((t) => t.id === y.id).colorKey, null, "y untouched");
+});
+
 test("3h. the colour keys: the database's closed list equals the server's", async () => {
   const def = (await q(`select pg_get_functiondef('calendar.color_key_ok(text)'::regprocedure) as d`))[0].d;
   const listed = [...def.matchAll(/'([a-z]+)'/g)].map((x) => x[1]);
@@ -863,9 +876,24 @@ test("3k. a team moved to another club (security review M1, L1): its events neve
   const card = (await calendarOf(b.admin.cookie)).body.days.flatMap((d) => d.items).find((i) => i.kind === "event" && (i.eventId === created.body.event.id));
   assert.ok(card, "club B sees its moved team's event");
   assert.equal(card.eventTypeLabel, null, "never club A's label");
+  assert.equal(card.eventTypeId, null, "nor club A's type id (D41)");
   const view = await api(`/api/calendar/events/${created.body.event.id}`, { cookie: b.admin.cookie });
   assert.equal(view.status, 200, view.text);
   assert.equal(view.body.event.eventTypeLabel, null);
+  assert.equal(view.body.event.eventTypeId, null);
+  const calendarB = await calendarOf(b.admin.cookie);
+  for (const text of [calendarB.text, view.text]) {
+    assert.ok(!text.includes(training.id) && !text.includes("A secret label"), "club A's type never reaches club B");
+  }
+  // An edit without a type keeps the stored type (the masked id is never
+  // sent back as "no type").
+  const edited = await api(`/api/calendar/events/${created.body.event.id}`, {
+    method: "PATCH", cookie: b.admin.cookie, body: { requestKey: newKey(), expectedRevision: view.body.event.revision, title: "Team session (B)" },
+  });
+  assert.equal(edited.status, 200, edited.text);
+  assert.equal(edited.body.event.eventTypeId, null);
+  assert.ok(!edited.text.includes(training.id));
+  assert.equal((await q(`select event_type_id from calendar.events where id = $1`, [created.body.event.id]))[0].event_type_id, training.id, "the stored type is kept");
   const afterA = await catalog(a.admin.cookie);
   assert.equal(afterA.types.find((t) => t.id === training.id).eventCount, 0, "club A no longer counts it");
   assert.deepEqual(afterA.locations.find((l) => l.id === place.body.location.id).defaultOfTeamIds, [], "nor names the moved team");
@@ -1054,6 +1082,44 @@ test("4d. the bounded COMMIT of the shared runner: a lost answer after a real CO
   }
   const replayed = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body: lostBody });
   assert.deepEqual([replayed.status, replayed.body.replayed], [201, true]);
+});
+
+test("4g. a replay of a saved request whose closing ROLLBACK is lost answers the saved outcome (replayed), never 500 — settings and events", async () => {
+  const { clubId, admin } = await freshClub("rollback");
+  const failRollbackOnce = async ({ client }) => {
+    const original = client.query;
+    client.query = function (...args) {
+      if (args[0] === "rollback") {
+        client.query = original;
+        return Promise.reject(new Error("Connection terminated unexpectedly"));
+      }
+      return original.apply(this, args);
+    };
+  };
+  const body = { requestKey: newKey(), name: "Rollback hall" };
+  assert.equal((await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body })).status, 201);
+  settingsService.testHooks.beforeLocks = failRollbackOnce;
+  let settingsReplay;
+  try {
+    settingsReplay = await api("/api/calendar/settings/locations", { method: "POST", cookie: admin.cookie, body });
+  } finally {
+    delete settingsService.testHooks.beforeLocks;
+  }
+  assert.deepEqual([settingsReplay.status, settingsReplay.body.replayed], [201, true], settingsReplay.text);
+  const types = (await typesOf(admin.cookie)).body.types;
+  const eventBody = { requestKey: newKey(), timezone: TZ, eventTypeId: types[0].id, title: "Rollback event", day: FUTURE, targets: [{ kind: "club", id: clubId }] };
+  assert.equal((await api("/api/calendar/events", { method: "POST", cookie: admin.cookie, body: eventBody })).status, 201);
+  eventService.testHooks.beforeLocks = failRollbackOnce;
+  let eventReplay;
+  try {
+    eventReplay = await api("/api/calendar/events", { method: "POST", cookie: admin.cookie, body: eventBody });
+  } finally {
+    delete eventService.testHooks.beforeLocks;
+  }
+  assert.deepEqual([eventReplay.status, eventReplay.body.replayed], [201, true], eventReplay.text);
+  assert.equal((await q(`select count(*)::int as n from calendar.event_requests where request_key = $1`, [eventBody.requestKey]))[0].n, 1);
+  // The pool is whole afterwards.
+  assert.equal((await settingsOf(admin.cookie)).status, 200);
 });
 
 test("4e. the same key twice at once (a double submit while the first is before its COMMIT): one write, the second replays it — a create, and a team's first row", async () => {

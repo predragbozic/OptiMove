@@ -258,7 +258,10 @@ function requestHash(canonical, { eventId, owner }) {
 // Reads
 // ---------------------------------------------------------------------------
 const EVENT_VIEW_SQL = `
-  select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id, e.event_type_id,
+  select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
+         -- The type's id, as its label: only on its own club's events (D41;
+         -- an edit keeps the stored type, read by EVENT_ROW_FOR_WRITE_SQL).
+         case when et.owner_scope = 'system' or et.owner_club_id = coalesce(e.owner_club_id, t.club_id) then e.event_type_id end as event_type_id,
          e.title, e.day, e.end_day, e.start_time, e.end_time, e.timezone, e.location, e.status,
          e.cancelled_at, e.cancel_reason, e.expects, e.notes, e.external_schedule_id, e.test_schedule_id, e.revision,
          e.created_at, e.updated_at,

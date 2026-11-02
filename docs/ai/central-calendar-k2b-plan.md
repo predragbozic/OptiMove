@@ -1,7 +1,8 @@
 # Central calendar — K2b-1 plan: Settings → Calendar (types, details, places, colours)
 
 Status: **accepted (2026-11-01).** The manager accepted the structure and the slices 1a → 1c → 1d → 1e and decided
-T1–T6; the owner accepted every recommendation of Q1–Q12, recorded as **D28–D39** (section 16), and on 2026-11-02 **D40** (questions to athletes only through the Tests module). **K2b-1a is built in
+T1–T6; the owner accepted every recommendation of Q1–Q12, recorded as **D28–D39** (section 16), and on 2026-11-02 **D40** (questions to athletes only through the Tests module) and **D41** (a team with events may
+move to another club; the new club sees only the kind's word). **K2b-1a is built in
 this pull request.** Written against the checked-out code at `17dc46d` (merge of PR #313, `main`; `origin/main` moved to
 `656cf88` with documents only, no migration). No persistent database was touched.
 
@@ -434,7 +435,7 @@ built from the address only (and absent without one), the auto-colour rule, no `
   writers' order, drops v51's tables, columns and functions, restores v49's two CHECKs, its `seed_club_event_types`
   body and its read-only trigger verbatim, puts `icon_key` back to null, and deletes v51's record. Rehearsed in the
   suite: apply → rollback → the v50 catalog digest identical → re-apply.
-- **Preflight** (`…-preflight.sql`, SELECT only, `begin transaction read only`): PostgreSQL version; v50 the last
+- **Preflight** (`…-preflight.sql`, plain SELECTs run one block at a time, no transaction and nothing written): PostgreSQL version; v50 the last
   migration with its checksum, v51 absent; the `calendar` objects as v49 left them; the type rows exactly the v49 seed
   (no edit possible before v51); the active clubs (the seed's expected counts); no lock or idle transaction on the
   `calendar` tables.
@@ -525,6 +526,7 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | **D38** | Q11 | Colours come from the closed palette of 12 (section 2.5). |
 | **D39** | Q12 | A detail's value is filled in only by the event's managers (the `canManage` of K2a 4.1). |
 | **D40** | (2026-11-02, the owner through the manager) | Questions to athletes go **only through the Tests module** (a questionnaire is a test; `test_parameters` numeric / integer / boolean / ordinal / text, `athlete_self`, its schedules and reminders). **K2b-2 = "Ask athletes"** on an event: a questionnaire from the Tests library, scheduled in one click for the event's athletes on its day with a window after it; Tests' notifications; the results in Tests and on the event's card; plus the **mapping of Tests parameters into Metrics Core** so the answers reach the Training Load dashboards (no new registry; `.claude/rules/metrics-core-mapping.md`). Replaces the earlier idea of athlete fields through the RPE channel as new variables. The split: coach fields = Details (K2b-1); RPE = Training Load; other questions to athletes = Tests (+ the mapping). |
+| **D41** | (2026-11-02, the owner through the manager) | A team that has calendar events **may** move to another club (`PUT /api/organization/teams/:id`); its events go with it. The new club sees only the kind's word — never the old club's type label or id, place or details — and its admin chooses the club's own. Answers the open question of section 17. |
 
 ## 17. K2b-1a as built (2026-11-01)
 
@@ -602,6 +604,19 @@ refuses); M33 (the clubs lock moved) survived then and is killed since by test 1
 final head: M34 (a saved answer's read failure answered as "nothing saved") killed by 4d, M35 (the stale default's
 clearing not audited) killed by 3k. **In all 35: 31 killed, 4 equivalent.**
 
+**The Independent review of PR #325** (on `dac5bd3`): READY WITH NON-BLOCKING NOTES, no BLOCKER, HIGH or MEDIUM. Applied
+in one small round on the manager's order, without a new internal round (the manager checks the delta):
+
+| Finding | Fix | Test (mutation) |
+|---|---|---|
+| LOW-1 (D41): after a move club B still received club A's type id on the card and in `GET /:id` | the id is masked with the label's predicate (`calendarQuery.js` readEventRows, `EVENT_VIEW_SQL`); an edit without a type keeps the stored type (`EVENT_ROW_FOR_WRITE_SQL` reads it unmasked) | 3k (M36, M36b) |
+| LOW-2: a mutation dropping the subject from the hash survived | test 3l (the same key and body on another type: `request_key_reused`); `sameRequest` also compares the saved subject id | 3l (M37: both guards removed) |
+| LOW-3: a lost ROLLBACK closing a replay answered "Nothing was saved" for a saved request | the replay's ROLLBACK failure destroys the connection and the saved answer stands (settings and events) | 4g (M38) |
+| N2: section 13 said the preflight runs in a read-only transaction | the text follows the file (plain SELECTs, block by block) | — |
+| N1: the same-key advisory lock comes after the row locks | not changed (the manager's order): a key reused across two subjects that wait on each other ends as `409 try_again` / `request_key_reused`, never a 500 | — |
+
+Mutations of this round: 4 run, 4 killed. **In all 39: 35 killed, 4 equivalent** (M6, M7, M7b, M24).
+
 **Follow-ups recorded for the next slices (not done here):**
 - **K2b-1d:** the event form's static *Type* line falls back to the kind's word when `eventTypeLabel` is null (a moved
   team's event), as the calendar card already does (`frontend/central-calendar-event-form.js`; the code and security
@@ -609,5 +624,10 @@ clearing not audited) killed by 3k. **In all 35: 31 killed, 4 equivalent.**
 - **K2b-1b:** a moved team's events keep their old club's `location_id` and chosen details (the database judges them
   only when set or changed); every read of an event's place, details and values shows them only when they belong to the
   event owner's current club — otherwise club B would see club A's place, address and detail labels (the db and
-  security re-reviews' forward note). Whether a team with calendar events may move to another club at all is an owner
-  question.
+  security re-reviews' forward note). Whether such a team may move at all is decided: yes (D41).
+- **K2b-1b, from the Independent review of PR #325 (finding 6):** a detail of club A answered through an event of a team
+  that later moved to club B stays answered (its meaning frozen) for good while club A's `eventCount` shows 0 for it;
+  K2b-1b decides what happens to another club's chosen details and values on a moved team's events. The team keeps the
+  colour club A gave it (test 3k asserts it on purpose); club B's admin chooses its own.
+- **K2b-1d:** the event form treats a null `eventTypeId` (a moved team's event, D41) as "choose a type"; an edit that
+  does not send a type keeps the stored one (test 3k).
