@@ -124,10 +124,19 @@ deploys and post-checks without a record in this file are as the stream manager 
     migration. v27 (section 2b, trigger `teams_source_binding_guard_move`) already refuses moving a team while it has an active
     binding through its club's connection; an unbound team can still be moved by a raw write.
   - **D44** in the same pull request: a club's admin (or a platform admin, never the team's coach) restores an archived
-    team (`PUT /api/organization/teams/:teamId/restore`; its athletes' memberships are not touched), and a name taken
-    in the club, an archived team's included, is `409 team_name_taken` that offers the archived team for restoring.
-  - **Open question for the owner:** a team's coach can archive their own team today (`canManageTeamById` includes
-    `team_coach`); is that intended?
+    team (`PUT /api/organization/teams/:teamId/restore`), and a name taken in the club, an archived team's included, is
+    `409 team_name_taken` that offers the archived team for restoring. PR #332, merge `92cd813`.
+  - **D45** (the owner, 2026-11-02; plan section 19.1; no migration; the pull request that adds this line, open):
+    - a restored team is empty, and only the club archives a team. `DELETE /api/organization/teams/:teamId` (the
+      club's admin or a platform admin, never the team's coach) ends every team membership of the team in the same
+      transaction, the way Remove from team ends one;
+    - the athletes stay in the club, their history stays, and from the archive on they see none of the team's days
+      (membership on the day);
+    - an archived team is neither renamed (`409 team_archived`) nor given a member;
+    - no archived team existed in production (the manager's read-only check), so nothing needs a repair;
+    - known limit, low importance (the owner's external review of PR #332, note 4): a raw database move of a team and
+      the order of the checks on a rename.
+  - The open question whether a team's coach may archive their own team is answered by D45: no, only the club.
 - Next by the plan: K2b-1c and K2b-1d (the Settings screen and the event form), then K2b-2 (athlete questions through
   the Tests module, D40).
 

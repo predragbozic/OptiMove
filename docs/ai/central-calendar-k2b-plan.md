@@ -529,6 +529,7 @@ The owner accepted every recommendation of section 15 (relayed by the manager th
 | **D41** | (2026-11-02, the owner through the manager) | A team that has calendar events **may** move to another club (`PUT /api/organization/teams/:id`); its events go with it. The new club sees only the kind's word — never the old club's type label or id, place or details — and its admin chooses the club's own. Answers the open question of section 17. |
 | **D43** | (2026-11-02, the owner through the manager) | Teams do **not** move between clubs: a team's club is fixed after creation. Athletes still move from team to team and club to club through their memberships. Supersedes D41's premise and suspends D42 (section 19). |
 | **D44** | (2026-11-02, the owner through the manager) | A club may stop a team one season and bring it back the next: a club's admin (or a platform admin, never the team's coach) restores an archived team; a name taken in the club, an archived team's included, is a clear refusal that offers the archived team for restoring (section 19). |
+| **D45** | (2026-11-02, the owner through the manager) | A restored team is empty, and only the club archives a team: the archive (the club's admin or a platform admin, never the team's coach) ends every team membership of the team in the same transaction; the athletes stay in the club and their history stays (section 19.1). |
 
 ## 17. K2b-1a as built (2026-11-01)
 
@@ -892,10 +893,69 @@ prove marked "per the stream manager").
 - **Open questions for the owner** (D44's work, no code change):
   - a team's coach can archive (*Delete*) their own team today, since `DELETE /teams/:teamId` takes
     `canManageTeamById`, which includes `team_coach`; restoring it is the club's. Is the coach's archive intended?
-  - **the memberships of a restored team** (the independent review's finding 5): an archive ends no membership, so a
-    team restored a year later comes back with last season's athletes, who see its new events again. Should a restored
-    team come back empty? Asked by the stream manager; if the answer is "empty", it is a small pull request of its own.
+    **Answered by D45** (section 19.1): no, only the club archives a team.
+  - **the memberships of a restored team** (the independent review's finding 5): an archive ended no membership, so a
+    team restored a year later came back with last season's athletes, who saw its new events again. **Answered by D45**
+    (section 19.1): a restored team is empty.
 - **Recorded, not changed** (the independent review; on `main` before this pull request): the admin of an archived club
   can still create a team in it, since `POST /teams` does not check the club's state.
 - **No migration.** Tests: `backend/tests/organization-team-club-fixed.test.mjs`, `frontend/tests/organization-view.render.test.mjs`
   (the edit form) and `frontend/tests/organization-teams-archive.test.mjs`.
+
+### 19.1 D45 — a restored team is empty; only the club archives a team
+
+The owner's decision (2026-11-02, through the manager), its own pull request after PR #332. No migration.
+
+- **The archive ends the team's memberships.** `DELETE /api/organization/teams/:teamId`, in one transaction:
+  - it locks the team row (`for no key update`) and archives it;
+  - it ends every active team membership of the team the way Remove from team ends one. Both go through one helper,
+    `archiveTeamMemberships`: the archived status with its fields (`archived_by_user_id`, `archive_reason` =
+    `team_archived`), the v25 trigger closing each membership's period, and each athlete's legacy pointer re-pointed
+    (`syncLegacyAthletePointer`, in athlete order).
+  - The athletes' club memberships are not touched: the athletes stay in the club. Their history stays: the archived
+    memberships and their closed periods. So the calendar and the roster, which judge membership on the day (K1a,
+    v25), keep the team's earlier days and show none after the archive.
+  - The coaches' roles (`user_team_roles`) are kept.
+- **Only the club archives.** The right of a restore: the club's admin or a platform admin. The team's club is read
+  from the database and `canManageClub` decides.
+  - The team's coach, another club's admin, an unknown id and an id that is not a UUID get today's answer for a foreign
+    team, `403 Team is outside your access.` (a platform admin's unknown id `404`), and nothing is written.
+  - An archived team answers `200` (`archived: false, membershipsArchived: 0`) and nothing new is written. A team
+    moved by a raw write between the read and the lock is `409 team_changed`.
+  - The archive control (Settings → Organization → Teams) is offered only for a team in `manageableTeamIds`, the
+    club's right the server already computes.
+- **No member joins an archived team.** `lockActiveTeam` takes the active team row `for share`, the lock the archive
+  waits for and that waits for the archive, before any team membership becomes active:
+  - every write through `ensureActiveMembership` (adding an athlete to a team, creating or editing an athlete with a
+    team, a team link's join approval) locks the team first, then the club membership: the archive's lock order;
+  - restoring one athlete's team membership locks the team first.
+  - So an archive that wins the race leaves nothing to join (`409 team_archived`), and a join that wins is ended by
+    the archive with the others.
+- **A restored team comes back without athletes.** The restore route is unchanged; its comment now says that the
+  request's authorization context lists archived teams too (`managedTeamIds` is not filtered on `is_active`) but
+  holds no team's club, so the club is read from the database.
+- **An archived team is not renamed.** `PUT /teams/:teamId` answers `409 team_archived` ("The team is archived.
+  Restore the team first.") after the rights. The update itself carries the condition, so an archive that lands
+  between the read and the write is the same 409.
+- **Texts.**
+  - The archive's confirmation: "Archive this team? Its athletes leave the team; their history stays. You can restore
+    the team later — it comes back without athletes."
+  - The restore asks first, and the archived list says, that the team comes back without athletes.
+- **Known limit, low importance** (the owner's external review of PR #332, note 4): a team moved by a raw database
+  write, and the order of the checks on a rename. A rename checks the team's right from the authorization context
+  first, then the club's right on the stored club. No route moves a team (D43).
+- **Production:** no archived team exists today (the manager's read-only check, 2026-11-02), so no old membership needs a
+  repair.
+- **Not run:** `backend/tests/athlete-membership-archive.test.mjs`, the older suite of Remove from team, is of the
+  `shared` kind, so running it writes to the local OPTIMOVE database. The disposable suite below covers the shared
+  helper through Remove from team (test 5).
+- **Tests:** `backend/tests/organization-team-archive.test.mjs` and `frontend/tests/organization-teams-archive.test.mjs`.
+  The backend suite covers:
+  - the archive by the club's admin and by a platform admin;
+  - the refusals, with nothing written;
+  - an archived team: archived again, renamed, a membership restored or added;
+  - the calendar before and after, and the empty restored team;
+  - Remove from team;
+  - the race of an archive with a join, in both orders, made deterministic by a held lock.
+
+  `organization-team-club-fixed.test.mjs` test 7 now expects the empty restored team.

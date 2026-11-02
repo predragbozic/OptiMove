@@ -1113,6 +1113,7 @@ async function teamNameTaken(error, clubId, name, exceptTeamId = null) {
 }
 
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TEAM_ARCHIVED = Object.freeze({ error: "team_archived", message: "The team is archived. Restore the team first." });
 
 // D43 (the owner, 2026-11-02): a team's club is fixed after creation — teams
 // never move between clubs (athletes do, through their memberships). The edit
@@ -1130,9 +1131,11 @@ router.put("/teams/:teamId", async (req, res, next) => {
     if (!name) return res.status(400).json({ error: "Team name is required." });
     // Only a platform admin gets here with an id that is not a UUID: it is no team.
     if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
-    team = (await query(`select club_id from public.teams where id = $1`, [req.params.teamId])).rows[0];
+    team = (await query(`select club_id, coalesce(is_active, true) as active from public.teams where id = $1`, [req.params.teamId])).rows[0];
     if (!team) return res.status(404).json({ error: "Team not found." });
     if (!(await canManageClub(req, String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
+    // D45: an archived team is restored first, then edited.
+    if (!team.active) return res.status(409).json(TEAM_ARCHIVED);
     const clubId = clean(req.body?.clubId);
     if (clubId && clubId.toLowerCase() !== String(team.club_id).toLowerCase()) {
       return res.status(409).json({ error: "team_club_fixed", message: "A team's club cannot be changed." });
@@ -1140,11 +1143,15 @@ router.put("/teams/:teamId", async (req, res, next) => {
     const result = await query(
       `update public.teams
        set name = $2, short_name = $3, logo_url = $4, updated_at = now()
-       where id = $1
+       where id = $1 and coalesce(is_active, true)
        returning id, club_id, name, short_name, logo_url`,
       [req.params.teamId, name, clean(req.body?.shortName), clean(req.body?.logoUrl)],
     );
-    if (!result.rows[0]) return res.status(404).json({ error: "Team not found." });
+    // Nothing updated: the team was archived (or removed) after the read above.
+    if (!result.rows[0]) {
+      const now = (await query(`select 1 from public.teams where id = $1`, [req.params.teamId])).rows[0];
+      return now ? res.status(409).json(TEAM_ARCHIVED) : res.status(404).json({ error: "Team not found." });
+    }
     res.json({ team: result.rows[0] });
   } catch (error) {
     try {
@@ -1158,13 +1165,15 @@ router.put("/teams/:teamId", async (req, res, next) => {
 // D44 (the owner, 2026-11-02): a club may stop a team one season and bring it
 // back the next. Restoring is the club's decision — its admin or a platform
 // admin, never the team's coach (as assigning the coach role, authz.js). The
-// team's club is read from the database, archived teams included (the
-// request's authorization context holds active teams only). A team the caller
-// may not restore answers as a foreign team does today; a team of an archived
-// club is refused; an active team answers 200 as it is. Only the team row
-// changes: its athletes' memberships are not touched (a new season adds new
-// memberships), and its GPEXE identities, dropped at the archive, are loaded
-// again on demand.
+// team's club is read from the database, archived teams included: the
+// request's authorization context lists archived teams too (managedTeamIds is
+// not filtered on is_active) but holds no team's club. A team the caller may
+// not restore answers as a foreign team does today; a team of an archived club
+// is refused; an active team answers 200 as it is. Only the team row changes.
+// Since D45 the archive ended every team membership, so the team comes back
+// without athletes (a new season adds new memberships); its coaches' roles are
+// kept, and its GPEXE identities, dropped at the archive, are loaded again on
+// demand.
 router.put("/teams/:teamId/restore", async (req, res, next) => {
   try {
     const teamId = clean(req.params.teamId);
@@ -1209,15 +1218,55 @@ router.put("/teams/:teamId/restore", async (req, res, next) => {
   }
 });
 
+// D45 (the owner, 2026-11-02): only the club archives a team — its admin or a
+// platform admin, never the team's coach (the right of a restore) — and the
+// archive empties the team. In one transaction the team row is locked and
+// archived, and every active team membership of the team is ended the way
+// Remove from team ends one (archiveTeamMemberships). The athletes stay in the
+// club (club memberships are not touched) and their history stays: the archived
+// memberships and their closed periods, so the calendar and the roster show the
+// team's earlier days and none after (membership on the day). The coaches'
+// roles are kept. An archived team answers 200 as it is, with nothing written.
 router.delete("/teams/:teamId", async (req, res, next) => {
   try {
-    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    const result = await query(
-      `update public.teams set is_active = false, updated_at = now() where id = $1 returning id`,
-      [req.params.teamId],
-    );
-    if (!result.rows[0]) return res.status(404).json({ error: "Team not found." });
-    res.json({ ok: true });
+    const teamId = clean(req.params.teamId);
+    const row = UUID_TEXT.test(teamId || "") ? (await query(
+      `select id, club_id from public.teams where id = $1`,
+      [teamId],
+    )).rows[0] : null;
+    if (!row) {
+      return isPlatformAdministrator(req.authz)
+        ? res.status(404).json({ error: "Team not found." })
+        : res.status(403).json({ error: "Team is outside your access." });
+    }
+    if (!row.club_id || !(await canManageClub(req, String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // The lock a membership write's share lock waits for (lockActiveTeam), so
+      // no member joins between the archive and the end of the memberships.
+      const locked = (await client.query(
+        `select club_id, coalesce(is_active, true) as active from public.teams where id = $1 for no key update`,
+        [teamId],
+      )).rows[0];
+      if (!locked || String(locked.club_id) !== String(row.club_id)) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "team_changed", message: "The team changed meanwhile. Reload and try again." });
+      }
+      if (!locked.active) {
+        await client.query("rollback");
+        return res.json({ ok: true, archived: false, membershipsArchived: 0 });
+      }
+      await client.query(`update public.teams set is_active = false, updated_at = now() where id = $1`, [teamId]);
+      const ended = await archiveTeamMemberships(client, { teamId, userId: req.user.id, reason: "team_archived" });
+      await client.query("commit");
+      res.json({ ok: true, archived: true, membershipsArchived: ended.length });
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     next(error);
   }
@@ -1254,8 +1303,9 @@ router.post("/athletes", async (req, res, next) => {
       // club/team access (see ensureActiveMembership). All in one
       // transaction so a failure partway never leaves the athlete row
       // created without its matching membership/coach-link rows.
-      if (clubId) await ensureActiveMembership(client, result.rows[0].id, clubId, null, "club", req.user.id);
+      // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
       if (teamId) await ensureActiveMembership(client, result.rows[0].id, clubId, teamId, "team", req.user.id);
+      if (clubId) await ensureActiveMembership(client, result.rows[0].id, clubId, null, "club", req.user.id);
       await client.query("commit");
       res.status(201).json({ athlete: result.rows[0] });
     } catch (error) {
@@ -1303,8 +1353,9 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
       // membership (an athlete may hold several at once) - it never
       // archives whatever was there before. Use the dedicated team/club
       // archive endpoints to end a specific membership.
-      if (clubId) await ensureActiveMembership(client, req.params.athleteId, clubId, null, "club", req.user.id);
+      // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
       if (teamId) await ensureActiveMembership(client, req.params.athleteId, clubId, teamId, "team", req.user.id);
+      if (clubId) await ensureActiveMembership(client, req.params.athleteId, clubId, null, "club", req.user.id);
       await client.query("commit");
       res.json({ athlete: result.rows[0] });
     } catch (error) {
@@ -1361,8 +1412,10 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
       // Adds an active membership rather than overwriting - an athlete may
       // already have other active club/team memberships, and this simply
       // adds one more (including a second team within the same club).
-      await ensureActiveMembership(client, athleteId, team.rows[0].club_id, null, "club", req.user.id);
+      // The team first (ensureActiveMembership locks it), the archive's lock
+      // order: an archive that won the race leaves nothing to join (D45).
       await ensureActiveMembership(client, athleteId, team.rows[0].club_id, teamId, "team", req.user.id);
+      await ensureActiveMembership(client, athleteId, team.rows[0].club_id, null, "club", req.user.id);
       const result = await client.query(
         `update public.athletes
          set club_id = $2, team_id = $3
@@ -1378,6 +1431,7 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
       res.json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
@@ -1970,8 +2024,9 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       } else if (link.context_type === "team") {
         const teamRow = await client.query(`select club_id from public.teams where id = $1 limit 1`, [link.context_id]);
         const clubId = teamRow.rows[0]?.club_id;
-        await ensureActiveMembership(client, resultingAthleteId, clubId, null, "club", req.user.id);
+        // The team first (ensureActiveMembership locks it), the archive's lock order (D45).
         await ensureActiveMembership(client, resultingAthleteId, clubId, link.context_id, "team", req.user.id);
+        await ensureActiveMembership(client, resultingAthleteId, clubId, null, "club", req.user.id);
       }
       await syncLegacyAthletePointer(resultingAthleteId, { query: (text, params) => client.query(text, params) });
 
@@ -2270,18 +2325,13 @@ router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const result = await client.query(
-        `update public.athlete_memberships
-         set status = 'archived', archived_at = now(), archived_by_user_id = $1, archive_reason = $2, updated_at = now()
-         where athlete_id = $3 and team_id = $4 and membership_type = 'team' and status = 'active'
-         returning id`,
-        [req.user.id, clean(req.body?.reason) || null, req.params.athleteId, req.params.teamId],
-      );
-      if (!result.rows[0]) {
+      const ended = await archiveTeamMemberships(client, {
+        teamId: req.params.teamId, athleteId: req.params.athleteId, userId: req.user.id, reason: clean(req.body?.reason) || null,
+      });
+      if (!ended.length) {
         await client.query("rollback");
         return res.status(404).json({ error: "This athlete has no active membership in this team." });
       }
-      await syncLegacyAthletePointer(req.params.athleteId, client);
       await client.query("commit");
       res.json({ ok: true });
     } catch (error) {
@@ -2303,6 +2353,11 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // D45: an archived team takes no member back (it is restored first, empty).
+      if (!(await lockActiveTeam(client, req.params.teamId))) {
+        await client.query("rollback");
+        return res.status(409).json(TEAM_ARCHIVED);
+      }
       // Lock the ONE row for this (athlete, team) identity, regardless of
       // its current status, then branch after the lock is held - not two
       // separate status-filtered SELECTs. That matters under concurrency:
@@ -3678,6 +3733,9 @@ async function resolveAthleteClubTeam(req, requestedClubId, requestedTeamId) {
 // function takes a row lock via FOR UPDATE, which only holds meaningfully
 // inside an explicit transaction) - never a bare pool/query.
 async function ensureActiveMembership(client, athleteId, clubId, teamId, membershipType, createdByUserId) {
+  if (membershipType === "team" && !(await lockActiveTeam(client, teamId))) {
+    throw Object.assign(new Error(TEAM_ARCHIVED.message), { status: 409, code: TEAM_ARCHIVED.error });
+  }
   const existing = await client.query(
     `select id, status from public.athlete_memberships
      where athlete_id = $1 and club_id = $2 and membership_type = $3
@@ -3705,6 +3763,36 @@ async function ensureActiveMembership(client, athleteId, clubId, teamId, members
     [athleteId, clubId, teamId, membershipType, createdByUserId],
   );
   return inserted.rows[0].id;
+}
+
+// D45: an archived team takes no member. Locks the active team row FOR SHARE
+// (the team archive's lock waits for it, and it waits for the archive), so a
+// team membership never becomes active in an archived team. Null when the team
+// is archived or missing. Inside a transaction only.
+async function lockActiveTeam(client, teamId) {
+  return (await client.query(
+    `select id, club_id from public.teams where id = $1 and coalesce(is_active, true) for share`,
+    [teamId],
+  )).rows[0] || null;
+}
+
+// The one way a team membership ends: Remove from team (one athlete) and the
+// team archive (every athlete, D45). Active team memberships of the team get
+// the archived status and its fields (the v25 trigger closes each membership's
+// period at archived_at), then each athlete's legacy pointer is re-pointed, in
+// athlete order, so two archives that share athletes take their rows in the
+// same order. Inside a transaction only; returns the ended rows.
+async function archiveTeamMemberships(client, { teamId, athleteId = null, userId, reason = null }) {
+  const result = await client.query(
+    `update public.athlete_memberships
+     set status = 'archived', archived_at = now(), archived_by_user_id = $1, archive_reason = $2, updated_at = now()
+     where team_id = $3 and membership_type = 'team' and status = 'active' and ($4::uuid is null or athlete_id = $4::uuid)
+     returning id, athlete_id`,
+    [userId, reason, teamId, athleteId],
+  );
+  const athleteIds = [...new Set(result.rows.map((row) => String(row.athlete_id)))].sort();
+  for (const id of athleteIds) await syncLegacyAthletePointer(id, client);
+  return result.rows;
 }
 
 // Re-points the legacy athletes.club_id/team_id "primary" pointer only when
