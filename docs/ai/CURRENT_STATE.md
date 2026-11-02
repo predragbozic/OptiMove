@@ -2773,7 +2773,7 @@ Technical details.
         - **M6, the first controlled import (2026-11-02; J17 section 10.5, the record).** One GPEXE session (190122,
           23.10.2026) of the First team is imported into the deployed database through the mappings.
           - The backup (O2, the owner) was VERIFIED: 222 tables, 92,490 rows, 0 differences. The dump has sha256
-            `8dde239d…7e3`. Its row is in the operational gate's table of `docs/runbooks/gpexe-in-app-import.md`.
+            `8dde239d…47e3`. Its row is in the operational gate's table of `docs/runbooks/gpexe-in-app-import.md`.
           - The preflight (about 12:50 UTC): blocks 1 to 8 and 14 passed. Block 9 listed 15 actionable candidates, 14 of
             them with a version 2 preview from before 9-B (see departure 1 below). Blocks 11 to 13 showed 2 platform
             admins and 1 grant, which the owner confirmed as theirs.
@@ -2797,7 +2797,8 @@ Technical details.
                `ca79b33`.
             3. The approval went through the Imports dialog for several sessions with one session selected, that is the
                batch route, not the single-candidate route step 14 names. It is the same `approveCandidate`, and one
-               approval was written.
+               approval was written. The owner used it on the *Rukovodilac*'s instruction, after showing the dialog
+               with one session selected.
             4. The switch stayed effective until the deploy of 13:17:06 UTC, because a Render environment change takes
                effect only with a deploy. No other approval was made.
       - **C112 (2026-11-01): mapping by drag and drop** — the owner's direction for mappings after the pilot, not a

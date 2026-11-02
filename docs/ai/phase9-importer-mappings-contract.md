@@ -826,7 +826,7 @@ Steps 9 to 16 ran on 2026-11-02 for the First team (GPEXE team 980). The facts a
     `succeeded`, preview version 3, `ready` and not blocked, 39 results, 13 athletes.
   - The preview's values matched the GPEXE UI's for the same session at the extremes: whole session 13 values per
     variable, drills 26. That is 117 values, none left out. The unchanged session's preview was refreshed to version
-    3 by the finalization (section 7.1).
+    3 by the finalization (section 7.1; inferred from the code, not observed directly).
 - **Step 9 (the freeze)** began after PR #330's merge (section 10.4). It ended when the *Rukovodilac* announced the
   end of the window.
 - **Step 10 (the backup, O2).**
@@ -856,8 +856,8 @@ Steps 9 to 16 ran on 2026-11-02 for the First team (GPEXE team 980). The facts a
   - **Off:** the owner saved `false` without a deploy. The *Rukovodilac* started a deploy of `ca79b33` through the Render
     API (no migration), which went live at 13:17:06 UTC. `/api/health` answered `ok` three times in a row on `ca79b33`,
     and the owner saw the switch-off message again.
-  - **Unauthenticated smoke (13:14 UTC):** `/api/auth/me` answered 200; the GPEXE status (zero UUID), the links list
-    and the mappings list answered 401.
+  - **Unauthenticated smoke (13:14 UTC):** `/api/auth/me` answered 200; the GPEXE status (zero UUID), the
+    source-connection list and the mappings list answered 401.
 - **Step 16 (the post-check).** The *Rukovodilac* ran it from the merged file (sha256 `a6532b5a…263e`), on the served
   `ca79b33`. All 11 blocks passed:
   - T6: 117 of 117 values, none without its row, no difference from the preview;
@@ -883,7 +883,7 @@ Steps 9 to 16 ran on 2026-11-02 for the First team (GPEXE team 980). The facts a
 3. **Step 14.** It names the single-candidate route, never the batch. The owner approved through the Imports dialog for
    several sessions with exactly one session selected ("Import 1 session"), that is the batch route with one
    candidate. That route approves each candidate through the same `approveCandidate`, and exactly one approval was
-   written.
+   written. The owner used it on the *Rukovodilac*'s instruction, after showing the dialog with one session selected.
 4. **Step 15.** It asks for the switch off at once. A change of a Render environment variable takes effect only with a
    deploy, so the switch stayed effective from the approval (13:10:10) until `ca79b33` went live again (13:17:06).
    No approval was made in that time (approvals 1, T6 117).
