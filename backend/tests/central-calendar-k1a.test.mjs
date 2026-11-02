@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes, TZ as GPEXE_TZ } from "./_gpexe-fixtures.mjs";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { mappedBinding } from "./support/mapped-world.mjs";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -297,8 +297,12 @@ async function makeTestAssignment(occurrenceId, athleteId, date, status = "pendi
 }
 
 // GPEXE: a team with athletes 101-103 as OptiMove athletes (Sarajevo time,
-// members since 2026-01-01) and the writer's direct import of one session of
-// 2026-09-14 (the roster suite's fixture).
+// members since 2026-01-01), bound to its own GPEXE team with the eleven
+// mapping activations of the 9-B mapped world (support/mapped-world.mjs), and
+// the writer's direct import (importGpexeBundle) of one session of 2026-09-14
+// (the roster suite's fixture). gpexe_team_settings is unique on the GPEXE
+// team id, so every team gets its own source team id and its bundles carry it.
+let gpexeSourceTeamCounter = 0;
 async function gpexeTeam(label = "GPEXE") {
   const clubId = await makeClub(`${label} club`);
   const teamId = await makeTeam(clubId, label);
@@ -310,9 +314,11 @@ async function gpexeTeam(label = "GPEXE") {
     members[g] = athlete;
   }
   const userId = await makeUser(`${label} importer`);
-  return { clubId, teamId, ids, members, userId };
+  const sourceTeamId = String(9300 + (gpexeSourceTeamCounter += 1));
+  const binding = await mappedBinding(admin, { teamId, clubId, sourceTeamId });
+  return { clubId, teamId, ids, members, userId, sourceTeamId, bindingId: binding.bindingId };
 }
-function bundleFor(sessionId) {
+function bundleFor(sessionId, sourceTeamId) {
   const athletes = standardAthletes().map((a) => {
     const copy = structuredClone(a);
     copy.tracks = copy.tracks.map((t, i) => sessionId * 10 + (copy.id - 100) * 2 + i);
@@ -327,13 +333,14 @@ function bundleFor(sessionId) {
   const a103 = athletes.find((a) => a.id === 103);
   a103.tracks = [a103.tracks[0]];
   a103.parts = [{ drill: null, time: 1500, distance: 1700, maxV: 5, power: [1500, 100, 80, 20, 0], acc: 5, dec: 5 }];
-  return makeBundle({ sessionId, gpexeTeamId: 77, start: `${GPEXE_DAY}T18:08:12`, athletes, detailsDrills: [0, 1] });
+  assert.ok(sourceTeamId, "a bundle carries its team's own GPEXE team id");
+  return makeBundle({ sessionId, gpexeTeamId: Number(sourceTeamId), start: `${GPEXE_DAY}T18:08:12`, athletes, detailsDrills: [0, 1] });
 }
 async function importDirect(team, bundle) {
   const client = new pg.Client({ connectionString: db.url });
   await client.connect();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), {
+    return await importGpexeBundle(client, bundle, {
       ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId: team.ids, batchFilename: "calendar test",
     });
   } finally {
@@ -711,7 +718,7 @@ test("10. a GPEXE import is its own card: expects device_data, attendance x/y fr
   const team = await gpexeTeam("a10");
   const coach = await coachOf(team.teamId, "a10 coach");
   const late = await makeAthlete("a10 no device", { clubId: team.clubId, teamId: team.teamId, tz: GPEXE_TZ });
-  const result = await importDirect(team, bundleFor(5101));
+  const result = await importDirect(team, bundleFor(5101, team.sourceTeamId));
   const activityId = result.activityId || (await q(`select id from training.activities where owner_team_id = $1 and origin in ('api_import','source_import') order by created_at desc limit 1`, [team.teamId]))[0].id;
   assert.ok(activityId, "the import materialized a team activity");
 
@@ -942,7 +949,7 @@ test("15. D8 contract: the club admin reads a team activity (detail 200, roster 
   const team = await teamWithBatch("d8", { n: 2 });
   const act = await submitRpe(team.athletes[0]);
   const gpexe = await gpexeTeam("d8g");
-  const imported = await importDirect(gpexe, bundleFor(5201));
+  const imported = await importDirect(gpexe, bundleFor(5201, gpexe.sourceTeamId));
   const importedId = imported.activityId || (await q(`select id from training.activities where owner_team_id = $1 order by created_at desc limit 1`, [gpexe.teamId]))[0].id;
   const admin1 = await clubAdminOf(team.clubId, "d8 admin");
   const gAdmin = await clubAdminOf(gpexe.clubId, "d8g admin");
@@ -997,7 +1004,7 @@ test("15. D8 contract: the club admin reads a team activity (detail 200, roster 
 // ---------------------------------------------------------------------------
 test("17. athlete workspace on a shared team activity: own participation only — no teammate id, name, RPE or roster anywhere in the answer", async () => {
   const team = await gpexeTeam("a17");
-  await importDirect(team, bundleFor(5301));
+  await importDirect(team, bundleFor(5301, team.sourceTeamId));
   const self = team.members[101];
   const res = await calendar(self.cookie, { from: GPEXE_DAY, to: GPEXE_DAY, extra: "&kinds=activity&include=athletes" });
   assert.equal(res.status, 200, res.text);

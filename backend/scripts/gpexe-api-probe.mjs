@@ -242,12 +242,13 @@ async function hashCheck(client, opts, report, setPhase) {
   report.session.pathsThatChangedBetweenFetches = same ? [] : differingPaths(first, second);
   setPhase("importer-view");
   try {
-    const plan = buildGpexeImportPlan(first);
+    // The importer's own gates only (9-B: its values come from mapping
+    // activations, which a probe never has).
+    const plan = buildGpexeImportPlan(first, { metricSpecs: [] });
     report.session.importerView = {
       participants: plan.participants.length,
       results: plan.participants.reduce((n, p) => n + p.results.length, 0),
       anomalies: countBy(plan.anomalies, "kind"),
-      skippedValuesByReason: countBy(plan.metricSkips, "reason"),
     };
   } catch (error) {
     report.session.importerView = { blocked: error instanceof GpexeMappingError ? error.code : error.name };

@@ -6,6 +6,7 @@ import { BLOCKED_CODES, REASON_CODES, blockedCodeFor, candidateReasons } from ".
 import { GpexeMappingError } from "../src/gpexeImportMapper.js";
 import { GpexeImportError } from "../src/gpexeImportWriter.js";
 import fs from "node:fs";
+import { BLOCKING_CODES } from "../src/gpexeImportAudience.js";
 
 const athlete = (over = {}) => ({
   gpexeAthleteId: "101", athleteId: "ath-1", participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null },
@@ -18,7 +19,7 @@ test("every code the GPEXE mapper and writer can throw maps to a neutral blocked
   // Read the adapter sources: a code added later without a mapping shows up
   // here as 'other', which this test then names.
   const codes = new Set();
-  for (const file of ["../src/gpexeImportMapper.js", "../src/gpexeImportWriter.js"]) {
+  for (const file of ["../src/gpexeImportMapper.js", "../src/gpexeImportWriter.js", "../src/gpexeImportMapping.js"]) {
     const text = fs.readFileSync(new URL(file, import.meta.url), "utf8");
     // The literal may sit on the next line (the writer's threshold errors do).
     for (const m of text.matchAll(/new Gpexe(?:Mapping|Import)Error\(\s*"([a-z_]+)"/g)) codes.add(m[1]);
@@ -29,9 +30,11 @@ test("every code the GPEXE mapper and writer can throw maps to a neutral blocked
   assert.equal(blockedCodeFor("reference_hash_version_outdated"), BLOCKED_CODES.conflicts_with_existing_data);
   const unmapped = [...codes].filter((c) => blockedCodeFor(c) === BLOCKED_CODES.other);
   // Two writer codes describe a participant the preview never hands to the
-  // writer (it filters to linked team athletes first): a bug, not a coach
-  // reason, so 'other' with the admin step is the honest category.
-  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped"]);
+  // writer (it filters to linked team athletes first), and three are 9-B
+  // invariants of the writer (a value that is not canonical decimal text, a
+  // value without its provenance): bugs, not coach reasons, so 'other' with
+  // the admin step is the honest category.
+  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped", "provenance_incomplete", "provenance_missing", "value_not_decimal"]);
   for (const code of codes) assert.ok(Object.values(BLOCKED_CODES).includes(blockedCodeFor(code)), code);
   assert.equal(blockedCodeFor("something_new_nobody_mapped"), BLOCKED_CODES.other);
   assert.equal(blockedCodeFor(null), null);
@@ -111,4 +114,22 @@ test("no preview (snapshot expired or purged), imported and superseded rows: not
   assert.deepEqual(candidateReasons("pending", undefined), empty);
   assert.deepEqual(candidateReasons("imported", preview({ athletes: [unlinked("104")] })), { ...empty, sessionType: "FULL TRAINING" });
   assert.deepEqual(candidateReasons("superseded", preview({ athletes: [unlinked("104")] })), { ...empty, sessionType: "FULL TRAINING" });
+});
+
+test("9-B: every block the mapping context and the mapper can answer is the stable data_setup_incomplete; the two C110 left-out reasons block nothing and are not blocked codes", () => {
+  const codes = new Set();
+  for (const file of ["../src/gpexeImportMapper.js", "../src/gpexeImportMapping.js"]) {
+    const text = fs.readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const m of text.matchAll(/block: "([a-z_]+)"/g)) codes.add(m[1]);
+  }
+  for (const c of ["mapping_not_usable", "source_unit_mismatch", "source_instance_held"]) assert.ok(codes.has(c), `the scan sees ${c}`);
+  // J17 section 6: the eight blocking codes of a mapped import (BLOCKING_CODES of the audience module).
+  assert.deepEqual([...BLOCKING_CODES].sort(), ["mapping_not_usable", "no_mapped_values", "session_imported_under_another_instance", "source_instance_changed",
+    "source_instance_held", "source_shape_mismatch", "source_threshold_contract_mismatch", "source_unit_mismatch"]);
+  for (const c of [...codes, ...BLOCKING_CODES]) assert.equal(blockedCodeFor(c), BLOCKED_CODES.data_setup_incomplete, c);
+  assert.equal(BLOCKED_CODES.data_setup_incomplete, "data_setup_incomplete");
+  for (const c of ["required_value_missing", "canonical_value_out_of_range"]) {
+    assert.ok(!Object.values(BLOCKED_CODES).includes(c), `${c} is not a blocked code`);
+    assert.equal(blockedCodeFor(c), BLOCKED_CODES.other, `${c} is never a session refusal`);
+  }
 });

@@ -27,8 +27,8 @@ import {
   applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS,
 } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes, TZ } from "./_gpexe-fixtures.mjs";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan, importGpexePlanLocked, lockTeamForImport } from "../src/gpexeImportWriter.js";
+import { mappedBinding } from "./support/mapped-world.mjs";
+import { importGpexeBundle, importGpexeBundleLocked, lockTeamForImport } from "../src/gpexeImportWriter.js";
 import { recordImportObservations } from "../src/activitySourceObservations.js";
 import * as runner from "../src/migrate.js";
 
@@ -152,7 +152,12 @@ async function plainSession(label, n = 3) {
 
 // A team with GPEXE athletes 101-103 as OptiMove athletes (members since
 // 2026-01-01); an import of bundleFor() measures 101 and 102 (103 has two
-// tracks and is not imported unless oneTrack103).
+// tracks and is not imported unless oneTrack103). Since 9-B the importer
+// writes only through mapping activations (J17): every such team has its own
+// GPEXE team id (gpexe_team_settings is unique on it), one active gpexe
+// binding to it and the eleven legacy activations on that binding
+// (support/mapped-world.mjs), and every bundle imported for it carries that id.
+let sourceTeamSeq = 5200;
 async function gpexeTeam(label) {
   const { clubId, teamId } = await makeTeam(label);
   const names = { 101: `A101 ${label}`, 102: `B102 ${label}`, 103: `C103 ${label}` };
@@ -164,10 +169,14 @@ async function gpexeTeam(label) {
   }
   const userId = await makeUser(`${label} importer`);
   const coach = await coachOf(teamId, `${label} coach`);
-  return { clubId, teamId, ids, names, userId, coach };
+  sourceTeamSeq += 1;
+  const sourceTeamId = String(sourceTeamSeq);
+  const { bindingId } = await mappedBinding(admin, { teamId, clubId, sourceTeamId });
+  return { clubId, teamId, ids, names, userId, coach, sourceTeamId, bindingId };
 }
 
-function bundleFor(sessionId, { oneTrack103 = false, updatedOn = "2026-09-14T20:18:09.337" } = {}) {
+function bundleFor(sessionId, { oneTrack103 = false, updatedOn = "2026-09-14T20:18:09.337", gpexeTeamId } = {}) {
+  if (!gpexeTeamId) throw new Error("bundleFor needs the team's own GPEXE team id (its binding's source team)");
   const athletes = standardAthletes().map((a) => {
     const copy = structuredClone(a);
     copy.tracks = copy.tracks.map((t, i) => sessionId * 10 + (copy.id - 100) * 2 + i);
@@ -183,13 +192,13 @@ function bundleFor(sessionId, { oneTrack103 = false, updatedOn = "2026-09-14T20:
     a103.tracks = [a103.tracks[0]];
     a103.parts = [{ drill: null, time: 1500, distance: 1700, maxV: 5, power: [1500, 100, 80, 20, 0], acc: 5, dec: 5 }];
   }
-  return makeBundle({ sessionId, gpexeTeamId: 77, start: "2026-09-14T18:08:12", updatedOn, athletes });
+  return makeBundle({ sessionId, gpexeTeamId: Number(gpexeTeamId), start: "2026-09-14T18:08:12", updatedOn, athletes });
 }
 
 async function importDirect(team, bundle) {
   const client = await newClient();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), {
+    return await importGpexeBundle(client, bundle, {
       ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId: team.ids, batchFilename: "roster 5a2 test",
     });
   } finally {
@@ -202,7 +211,7 @@ let sessionSeq = 7000;
 async function measuredSession(label) {
   const team = await gpexeTeam(label);
   sessionSeq += 1;
-  const summary = await importDirect(team, bundleFor(sessionSeq));
+  const summary = await importDirect(team, bundleFor(sessionSeq, { gpexeTeamId: team.sourceTeamId }));
   return { ...team, sessionId: sessionSeq, summary, activityId: summary.activityId };
 }
 
@@ -899,7 +908,7 @@ test("26. a decision waits for an uncommitted import of the same team, then sees
   const importer = await newClient();
   await importer.query("begin");
   await lockTeamForImport(importer, s.teamId);
-  await importGpexePlanLocked(importer, buildGpexeImportPlan(bundleFor(s.sessionId, { oneTrack103: true })), {
+  await importGpexeBundleLocked(importer, bundleFor(s.sessionId, { oneTrack103: true, gpexeTeamId: s.sourceTeamId }), {
     ownerTeamId: s.teamId, performedByUserId: s.userId, athleteIdByGpexeId: s.ids, batchFilename: "race",
   });
   const request = put(s.activityId, s.ids[103], s.coach.cookie, dnp());
@@ -1062,7 +1071,7 @@ test("30. Complete stores who, when, the basis and the fingerprint, and logs it 
 test("31. Complete on a session whose athletes are all measured creates the completion row at revision 1", async () => {
   const team = await gpexeTeam("All measured");
   sessionSeq += 1;
-  const summary = await importDirect(team, bundleFor(sessionSeq, { oneTrack103: true }));
+  const summary = await importDirect(team, bundleFor(sessionSeq, { oneTrack103: true, gpexeTeamId: team.sourceTeamId }));
   assert.equal(await completionOf(summary.activityId), null);
   const res = await completeNow(summary.activityId, team.coach.cookie);
   assert.equal(res.status, 200, res.text);
@@ -1482,7 +1491,7 @@ test("49. no duplicate log rows for the same kind of change; a new kind adds one
 
 test("50. real writers are never blocked: a GPEXE re-import and a Settings archive on complete sessions succeed and downgrade", async () => {
   const s = await completedMeasured("Writer import");
-  const summary = await importDirect(s, bundleFor(s.sessionId, { oneTrack103: true }));
+  const summary = await importDirect(s, bundleFor(s.sessionId, { oneTrack103: true, gpexeTeamId: s.sourceTeamId }));
   assert.equal(summary.activityId, s.activityId);
   const c = await completionOf(s.activityId);
   assert.equal(c.status, "needs_review");

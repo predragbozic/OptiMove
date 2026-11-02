@@ -5,7 +5,8 @@
 // scope and the order of answers are source-metric-preview-7e.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GPEXE_METRIC_SPECS, GpexeMappingError, buildGpexeImportPlan, gpexeLevelValues } from "../src/gpexeImportMapper.js";
+import { GpexeMappingError, buildGpexeImportPlan, gpexeLevelValues } from "../src/gpexeImportMapper.js";
+import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { extractorFor } from "../src/sourceMetricExtractors.js";
 import { PREVIEW_MINIMUM_ATHLETES, STORAGE_SCALE, convertAtStorageScale, previewLevel } from "../src/sourceMetricPreview.js";
 import { PLANTED, previewAthletes, previewBundle } from "./support/preview-bundles.mjs";
@@ -18,6 +19,8 @@ const IDENTITY = { scale: "1", divisor: "1", offset: "0" };
 const S_TO_MIN = { scale: "1", divisor: "60", offset: "0" };
 const MS_TO_KMH = { scale: "3.6", divisor: "1", offset: "0" };
 const KMH_TO_MS = { scale: "1", divisor: "3.6", offset: "0" };
+// The frozen pre-9-B specs as raw plan specs (the mapper keeps their values unconverted).
+const ORACLE = LEGACY_SPECS.map((s) => ({ raw: true, key: s.key, levels: { full: true, drill: true }, extract: s.extract }));
 
 test("1. the constants: the minimum count is 3 (OD3) and the storage scale 9 (D8)", () => {
   assert.equal(PREVIEW_MINIMUM_ATHLETES, 3);
@@ -86,12 +89,12 @@ const SPECS = {
   gpexe_max_speed: ["athlete_session.max_v", {}, (raw) => raw * 3.6],
 };
 
-test("4. gpexeLevelValues against today's import: for every spec with its own bounds, the same athletes (the multi-track athlete left out), the same values at each level (the spec's own unit arithmetic undone), the session row once and every drill row; nothing but the values comes back", () => {
-  assert.deepEqual(Object.keys(SPECS).sort(), GPEXE_METRIC_SPECS.map((s) => s.key).sort());
+test("4. gpexeLevelValues against the frozen pre-9-B import (the oracle specs): for every spec with its own bounds, the same athletes (the multi-track athlete left out), the same values at each level (the spec's own unit arithmetic undone), the session row once and every drill row; nothing but the values comes back", () => {
+  assert.deepEqual(Object.keys(SPECS).sort(), LEGACY_SPECS.map((s) => s.key).sort());
   const bundle = previewBundle({ gpexeTeamId: 970001 });
-  const today = buildGpexeImportPlan(bundle);
+  const today = buildGpexeImportPlan(bundle, { metricSpecs: ORACLE });
   assert.deepEqual(today.participants.map((p) => p.gpexeAthleteId), ["01", "02", "03"].map((n) => `${PLANTED.athletePrefix}${n}`));
-  const todayAt = (participant, level, specKey) => participant.results.filter((x) => x.level === level).flatMap((x) => x.values.filter((v) => v.metricKey === specKey).map((v) => v.value));
+  const todayAt = (participant, level, specKey) => participant.results.filter((x) => x.level === level).flatMap((x) => x.values.filter((v) => v.key === specKey).map((v) => v.value));
   for (const [specKey, [key, params, convert]] of Object.entries(SPECS)) {
     const out = gpexeLevelValues(bundle, (input) => G(key).extract(input, params));
     assert.equal(out.code, null, specKey);
@@ -126,10 +129,10 @@ test("5. a refusal of the whole session returns its stable code and nothing else
   for (const [bundle, code] of cases) {
     const out = gpexeLevelValues(bundle, () => ({ value: 1 }));
     assert.deepEqual(out, { code }, code);
-    assert.throws(() => buildGpexeImportPlan(bundle), (e) => e instanceof GpexeMappingError && e.code === code && e.message.length > 0, code);
+    assert.throws(() => buildGpexeImportPlan(bundle, { metricSpecs: ORACLE }), (e) => e instanceof GpexeMappingError && e.code === code && e.message.length > 0, code);
   }
   // Why only the code crosses: the plan's own message names the session.
-  assert.throws(() => buildGpexeImportPlan(cases[0][0]), (e) => e.message.includes(String(PLANTED.sessionId)));
+  assert.throws(() => buildGpexeImportPlan(cases[0][0], { metricSpecs: ORACLE }), (e) => e.message.includes(String(PLANTED.sessionId)));
   assert.throws(() => gpexeLevelValues(previewBundle({ gpexeTeamId: 970001 }), () => { throw new Error("boom"); }), /boom/);
 });
 

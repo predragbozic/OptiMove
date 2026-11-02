@@ -11,7 +11,7 @@
 // stored after it — that is the alarm to look at.
 import { pathToFileURL } from "node:url";
 import { pool } from "./db.js";
-import { retentionStatus, runRetention } from "./gpexeImportService.js";
+import { formatDbError, retentionStatus, runRetention } from "./gpexeImportService.js";
 
 export async function runGpexeRetentionOnce() {
   const run = await runRetention("cli");
@@ -29,7 +29,8 @@ if (isMainModule) {
       process.exitCode = 1;
     }
   } catch (error) {
-    console.error(`[gpexe] retention failed: ${error?.message}`);
+    // J17 log rule: a database error by its stable fields only, never its text.
+    console.error(`[gpexe] retention failed: ${formatDbError(error)}`);
     process.exitCode = 1;
   } finally {
     await pool.end();

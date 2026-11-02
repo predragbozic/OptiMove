@@ -4,7 +4,9 @@
 // that writes measurements, an event and an activity (phase F2).
 import { Router } from "express";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT, query } from "../db.js";
-import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
+import { canApproveGpexeImport, importAudienceOf, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
+import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
+import { previewHasClubVariable } from "../gpexeImportAudience.js";
 import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
@@ -23,10 +25,28 @@ function forbidden(res) {
 // F3c2e / F3c2g: an administrator of the platform or of the team's club sees
 // the precise connection facts (the refusal `reason`, a failed check's precise
 // code); a coach gets the stable code and the sentence to contact an
-// administrator. Decided from the resolved team access of this request only.
+// administrator. Decided from the resolved team access of this request only:
+// since 9-B (D8) from its audience level, so the club's admin is one only in
+// the club's workspace (J17 section 6.1).
 function adminViewerOf(req) {
+  return (req.gpexeImportAudience ?? "other") !== "other";
+}
+
+// R17: whether a coach-level viewer may read a club variable's name - C99's
+// predicate (an active coach of an active team of that club, in that team's
+// workspace; resolveVariableEditor), asked lazily and only when the preview
+// names a club variable. Any error reads as "no".
+async function namesClubVariablesFor(req, preview) {
   const access = req.gpexeTeamAccess;
-  return Boolean(access && (access.platformAdmin || (access.clubId && holdsClubAdminRole(req.authz, access.clubId))));
+  if (!access || req.gpexeImportAudience !== "other" || !previewHasClubVariable(preview)) return false;
+  if (access.workspace?.type !== "team" || String(access.workspace.scopeId) !== String(access.teamId)) return false;
+  try {
+    const editor = await resolveVariableEditor(req);
+    return Boolean(editor && editor.view === "coach" && editor.owner?.clubId === access.clubId
+      && (editor.teamId === undefined || editor.teamId === access.teamId));
+  } catch {
+    return false;
+  }
 }
 
 // The database pool had no free connection within its checkout bound (db.js).
@@ -60,7 +80,8 @@ function handle(fn) {
           error: error.code, message,
           ...(typeof reason === "string" && adminViewer ? { reason } : {}),
           ...(reviewAgain ? { reviewAgain } : {}),
-          ...(changesToImported !== undefined ? { changesToImported } : {}),
+          // A count only (J17 section 8.2, D11): never the changes themselves.
+          ...(Number.isInteger(changesToImported) && changesToImported >= 0 ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
         });
       }
@@ -78,7 +99,11 @@ async function teamAccess(req, res) {
   }
   const access = await resolveGpexeTeamAccess(req, req.params.teamId, { query });
   if (!access) notFound(res);
-  else req.gpexeTeamAccess = access;
+  else {
+    req.gpexeTeamAccess = access;
+    // J17 section 6.1: the request's one audience level, from this snapshot.
+    req.gpexeImportAudience = importAudienceOf(req.authz, access);
+  }
   return access;
 }
 
@@ -143,7 +168,7 @@ router.get("/teams/:teamId/checks/:checkId", handle(async (req, res) => {
 router.get("/teams/:teamId/candidates", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  const candidates = await service.listCandidates(access.teamId, { includeSuperseded: req.query.includeSuperseded === "true" });
+  const candidates = await service.listCandidates(access.teamId, { includeSuperseded: req.query.includeSuperseded === "true", audience: req.gpexeImportAudience });
   res.json({ candidates, importSwitch: service.applySwitchInfo() });
 }));
 
@@ -151,7 +176,9 @@ router.get("/teams/:teamId/candidates/:candidateId", handle(async (req, res) => 
   const access = await teamAccess(req, res);
   if (!access) return;
   if (!UUID.test(req.params.candidateId)) return notFound(res);
-  const candidate = await service.getCandidate(access.teamId, req.params.candidateId);
+  const candidate = await service.getCandidate(access.teamId, req.params.candidateId, {
+    audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
+  });
   if (!candidate) return notFound(res);
   res.json({ candidate, importSwitch: service.applySwitchInfo() });
 }));
@@ -169,16 +196,18 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   if (!access) return;
   if (!UUID.test(req.params.candidateId)) return notFound(res);
   const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
-    userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges,
+    userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges, expectedClubId: access.clubId,
   });
   // The import is committed. Reading the candidate afterwards is only a
   // convenience; if it fails, the answer still says the import happened.
   let candidate = null;
   let candidateReadError = null;
   try {
-    candidate = await service.getCandidate(access.teamId, req.params.candidateId);
+    candidate = await service.getCandidate(access.teamId, req.params.candidateId, {
+      audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
+    });
   } catch (error) {
-    console.error(`[gpexe] reading candidate ${req.params.candidateId} after its import failed: ${error?.message}`);
+    console.error(`[gpexe] reading candidate ${req.params.candidateId} after its import failed: ${service.formatDbError(error)}`);
     candidateReadError = {
       error: "candidate_read_failed",
       message: "The import was committed; only reading the candidate afterwards failed. Open the candidate again to see it.",
@@ -203,7 +232,9 @@ router.post("/teams/:teamId/imports", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   const { candidates } = service.parseBatchApproveBody(req.body);
-  res.json(await service.approveCandidates(access.teamId, candidates, { userId: req.user.id }));
+  // The batch answers the same neutral result for every level (blockedCode
+  // only, J17 section 6.1), so it takes no audience.
+  res.json(await service.approveCandidates(access.teamId, candidates, { userId: req.user.id, expectedClubId: access.clubId }));
 }));
 
 // One approval of the team, by id. With the candidate, this is how an

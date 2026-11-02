@@ -25,8 +25,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { mappedBinding } from "./support/mapped-world.mjs";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import * as runner from "../src/migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -203,9 +203,13 @@ async function addParticipant(activityId, athleteId) {
 
 // A real GPEXE import for the team (the 5a2 suite's fixture): GPEXE athletes
 // 101 and 102 are measured, 103 has two tracks and is left out. `ids` maps
-// the GPEXE ids to this team's athletes.
+// the GPEXE ids to this team's athletes. 9-B: the writer imports only through
+// the team's one active binding and its mapping activations, so the team is
+// bound once (raw SQL, the eleven legacy activations) to its own GPEXE team
+// (gpexe_team_settings is unique on it), and the bundle carries that team.
 let sessionSeq = 9000;
-function bundleFor(sessionId) {
+let sourceTeamSeq = 9500;
+function bundleFor(sessionId, gpexeTeamId) {
   const athletes = standardAthletes().map((a) => {
     const copy = structuredClone(a);
     copy.tracks = copy.tracks.map((t, i) => sessionId * 10 + (copy.id - 100) * 2 + i);
@@ -216,15 +220,19 @@ function bundleFor(sessionId) {
     });
     return copy;
   });
-  return makeBundle({ sessionId, gpexeTeamId: 77, start: "2026-09-14T18:08:12", updatedOn: "2026-09-14T20:18:09.337", athletes });
+  return makeBundle({ sessionId, gpexeTeamId, start: "2026-09-14T18:08:12", updatedOn: "2026-09-14T20:18:09.337", athletes });
 }
 
-async function importMeasured(teamId, ids, performedByUserId) {
+async function importMeasured(team, ids, performedByUserId) {
   sessionSeq += 1;
+  if (!team.sourceTeamId) {
+    team.sourceTeamId = String(sourceTeamSeq++);
+    await mappedBinding(admin, { teamId: team.teamId, clubId: team.clubId, sourceTeamId: team.sourceTeamId });
+  }
   const client = await newClient();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundleFor(sessionSeq)), {
-      ownerTeamId: teamId, performedByUserId, athleteIdByGpexeId: ids, batchFilename: "self-report test",
+    return await importGpexeBundle(client, bundleFor(sessionSeq, Number(team.sourceTeamId)), {
+      ownerTeamId: team.teamId, performedByUserId, athleteIdByGpexeId: ids, batchFilename: "self-report test",
     });
   } finally {
     await client.end();
@@ -486,7 +494,7 @@ test("7. the other merge direction: a measured GPEXE participant merged into a s
   const [ana, bojan, ceca] = t.athletes;
   const selfReport = await submitRpe(ana);
   assert.equal(await hasRoster(selfReport.id), false);
-  const summary = await importMeasured(t.teamId, { 101: ana.athleteId, 102: bojan.athleteId, 103: ceca.athleteId }, t.coach.id);
+  const summary = await importMeasured(t, { 101: ana.athleteId, 102: bojan.athleteId, 103: ceca.athleteId }, t.coach.id);
   const imported = summary.activityId;
   assert.ok(imported, "the import materialized its activity");
   assert.equal(await hasRoster(imported), true, "the imported session has the team's roster");

@@ -1,18 +1,23 @@
 // In-app GPEXE import, phases F1 and F2, through the real server on a disposable
 // database: "Check now", candidates, previews, athlete links, approver
-// grants, retention, approval and import. GPEXE itself is a fake client;
-// nothing touches a persistent database. Results and activities are written
-// only by the F2 approval tests, only on the disposable database, with the
-// import switch turned on inside this process for those tests alone.
+// grants, retention, approval and import. GPEXE itself is a fake: a fake
+// server3 source behind the team's binding (9-B, J17 section 3: only a
+// candidate checked through the team's binding and its mapping activations
+// can be imported), or the legacy fake client for a team that was never
+// bound. Nothing touches a persistent database. Results and activities are
+// written only by the F2 approval tests and the direct imports through the
+// writer, only on the disposable database, with the import switch turned on
+// inside this process for the approval tests alone.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import pg from "pg";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import { GpexeClientError } from "../src/gpexeClient.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { activateBinding, t6Rows } from "./support/mapped-world.mjs";
 
 // v33 (the drill-parameter guard): a session with two or more drills is
 // importable only when at least two drill answers are non-empty and pairwise
@@ -22,6 +27,19 @@ const makeBundle = (options) => makeFixtureBundle({ detailsDrills: [0, 1], ...op
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const ORIGINAL_SWITCH = process.env.GPEXE_IMPORT_APPLY_ENABLED;
+const ORIGINAL_KEYS = process.env.SOURCE_CREDENTIAL_KEYS;
+// A bound team's check reads the fake source through a date window; every
+// session of these fixtures starts on one of these days.
+const WINDOW = { from: "2026-09-01", to: "2026-09-14" };
+let src;
+let connections;
+let resolver;
+// The mapped system world (support/mapped-world.mjs), the same for every
+// team of this database: legacy key -> { fieldId, revId, variableId,
+// mappingId, versionId }.
+let world;
+// The source teams the fake source has served sessions for.
+const servedTeams = new Set();
 
 let db;
 let admin;
@@ -38,8 +56,14 @@ before(async () => {
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
   const serverModule = await import("../src/server.js");
   service = await import("../src/gpexeImportService.js");
+  connections = await import("../src/sourceConnectionService.js");
+  resolver = await import("../src/sourceImportCredentialResolver.js");
+  src = createFakeSource();
+  connections.setSourceFetchForTests(src.fetchImpl);
+  resolver.setImportSourceFetchForTests(src.fetchImpl);
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   server = http.createServer(serverModule.app);
@@ -49,6 +73,10 @@ before(async () => {
 
 after(async () => {
   service?.setGpexeClientFactory(null);
+  connections?.setSourceFetchForTests(null);
+  resolver?.setImportSourceFetchForTests(null);
+  if (ORIGINAL_KEYS === undefined) delete process.env.SOURCE_CREDENTIAL_KEYS;
+  else process.env.SOURCE_CREDENTIAL_KEYS = ORIGINAL_KEYS;
   // A request left hanging by a failed test must not keep the suite open.
   if (server) {
     server.closeAllConnections();
@@ -134,10 +162,16 @@ function fakeGpexe({ bundles = [], error = null, gate = null, fetchGate = null, 
 }
 
 // Team with six athletes; links for 101, 102, 103, 105 (104 stays unlinked).
-// Each team reads its own GPEXE team (one GPEXE team feeds one OptiMove team);
-// the fake GPEXE ignores the number.
+// Each team reads its own GPEXE team (one GPEXE team feeds one OptiMove team).
+// 9-B (J17 section 3): only a candidate checked through the team's binding is
+// importable, so a team is bound by default - its approved GPEXE team
+// connected and bound through the real Connect / Bind routes, every legacy
+// mapping activated on the binding, and its sessions served by the fake
+// server3 source (serve). path "legacy" leaves the team never bound: its
+// checks read through the legacy fake client (setGpexeClientFactory), and
+// every candidate they store is blocked mapping_not_usable.
 let nextGpexeTeamId = 1000;
-async function setupTeam({ gpexeTeamId = String(nextGpexeTeamId++) } = {}) {
+async function setupTeam({ gpexeTeamId = String(nextGpexeTeamId++), path = "binding" } = {}) {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["A101", "B102", "C103", "D", "E", "F105"] });
   const [a, b, c, d, e, f] = org.athleteIds;
   const coach = await coachOf(org.teamId);
@@ -146,7 +180,45 @@ async function setupTeam({ gpexeTeamId = String(nextGpexeTeamId++) } = {}) {
   for (const [gpexeAthleteId, athleteId] of [["101", a], ["102", b], ["103", c], ["105", f]]) {
     assert.equal((await api(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);
   }
-  return { ...org, ids: { a, b, c, d, e, f }, coach, padmin };
+  const team = { ...org, ids: { a, b, c, d, e, f }, coach, padmin, sourceTeamId: gpexeTeamId, path: "legacy", bindingId: null };
+  if (path === "binding") await bindTeam(team);
+  return team;
+}
+
+// Binds a set-up team to its approved GPEXE team through the real routes and
+// starts the activations of every legacy mapping on the binding.
+async function bindTeam(team) {
+  src.show(team.sourceTeamId);
+  const { bindingId } = await bindThroughRoutes({ apiBase, cookie: team.padmin.cookie, clubId: team.clubId, teamId: team.teamId, sourceTeamId: team.sourceTeamId });
+  ({ world } = await activateBinding(admin, bindingId));
+  team.bindingId = bindingId;
+  team.path = "binding";
+}
+
+// The sessions the fake source serves for a bound team (each a copy carried
+// by the team's own GPEXE team). Only this team's sessions are served: the
+// fake finds a session by its id across every team it serves, and session
+// ids repeat between tests. The legacy client is a trap.
+function serve(team, bundles) {
+  for (const id of servedTeams) if (id !== team.sourceTeamId) src.serve(id, []);
+  servedTeams.add(team.sourceTeamId);
+  src.serve(team.sourceTeamId, bundles);
+  service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
+}
+
+// An earlier import of the named GPEXE athletes only (athleteIdByGpexeId),
+// committed straight through the writer and the team's mapping activations,
+// with the bundle carried by the team's own GPEXE team.
+async function importEarlier(team, bundle, athleteIdByGpexeId) {
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    return await importGpexeBundle(client, asSourceTeam(bundle, team.sourceTeamId), {
+      ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId, batchFilename: "earlier import", onlyMapped: true,
+    });
+  } finally {
+    await client.end();
+  }
 }
 
 async function waitForCheck(teamId, checkId, cookie) {
@@ -158,7 +230,7 @@ async function waitForCheck(teamId, checkId, cookie) {
   throw new Error("check did not finish");
 }
 
-async function checkNow(team, cookie = team.coach.cookie, body = {}) {
+async function checkNow(team, cookie = team.coach.cookie, body = team.path === "binding" ? WINDOW : {}) {
   const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie, body });
   assert.equal(started.status, 202, JSON.stringify(started.body));
   return waitForCheck(team.teamId, started.body.check.id, cookie);
@@ -180,7 +252,7 @@ const NOTHING_WRITTEN = { events: 0, activities: 0, connections: 0, definitions:
 
 test("check: candidates and a preview are saved while the import switch is off, and no result or activity is written", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle()] }));
+  serve(team, [sessionBundle()]);
   const valuesBefore = (await writtenRows(team.teamId)).all_values;
 
   const check = await checkNow(team);
@@ -211,9 +283,17 @@ test("check: candidates and a preview are saved while the import switch is off, 
 
 test("preview: per athlete and per value, participation and GPS apart, every left-out value with its reason", async () => {
   const team = await setupTeam();
-  // Drill 1's details were not fetched: one non-empty drill answer of two.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7002, detailsDrills: [0] })] }));
-  await checkNow(team);
+  // Drill 1's details were not fetched: one non-empty drill answer of two
+  // (the fake source answers drill 1 with an empty players map, so the stored
+  // bundle holds no athlete's details for it).
+  const bundle = sessionBundle({ sessionId: 7002, detailsDrills: [0] });
+  src.state.faults.drillPlayers["7002"] = (index) => (index === 0 ? structuredClone(bundle.details.drills["0"].players) : {});
+  try {
+    serve(team, [bundle]);
+    await checkNow(team);
+  } finally {
+    delete src.state.faults.drillPlayers["7002"];
+  }
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   // v33: fewer than two non-empty drill answers prove nothing about the drill
   // parameter - the session is previewed but not actionable (one generic word).
@@ -230,7 +310,8 @@ test("preview: per athlete and per value, participation and GPS apart, every lef
   assert.deepEqual(by["101"].results.map((r) => [r.level, r.drillIndex, r.outcome]), [["full", null, "created"], ["drill", 0, "created"], ["drill", 1, "created"]]);
   // Drill 1 burst/brake were not fetched: left out with the reason, not a zero.
   const drill1 = by["101"].results.find((r) => r.drillIndex === 1);
-  assert.ok(!drill1.values.some((v) => v.metricKey.includes("burst")), "a left-out value is absent, never 0");
+  const leftOut = [world.gpexe_burst_events.variableId, world.gpexe_brake_events.variableId];
+  assert.ok(!drill1.values.some((v) => leftOut.includes(v.metricDefinitionId)), "a left-out value is absent, never 0");
   assert.ok(by["101"].skippedValues.some((s) => s.drillIndex === 1 && s.reason === "details_not_fetched"));
 
   // Two tracks: manual review, stated from the GPEXE data, not imported; the others go on.
@@ -261,14 +342,14 @@ test("preview: per athlete and per value, participation and GPS apart, every lef
 
 test("check: repeating it on unchanged data adds no candidate; changed data supersedes the old one", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7003 })] }));
+  serve(team, [sessionBundle({ sessionId: 7003 })]);
   await checkNow(team);
   const second = await checkNow(team);
   assert.deepEqual([second.candidatesNew, second.candidatesChanged, second.candidatesUnchanged], [0, 0, 1]);
   const count = async () => (await admin.query(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [team.teamId])).rows[0].n;
   assert.equal(await count(), 1);
 
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7003, distance101: 3333 })] }));
+  serve(team, [sessionBundle({ sessionId: 7003, distance101: 3333 })]);
   const third = await checkNow(team);
   assert.deepEqual([third.candidatesNew, third.candidatesChanged, third.candidatesUnchanged], [0, 1, 0]);
   assert.equal(await count(), 2);
@@ -282,31 +363,26 @@ test("check: repeating it on unchanged data adds no candidate; changed data supe
 
 test("preview: against data already imported, only the difference is shown, old next to new", async () => {
   const team = await setupTeam();
-  // An earlier import of 101 and 102, committed the pilot way.
+  // An earlier import of 101 and 102, committed straight through the writer
+  // and the team's mapping activations.
   const first = sessionBundle({ sessionId: 7004, updatedOn: "2026-09-14T20:18:09.337" });
-  const plan = buildGpexeImportPlan(first);
-  const client = new pg.Client({ connectionString: db.url });
-  await client.connect();
-  try {
-    await importGpexePlan(client, { ...plan, participants: plan.participants.filter((p) => ["101", "102"].includes(p.gpexeAthleteId)) }, {
-      ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId: { 101: team.ids.a, 102: team.ids.b }, batchFilename: "earlier import",
-    });
-  } finally {
-    await client.end();
-  }
+  await importEarlier(team, first, { 101: team.ids.a, 102: team.ids.b });
   const before = await writtenRows(team.teamId);
 
   // GPEXE later reports a different total distance for 101's whole session.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7004, updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })] }));
+  serve(team, [sessionBundle({ sessionId: 7004, updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })]);
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   const preview = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate.preview;
   const a101 = preview.athletes.find((x) => x.gpexeAthleteId === "101");
   const full = a101.results.find((r) => r.level === "full");
   assert.equal(full.outcome, "corrected");
-  const distance = full.values.find((v) => v.metricKey === "gpexe_total_distance");
-  assert.deepEqual([distance.previous, distance.value, distance.change], [3000, 3100, "changed"]);
-  assert.ok(full.values.filter((v) => v.metricKey !== "gpexe_total_distance").every((v) => v.change === "same"));
+  // Preview v3: a value is named by its canonical variable and is exact
+  // decimal text; the old value next to the new.
+  const distanceId = world.gpexe_total_distance.variableId;
+  const distance = full.values.find((v) => v.metricDefinitionId === distanceId);
+  assert.deepEqual([distance.previous, distance.value, distance.change], ["3000", "3100", "changed"]);
+  assert.ok(full.values.filter((v) => v.metricDefinitionId !== distanceId).every((v) => v.change === "same"));
   assert.ok(a101.results.filter((r) => r.level === "drill").every((r) => r.outcome === "unchanged"));
   assert.ok(preview.athletes.find((x) => x.gpexeAthleteId === "102").results.every((r) => r.outcome === "unchanged"));
 
@@ -315,7 +391,7 @@ test("preview: against data already imported, only the difference is shown, old 
 
 test("check: a session the importer cannot take is saved as blocked, with the reason", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7005, category: "OFFICIAL MATCH" })] }));
+  serve(team, [sessionBundle({ sessionId: 7005, category: "OFFICIAL MATCH" })]);
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.status, "blocked");
@@ -329,7 +405,9 @@ test("check: a session the importer cannot take is saved as blocked, with the re
 });
 
 test("check: GPEXE refusing the token fails the check with a stable code, and the token appears nowhere", async () => {
-  const team = await setupTeam();
+  // The legacy path only: a team that was never bound reads with the
+  // server's environment token.
+  const team = await setupTeam({ path: "legacy" });
   service.setGpexeClientFactory(fakeGpexe({ error: new GpexeClientError("unauthorized", "GPEXE refused the server's token (check GPEXE_API_TOKEN).", { status: 401 }) }));
   const check = await checkNow(team);
   assert.equal(check.status, "failed");
@@ -344,7 +422,10 @@ test("check: GPEXE refusing the token fails the check with a stable code, and th
 });
 
 test("check: one at a time per team; a check that stopped reporting is closed as abandoned", async () => {
-  const team = await setupTeam();
+  // A never-bound team (the legacy fake client's gate holds the run inside its
+  // list request; the stand-in row below is a legacy_env check, which the
+  // database refuses for a team that has or had a binding).
+  const team = await setupTeam({ path: "legacy" });
   let open;
   const gate = new Promise((resolve) => { open = resolve; });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7006 })], gate }));
@@ -355,6 +436,14 @@ test("check: one at a time per team; a check that stopped reporting is closed as
   assert.equal(second.body.error, "check_already_running");
   open();
   assert.equal((await waitForCheck(team.teamId, first.body.check.id, team.coach.cookie)).status, "succeeded");
+  // 9-B (J17 section 3, C2): a never-bound team's check still reads through
+  // the legacy path and stores its candidate, but that candidate is never
+  // importable - blocked mapping_not_usable. A coach reads only the stable
+  // code, a platform admin the precise one.
+  assert.equal((await admin.query(`select source_path from training_load.gpexe_import_checks where id = $1`, [first.body.check.id])).rows[0].source_path, "legacy_env");
+  const codes = async (cookie) => (await api(`/teams/${team.teamId}/candidates`, { cookie })).body.candidates.map((c) => [c.status, c.blockedCode, c.blockedSourceCode]);
+  assert.deepEqual(await codes(team.coach.cookie), [["blocked", "data_setup_incomplete", "data_setup_incomplete"]]);
+  assert.deepEqual(await codes(team.padmin.cookie), [["blocked", "data_setup_incomplete", "mapping_not_usable"]]);
 
   // A running check whose server went away: no heartbeat for too long.
   const stale = (await admin.query(
@@ -372,7 +461,7 @@ test("check: one at a time per team; a check that stopped reporting is closed as
 });
 
 test("check window: at most 31 days, not in the future, a real date", async () => {
-  const team = await setupTeam();
+  const team = await setupTeam({ path: "legacy" });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [] }));
   for (const body of [{ from: "2026-08-01", to: "2026-09-14" }, { from: "2026-09-10", to: "2026-09-01" }, { to: "2999-01-01" }, { from: "2026-02-30" }]) {
     const r = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body });
@@ -384,7 +473,7 @@ test("check window: at most 31 days, not in the future, a real date", async () =
 test("retention: an expired snapshot is gone for the app before the purge, the purge removes it, and only a new check brings it back", async () => {
   const team = await setupTeam();
   const bundle = sessionBundle({ sessionId: 7007 });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [bundle] }));
+  serve(team, [bundle]);
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.snapshot.available, true);
@@ -424,7 +513,8 @@ test("retention: an expired snapshot is gone for the app before the purge, the p
 });
 
 test("retention: every check purges expired snapshots first, even of other sessions, with no scheduler running", async () => {
-  const team = await setupTeam();
+  // A never-bound team: the purge runs with every check, whatever its path.
+  const team = await setupTeam({ path: "legacy" });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7010 })] }));
   await checkNow(team);
   const id = (await admin.query(`select id from training_load.gpexe_import_candidates where owner_team_id = $1`, [team.teamId])).rows[0].id;
@@ -444,7 +534,7 @@ test("retention: every check purges expired snapshots first, even of other sessi
 
 test("retention: an imported snapshot is purged after its 90 days and a later check does not store it again", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7008 })] }));
+  serve(team, [sessionBundle({ sessionId: 7008 })]);
   await checkNow(team);
   const id = await importThroughApproval(team);
   // Its 90 days are over.
@@ -616,7 +706,7 @@ test("switch: turning GPEXE_IMPORT_APPLY_ENABLED on changes what the screens say
   const team = await setupTeam();
   process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
   try {
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7009 })] }));
+    serve(team, [sessionBundle({ sessionId: 7009 })]);
     await checkNow(team);
     const list = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
     assert.equal(list.body.importSwitch.enabled, true);
@@ -630,7 +720,9 @@ test("switch: turning GPEXE_IMPORT_APPLY_ENABLED on changes what the screens say
 });
 
 test("check: a run closed as abandoned stops, and never ends up succeeded or writes a candidate", async () => {
-  const team = await setupTeam();
+  // A never-bound team: the legacy fake client holds the run inside a GPEXE
+  // request.
+  const team = await setupTeam({ path: "legacy" });
   let open;
   let entered;
   const fetchGate = new Promise((resolve) => { open = resolve; });
@@ -657,20 +749,11 @@ test("check: a run closed as abandoned stops, and never ends up succeeded or wri
 test("preview: an athlete imported before and now left out blocks the session, and is named as the cause", async () => {
   const team = await setupTeam();
   const bundle = sessionBundle({ sessionId: 7012 });
-  const plan = buildGpexeImportPlan(bundle);
-  const client = new pg.Client({ connectionString: db.url });
-  await client.connect();
-  try {
-    await importGpexePlan(client, { ...plan, participants: plan.participants.filter((p) => ["101", "102"].includes(p.gpexeAthleteId)) }, {
-      ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId: { 101: team.ids.a, 102: team.ids.b }, batchFilename: "earlier import",
-    });
-  } finally {
-    await client.end();
-  }
+  await importEarlier(team, bundle, { 101: team.ids.a, 102: team.ids.b });
   const link101 = (await api(`/teams/${team.teamId}/athlete-links`, { cookie: team.coach.cookie })).body.links.find((l) => l.gpexeAthleteId === "101");
   await api(`/teams/${team.teamId}/athlete-links/${link101.id}/unlink`, { method: "POST", cookie: team.coach.cookie });
 
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [bundle] }));
+  serve(team, [bundle]);
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.status, "blocked");
@@ -719,7 +802,7 @@ test("access: the club admin sees the team in the club's workspace, not in anoth
 
 test("database: history tables refuse TRUNCATE, an imported candidate is never deleted, every GPEXE team setting is kept", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7013 })] }));
+  serve(team, [sessionBundle({ sessionId: 7013 })]);
   await checkNow(team);
   const c = new pg.Client({ connectionString: db.url });
   await c.connect();
@@ -760,7 +843,8 @@ test("database: history tables refuse TRUNCATE, an imported candidate is never d
 });
 
 test("retention: the purge works in short batches and a backlog is cleared completely", async () => {
-  const team = await setupTeam();
+  // A never-bound team: the purge does not depend on the check's path.
+  const team = await setupTeam({ path: "legacy" });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7014 }), sessionBundle({ sessionId: 7015 }), sessionBundle({ sessionId: 7016 })] }));
   await checkNow(team);
   await admin.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() - interval '1 minute' where owner_team_id = $1`, [team.teamId]);
@@ -831,21 +915,23 @@ async function candidateRow(id) {
   return (await admin.query(`select status, imported_at, raw_expires_at, preview_hash, preview from training_load.gpexe_import_candidates where id = $1`, [id])).rows[0];
 }
 
+// The current total distance of one imported result: the value of the
+// canonical variable the total-distance mapping writes (9-B: no team-owned
+// gpexe_* definition exists any more).
 async function currentDistance(teamId, externalId) {
   return (await admin.query(
     `select v.value_numeric::float8 as v
        from training_load.metric_source_connections c
        join training_load.metric_source_identities si on si.source_connection_id = c.id
        join training_load.metric_values v on v.occasion_id = si.current_occasion_id
-       join training_load.metric_definitions d on d.id = v.metric_definition_id
-      where c.owner_team_id = $1 and si.source_external_id = $2 and d.key = 'gpexe_total_distance'`,
-    [teamId, externalId],
+      where c.owner_team_id = $1 and si.source_external_id = $2 and v.metric_definition_id = $3`,
+    [teamId, externalId, world.gpexe_total_distance.variableId],
   )).rows[0]?.v ?? null;
 }
 
 test("approve: with the import switch off nothing is written, whoever asks", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7101 })] }));
+  serve(team, [sessionBundle({ sessionId: 7101 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const before = await allRowCounts();
@@ -859,7 +945,7 @@ test("approve: with the import switch off nothing is written, whoever asks", asy
 
 test("approve: the whole candidate is imported exactly as previewed, recorded with its approver, and only once", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7102 })] }));
+  serve(team, [sessionBundle({ sessionId: 7102 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   assert.equal(candidate.preview.status, "ready");
@@ -888,6 +974,16 @@ test("approve: the whole candidate is imported exactly as previewed, recorded wi
     assert.equal(rows.events, 1);
     assert.equal(rows.activities, 1);
     assert.equal(rows.batches, 1);
+    // 9-B: the import creates no metric definition (C46), and every value it
+    // wrote carries exactly one provenance row (T6).
+    assert.equal(rows.definitions, 0);
+    const valueCount = (await admin.query(
+      `select count(*)::int as n from training_load.metric_values v
+         join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+         join training_load.metric_event_participants p on p.id = o.event_participant_id
+        where p.event_id = $1`, [r.body.import.eventId])).rows[0].n;
+    assert.ok(valueCount > 0);
+    assert.equal((await t6Rows(admin, r.body.import.eventId)).length, valueCount);
 
     const [approval] = await approvalsOf(candidate.id);
     assert.equal(approval.approved_by_user_id, team.padmin.id);
@@ -917,7 +1013,7 @@ test("approve: the whole candidate is imported exactly as previewed, recorded wi
 
 test("approve: when the preview changed under the approval's lock, everything the import already wrote is rolled back and the candidate is sent back for review", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7103 })] }));
+  serve(team, [sessionBundle({ sessionId: 7103 })]);
   await checkNow(team);
   const reviewed = await pendingCandidate(team);
   assert.ok(reviewed.preview.athletes.find((a) => a.gpexeAthleteId === "102").results.some((x) => x.outcome === "created"));
@@ -975,11 +1071,12 @@ test("approve: when the preview changed under the approval's lock, everything th
 // The importer writes a result's values in one multi-row INSERT
 // (metricValuesInsert): a value the database refuses in the middle of that
 // statement, through the real route. A test-only trigger, armed by a flag row
-// after the check (so the check's own preview ran clean), refuses the
-// distance value of every result - the second row of each statement.
+// after the check (so the check's own preview ran clean), refuses the total
+// distance value of every result (the canonical variable the total-distance
+// mapping writes), a row inside each statement.
 test("approve: a value the database refuses inside the import answers 500 internal_error, writes nothing, keeps the candidate pending, and releases its lock and connection", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7190 })] }));
+  serve(team, [sessionBundle({ sessionId: 7190 })]);
   await checkNow(team);
   const reviewed = await pendingCandidate(team);
   assert.equal(reviewed.status, "pending");
@@ -989,7 +1086,7 @@ test("approve: a value the database refuses inside the import answers 500 intern
       create function training_load.zz_test_refuse_value() returns trigger as $$
       begin
         if exists (select 1 from public.zz_test_refuse_values_flag)
-           and (select key from training_load.metric_definitions where id = new.metric_definition_id) = 'gpexe_total_distance' then
+           and new.metric_definition_id = '${world.gpexe_total_distance.variableId}' then
           raise exception 'zz_test_refuse_value';
         end if;
         return new;
@@ -1023,7 +1120,7 @@ test("approve: a value the database refuses inside the import answers 500 intern
 
 test("approve: a preview hash other than the stored one is refused before anything is written", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7104 })] }));
+  serve(team, [sessionBundle({ sessionId: 7104 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const before = await allRowCounts();
@@ -1044,7 +1141,7 @@ test("approve: a preview hash other than the stored one is refused before anythi
 
 test("approve: every change to an already imported result is listed and must be accepted explicitly", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-14T20:18:09.337" })] }));
+  serve(team, [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-14T20:18:09.337" })]);
   await checkNow(team);
   await withSwitchOn(async () => {
     assert.equal((await approve(team, await pendingCandidate(team), team.padmin.cookie)).status, 200);
@@ -1052,13 +1149,13 @@ test("approve: every change to an already imported result is listed and must be 
   const fullId = (await admin.query(
     `select si.source_external_id as id from training_load.metric_source_identities si join training_load.metric_source_connections c on c.id = si.source_connection_id
       where c.owner_team_id = $1 and si.source_external_id like '%:full' and si.current_occasion_id is not null
-        and exists (select 1 from training_load.metric_values v join training_load.metric_definitions d on d.id = v.metric_definition_id
-                     where v.occasion_id = si.current_occasion_id and d.key = 'gpexe_total_distance' and v.value_numeric = 3000)
-      order by 1 limit 1`, [team.teamId])).rows[0].id;
+        and exists (select 1 from training_load.metric_values v
+                     where v.occasion_id = si.current_occasion_id and v.metric_definition_id = $2 and v.value_numeric = 3000)
+      order by 1 limit 1`, [team.teamId, world.gpexe_total_distance.variableId])).rows[0].id;
 
   // GPEXE later reports a different distance for 101 (newer report time):
   // the imported value would be replaced.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })] }));
+  serve(team, [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   assert.equal(candidate.changesToImported, 1);
@@ -1070,7 +1167,7 @@ test("approve: every change to an already imported result is listed and must be 
   assert.equal(change.outcome, "corrected");
   assert.equal(change.effect, "replaces_current_values");
   assert.equal(change.newVersionBecomesCurrent, true);
-  assert.deepEqual(change.values.map((v) => [v.metricKey, v.previous, v.value, v.change]), [["gpexe_total_distance", 3000, 3100, "changed"]]);
+  assert.deepEqual(change.values.map((v) => [v.metricDefinitionId, v.previous, v.value, v.change]), [[world.gpexe_total_distance.variableId, "3000", "3100", "changed"]]);
 
   const before = await allRowCounts();
   await withSwitchOn(async () => {
@@ -1095,7 +1192,7 @@ test("approve: every change to an already imported result is listed and must be 
   // Different values with the same report time are not a correction: they
   // are stored as a conflicting version for review, the current value
   // stays; that is a change to an imported result too, and it is listed.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-15T08:00:00.000", distance101: 3200 })] }));
+  serve(team, [sessionBundle({ sessionId: 7105, updatedOn: "2026-09-15T08:00:00.000", distance101: 3200 })]);
   await checkNow(team);
   const conflicting = await pendingCandidate(team);
   assert.equal(conflicting.changesToImported, 1);
@@ -1107,7 +1204,7 @@ test("approve: every change to an already imported result is listed and must be 
 
 test("approve: only an active platform admin or a coach with an active grant for the team; others are refused before anything is written", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7106 })] }));
+  serve(team, [sessionBundle({ sessionId: 7106 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const other = await setupTeam();
@@ -1149,7 +1246,7 @@ test("approve: only an active platform admin or a coach with an active grant for
 
 test("approve: two approvals of the same candidate at the same time import it once", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7107 })] }));
+  serve(team, [sessionBundle({ sessionId: 7107 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "second approver" } });
@@ -1201,10 +1298,10 @@ test("approve: a blocked, superseded, expired or empty candidate is refused with
   await withSwitchOn(async () => {
     // Superseded: points at the newer candidate.
     const team = await setupTeam();
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7108 })] }));
+    serve(team, [sessionBundle({ sessionId: 7108 })]);
     await checkNow(team);
     const old = await pendingCandidate(team);
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7108, distance101: 3333 })] }));
+    serve(team, [sessionBundle({ sessionId: 7108, distance101: 3333 })]);
     await checkNow(team);
     const newer = await pendingCandidate(team);
     assert.notEqual(newer.id, old.id);
@@ -1220,28 +1317,22 @@ test("approve: a blocked, superseded, expired or empty candidate is refused with
 
     // Blocked: an official match the importer does not take.
     const blockedTeam = await setupTeam();
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7109, category: "OFFICIAL MATCH" })] }));
+    serve(blockedTeam, [sessionBundle({ sessionId: 7109, category: "OFFICIAL MATCH" })]);
     await checkNow(blockedTeam);
     const blockedSummary = (await api(`/teams/${blockedTeam.teamId}/candidates`, { cookie: blockedTeam.coach.cookie })).body.candidates[0];
-    const blocked = (await api(`/teams/${blockedTeam.teamId}/candidates/${blockedSummary.id}`, { cookie: blockedTeam.coach.cookie })).body.candidate;
+    // D10 (9-B): a blocked candidate's preview hash goes to a platform admin only.
+    assert.equal(blockedSummary.previewHash, null, "the coach gets no hash of a blocked preview");
+    const blocked = (await api(`/teams/${blockedTeam.teamId}/candidates/${blockedSummary.id}`, { cookie: blockedTeam.padmin.cookie })).body.candidate;
+    assert.match(blocked.previewHash, /^[0-9a-f]{64}$/, "the platform admin gets it");
     const b = await approve(blockedTeam, blocked, blockedTeam.padmin.cookie);
     assert.deepEqual([b.status, b.body.error], [409, "blocked"]);
 
-    // Nothing to import: everything was imported earlier the pilot way.
+    // Nothing to import: everything was imported earlier, straight through
+    // the writer and the team's mapping activations.
     const emptyTeam = await setupTeam();
     const bundle = sessionBundle({ sessionId: 7110 });
-    const plan = buildGpexeImportPlan(bundle);
-    const client = new pg.Client({ connectionString: db.url });
-    await client.connect();
-    try {
-      const linked = plan.participants.filter((p) => ["101", "102"].includes(p.gpexeAthleteId));
-      await importGpexePlan(client, { ...plan, participants: linked }, {
-        ownerTeamId: emptyTeam.teamId, performedByUserId: emptyTeam.userId, athleteIdByGpexeId: { 101: emptyTeam.ids.a, 102: emptyTeam.ids.b }, batchFilename: "earlier import",
-      });
-    } finally {
-      await client.end();
-    }
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [bundle] }));
+    await importEarlier(emptyTeam, bundle, { 101: emptyTeam.ids.a, 102: emptyTeam.ids.b });
+    serve(emptyTeam, [bundle]);
     await checkNow(emptyTeam);
     const empty = await pendingCandidate(emptyTeam);
     assert.equal(empty.preview.status, "no_changes");
@@ -1252,7 +1343,7 @@ test("approve: a blocked, superseded, expired or empty candidate is refused with
 
 test("database: approvals are append-only, re-check the approver, and a candidate becomes imported only with its approval", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7111 })] }));
+  serve(team, [sessionBundle({ sessionId: 7111 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const row = (await admin.query(`select gpexe_team_session_id, bundle_hash, preview_hash from training_load.gpexe_import_candidates where id = $1`, [candidate.id])).rows[0];
@@ -1293,7 +1384,7 @@ test("database: approvals are append-only, re-check the approver, and a candidat
 
 test("approve: a revoke sent while an approval is running waits for it; the approval stands on the right it held", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7112 })] }));
+  serve(team, [sessionBundle({ sessionId: 7112 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const grant = await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "approver" } });
@@ -1341,7 +1432,7 @@ test("approve: values added to an imported result and a GPEXE resend next to a m
   // drill-parameter guard (v33).
   const first = sessionBundle({ sessionId: 7113, detailsDrills: [0, 1] });
   first.details.drills["1"].players = { 999: { tot_burst_events: { unit: "number", value: 1 }, tot_brake_events: { unit: "number", value: 1 } } };
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [first] }));
+  serve(team, [first]);
   await checkNow(team);
   await withSwitchOn(async () => {
     assert.equal((await approve(team, await pendingCandidate(team), team.padmin.cookie)).status, 200);
@@ -1349,13 +1440,14 @@ test("approve: values added to an imported result and a GPEXE resend next to a m
 
   // GPEXE now also has drill 1's details: values are ADDED to results that
   // were imported before, the existing values stay the same.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7113, detailsDrills: [0, 1] })] }));
+  serve(team, [sessionBundle({ sessionId: 7113, detailsDrills: [0, 1] })]);
   await checkNow(team);
   const supplemented = await pendingCandidate(team);
   assert.ok(supplemented.changesToImported > 0);
   for (const change of supplemented.preview.changesToImported) {
     assert.deepEqual([change.outcome, change.effect, change.newVersionBecomesCurrent, change.level, change.drillIndex], ["supplemented", "adds_values_to_imported_result", true, "drill", 1]);
-    assert.deepEqual(change.values.map((v) => [v.metricKey, v.previous, v.change]).sort(), [["gpexe_brake_events", null, "added"], ["gpexe_burst_events", null, "added"]]);
+    assert.deepEqual(change.values.map((v) => [v.metricDefinitionId, v.previous, v.change]).sort(),
+      [[world.gpexe_brake_events.variableId, null, "added"], [world.gpexe_burst_events.variableId, null, "added"]].sort());
   }
   await withSwitchOn(async () => {
     const refused = await approve(team, supplemented, team.padmin.cookie);
@@ -1372,9 +1464,9 @@ test("approve: values added to an imported result and a GPEXE resend next to a m
     `select si.id, si.current_occasion_id, si.source_external_id from training_load.metric_source_identities si
        join training_load.metric_source_connections c on c.id = si.source_connection_id
       where c.owner_team_id = $1 and si.source_external_id like 'athlete_session:%:full'
-        and exists (select 1 from training_load.metric_values v join training_load.metric_definitions d on d.id = v.metric_definition_id
-                     where v.occasion_id = si.current_occasion_id and d.key = 'gpexe_total_distance' and v.value_numeric = 3000)
-      order by si.source_external_id limit 1`, [team.teamId])).rows[0];
+        and exists (select 1 from training_load.metric_values v
+                     where v.occasion_id = si.current_occasion_id and v.metric_definition_id = $2 and v.value_numeric = 3000)
+      order by si.source_external_id limit 1`, [team.teamId, world.gpexe_total_distance.variableId])).rows[0];
   const values = (await admin.query(
     `select metric_definition_id, metric_definition_version_id, value_numeric::float8 as value from training_load.metric_values where occasion_id = $1`,
     [identity.current_occasion_id],
@@ -1385,7 +1477,7 @@ test("approve: values added to an imported result and a GPEXE resend next to a m
   const manual = await correctImportedOccasionManually(req, scope, { requestKey: `manual-${team.teamId}`, sourceIdentityId: identity.id, expectedCurrentOccasionId: identity.current_occasion_id, values });
   assert.equal(manual.error, undefined, JSON.stringify(manual));
 
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7113, detailsDrills: [0, 1], updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })] }));
+  serve(team, [sessionBundle({ sessionId: 7113, detailsDrills: [0, 1], updatedOn: "2026-09-15T08:00:00.000", distance101: 3100 })]);
   await checkNow(team);
   const resend = await pendingCandidate(team);
   const [change] = resend.preview.changesToImported;
@@ -1412,7 +1504,7 @@ test("preview: every importer outcome on an imported result has an acceptance ru
 
 test("approve: stored GPEXE data the importer can no longer take blocks the candidate with the reason, and nothing is written", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7114 })] }));
+  serve(team, [sessionBundle({ sessionId: 7114 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   // As if the mapper's rules changed between the check and the approval.
@@ -1431,7 +1523,7 @@ test("approve: stored GPEXE data the importer can no longer take blocks the cand
 
 test("approve: deactivating the approver while an approval is running waits for it", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7115 })] }));
+  serve(team, [sessionBundle({ sessionId: 7115 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   await withSwitchOn(async () => {
@@ -1473,7 +1565,7 @@ test("approve: deactivating the approver while an approval is running waits for 
 
 test("database: a candidate is never inserted as imported, and an approval must carry the preview's own number of changes", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7116 })] }));
+  serve(team, [sessionBundle({ sessionId: 7116 })]);
   const check = await checkNow(team);
   await assert.rejects(admin.query(
     `insert into training_load.gpexe_import_candidates
@@ -1507,7 +1599,7 @@ async function withCommitReplaced(commit, fn, options) {
 
 test("approve: the COMMIT went through but its answer was lost — the answer says imported, verified, never 'nothing was imported'", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7201 })] }));
+  serve(team, [sessionBundle({ sessionId: 7201 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   await withSwitchOn(() => withCommitReplaced(async (client) => {
@@ -1534,7 +1626,7 @@ test("approve: the COMMIT went through but its answer was lost — the answer sa
 
 test("approve: the COMMIT was never confirmed and the import is not there — 503 import_outcome_unknown with how to check, and approving again is safe", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7202 })] }));
+  serve(team, [sessionBundle({ sessionId: 7202 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const before = await allRowCounts();
@@ -1576,7 +1668,7 @@ test("approve: the COMMIT was never confirmed and the import is not there — 50
 
 test("approve: reading the candidate after a committed import fails — the answer still says imported, with the approval and the write report", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7203 })] }));
+  serve(team, [sessionBundle({ sessionId: 7203 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   await withSwitchOn(async () => {
@@ -1606,7 +1698,7 @@ test("approve: reading the candidate after a committed import fails — the answ
 
 test("approvals by id: another team's approval and a malformed id are the same 404 as a missing one", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7204 })] }));
+  serve(team, [sessionBundle({ sessionId: 7204 })]);
   await checkNow(team);
   const approvalId = await withSwitchOn(async () => (await approve(team, await pendingCandidate(team), team.padmin.cookie)).body.approval.id);
   const other = await setupTeam();
@@ -1640,7 +1732,7 @@ async function approvalConnectionFate(fn) {
 
 test("approve: after a confirmed COMMIT the connection goes back to the pool; only an unconfirmed one is dropped", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7205 }), sessionBundle({ sessionId: 7206 })] }));
+  serve(team, [sessionBundle({ sessionId: 7205 }), sessionBundle({ sessionId: 7206 })]);
   await checkNow(team);
   const [first, second] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   const detail = async (id) => (await api(`/teams/${team.teamId}/candidates/${id}`, { cookie: team.coach.cookie })).body.candidate;
@@ -1661,7 +1753,7 @@ test("approve: after a confirmed COMMIT the connection goes back to the pool; on
 
 test("approve: the COMMIT went unconfirmed and the check fails or hangs — 503 import_outcome_unknown in bounded time, never 'nothing was imported'", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7207 })] }));
+  serve(team, [sessionBundle({ sessionId: 7207 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const lostAnswer = async (client) => {
@@ -1685,7 +1777,7 @@ test("approve: the COMMIT went unconfirmed and the check fails or hangs — 503 
   }));
 
   const team2 = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7208 })] }));
+  serve(team2, [sessionBundle({ sessionId: 7208 })]);
   await checkNow(team2);
   const candidate2 = await pendingCandidate(team2);
   await withSwitchOn(() => withCommitReplaced(lostAnswer, async () => {
@@ -1728,7 +1820,7 @@ async function poolSettled() {
 
 test("approve: a COMMIT that never answers is bounded — the request ends, the connection is closed, and without a commit the answer is import_outcome_unknown", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7209 })] }));
+  serve(team, [sessionBundle({ sessionId: 7209 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   const before = await allRowCounts();
@@ -1762,7 +1854,7 @@ test("approve: a COMMIT that never answers is bounded — the request ends, the 
 
 test("approve: the COMMIT went through but its answer never comes — bounded, the connection is closed, and the answer is the verified import", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7210 })] }));
+  serve(team, [sessionBundle({ sessionId: 7210 })]);
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   await withSwitchOn(async () => {
@@ -1858,7 +1950,7 @@ test("candidates list: blocked code and reasons come with the list, and the list
   const team = await setupTeam();
   // One session first: 101 and 102 linked and measured, 104 unlinked, 103 on
   // two tracks, 105 marked invalid.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7201 })] }));
+  serve(team, [sessionBundle({ sessionId: 7201 })]);
   await checkNow(team);
   const one = await countQueries(async () => {
     const r = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
@@ -1872,9 +1964,9 @@ test("candidates list: blocked code and reasons come with the list, and the list
   const only104 = makeBundle({ sessionId: 7202, gpexeTeamId: 77, athletes: [{ ...structuredClone(a102), id: 104, tracks: [9105] }] });
   const invalid = sessionBundle({ sessionId: 7204 });
   invalid.teamSession.is_stats_valid = false;
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [
+  serve(team, [
     sessionBundle({ sessionId: 7201 }), sessionBundle({ sessionId: 7203, category: "OFFICIAL MATCH" }), only104, invalid,
-  ] }));
+  ]);
   await checkNow(team);
 
   let list;
@@ -1917,7 +2009,7 @@ test("source athletes: once each, with status, the link's name only, a determini
   const team = await setupTeam();
   // A GPEXE athlete linked before any check ever saw them.
   assert.equal((await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: "199", athleteId: team.ids.d } })).status, 201);
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7301 })] }));
+  serve(team, [sessionBundle({ sessionId: 7301 })]);
   await checkNow(team);
   const body = await sourceAthletes(team);
   assert.deepEqual(body.units, { duration: "min", distance: "m", maxSpeed: "km/h" });
@@ -1927,17 +2019,22 @@ test("source athletes: once each, with status, the link's name only, a determini
   const by = Object.fromEntries(body.athletes.map((a) => [a.gpexeAthleteId, a]));
   const [candidate] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   const detail = (await api(`/teams/${team.teamId}/candidates/${candidate.id}`, { cookie: team.coach.cookie })).body.candidate;
-  const stored = Object.fromEntries(detail.preview.athletes.map((a) => [a.gpexeAthleteId, a]));
-  const storedValue = (gpexeId, key) => stored[gpexeId].results.find((r) => r.level === "full").values.find((v) => v.metricKey === key).value;
+  // R12 (9-B): the helper values come from the stored snapshot's own
+  // whole-session row (s, m, m/s shown as min, m, km/h), independent of any
+  // mapping activation - the same numbers the candidate's review carries as
+  // its link context.
+  const reviewHelper = (gpexeId) => {
+    const { duration, distance, maxSpeed } = detail.helperValues[gpexeId];
+    return { duration, distance, maxSpeed };
+  };
 
   // Linked and measured: the link, the OptiMove name from it, the session, the values.
   assert.equal(by["101"].status, "linked");
   assert.deepEqual([by["101"].link.athleteId, by["101"].link.athleteName], [team.ids.a, "A101"]);
   assert.deepEqual([by["101"].lastSeen.candidateId, by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.candidateStatus], [candidate.id, "7301", "pending"]);
   assert.equal(by["101"].lastSeen.sessionStartedAt, candidate.sessionStartedAt);
-  assert.deepEqual(by["101"].values, {
-    duration: storedValue("101", "gpexe_time_min"), distance: storedValue("101", "gpexe_total_distance"), maxSpeed: storedValue("101", "gpexe_max_speed"),
-  });
+  assert.deepEqual(by["101"].values, { duration: 2400 / 60, distance: 3000, maxSpeed: 7.5 * 3.6 });
+  assert.deepEqual(by["101"].values, reviewHelper("101"));
   assert.deepEqual([by["101"].lastSeen.evidence, by["101"].lastSeen.sessionDrillsCount], ["preview", 2], "the drill count is the session's, next to the sighting");
   assert.equal(by["101"].values.distance, 3000);
   assert.equal(by["101"].values.duration, 40);
@@ -1945,7 +2042,8 @@ test("source athletes: once each, with status, the link's name only, a determini
   // Recorded but not linked: no link, no name anywhere, values still there.
   assert.equal(by["104"].status, "unlinked");
   assert.equal(by["104"].link, null);
-  assert.equal(by["104"].values.distance, storedValue("104", "gpexe_total_distance"));
+  assert.deepEqual(by["104"].values, { duration: 1200 / 60, distance: 1500, maxSpeed: 6.2 * 3.6 });
+  assert.deepEqual(by["104"].values, reviewHelper("104"));
   assert.equal(by["104"].lastSeen.candidateId, candidate.id);
 
   // Two tracks / invalid statistics: linked, seen, but the source gave no
@@ -1975,14 +2073,14 @@ test("source athletes: the last sighting is the newest session date; on the same
   const older = makeBundle({ sessionId: 7302, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
   const newer = makeBundle({ sessionId: 7303, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes() });
   // The fake lists the newer session first: the order GPEXE answers in must not matter.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [newer, older] }));
+  serve(team, [newer, older]);
   await checkNow(team);
   let by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
   assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7303");
   assert.equal(by["104"].lastSeen.gpexeTeamSessionId, "7303");
 
   // A later check sees only the older session again: the newer date still wins.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [older] }));
+  serve(team, [older]);
   await checkNow(team);
   by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
   assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7303");
@@ -1990,7 +2088,7 @@ test("source athletes: the last sighting is the newest session date; on the same
   // The newer session changes content: its old candidate is replaced, and
   // the sighting is the current version (same date, same session).
   const changed = makeBundle({ sessionId: 7303, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes({ distance101: 3333 }) });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [changed] }));
+  serve(team, [changed]);
   await checkNow(team);
   const all = (await api(`/teams/${team.teamId}/candidates?includeSuperseded=true`, { cookie: team.coach.cookie })).body.candidates;
   const current = all.find((c) => c.gpexeTeamSessionId === "7303" && c.status !== "superseded");
@@ -2011,7 +2109,7 @@ test("source athletes: an expired but not yet purged snapshot is no sighting (th
   const team = await setupTeam();
   const older = makeBundle({ sessionId: 7313, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
   const newer = makeBundle({ sessionId: 7314, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes() });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [older, newer] }));
+  serve(team, [older, newer]);
   await checkNow(team);
   let by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
   assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7314");
@@ -2040,7 +2138,7 @@ test("source athletes: an expired but not yet purged snapshot is no sighting (th
 
 test("source athletes: a link whose OptiMove athlete is no longer an active member of the team is linked_inactive, and the link is still shown", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7304 })] }));
+  serve(team, [sessionBundle({ sessionId: 7304 })]);
   await checkNow(team);
   // 'archived' is how Settings ends a membership (the real status check has
   // only active / paused / archived; the fixture now has that check too).
@@ -2059,14 +2157,14 @@ test("source athletes: a link whose OptiMove athlete is no longer an active memb
 test("source athletes: the team's coach reads them; another team's coach, a user with no role, an admin in the wrong club workspace and a malformed id get the same 404; no login gets 401; nothing of another team leaks", async () => {
   const team = await setupTeam();
   const other = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7305 })] }));
+  serve(team, [sessionBundle({ sessionId: 7305 })]);
   await checkNow(team);
   // The other team's GPEXE athlete 201 exists only there.
   const [, a102] = standardAthletes();
   const otherBundle = makeBundle({ sessionId: 7306, gpexeTeamId: 78, athletes: [{ ...structuredClone(a102), id: 201, tracks: [9201] }] });
   // ... and a refused session (a match) whose only athlete, 205, is raw-only.
   const otherMatch = makeBundle({ sessionId: 7316, gpexeTeamId: 78, category: "OFFICIAL MATCH", athletes: [{ ...structuredClone(a102), id: 205, tracks: [9205] }] });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [otherBundle, otherMatch] }));
+  serve(other, [otherBundle, otherMatch]);
   await checkNow(other);
 
   const mine = await sourceAthletes(team);
@@ -2122,7 +2220,7 @@ test("source athletes: the team's coach reads them; another team's coach, a user
 
 test("source athletes: the number of SQL statements does not grow with the number of candidates or source athletes", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7307 })] }));
+  serve(team, [sessionBundle({ sessionId: 7307 })]);
   await checkNow(team);
   let sql = [];
   const originalQuery = appPool.query;
@@ -2144,7 +2242,8 @@ test("source athletes: the number of SQL statements does not grow with the numbe
   const [, a102] = standardAthletes();
   const extra = (sessionId, ids) => makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-0${(sessionId % 5) + 1}T18:00:00`, athletes: [...sessionAthletes(), ...ids.map((id) => ({ ...structuredClone(a102), id, tracks: [9300 + id] }))] });
   const refused = makeBundle({ sessionId: 7317, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-07T18:00:00", athletes: [...sessionAthletes(), { ...structuredClone(a102), id: 304, tracks: [9604] }] });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [extra(7308, [301]), extra(7309, [301, 302]), extra(7310, [303]), extra(7311, []), extra(7312, [301, 302, 303]), refused] }));
+  // The first session is served again: a complete check through the binding withdraws a session of its window it no longer sees (v33).
+  serve(team, [sessionBundle({ sessionId: 7307 }), extra(7308, [301]), extra(7309, [301, 302]), extra(7310, [303]), extra(7311, []), extra(7312, [301, 302, 303]), refused]);
   await checkNow(team);
   for (const [gpexeAthleteId, athleteId] of [["301", team.ids.d], ["302", team.ids.e]]) {
     assert.equal((await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);
@@ -2168,7 +2267,10 @@ test("source athletes: the number of SQL statements does not grow with the numbe
 });
 
 test("source athletes: an athlete named only by a refused session's raw snapshot is listed as unlinked with evidence raw_snapshot and no values; an invalid raw id is ignored; expired or purged, it is gone", async () => {
-  const team = await setupTeam();
+  // A never-bound team: only the legacy fake client stores a raw row whose
+  // athlete id is not canonical (the server3 adapter refuses such a session's
+  // athlete list before anything is stored).
+  const team = await setupTeam({ path: "legacy" });
   const [, a102] = standardAthletes();
   // A match: the mapper refuses it, the stored preview names no athlete; only
   // athlete 204 is recorded in it. A second raw row carries an invalid id.
@@ -2212,7 +2314,7 @@ test("source athletes: the raw fallback never replaces a preview sighting or its
   const training = makeBundle({ sessionId: 7321, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
   // A newer match recorded 101 (seen in the training's preview) and 206 (seen nowhere else).
   const match = makeBundle({ sessionId: 7322, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [...sessionAthletes({ distance101: 5000 }), { ...structuredClone(a102), id: 206, tracks: [9206] }] });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [match, training] }));
+  serve(team, [match, training]);
   await checkNow(team);
   const list = (await sourceAthletes(team)).athletes;
   // The list itself, once each: a fallback without its "not exists" would
@@ -2233,7 +2335,7 @@ test("source athletes: a refused candidate whose raw athleteSessions is not an a
   const [, a102] = standardAthletes();
   const training = makeBundle({ sessionId: 7323, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
   const match = makeBundle({ sessionId: 7324, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 207, tracks: [9207] }] });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [training, match] }));
+  serve(team, [training, match]);
   await checkNow(team);
   const refused = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7324");
   assert.equal(refused.status, "blocked");
@@ -2299,7 +2401,10 @@ test("athlete id: the link route takes only a canonical id ('0' or digits withou
 });
 
 test("athlete id: the source-athletes raw fallback ignores a non-canonical id and keeps the canonical ones; a raw row with such an id refuses the whole session as inconsistent source data", async () => {
-  const team = await setupTeam();
+  // The team starts never bound: only the legacy fake client stores a raw
+  // row whose athlete id is not canonical (the server3 adapter refuses such a
+  // session's athlete list before anything is stored).
+  const team = await setupTeam({ path: "legacy" });
   const [, a102] = standardAthletes();
   // A refused match whose raw rows name 208 (canonical) and "0208" (not).
   const match = makeBundle({ sessionId: 7330, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 208, tracks: [9208] }] });
@@ -2331,9 +2436,15 @@ test("athlete id: the source-athletes raw fallback ignores a non-canonical id an
   // Defence in depth for the preview branch: a stored preview entry whose id
   // is not canonical (only reachable by hand today, the mapper refuses such
   // rows) is ignored too, never listed and never read as another athlete.
+  // This part needs a pending (not blocked) candidate, so the team is now
+  // bound (9-B: a never-bound team's candidates are all blocked, and a blocked
+  // one's raw rows would name 104 again through the raw fallback); the check
+  // reads that one day only, so the two refused sessions above stay as they
+  // are.
   const clean = makeBundle({ sessionId: 7332, gpexeTeamId: 77, start: "2026-09-14T18:00:00", athletes: sessionAthletes() });
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [clean] }));
-  await checkNow(team);
+  await bindTeam(team);
+  serve(team, [clean]);
+  await checkNow(team, team.coach.cookie, { from: "2026-09-14", to: "2026-09-14" });
   const cleanRow = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7332");
   assert.ok((await sourceAthletes(team)).athletes.some((a) => a.gpexeAthleteId === "104" && a.lastSeen.evidence === "preview"));
   await admin.query(

@@ -22,6 +22,7 @@ import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-di
 import { verifyRevisionRow, writeRevision } from "./support/source-revisions.mjs";
 import { EXTRACTORS, setExtractorFallbackForTests } from "../src/sourceMetricExtractors.js";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
+import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { PLANTED, previewAthletes, previewBundle } from "./support/preview-bundles.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -467,7 +468,7 @@ test("5. the order of the 409s: snapshot_expired (purged, expired) before candid
   assert.deepEqual(refused(await preview(V.time, allLeftOut, W.pa), 409, "candidate_not_importable").current, { reason: "no_importable_participants" });
 });
 
-// Today's specs, their versions here, and the spec's own conversion of the raw value.
+// The frozen pre-9-B specs (the oracle), their versions here, and the spec's own conversion of the raw value.
 const SPEC_OF = [
   ["gpexe_time_min", "time", (raw) => raw / 60],
   ["gpexe_total_distance", "distance", (raw) => raw],
@@ -482,14 +483,15 @@ const SPEC_OF = [
   ["gpexe_max_speed", "maxV", (raw) => raw * 3.6],
 ];
 
-test("6. the values are the ones today's import takes: for every spec of today's mapper with its own bounds (ten fields, eleven versions), the count of athletes with a value per level and min / max equal today's plan for the same session (the athlete on two tracks left out, a drill athlete counted once); every canonical min and max passes the database's own D8 check, and fails it one unit away", async () => {
+test("6. the values are the ones the pre-9-B import took: for every frozen spec (the oracle) with its own bounds (ten fields, eleven versions), the count of athletes with a value per level and min / max equal today's plan for the same session (the athlete on two tracks left out, a drill athlete counted once); every canonical min and max passes the database's own D8 check, and fails it one unit away", async () => {
   const bundle = previewBundle({ gpexeTeamId: Number(W.tA.sourceTeamId) });
-  const today = buildGpexeImportPlan(bundle);
+  const today = buildGpexeImportPlan(bundle, { metricSpecs: LEGACY_SPECS.map((s) => ({ raw: true, key: s.key, levels: { full: true, drill: true }, extract: s.extract })) });
+  assert.deepEqual(SPEC_OF.map(([k]) => k).sort(), LEGACY_SPECS.map((s) => s.key).sort());
   for (const [specKey, name, convert] of SPEC_OF) {
     const body = ok(await preview(V[name], W.cA.ok, W.caA)).preview;
     const factors = await one(`select scale, scale_divisor, "offset" from training_load.source_metric_mapping_versions where id = $1`, [V[name].versionId]);
     for (const [level, planLevel] of [["session", "full"], ["drill", "drill"]]) {
-      const perAthlete = today.participants.map((p) => p.results.filter((x) => x.level === planLevel).flatMap((x) => x.values.filter((v) => v.metricKey === specKey).map((v) => v.value)));
+      const perAthlete = today.participants.map((p) => p.results.filter((x) => x.level === planLevel).flatMap((x) => x.values.filter((v) => v.key === specKey).map((v) => v.value)));
       const all = perAthlete.flat();
       const got = body.levels[level];
       assert.equal(got.athletesWithValue, perAthlete.filter((list) => list.length > 0).length, `${specKey} ${level}`);

@@ -382,7 +382,12 @@ export const END_REASON_LABEL = {
   mapping_version_disabled: "The version was disabled",
 };
 export const REQUIREMENT_LABEL = { required: "Required", optional: "Optional" };
-export const REQUIREMENT_MEANING = "When imports use this mapping — Required: if an athlete the import admits has no value, the whole session is not imported. Optional: athletes without a value get no value for this variable; this alone does not stop the session from being imported.";
+// What Required and Optional mean for an import (C110, form B, in force since
+// 9-B): both leave a missing value out of that athlete, never stored as a
+// zero; they differ only in the reason the review names
+// (gpexeImportMapper.js leftOutReason). A session with no value left at all
+// is blocked as no_mapped_values (classifyMappedPlan).
+export const REQUIREMENT_MEANING = "Required and Optional import the same way for now: if GPEXE has no value for a linked athlete, only that value is left out for that athlete — never stored as a zero — and the athlete's other values and the session are still imported (a session with no value left at all can't be imported). They differ only in how the session review names the gap: Required as “required value missing”, Optional with GPEXE's own reason (for example “total distance missing in GPEXE”).";
 export const ACTS_SENTENCE = "Activating approves a version as the mapping's current one. Switching it on for a team lets that team's imports use it.";
 export const FREE_TEXT_NOTE = "Do not enter athlete names, ids, dates of birth or measured values.";
 // The list row's state in words, from the list summary (J16 4.1).

@@ -16745,6 +16745,20 @@ optimove-dashboard-chart {
 .gpexe-athletes .gpexe-values {
   overflow-wrap: normal;
 }
+/* 9-B: the first column of a v3 table is a variable's label an administrator
+   typed; a long unbroken label breaks inside its cell, so the value columns
+   stay in view. The numbers keep their own sizing. */
+.gpexe-values th:first-child,
+.gpexe-values td:first-child {
+  overflow-wrap: anywhere;
+}
+/* 9-B: the note on the GPEXE fields not set up for import reads like the
+   approval note (not 12px grey) and wraps a long field label. */
+p.muted.gpexe-source-fields {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+  color: var(--text);
+}
 .gpexe-result p {
   margin: 8px 0 4px;
   font-weight: 500;

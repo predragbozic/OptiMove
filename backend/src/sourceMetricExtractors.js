@@ -10,9 +10,10 @@
 // - extract() returns the value in the field's SOURCE unit, as the bundle
 //   stores it (seconds, metres, m/s, counts): the version's conversion does the
 //   rest (D6, D8). It never converts.
-// - Its skips are today's codes of gpexeImportMapper.js, unchanged (F's table):
-//   the same checks in the same order, with the version's bounds and
-//   thresholds instead of hard-coded ones.
+// - Its skips are the codes the importer's specs gave before phase 9 (F's
+//   table): the same checks in the same order, with the version's bounds and
+//   thresholds instead of hard-coded ones. SKIP_CATEGORY sorts every code for
+//   the importer (J17 section 3, step 8).
 // - Every bound and threshold is compared as an exact decimal (R2): 25 equals
 //   25.0, 2.5 equals "2.50", and 2.5 never equals 2.4999999. Nothing here is a
 //   binary floating-point comparison.
@@ -141,6 +142,36 @@ function detailsNumber(playerDetails, field) {
   const value = finiteNumber(entry.value);
   return value === null ? { skip: "value_missing" } : { value };
 }
+
+// Every skip code an entry can answer, by what it means for an import (J17
+// section 3, step 8; discovery section F):
+// - threshold_contract: the session's team thresholds or the answer's own
+//   threshold / zone extremes are not the version's - the whole candidate is
+//   blocked (source_threshold_contract_mismatch);
+// - shape: the answer is not of the revision's shape (the details' literal
+//   unit "number", R7) - the whole candidate is blocked (source_shape_mismatch);
+// - missing: the value is not there - only that athlete's value at that level
+//   is left out (C110, form B).
+export const SKIP_CATEGORY = Object.freeze(Object.assign(Object.create(null), {
+  team_threshold_missing: "threshold_contract",
+  team_threshold_split: "threshold_contract",
+  threshold_mismatch: "threshold_contract",
+  duration_mismatch: "threshold_contract",
+  zone_boundary_missing: "threshold_contract",
+  zone_boundary_ambiguous: "threshold_contract",
+  unexpected_unit: "shape",
+  zones_missing: "missing",
+  zones_not_ready: "missing",
+  zone_distance_missing: "missing",
+  events_missing: "missing",
+  count_missing: "missing",
+  details_not_fetched: "missing",
+  field_missing: "missing",
+  value_missing: "missing",
+  total_time_missing: "missing",
+  total_distance_missing: "missing",
+  max_v_missing: "missing",
+}));
 
 // ---------------------------------------------------------------------------
 // Parameter checks

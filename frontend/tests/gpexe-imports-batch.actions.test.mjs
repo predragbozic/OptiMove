@@ -80,7 +80,7 @@ function ready(n, overrides = {}) {
 }
 
 function candidateDetail(c) {
-  return { ...c, athletes: {}, approval: c.status === "imported" ? { id: `appr-${c.id}`, approvedAt: "2026-09-22T12:00:00Z", basis: "team_grant" } : null, preview: { version: 2, status: "ready", blocked: null, counts: c.counts, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [] } };
+  return { ...c, athletes: {}, approval: c.status === "imported" ? { id: `appr-${c.id}`, approvedAt: "2026-09-22T12:00:00Z", basis: "team_grant" } : null, preview: { version: 3, status: "ready", blocked: null, counts: c.counts, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [], unactivatedSourceMetricCount: 0 } };
 }
 
 function gpexeServer({ teamStatus = {}, candidates = [], onImports, onCandidate } = {}) {
@@ -260,6 +260,29 @@ test("4./5./6. Review shows the sessions (no hash, id or code in the open), Back
   assert.deepEqual(posts[0].body, { candidateIds: ["cand-1", "cand-3"], previewHashes: { "cand-1": hashOf(1), "cand-3": hashOf(3) } });
   assert.equal(fetchCalls.filter((c) => c.url.includes("/approve")).length, 0, "no per-session approve calls");
   assert.ok(!html().includes(hashOf(1)), "the hash is not in the result either");
+});
+
+test("D32: a Ready session that leaves values out says how many on its row and in the confirmation, before anything is sent", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: [ready(1, { counts: { created: 4, athletesNotImported: 0, skippedValues: 3 } }), ready(2, { counts: { created: 2, athletesNotImported: 0, skippedValues: 1 } }), ready(3)],
+  }));
+  await openImports();
+  const page = html();
+  const row = (id) => page.slice(page.indexOf(`data-candidate-id="${id}"`), page.indexOf("</button>", page.indexOf(`data-candidate-id="${id}"`)));
+  assert.match(row("cand-1"), /<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
+  assert.match(row("cand-2"), /<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
+  assert.ok(!/left out/.test(row("cand-3")), "nothing left out: nothing said");
+  await pick("cand-1");
+  await pick("cand-2");
+  await pick("cand-3");
+  await act("training-load-gpexe-batch-review");
+  const d = dialog();
+  assert.match(d, /<strong>FULL TRAINING 1<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
+  assert.match(d, /<strong>FULL TRAINING 2<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
+  assert.match(d, /<strong>FULL TRAINING 3<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results<\/span>/);
+  assert.equal(importPosts().length, 0, "the confirmation sends nothing");
 });
 
 test("7. a second click while the request runs sends nothing; the dialog cannot be closed meanwhile", async () => {

@@ -946,7 +946,7 @@ test("14. the acting user: the admin API sets the transaction-local setting from
   }
 });
 
-test("15. compatibility (C98, superseding part of C82): the older /api/training-load/metrics catalog API refuses to create or version a system variable (409 canonical_variable_read_only, nothing written) and still creates and versions a team definition without a request row or an actor; a team-owned definition (the GPEXE writer's shape) is written without either; its GET lists the admin API's variables; only the three known modules write Metrics Core definitions and only the admin service writes request records", async () => {
+test("15. compatibility (C98, superseding part of C82): the older /api/training-load/metrics catalog API refuses to create or version a system variable (409 canonical_variable_read_only, nothing written) and still creates and versions a team definition without a request row or an actor; a team-owned definition (the GPEXE writer's shape) is written without either; its GET lists the admin API's variables; only the two known modules (the admin service and the older catalog API) write Metrics Core definitions - the 9-B importer writes none (C46) - and only the admin service writes request records", async () => {
   const counts = async () => one(k, `select (select count(*) from training_load.metric_definitions)::int as d, (select count(*) from training_load.metric_definition_versions)::int as v, (select count(*) from training_load.metric_variable_requests)::int as r`);
   const before = await counts();
   const oldCreate = await api("/definitions", { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { key: `old_${uid()}`, label: "Old API", valueType: "numeric", unit: "m", ownerScope: "system", scopeCapabilities: ["session"] } });
@@ -979,8 +979,8 @@ test("15. compatibility (C98, superseding part of C82): the older /api/training-
   walk(src);
   const writes = (table) => new RegExp(`(insert\\s+into|update|delete\\s+from)\\s+training_load\\.${table}\\b`, "i");
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(src, f).replace(/\\/g, "/")).sort();
-  assert.deepEqual(writers("metric_definitions"), ["canonicalVariableAdminService.js", "gpexeImportWriter.js", "trainingLoadMetricsCatalog.js"]);
-  assert.deepEqual(writers("metric_definition_versions"), ["canonicalVariableAdminService.js", "gpexeImportWriter.js", "trainingLoadMetricsCatalog.js"]);
+  assert.deepEqual(writers("metric_definitions"), ["canonicalVariableAdminService.js", "trainingLoadMetricsCatalog.js"]);
+  assert.deepEqual(writers("metric_definition_versions"), ["canonicalVariableAdminService.js", "trainingLoadMetricsCatalog.js"]);
   assert.deepEqual(writers("metric_variable_requests"), ["canonicalVariableAdminService.js"]);
 });
 

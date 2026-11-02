@@ -9,15 +9,18 @@
 //   try_again; a session the server ends never ends the process.
 //   Condition 3 - the undo takes the team's import lock first, so an undo
 //   waits for a running import of the same team and the reverse.
-// GPEXE is a fake client; the import switch is turned on inside this process
-// only, for the approval tests.
+// GPEXE is the fake server3 source of support/gpexe-fake-source.mjs: since 9-B
+// a candidate is importable only through the team's binding and its mapping
+// activations (J17 section 3), so every route team is bound through the real
+// Connect / Bind routes with the mapped world's activations (the writer-level
+// undo teams bind with raw SQL), and the legacy client factory is a trap. The
+// import switch is turned on inside this process only, for the approval tests.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan, importGpexePlanLocked, lockTeamForImport } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle, importGpexeBundleLocked, lockTeamForImport } from "../src/gpexeImportWriter.js";
 import {
   IMPORT_IDLE_IN_TRANSACTION_MS, IMPORT_LOCK_TIMEOUT_MS, IMPORT_STATEMENT_TIMEOUT_MS,
   setCheckPreviewHoldForTests, setImportTransactionBounds, setImportTransactionBoundsForTests,
@@ -25,10 +28,18 @@ import {
 import { undoImportedSession } from "../scripts/gpexe-undo-imported-session.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { activateBinding, mappedBinding } from "./support/mapped-world.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const ORIGINAL_SWITCH = process.env.GPEXE_IMPORT_APPLY_ENABLED;
+const ORIGINAL_KEYS = process.env.SOURCE_CREDENTIAL_KEYS;
+// The fixtures' day: a binding-path check reads the sessions of its window.
+const D1 = "2026-09-14";
+let src;
+let connections;
+let resolver;
 
 let db;
 let admin;
@@ -45,8 +56,15 @@ before(async () => {
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
   const serverModule = await import("../src/server.js");
   service = await import("../src/gpexeImportService.js");
+  connections = await import("../src/sourceConnectionService.js");
+  resolver = await import("../src/sourceImportCredentialResolver.js");
+  src = createFakeSource();
+  connections.setSourceFetchForTests(src.fetchImpl);
+  resolver.setImportSourceFetchForTests(src.fetchImpl);
+  service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   server = http.createServer(serverModule.app);
@@ -57,6 +75,9 @@ before(async () => {
 after(async () => {
   service?.setGpexeClientFactory(null);
   service?.setApprovalObserver(null);
+  connections?.setSourceFetchForTests(null);
+  resolver?.setImportSourceFetchForTests(null);
+  if (ORIGINAL_KEYS === undefined) delete process.env.SOURCE_CREDENTIAL_KEYS; else process.env.SOURCE_CREDENTIAL_KEYS = ORIGINAL_KEYS;
   setImportTransactionBoundsForTests(null);
   setCheckPreviewHoldForTests(null);
   if (server) {
@@ -103,39 +124,30 @@ async function platformAdmin() {
   return { id, cookie: `optimove_session=${await createSession(id)}` };
 }
 
-// A fake GPEXE: the sessions of the given bundles; fetchGate holds every
-// bundle read until it resolves.
-function fakeGpexe({ bundles = [], fetchGate = null, onFetch = null } = {}) {
-  return () => ({
-    async listTeamSessions() {
-      return bundles.map((b) => ({ id: String(b.teamSession.id) }));
-    },
-    async fetchSessionBundle({ sessionId }) {
-      if (onFetch) onFetch();
-      if (fetchGate) await fetchGate;
-      return structuredClone(bundles.find((b) => String(b.teamSession.id) === sessionId));
-    },
-  });
-}
-
 // v33: a session with two drills is actionable only when both drill answers
-// are non-empty and distinct, so the route's sessions carry both drills.
+// are non-empty and distinct, so the route's sessions carry both drills. The
+// fake source serves each bundle as its source team's (asSourceTeam).
 function routeBundle(sessionId, { gpexeTeamId, athletes = standardAthletes() } = {}) {
   return makeBundle({ sessionId, gpexeTeamId, athletes, detailsDrills: [0, 1] });
 }
 
 // A team with athletes 101, 102, 103 linked (103 is on two tracks and stays
-// out, as in J17's Arm A1).
+// out, as in J17's Arm A1), bound to its own GPEXE team (gpexe_team_settings
+// is unique on it) through the real Connect / Bind routes, with the eleven
+// activations of the mapped world on its binding (9-B).
 let nextGpexeTeamId = 3000;
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["A101", "B102", "C103"] });
   const padmin = await platformAdmin();
   const gpexeTeamId = String(nextGpexeTeamId++);
   assert.equal((await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId } })).status, 200);
+  src.show(gpexeTeamId);
+  const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
+  await activateBinding(admin, bindingId);
   for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
     assert.equal((await api(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);
   }
-  return { ...org, padmin, gpexeTeamId };
+  return { ...org, padmin, gpexeTeamId, bindingId };
 }
 
 async function waitForCheck(teamId, checkId, cookie) {
@@ -148,7 +160,8 @@ async function waitForCheck(teamId, checkId, cookie) {
 }
 
 async function startCheck(team) {
-  const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.padmin.cookie, body: {} });
+  // The binding path reads the sessions of the check's window: the fixtures' day.
+  const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.padmin.cookie, body: { from: D1, to: D1 } });
   assert.equal(started.status, 202, JSON.stringify(started.body));
   return started.body.check.id;
 }
@@ -168,7 +181,7 @@ async function candidateDetail(team, id) {
 // A team with one checked, actionable candidate per session id.
 async function teamWithCandidates(sessionIds, { athletes } = {}) {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: sessionIds.map((id) => routeBundle(id, { athletes })) }));
+  src.serve(team.gpexeTeamId, sessionIds.map((id) => routeBundle(id, { athletes })));
   const check = await checkNow(team);
   assert.equal(check.status, "succeeded", JSON.stringify(check.error));
   const list = await candidates(team);
@@ -340,12 +353,13 @@ test("2. approval: the team's advisory import lock held elsewhere is bounded - 4
   });
 });
 
-test("3. approval: a row lock held elsewhere is bounded - the candidate row, and the approver's role row (the first lock) - 409 try_again, nothing written", async () => {
+test("3. approval: a row lock held elsewhere is bounded - the candidate row (the first lock), the team's binding (J17 step 3) and the approver's role row (step 6b, after the team lock and the mapping rows) - 409 try_again, nothing written", async () => {
   const { team, list } = await teamWithCandidates([9301]);
   const candidate = await candidateDetail(team, list[0].id);
   const before = await allRowCounts();
   const holds = [
     () => holdRow(`select id from training_load.gpexe_import_candidates where id = $1 for update`, [candidate.id]),
+    () => holdRow(`select id from training_load.source_team_bindings where id = $1 for update`, [team.bindingId]),
     () => holdRow(`select user_id from public.user_global_roles where user_id = $1 and role = 'platform_admin' for update`, [team.padmin.id]),
   ];
   for (const hold of holds) {
@@ -514,6 +528,38 @@ test("6c. approval: an error the COMMIT itself raises goes through resolveUncert
   });
 });
 
+test("6c2. approval (the Nezavisni revizor's LOW-1 on 9-0): once the COMMIT is sent, no error is ever answered try_again - a lock wait (55P03), a deadlock (40P01), an administrator's end of the session (57P01), an aborted transaction (25P03) and a cancelled statement (57014) raised by the COMMIT are 503 import_outcome_unknown when it did not land and 200 verified when it did", async () => {
+  const codes = ["55P03", "40P01", "57P01", "25P03", "57014"];
+  const { team, list } = await teamWithCandidates(codes.flatMap((_, i) => [9621 + 2 * i, 9622 + 2 * i]));
+  const details = await Promise.all(list.map((c) => candidateDetail(team, c.id)));
+  for (const [i, code] of codes.entries()) {
+    const raised = () => Object.assign(new Error(`the COMMIT raised ${code}`), { code });
+    const before = await allRowCounts();
+    await withSwitchOn(async () => {
+      service.setApprovalCommitForTests(async (client) => { await client.query("rollback"); throw raised(); });
+      try {
+        const r = await approve(team, details[2 * i]);
+        assert.deepEqual([r.status, r.body.error], [503, "import_outcome_unknown"], `${code} (not landed): ${JSON.stringify(r.body)}`);
+        assert.notEqual(r.body.error, "try_again");
+        assert.ok(!/nothing was imported/i.test(JSON.stringify(r.body)), `${code}: never "nothing was imported" after the COMMIT was sent`);
+      } finally {
+        service.setApprovalCommitForTests(null);
+      }
+    });
+    assert.deepEqual(await allRowCounts(), before, `${code}: it did not land`);
+    await withSwitchOn(async () => {
+      service.setApprovalCommitForTests(async (client) => { await client.query("commit"); throw raised(); });
+      try {
+        const r = await approve(team, details[2 * i + 1]);
+        assert.equal(r.status, 200, `${code} (landed): ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.commitConfirmation, "verified_after_commit_error");
+      } finally {
+        service.setApprovalCommitForTests(null);
+      }
+    });
+  }
+});
+
 test("6d. approval: nothing is written between SET CONSTRAINTS ALL IMMEDIATE and the COMMIT - the approval's last two statements are exactly those two", async () => {
   const { team, list } = await teamWithCandidates([9621]);
   const candidate = await candidateDetail(team, list[0].id);
@@ -601,7 +647,7 @@ function timeStatements(client) {
     const started = performance.now();
     const answer = original.apply(this, args);
     if (answer && typeof answer.then === "function") {
-      answer.then(() => times.push({ text, ms: performance.now() - started }), () => times.push({ text, ms: performance.now() - started, failed: true }));
+      answer.then(() => times.push({ text, ms: performance.now() - started, started, ended: performance.now() }), () => times.push({ text, ms: performance.now() - started, started, ended: performance.now(), failed: true }));
     }
     return answer;
   };
@@ -612,7 +658,19 @@ function summarize(times) {
   const commit = times.filter((t) => /^\s*commit\s*$/i.test(t.text));
   const others = times.filter((t) => !/^\s*commit\s*$/i.test(t.text));
   const longest = others.reduce((a, b) => (b.ms > a.ms ? b : a), { ms: 0, text: "" });
+  // LOW-3 (the Nezavisni revizor on 9-0): the longest time the connection sat
+  // idle in its transaction between one statement's answer and the next
+  // statement - the JavaScript work of the import and the preview - which the
+  // 10 s idle_in_transaction bound watches.
+  const ordered = [...times].sort((a, b) => a.started - b.started);
+  let longestGap = { ms: 0, after: "" };
+  for (let i = 1; i < ordered.length; i += 1) {
+    const gap = ordered[i].started - ordered[i - 1].ended;
+    if (gap > longestGap.ms) longestGap = { ms: gap, after: ordered[i - 1].text };
+  }
   return {
+    longestGapMs: Math.round(longestGap.ms * 10) / 10,
+    longestGapAfter: longestGap.after.replace(/\s+/g, " ").slice(0, 60),
     statements: others.length,
     longestMs: Math.round(longest.ms * 10) / 10,
     longest: longest.text.replace(/\s+/g, " ").slice(0, 80),
@@ -633,8 +691,10 @@ test("8. Arm A1 commits under the production bounds: the writer on J17's Arm A1 
     await client.query("begin");
     await setImportTransactionBounds(client);
     await lockTeamForImport(client, org.teamId);
-    const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes() }));
-    await importGpexePlanLocked(client, plan, {
+    // 9-B: the writer reads the team's binding and activations under the lock
+    // and builds the plan from them (J17 steps 3-10); the bundle is the bound
+    // GPEXE team's.
+    await importGpexeBundleLocked(client, makeBundle({ athletes: standardAthletes(), gpexeTeamId: Number(org.gpexeTeamId) }), {
       ownerTeamId: org.teamId, performedByUserId: org.padmin.id,
       athleteIdByGpexeId: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] }, batchFilename: "bounds 9-0 arm A1",
     });
@@ -645,13 +705,16 @@ test("8. Arm A1 commits under the production bounds: the writer on J17's Arm A1 
   }
   armA1 = summarize(writer.times);
   const values = (await admin.query(
-    `select count(*)::int as n from training_load.metric_values v
+    `select count(*)::int as n, count(pr.metric_value_id)::int as provenance from training_load.metric_values v
        join training_load.metric_measurement_occasions o on o.id = v.occasion_id
        join training_load.metric_event_participants p on p.id = o.event_participant_id
-       join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1`,
+       join training_load.metric_events e on e.id = p.event_id
+       left join training_load.metric_value_source_provenance pr on pr.metric_value_id = v.id
+      where e.owner_team_id = $1`,
     [org.teamId],
-  )).rows[0].n;
-  assert.equal(values, 53, "J17's Arm A1: 53 values");
+  )).rows[0];
+  assert.equal(values.n, 53, "J17's Arm A1: 53 values");
+  assert.equal(values.provenance, 53, "one T6 provenance row per value, written in the measured transaction");
 
   // (b) An approval through the real route (both drills, as v33 requires),
   // every statement of the approval's pooled client timed.
@@ -679,7 +742,49 @@ test("8. Arm A1 commits under the production bounds: the writer on J17's Arm A1 
   for (const m of [armA1, route]) {
     assert.ok(m.longestMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the longest statement (${m.longestMs} ms) is far below the bound`);
     assert.ok(m.commitMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the COMMIT (${m.commitMs} ms) is far below the bound`);
+    assert.ok(m.longestGapMs < IMPORT_IDLE_IN_TRANSACTION_MS / 4, `the longest idle gap in the transaction (${m.longestGapMs} ms) is far below the idle bound`);
   }
+});
+
+test("8b. LOW-3 (the Nezavisni revizor on 9-0): a synthetic session of 40 athletes on 6 levels (the whole session and 5 drills) with the eleven activations - every value with its T6 row - commits with its longest statement and its longest idle gap far below the 10 s bounds", async () => {
+  const names = Array.from({ length: 40 }, (_, i) => `Synthetic ${i + 1}`);
+  const org = await createGpexePilotOrg(admin, { athleteNames: names });
+  const sourceTeamId = String(nextGpexeTeamId++);
+  await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId });
+  const [base] = standardAthletes();
+  const whole = base.parts.find((p) => p.drill === null);
+  const athletes = names.map((_, i) => ({
+    id: 4000 + i, tracks: [84000 + i],
+    parts: [{ ...whole }, ...[0, 1, 2, 3, 4].map((drill) => ({ ...whole, drill, time: 480, distance: 600 + i }))],
+  }));
+  const bundle = makeBundle({ sessionId: 9901, gpexeTeamId: Number(sourceTeamId), athletes, drillsCount: 5, detailsDrills: [0, 1, 2, 3, 4] });
+  const athleteIdByGpexeId = Object.fromEntries(athletes.map((a, i) => [String(a.id), org.athleteIds[i]]));
+  const client = await newClient();
+  const timed = timeStatements(client);
+  try {
+    await client.query("begin");
+    await setImportTransactionBounds(client);
+    await lockTeamForImport(client, org.teamId);
+    await importGpexeBundleLocked(client, bundle, { ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId, batchFilename: "bounds 9-0 synthetic 40x6" });
+    await client.query("commit");
+  } finally {
+    timed.restore();
+    await client.end();
+  }
+  const m = summarize(timed.times);
+  const written = (await admin.query(
+    `select count(*)::int as n, count(pr.metric_value_id)::int as provenance from training_load.metric_values v
+       join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+       join training_load.metric_events e on e.id = p.event_id
+       left join training_load.metric_value_source_provenance pr on pr.metric_value_id = v.id
+      where e.owner_team_id = $1`, [org.teamId])).rows[0];
+  console.log(`[9-B measurement] synthetic 40 athletes x 6 levels: ${JSON.stringify({ ...m, values: written.n })}`);
+  assert.ok(written.n >= 40 * 6 * 9, `about eleven values per athlete and level (${written.n})`);
+  assert.equal(written.provenance, written.n, "one T6 row per value");
+  assert.ok(m.longestMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the longest statement (${m.longestMs} ms) is far below the bound`);
+  assert.ok(m.commitMs < IMPORT_STATEMENT_TIMEOUT_MS / 4, `the COMMIT (${m.commitMs} ms) is far below the bound`);
+  assert.ok(m.longestGapMs < IMPORT_IDLE_IN_TRANSACTION_MS / 4, `the longest idle gap (${m.longestGapMs} ms) is far below the idle bound`);
 });
 
 // ---------------------------------------------------------------------------
@@ -701,34 +806,42 @@ test("9. check: a preview that waits for the team lock past its bound fails the 
   const team = await setupTeam();
   let releaseFetch;
   const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
-  let fetched = false;
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [routeBundle(9901)], fetchGate, onFetch: () => { fetched = true; } }));
+  // The source holds the session's athlete rows (part of the check's bundle
+  // read) until released.
+  const held = { reached: false, p: fetchGate };
+  src.state.gates.athletes["9901"] = held;
+  src.serve(team.gpexeTeamId, [routeBundle(9901)]);
   let checkId;
   let lock;
-  await withBounds({ lockTimeoutMs: 300 }, async () => {
-    checkId = await startCheck(team);
-    // The check has started (its own short start transaction took and left the
-    // team lock); now another session takes the lock before the preview runs.
-    for (let i = 0; i < 200 && !fetched; i += 1) await sleep(10);
-    assert.ok(fetched, "the check reached its bundle read");
-    lock = await holdTeamLock(team.teamId);
+  try {
+    await withBounds({ lockTimeoutMs: 300 }, async () => {
+      checkId = await startCheck(team);
+      // The check has started (its own short start transaction took and left the
+      // team lock); now another session takes the lock before the preview runs.
+      for (let i = 0; i < 500 && !held.reached; i += 1) await sleep(10);
+      assert.ok(held.reached, "the check reached its bundle read");
+      lock = await holdTeamLock(team.teamId);
+      releaseFetch();
+      try {
+        const check = await waitForCheck(team.teamId, checkId, team.padmin.cookie);
+        assert.equal(check.status, "failed");
+        assert.equal(check.error.code, "check_preview_busy");
+        assert.match(check.error.message, /nothing of the check was published/);
+      } finally {
+        await lock.release();
+      }
+    });
+  } finally {
     releaseFetch();
-    try {
-      const check = await waitForCheck(team.teamId, checkId, team.padmin.cookie);
-      assert.equal(check.status, "failed");
-      assert.equal(check.error.code, "check_preview_busy");
-      assert.match(check.error.message, /nothing of the check was published/);
-    } finally {
-      await lock.release();
-    }
-  });
+    delete src.state.gates.athletes["9901"];
+  }
   assert.deepEqual(await checkRow(checkId), { status: "failed", error_code: "check_preview_busy" });
   assert.deepEqual(await stagedAndPublished(team.teamId, checkId), { observations: 0, candidates: 0 });
 });
 
 test("10. check: a preview statement ended by its bound fails the check with check_preview_busy, nothing published", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [routeBundle(10001)] }));
+  src.serve(team.gpexeTeamId, [routeBundle(10001)]);
   setCheckPreviewHoldForTests((client) => client.query("select pg_sleep(2)"));
   let check;
   try {
@@ -743,7 +856,7 @@ test("10. check: a preview statement ended by its bound fails the check with che
 test("10b. check: a deadlock (40P01) in the preview fails the check with check_preview_busy, a session the server ended (57P01) with check_preview_interrupted - nothing published", async () => {
   for (const [code, expected, sessionId] of [["40P01", "check_preview_busy", 10101], ["57P01", "check_preview_interrupted", 10102]]) {
     const team = await setupTeam();
-    service.setGpexeClientFactory(fakeGpexe({ bundles: [routeBundle(sessionId)] }));
+    src.serve(team.gpexeTeamId, [routeBundle(sessionId)]);
     setCheckPreviewHoldForTests(() => { throw Object.assign(new Error("injected"), { code }); });
     let check;
     try {
@@ -758,7 +871,7 @@ test("10b. check: a deadlock (40P01) in the preview fails the check with check_p
 
 test("11. check: the database ends the preview's session (the idle bound) - the check fails with check_preview_interrupted, the process lives on, the connection is not reused", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [routeBundle(11001)] }));
+  src.serve(team.gpexeTeamId, [routeBundle(11001)]);
   let used = null;
   const removed = new Set();
   const onRemove = (client) => removed.add(client);
@@ -786,17 +899,26 @@ test("11. check: the database ends the preview's session (the idle bound) - the 
 // Condition 3: the undo takes the team's import lock
 // ---------------------------------------------------------------------------
 
+// 9-B: the writer imports only through the team's binding and its mapping
+// activations - a raw-SQL binding to the team's own GPEXE team with the
+// eleven activations (writer level, support/mapped-world.mjs).
 async function undoTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["U101", "U102", "U103"] });
   await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [org.userId]);
-  return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+  const sourceTeamId = String(nextGpexeTeamId++);
+  const { bindingId } = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId });
+  return { ...org, sourceTeamId, bindingId, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+}
+
+function undoBundle(org, sessionId) {
+  return makeBundle({ sessionId, gpexeTeamId: Number(org.sourceTeamId), athletes: standardAthletes() });
 }
 
 function importSession(org, sessionId, { onLocked } = {}) {
   return (async () => {
     const client = await newClient();
     try {
-      return await importGpexePlan(client, buildGpexeImportPlan(makeBundle({ sessionId, athletes: standardAthletes() })), {
+      return await importGpexeBundle(client, undoBundle(org, sessionId), {
         ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId: org.athleteMap, batchFilename: "bounds 9-0 undo",
       }, { onLocked });
     } finally {
@@ -876,7 +998,7 @@ test("12. undo: an undo waits for a running import of the same team, and an impo
   const importPid = importClient.processID;
   const blocked = (async () => {
     try {
-      return await importGpexePlan(importClient, buildGpexeImportPlan(makeBundle({ sessionId: 12003, athletes: standardAthletes() })), {
+      return await importGpexeBundle(importClient, undoBundle(org, 12003), {
         ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId: org.athleteMap, batchFilename: "bounds 9-0 undo",
       });
     } finally {
@@ -921,4 +1043,65 @@ test("13. undo: the platform admin is checked after the team lock - a revocation
   // Nothing holds the team lock: an import of the team runs at once.
   const imported = await importSession(org, 13002);
   assert.ok(imported.eventId);
+});
+
+test("12c. approval and undo of the same team (the Nezavisni revizor's LOW-2 on 9-0): both take the team import lock first and their rights after it (the approval's step 6b, the undo's platform admin row), so they serialize in both orders - the second waits on the advisory lock, never a deadlock - and both then finish", async () => {
+  const { team, list } = await teamWithCandidates([12101, 12102, 12103]);
+  const [c1, c2, c3] = await Promise.all(list.map((c) => candidateDetail(team, c.id)));
+  const undoer = { userId: team.padmin.id };
+  const anyAdvisoryWaiter = async (excludePid) => {
+    for (let i = 0; i < 200; i += 1) {
+      const n = (await admin.query(
+        `select count(*)::int as n from pg_locks l join pg_stat_activity a on a.pid = l.pid
+          where a.datname = current_database() and l.locktype = 'advisory' and not l.granted and l.pid <> $1`, [excludePid])).rows[0].n;
+      if (n > 0) return true;
+      await sleep(10);
+    }
+    return false;
+  };
+  // An imported event of the team, for the undo.
+  await withSwitchOn(async () => { const r = await approve(team, c1); assert.equal(r.status, 200, JSON.stringify(r.body)); });
+  const eventId = await eventOf(team, c1.gpexeTeamSessionId);
+
+  // (a) The approval holds the team lock and its rights (after step 6b): the undo waits on the advisory lock.
+  await withSwitchOn(async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let reached;
+    const atHold = new Promise((resolve) => { reached = resolve; });
+    service.setApprovalObserver(async () => { reached(); await gate; });
+    const approving = approve(team, c2);
+    await atHold;
+    let undoPid = null;
+    const undo = undoDryRun(undoer, eventId, { onPid: (pid) => { undoPid = pid; } });
+    const undoDone = settled(undo);
+    for (let i = 0; i < 100 && undoPid === null; i += 1) await sleep(10);
+    assert.ok(await waitsOnAdvisoryLock(undoPid), "the undo waits on the team's advisory import lock");
+    await sleep(200);
+    assert.equal(undoDone(), false, "the undo is still waiting");
+    release();
+    const r = await approving;
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal((await undo).outcome, "rolled_back", "the undo's dry run went through after the approval committed - no 40P01");
+  });
+
+  // (b) The undo holds the team lock: the approval waits on it after its candidate row, then imports.
+  await withSwitchOn(async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let locked;
+    const undoHasLock = new Promise((resolve) => { locked = resolve; });
+    let undoPid = null;
+    const holding = undoDryRun(undoer, eventId, { onPid: (pid) => { undoPid = pid; }, onTeamLocked: async () => { locked(); await gate; } });
+    await undoHasLock;
+    const approving = approve(team, c3);
+    const approvalDone = settled(approving);
+    assert.ok(await anyAdvisoryWaiter(undoPid), "the approval waits on the team's advisory import lock");
+    await sleep(200);
+    assert.equal(approvalDone(), false, "the approval is still waiting");
+    release();
+    assert.equal((await holding).outcome, "rolled_back");
+    const r = await approving;
+    assert.equal(r.status, 200, `the approval imports after the undo ended - no 40P01: ${JSON.stringify(r.body)}`);
+  });
 });

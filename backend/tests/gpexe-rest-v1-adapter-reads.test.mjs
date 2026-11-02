@@ -879,7 +879,7 @@ test("B8.1 a session is read only when a session list of this instance classifie
   assert.equal(flip.calls.length, before, "nothing was sent after the reclassification");
 });
 
-test("B8.2 explicit projections: every read returns exactly the fields the importer reads and nothing the source adds, in any spelling or nesting; the lists of fields cover every field the mapper source reads", async () => {
+test("B8.2 explicit projections: every read returns exactly the fields the importer reads and nothing the source adds, in any spelling or nesting; the lists of fields cover every field the importer source (the mapper and the extractor registry) reads", async () => {
   const extra = { first_name: "Marker Athlete Name", athlete_obj: { name: "someone" }, notes: "a private note", zzzOpaqueKey: 1, submitted_by: "someone" };
   const { a } = await confirmedAdapter({
     [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00", drills_count: 2, is_stats_valid: true, total_time: 3600, total_distance: 5000, max_v: 8, drills: [101, 102], ...extra }),
@@ -913,8 +913,10 @@ test("B8.2 explicit projections: every read returns exactly the fields the impor
   // The whole bundle, as the importer gets it, carries no unknown key anywhere.
   const bundle = await a.fetchSessionBundle({ sessionId: "100" });
   noNames(bundle, ["first_name", "athlete_obj", "zzzOpaqueKey", "heart", "\"lat\"", "\"lng\""]);
-  // Every field the mapper reads from a session, row, track, threshold set, events or zone is in the lists.
-  const mapper = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeImportMapper.js"), "utf8");
+  // Every field the importer reads from a session, row, track, threshold set, events or zone is in the lists.
+  // Since 9-B the importer is the mapper (the gates) plus the extractor registry (every value it reads).
+  const mapper = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeImportMapper.js"), "utf8"))
+    + "\n" + (await fsp.readFile(path.resolve(ROOT, "backend/src/sourceMetricExtractors.js"), "utf8"));
   const reads = (re) => new Set([...mapper.matchAll(re)].map((m) => m[1]));
   const subset = (set, list, what) => { for (const k of set) assert.ok(list.includes(k), `${what}.${k} is read by the mapper but not projected`); };
   subset(reads(/\bsession\.([a-z_]+)\b/g), BUNDLE_FIELDS.teamSession, "teamSession");
@@ -925,7 +927,7 @@ test("B8.2 explicit projections: every read returns exactly the fields the impor
   subset(reads(/complementary_data\?\.([a-z_]+)\b/g), BUNDLE_FIELDS.complementaryData, "complementary_data");
   subset(new Set([...reads(/\bz\??\.([a-z_]+)\b/g), ...reads(/matching\[0\]\.([a-z_]+)\b/g)]), BUNDLE_FIELDS.zone, "zone");
   const suffixes = [...reads(/events\[`\$\{prefix\}_([a-z_]+)`\]/g)];
-  assert.ok(suffixes.length >= 3, "the event suffixes the mapper reads were found");
+  assert.ok(suffixes.length >= 3, "the event suffixes the importer reads were found");
   for (const prefix of ["acceleration_events", "deceleration_events"]) subset(new Set(suffixes.map((x) => `${prefix}_${x}`)), BUNDLE_FIELDS.moreEvents, "more.events");
   // The candidate service reads two session fields and two row fields from the stored bundle.
   for (const k of ["category_name", "drills_count"]) assert.ok(BUNDLE_FIELDS.teamSession.includes(k));
@@ -1171,12 +1173,13 @@ test("B8.9 last started wins, fail-closed: with two held lists, the older one fi
 });
 
 const { DETAILS_CONSUMED_FIELDS, DIAGNOSTIC_MARK } = await import("../src/gpexeRestV1Adapter.js");
-const { GPEXE_METRIC_SPECS } = await import("../src/gpexeImportMapper.js");
+const { EXTRACTORS } = await import("../src/sourceMetricExtractors.js");
 
 test("B7.5 the administrator's description of a refused details answer: fixed words only (the operation, a consumed field's constant name and kind, or the kind of a bad name), never an athlete id, another metric name, a value or a text; the full validator of 2026-10-05 is gone and nothing can call it", async () => {
-  // The consumed fields are exactly the mapper's details fields.
-  const mapperDetailsFields = GPEXE_METRIC_SPECS.map((s) => /^details\.players\[athlete\]\.(\w+)$/.exec(s.sourceContext?.field ?? "")?.[1]).filter(Boolean).sort();
-  assert.deepEqual([...DETAILS_CONSUMED_FIELDS].sort(), mapperDetailsFields);
+  // The consumed fields are exactly the extractor registry's details fields
+  // (since 9-B the importer reads source values only through the registry).
+  const registryDetailsFields = Object.keys(EXTRACTORS).map((k) => /^gpexe\/rest_v1\/details\.players\.(\w+)$/.exec(k)?.[1]).filter(Boolean).sort();
+  assert.deepEqual([...DETAILS_CONSUMED_FIELDS].sort(), registryDetailsFields);
   assert.equal(DIAGNOSTIC_MARK, " Diagnostic: ");
   const mod = await import("../src/gpexeRestV1Adapter.js");
   for (const gone of ["validatePlayersAnswer", "describePlayersShape", "formatPlayersShape"]) assert.equal(mod[gone], undefined, `${gone} is not exported any more`);
@@ -1215,7 +1218,14 @@ test("B7.5 the administrator's description of a refused details answer: fixed wo
 });
 
 const { projectSessionDetails } = await import("../src/gpexeRestV1Adapter.js");
-const { buildGpexeImportPlan } = await import("../src/gpexeImportMapper.js");
+const { buildGpexeImportPlan, mappedMetricSpecs } = await import("../src/gpexeImportMapper.js");
+const { activationRowFor, SPEC_REGISTRY } = await import("./support/gpexe-legacy-specs.mjs");
+// The specs of eleven locked activations (both levels), as the 9-B importer builds them.
+const registrySpecs = () => {
+  const out = mappedMetricSpecs(Object.keys(SPEC_REGISTRY).map((k, i) => activationRowFor(k, {}, i)));
+  assert.equal(out.block, null);
+  return out.specs;
+};
 const { makeBundle, standardAthletes } = await import("./_gpexe-fixtures.mjs");
 
 test("B7.6 the whole-session projection (op=session_details only): the container, ids, bounds and metric-name guard are as before; of the values only tot_burst_events / tot_brake_events are read, validated by the same rule and copied into fresh objects; every other metric is neither read nor returned; the drill read keeps the full check", async () => {
@@ -1302,7 +1312,7 @@ test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of th
   assert.deepEqual(projectStoredDetails({ teamSession: { id: 1 } }), { teamSession: { id: 1 } }, "a bundle without details is returned as it is");
 });
 
-test("B7.7 architecture guard: the whole-session consumer (the mapper, through buildGpexeImportPlan) reads no player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a whole-session athlete's details fails this test", () => {
+test("B7.7 architecture guard: the whole-session consumer (the mapper with the registry's specs, through buildGpexeImportPlan) reads no player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a whole-session athlete's details fails this test", () => {
   const bundle = makeBundle({ sessionId: 5001, gpexeTeamId: 77, athletes: standardAthletes(), detailsDrills: [0] });
   const touched = new Set();
   for (const [id, values] of Object.entries(bundle.details.full.players)) {
@@ -1313,8 +1323,8 @@ test("B7.7 architecture guard: the whole-session consumer (the mapper, through b
       getOwnPropertyDescriptor(target, prop) { touched.add(`descriptor:${String(prop)}`); return Reflect.getOwnPropertyDescriptor(target, prop); },
     });
   }
-  const plan = buildGpexeImportPlan(bundle);
-  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level === "full" && r.values.some((v) => v.metricKey === "gpexe_burst_events"))), "the consumed fields were read");
+  const plan = buildGpexeImportPlan(bundle, { metricSpecs: registrySpecs() });
+  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level === "full" && r.values.some((v) => v.sourceMetricKey === "details.players.tot_burst_events"))), "the consumed fields were read");
   assert.deepEqual([...touched], [], "no other whole-session metric is read");
 });
 
@@ -1334,12 +1344,12 @@ test("B7.7b architecture guard for drills: the mapper reads no drill player metr
     }
   }
   assert.ok(wrapped > 0, "the bundle carries drill details");
-  const plan = buildGpexeImportPlan(bundle);
-  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level !== "full" && r.values.some((v) => v.metricKey === "gpexe_burst_events"))), "the consumed drill fields were read");
+  const plan = buildGpexeImportPlan(bundle, { metricSpecs: registrySpecs() });
+  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level !== "full" && r.values.some((v) => v.sourceMetricKey === "details.players.tot_burst_events"))), "the consumed drill fields were read");
   assert.deepEqual([...touched], [], "no other drill metric is read");
 });
 
-test("B7.8 static architecture guard: no consumer outside the adapter, the mapper and the extractor registry reads the stored details (JS or SQL), the registry reads only the consumed fields, and the mapper's own reads are exactly the whole-session / drill player lookup and detailsNumber's one field read", async () => {
+test("B7.8 static architecture guard: no consumer outside the adapter, the mapper and the extractor registry reads the stored details (JS or SQL), the registry reads only the consumed fields, and the mapper's own reads are exactly the whole-session / drill / athlete lookup that hands one athlete's details to the registry (9-B: no field read of its own)", async () => {
   const srcDir = path.resolve(ROOT, "backend/src");
   const files = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js")).map((f) => path.join(srcDir, f));
   const DETAILS_READ = /\bdetails\??\.(full|drills|players)\b|->>?\s*'details'|\[\s*['"]details['"]\s*\]/;
@@ -1363,10 +1373,9 @@ test("B7.8 static architecture guard: no consumer outside the adapter, the mappe
   assert.equal(count(/\bdetails\?\.full\b/g), 1, "one whole-session lookup");
   assert.equal(count(/\bdetails\?\.drills\b/g), 1, "one drill lookup");
   assert.equal(count(/\bdetails\?\.players\b/g), 1, "one athlete lookup");
-  assert.equal(count(/\bplayerDetails\[/g), 1, "detailsNumber's one field read");
-  assert.equal(count(/\bplayerDetails\??\./g), 0, "no other property of an athlete's details is read");
-  assert.equal(count(/detailsNumber\(playerDetails, "/g), DETAILS_CONSUMED_FIELDS.length, "detailsNumber is called only for the consumed fields");
-  for (const field of DETAILS_CONSUMED_FIELDS) assert.ok(mapper.includes(`detailsNumber(playerDetails, "${field}")`), field);
+  assert.equal(count(/\bplayerDetails\[/g), 0, "the mapper reads no field of an athlete's details (the registry does)");
+  assert.equal(count(/\bplayerDetails\??\./g), 0, "no property of an athlete's details is read");
+  assert.equal(count(/detailsNumber\(/g), 0, "detailsNumber is gone with the 9-B specs");
   // Since 2026-10-09 both details reads are projected: no comment claims the old drill contract, and
   // the full validator is on no read path (only its own definition names it).
   const adapterSrc = await fsp.readFile(path.resolve(srcDir, "gpexeRestV1Adapter.js"), "utf8");

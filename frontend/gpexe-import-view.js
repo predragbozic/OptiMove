@@ -152,6 +152,22 @@ function byMetricOrder(a, b) {
   return rank(a) - rank(b);
 }
 
+// Preview v3 (9-B, J17 section 4): every value comes through one of the
+// team's mapping activations and names its canonical variable (label), its
+// GPEXE field (sourceMetricKey) and the GPEXE value (sourceValue,
+// sourceUnit), in the order the server gives. A preview stored before 9-B
+// (version 2) keeps the rendering above (METRIC_TEXT, METRIC_ORDER) unchanged.
+function isV3(preview) {
+  return Number(preview?.version) >= 3;
+}
+
+// A v3 value's name: the variable's label as the server sends it (a viewer
+// whom C99 does not admit to a club variable reads "Club variable"). The
+// variable's key is never shown.
+function variableName(v) {
+  return typeof v?.label === "string" && v.label.trim() ? v.label : "Variable";
+}
+
 function plural(n, one, many) {
   return `${n} ${Number(n) === 1 ? one : many}`;
 }
@@ -210,6 +226,11 @@ const SKIP_TEXT = {
   total_distance_missing: "total distance missing in GPEXE",
   total_time_missing: "total time missing in GPEXE",
   unexpected_unit: "unexpected unit in GPEXE",
+  // C110 form B (9-B): the two Left-out reasons of a mapped import. The code
+  // reaches the two administrators; everyone else reads the server's plain
+  // words (leftOutText).
+  required_value_missing: "required value missing",
+  canonical_value_out_of_range: "outside the variable's limits",
 };
 
 // The step that lifts a block, in the coach's words, built from the step's
@@ -250,16 +271,39 @@ function fmtDateTime(value) {
 function fmtValue(value, unit) {
   if (value === null || value === undefined) return "-";
   const n = Number(value);
-  const text = Number.isFinite(n) ? n.toLocaleString("en-GB", { maximumFractionDigits: 2 }) : String(value);
+  // A non-zero value never reads as "0": below 0.005 it keeps 3 significant digits.
+  const tiny = Number.isFinite(n) && n !== 0 && Math.abs(n) < 0.005;
+  const text = Number.isFinite(n) ? n.toLocaleString("en-GB", tiny ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 2 }) : String(value);
   // "n" is a count: no unit after it.
   return unit && unit !== "n" ? `${text} ${unit}` : text;
 }
 
-// GPEXE's own names of the metrics shown, for Technical details.
-function metricNamesTech(values) {
+// GPEXE's own names of the metrics shown, for Technical details. A v3 preview
+// (9-B) names the GPEXE fields instead (sourceFieldsTech).
+function metricNamesTech(values, v3 = false) {
+  if (v3) return sourceFieldsTech(values);
   const seen = new Map();
   for (const v of values || []) if (v?.metricKey && !seen.has(v.metricKey)) seen.set(v.metricKey, `${metricName(v)} = ${v.label || v.metricKey} (${v.metricKey})`);
   return seen.size ? [["GPEXE metric names", [...seen.values()].join("; ")]] : [];
+}
+
+// v3: one line per GPEXE field and parameter fingerprint, with the activation
+// and the mapping version only where the server sent them (the two
+// administrators). The variable's key is never shown, not even here.
+function sourceFieldsTech(values) {
+  const seen = new Map();
+  for (const v of values || []) {
+    if (!v?.sourceMetricKey) continue;
+    const fingerprint = v.sourceParameterFingerprint || "";
+    const key = `${v.sourceMetricKey}|${fingerprint}`;
+    if (seen.has(key)) continue;
+    const parts = [`${variableName(v)} = ${v.sourceMetricKey}`];
+    if (fingerprint) parts.push(`parameters ${fingerprint}`);
+    if (v.activationId) parts.push(`activation ${v.activationId}`);
+    if (v.mappingVersionId) parts.push(`mapping version ${v.mappingVersionId}`);
+    seen.set(key, parts.join(" · "));
+  }
+  return seen.size ? [["GPEXE fields", [...seen.values()].join("; ")]] : [];
 }
 
 function resultLabel(result) {
@@ -678,6 +722,8 @@ function renderSessionRowHtml(c, status, kind, pick = false) {
   if (kind === "ready" || kind === "attention") {
     if (counts.created) facts.push(plural(counts.created, "new result", "new results"));
     if (kind === "ready" && counts.unchanged) facts.push(plural(counts.unchanged, "result unchanged", "results unchanged"));
+    // D32: values left out are named before an approval, never imported silently.
+    if (kind === "ready" && Number(counts.skippedValues) > 0) facts.push(plural(counts.skippedValues, "value left out", "values left out"));
     // Every reason stays visible even though the step sentence names one.
     if (kind === "attention") for (const r of rowReasons(c)) if (reasonFact(r)) facts.push(reasonFact(r));
   }
@@ -796,6 +842,16 @@ function batchSummaryText(summary) {
   return parts.join(" · ");
 }
 
+// What the confirmation says of one session: its new results and, before the
+// approval, the values it leaves out (D32), so a gap is never imported
+// silently.
+function batchFacts(c) {
+  const facts = [];
+  if (c?.counts?.created) facts.push(plural(c.counts.created, "new result", "new results"));
+  if (Number(c?.counts?.skippedValues) > 0) facts.push(plural(c.counts.skippedValues, "value left out", "values left out"));
+  return facts.join(" · ");
+}
+
 function batchSessionLine(c, candidateId) {
   if (!c) return `<strong>Session</strong> <span class="muted">(no longer in the list)</span>`;
   return `<strong>${escapeHtml(sessionTitle(c))}</strong> <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>`;
@@ -839,7 +895,7 @@ function renderBatchReviewHtml(gx, items) {
   return `
     <p><strong>Import these sessions exactly as found in the last search.</strong></p>
     <ul class="imports-batch-list">
-      ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${c?.counts?.created ? `<span class="gpexe-candidate-facts">${escapeHtml(plural(c.counts.created, "new result", "new results"))}</span>` : ""}</li>`).join("")}
+      ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
     <p class="muted">The sessions are imported one by one and the result is shown for each. A session that can't be imported does not stop the others - the batch is not all-or-nothing.</p>
     <p class="muted">Athletes are imported under the names shown in each session's review. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
@@ -1415,10 +1471,24 @@ function renderCandidateBodyHtml(c, detail, status) {
       ${renderChangesHtml(preview, c)}
       ${renderAthletesHtml(preview, c)}
       ${renderNoRecordHtml(preview, c)}
+      ${renderSourceFieldsNoteHtml(preview)}
     `}
     ${renderOutcomeHtml(detail)}
     ${renderApproveHtml(c, detail, status)}
   `;
+}
+
+// Section F row 2 (J17 section 4): the GPEXE fields with no mapping switched
+// on for this team, whose values are not imported. The two administrators'
+// answer names them; everyone else's carries only their count. Nothing on a
+// preview without either (one stored before 9-B).
+function renderSourceFieldsNoteHtml(preview) {
+  const labels = Array.isArray(preview?.unactivatedSourceMetrics) ? preview.unactivatedSourceMetrics.filter((l) => typeof l === "string" && l.trim()) : [];
+  const count = labels.length || (Number.isInteger(preview?.unactivatedSourceMetricCount) ? preview.unactivatedSourceMetricCount : 0);
+  if (count <= 0) return "";
+  if (!labels.length) return `<p class="muted gpexe-source-fields">${escapeHtml(`${plural(count, "more GPEXE field is", "more GPEXE fields are")} not set up for import for this team; ${count === 1 ? "its values are" : "their values are"} not imported.`)}</p>`;
+  const head = `${plural(count, "GPEXE field is", "GPEXE fields are")} not switched on for this team, so ${count === 1 ? "its values are" : "their values are"} not imported`;
+  return `<p class="muted gpexe-source-fields">${escapeHtml(`${head}: ${labels.join(", ")}. To import one, set up its mapping and switch it on for this team under Training Load > Data configuration > Mappings.`)}</p>`;
 }
 
 function renderApprovalRecordHtml(c) {
@@ -1433,8 +1503,48 @@ function renderApprovalRecordHtml(c) {
 // stay in Technical details. `c` is a list row or the review's candidate.
 // `excluded` marks a session that stays out of OptiMove for good - nothing
 // to fix, no decision.
+// Phase 9 (9-B, J17 section 6.1): the eight codes of a mapped import that
+// block a whole session. Everyone but the two administrators reads the one
+// code data_setup_incomplete with the coach's sentence; an administrator
+// reads the precise code's sentence (the server's own when the review carries
+// it) and its step. None of them ever reads as a conflict with data already
+// in OptiMove.
+const SETUP_COACH_TEXT = Object.freeze({
+  reason: "This session can't be imported until an administrator finishes its data setup.",
+  step: "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.",
+});
+const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. If both look right, ask a platform administrator (give them the Technical details).";
+const SETUP_CONNECTION_STEP = "Check this team's GPEXE binding and the binding of the team that holds this GPEXE team (Settings > Source connections). Ending a held source instance is a platform administrator's step (docs/runbooks/source-instance-end-v50.md); then find new sessions.";
+const SETUP_ADMIN_TEXT = Object.freeze({
+  mapping_not_usable: { reason: "This session can't be imported through the team's mappings and GPEXE binding as they stand.", step: SETUP_MAPPINGS_STEP },
+  source_threshold_contract_mismatch: { reason: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.", step: "Check the team's thresholds and zones in GPEXE against the mapping, then find new sessions." },
+  source_unit_mismatch: { reason: "A mapping's source unit is not the proven unit of its GPEXE field.", step: "Check the mapping's source unit (Training Load > Data configuration > Mappings), then find new sessions." },
+  source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, ask a platform administrator to check that GPEXE field (give them the Technical details)." },
+  no_mapped_values: { reason: "No value of this session can be imported: either no mapping switched on for this team gives a value for this session, or every mapped value was left out (see Left out under each athlete).", step: "Check which mappings are switched on for this team and the levels they cover (Training Load > Data configuration > Mappings), and any reasons under Left out; then find new sessions." },
+  source_instance_held: { reason: "Another team's GPEXE source instance holds this GPEXE team.", step: SETUP_CONNECTION_STEP },
+  source_instance_changed: { reason: "This team's GPEXE source instance names another GPEXE team.", step: "Check that this team's GPEXE binding names the right GPEXE team (Settings > Source connections). If it does, ending this team's earlier source instance is a platform administrator's step (an ended instance stays ended; docs/runbooks/source-instance-end-v50.md); then find new sessions." },
+  session_imported_under_another_instance: { reason: "This session was imported earlier under another GPEXE source instance.", step: "The earlier import stays as it is. OptiMove never imports one GPEXE session twice, so this session stays out; ending or changing a source instance does not change that." },
+});
+
+// The precise mapping code an administrator's answer carries (the list's
+// blockedSourceCode, or the review's own block), or null.
+function setupBlockCode(c) {
+  for (const code of [c?.blockedSourceCode, c?.preview?.blocked?.code]) {
+    if (typeof code === "string" && Object.hasOwn(SETUP_ADMIN_TEXT, code)) return code;
+  }
+  return null;
+}
+
 function blockedCoachText(c) {
   const code = c.blockedCode;
+  const precise = setupBlockCode(c);
+  if (precise) {
+    const own = c.preview?.blocked?.code === precise ? c.preview.blocked.message : null;
+    return { reason: typeof own === "string" && own.trim() ? own : SETUP_ADMIN_TEXT[precise].reason, step: SETUP_ADMIN_TEXT[precise].step };
+  }
+  if (code === "data_setup_incomplete" || c.blockedSourceCode === "data_setup_incomplete" || c.preview?.blocked?.code === "data_setup_incomplete") {
+    return { ...SETUP_COACH_TEXT };
+  }
   if (code === "earlier_import_left_behind") {
     return { reason: "Some athletes' results from this session were imported before, but would now be left out.", step: "Do the step below for each athlete, then find new sessions." };
   }
@@ -1485,22 +1595,38 @@ function renderChangesHtml(preview, c) {
             <p><strong>${escapeHtml(athleteName(c, ch.athleteId, ch.gpexeAthleteId))}</strong> · ${escapeHtml(resultLabel(ch))} · ${escapeHtml(OUTCOME_TEXT[ch.outcome] || ch.outcome)}</p>
             <p class="muted">${escapeHtml(ch.message || "")}${ch.manualCorrectionKept ? " A manual correction stays current." : ""}</p>
             ${ch.athleteId ? "" : idTechHtml(ch.gpexeAthleteId)}
-            ${renderValueTableHtml(ch.values, true)}
+            ${renderValueTableHtml(ch.values, true, isV3(preview))}
           </li>
         `).join("")}
       </ul>
-      ${techHtml(metricNamesTech(changes.flatMap((ch) => ch.values || [])))}
+      ${techHtml(metricNamesTech(changes.flatMap((ch) => ch.values || []), isV3(preview)))}
     </section>
   `;
 }
 
-function renderValueTableHtml(values, withPrevious) {
+function renderValueTableHtml(values, withPrevious, v3 = false) {
   if (!values?.length) return "";
+  if (v3) return renderVariableTableHtml(values, withPrevious);
   return `
     <div class="gpexe-values-wrap"><table class="gpexe-values">
       <thead><tr><th scope="col">Metric</th>${withPrevious ? `<th scope="col">Before</th>` : ""}<th scope="col">GPEXE</th></tr></thead>
       <tbody>
         ${[...values].sort(byMetricOrder).map((v) => `<tr><td>${escapeHtml(metricName(v))}</td>${withPrevious ? `<td>${escapeHtml(fmtValue(v.previous, v.unit))}</td>` : ""}<td>${escapeHtml(fmtValue(v.value, v.unit))}</td></tr>`).join("")}
+      </tbody>
+    </table></div>
+  `;
+}
+
+// v3: Variable | OptiMove value | GPEXE value, or Variable | Before | New
+// value | GPEXE value for a result already imported, in the server's order. A
+// value the result had that this import does not write says why, never a zero.
+const EMPTY_CHANGE_TEXT = { left_out: "Left out", not_mapped: "No longer imported for this team", missing_in_gpexe: "Not in GPEXE" };
+function renderVariableTableHtml(values, withPrevious) {
+  return `
+    <div class="gpexe-values-wrap"><table class="gpexe-values">
+      <thead><tr><th scope="col">Variable</th>${withPrevious ? `<th scope="col">Before</th><th scope="col">New value</th>` : `<th scope="col">OptiMove value</th>`}<th scope="col">GPEXE value</th></tr></thead>
+      <tbody>
+        ${values.map((v) => `<tr><td>${escapeHtml(variableName(v))}</td>${withPrevious ? `<td>${escapeHtml(fmtValue(v.previous, v.unit))}</td>` : ""}<td>${escapeHtml(v.value === null || v.value === undefined ? (EMPTY_CHANGE_TEXT[v.change] || "-") : fmtValue(v.value, v.unit))}</td><td>${escapeHtml(fmtValue(v.sourceValue, v.sourceUnit))}</td></tr>`).join("")}
       </tbody>
     </table></div>
   `;
@@ -1527,10 +1653,14 @@ function renderAthletesHtml(preview, c) {
 }
 
 // What GPEXE recorded for an unlinked athlete in this session: only a help
-// to find the athlete in GPEXE. Values never prove who an athlete is.
+// to find the athlete in GPEXE. Values never prove who an athlete is. A v2
+// preview (stored before 9-B) reads them from its own results by these keys;
+// a v3 preview from the candidate's helperValues (R12), whatever the team's
+// mappings are.
 const LINK_CONTEXT_KEYS = ["gpexe_total_distance", "gpexe_max_speed", "gpexe_time_min"];
 
-function renderLinkContextHtml(a) {
+function renderLinkContextHtml(a, c) {
+  if (isV3(c?.preview)) return renderHelperContextHtml(a, c);
   const whole = (a.results || []).find((r) => r.level !== "drill");
   const values = LINK_CONTEXT_KEYS.map((key) => whole?.values?.find((v) => v.metricKey === key)).filter((v) => v && v.value !== null && v.value !== undefined);
   const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
@@ -1539,6 +1669,24 @@ function renderLinkContextHtml(a) {
     <p class="muted">Recorded by GPEXE for ${escapeHtml(maskGpexeIds() ? gpexeWho(a.gpexeAthleteId) : `athlete ${a.gpexeAthleteId}`)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
     <ul class="gpexe-link-context">
       ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
+      ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
+    </ul>
+  `;
+}
+
+// v3 (R12): the helper values the server read from the session's own
+// snapshot for this GPEXE athlete (duration in min, distance in m, top speed
+// in km/h, and its drill rows), never the mapped values. A value the source
+// did not give is null and is not shown.
+function renderHelperContextHtml(a, c) {
+  const h = c?.helperValues?.[a.gpexeAthleteId] || {};
+  const values = MAP_VALUE_LABELS.filter(([key]) => h[key] !== null && h[key] !== undefined);
+  const drills = Number.isInteger(h.drillRows) && h.drillRows > 0 ? h.drillRows : 0;
+  if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
+  return `
+    <p class="muted">Recorded by GPEXE for ${escapeHtml(maskGpexeIds() ? gpexeWho(a.gpexeAthleteId) : `athlete ${a.gpexeAthleteId}`)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    <ul class="gpexe-link-context">
+      ${values.map(([key, label, unit]) => `<li><span>${escapeHtml(label)}</span> <strong>${escapeHtml(fmtValue(h[key], unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
     </ul>
   `;
@@ -1572,7 +1720,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
       ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
       ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
-      ${renderLinkContextHtml(a)}
+      ${renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
@@ -1587,14 +1735,31 @@ function renderLinkHtml(a, c, unlinkedChoices) {
   `;
 }
 
-function renderSkippedHtml(a) {
+// v3: a Left-out entry's reason in the screen's words - an administrator's
+// C110 code or an extractor's code - else the server's plain words (a
+// coach's answer carries no C110 code), never a code.
+function leftOutText(s) {
+  if (typeof s?.reason === "string" && Object.hasOwn(SKIP_TEXT, s.reason)) return SKIP_TEXT[s.reason];
+  if (typeof s?.message === "string" && s.message.trim()) return s.message.trim().replace(/\.$/, "");
+  return "other reason (see Technical details)";
+}
+
+// One Technical details line of codes, each once; a missing code (a coach's
+// answer carries no C110 code and no source reason) is left out, and so is
+// the line when nothing is left.
+function codesTech(label, codes) {
+  const list = [...new Set(codes.filter((code) => typeof code === "string" && code))];
+  return list.length ? [[label, list.join(", ")]] : [];
+}
+
+function renderSkippedHtml(a, v3 = false) {
   const skipped = a.skippedValues || [];
   if (!skipped.length) return "";
   return `
     <div class="gpexe-skipped">
       <p class="muted">Left out (${skipped.length}) - a left-out value is not a zero:</p>
       <ul>
-        ${skipped.map((s) => `<li>${escapeHtml(resultLabel(s))} · ${escapeHtml(metricName(s))} - ${escapeHtml(SKIP_TEXT[s.reason] || "other reason (see Technical details)")}</li>`).join("")}
+        ${skipped.map((s) => `<li>${escapeHtml(resultLabel(s))} · ${escapeHtml(v3 ? variableName(s) : metricName(s))} - ${escapeHtml(v3 ? leftOutText(s) : SKIP_TEXT[s.reason] || "other reason (see Technical details)")}</li>`).join("")}
       </ul>
     </div>
   `;
@@ -1607,31 +1772,38 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
   const outcomes = {};
   for (const r of a.results || []) outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
   const outcomeText = countsText(outcomes);
+  const leftOutCount = (a.skippedValues || []).length;
   const unlinked = a.notImported?.code === "athlete_not_linked";
-  const shownResults = (a.results || []).filter((r) => r.outcome !== "not_imported" && r.outcome !== "unchanged");
+  const v3 = isV3(c?.preview);
+  // D29: an athlete the import keeps whose every mapped value was left out is
+  // never shown as imported with data - only with its Left-out entries.
+  const allLeftOut = v3 && a.allValuesLeftOut === true && !a.notImported;
+  const shownResults = allLeftOut ? [] : (a.results || []).filter((r) => r.outcome !== "not_imported" && r.outcome !== "unchanged");
   // Kept open while the coach is linking this athlete (a re-render would
   // otherwise close it under them).
   const open = unlinked && gx.linkOpen === a.gpexeAthleteId;
   const tech = [
     ...(maskGpexeIds() && a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
-    ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])]),
-    ...((a.skippedValues || []).length ? [["Left-out codes", [...new Set(a.skippedValues.map((s) => s.reason))].join(", ")]] : []),
+    ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])], v3),
+    ...codesTech("Left-out codes", (a.skippedValues || []).map((s) => s.reason)),
+    ...codesTech("Left-out source codes", (a.skippedValues || []).map((s) => s.sourceReason)),
   ];
   return `
     <details class="gpexe-athlete ${a.blocksSession ? "is-blocking" : ""}" ${open ? "open" : ""}>
       <summary>
         <span><strong>${escapeHtml(name)}</strong>${a.blocksSession ? ` <span class="gpexe-badge is-blocked">Blocks the session</span>` : ""}</span>
-        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : outcomeText ? ` · ${escapeHtml(outcomeText)}` : ""}</span>
+        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : allLeftOut ? " · All values left out" : outcomeText ? ` · ${escapeHtml(outcomeText)}${leftOutCount ? ` · ${escapeHtml(plural(leftOutCount, "value left out", "values left out"))}` : ""}` : ""}</span>
       </summary>
       ${a.gps?.reason ? `<p class="muted">${escapeHtml(a.gps.reason.message)}</p>` : ""}
+      ${allLeftOut ? `<p class="muted">All values left out: participation is recorded, but no value is imported for this athlete. The reasons are listed under Left out.</p>` : ""}
       ${unlinked ? renderLinkHtml(a, c, unlinkedChoices) : ""}
       ${shownResults.map((r) => `
         <div class="gpexe-result">
-          <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}</p>
-          ${renderValueTableHtml(r.values.filter((v) => v.change !== "same" || r.outcome === "created"), r.outcome !== "created")}
+          <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}${v3 && !(r.values || []).some((v) => v.value !== null && v.value !== undefined) ? " · no value imported (see Left out)" : ""}</p>
+          ${renderValueTableHtml(r.values.filter((v) => v.change !== "same" || r.outcome === "created"), r.outcome !== "created", v3)}
         </div>
       `).join("")}
-      ${renderSkippedHtml(a)}
+      ${renderSkippedHtml(a, v3)}
       ${techHtml(tech)}
     </details>
   `;
@@ -1706,6 +1878,15 @@ export function importsLinkedAthletes(c) {
   return (c?.preview?.athletes || []).some((a) => a.athleteId && !a.notImported);
 }
 
+// D32 (9-B): the number of values left out is named before an approval.
+function approveLeftOutText(c) {
+  const left = Number(c?.preview?.counts?.skippedValues ?? c?.counts?.skippedValues);
+  if (Number.isInteger(left) && left > 0) {
+    return `Approving imports this whole session exactly as shown. ${left === 1 ? "1 value is" : `${left} values are`} left out (listed under each athlete); ${left === 1 ? "it is" : "they are"} not imported and never stored as a zero. Athletes left out stay out.`;
+  }
+  return "Approving imports this whole session exactly as shown. Athletes and values left out stay out.";
+}
+
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
   if (detail.outcome?.error?.code === "already_imported") return "";
@@ -1738,7 +1919,7 @@ function renderApproveHtml(c, detail, status) {
           <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
         </label>
       ` : ""}
-      <p class="muted">Approving imports this whole session exactly as shown. Athletes left out stay out.</p>
+      <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
       ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving ? "disabled" : ""}>${detail.approving ? "Importing..." : "Approve import"}</button>
     </div>

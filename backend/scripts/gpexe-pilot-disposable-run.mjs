@@ -9,6 +9,16 @@
 // single import for a third team, and drops the database in every case.
 // Never touches OPTIMOVE, monitoring2 or Supabase.
 //
+// Since phase 9 (9-B) every value comes from a mapping activation: the run
+// first builds the mapped world of the 9-B suites (tests/support/mapped-world.mjs:
+// the seeded rest_v1 fields confirmed, eleven system variables and their
+// active mappings) and binds each team to the session's GPEXE team with every
+// activation on. The saved files are read through the rest_v1 extractors
+// (the field names are the same; disposable databases only). A GPEXE team is
+// bound to one OptiMove team at a time, so the second and third teams get the
+// session with its GPEXE team id rewritten in memory (the session's and the
+// thresholds' team only; nothing else of the answer names the team).
+//
 //   node --env-file=backend/.env backend/scripts/gpexe-pilot-disposable-run.mjs \
 //     --raw-dir <dir> [--raw-dir-before <dir>] --team-session 186942 \
 //     --athletes 10442,11176,9241,9697,9231 [--report <file>]
@@ -20,9 +30,9 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "../tests/_gpexe-disposable-db.mjs";
+import { activateOn, bindTeam, ensureMappedSystem, platformAdmin } from "../tests/support/mapped-world.mjs";
 import { main as cliMain, parseArgs, loadGpexeBundle } from "./gpexe-import-pilot.mjs";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 
 const TABLES = {
   connections: `select count(*)::int as c from training_load.metric_source_connections where owner_team_id = $1`,
@@ -62,14 +72,25 @@ async function run() {
   const report = { startedAt: new Date().toISOString() };
 
   const db = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "pilot" });
+  // The mapped world's services read DATABASE_URL when they are first loaded.
+  process.env.DATABASE_URL = db.url;
   const target = new URL(db.url);
   report.database = { host: target.hostname, port: target.port || "5432", name: db.name, droppedAfterRun: true };
   const admin = new pg.Client({ connectionString: db.url });
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gpexe-pilot-map-"));
   try {
     await admin.connect();
+    const pa = await platformAdmin(admin, "pilot-pa");
+    const world = await ensureMappedSystem(admin, { platformAdminId: pa });
+    const sessionBundle = loadGpexeBundle(opts.rawDir, opts.teamSession);
+    const sourceTeam = String(sessionBundle.teamSession.team);
+    const mapped = async (org, sourceTeamId) => {
+      const { bindingId } = await bindTeam(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId, by: pa });
+      await activateOn(world, { bindingId, platformAdminId: pa });
+    };
     const names = gpexeAthleteIds.map((id) => `GPEXE athlete ${id}`);
     const org = await createGpexePilotOrg(admin, { athleteNames: names });
+    await mapped(org, sourceTeam);
     const athleteMap = Object.fromEntries(gpexeAthleteIds.map((id, i) => [id, org.athleteIds[i]]));
     const mapFile = path.join(tmpDir, "athlete-map.json");
     fs.writeFileSync(mapFile, JSON.stringify(athleteMap));
@@ -77,33 +98,22 @@ async function run() {
       "--raw-dir", rawDir, "--team-session", opts.teamSession, "--apply", "--database-url", db.url,
       "--owner-team-id", org.teamId, "--performed-by-user-id", org.userId, "--athlete-map", mapFile,
     ];
-    const skipSummary = (plan) => {
-      const byReason = {};
-      for (const skip of plan.metricSkips) {
-        const key = `${skip.level}${skip.level === "drill" ? ` ${skip.drillIndex}` : ""} ${skip.metricKey}: ${skip.reason}`;
-        byReason[key] = (byReason[key] || 0) + 1;
-      }
-      return { count: plan.metricSkips.length, byLevelMetricReason: byReason };
-    };
 
     if (opts.rawDirBefore) {
       const earlier = await quietly(() => cliMain(applyArgs(opts.rawDirBefore)));
       report.earlierFetchImport = {
         rawDir: path.basename(opts.rawDirBefore), counts: earlier.summary.counts,
-        definitionsCreated: earlier.summary.definitionsCreated.length, missingValues: skipSummary(earlier.plan),
       };
     }
 
     const first = await quietly(() => cliMain(applyArgs(opts.rawDir)));
     report.plan = {
       event: first.plan.event, thresholdsUsed: first.plan.thresholdsUsed, anomalies: first.plan.anomalies,
-      metrics: first.plan.metrics, derivedNotImported: first.plan.derivedNotImported,
-      drillDetailsFetched: Object.keys(loadGpexeBundle(opts.rawDir, opts.teamSession).details.drills).sort(),
-      missingValues: skipSummary(first.plan),
+      drillDetailsFetched: Object.keys(sessionBundle.details.drills).sort(),
     };
     report.import = {
-      rawDir: path.basename(opts.rawDir), counts: first.summary.counts, definitionsCreated: first.summary.definitionsCreated.length,
-      supplemented: first.summary.results.filter((r) => r.outcome === "supplemented").map((r) => ({ externalId: r.externalId, addedMetricKeys: r.addedMetricKeys })),
+      rawDir: path.basename(opts.rawDir), counts: first.summary.counts,
+      supplemented: first.summary.results.filter((r) => r.outcome === "supplemented").map((r) => ({ externalId: r.externalId, addedValues: r.addedValues })),
     };
     report.stateBeforeRepeatImport = await snapshot(admin, org.teamId);
 
@@ -136,24 +146,32 @@ async function run() {
     )).rows;
 
     // Concurrency on real data: a second team, two imports at the same time.
+    // Its own GPEXE team id (see the header), the session rewritten to it.
+    const asTeam = (teamId) => {
+      const b = loadGpexeBundle(opts.rawDir, opts.teamSession);
+      b.teamSession = { ...b.teamSession, team: Number(teamId) };
+      if (b.teamThresholds) b.teamThresholds = { ...b.teamThresholds, team: Number(teamId) };
+      return b;
+    };
     const concurrentOrg = await createGpexePilotOrg(admin, { athleteNames: names });
+    await mapped(concurrentOrg, "990001");
     const concurrentMap = Object.fromEntries(gpexeAthleteIds.map((id, i) => [id, concurrentOrg.athleteIds[i]]));
-    const plan = buildGpexeImportPlan(loadGpexeBundle(opts.rawDir, opts.teamSession));
     const runOne = async () => {
       const client = new pg.Client({ connectionString: db.url });
       await client.connect();
       try {
-        return await importGpexePlan(client, plan, { ownerTeamId: concurrentOrg.teamId, performedByUserId: concurrentOrg.userId, athleteIdByGpexeId: concurrentMap, batchFilename: "concurrent" });
+        return await importGpexeBundle(client, asTeam("990001"), { ownerTeamId: concurrentOrg.teamId, performedByUserId: concurrentOrg.userId, athleteIdByGpexeId: concurrentMap, batchFilename: "concurrent" });
       } finally {
         await client.end();
       }
     };
     const concurrent = await Promise.all([runOne(), runOne()]);
     const singleOrg = await createGpexePilotOrg(admin, { athleteNames: names });
+    await mapped(singleOrg, "990002");
     const singleClient = new pg.Client({ connectionString: db.url });
     await singleClient.connect();
     try {
-      await importGpexePlan(singleClient, plan, {
+      await importGpexeBundle(singleClient, asTeam("990002"), {
         ownerTeamId: singleOrg.teamId, performedByUserId: singleOrg.userId,
         athleteIdByGpexeId: Object.fromEntries(gpexeAthleteIds.map((id, i) => [id, singleOrg.athleteIds[i]])), batchFilename: "single",
       });
@@ -169,6 +187,8 @@ async function run() {
     report.concurrentImports.matchesSingleImport = JSON.stringify(concurrentState) === JSON.stringify(report.concurrentImports.singleImportState);
   } finally {
     await admin.end().catch(() => {});
+    // The mapped world's services opened the application pool on this database.
+    await import("../src/db.js").then((m) => m.pool.end()).catch(() => {});
     fs.rmSync(tmpDir, { recursive: true, force: true });
     await db.drop();
   }

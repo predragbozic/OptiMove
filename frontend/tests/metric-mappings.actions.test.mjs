@@ -508,7 +508,8 @@ test("13. switch on: the club's teams by name, the ones that cannot be chosen, e
   await click('[data-action="metric-mappings-review"]');
   render();
   assert.match(text(), /Choose Required or Optional\./);
-  assert.match(text(), /When imports use this mapping — Required: if an athlete the import admits has no value/);
+  assert.match(text(), /Required and Optional import the same way for now: if GPEXE has no value for a linked athlete, only that value is left out for that athlete/);
+  assert.doesNotMatch(text(), /the whole session is not imported/);
   await input('[data-mm-field="requirement"][value="required"]', true);
   await click('[data-action="metric-mappings-review"]');
   render();
@@ -524,7 +525,28 @@ test("13. switch on: the club's teams by name, the ones that cannot be chosen, e
   assert.deepEqual(post.body.bindings, [{ bindingId: id("b1b1b1b1", 4), requirement: "required" }]);
   assert.deepEqual(Object.keys(post.body).sort(), ["bindings", "mappingId", "reason", "requestKey", "versionId"]);
   render();
-  assert.match(text(), /Switched on\. Imports do not use mappings yet; nothing changes in imports until they do\./);
+  assert.match(text(), /Switched on\./);
+  assert.match(text(), /Switched on\. Imports use it from the next Find new sessions\./);
+  assert.doesNotMatch(text(), /Imports do not use mappings|nothing changes in imports/);
+});
+
+test("D31: no screen says that imports do not use mappings, and Required / Optional say what an import does with a missing value (C110 form B)", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const sources = fs.readdirSync(dir).filter((name) => name.endsWith(".js"));
+  assert.ok(sources.includes("metric-mappings-actions.js") && sources.includes("gpexe-import-view.js"), "the scan sees the frontend modules");
+  for (const name of sources) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    assert.doesNotMatch(source, /do not use mappings|nothing changes in imports until/i, name);
+  }
+  assert.match(data.REQUIREMENT_MEANING, /only that value is left out for that athlete — never stored as a zero — and the athlete's other values and the session are still imported/);
+  // Code review LOW-1 (9-B): a session with no value left is blocked (no_mapped_values), and the text says so.
+  assert.match(data.REQUIREMENT_MEANING, /a session with no value left at all can't be imported/);
+  // UX M5: the two choices differ only in the reason the review names.
+  assert.match(data.REQUIREMENT_MEANING, /They differ only in how the session review names the gap: Required as “required value missing”, Optional with GPEXE's own reason/);
+  assert.doesNotMatch(data.REQUIREMENT_MEANING, /whole session is not imported|When imports use this mapping/);
 });
 
 test("14. a batch refused for one team names it (never its id) and offers the others", async () => {
@@ -1118,7 +1140,8 @@ test("36. the R8 re-read at the button: a second click while it runs sends nothi
   await first;
   render();
   assert.equal(posts().filter((c) => c.url.endsWith("/activate")).length, 1);
-  assert.match(text(), /Version 2 is active\. 2 teams were switched off\. 1 team is switched on for version 2\. Imports do not use mappings yet/);
+  assert.match(text(), /Version 2 is active\. 2 teams were switched off\. 1 team is switched on for version 2\./);
+  assert.doesNotMatch(text(), /Imports do not use mappings/);
   // Back while the re-read runs: nothing is sent.
   actions.resetMappings();
   calls.length = 0;

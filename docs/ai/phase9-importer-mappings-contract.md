@@ -158,7 +158,8 @@ so "never a value without its T6 row" rests on the writer's code and the archite
 ## 3. The writer's new path (9-B), in lock order
 
 The approval runs the steps below and commits; the check-time preview runs steps 2–11 for each session (without
-steps 2a and 6b) and rolls back (R10).
+steps 2a and 6b) and rolls back (R10). Section 16 records what the 9-B pull request built and where it departs from
+this text.
 
 1. **The prefix.** The switch refusal before `pool.connect`; `begin`; 9-0's bounds (section 9); an **unlocked** check
    of the approver's right, for the early `403 not_an_approver`; the candidate `FOR UPDATE`; the existing refusals
@@ -543,7 +544,9 @@ Two fixtures, two runs, because the pinned counts and the rounding-sensitive val
   `40P01` is answered `try_again` with nothing written, never a partial write. No `40P01` arises between the importer
   and a 7d writer, an Unbind or a 7g end (C57). Each wait falls under 9-0's bound.
 - The T7 refusal through a fault seam (two teams on one triple are unreachable through v30): the `23505` rolls back to
-  its savepoint and the candidate is stored `blocked` `source_instance_held`.
+  its savepoint and the candidate is stored `blocked` `source_instance_held`. *As built (D19, section 16): through a
+  real keyed row of another team, not a fault seam; the case is reachable after an Unbind, a settings change and a new
+  bind, so "unreachable through v30" is too strong.*
 - A value-bearing trigger error injected on the import path: the log holds the SQLSTATE and the constraint or trigger
   name, never the value or an id.
 - The undo removes T6 first on an M4-imported session (C47; disposable only).
@@ -1039,3 +1042,313 @@ by the executor.
 - **Amendment after the owner's decisions of 2026-11-01** (section 12.3): C110 as form B in step 8, section 6, 6.1,
   8.2, R8, O6 and the risks; O2 decided; C111 recorded out of scope; the *Nezavisni revizor*'s LOW folded (section
   7.3, R3 and O13 now end the deploy exception "until 9-B is live, deployed on the owner's word (O13)").
+
+---
+
+## 16. As built (9-B)
+
+The 9-B pull request (branch `feature/phase9-b-mapped-writer`), built on `8fa0ea7` (merge of PR #322, 9-0; the base).
+Not merged and not deployed; no migration (O14); the import switch untouched. The *Rukovodilac* accepted the decisions
+D1–D38 of the executor's 9-B plan as recommended (2026-11-02), with the conditions on D9 and D29 written below. This
+section names functions and tests, not line numbers.
+
+### 16.1 What was built, by step
+
+- **Steps 1–2a (approval).** An unlocked `canApproveGpexeImport` inside the transaction gives the early
+  `403 not_an_approver`; then the candidate `FOR UPDATE`, the existing refusals and the team import lock. Step 2a is
+  `lockApprovalTeam` (`backend/src/gpexeImportAccess.js`): the team and its club `FOR SHARE` in two plain locked reads,
+  not `judge()` (it refuses a connection that is not `verified`, which C55 forbids as a condition, and its LEFT JOINs
+  cannot be locked). A team or club missing or archived, or a team moved to another club since the route's check, is
+  the identical 404 (R16); `notFound` is now in `BATCH_STOP_CODES`, so a batch stops at it.
+- **Step 3.** `readImportBinding` (`backend/src/gpexeImportMapping.js`): the binding `FOR SHARE`, active, of the team and
+  of `gpexe`, with its raw `source_team_id` (T6 compares the instance key with the stored text). At an approval it is the
+  binding of the candidate's last check, pinned to the team; a `legacy_env` check, or a missing, ended or other binding,
+  stores a preview blocked `mapping_not_usable` that lists the athletes, and answers `preview_changed`. At a check it is
+  the run's own binding (`importSourceIdentity`); a binding found not active under the lock fails the check
+  `binding_ended`, nothing staged.
+- **Steps 4–5.** `readOpenActivations` (unlocked), then `lockActivations`: T2b → T3 → T4 → `metric_definitions` → T5,
+  each `FOR SHARE` ascending by id, and the rows read again and compared on every field that decides a write. A
+  difference throws `ImportMappingChangedError`: `409 preview_changed` with nothing stored at an approval,
+  `check_preview_busy` at a check. R11: a variable without the scope capability of a level it is switched on for
+  (`session`, `component`) is `mapping_not_usable`. The labels of the binding family's active fields with no open
+  activation give `unactivatedSourceMetrics`.
+- **Step 6.** `lockSourceInstance`: the team's active team-owned gpexe v11 row is found, then locked `FOR UPDATE` by id
+  (R6: found inactive → `mapping_not_usable`). Its T7 keys are set from NULL, or a row is inserted with them, inside
+  `savepoint gpexe_source_instance`; a `23505` is told apart by its constraint (`source_instance_held`, or
+  `mapping_not_usable` for the one-active-gpexe-per-team index). Keys that differ → `source_instance_changed`; the
+  session under another instance → `session_imported_under_another_instance` (a boolean lookup). **6b:**
+  `lock_gpexe_import_approver` runs after it; `42501` → `403 not_an_approver`; the approval row's basis and grant come
+  from this locked result.
+- **Steps 7–8.** `mappedMetricSpecs` (`gpexeImportMapper.js`) builds one frozen spec per locked activation through
+  `extractorFor`, or refuses with `mapping_not_usable` or `source_unit_mismatch`. `buildGpexeImportPlan(bundle, {
+  metricSpecs })` converts each value with `convertAtStorageScale` and checks the range with `compareDecimal`,
+  inclusive. `classifyMappedPlan` decides the whole-candidate blocks and `leftOutReason` the Left-out reasons;
+  `SKIP_CATEGORY` (`sourceMetricExtractors.js`) classifies the 18 extractor codes. Before the locks only the gates run
+  (no specs), to name the session and its GPEXE team.
+- **Steps 9–11.** The writer (`gpexeImportWriter.js`). `importGpexePlanLocked` checks C55 for every value before any
+  write (`checkMappedValues`) and refuses `no_mapped_values` when no value remains. It writes each value as decimal text,
+  then its T6 rows in the same function (`metricValueProvenanceInsert`, matched by definition id). It creates no
+  definition: `ensureSourceConnection` and `ensureMetricDefinitions` are removed. The occasion content hash covers the
+  canonical definition and version, the mapping version, the value and unit, and the source value and unit. A current
+  value under another mapping version, or without a T6 row, gives `needs_review`. `importGpexeBundle` and
+  `importGpexeBundleLocked` replace `importGpexePlan` as the writer's own entry. Preview version 3
+  (`gpexeImportPreview.js`); its hash adds the sorted activation set.
+- **Section 6.1.** `backend/src/gpexeImportAudience.js`: the three levels, the closed code sets, `projectPreview` and
+  `projectBlockedCodes`. `importAudienceOf` (`gpexeImportAccess.js`); the route computes the level once (`teamAccess`)
+  and passes it to the list, the detail and the candidate inside an approval's answer. `data_setup_incomplete` is the
+  `blockedCode` of the eight blocking codes (`gpexeImportReasons.js`).
+- **R12.** `listSourceAthletes` and `getCandidate`'s `helperValues` read the helper values from the snapshot through
+  `wholeRowHelperValues`.
+- **R14.** `frontend/gpexe-import-view.js` reads version 3 and still renders version 2: Variable, Before, Imported and the
+  GPEXE value; Left-out entries by label with a plain reason; "All values left out"; the coach sentence against the
+  administrators' precise sentences; the note of fields not switched on; "N values left out" on a Ready row and in the
+  batch confirmation. The Mappings screen (`frontend/metric-mappings-*.js`): J16's R18 sentence removed and
+  `REQUIREMENT_MEANING` rewritten for C110 form B (J16 section 15).
+- **R15.** `gpexe-import-pilot.mjs` (the dry run builds gates only; `--apply` runs `importGpexeBundle` on a disposable
+  database), `gpexe-pilot-disposable-run.mjs` (a mapped world), `gpexe-api-probe.mjs` (empty specs) and
+  `gpexe-details-coverage-probe.mjs` (its own constants).
+- **Logs (step 10).** `dbErrorFields` and `formatDbError` (`gpexeImportService.js`): code, constraint, table, routine,
+  the PL/pgSQL function name and the error's name; never the message, detail, hint, `where` or a stack. Every importer
+  log sink uses them, four older sinks included: the team settings, the retention schedule and link trigger errors,
+  which the architecture suite found, and the retention CLI (`gpexeRetentionCli.js`), which the internal code review
+  found. The suite's log test now takes as sinks every `backend/src` module that calls an importer entry point, not a
+  fixed list. The disposable-database operator scripts (`backend/scripts/gpexe-*.mjs`) still print an error's text.
+
+### 16.2 Decisions D1–D38 (accepted as recommended)
+
+- **D1** `GPEXE_METRIC_SPECS`, `GPEXE_DERIVED_NOT_IMPORTED` and their helpers deleted from `src`; `buildGpexeImportPlan`
+  has no default specs (a `TypeError` without them); the frozen copy lives in `backend/tests/support/gpexe-legacy-specs.mjs`.
+- **D2** A level no activation covers produces no result (no identity, occasion or segment); a covered level whose
+  values are all left out keeps its occasion with no values.
+- **D3** "Admitted" means the linked active members (all participants when none is linked); no activation is always
+  `no_mapped_values`; nobody linked while the mapping gives values keeps `no_changes` with the link reason.
+- **D4** The plan with values is built only after the locks, at a check and at an approval; codes win in step order.
+- **D5** A difference under the registry locks: `preview_changed` with nothing stored at an approval,
+  `check_preview_busy` at a check.
+- **D6** A check whose binding is not active under `FOR SHARE` fails `binding_ended`; nothing staged.
+- **D7** Step 2a checks the team and club active and the club unchanged; the connection's club is a binding fact
+  (step 3).
+- **D8** `club_admin` needs the club's workspace; `adminViewerOf` is "the level is not `other`". This also narrows the
+  check rows of a club admin who coaches the team, in the team workspace (audience test 5; for the security review).
+- **D9** `blockedCode` is `data_setup_incomplete` for all eight codes at every level. The precise code stays in
+  `blockedSourceCode` and `preview.blocked`: all eight for the platform admin; for the club's admin, with
+  `mapping_not_usable` in place of the three instance codes; `other` gets the stable code and the coach sentence
+  (the *Rukovodilac*'s condition; tested for every level on the six surfaces, audience tests 1 and 3).
+- **D10** `previewHash` is null for a blocked candidate at `club_admin` and `other`; a candidate that is not blocked keeps
+  its hash for every level (audience test 3).
+- **D11** `changesToImported` in a refusal is a count, behind an integer guard in the route.
+- **D12** Left-out entries keep the names `skippedValues` and `counts.skippedValues`, are listed for every participant
+  with `message` in plain words; the C110 code and `sourceReason` are for the two admins.
+- **D13** The value entry carries `variableScope`; `metricKey` is gone; the change labels add `left_out` and `not_mapped`.
+- **D14** The Link athletes helper values are computed when read, from one whole-session row of a measured athlete in
+  the snapshot, converted as doubles for display; `getCandidate` adds `helperValues` for the review's link context.
+- **D15** `derivedNotImported` dropped.
+- **D16** `unactivatedSourceMetrics` per binding, labels sorted, with `unactivatedSourceMetricCount`.
+- **D17** A current value under another mapping version, or from before M4 (no T6 row), gives `needs_review` whatever
+  the report time.
+- **D18** A bundle of another GPEXE team than the binding's is `mapping_not_usable`.
+- **D19** The T7 `23505` is produced through a real keyed row, not a JS fault seam (section 8.2).
+- **D20** Logs carry the fields of `dbErrorFields`; errors are never re-wrapped, so 9-0's codes hold.
+- **D21** The pilot CLI's dry run has no values (R15).
+- **D22** The API probe uses empty specs.
+- **D23** An unknown skip code throws a plain error (internal); the 18-code completeness test shows it is unreachable.
+- **D24** `unexpected_unit` is the only runtime shape code; the registry is unchanged.
+- **D25** An empty `events` object (`{}`: present, without the version's threshold or duration fields) gives
+  `threshold_mismatch`, which blocks the candidate (a known limit). An absent `events` object is `events_missing`,
+  which leaves that value out (C110 form B).
+- **D26** R17 uses `resolveVariableEditor` unchanged, asked lazily; any error masks the name.
+- **D27** The activation set enters the preview hash only, not the preview JSON.
+- **D28** `importGpexePlan` removed; `importGpexeBundle` and `importGpexeBundleLocked` keep the athlete map strict
+  (`onlyMapped` for tests).
+- **D29** An athlete whose values are all left out still counts as imported for the roster (participation recorded).
+  The *Rukovodilac*'s condition: the review shows that athlete with "All values left out" and the reasons, never as
+  imported with data (`allValuesLeftOut`; audience test 4).
+- **D30** No backend module outside the GPEXE importer and the extractor registry changes; `resolveVariableEditor` is
+  unchanged; `PARAMS_AS_TEXT` is copied into `gpexeImportMapping.js`.
+- **D31** `REQUIREMENT_MEANING` rewritten for C110 form B in 9-B; reviewed by `code-reviewer` only (the *Rukovodilac*).
+- **D32** "N values left out" on Ready rows and in the batch confirmation; the approval note reads "Athletes and values
+  left out stay out.".
+- **D33** No version marker for the content hash.
+- **D34** The writer's C55 checks are D5's (`checkMappedValues`); R6 locks the instance by id in two steps.
+- **D35** The check routes keep `adminViewer`; a check answer carries no candidate; surface 6 is the list read again.
+- **D36** Only step 3 short-circuits an approval; a block at step 6 still runs step 6b and is refused at step 12.
+- **D37** A step-3 block stores a preview that lists the athletes (`session_blocked`).
+- **D38** A team without a club compares null with null at step 2a.
+
+### 16.3 Departures from the text above
+
+- **Section 4, the value entry:** it also carries `metricDefinitionId`, and a value the result had and this import does
+  not write can also read `missing_in_gpexe` (D13 named `left_out` and `not_mapped`).
+- **Section 4 / D16, `unmappedSourceFields`:** always 0, by construction. The server3 snapshot keeps only the fields the
+  extractor registry reads (the adapter's `BUNDLE_FIELDS`), so no walker was built and no test uses an unprojected
+  bundle.
+- **Section 6.1, the batch:** `approveCandidates` receives the level but does not read it; its results carry only the
+  neutral `blockedCode` and a count, which audience test 1 checks for every viewer.
+- **Section 8.2, the T7 refusal:** D19.
+- **Section 8.1, Arm A1:** the writer's own entry is `importGpexeBundle` (D28), not `runImport`.
+
+### 16.4 Tests
+
+- **New suites:** `backend/tests/gpexe-import-mapped-plan-9b.test.mjs` (unit: the spec builder's refusals, the plan
+  against the oracle, D2, the 18 codes, C110, R7, R8, R9, never a zero, `gpexeLevelValues`, `wholeRowHelperValues`, D3,
+  two mappings of one field); `gpexe-import-mapped-9b.test.mjs` (Arm A1, the writer half of A2, Arm B1 and an ended
+  activation, R12); `gpexe-import-mapped-routes-9b.test.mjs` (Arms A2, B2, B3 and C); `gpexe-import-mapped-audience-9b.test.mjs`
+  (the D9 matrix, each blocking code arising for real, D10 and the granted coach, D29 with C110 and R17, D8);
+  `gpexe-import-mapped-architecture-9b.test.mjs` (C46, a T6 row for every value, specs only from the registry, the test
+  seams, the log sinks, the audience on the six surfaces); `gpexe-import-mapped-concurrency-9b.test.mjs` (the writer
+  against a 7d end in three orders through the mapping hold seam, an approval against an Unbind and a 7g end in both
+  orders, two approvals of one team, a revoke and a 7d end during an approval - no `40P01`, `403` -, R16 through the
+  single route and the batch, the T7 `23505` inside its savepoint for the writer and the approval);
+  `gpexe-import-mapped-writer-9b.test.mjs` (D17 `needs_review` under a replacement version, the exact-decimal
+  supplement, the two closed power zones keyed apart, `PARAMS_AS_TEXT` parity, D18, R6, R11).
+- **Added to `gpexe-import-bounds-9-0`:** 6c2 (LOW-1), 12c (LOW-2), the idle gap in 8 and the synthetic session 8b
+  (LOW-3).
+- **New support:** `backend/tests/support/gpexe-legacy-specs.mjs` (the frozen pre-9-B specs, the oracle),
+  `support/gpexe-fake-source.mjs` (the fake server3 source and binding through the routes, extracted from
+  the finalization suite's own, which it keeps), `support/mapped-world.mjs` (the ten seeded revisions confirmed with every guard on, eleven system
+  variables and active mappings through the real services, bindings and activations).
+- **Rewritten onto the binding path with activations, or onto the mapped writer:** `gpexe-import`,
+  `gpexe-in-app-import`, `gpexe-batch-approve`, `gpexe-import-bounds-9-0`, `gpexe-check-finalization`,
+  `gpexe-import-credential-resolver`, `gpexe-import-values-batch`, `gpexe-undo-session`, `gpexe-undo-guards`,
+  `gpexe-backup-verify`, `gpexe-import-reasons`, `activity-roster-5a1`, `activity-roster-5a2`,
+  `activity-roster-self-report`, `central-calendar-k1a`, `source-metric-extractors-7f`, `source-metric-preview-7e`,
+  `source-metric-preview-math-7e`, `gpexe-rest-v1-adapter-reads`, `gpexe-details-coverage-probe`,
+  `source-metric-mapping-m2`, `metric-variables-m3-0` and `source-instance-end-7g`; in the frontend
+  `gpexe-import.actions`, `gpexe-imports-batch.actions`, `gpexe-imports-id-masking.actions`,
+  `gpexe-imports-v33.actions` and `metric-mappings.actions`.
+- **Retired on purpose** (9-B removes the behaviour): in `gpexe-import`, "an existing definition whose GPEXE source
+  context changed stops the import" and "an import racing a catalog archive of its definition". The importer no longer
+  creates or checks its own definitions.
+- **`source-instance-end-7g` test 7** now builds its own state (the *Nezavisni revizor*'s LOW-1 on PR #305).
+
+### 16.5 Measurements (LOW-3; bounds tests 8 and 8b)
+
+PostgreSQL 16 on a disposable database in the executor's container; PostgreSQL 17.6 (production) was not measured.
+- Arm A1, the writer (53 values, 53 T6 rows): 68 statements; the longest statement 8.1 ms
+  (`materialize_activity_group_from_metric_event`); the COMMIT 3.4 ms; the longest idle gap 2.4 ms.
+- An approval through the route (one candidate, both drills): 86 statements; the longest statement 6.7 ms
+  (`activity_roster`); the COMMIT 1.9 ms; the longest idle gap 1.8 ms (after `lock_gpexe_import_approver`).
+- A synthetic session of 40 athletes on 6 levels with the eleven activations: 2,640 values and 2,640 T6 rows; 1,334
+  statements and 1,207 ms of statement time; the longest statement 15.7 ms; the COMMIT 3.1 ms; the longest idle gap
+  33 ms.
+- The bounds are 10 s per statement, 10 s idle in a transaction and 5 s per lock wait; the tests assert each measure
+  below a quarter of its bound.
+
+### 16.6 The *Nezavisni revizor*'s LOW notes on 9-0
+
+- **LOW-1** (bounds test 6c2): once the COMMIT is sent, no error is answered `try_again`. A 55P03, 40P01, 57P01, 25P03
+  or 57014 raised by the COMMIT is `503 import_outcome_unknown` when it did not land and `200` verified when it did.
+- **LOW-2** (bounds test 12c): an approval and an undo of the same team both take the team import lock first and their
+  rights after it, so they serialize in both orders; the second waits on the advisory lock, never a deadlock.
+- **LOW-3** (bounds tests 8 and 8b): section 16.5.
+
+### 16.7 Mutations
+
+- LOW-1: N7a (the COMMIT's catch rethrows instead of `resolveUncertainCommit`) and N7b (N7a plus the outer `!commitSent`
+  guard removed) are killed by test 6c2. N7c (the outer guard removed alone) survives: every COMMIT error is resolved
+  in the inner catch, so the guard is unreachable defence in depth.
+- Audience suite: M-D9 (the club admin reads the instance codes unprojected), M-D10 (a blocked candidate's hash for every
+  level), M-D8 (`club_admin` in any workspace), M-R17b (every coach reads a club variable's name) and M-R17c (the
+  projection never hides it) are killed.
+- Architecture suite: test 5 found the three older log sinks of section 16.1, fixed.
+- Concurrency and writer suites: M-R16 (step 2a removed), M-T7 (the source-instance savepoint removed), M-D18 (the
+  bundle-team guard removed) and M-PARAMS (`PARAMS_AS_TEXT` without `trim_scale`) are killed.
+
+### 16.8 Section 8.2 items and where they are tested
+
+- The concurrency cases (a 7d version end, an Unbind, a 7g end, two approvals of one team, the revoke during an
+  approval), R16 through the single route and the batch, the preview with the mapping hold seam and the T7 `23505`:
+  `gpexe-import-mapped-concurrency-9b`.
+- R6, R11, D18 and the `PARAMS_AS_TEXT` parity (D30): `gpexe-import-mapped-writer-9b`. R6 is built with every trigger on
+  by ending the instance between the importer's unlocked read and its lock; R11 removes a level's capability with the
+  history triggers off, as the 7d suite's `rawActivation` does, because with them on the capability cannot be removed.
+- The stale-hash `changesToImported` count: the single 409 in `gpexe-in-app-import`, the batch's
+  `changes_need_acceptance` in `gpexe-batch-approve`.
+- A value-bearing database error: the batch suite's `42P01` carrying a marker text on the approval path (the log names
+  the code, never the text), and the architecture suite's rule for every importer log sink.
+
+### 16.9 Recorded, not changed
+
+- **Pre-existing, confirmed by the security review (MEDIUM, a separate task):** a coach of a team whose club was
+  archived still reaches the GPEXE team routes. The club archive (`DELETE /clubs/:id`) sets only `clubs.is_active`;
+  `loadAvailableWorkspaces` still offers the team workspace and `resolveGpexeTeamAccess` checks the team, not its club.
+  Reads (status, candidates, source athletes, approvers) and Link / Unlink stay open to that coach; a check start is
+  refused by the credential resolver (`team_club_active`) and, since 9-B, an approval by `lockApprovalTeam` (the
+  identical 404). No other tenant's data is reachable. The fix (the club's `is_active` in `resolveGpexeTeamAccess` and in
+  the team-workspace query) is outside 9-B and is recorded for a separate task.
+- **Line references.** Sections 1–9 and 12 cite lines at `1932ad1`, as the header says. 9-0 moved
+  `gpexeImportPreview.js` and `gpexeImportService.js` by about 70–80 lines (to `8fa0ea7`), and 9-B rewrote the mapper,
+  the writer, the preview and much of the service, so most cited lines in those files no longer match. They are not
+  rewritten: read them at `1932ad1`. The 9-B plan's own line numbers are at `8fa0ea7`.
+
+### 16.10 Internal review round (frozen head `71caa135`)
+
+`code-reviewer`, `db-reviewer`, `security-reviewer`, `mobile-qa` and `ux-design-reviewer` each answered READY WITH
+NON-BLOCKING NOTES; none found a BLOCKER or HIGH. Fixed in the next commit, each with a test:
+- **Code, LOW:** the Required / Optional text promised the session is always imported - a session with no value left
+  is blocked `no_mapped_values`; the text says so now. D25 here said "a missing `events` object" for what the code does
+  with an empty one (an absent one is `events_missing`, left out); reworded. The retention CLI (`gpexeRetentionCli.js`)
+  still logged an error's message; it uses `formatDbError` now, and architecture test 5 takes as log sinks every
+  `backend/src` module that calls an importer entry point (the CLI included), not a fixed list. **NIT:** routes test C
+  plants a real version 2 preview (values by `metricKey`, `derivedNotImported`, no version 3 field).
+- **Code and security, NIT / LOW:** the route no longer passes a dead `audience` to `approveCandidates` (the batch
+  answers the same neutral result for every level); architecture test 6 now asserts that neither approval call takes an
+  audience and that both pass `expectedClubId: access.clubId` (R16).
+- **Security, LOW:** the coach's projection removes named fields; audience test 4 now pins the exact key sets a coach
+  reads (the preview, an athlete, a result, a value, a Left-out entry), so a new field must be decided for that level.
+  Architecture test 5 also refuses `.detail`, `.hint`, `.where`, `.cause`, `.internalQuery` and `toString()` in a log
+  call.
+- **Database, MEDIUM (F1):** the concurrency suite had no case of the importer against the 7b transitions, the revision
+  lifecycle's pinned step or a canonical variable version. Tests 8–10 add them, both orders, no `40P01`:
+  - 8a / 8b: an A2 disable of the version the activation pins waits at the import's T3 row, or holds its locks first
+    and the import's step-5 re-read answers the change;
+  - 9: the lifecycle's L5 retirement waits at the T2b row, or holds it first;
+  - 10: a canonical variable version create waits at the `metric_definitions` row and is then refused
+    `variable_pinned` (decision 9: a variable a mapping pins keeps its current version), in both orders.
+  - They disable versions and retire revisions of the suite's shared world, so they stay last in the file.
+  - Removing the step-5 `FOR SHARE` fails 8a, 8b, 9 and 10 (and 1a, 1c, 5).
+- **Database, LOW (F2):** the approval, the check-time preview and the writer's entry open with
+  `begin isolation level read committed` (steps 4–5 read, lock, read again and compare); architecture test 7 pins it.
+- **UX, MEDIUM M1–M5** (text and view only):
+  - M1: `no_mapped_values` says it covers "no mapping switched on for this team gives a value for this session" and
+    "every mapped value left out", and its step names the mappings with the levels they cover and the Left-out reasons.
+  - M2: `mapping_not_usable` names the team's GPEXE binding as well as its mappings, and the step ends with "ask a
+    platform administrator".
+  - M3: the athlete's summary names its values left out, and the approval note names the session's count (D32).
+  - M4: the value table's header is "OptiMove value" (or "Before | New value"), never "Imported" before an approval.
+  - M5: Required / Optional say that both import the same way for now and differ only in the reason the review names.
+  - **UX, LOW:**
+    - L1 in part: a coach reads "not set up for import" instead of "not switched on", and an administrator reads
+      where to set up a mapping and switch it on. The C110 Left-out words stay as section 6 fixes them.
+    - L2: a result with no value says "no value imported (see Left out)".
+    - L3: the shape and instance steps name a platform administrator; `session_imported_under_another_instance` says
+      the session stays out (ending an instance never lifts it).
+    - L4: a switch-on says "Imports use it from the next Find new sessions."
+  - The coach's sentence is unchanged (section 6 fixes it).
+- **Mobile, LOW:** a v3 table's first column wraps a long unbroken label, and the field note is 0.9rem, full contrast
+  and wraps. A non-zero value below 0.005 keeps three significant digits instead of reading "0".
+
+Narrow re-reviews of the fixes: `code-reviewer`, `ux-design-reviewer` and `db-reviewer` (F1, F2) answered READY WITH
+NON-BLOCKING NOTES; F1 and F2 are closed. Applied:
+- `fmtValue` is pinned for 0.0012345, 0, -0.004 and 0.005;
+- the coach's key sets are also pinned for the session, `thresholdsUsed`, the counts, `gps` and `participation`;
+- `no_mapped_values` also covers "a mapping is switched on but gives no value for this session" (no level covered),
+  and its step names the levels;
+- the administrator's field note says to set up a mapping and switch it on;
+- `session_imported_under_another_instance` no longer points to ending an instance;
+- `source_instance_changed` points to the team's binding first.
+
+Recorded, not changed:
+- the pre-existing archived-club access (16.9);
+- R17 resolving the workspace a second time (`resolveVariableEditor`), and comparing the viewer's club with the team's
+  current club, not the variable's owner (LOW; name-only, narrow precondition);
+- an optional / other Left-out entry keeps the extractor's code in `reason` for a coach (NIT; the same as version 2,
+  shown as plain words);
+- the step-3 refresh of a blocked preview before step 6b (D36, accepted);
+- one pre-existing statement that may grow with history, `assertNoIdentitiesMissingFromSource` (LOW; no EXPLAIN run);
+- a runtime canary test for a value-bearing database error on the approval path beyond the batch's `42P01` (LOW);
+- UX NIT (b) "its data setup" and NIT (c) `white-space: nowrap` for value cells;
+- from the database re-review: the import-first orders of tests 8a, 9 and 10 finish inside the writers' 2 s row lock
+  timeout (a flake risk on a very slow machine, not a correctness gap); A1 replace is not a separate case (it takes only
+  `FOR SHARE` locks the import does not conflict with, so it never waits on the import); a behavioural proof of the
+  READ COMMITTED pin under a `repeatable read` server default is not built (architecture test 7 is static).

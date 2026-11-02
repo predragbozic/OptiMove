@@ -153,7 +153,7 @@ test("DC1 the planned run: one exchange, then ten GETs in a fixed order with a 2
   noLeak(report);
 });
 
-test("DC2 what is compared comes from the importer itself; the details' names are the old script's hypotheses", () => {
+test("DC2 what is compared is the frozen pre-9-B import rules (since 9-B the importer reads through the mappings, not code rules); the details' names are the old script's hypotheses", () => {
   assert.deepEqual(IMPORTED_MORE_RULES.events.map((e) => [e.metric, e.threshold, e.duration]), [["acceleration", 2.5, 0.3], ["deceleration", -2.5, 0.3]]);
   assert.deepEqual(IMPORTED_MORE_RULES.zones.map((z) => [z.family, z.band, z.thresholdField]), [["power", [25, 60], "power_thresholds"], ["power", [60, 75], "power_thresholds"], ["power", [75, null], "power_thresholds"], ["speed", [7, null], "speed_thresholds"]]);
   assert.deepEqual([...IMPORTED_ROW_SCALARS], ["total_time", "total_distance", "max_v"]);

@@ -7,8 +7,10 @@
 // of the rollback, the rollback back to v49's exact catalog, and v50 again), and
 // one migrated through v50 for the behaviour. Every team, binding, connection and
 // instance here is a test row of this file (a credential connection's parts are
-// random bytes of the right lengths: nothing is ever decrypted or sent). No code
-// writes the T7 keys before M4, so every instance is a raw fixture row.
+// random bytes of the right lengths: nothing is ever decrypted or sent). Since
+// 9-B the importer's mapping context keys the team's instance (T7) on its first
+// mapped import; here every instance is still a raw fixture row, so each test
+// owns its state.
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -639,7 +641,7 @@ test("5. the rollback returns v49's catalog exactly (comments included; v48's bo
 // ---------------------------------------------------------------------------
 test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or club-owned connection, keys, an owner change or a source-system change in the ending statement, an active binding of the owner team, an open activation on its ended binding, a held team lock, a missing audit row at COMMIT - each refused; an ended instance is final; `set state = state` passes; an INSERT is untouched", async () => {
   const pa = W.pa.id;
-  // The importer's INSERT (keyless, no actor) is untouched.
+  // A keyless INSERT with no actor (the shape of a connection before 9-B keys it) is untouched.
   const freshTeam = await team(W.clubA);
   const keyless = (await one(k, `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`, [freshTeam])).id;
   const inst = await instance();
@@ -686,14 +688,15 @@ test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or
   for (const actor of [pa, null]) {
     refusedWith(await tx(actor, (c) => c.query(`update training_load.metric_source_connections set state = 'active' where id = $1`, [inst.connectionId])), "23514", FINAL);
   }
-  // Both ends of `bound` (no binding, no activation now) and of a fresh one stay possible for the T8 tests.
-  W.ended6 = inst;
 });
 
 test("7. the T8 branch, in direct SQL: the audit row follows its own end in the same transaction (never an earlier end, never a savepoint's), once, by the acting platform admin, naming the owner team, with a reason and no evidence; the once-index makes it physical", async () => {
   const pa = W.pa.id;
-  // An end ended in an earlier transaction gets no new row.
-  refusedWith(await tx(pa, (c) => auditSql(c, W.ended6, { requestKey: key() })), "23514", AUDIT_FOLLOWS);
+  // An end ended in an earlier transaction gets no new row (this test's own
+  // instance, ended with its audit row first - no state from test 6).
+  const earlier = await instance();
+  assert.equal((await tx(pa, async (c) => { await endSql(c, earlier.connectionId); await auditSql(c, earlier); })).ok, true);
+  refusedWith(await tx(pa, (c) => auditSql(c, earlier, { requestKey: key() })), "23514", AUDIT_FOLLOWS);
   // A row without an end in this transaction; a row written in this transaction without an end (`set state = state`).
   const inst = await instance();
   refusedWith(await tx(pa, (c) => auditSql(c, inst)), "23514", AUDIT_FOLLOWS);

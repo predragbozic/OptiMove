@@ -14,7 +14,7 @@
 // docs/runbooks/gpexe-in-app-import.md); nothing here checks or claims a
 // backup.
 import { isPoolCheckoutTimeout, pool, query } from "./db.js";
-import { canApproveGpexeImport } from "./gpexeImportAccess.js";
+import { ApprovalTeamGoneError, canApproveGpexeImport, lockApprovalTeam } from "./gpexeImportAccess.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
@@ -23,12 +23,14 @@ import {
   projectStoredDetails, DRILL_PARAMETER_EFFECT, drillParameterEffectOfFullBundle, importRefusal,
   assertImportSourceStillUsable, assertLegacyPathStillOpen,
 } from "./sourceImportCredentialResolver.js";
-import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
+import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId, wholeRowHelperValues } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
+import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
   blockedByMapping, buildCandidatePreview, canonicalJson, isImportWaitError, isSessionEndedError, previewLocked, setImportTransactionBounds, sha256Hex,
 } from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
+import { ImportBindingNotActiveError, ImportMappingChangedError, prepareImportMapping, readImportBinding } from "./gpexeImportMapping.js";
 import { recordImportObservations } from "./activitySourceObservations.js";
 import { createCheckMeter, NOOP_CHECK_METER } from "./gpexeCheckTiming.js";
 
@@ -289,7 +291,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     if (error instanceof GpexeImportServiceError) throw error;
     // Anything else (a database guard firing, a bug): a stable code, and the
     // database's own text never reaches the caller.
-    console.error(`[gpexe] the GPEXE team of ${teamId} could not be set: ${error?.code ?? ""} ${error?.message}`);
+    console.error(`[gpexe] the GPEXE team of ${teamId} could not be set: ${formatDbError(error)}`);
     throw new GpexeImportServiceError(500, "internal_error", "The GPEXE team could not be set; nothing was changed.");
   } finally {
     client.release();
@@ -698,7 +700,7 @@ export const RETENTION_INTERVAL_HOURS = 6;
 // In the web server process only (see server.js). Timers are unref'd, and a
 // failure is logged and recorded in gpexe_retention_runs, never thrown.
 export function startGpexeRetentionSchedule({ intervalHours = RETENTION_INTERVAL_HOURS, startupDelayMs = 30_000 } = {}) {
-  const tick = (trigger) => runRetention(trigger).catch((error) => console.error(`[gpexe] retention (${trigger}) failed: ${error?.message}`));
+  const tick = (trigger) => runRetention(trigger).catch((error) => console.error(`[gpexe] retention (${trigger}) failed: ${formatDbError(error)}`));
   const first = setTimeout(() => tick("startup"), startupDelayMs);
   first.unref();
   const every = setInterval(() => tick("interval"), intervalHours * 3_600_000);
@@ -935,7 +937,7 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
         throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
       }
       if (error instanceof GpexeImportServiceError) throw error;
-      console.error(`[gpexe] the check of ${teamId} could not be started: ${error?.code ?? ""} ${error?.message}`);
+      console.error(`[gpexe] the check of ${teamId} could not be started: ${formatDbError(error)}`);
       throw new GpexeImportServiceError(500, "internal_error", "The check could not be started; nothing was written.");
     }
   } finally {
@@ -988,7 +990,7 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   }
   const identity = importSourceIdentity(facts);
   console.info(`[gpexe] check ${row.id} of team ${teamId} reads through ${identity.path}${identity.path === PATH_SOURCE_CONNECTION ? ` (connection ${identity.connectionId}, binding ${identity.bindingId}, source team ${identity.sourceTeamId})` : " (GPEXE_API_TOKEN, a team without a source binding)"}`);
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null, meter });
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null, importPath: identity, meter });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
   return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
@@ -1033,7 +1035,7 @@ async function runCheck(checkId, options) {
   }
 }
 
-async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null, meter = NOOP_CHECK_METER }) {
+async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null, importPath = null, meter = NOOP_CHECK_METER }) {
   const counts = { sessions: 0, new: 0, changed: 0, unchanged: 0 };
   // Every heartbeat, timed (the meter never throws; the heartbeat's own error
   // is passed on unchanged).
@@ -1058,7 +1060,7 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     // Every check is also a retention run, so expired snapshots go even when
     // no scheduler ran; a failure here must not stop the check.
     const retentionStarted = meter.start();
-    await runRetention("check").catch((error) => console.error(`[gpexe] retention during check failed: ${error?.message}`));
+    await runRetention("check").catch((error) => console.error(`[gpexe] retention during check failed: ${formatDbError(error)}`));
     meter.retention(retentionStarted);
     const sessions = await gpexe.listTeamSessions({ gpexeTeamId, fromDay: window.from, toDay: window.to, onProgress: alive });
     meter.sessionsFound(sessions.length);
@@ -1085,7 +1087,7 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
         throw importRefusal("drill_parameter_effect_not_distinguishable");
       }
       if (!["not_required", "confirmed", "not_observed"].includes(drillParameterEffect)) drillParameterEffect = null;
-      const kind = await recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect, meter });
+      const kind = await recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect, importPath, meter });
       counts.sessions += 1;
       counts[kind] += 1;
       meter.sessionDone(bundle);
@@ -1111,7 +1113,7 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     // connection to needs_reconnect (one auto_invalidate audit row, basis
     // system) — and nothing falls back to the environment token.
     const known = error instanceof GpexeClientError || error instanceof SourceAdapterError || error instanceof SourceImportResolveError;
-    if (!known) console.error(`[gpexe] check ${checkId} failed: ${error?.stack || error}`);
+    if (!known) console.error(`[gpexe] check ${checkId} failed: ${formatDbError(error)}`);
     // The stable code the row gets, never a message (the meter writes `other`
     // for a code outside its closed set). A finalization whose COMMIT was not
     // confirmed may have landed: its outcome is unknown, never "failed".
@@ -1154,7 +1156,7 @@ function sessionStartInstant(bundle) {
 // running check; the finalization publishes it, or it is discarded with the
 // check. So a running, failed or outcome-unknown check never changes a
 // published candidate, never shows a new one and never withdraws one.
-async function recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect = null, meter = NOOP_CHECK_METER }) {
+async function recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect = null, importPath = null, meter = NOOP_CHECK_METER }) {
   // Timed as staging: the hash here and the read and insert below; as
   // preview: the dry run with its connection (the meter never throws).
   const hashStarted = meter.start();
@@ -1177,8 +1179,14 @@ async function recordCandidate(checkId, { teamId, userId, bundle, drillParameter
     const onPreviewClientError = () => { sessionLost = true; };
     previewClient.on("error", onPreviewClientError);
     try {
-      ({ preview, previewHash } = await buildCandidatePreview(previewClient, { bundle, ownerTeamId: teamId, performedByUserId: userId }));
+      ({ preview, previewHash } = await buildCandidatePreview(previewClient, { bundle, ownerTeamId: teamId, performedByUserId: userId, importPath }));
     } catch (error) {
+      // 9-B (D5, D6): the mapping changed between the unlocked read and the
+      // registry locks (J17 step 5) - the check fails as busy, nothing staged;
+      // the binding the check reads through was found ended under its lock -
+      // the check fails as binding_ended, nothing staged.
+      if (error instanceof ImportMappingChangedError) throw importRefusal("check_preview_busy");
+      if (error instanceof ImportBindingNotActiveError) throw importRefusal("binding_ended");
       if (isImportWaitError(error)) {
         console.error(`[gpexe] check ${checkId}: the preview of a session ended by a bound (${error.code})`);
         throw importRefusal("check_preview_busy");
@@ -1344,10 +1352,16 @@ function candidateRowActionable(row) {
     && ["not_required", "confirmed"].includes(row.drill_parameter_effect);
 }
 
-function candidateSummary(row) {
+// J17 section 6.1: every summary is projected for the request's audience
+// level; D10: a blocked candidate's preview hash is returned to a platform
+// admin only (it cannot be approved, and the hash of a preview whose code is
+// hidden must not let anyone test guesses of that code).
+function candidateSummary(row, audience = "other") {
+  const level = normalizeImportAudience(audience);
   const snapshot = snapshotState(row);
   const preview = snapshot.available ? row.preview : null;
-  return {
+  const blockedForHash = row.status === "blocked" || preview?.status === "blocked";
+  return projectBlockedCodes({
     id: row.id,
     gpexeTeamSessionId: row.gpexe_team_session_id,
     label: row.session_label,
@@ -1356,7 +1370,7 @@ function candidateSummary(row) {
     previewStatus: preview?.status ?? null,
     // The hash of the stored preview this summary describes (Imports phase
     // 4a): a batch approval sends it back, so it imports only what was seen.
-    previewHash: preview ? row.preview_hash : null,
+    previewHash: preview && !(blockedForHash && level !== "platform") ? row.preview_hash : null,
     counts: preview?.counts ?? null,
     // The approval must carry acceptChanges = true when this is > 0.
     changesToImported: preview ? (preview.changesToImported?.length ?? 0) : null,
@@ -1372,7 +1386,7 @@ function candidateSummary(row) {
     // "Ready to import", from the stored preview - the list needs no
     // per-candidate read for them. Null / empty when the snapshot is gone.
     ...candidateReasons(row.status, preview),
-  };
+  }, level);
 }
 
 const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_started_at, status, preview, preview_hash,
@@ -1381,14 +1395,14 @@ const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_sta
   (select k.status from training_load.gpexe_import_checks k
     where k.id = gpexe_import_candidates.last_seen_check_id and k.owner_team_id = gpexe_import_candidates.owner_team_id) as last_seen_check_status`;
 
-export async function listCandidates(teamId, { includeSuperseded = false } = {}) {
+export async function listCandidates(teamId, { includeSuperseded = false, audience } = {}) {
   const rows = (await query(
     `select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates
      where owner_team_id = $1 and ($2 or status <> 'superseded')
      order by session_started_at desc nulls last, first_seen_at desc limit 200`,
     [teamId, includeSuperseded],
   )).rows;
-  return rows.map(candidateSummary);
+  return rows.map((row) => candidateSummary(row, audience));
 }
 
 // Tests make reading a candidate fail, to prove the approval route never
@@ -1421,12 +1435,20 @@ export async function getApproval(teamId, approvalId) {
   return row ? approvalView(row) : null;
 }
 
-export async function getCandidate(teamId, candidateId) {
+// audience: the request's level (J17 section 6.1; missing is "other").
+// namesClubVariables: R17's predicate, asked with the stored preview only when
+// the level is "other" (a function, so it runs lazily), or a boolean.
+export async function getCandidate(teamId, candidateId, { audience, namesClubVariables = false } = {}) {
   if (candidateReadFault) await candidateReadFault(candidateId);
   const row = (await query(`select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
   if (!row) return null;
-  const summary = candidateSummary(row);
-  const preview = summary.snapshot.available ? row.preview : null;
+  const level = normalizeImportAudience(audience);
+  const summary = candidateSummary(row, level);
+  const stored = summary.snapshot.available ? row.preview : null;
+  const names = level === "other" && stored
+    ? (typeof namesClubVariables === "function" ? await namesClubVariables(stored) : namesClubVariables === true)
+    : false;
+  const preview = stored ? projectPreview(stored, level, { namesClubVariables: names }) : null;
   // Names are read now, for the team's own athletes only; the stored preview
   // carries ids, not names.
   let athletes = {};
@@ -1449,7 +1471,24 @@ export async function getCandidate(teamId, candidateId) {
   const approvalRow = row.status === "imported"
     ? (await query(`select ${APPROVAL_COLUMNS} from training_load.gpexe_import_approvals where candidate_id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0]
     : null;
-  return { ...summary, preview, previewHash: preview ? row.preview_hash : null, athletes, approval: approvalRow ? approvalView(approvalRow) : null };
+  // The review's link context (R12): each GPEXE athlete's helper values from
+  // the stored snapshot, independent of any activation - the three helper
+  // fields of every row of the session and whether it is a drill row.
+  let helperValues = {};
+  if (stored) {
+    const rows = (await query(
+      `select r.row->>'athlete' as athlete, (r.row->'drill' is not null and jsonb_typeof(r.row->'drill') <> 'null') as is_drill,
+              jsonb_build_object('total_time', r.row->'total_time', 'total_distance', r.row->'total_distance', 'max_v', r.row->'max_v') as helper
+         from training_load.gpexe_import_candidates c
+         cross join lateral jsonb_array_elements(
+           case when jsonb_typeof(c.raw_bundle->'athleteSessions') = 'array' then c.raw_bundle->'athleteSessions' else '[]'::jsonb end
+         ) as r(row)
+        where c.id = $1 and c.owner_team_id = $2 and r.row->>'teamsession' = c.gpexe_team_session_id and r.row->>'athlete' ~ $3`,
+      [candidateId, teamId, GPEXE_ATHLETE_ID_PATTERN],
+    )).rows;
+    helperValues = helperValuesOf(rows, stored);
+  }
+  return { ...summary, preview, athletes, helperValues, approval: approvalRow ? approvalView(approvalRow) : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,7 +1505,7 @@ function mapTriggerError(error, fallbackCode) {
   if (error.code === "P0001") return new GpexeImportServiceError(409, fallbackCode, "The change was refused by the database rules.");
   // Any other database code (a constraint nobody mapped, a bug): a stable
   // answer, and the database's own text stays in the log.
-  console.error(`[gpexe] ${fallbackCode}: unmapped database error ${error?.code ?? ""} ${error?.message}`);
+  console.error(`[gpexe] ${fallbackCode}: unmapped database error ${formatDbError(error)}`);
   return new GpexeImportServiceError(500, "internal_error", "The change failed on the server; nothing was written.");
 }
 
@@ -1494,27 +1533,31 @@ function mapTriggerError(error, fallbackCode) {
 // athlete id (GPEXE_ATHLETE_ID_PATTERN) is accepted, from a preview entry and
 // from a raw row alike; anything else is ignored, never reinterpreted.
 //
-// Helper values for telling athletes apart are the athlete's own
-// whole-session result of that sighting (from the stored preview); the number
-// of drills is a property of the session (lastSeen.sessionDrillsCount, from
-// the raw snapshot's own field). A value the source did not give is null,
-// never a zero. GPEXE names are never stored, so none is returned; the
-// OptiMove name comes only from the confirmed link.
+// Helper values for telling athletes apart (R12, 9-B): the athlete's own
+// whole-session row of that sighting in the stored snapshot, read through the
+// three athlete_session extractors in the source units (s, m, m/s) and shown
+// converted for display only (min, m, km/h) - independent of any mapping
+// activation, so an unmapped or blocked session still shows them. Only for a
+// preview sighting of an athlete the import measured (gps "measured") with
+// exactly one whole-session row; the number of drills is a property of the
+// session (lastSeen.sessionDrillsCount, from the raw snapshot's own field). A
+// value the source did not give is null, never a zero. GPEXE names are never
+// stored, so none is returned; the OptiMove name comes only from the
+// confirmed link.
 export const SOURCE_ATHLETE_UNITS = Object.freeze({ duration: "min", distance: "m", maxSpeed: "km/h" });
-const SOURCE_ATHLETE_VALUE_KEYS = { duration: "gpexe_time_min", distance: "gpexe_total_distance", maxSpeed: "gpexe_max_speed" };
 
 const NO_VALUES = Object.freeze({ duration: null, distance: null, maxSpeed: null });
 
-// The athlete's whole-session values of one preview entry; null entry (a
-// raw-only sighting, or no sighting) gives nulls.
-function sourceAthleteValues(entry) {
-  const full = Array.isArray(entry?.results) ? entry.results.find((r) => r.level === "full") : null;
-  const byKey = new Map((full?.values || []).map((v) => [v.metricKey, v.value]));
-  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+// The helper values of one sighting from its snapshot rows; a raw-only
+// sighting, an athlete the import did not measure, or not exactly one
+// whole-session row gives nulls.
+export function sourceAthleteHelperValues(entry, wholeRows) {
+  if (!entry || entry.gps?.status !== "measured" || !Array.isArray(wholeRows) || wholeRows.length !== 1) return { ...NO_VALUES };
+  const raw = wholeRowHelperValues(wholeRows[0]);
   return {
-    duration: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.duration)),
-    distance: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.distance)),
-    maxSpeed: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.maxSpeed)),
+    duration: raw.totalTime === null ? null : raw.totalTime / 60,
+    distance: raw.totalDistance,
+    maxSpeed: raw.maxV === null ? null : raw.maxV * 3.6,
   };
 }
 
@@ -1589,6 +1632,16 @@ export async function listSourceAthletes(teamId) {
             s.status as candidate_status, s.last_seen_at, s.entry, s.evidence,
             (select c2.raw_bundle->'teamSession'->>'drills_count' from training_load.gpexe_import_candidates c2
               where c2.id = s.candidate_id and c2.owner_team_id = $1) as raw_drills_count,
+            -- R12: the athlete's whole-session rows of that sighting, only
+            -- the three helper fields (the array guard as above).
+            (select coalesce(jsonb_agg(jsonb_build_object('total_time', r.row->'total_time', 'total_distance', r.row->'total_distance', 'max_v', r.row->'max_v')), '[]'::jsonb)
+               from training_load.gpexe_import_candidates c3
+               cross join lateral jsonb_array_elements(
+                 case when jsonb_typeof(c3.raw_bundle->'athleteSessions') = 'array' then c3.raw_bundle->'athleteSessions' else '[]'::jsonb end
+               ) as r(row)
+              where c3.id = s.candidate_id and c3.owner_team_id = $1 and s.evidence = 'preview'
+                and r.row->>'athlete' = s.gpexe_athlete_id and r.row->>'teamsession' = s.gpexe_team_session_id
+                and (r.row->'drill' is null or jsonb_typeof(r.row->'drill') = 'null')) as whole_rows,
             k.link_id, k.athlete_id, k.linked_at, k.athlete_name, k.athlete_active
        from seen s
        full outer join link k on k.gpexe_athlete_id = s.gpexe_athlete_id
@@ -1606,8 +1659,27 @@ export async function listSourceAthletes(teamId) {
       sessionLabel: r.session_label, sessionType: r.session_type, candidateStatus: r.candidate_status, lastSeenAt: r.last_seen_at,
       evidence: r.evidence, sessionDrillsCount: sessionDrillsCount(r.raw_drills_count),
     } : null,
-    values: r.candidate_id && r.entry ? sourceAthleteValues(r.entry) : { ...NO_VALUES },
+    values: r.candidate_id && r.entry ? sourceAthleteHelperValues(r.entry, r.whole_rows) : { ...NO_VALUES },
   }));
+}
+
+// R12 for one candidate: per GPEXE athlete of the stored preview, the helper
+// values of its one whole-session row (sourceAthleteHelperValues) and how
+// many drill rows the athlete has.
+function helperValuesOf(rows, preview) {
+  const byAthlete = new Map();
+  for (const r of rows) {
+    if (!byAthlete.has(r.athlete)) byAthlete.set(r.athlete, { whole: [], drillRows: 0 });
+    const entry = byAthlete.get(r.athlete);
+    if (r.is_drill) entry.drillRows += 1;
+    else entry.whole.push(r.helper);
+  }
+  const out = {};
+  for (const athlete of preview.athletes ?? []) {
+    const found = byAthlete.get(athlete.gpexeAthleteId);
+    out[athlete.gpexeAthleteId] = { ...sourceAthleteHelperValues(athlete, found?.whole ?? []), drillRows: found?.drillRows ?? 0 };
+  }
+  return out;
 }
 
 export async function listAthleteLinks(teamId) {
@@ -1829,12 +1901,12 @@ function withinBound(promise, ms) {
 // to check. Approving again is safe either way (an imported candidate
 // answers 409 already_imported).
 async function resolveUncertainCommit(teamId, candidateId, { approvalId, result, commitError }) {
-  console.error(`[gpexe] approval ${approvalId} of candidate ${candidateId}: the COMMIT was not confirmed (${commitError?.code ?? ""} ${commitError?.message}); checking whether it is in the database`);
+  console.error(`[gpexe] approval ${approvalId} of candidate ${candidateId}: the COMMIT was not confirmed (${formatDbError(commitError)}); checking whether it is in the database`);
   let found = false;
   try {
     found = await approvalIsCommitted(approvalId, teamId, uncertainCommitCheckTimeoutMs);
   } catch (error) {
-    console.error(`[gpexe] checking approval ${approvalId} after an unconfirmed COMMIT failed: ${error?.message}`);
+    console.error(`[gpexe] checking approval ${approvalId} after an unconfirmed COMMIT failed: ${formatDbError(error)}`);
   }
   if (found) return { ...result, commitConfirmation: "verified_after_commit_error" };
   throw refusal(503, "import_outcome_unknown",
@@ -1882,19 +1954,52 @@ async function storeRefreshedPreview(candidateId, { expectedPreviewHash, preview
 
 const HASH = /^[0-9a-f]{64}$/;
 
-// Approves one candidate as a whole and imports it, in ONE transaction:
-//   1. the approver's right, held FOR SHARE (lock_gpexe_import_approver);
+// J17 step 10 (D20): what a log line may say about a database or importer
+// error - its SQLSTATE or code, constraint, table, routine and the name of the
+// PL/pgSQL function it came from. Never its message, detail, hint, where or a
+// stack: the v13 and T6 messages can carry a value or a definition id.
+const PLPGSQL_FUNCTION = /PL\/pgSQL function ([a-z_][a-z0-9_.]*)\(/;
+export function dbErrorFields(error) {
+  const fn = typeof error?.where === "string" ? PLPGSQL_FUNCTION.exec(error.where)?.[1] ?? null : null;
+  return {
+    code: typeof error?.code === "string" ? error.code : null,
+    constraint: typeof error?.constraint === "string" ? error.constraint : null,
+    table: typeof error?.table === "string" ? error.table : null,
+    routine: typeof error?.routine === "string" ? error.routine : null,
+    fn,
+    name: typeof error?.name === "string" ? error.name : null,
+  };
+}
+export function formatDbError(error) {
+  const f = dbErrorFields(error);
+  return Object.entries(f).filter(([, v]) => v !== null).map(([k, v]) => `${k}=${v}`).join(" ") || "error";
+}
+
+// Approves one candidate as a whole and imports it, in ONE transaction, in
+// the order of contract J17 (phase 9, 9-B):
+//   1. the caller's right (canApproveGpexeImport), read UNLOCKED on the
+//      transaction's client - a fast refusal only; the right that counts is
+//      the one locked at 6b;
 //   2. the candidate, FOR UPDATE: pending, snapshot not expired, the stored
 //      preview is the one the caller reviewed, and every change to an
 //      already imported result is accepted (acceptChanges);
-//   3. the team's import lock, the import itself, and the preview recomputed
-//      from what the import did (previewLocked);
-//   4. the recomputed preview hash must equal the approved one; otherwise
-//      EVERYTHING is rolled back, including what the import had written, and
-//      the caller is sent back to review the candidate;
-//   5. the approval row and the candidate becoming 'imported' (its snapshot
-//      kept 90 more days); commit.
-// Nothing is written before step 3, and nothing survives a refusal.
+//   3. the team's import lock; then (2a) the team and its club FOR SHARE and
+//      still the club the route resolved (R16: else the identical 404);
+//   4. (step 3) the binding the candidate's last check read through; (steps
+//      4-6) the open activations and their mapping rows FOR SHARE in the
+//      order T2b -> T3 -> T4 -> definitions -> T5, read again and compared
+//      (a change since the preview is preview_changed), the scope
+//      capabilities (R11) and the team's source instance (T7);
+//   5. (6b) the approver's right FOR SHARE (lock_gpexe_import_approver) - a
+//      right revoked meanwhile is 403, nothing written;
+//   6. the import itself and the preview recomputed from what it did
+//      (previewLocked); the recomputed hash must equal the approved one,
+//      otherwise EVERYTHING is rolled back, including what the import had
+//      written, and the caller is sent back to review the candidate;
+//   7. the approval row and the candidate becoming 'imported' (its snapshot
+//      kept 90 more days); the deferred work fired under the statement bound;
+//      commit - once it is sent, the outcome is never "nothing was imported".
+// Nothing is written before the import in step 6, and nothing survives a refusal.
 // What the roster learns from a preview (Phase 5a1): an athlete is
 // "unusable" only when GPEXE's own data says so (two tracks, statistics not
 // valid, several whole-session rows) AND the GPEXE athlete is linked to an
@@ -2177,7 +2282,7 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
 // route's own try_again sentence, with what was (not) done.
 const APPROVAL_TRY_AGAIN = "Another check, import or change of this team was running, or the server was busy. Nothing was imported; try again in a moment.";
 
-export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges }) {
+export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
   }
@@ -2201,19 +2306,22 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
   const onClientError = () => { sessionLost = true; };
   client.on("error", onClientError);
   try {
-    await client.query("begin");
+    // DB review F2 (9-B): steps 4-5 read, lock, read again and compare, which
+    // needs a fresh snapshot per statement - READ COMMITTED, pinned here
+    // rather than left to the server's default.
+    await client.query("begin isolation level read committed");
     // Switch condition 2: every wait before the COMMIT is bounded by the
     // server (lock, statement, idle in transaction), set before the first
     // lock; the COMMIT keeps only its own 15 s client bound (COMMIT_ANSWER_TIMEOUT_MS), and its deferred work is
     // fired before it by SET CONSTRAINTS ALL IMMEDIATE (below).
     await setImportTransactionBounds(client);
-    // Step 1.
-    const right = (await client.query(
-      `select basis, grant_id from training_load.lock_gpexe_import_approver($1, $2) limit 1`,
-      [userId, teamId],
-    )).rows[0];
+    // J17 step 1: the approver's right, UNLOCKED, for the early 403. The
+    // role, grant and user rows are locked only at step 6b, after every
+    // registry row (R5).
+    const unlocked = await canApproveGpexeImport({ query: (text, params) => client.query(text, params) }, userId, teamId);
+    if (!unlocked.canApprove) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
 
-    // Step 2.
+    // The candidate, FOR UPDATE, and the existing refusals.
     const row = (await client.query(
       `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
               superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect
@@ -2249,29 +2357,72 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
         { changesToImported });
     }
 
-    // Step 3: from here on the import writes, uncommitted.
-    let plan;
-    try {
-      plan = buildGpexeImportPlan(row.raw_bundle);
-    } catch (error) {
-      if (!(error instanceof GpexeMappingError)) throw error;
-      // The candidate becomes blocked with the mapping reason, so the next
-      // review shows why and does not lead back here.
-      const blocked = blockedByMapping(row.raw_bundle, error);
-      refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
-      throw previewChanged(teamId, candidateId, "The stored GPEXE data can no longer be imported; nothing was imported. Review the candidate again.");
-    }
+    // J17 step 2: the team import lock, first among the importer's own locks.
     await lockTeamForImport(client, teamId);
-    const fresh = await previewLocked(client, { bundle: row.raw_bundle, plan, ownerTeamId: teamId, performedByUserId: userId });
+    // Step 2a (R16): the team and its club FOR SHARE - archived, or moved to
+    // another club since the route's check, is the identical 404.
+    await lockApprovalTeam(client, teamId, expectedClubId);
+    // Step 3: the binding the candidate's last check read through, FOR SHARE.
+    // A legacy_env check, or a binding that is missing, ended or of another
+    // team: the refreshed preview is blocked mapping_not_usable, stored, and
+    // the caller reviews again (only this step short-circuits, D36).
+    const lastCheck = (await client.query(
+      `select source_path, source_binding_id from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`,
+      [row.last_seen_check_id, teamId],
+    )).rows[0];
+    const bindingId = lastCheck?.source_path === "source_connection" && lastCheck.source_binding_id ? String(lastCheck.source_binding_id) : null;
+    const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
+    if (!binding) {
+      const blocked = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
+      refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
+      throw previewChanged(teamId, candidateId, "This session can no longer be imported through the team's source binding; nothing was imported. Review the candidate again.");
+    }
+    // Steps 4-6: the activations, the registry locks and their re-check, the
+    // Metrics Core source instance FOR UPDATE and its T7 keys. A difference
+    // under the locks is preview_changed with nothing stored (D5).
+    let mapping;
+    try {
+      let gates = null;
+      try {
+        gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+      } catch (error) {
+        if (!(error instanceof GpexeMappingError)) throw error;
+      }
+      mapping = gates
+        ? await prepareImportMapping(client, { teamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId })
+        : { block: null, rows: [], activationSet: [], unactivated: [], binding, connection: null };
+    } catch (error) {
+      if (error instanceof ImportMappingChangedError) {
+        throw previewChanged(teamId, candidateId, "The team's mappings changed while the import read them; nothing was imported. Review the candidate again.");
+      }
+      throw error;
+    }
+    // Step 6b: the approver's rights FOR SHARE, after every registry row (R5).
+    // A right revoked since step 1 is 42501 -> 403, nothing written. The
+    // approval row's basis and grant come from this locked result.
+    let right;
+    try {
+      right = (await client.query(
+        `select basis, grant_id from training_load.lock_gpexe_import_approver($1, $2) limit 1`,
+        [userId, teamId],
+      )).rows[0];
+    } catch (error) {
+      if (error?.code === "42501") throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+      throw error;
+    }
+    // Steps 7-11: the plan, the classification and the import, inside the
+    // preview (previewLocked); a block there is a blocked preview, refused at
+    // step 12 below as a changed preview.
+    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId });
     if (approvalObserver) await approvalObserver({ client, candidateId, freshPreviewHash: fresh.previewHash });
 
-    // Step 4.
+    // Step 12: the hash compared again.
     if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
       refreshed = { expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash };
       throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.");
     }
 
-    // Step 5.
+    // The approval row, the candidate imported, the observations.
     const summary = fresh.summary;
     const approval = (await client.query(
       `insert into training_load.gpexe_import_approvals
@@ -2336,10 +2487,10 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     if (!commitSent) await client.query("rollback").catch(() => {});
     if (refreshed) {
       await storeRefreshedPreview(candidateId, refreshed)
-        .catch((e) => console.error(`[gpexe] storing the refreshed preview of ${candidateId} failed: ${e?.message}`));
+        .catch((e) => console.error(`[gpexe] storing the refreshed preview of ${candidateId} failed: ${formatDbError(e)}`));
     }
     if (error instanceof GpexeImportServiceError) throw error;
-    if (error?.code === "42501") throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    if (error instanceof ApprovalTeamGoneError) throw refusal(404, "notFound", "Not found.");
     // Switch condition 2: a wait the server bounded before the COMMIT (a lock
     // not granted in time, a statement ended by its bound, a deadlock), or a
     // session the server ended (the idle bound) - the transaction rolled
@@ -2352,7 +2503,9 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     }
     // Anything else (a database guard firing, a bug) is logged here and
     // answered with a stable code; its text never reaches the caller.
-    console.error(`[gpexe] approval of candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+    // Only the error's code and the database's own field names - never its
+    // message, detail or stack, which can carry a value or an id (J17 step 10).
+    console.error(`[gpexe] approval of candidate ${candidateId} failed: ${formatDbError(error)}`);
     throw refusal(500, "internal_error", "The approval failed on the server; nothing was imported.");
   } finally {
     // A connection whose COMMIT went unanswered, or whose session the server
@@ -2429,9 +2582,11 @@ export function parseBatchApproveBody(body) {
 // A refusal that holds for every remaining candidate (the switch was turned
 // off, the approver lost the right), a failure of the server, or a bounded
 // wait (try_again: the team's import lock or the server is busy, and every
-// remaining candidate of the batch is the same team's) stops the batch; any
+// remaining candidate of the batch is the same team's) stops the batch; so
+// does notFound (R16: the team or its club archived or moved since the
+// route's check - it holds for every remaining candidate of the team); any
 // other refusal concerns its candidate only.
-const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error", "try_again"]);
+const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error", "try_again", "notFound"]);
 
 function batchResult(candidateId, outcome, code = null, extra = {}) {
   return { candidateId, outcome, code, approvalId: null, ...extra };
@@ -2442,7 +2597,8 @@ function refusedResult(candidateId, code, details = {}) {
   const { reviewAgain: again, changesToImported, reasons, blockedCode } = details;
   return batchResult(candidateId, "refused", code, {
     ...(again ? { reviewAgain: again } : {}),
-    ...(changesToImported !== undefined ? { changesToImported } : {}),
+    // R17 / D11: a count only, never the changes themselves.
+    ...(Number.isInteger(changesToImported) && changesToImported >= 0 ? { changesToImported } : {}),
     ...(reasons ? { reasons } : {}),
     ...(blockedCode !== undefined ? { blockedCode } : {}),
   });
@@ -2482,7 +2638,7 @@ async function approvalIdOf(teamId, candidateId) {
     const row = (await query(`select id from training_load.gpexe_import_approvals where candidate_id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
     return row?.id ?? null;
   } catch (error) {
-    console.error(`[gpexe] reading the approval of imported candidate ${candidateId} failed: ${error?.message}`);
+    console.error(`[gpexe] reading the approval of imported candidate ${candidateId} failed: ${formatDbError(error)}`);
     return null;
   }
 }
@@ -2491,7 +2647,7 @@ async function approvalIdOf(teamId, candidateId) {
 // single approval itself (approveCandidate), bound to the preview hash the
 // approver saw, never accepting changes. Never throws: every outcome is a
 // result.
-async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId) {
+async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId, expectedClubId) {
   let early;
   try {
     const row = (await query(
@@ -2504,18 +2660,18 @@ async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId) {
     )).rows[0];
     early = row ? batchIneligibility(teamId, candidateId, row, previewHash) : refusedResult(candidateId, "notFound");
   } catch (error) {
-    console.error(`[gpexe] batch: reading candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+    console.error(`[gpexe] batch: reading candidate ${candidateId} failed: ${formatDbError(error)}`);
     return refusedResult(candidateId, "internal_error");
   }
   if (early) return early;
   try {
-    const done = await approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges: false });
+    const done = await approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges: false, expectedClubId });
     return batchResult(candidateId, "imported", null, { approvalId: done.approval.id, commitConfirmation: done.commitConfirmation });
   } catch (error) {
     if (!(error instanceof GpexeImportServiceError)) {
       // approveCandidate maps everything inside its transaction; this is what
       // happens before it (e.g. no database connection): nothing was sent.
-      console.error(`[gpexe] batch: approving candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+      console.error(`[gpexe] batch: approving candidate ${candidateId} failed: ${formatDbError(error)}`);
       return refusedResult(candidateId, "internal_error");
     }
     if (error.code === "already_imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: await approvalIdOf(teamId, candidateId) });
@@ -2550,7 +2706,7 @@ function batchSummary(results) {
 // Before any candidate: the import switch (the single approval's 409), the
 // caller's approver right (its 403), and every id must be a candidate of
 // this team (else the same 404 as a missing one, nothing attempted).
-export async function approveCandidates(teamId, candidates, { userId }) {
+export async function approveCandidates(teamId, candidates, { userId, expectedClubId = undefined }) {
   const candidateIds = candidates.map((c) => c.candidateId);
   if (!applyEnabled()) throw refusal(409, "import_switch_off", applySwitchInfo().message);
   try {
@@ -2563,7 +2719,7 @@ export async function approveCandidates(teamId, candidates, { userId }) {
     if (owned.length !== candidateIds.length) throw refusal(404, "notFound", "Not found.");
   } catch (error) {
     if (error instanceof GpexeImportServiceError) throw error;
-    console.error(`[gpexe] batch approval of team ${teamId} could not start: ${error?.code ?? ""} ${error?.message}`);
+    console.error(`[gpexe] batch approval of team ${teamId} could not start: ${formatDbError(error)}`);
     throw refusal(500, "internal_error", "The batch could not be started; nothing was imported.");
   }
   const results = [];
@@ -2573,7 +2729,7 @@ export async function approveCandidates(teamId, candidates, { userId }) {
       results.push(batchResult(candidate.candidateId, "not_attempted"));
       continue;
     }
-    const result = await approveOneOfBatch(teamId, candidate, userId);
+    const result = await approveOneOfBatch(teamId, candidate, userId, expectedClubId);
     results.push(result);
     if (result.outcome === "import_outcome_unknown" || (result.outcome === "refused" && BATCH_STOP_CODES.has(result.code))) stopped = true;
   }

@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { activateBinding } from "./support/mapped-world.mjs";
 import * as cryptoMod from "../src/sourceCredentialCrypto.js";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -319,7 +320,7 @@ const connRow = async (id) => (await q(`select state, last_error_code from train
 const auditOf = (id) => q(`select action, outcome, error_code, basis, performed_by_user_id, metadata, team_id from training_load.source_connection_audit where connection_id = $1 order by performed_at, id`, [id]);
 
 // ---------------------------------------------------------------------------
-test("1. a team without a new binding keeps the legacy path, explicitly: the legacy client factory is called once, no request reaches the new adapter, the check succeeds and records its candidate, and the log names legacy_env", async () => {
+test("1. a team without a new binding keeps the legacy path, explicitly: the legacy client factory is called once, no request reaches the new adapter, the check succeeds and records its candidate - stored blocked mapping_not_usable, since a team without a binding has no mapping (9-B) -, and the log names legacy_env", async () => {
   const o = await org();
   useSource();
   const legacy = legacyFake(o.sourceTeamId);
@@ -329,6 +330,8 @@ test("1. a team without a new binding keeps the legacy path, explicitly: the leg
   assert.deepEqual([legacy.factory, legacy.list, legacy.bundle], [1, 1, 1]);
   assert.equal(importReads().length, 0, "the new adapter was not used");
   assert.equal((await candidatesOf(o.teamId)).length, 1);
+  const [legacyCandidate] = await q(`select status, preview->'blocked'->>'code' as code from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  assert.deepEqual([legacyCandidate.status, legacyCandidate.code], ["blocked", "mapping_not_usable"], "9-B: a legacy_env candidate has no binding and so no mapping - it is stored, but blocked");
   assert.ok(logLines.slice(logBefore).some((l) => l.includes(`check ${row.id}`) && l.includes("legacy_env")), "the path is logged");
   assert.deepEqual([row.source_path, row.source_connection_id, row.source_binding_id, row.source_team_id, row.source_host_key], ["legacy_env", null, null, null, null], "v31: the row records the legacy path and nothing else");
   // Without an environment token the legacy path answers as before: 503, no check row.
@@ -1409,6 +1412,8 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
       const o = await org();
       useSource();
       const { conn, binding } = await bound(o);
+      // 9-B: the binding's activations, so the candidate is not blocked and only the switch refuses the approval below.
+      await activateBinding(admin, binding.bindingId);
       process.env.GPEXE_API_TOKEN = ENV_TOKEN;
       legacyTrap();
       src.serve(o.sourceTeamId);
@@ -1421,6 +1426,7 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
       const saved = await q(`select id, status, preview is not null as has_preview, preview_hash, raw_bundle is not null as has_snapshot from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
       assert.equal(saved.length, 1);
       assert.ok(saved[0].has_preview && saved[0].preview_hash && saved[0].has_snapshot, "the check saved its candidate, preview and snapshot");
+      assert.equal(saved[0].status, "pending", "with the binding's activations the candidate is not blocked");
       assert.deepEqual(await importRows(), before, "the check wrote nothing of an import (its preview is a rolled-back dry run)");
       assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token never reached the source");
 
@@ -1464,10 +1470,12 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   const MARKER_NUMBER = 24680.1357;
   const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
   const rows = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
-  const setup = async (mutate) => {
+  const setup = async (mutate, { activate = false } = {}) => {
     const o = await org();
     useSource();
-    const { conn } = await bound(o);
+    const { conn, binding } = await bound(o);
+    // 9-B: the approval case runs with the binding's activations, so its candidate is not blocked and only the switch refuses it.
+    if (activate) await activateBinding(admin, binding.bindingId);
     process.env.GPEXE_API_TOKEN = ENV_TOKEN;
     legacyTrap();
     src.serve(o.sourceTeamId);
@@ -1480,7 +1488,7 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   // (a) The production case: both consumed fields in the documented shape, plus one unconsumed
   // object metric of another shape (8 keys; null, number, short text, other-character text; no unit / value key).
   const unrelated = { k1: null, k2: MARKER_NUMBER, k3: "ok", k4: MARKER_TEXT, k5: 3, k6: null, k7: "a-b", k8: 7 };
-  const a = await setup((players) => { for (const id of Object.keys(players)) players[id][MARKER_METRIC] = { ...unrelated }; });
+  const a = await setup((players) => { for (const id of Object.keys(players)) players[id][MARKER_METRIC] = { ...unrelated }; }, { activate: true });
   const row = await runCheck(a.o);
   assert.equal(row.status, "succeeded", JSON.stringify(row));
   assert.deepEqual([row.error_code, row.source_path], [null, "source_connection"]);
@@ -1494,6 +1502,7 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   const everything = JSON.stringify({ candidates, row });
   for (const leak of [MARKER_METRIC, MARKER_TEXT, String(MARKER_NUMBER), "24680"]) assert.ok(!everything.includes(leak), `${leak} is absent from the candidate, its preview, the snapshot and the check row`);
   assert.ok(candidates[0].preview && candidates[0].preview_hash, "the preview was computed");
+  assert.equal(candidates[0].status, "pending", "with the binding's activations the candidate is not blocked");
   // The switch is off: a successful check / preview is allowed, approving is not.
   const list = await api(`/gpexe/teams/${a.o.teamId}/candidates`, { cookie: a.o.padmin.cookie });
   const cand = list.body.candidates[0];
@@ -1603,7 +1612,9 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
   const counts = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
   const o = await org();
   useSource();
-  await bound(o);
+  const { binding } = await bound(o);
+  // 9-B: the binding's activations, so the current candidate is refused by the switch alone.
+  await activateBinding(admin, binding.bindingId);
   process.env.GPEXE_API_TOKEN = ENV_TOKEN;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   legacyTrap();
@@ -1641,6 +1652,7 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
     assert.equal(rows.length, 2);
     const [oldRow, newRow] = rows;
     assert.deepEqual([oldRow.id, oldRow.status, oldRow.superseded_by_candidate_id], [a.id, "superseded", newRow.id]);
+    assert.equal(newRow.status, "pending", "with the binding's activations the current candidate is not blocked");
     assert.equal(oldRow.bundle_hash, a.bundle_hash, "the record of what was seen is unchanged");
     for (const row of rows) {
       for (const [index, drill] of Object.entries(row.raw_bundle.details.drills)) {
@@ -2277,7 +2289,11 @@ test("38. an incomplete drill set keeps its reason for an administrator in a clo
       const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
       assert.ok(!JSON.stringify(status.body).includes("Diagnostic"), `${label}: no description in the coach's status`);
       assert.equal((await candidatesOf(o.teamId)).length, 0, `${label}: nothing recorded`);
-      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => l.includes(id)), `${label}: log line ${l.slice(0, 120)}`);
+      // An athlete id as a whole token only: the log lines carry random UUIDs,
+      // whose hex runs contain three-digit sequences like "101" (a substring
+      // match failed about 1.5% of the runs - CURRENT_STATE, Separate tasks).
+      const namesId = (line, id) => new RegExp(`(?<![0-9A-Za-z-])${id}(?![0-9A-Za-z-])`).test(line);
+      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => namesId(l, id)), `${label}: log line ${l.slice(0, 120)}`);
     } finally {
       src.state.faults.drillPlayers = null;
     }

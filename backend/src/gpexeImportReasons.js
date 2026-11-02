@@ -31,6 +31,12 @@ export const BLOCKED_CODES = Object.freeze({
   // The import conflicts with data already in OptiMove (a duplicate event,
   // a changed binding, ...). A platform admin has to look at it.
   conflicts_with_existing_data: "conflicts_with_existing_data",
+  // Phase 9 (9-B, J17 section 6): the session cannot be imported through the
+  // team's mapping activations as they stand (no activation, a mapping not
+  // usable, a threshold, unit or shape that does not fit, the source
+  // instance). An administrator finishes the data setup; the precise code is
+  // for the two administrators only (gpexeImportAudience.js).
+  data_setup_incomplete: "data_setup_incomplete",
   // A code this mapping does not know. Same step as a conflict.
   other: "other",
 });
@@ -68,6 +74,12 @@ const SOURCE_CODE_TO_BLOCKED = new Map([
     "identity_target_changed", "metric_definition_mismatch", "participant_timezone_changed", "segment_linked_elsewhere", "segment_missing",
     "source_reference_set_changed", "reference_hash_version_outdated"]
     .map((c) => [c, BLOCKED_CODES.conflicts_with_existing_data]),
+  // J17 section 6: the eight blocking codes of a mapped import. The two
+  // Left-out reasons of C110 (required_value_missing,
+  // canonical_value_out_of_range) block nothing and are never here.
+  ...["mapping_not_usable", "source_threshold_contract_mismatch", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
+    "source_instance_held", "source_instance_changed", "session_imported_under_another_instance"]
+    .map((c) => [c, BLOCKED_CODES.data_setup_incomplete]),
 ]);
 
 export function blockedCodeFor(sourceCode) {

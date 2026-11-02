@@ -9,6 +9,8 @@ import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { activateBinding } from "./support/mapped-world.mjs";
 
 // v33 (the drill-parameter guard): a session with two or more drills is
 // importable only when at least two drill answers are non-empty and pairwise
@@ -18,6 +20,15 @@ const makeBundle = (options) => makeFixtureBundle({ detailsDrills: [0, 1], ...op
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const ORIGINAL_SWITCH = process.env.GPEXE_IMPORT_APPLY_ENABLED;
+const ORIGINAL_KEYS = process.env.SOURCE_CREDENTIAL_KEYS;
+// 9-B: a candidate is importable only through the team's binding and its
+// mapping activations (J17 section 3), so every team here is bound to its
+// GPEXE team through the real Connect / Bind routes and its sessions are
+// served by the fake server3 source.
+const D1 = "2026-09-14";
+let src;
+let connections;
+let resolver;
 
 let db;
 let admin;
@@ -34,8 +45,15 @@ before(async () => {
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
   const serverModule = await import("../src/server.js");
   service = await import("../src/gpexeImportService.js");
+  connections = await import("../src/sourceConnectionService.js");
+  resolver = await import("../src/sourceImportCredentialResolver.js");
+  src = createFakeSource();
+  connections.setSourceFetchForTests(src.fetchImpl);
+  resolver.setImportSourceFetchForTests(src.fetchImpl);
+  service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   server = http.createServer(serverModule.app);
@@ -45,6 +63,9 @@ before(async () => {
 
 after(async () => {
   service?.setGpexeClientFactory(null);
+  connections?.setSourceFetchForTests(null);
+  resolver?.setImportSourceFetchForTests(null);
+  if (ORIGINAL_KEYS === undefined) delete process.env.SOURCE_CREDENTIAL_KEYS; else process.env.SOURCE_CREDENTIAL_KEYS = ORIGINAL_KEYS;
   if (server) {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -111,32 +132,26 @@ function cleanBundle({ sessionId, hour = 8, ids = [101, 102], distance101 = 3000
   return makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-14T${String(hour).padStart(2, "0")}:08:12`, updatedOn, athletes });
 }
 
-function fakeGpexe(bundles, { onUse } = {}) {
-  return () => {
-    onUse?.();
-    return {
-      async listTeamSessions() { return bundles.map((b) => ({ id: String(b.teamSession.id) })); },
-      async fetchSessionBundle({ sessionId }) { return structuredClone(bundles.find((b) => String(b.teamSession.id) === sessionId)); },
-    };
-  };
-}
-
 let nextGpexeTeamId = 5000;
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["A101", "B102", "C103", "D", "E", "F105"] });
   const [a, b, c, , , f] = org.athleteIds;
   const coach = await coachOf(org.teamId);
   const padmin = await platformAdmin();
-  assert.equal((await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: String(nextGpexeTeamId++) } })).status, 200);
+  const sourceTeamId = String(nextGpexeTeamId++);
+  assert.equal((await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } })).status, 200);
+  src.show(sourceTeamId);
+  const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId });
+  await activateBinding(admin, bindingId);
   for (const [gpexeAthleteId, athleteId] of [["101", a], ["102", b], ["103", c], ["105", f]]) {
     assert.equal((await api(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);
   }
-  return { ...org, coach, padmin };
+  return { ...org, coach, padmin, sourceTeamId, bindingId };
 }
 
 async function checkNow(team, bundles) {
-  service.setGpexeClientFactory(fakeGpexe(bundles));
-  const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: {} });
+  src.serve(team.sourceTeamId, bundles);
+  const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: { from: D1, to: D1 } });
   assert.equal(started.status, 202, JSON.stringify(started.body));
   for (let i = 0; i < 200; i += 1) {
     const r = await api(`/teams/${team.teamId}/checks/${started.body.check.id}`, { cookie: team.coach.cookie });
@@ -589,7 +604,11 @@ test("batch: an unexpected database error is a stable code without the database'
   } finally {
     console.error = originalError;
   }
-  assert.ok(errors.some((e) => e.includes("internal_secret_table")), "the text is logged on the server");
+  // 9-B (J17 section 7, the log rule): the server log names the error by its
+  // stable fields (code, routine, function) only - never the database's text,
+  // which can carry a value or an id.
+  assert.ok(errors.some((e) => e.includes("code=42P01")), "the error's code is logged on the server");
+  assert.ok(!errors.some((e) => e.includes("internal_secret_table")), "the database's text is never logged");
   assert.equal(await eventsOf(team.teamId), 1);
 });
 
@@ -610,20 +629,12 @@ test("batch: approving makes no GPEXE call, whatever the number of candidates - 
   const bundles = [9101, 9102, 9103, 9104].map((sessionId, i) => cleanBundle({ sessionId, hour: 7 + i * 2, ids: [101] }));
   await checkNow(team, bundles);
   const ids = Object.values(await candidateIds(team));
-  let clients = 0;
-  service.setGpexeClientFactory(() => {
-    clients += 1;
-    throw new Error("GPEXE must not be called while approving");
+  const callsBefore = src.calls.length;
+  await withSwitchOn(async () => {
+    const r = await batch(team, ids);
+    assert.deepEqual(r.body.summary, { requested: 4, imported: 4, alreadyImported: 0, refused: 0, unknown: 0, notAttempted: 0 });
   });
-  try {
-    await withSwitchOn(async () => {
-      const r = await batch(team, ids);
-      assert.deepEqual(r.body.summary, { requested: 4, imported: 4, alreadyImported: 0, refused: 0, unknown: 0, notAttempted: 0 });
-    });
-  } finally {
-    service.setGpexeClientFactory(null);
-  }
-  assert.equal(clients, 0);
+  assert.equal(src.calls.length, callsBefore, "no request to the source while approving (the legacy factory is a trap too)");
 });
 
 test("batch: a preview recomputed after the coach read the list (a link changed, then a check) is not imported - preview_changed, until the new list is sent", async () => {

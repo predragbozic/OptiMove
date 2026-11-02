@@ -4,17 +4,29 @@
 // session 186942): naive UTC timestamps, SI numeric fields, whole-session
 // rows with drill=null and drill rows with drill=n, /more/ zones and events,
 // team thresholds, details with burst/brake counts.
+//
+// Since phase 9 (9-B, contract J17) the importer writes only through the
+// mapping activations of a team's binding and creates no metric definition
+// (C46): every team of this suite is bound to its own GPEXE team with the
+// eleven legacy activations open (support/mapped-world.mjs), and runImport
+// hands the writer the bundle under that team id. The mapper tests read their
+// values through the frozen pre-9-B specs (support/gpexe-legacy-specs.mjs).
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { buildGpexeImportPlan, GPEXE_METRIC_SPECS, GPEXE_DERIVED_NOT_IMPORTED, GpexeMappingError } from "../src/gpexeImportMapper.js";
-import { importGpexePlan, importedOccasionContentHash, referenceSetHash, GpexeImportError } from "../src/gpexeImportWriter.js";
+import { buildGpexeImportPlan, GpexeMappingError } from "../src/gpexeImportMapper.js";
+import { importGpexeBundle, importedOccasionContentHash, referenceSetHash, GpexeImportError } from "../src/gpexeImportWriter.js";
+import { convertAtStorageScale } from "../src/sourceMetricPreview.js";
+import { canonicalDecimal } from "../src/sourceMetricExtractors.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import realTeamThresholds from "./fixtures/gpexe-team-thresholds-1473.json" with { type: "json" };
-import { describeApplyTarget, assertDisposableApplyTarget, main as cliMain } from "../scripts/gpexe-import-pilot.mjs";
+import { describeApplyTarget, assertDisposableApplyTarget, loadGpexeBundle, main as cliMain } from "../scripts/gpexe-import-pilot.mjs";
+import { LEGACY_SPECS, SPEC_REGISTRY } from "./support/gpexe-legacy-specs.mjs";
+import { definitionDigest, mappedBinding } from "./support/mapped-world.mjs";
+import { asSourceTeam } from "./support/gpexe-fake-source.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -24,28 +36,47 @@ const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 // ------------------------------------------------------------
 import { TZ, defaultThresholds, makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 
+// The oracle: the frozen pre-9-B specs as raw plan specs at both levels; their
+// values are what the importer stored before 9-B (JavaScript doubles).
+const ORACLE_SPECS = LEGACY_SPECS.map((s) => ({ raw: true, key: s.key, levels: { full: true, drill: true }, extract: s.extract }));
+function oraclePlan(bundle) {
+  return buildGpexeImportPlan(bundle, { metricSpecs: ORACLE_SPECS });
+}
+// The plan's own gates (session, thresholds, tracks, athletes) without any value.
+function gatesPlan(bundle) {
+  return buildGpexeImportPlan(bundle, { metricSpecs: [] });
+}
 function byExternalId(plan) {
   return new Map(plan.participants.flatMap((p) => p.results.map((r) => [r.externalId, r])));
 }
 function valueOf(result, key) {
-  return result.values.find((v) => v.metricKey === key)?.value;
+  return result.values.find((v) => v.key === key)?.value;
 }
 function skipsFor(plan, athleteSessionId) {
-  return plan.metricSkips.filter((s) => s.athleteSessionId === athleteSessionId).map((s) => `${s.metricKey}:${s.reason}`).sort();
+  return plan.leftOut.filter((s) => s.athleteSessionId === athleteSessionId).map((s) => `${s.key}:${s.code}`).sort();
 }
 
 // ------------------------------------------------------------
 // Mapper (no database)
 // ------------------------------------------------------------
-test("mapper: GPEXE source values only, units and conversions, separate full/drill identities, UTC -> local date", () => {
-  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes() }));
+test("mapper: the frozen pre-9-B specs read GPEXE source values with their conversions, separate full/drill identities, UTC -> local date; the plan builder has no spec list of its own", () => {
+  const bundle = makeBundle({ athletes: standardAthletes() });
+  // 9-B: every value comes from a mapping activation, so the plan builder has
+  // no default spec list, and its gates alone build no result and no value.
+  assert.throws(() => buildGpexeImportPlan(bundle), TypeError);
+  const gates = gatesPlan(bundle);
+  assert.deepEqual(gates.participants.map((p) => [p.gpexeAthleteId, p.results.length]), [["101", 0], ["102", 0]]);
+  assert.deepEqual(gates.leftOut, []);
+  assert.deepEqual(gates.activationSet, []);
+
+  const plan = oraclePlan(bundle);
+  assert.deepEqual(plan.activationSet, [], "raw oracle specs are not activations");
   assert.equal(plan.event.occurredInstant, "2026-09-14T18:08:12.000Z");
   assert.equal(plan.event.occurredLocalDate, "2026-09-14");
   assert.equal(plan.event.timezone, TZ);
   assert.equal(plan.event.name, "GPEXE FULL TRAINING 2026-09-14 20:08");
   assert.equal(plan.event.sourceExternalId, "team_session:5001");
   assert.deepEqual(plan.segments.map((s) => [s.drillIndex, s.order]), [[0, 1], [1, 2]]);
-  assert.deepEqual(plan.metrics.map((m) => m.key), GPEXE_METRIC_SPECS.map((s) => s.key));
   assert.equal(plan.thresholdsUsed.id, "1473");
   assert.equal(plan.thresholdsUsed.validityStart, "2025-01-01T00:00:00.000Z");
   assert.equal(plan.thresholdsUsed.validityEnd, null);
@@ -54,10 +85,6 @@ test("mapper: GPEXE source values only, units and conversions, separate full/dri
     acceleration_events_threshold: 2.5, acceleration_events_duration: 0.3,
     deceleration_events_threshold: -2.5, deceleration_events_duration: 0.3,
   }, "the plan carries the threshold set itself, not only its id");
-  const derivedLabels = ["m/min", "Acc+Dec", "Burst&brakes", "HMLD ≥25 W/kg (m)", "EXPDist ≥60 W/kg (m)"];
-  assert.deepEqual(plan.derivedNotImported.map((m) => m.label), derivedLabels);
-  assert.deepEqual(GPEXE_DERIVED_NOT_IMPORTED.map((m) => m.label), derivedLabels);
-  for (const m of plan.metrics) assert.doesNotMatch(m.label, />/, `${m.key}: labels state the inclusive boundary the code applies`);
 
   const results = byExternalId(plan);
   const full = results.get("athlete_session:500101:full");
@@ -72,18 +99,13 @@ test("mapper: GPEXE source values only, units and conversions, separate full/dri
   assert.equal(valueOf(full, "gpexe_power_zone_25_60_distance"), 300, "zone [25,60]");
   assert.equal(valueOf(full, "gpexe_power_zone_60_75_distance"), 60, "zone [60,75]");
   assert.equal(valueOf(full, "gpexe_power_zone_75_plus_distance"), 40, "zone [75,)");
-  assert.equal(plan.metrics.find((m) => m.key === "gpexe_power_zone_75_plus_distance").label, "GPEXE zona snage ≥75 W/kg");
-  assert.deepEqual(full.values.find((v) => v.metricKey === "gpexe_power_zone_25_60_distance").sourceContext.gpexeZoneExtremes, [25, 60]);
   assert.equal(valueOf(full, "gpexe_acceleration_events"), 20);
   assert.equal(valueOf(full, "gpexe_deceleration_events"), 18);
   assert.equal(valueOf(full, "gpexe_sprint_distance_7mps"), 12, "speed zone [7 m/s,)");
   assert.equal(valueOf(full, "gpexe_burst_events"), 9);
   assert.equal(valueOf(full, "gpexe_brake_events"), 7);
   assert.equal(valueOf(full, "gpexe_max_speed"), 7.5 * 3.6);
-  assert.equal(full.values.find((v) => v.metricKey === "gpexe_max_speed").unit, "km/h");
-  assert.equal(full.values.find((v) => v.metricKey === "gpexe_sprint_distance_7mps").sourceContext.gpexeThresholdMps, 7);
-  const keys = full.values.map((v) => v.metricKey);
-  for (const derived of ["gpexe_distance_per_min", "gpexe_acc_dec_count", "gpexe_burst_brake_count", "gpexe_hmld_25", "gpexe_exp_distance_60"]) assert.ok(!keys.includes(derived), `${derived} is never imported`);
+  assert.deepEqual(full.values.map((v) => v.key), LEGACY_SPECS.map((s) => s.key), "one value per legacy spec, nothing else");
   assert.equal(full.values.length, 11);
 
   const drill1 = results.get("athlete_session:500103:drill:1");
@@ -92,13 +114,13 @@ test("mapper: GPEXE source values only, units and conversions, separate full/dri
 });
 
 test("mapper: an athlete on two tracks is reported and not imported", () => {
-  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes() }));
+  const plan = gatesPlan(makeBundle({ athletes: standardAthletes() }));
   assert.deepEqual(plan.participants.map((p) => p.gpexeAthleteId), ["101", "102"]);
   assert.deepEqual(plan.anomalies.map((a) => [a.kind, a.gpexeAthleteId]), [["multiple_tracks", "103"]]);
 });
 
 test("mapper: a changed zone boundary, event threshold or team threshold skips that metric instead of importing another meaning", () => {
-  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 24], [24, 60], [60, 75], [75, null]], accThreshold: 3 }));
+  const plan = oraclePlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 24], [24, 60], [60, 75], [75, null]], accThreshold: 3 }));
   const full = byExternalId(plan).get("athlete_session:500101:full");
   assert.equal(valueOf(full, "gpexe_power_zone_25_60_distance"), undefined);
   assert.equal(valueOf(full, "gpexe_power_zone_60_75_distance"), 60, "the [60,75] zone is unchanged");
@@ -106,19 +128,19 @@ test("mapper: a changed zone boundary, event threshold or team threshold skips t
   assert.equal(valueOf(full, "gpexe_deceleration_events"), 18, "deceleration threshold is unchanged");
   assert.deepEqual(skipsFor(plan, "500101"), ["gpexe_acceleration_events:threshold_mismatch", "gpexe_power_zone_25_60_distance:zone_boundary_missing"]);
 
-  const changedTeamThresholds = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), thresholds: { ...defaultThresholds(77), speed_thresholds: [5.5, 6.5], power_thresholds: [20, 24, 60, 75] } }));
+  const changedTeamThresholds = oraclePlan(makeBundle({ athletes: standardAthletes().slice(0, 1), thresholds: { ...defaultThresholds(77), speed_thresholds: [5.5, 6.5], power_thresholds: [20, 24, 60, 75] } }));
   assert.deepEqual(skipsFor(changedTeamThresholds, "500101"), ["gpexe_power_zone_25_60_distance:team_threshold_missing", "gpexe_sprint_distance_7mps:team_threshold_missing"], "the team's own thresholds for that date must contain the boundary");
 
-  const movedUpper = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 25], [25, 55], [55, 75], [75, null]] }));
+  const movedUpper = oraclePlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 25], [25, 55], [55, 75], [75, null]] }));
   const movedUpperFull = byExternalId(movedUpper).get("athlete_session:500101:full");
   assert.equal(valueOf(movedUpperFull, "gpexe_power_zone_25_60_distance"), undefined, "a zone GPEXE delimits as [25,55] is not [25,60]");
   assert.equal(valueOf(movedUpperFull, "gpexe_power_zone_75_plus_distance"), 40, "the unchanged [75,) zone is still imported");
   assert.deepEqual(skipsFor(movedUpper, "500101"), ["gpexe_power_zone_25_60_distance:zone_boundary_missing", "gpexe_power_zone_60_75_distance:zone_boundary_missing"]);
 
-  const duplicated = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 25], [25, 60], [25, 60], [75, null]] }));
+  const duplicated = oraclePlan(makeBundle({ athletes: standardAthletes().slice(0, 1), powerBounds: [[null, 20], [20, 25], [25, 60], [25, 60], [75, null]] }));
   assert.ok(skipsFor(duplicated, "500101").includes("gpexe_power_zone_25_60_distance:zone_boundary_ambiguous"), "two GPEXE zones with the same extremes are reported, not guessed");
 
-  const splitZone = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), thresholds: { ...defaultThresholds(77), power_thresholds: [20, 25, 50, 60, 75], speed_thresholds: [5.5, 7, 8] } }));
+  const splitZone = oraclePlan(makeBundle({ athletes: standardAthletes().slice(0, 1), thresholds: { ...defaultThresholds(77), power_thresholds: [20, 25, 50, 60, 75], speed_thresholds: [5.5, 7, 8] } }));
   assert.deepEqual(skipsFor(splitZone, "500101"), ["gpexe_power_zone_25_60_distance:team_threshold_split", "gpexe_sprint_distance_7mps:team_threshold_split"], "a team threshold inside a zone means the zone no longer has that meaning");
 });
 
@@ -127,7 +149,7 @@ test("mapper: the snapshot is built from the real captured GPEXE threshold set",
   // team/980/thresholds/?valid_on=2026-09-14 as GPEXE returned it on
   // 2026-09-17, with the "user" field removed. If GPEXE renames a field, this
   // test fails instead of the importer recording an empty provenance.
-  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), gpexeTeamId: realTeamThresholds.team, thresholds: realTeamThresholds }));
+  const plan = gatesPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), gpexeTeamId: realTeamThresholds.team, thresholds: realTeamThresholds }));
   assert.equal(plan.thresholdsUsed.id, String(realTeamThresholds.id));
   assert.equal(plan.thresholdsUsed.validityStart, "2025-01-01T00:00:00.000Z");
   assert.equal(plan.thresholdsUsed.validityEnd, null);
@@ -145,7 +167,7 @@ test("mapper: a threshold set missing any of the fields the snapshot records is 
     const thresholds = { ...defaultThresholds(77) };
     delete thresholds[field];
     assert.throws(
-      () => buildGpexeImportPlan(makeBundle({ athletes, thresholds })),
+      () => gatesPlan(makeBundle({ athletes, thresholds })),
       (e) => e.code === "thresholds_payload_incomplete" && e.message.includes(field),
       field,
     );
@@ -154,39 +176,47 @@ test("mapper: a threshold set missing any of the fields the snapshot records is 
 
 test("mapper: team thresholds must belong to the session's team and be valid at the session start", () => {
   const athletes = standardAthletes().slice(0, 1);
-  assert.throws(() => buildGpexeImportPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), team: 78 } })), (e) => e.code === "thresholds_wrong_team");
-  assert.throws(() => buildGpexeImportPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), validity_start: "2026-09-15T00:00:00" } })), (e) => e.code === "thresholds_not_valid_for_session");
-  assert.throws(() => buildGpexeImportPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), validity_end: "2026-09-14T00:00:00" } })), (e) => e.code === "thresholds_not_valid_for_session");
+  assert.throws(() => gatesPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), team: 78 } })), (e) => e.code === "thresholds_wrong_team");
+  assert.throws(() => gatesPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), validity_start: "2026-09-15T00:00:00" } })), (e) => e.code === "thresholds_not_valid_for_session");
+  assert.throws(() => gatesPlan(makeBundle({ athletes, thresholds: { ...defaultThresholds(77), validity_end: "2026-09-14T00:00:00" } })), (e) => e.code === "thresholds_not_valid_for_session");
   const bundle = makeBundle({ athletes });
   delete bundle.teamThresholds;
-  assert.throws(() => buildGpexeImportPlan(bundle), (e) => e.code === "thresholds_missing");
+  assert.throws(() => gatesPlan(bundle), (e) => e.code === "thresholds_missing");
 });
 
 test("mapper: refuses when naive track timestamps stop being UTC, and for unsupported categories", () => {
-  assert.throws(() => buildGpexeImportPlan(makeBundle({ athletes: standardAthletes(), trackTimestampOffsetMs: 2 * 3600_000 })), (e) => e instanceof GpexeMappingError && e.code === "timestamp_semantics_changed");
-  assert.throws(() => buildGpexeImportPlan(makeBundle({ athletes: standardAthletes(), category: "OFFICIAL MATCH" })), (e) => e instanceof GpexeMappingError && e.code === "unsupported_category");
+  assert.throws(() => gatesPlan(makeBundle({ athletes: standardAthletes(), trackTimestampOffsetMs: 2 * 3600_000 })), (e) => e instanceof GpexeMappingError && e.code === "timestamp_semantics_changed");
+  assert.throws(() => gatesPlan(makeBundle({ athletes: standardAthletes(), category: "OFFICIAL MATCH" })), (e) => e instanceof GpexeMappingError && e.code === "unsupported_category");
 });
 
 test("mapper: a track without a timezone is refused instead of using the machine's zone", () => {
   const bundle = makeBundle({ athletes: standardAthletes().slice(0, 1) });
   delete bundle.tracks["9001"].timezone;
-  assert.throws(() => buildGpexeImportPlan(bundle), (e) => e.code === "invalid_timezone");
+  assert.throws(() => gatesPlan(bundle), (e) => e.code === "invalid_timezone");
 });
 
 test("mapper: a session after 22:00 UTC lands on the next local day", () => {
-  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), start: "2026-09-02T22:32:59" }));
+  const plan = gatesPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), start: "2026-09-02T22:32:59" }));
   assert.equal(plan.event.occurredLocalDate, "2026-09-03");
 });
 
-test("content hash changes when unit, level, aggregation role, coverage or GPEXE threshold change — not only the value", () => {
-  const base = { level: "full", drillIndex: null, values: [{ metricKey: "k", metricDefinitionId: "d", metricDefinitionVersionId: "v", value: 1, unit: "m", aggregationRole: "source_rollup", coverage: "complete", sourceContext: { gpexeThresholdMps: 7 } }] };
+test("content hash changes when level, value, unit, aggregation role, coverage, canonical version, mapping version or source value/unit change — not the order of the values", () => {
+  const base = { level: "full", drillIndex: null, values: [{ metricDefinitionId: "d", metricDefinitionVersionId: "v", mappingVersionId: "mv", value: "1", unit: "m", sourceValue: "1", sourceUnit: "m", aggregationRole: "source_rollup", coverage: "complete" }] };
   const hash = importedOccasionContentHash(base);
+  const two = { ...base, values: [...base.values, { ...base.values[0], metricDefinitionId: "e", metricDefinitionVersionId: "w", mappingVersionId: "mw" }] };
+  assert.equal(importedOccasionContentHash({ ...two, values: [...two.values].reverse() }), importedOccasionContentHash(two), "the values are hashed in definition order");
   const variants = [
     { ...base, level: "drill", drillIndex: 0 },
+    { ...base, values: [{ ...base.values[0], value: "2" }] },
     { ...base, values: [{ ...base.values[0], unit: "km" }] },
     { ...base, values: [{ ...base.values[0], aggregationRole: "standalone" }] },
     { ...base, values: [{ ...base.values[0], coverage: "partial" }] },
-    { ...base, values: [{ ...base.values[0], sourceContext: { gpexeThresholdMps: 6.5 } }] },
+    { ...base, values: [{ ...base.values[0], metricDefinitionVersionId: "v2" }] },
+    // A value under another mapping version (e.g. another GPEXE threshold) is
+    // never "unchanged" (J17 step 11).
+    { ...base, values: [{ ...base.values[0], mappingVersionId: "mv2" }] },
+    { ...base, values: [{ ...base.values[0], sourceValue: "2" }] },
+    { ...base, values: [{ ...base.values[0], sourceUnit: "km" }] },
   ];
   for (const variant of variants) assert.notEqual(importedOccasionContentHash(variant), hash);
   assert.equal(importedOccasionContentHash(structuredClone(base)), hash);
@@ -197,10 +227,13 @@ test("content hash changes when unit, level, aggregation role, coverage or GPEXE
 // ------------------------------------------------------------
 let db;
 let admin;
-let dashboardDbModule = null;
+let world = null;
 
 before(async () => {
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "suite" });
+  // The mapped world's services and the app modules read DATABASE_URL through
+  // db.js when first imported: point it at the disposable database first.
+  process.env.DATABASE_URL = db.url;
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   const own = await admin.query("select current_database() as db");
@@ -208,22 +241,21 @@ before(async () => {
 });
 
 after(async () => {
-  process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   try {
-    if (dashboardDbModule) await dashboardDbModule.pool.end();
-  } finally {
+    const dbModule = await import("../src/db.js");
+    await dbModule.pool.end().catch(() => {});
+  } catch { /* not loaded */ }
+  try {
     if (admin) await admin.end();
+  } finally {
     if (db) await db.drop();
+    process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   }
 });
 
-// App service modules read DATABASE_URL through db.js when first imported,
-// so point it at the disposable database before loading any of them.
+// App service modules read DATABASE_URL through db.js when first imported;
+// before() already points it at the disposable database.
 async function loadAppModule(specifier) {
-  if (!dashboardDbModule) {
-    process.env.DATABASE_URL = db.url;
-    dashboardDbModule = await import("../src/db.js");
-  }
   return import(specifier);
 }
 
@@ -233,9 +265,38 @@ async function newClient() {
   return client;
 }
 
-async function setupTeam() {
+// Every team is bound (raw SQL, support/mapped-world.mjs) to its own GPEXE
+// team - gpexe_team_settings is unique on it - with the eleven legacy
+// activations open on the binding unless activate is false; runImport hands
+// the writer the bundle under that team id (the bundle's team must be the
+// binding's source team, D18).
+let teamCounter = 0;
+async function setupTeam({ activate = true } = {}) {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
-  return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+  teamCounter += 1;
+  const sourceTeamId = String(9300 + teamCounter);
+  const binding = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId, activate });
+  if (binding.world) world = binding.world;
+  return {
+    ...org, bindingId: binding.bindingId, started: binding.started, sourceTeamId,
+    athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] },
+  };
+}
+
+// The legacy key of a canonical variable of the mapped world.
+function legacyKeyOf(variableId) {
+  const hit = Object.entries(world ?? {}).find(([, m]) => String(m.variableId) === String(variableId));
+  return hit ? hit[0] : `not_of_the_world:${variableId}`;
+}
+
+// The legacy keys of a supplement's added values; each must come from that
+// key's own activation on the team's binding.
+function addedKeys(org, addedValues) {
+  for (const v of addedValues) {
+    const key = legacyKeyOf(v.metricDefinitionId);
+    assert.ok((org.started[key] ?? []).map(String).includes(String(v.activationId)), `${key}: the added value comes from its activation on the team's binding`);
+  }
+  return addedValues.map((v) => legacyKeyOf(v.metricDefinitionId)).sort();
 }
 
 function contextFor(org) {
@@ -245,7 +306,7 @@ function contextFor(org) {
 async function runImport(org, bundle, hooks) {
   const client = await newClient();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), contextFor(org), hooks);
+    return await importGpexeBundle(client, asSourceTeam(bundle, org.sourceTeamId), contextFor(org), hooks);
   } finally {
     await client.end();
   }
@@ -263,6 +324,7 @@ const TEAM_TABLES = {
   import_batches: `select count(*)::int as c from training_load.metric_import_batches where owner_team_id = $1`,
   occasions: `select count(*)::int as c from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1`,
   metric_values: `select count(*)::int as c from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id join training_load.metric_event_participants p on p.id = o.event_participant_id join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1`,
+  value_provenance: `select count(*)::int as c from training_load.metric_value_source_provenance pr join training_load.metric_values v on v.id = pr.metric_value_id join training_load.metric_measurement_occasions o on o.id = v.occasion_id join training_load.metric_event_participants p on p.id = o.event_participant_id join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1`,
   activities: `select count(*)::int as c from training.activities where owner_team_id = $1`,
   activity_participants: `select count(*)::int as c from training.activity_participants ap join training.activities a on a.id = ap.activity_id where a.owner_team_id = $1`,
   activity_components: `select count(*)::int as c from training.activity_components ac join training.activities a on a.id = ac.activity_id where a.owner_team_id = $1`,
@@ -276,18 +338,21 @@ async function snapshot(teamId) {
   return out;
 }
 
-test("writer: first import creates one event, activity, drill components and one current api_import occasion per identity", async () => {
+test("writer: first import creates one event, activity, drill components and one current api_import occasion per identity, every value through the team's activations and no definition of its own", async () => {
   const org = await setupTeam();
+  const digestBefore = await definitionDigest(admin);
   const summary = await runImport(org, makeBundle({ athletes: standardAthletes() }));
   assert.deepEqual(summary.counts, { created: 5 }, "101: full + 2 drills, 102: full + 1 drill; 103 skipped (two tracks)");
-  assert.equal(summary.definitionsCreated.length, 11);
+  assert.equal(summary.definitionsCreated, undefined, "the importer creates no definition (C46)");
+  assert.equal(summary.connectionCreated, true);
+  assert.equal(summary.instanceKeysSet, true);
   assert.equal(summary.thresholdsUsed.id, "1473");
   assert.equal(summary.bindingCreated, true);
 
   const state = await snapshot(org.teamId);
   assert.deepEqual(state, {
-    connections: 1, definitions: 11, definition_versions: 11, scope_capabilities: 22, events: 1, segments: 2, event_participants: 2,
-    source_identities: 6, import_batches: 1, occasions: 5, metric_values: 53, activities: 1, activity_participants: 2,
+    connections: 1, definitions: 0, definition_versions: 0, scope_capabilities: 0, events: 1, segments: 2, event_participants: 2,
+    source_identities: 6, import_batches: 1, occasions: 5, metric_values: 53, value_provenance: 53, activities: 1, activity_participants: 2,
     activity_components: 2, component_segment_links: 2, event_source_bindings: 1,
   });
 
@@ -300,20 +365,17 @@ test("writer: first import creates one event, activity, drill components and one
   assert.equal(reserved.length, 1, "the session itself is reserved as an identity");
   assert.equal(reserved[0].current_occasion_id, null, "the reservation never receives an occasion");
 
-  const sprint = (await admin.query(
-    `select d.label, v.unit, v.condition_description from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id
-     where d.owner_team_id = $1 and d.key = 'gpexe_sprint_distance_7mps'`,
+  // The values attach to the eleven canonical variables the activations pin,
+  // each in its variable's unit; the catalog is untouched (C46).
+  const byVariable = (await admin.query(
+    `select v.metric_definition_id::text as id, array_agg(distinct v.unit_at_capture) as units from training_load.metric_values v
+     join training_load.metric_measurement_occasions o on o.id = v.occasion_id join training_load.metric_event_participants p on p.id = o.event_participant_id
+     join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1 group by 1`,
     [org.teamId],
-  )).rows[0];
-  assert.equal(sprint.label, "Sprint distanca ≥25,2 km/h");
-  assert.equal(sprint.unit, "m");
-  assert.equal(sprint.condition_description.sourceContext.gpexeThresholdMps, 7);
-  const burst = (await admin.query(
-    `select d.label, v.condition_description from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id where d.owner_team_id = $1 and d.key = 'gpexe_burst_events'`,
-    [org.teamId],
-  )).rows[0];
-  assert.equal(burst.label, "GPEXE burst events (definicija nepotvrđena)");
-  assert.equal(burst.condition_description.definition, "unconfirmed");
+  )).rows;
+  assert.deepEqual(byVariable.map((r) => legacyKeyOf(r.id)).sort(), Object.keys(world).sort());
+  for (const r of byVariable) assert.deepEqual(r.units, [SPEC_REGISTRY[legacyKeyOf(r.id)].targetUnit], legacyKeyOf(r.id));
+  assert.equal(await definitionDigest(admin), digestBefore, "no definition, version or capability is created or changed (C46)");
 
   const activity = (await admin.query(`select origin, activity_type_key, occurred_local_date::text as d, started_at, timezone_snapshot from training.activities where owner_team_id = $1`, [org.teamId])).rows[0];
   assert.equal(activity.origin, "source_import");
@@ -365,7 +427,8 @@ test("writer: identical second import writes nothing (state before == after, no 
   const second = await runImport(org, bundle);
   assert.deepEqual(second.counts, { unchanged: 5 });
   assert.equal(second.importBatchId, null);
-  assert.deepEqual(second.definitionsCreated, []);
+  assert.equal(second.definitionsCreated, undefined);
+  assert.equal(second.instanceKeysSet, false);
   assert.equal(second.connectionCreated, false);
   assert.equal(second.eventCreated, false);
   assert.deepEqual(await snapshot(org.teamId), before);
@@ -402,9 +465,11 @@ test("writer: a newer correction of the whole session supersedes only the :full 
   ]);
   const current = (await admin.query(
     `select v.value_numeric from training_load.metric_source_identities si join training_load.metric_values v on v.occasion_id = si.current_occasion_id
-     join training_load.metric_definitions d on d.id = v.metric_definition_id where si.source_external_id = 'athlete_session:500301:full' and d.key = 'gpexe_total_distance' and d.owner_team_id = $1`,
-    [org.teamId],
+     join training_load.metric_source_connections c on c.id = si.source_connection_id
+     where si.source_external_id = 'athlete_session:500301:full' and v.metric_definition_id = $2 and c.owner_team_id = $1`,
+    [org.teamId, world.gpexe_total_distance.variableId],
   )).rows;
+  assert.equal(current.length, 1);
   assert.equal(Number(current[0].value_numeric), 3100);
 });
 
@@ -449,7 +514,7 @@ test("writer: two concurrent imports of the same session serialize on the team l
 
   const secondClient = await newClient();
   const secondPid = (await secondClient.query("select pg_backend_pid() as pid")).rows[0].pid;
-  const second = importGpexePlan(secondClient, buildGpexeImportPlan(bundle), contextFor(org)).finally(() => secondClient.end());
+  const second = importGpexeBundle(secondClient, asSourceTeam(bundle, org.sourceTeamId), contextFor(org)).finally(() => secondClient.end());
 
   let waiting = false;
   for (let i = 0; i < 100 && !waiting; i += 1) {
@@ -467,7 +532,7 @@ test("writer: two concurrent imports of the same session serialize on the team l
   const state = await snapshot(org.teamId);
   assert.deepEqual(
     [state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.import_batches, state.activities, state.activity_components],
-    [1, 11, 1, 6, 5, 1, 1, 2],
+    [1, 0, 1, 6, 5, 1, 1, 2],
   );
   assert.equal(state.event_source_bindings, 1, "one binding, whichever import created the event");
 });
@@ -479,7 +544,7 @@ test("writer: three concurrent first imports without any test hook also end with
   const outcomes = summaries.map((s) => JSON.stringify(s.counts)).sort();
   assert.deepEqual(outcomes, [JSON.stringify({ created: 5 }), JSON.stringify({ unchanged: 5 }), JSON.stringify({ unchanged: 5 })]);
   const state = await snapshot(org.teamId);
-  assert.deepEqual([state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.activities], [1, 11, 1, 6, 5, 1]);
+  assert.deepEqual([state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.activities], [1, 0, 1, 6, 5, 1]);
   assert.equal(state.event_source_bindings, 1);
 });
 
@@ -491,30 +556,16 @@ test("writer: an athlete without an active membership in the team stops the impo
   assert.ok(Object.values(state).every((c) => c === 0), JSON.stringify(state));
 });
 
-test("writer: an existing definition whose GPEXE source context changed stops the import", async () => {
-  const org = await setupTeam();
-  await runImport(org, makeBundle({ sessionId: 5010, athletes: standardAthletes() }));
-  const plan = buildGpexeImportPlan(makeBundle({ sessionId: 5011, athletes: standardAthletes() }));
-  plan.metrics = plan.metrics.map((m) => (m.key === "gpexe_sprint_distance_7mps" ? { ...m, sourceContext: { ...m.sourceContext, gpexeThresholdMps: 6.5 } } : m));
-  const client = await newClient();
-  try {
-    await assert.rejects(importGpexePlan(client, plan, contextFor(org)), (e) => e.code === "metric_definition_mismatch");
-  } finally {
-    await client.end();
-  }
-  assert.equal((await snapshot(org.teamId)).events, 1, "the rejected session wrote nothing");
-});
-
+// The current values of one identity by legacy key, as exact decimal text.
 async function currentValuesOf(org, externalId) {
   const rows = (await admin.query(
-    `select d.key, v.value_numeric::float8 as value from training_load.metric_source_identities si
+    `select v.metric_definition_id::text as id, v.value_numeric::text as value_text from training_load.metric_source_identities si
      join training_load.metric_source_connections c on c.id = si.source_connection_id
      join training_load.metric_values v on v.occasion_id = si.current_occasion_id
-     join training_load.metric_definitions d on d.id = v.metric_definition_id
-     where c.owner_team_id = $1 and si.source_external_id = $2 order by d.key`,
+     where c.owner_team_id = $1 and si.source_external_id = $2`,
     [org.teamId, externalId],
   )).rows;
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return Object.fromEntries(rows.map((r) => [legacyKeyOf(r.id), canonicalDecimal(r.value_text)]));
 }
 
 async function occasionChain(org, externalId) {
@@ -529,8 +580,9 @@ async function occasionChain(org, externalId) {
   )).rows;
 }
 
-// Drill 1 with values whose shortest decimal form has 17 digits, as real
-// GPEXE data does (1397 s -> 23.283333333333335 min, 7.53 m/s -> 27.108000000000004 km/h).
+// Drill 1 with values whose double has 17 digits, as real GPEXE data does
+// (1397 s -> 23.283333333333335 min, 7.53 m/s -> 27.108000000000004 km/h);
+// since 9-B the stored value is the exact conversion at the storage scale.
 function athletesWithLongDecimals() {
   const athletes = standardAthletes();
   Object.assign(athletes[0].parts[2], { time: 1397, maxV: 7.53 });
@@ -548,15 +600,19 @@ test("writer: drill burst/brake fetched later are supplemented into the current 
   const withDrill1Details = await runImport(org, makeBundle({ sessionId: 5012, athletes: athletesWithLongDecimals(), detailsDrills: [0, 1] }));
   const supplemented = withDrill1Details.results.find((r) => r.externalId === drill1);
   assert.equal(supplemented.outcome, "supplemented");
-  assert.deepEqual(supplemented.addedMetricKeys, ["gpexe_brake_events", "gpexe_burst_events"]);
+  assert.deepEqual(addedKeys(org, supplemented.addedValues), ["gpexe_brake_events", "gpexe_burst_events"]);
   assert.deepEqual(withDrill1Details.counts, { supplemented: 1, unchanged: 4 });
 
   const current = await currentValuesOf(org, drill1);
-  assert.equal(current.gpexe_burst_events, 4);
-  assert.equal(current.gpexe_brake_events, 3);
-  assert.equal(current.gpexe_total_distance, 1400, "values that were already imported are carried over unchanged");
-  assert.equal(current.gpexe_time_min, 1397 / 60);
-  assert.equal(current.gpexe_max_speed, 7.53 * 3.6);
+  assert.equal(current.gpexe_burst_events, "4");
+  assert.equal(current.gpexe_brake_events, "3");
+  assert.equal(current.gpexe_total_distance, "1400", "values that were already imported are carried over unchanged");
+  // Exact decimals at the storage scale, within 1e-9 of the double the
+  // importer stored before 9-B.
+  assert.equal(current.gpexe_time_min, convertAtStorageScale("1397", SPEC_REGISTRY.gpexe_time_min.factors));
+  assert.ok(Math.abs(Number(current.gpexe_time_min) - 1397 / 60) <= 1e-9, current.gpexe_time_min);
+  assert.equal(current.gpexe_max_speed, convertAtStorageScale("7.53", SPEC_REGISTRY.gpexe_max_speed.factors));
+  assert.ok(Math.abs(Number(current.gpexe_max_speed) - 7.53 * 3.6) <= 1e-9, current.gpexe_max_speed);
   assert.equal(Object.keys(current).length, 11);
   assert.deepEqual(await occasionChain(org, drill1), [
     { import_conflict_status: null, supersedes: false, superseded: true, is_current: false, values: 9 },
@@ -581,7 +637,7 @@ test("writer: added metrics with a newer updated_on are also supplemented", asyn
   const newer = await runImport(org, makeBundle({ sessionId: 5020, athletes: standardAthletes(), detailsDrills: [0, 1], updatedOn: "2026-09-15T08:00:00" }));
   const result = newer.results.find((r) => r.externalId === drill1);
   assert.equal(result.outcome, "supplemented");
-  assert.deepEqual(result.addedMetricKeys, ["gpexe_brake_events", "gpexe_burst_events"]);
+  assert.deepEqual(addedKeys(org, result.addedValues), ["gpexe_brake_events", "gpexe_burst_events"]);
   const reportedAt = (await admin.query(
     `select o.source_reported_at from training_load.metric_source_identities si join training_load.metric_source_connections c on c.id = si.source_connection_id
      join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id where c.owner_team_id = $1 and si.source_external_id = $2`,
@@ -634,7 +690,7 @@ test("writer: a supplement that also changes, drops or predates existing values 
   assert.equal(dropped.results.find((r) => r.externalId === "athlete_session:501802:drill:0").outcome, "needs_review", "burst/brake missing from a later fetch are not removed");
 
   assert.equal((await currentValuesOf(org, drill1)).gpexe_burst_events, undefined, "the current drill 1 result is unchanged");
-  assert.equal((await currentValuesOf(org, "athlete_session:501802:drill:0")).gpexe_burst_events, 5, "drill 0 keeps its burst value");
+  assert.equal((await currentValuesOf(org, "athlete_session:501802:drill:0")).gpexe_burst_events, "5", "drill 0 keeps its burst value");
 });
 
 test("writer: a manual correction as current makes a newer GPEXE resend stale_resend_ignored", async () => {
@@ -725,41 +781,6 @@ test("writer: a re-import holding the event does not deadlock with a manual corr
   assert.equal(outcome.summary.results.find((r) => r.externalId === "athlete_session:501501:full").outcome, "corrected");
 });
 
-test("writer: an import racing a catalog archive of its definition waits and then refuses, never writing under the archived definition", async () => {
-  const org = await setupTeam();
-  await runImport(org, makeBundle({ sessionId: 5016, athletes: standardAthletes() }));
-  const definitionId = (await admin.query(`select id from training_load.metric_definitions where owner_team_id = $1 and key = 'gpexe_total_distance'`, [org.teamId])).rows[0].id;
-  const { archiveDefinition } = await loadAppModule("../src/trainingLoadMetricsCatalog.js");
-  const req = { user: { id: org.userId }, authz: { platformRoles: [], clubRoles: [], teamRoles: [{ role: "team_coach", teamId: org.teamId }], managedTeamIds: [org.teamId] } };
-
-  let signalLocked;
-  let releaseArchive;
-  const archiveHoldsLock = new Promise((resolve) => { signalLocked = resolve; });
-  const archiveMayCommit = new Promise((resolve) => { releaseArchive = resolve; });
-  const archive = archiveDefinition(req, definitionId, { onLocked: async () => { signalLocked(); await archiveMayCommit; } });
-  await archiveHoldsLock;
-
-  const importClient = await newClient();
-  const importPid = (await importClient.query("select pg_backend_pid() as pid")).rows[0].pid;
-  const reimport = importGpexePlan(importClient, buildGpexeImportPlan(makeBundle({ sessionId: 5017, athletes: standardAthletes() })), contextFor(org))
-    .then((summary) => ({ summary }), (error) => ({ error }))
-    .finally(() => importClient.end());
-  let waiting = false;
-  for (let i = 0; i < 100 && !waiting; i += 1) {
-    const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [importPid]);
-    waiting = r.rows[0]?.wait_event_type === "Lock";
-    if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.equal(waiting, true, "the import waits for the definition row the archive holds");
-  releaseArchive();
-  const archived = await archive;
-  assert.equal(archived.row?.state, "archived", JSON.stringify(archived));
-
-  const outcome = await reimport;
-  assert.equal(outcome.error?.code, "metric_definition_mismatch", JSON.stringify(outcome.summary?.counts ?? outcome.error?.message));
-  assert.equal((await snapshot(org.teamId)).events, 1, "the second session was not written");
-});
-
 test("writer: the event binding stores which GPEXE threshold set produced the session", async () => {
   const org = await setupTeam();
   const bundle = makeBundle({ sessionId: 5021, athletes: standardAthletes() });
@@ -777,7 +798,7 @@ test("writer: the event binding stores which GPEXE threshold set produced the se
   assert.equal(binding[0].reference_valid_to, null, "an open-ended set stays open-ended");
   assert.deepEqual(binding[0].reference_payload.power_thresholds, [20, 25, 60, 75]);
   assert.equal(binding[0].reference_payload.acceleration_events_duration, 0.3);
-  assert.equal(binding[0].reference_hash, referenceSetHash(buildGpexeImportPlan(bundle).thresholdsUsed));
+  assert.equal(binding[0].reference_hash, referenceSetHash(gatesPlan(bundle).thresholdsUsed));
   // The same set serialized differently by GPEXE (numeric strings) is the same set.
   const restated = defaultThresholds(77);
   const asStrings = {
@@ -787,7 +808,7 @@ test("writer: the event binding stores which GPEXE threshold set produced the se
     acceleration_events_duration: String(restated.acceleration_events_duration),
   };
   assert.equal(
-    referenceSetHash(buildGpexeImportPlan(makeBundle({ sessionId: 5021, athletes: standardAthletes(), thresholds: asStrings })).thresholdsUsed),
+    referenceSetHash(gatesPlan(makeBundle({ sessionId: 5021, athletes: standardAthletes(), thresholds: asStrings })).thresholdsUsed),
     binding[0].reference_hash,
     "a re-serialized set must not read as a changed set",
   );
@@ -816,9 +837,20 @@ test("writer: a re-import under a different GPEXE threshold set stops instead of
   await runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes() }));
   const before = await snapshot(org.teamId);
 
-  // The thresholds themselves changed under the same set id: what the stored
-  // values mean is no longer certain, so the import stops.
-  const changedSet = { ...defaultThresholds(77), power_thresholds: [20, 25, 55, 75] };
+  // A threshold an activation's zone depends on changed under the same set
+  // id: that zone no longer has the meaning its mapping version names, so the
+  // whole session stops before any write (9-B: a threshold-contract skip
+  // blocks the candidate, J17 step 8).
+  const zoneChanged = { ...defaultThresholds(77), power_thresholds: [20, 25, 55, 75] };
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes(), thresholds: zoneChanged, updatedOn: "2026-09-15T08:00:00" })),
+    (e) => e instanceof GpexeImportError && e.code === "source_threshold_contract_mismatch",
+  );
+  assert.deepEqual(await snapshot(org.teamId), before, "a changed zone threshold writes nothing at all");
+
+  // A threshold no activation reads changed under the same set id: what the
+  // stored values mean is no longer certain, so the import stops.
+  const changedSet = { ...defaultThresholds(77), acceleration_events_duration: 0.4 };
   await assert.rejects(
     runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes(), thresholds: changedSet, updatedOn: "2026-09-15T08:00:00" })),
     (e) => e.code === "source_reference_set_changed" && e.storedReferenceSet.externalId === "1473" && e.incomingReferenceSet.hash !== e.storedReferenceSet.hash,
@@ -1241,7 +1273,7 @@ test("writer: an existing event without a binding stops instead of recording a t
 test("dashboard: source policy api_import now returns imported session and drill values; manual returns none", async () => {
   const org = await setupTeam();
   await runImport(org, makeBundle({ sessionId: 5008, athletes: standardAthletes() }));
-  const distance = (await admin.query(`select id from training_load.metric_definitions where owner_team_id = $1 and key = 'gpexe_total_distance'`, [org.teamId])).rows[0].id;
+  const distance = world.gpexe_total_distance.variableId;
 
   const { runDashboardBatchQuery } = await loadAppModule("../src/trainingLoadDashboardQuery.js");
   const spec = (id, dataScopeLevel, sourcePolicy) => ({
@@ -1309,7 +1341,7 @@ test("CLI --apply refuses a disposable-looking database without the marker, and 
 });
 
 test("CLI dry run opens no database connection and creates nothing", async () => {
-  const org = await setupTeam();
+  const org = await setupTeam({ activate: false });
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gpexe-dry-run-"));
   try {
     const bundle = makeBundle({ sessionId: 5009, athletes: standardAthletes() });
@@ -1335,7 +1367,11 @@ test("CLI dry run opens no database connection and creates nothing", async () =>
     }
     assert.equal(result.summary, undefined);
     assert.equal(result.plan.participants.length, 2);
-    assert.equal(byExternalId(result.plan).get("athlete_session:500902:drill:0").values.length, 11, "drill 0 details were loaded from the raw dir");
+    assert.ok(result.plan.participants.every((p) => p.results.length === 0), "a dry run has no activation, so it builds no value (9-B)");
+    assert.deepEqual(result.plan.leftOut, []);
+    const loaded = loadGpexeBundle(dir, "5009");
+    assert.deepEqual(loaded.details.drills, { 0: bundle.details.drills["0"] }, "drill 0 details were loaded from the raw dir");
+    assert.deepEqual(loaded.details.full, bundle.details.full);
     assert.deepEqual(await snapshot(org.teamId), Object.fromEntries(Object.keys(TEAM_TABLES).map((k) => [k, 0])));
     const definitions = (await admin.query(`select count(*)::int as c from training_load.metric_definitions where key like 'gpexe_%' and owner_team_id = $1`, [org.teamId])).rows[0].c;
     assert.equal(definitions, 0);
