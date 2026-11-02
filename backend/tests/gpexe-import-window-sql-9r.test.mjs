@@ -669,13 +669,15 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
   // import table and an advisory lock, while the connector's session runs
   // block 3; a plain read lock alone is not counted.
   const other = new pg.Client({ connectionString: db.url });
-  await other.connect();
-  assert.equal((await other.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
-  const elsewhere = new pg.Client({ connectionString: ORIGINAL_DATABASE_URL }); // another database of the same server
-  await elsewhere.connect();
-  assert.notEqual((await elsewhere.query("select current_database() as db")).rows[0].db, db.name);
+  const elsewhereUrl = new URL(db.url);
+  elsewhereUrl.pathname = "/postgres"; // the server's maintenance database: only an advisory lock, nothing written
+  const elsewhere = new pg.Client({ connectionString: elsewhereUrl.toString() });
   try {
-    await elsewhere.query("select pg_advisory_lock(9120)");
+    await other.connect();
+    assert.equal((await other.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+    await elsewhere.connect();
+    assert.equal((await elsewhere.query("select current_database() as db")).rows[0].db, "postgres", "SAFETY: not the maintenance database");
+    assert.equal((await elsewhere.query("select pg_try_advisory_lock(9120) as ok")).rows[0].ok, true, "the advisory lock is free");
     await other.query("begin");
     await other.query("select count(*) from training_load.metric_values");
     const reading = await readOnlyBlocks(ro, PREFLIGHT, [3]);

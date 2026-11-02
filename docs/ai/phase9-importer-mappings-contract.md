@@ -741,7 +741,8 @@ request, reads or writes no persistent database, and touches no Render or Supaba
 #### As built (9-R: the window's two SELECT files)
 
 The *Rukovodilac* asked for them after step 8 passed (2026-11-02). They do not include the M6 runbook or the proposals.
-They are merged only on the owner's word (section 2's 9-R row, step 6a).
+They merge under the standing merge order after the *Rukovodilac*'s GO: the owner's work order `628d0be9`
+(section 12.3) covers section 2's 9-R row and step 6a for PRs without a migration.
 
 - **`docs/runbooks/gpexe-import-window-preflight.sql`** (step 11), 14 numbered blocks:
   1. the migrations: v51 last, with its checksum, nothing later;
