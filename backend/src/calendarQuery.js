@@ -486,13 +486,15 @@ async function readEventRows(ctx, { from, to }) {
 // card only), counted — only the details of the event's club now (D41): how
 // many are chosen, how many hold a value, how many are required and how many
 // of those hold one. A value row whose columns are all null (cleared) holds
-// none. One statement.
+// none; an archived detail still chosen counts as chosen, never as required
+// (it is out of the choice, so the event does not wait for it; its value can
+// still be written). One statement.
 async function readEventDetailCounts(eventIds) {
   const result = await query(
     `select s.event_id, count(*)::int as selected,
             count(*) filter (where num_nonnulls(v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value) > 0)::int as filled,
-            count(*) filter (where f.required)::int as required,
-            count(*) filter (where f.required and num_nonnulls(v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value) > 0)::int as filled_required
+            count(*) filter (where f.required and f.archived_at is null)::int as required,
+            count(*) filter (where f.required and f.archived_at is null and num_nonnulls(v.option_id, v.number_value, v.scale_value, v.bool_value, v.text_value) > 0)::int as filled_required
        from calendar.event_selected_fields s
        join calendar.events e on e.id = s.event_id
        left join public.teams t on t.id = e.owner_team_id

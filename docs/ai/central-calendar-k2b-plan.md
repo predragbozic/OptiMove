@@ -798,7 +798,30 @@ prove marked "per the stream manager").
 - **The edit's change row** carries the one-off text before / after under `location` (as K2a did), `locationId` before /
   after (only a place the event shows, so only of the club now), `fieldIdsBefore` / `fieldIdsAfter` and the flags
   `foreignFieldsDetached` / `foreignPlaceCleared` — not the `locationTextChanged` 18.2 named. The values command's
-  `cleared` names only a detail whose value it cleared.
+  `cleared` names only a detail whose value held something and is now cleared (a value already null is not cleared
+  again).
+- **The owner after the writer lock** (the independent review's LOW): an edit, a values command and every other event
+  command take the owner from the event row read `FOR UPDATE` after `lock_event_writer`, which holds a team owner's
+  team `FOR SHARE`; a new team event reads its team's club again under that lock. So a team that moved between the
+  first read and the lock is judged by its club of that moment: club A's detail, place or type is the one 400
+  (`field_not_available`, `location_not_available`, `type_not_available`), never a refusal of the database's guard (a
+  500), and nothing is written (test 11).
+- **The status, two edge cases** (the manager's decisions, 2026-11-02): an archived detail still chosen on an event never
+  keeps it awaiting, even when required — it is out of the choice, so the event does not wait for it, and its value can
+  still be written; an event that declares RPE without a channel (a gap, the note only) and has its required detail
+  filled reads `done` (test 7).
+- **The guard of a place sent back** (the review's observation on M19): `events_location_guard` judges a place only when
+  `location_id` changes, so for club A's place sent back on a moved team's event the service's `lockOwnPlace` — against
+  the place the event shows — is the only guard.
+- **Release order:** the "required" switch of K2b-1c ships with K2b-1d or after it (the event form where a coach enters
+  the values); before that, an event could wait for a detail nobody has a place to fill.
+- **Known limit until the owner decides** (the independent review's MEDIUM, recorded without a change): an event of club
+  A that targets its team T stays visible after T moves to club B — club B's admin and T's coach see its title and time
+  and, since K2b-1b, the address and note of A's library place. The cause is K2a's reader rule
+  (`backend/src/calendarAccess.js`, the club and team branches of `calendarScheduleCandidateSql`: a team target of
+  the scope's club or team makes the event visible), not this slice. Options for the owner: (a) a club event's team
+  target counts only while the team belongs to the event's owner club; (b) a stopgap — a library place shown only to a
+  reader of the owner's club.
 - **The type's default details** are read `FOR SHARE` in ascending id at create: a default archived meanwhile is waited
   for and left out.
 - **Tests:** `backend/tests/central-calendar-k2b-event-details.test.mjs` (18.6, items 1–7 and 9; the regression of

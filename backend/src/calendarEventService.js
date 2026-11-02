@@ -716,8 +716,18 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
         row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for update of e`, [eventId])).rows[0];
         if (!row) throw notFound();
         // The right is decided again on the locked row (an owner never changes,
-        // but the team's or the club's activity may have).
-        if (eventWriteBasis(ctx, eventOwnerOfRow(row)) !== basis) throw notFound();
+        // but the team's or the club's activity may have), and the owner is
+        // taken from it: lock_event_writer holds a team owner's team FOR SHARE,
+        // so its club - whose catalog the command checks against (D41) - is
+        // the one of this moment, even when the team moved since the first read.
+        owner = eventOwnerOfRow(row);
+        if (eventWriteBasis(ctx, owner) !== basis) throw notFound();
+      } else if (owner.scope === "team") {
+        // The same for a new team event: the team's club read again under the
+        // writer lock's FOR SHARE on the team.
+        owner.teamClubId = await teamClubId(client, owner.teamId);
+        if (!owner.teamClubId) throw notFound();
+        if (eventWriteBasis(ctx, owner) !== basis) throw forbidden();
       }
       return { hash, owner, basis, row };
     },
@@ -1082,7 +1092,8 @@ export async function setEventFields(ctx, eventId, body) {
     if (fields.length !== ids.length) throw bad("field_not_available", FIELD_NOT_AVAILABLE);
     const fieldById = new Map(fields.map((r) => [String(r.id), r]));
     const current = new Map((await client.query(
-      `select field_id, option_id from calendar.event_field_values where event_id = $1 and field_id = any($2::uuid[])`, [row.id, ids],
+      `select field_id, option_id, num_nonnulls(option_id, number_value, scale_value, bool_value, text_value) as filled
+         from calendar.event_field_values where event_id = $1 and field_id = any($2::uuid[])`, [row.id, ids],
     )).rows.map((r) => [String(r.field_id), r]));
     const chosenOptions = canonical.values.filter((v) => fieldById.get(v.fieldId).value_kind === "choice" && v.value !== null);
     for (const v of chosenOptions) if (!isUuid(v.value)) throw invalidValue(v.fieldId);
@@ -1095,7 +1106,7 @@ export async function setEventFields(ctx, eventId, body) {
       const field = fieldById.get(v.fieldId);
       const columns = { option_id: null, number_value: null, scale_value: null, bool_value: null, text_value: null };
       if (v.value === null) {
-        if (current.has(v.fieldId)) cleared.push(v.fieldId);
+        if (current.get(v.fieldId)?.filled > 0) cleared.push(v.fieldId);
       } else if (field.value_kind === "choice") {
         const optionId = v.value.toLowerCase();
         // A hidden option kept as it is passes; a new choice is a live option of this detail (D30).

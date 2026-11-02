@@ -359,6 +359,10 @@ test("4. values: each kind by its rule, a hidden option kept but never newly cho
   event = res.body.event;
   assert.deepEqual((await changesOf(event.id)).at(-1).details.cleared, [], "a detail without a value is not named as cleared");
   assert.equal((await q(`select count(*)::int as n from calendar.event_field_values where event_id = $1 and field_id = $2`, [event.id, other.id]))[0].n, 0);
+  res = await setValues(a.admin.cookie, event, [{ fieldId: text.id, value: null }]);
+  assert.equal(res.status, 200, res.text);
+  event = res.body.event;
+  assert.deepEqual((await changesOf(event.id)).at(-1).details.cleared, [], "a value already cleared is not cleared again");
 
   // A detail not chosen on the event, a detail of another club, an unknown id: the one 400.
   const b = await freshClub("values other");
@@ -384,7 +388,7 @@ test("4. values: each kind by its rule, a hidden option kept but never newly cho
   const replay = await api(`/api/calendar/events/${event.id}/fields`, { method: "POST", cookie: a.admin.cookie, body });
   assert.equal(replay.status, 200, replay.text);
   assert.equal(replay.body.event.revision, first.body.event.revision);
-  assert.equal((await q(`select count(*)::int as n from calendar.event_changes where event_id = $1 and kind = 'set_fields'`, [event.id]))[0].n, 6, "the replay wrote nothing");
+  assert.equal((await q(`select count(*)::int as n from calendar.event_changes where event_id = $1 and kind = 'set_fields'`, [event.id]))[0].n, 7, "the replay wrote nothing");
   const reused = await api(`/api/calendar/events/${event.id}/fields`, { method: "POST", cookie: a.admin.cookie, body: { ...body, values: [{ fieldId: number.id, value: 41 }] } });
   assert.deepEqual([reused.status, reused.body.error], [409, "request_key_reused"]);
   event = first.body.event;
@@ -520,6 +524,22 @@ test("7. status (D31): a required detail without a value awaits after the event'
   const gone = await make({ day: PAST, fieldIds: [required.id] });
   assert.equal((await ev(a.admin.cookie, "POST", `/${gone.id}/cancel`, { expectedRevision: gone.revision })).status, 200);
   assert.equal(await statusOf(a.admin.cookie, gone, PAST), "cancelled");
+
+  // RPE declared with no channel (a gap, the note only) and the required detail filled: done (accepted, 18.8).
+  const noted = await make({ day: PAST, expects: ["rpe"], fieldIds: [required.id] });
+  assert.equal((await setValues(a.admin.cookie, noted, [{ fieldId: required.id, value: true }])).status, 200);
+  const notedCard = cardsOf(await calendarOf(a.admin.cookie), noted.id).find((c) => c.date === PAST);
+  assert.deepEqual([notedCard.status, notedCard.gaps], ["done", ["rpe"]]);
+
+  // An archived required detail still chosen on the event is not awaited (the manager's decision, 18.8); its value can
+  // still be written.
+  const late = await newField(a.admin, { label: "Late sheet", valueKind: "yes_no", required: true });
+  const archivedReq = await make({ day: PAST, fieldIds: [late.id] });
+  assert.equal(await statusOf(a.admin.cookie, archivedReq, PAST), "awaiting_entry");
+  assert.equal((await send(a.admin.cookie, "POST", `/fields/${late.id}/archive`, { expectedRevision: late.revision })).status, 200);
+  const archivedCard = cardsOf(await calendarOf(a.admin.cookie), archivedReq.id).find((c) => c.date === PAST);
+  assert.deepEqual([archivedCard.status, archivedCard.details], ["none", { selected: 1, filled: 0, required: 0, filledRequired: 0 }]);
+  assert.equal((await setValues(a.admin.cookie, archivedReq, [{ fieldId: late.id, value: true }])).status, 200, "its value can still be written");
 });
 
 // ---------------------------------------------------------------------------
@@ -690,6 +710,59 @@ test("9. races: a value against a detail's edit in both orders, a place archived
   assert.deepEqual([x.status, y.status], [200, 200], `${x.text} ${y.text}`);
   assert.equal(x.body.event.revision, y.body.event.revision);
   assert.equal((await q(`select count(*)::int as n from calendar.event_changes where event_id = $1 and kind = 'set_fields'`, [event.id]))[0].n, 2);
+});
+
+// ---------------------------------------------------------------------------
+// 11. A team moved between the command's first read and the writer lock
+// ---------------------------------------------------------------------------
+test("11. a team moved to another club between the first read and the writer lock: the command judges by the club of the locked team (400, never a 500), nothing written", async () => {
+  const a = await freshClub("race move A");
+  const b = await freshClub("race move B");
+  const hooks = eventService.testHooks;
+  const teams = [a.teamId, await env.fx.makeTeam(a.clubId, "race move T2"), await env.fx.makeTeam(a.clubId, "race move T3")];
+  const coaches = [];
+  for (const [i, teamId] of teams.entries()) coaches.push(await env.fx.coachOf(teamId, `race move coach ${i}`));
+  const fieldA = await newField(a.admin, { label: "A detail", valueKind: "yes_no" });
+  const catA = await catalog(a.admin.cookie);
+  const catB = await catalog(b.admin.cookie);
+  const moveOn = (operation, teamId) => {
+    hooks.beforeLocks = async (ctx) => {
+      if (ctx.operation !== operation) return;
+      delete hooks.beforeLocks;
+      await q(`update public.teams set club_id = $2 where id = $1`, [teamId, b.clubId]);
+    };
+  };
+  const counts = async (teamId) => (await q(
+    `select (select count(*)::int from calendar.events where owner_team_id = $1) as events,
+            (select count(*)::int from calendar.event_selected_fields s join calendar.events e on e.id = s.event_id where e.owner_team_id = $1) as selections,
+            (select coalesce(max(revision), 0)::int from calendar.events where owner_team_id = $1) as revision`, [teamId]))[0];
+  try {
+    // PATCH choosing A's detail.
+    const made = await createEvent(coaches[0].cookie, { eventTypeId: typeOf(catA, "training").id, title: "Moves", targets: [{ kind: "team", id: teams[0] }], fieldIds: [] });
+    assert.equal(made.status, 201, made.text);
+    const before = await counts(teams[0]);
+    moveOn("update", teams[0]);
+    const patched = await patchEvent(coaches[0].cookie, made.body.event, { fieldIds: [fieldA.id] });
+    assert.deepEqual([patched.status, patched.body.error], [400, "field_not_available"], patched.text);
+    assert.deepEqual(await counts(teams[0]), before, "nothing written");
+
+    // PATCH changing the type to another of A's.
+    const typed = await createEvent(coaches[1].cookie, { eventTypeId: typeOf(catA, "training").id, title: "Retyped", targets: [{ kind: "team", id: teams[1] }], fieldIds: [] });
+    assert.equal(typed.status, 201, typed.text);
+    const beforeType = await counts(teams[1]);
+    moveOn("update", teams[1]);
+    const retyped = await patchEvent(coaches[1].cookie, typed.body.event, { eventTypeId: typeOf(catA, "match").id });
+    assert.deepEqual([retyped.status, retyped.body.error], [400, "type_not_available"], retyped.text);
+    assert.deepEqual(await counts(teams[1]), beforeType, "nothing written");
+
+    // A new team event: B's type is the team's now, A's detail is not.
+    moveOn("create", teams[2]);
+    const created = await createEvent(coaches[2].cookie, { eventTypeId: typeOf(catB, "training").id, title: "Born moved", targets: [{ kind: "team", id: teams[2] }], fieldIds: [fieldA.id] });
+    assert.deepEqual([created.status, created.body.error], [400, "field_not_available"], created.text);
+    assert.equal((await counts(teams[2])).events, 0, "nothing written");
+  } finally {
+    delete hooks.beforeLocks;
+  }
 });
 
 // ---------------------------------------------------------------------------
