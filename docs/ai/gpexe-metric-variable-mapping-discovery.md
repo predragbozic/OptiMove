@@ -4096,8 +4096,8 @@ with the platform-admin-only instance codes (its R18, section 6.1). Amended on 2
 `docs/ai/c112-drag-mapping-contract.md`, proposed on 2026-11-01 on the *Rukovodilac*'s order: status Proposed,
 documentation only, code only after phase 9 and after the owner accepts it. One board per team for the team's club
 administrators, a stored two-athlete confirmation as the evidence, and the switching-on of system mappings; C112's
-questions (a)–(d) answered as recommendations; owner questions Q1–Q13 (decisions C113–C124 once decided) and
-*Rukovodilac* items R1–R8. Nothing it proposes is recorded in this document as decided until the owner accepts it.
+questions (a)–(d) answered as recommendations; owner questions Q1–Q14 (decisions C113–C125 once decided; Q12 is
+J17's O16) and *Rukovodilac* items R1–R9. Nothing it proposes is recorded in this document as decided until the owner accepts it.
 J19 is proposed for C111.
 
 ## K. Open, but not blocking M1
