@@ -536,6 +536,11 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         sourceReason,
       });
     }
+    // D29 (the Rukovodilac's condition, 2026-11-02): an athlete the import keeps
+    // whose every mapped value was left out still counts as a participant (the
+    // participation is recorded), and is marked so the review never shows that
+    // athlete as imported with data - only with the Left-out entries and reasons.
+    if (participant && entry.skippedValues.length > 0 && participant.results.every((r) => r.values.length === 0)) entry.allValuesLeftOut = true;
     athletes.push(entry);
   }
 

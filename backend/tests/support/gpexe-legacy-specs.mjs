@@ -6,6 +6,7 @@
 // oracle: one JavaScript double per (athlete, level, drill, legacy key),
 // compared with what the mapped import writes. Test code only; never imported
 // by backend/src.
+import { extractorFor } from "../../src/sourceMetricExtractors.js";
 
 function finiteNumber(raw) {
   if (raw === null || raw === undefined || raw === "" || typeof raw === "boolean") return null;
@@ -135,37 +136,43 @@ export const LEGACY_SPECS = Object.freeze([
   },
 ]);
 
-// The registry key, the version's source parameters (the M2 API form), the
-// revision's confirmation, the canonical variable's unit and the conversion
-// that give today's value of each legacy spec through a mapping.
+// The registry key, the version's source parameters (the M2 API form, and as
+// the database stores them), the revision's confirmation, the canonical
+// variable's unit and the conversion (its factors, and the double the legacy
+// spec computed) that give today's value of each legacy spec through a
+// mapping.
 const closed = (lower, upper) => ({
   condition: { kind: "zone", operator: "between", lower, upper, unit: "W/kg" },
   sourceParameters: { lower, upper },
 });
 export const SPEC_REGISTRY = Object.freeze({
-  gpexe_time_min: { sourceMetricKey: "athlete_session.total_time", confirmation: { unit: "s" }, targetUnit: "min", conversionNote: "Seconds to minutes.", toLegacy: (raw) => raw / 60 },
-  gpexe_total_distance: { sourceMetricKey: "athlete_session.total_distance", confirmation: { unit: "m" }, targetUnit: "m", toLegacy: (raw) => raw },
-  gpexe_power_zone_25_60_distance: { sourceMetricKey: "more.complementary_data.power.distance", confirmation: { unit: "m", boundUnit: "W/kg", operator: "between" }, targetUnit: "m", ...closed("25", "60"), toLegacy: (raw) => raw },
-  gpexe_power_zone_60_75_distance: { sourceMetricKey: "more.complementary_data.power.distance", confirmation: { unit: "m", boundUnit: "W/kg", operator: "between" }, targetUnit: "m", ...closed("60", "75"), toLegacy: (raw) => raw },
+  gpexe_time_min: { storedParameters: {}, factors: { scale: "1", divisor: "60", offset: "0" }, sourceMetricKey: "athlete_session.total_time", confirmation: { unit: "s" }, targetUnit: "min", conversionNote: "Seconds to minutes.", toLegacy: (raw) => raw / 60 },
+  gpexe_total_distance: { storedParameters: {}, factors: { scale: "1", divisor: "1", offset: "0" }, sourceMetricKey: "athlete_session.total_distance", confirmation: { unit: "m" }, targetUnit: "m", toLegacy: (raw) => raw },
+  gpexe_power_zone_25_60_distance: { storedParameters: { lower: "25", operator: "between", unit: "W/kg", upper: "60" }, factors: { scale: "1", divisor: "1", offset: "0" }, sourceMetricKey: "more.complementary_data.power.distance", confirmation: { unit: "m", boundUnit: "W/kg", operator: "between" }, targetUnit: "m", ...closed("25", "60"), toLegacy: (raw) => raw },
+  gpexe_power_zone_60_75_distance: { storedParameters: { lower: "60", operator: "between", unit: "W/kg", upper: "75" }, factors: { scale: "1", divisor: "1", offset: "0" }, sourceMetricKey: "more.complementary_data.power.distance", confirmation: { unit: "m", boundUnit: "W/kg", operator: "between" }, targetUnit: "m", ...closed("60", "75"), toLegacy: (raw) => raw },
   gpexe_power_zone_75_plus_distance: {
+    storedParameters: { lower: "75", operator: ">=", unit: "W/kg", upper: null }, factors: { scale: "1", divisor: "1", offset: "0" },
     sourceMetricKey: "more.complementary_data.power.distance.open_top", confirmation: { unit: "m", boundUnit: "W/kg", operator: ">=" }, targetUnit: "m",
     condition: { kind: "zone", operator: ">=", value: "75", unit: "W/kg" }, sourceParameters: { lower: "75", upper: null }, toLegacy: (raw) => raw,
   },
   gpexe_acceleration_events: {
+    storedParameters: { duration_seconds: "0.3", operator: ">=", threshold_value: "2.5", unit: "m/s2" }, factors: { scale: "1", divisor: "1", offset: "0" },
     sourceMetricKey: "more.events.acceleration_events_count", confirmation: { unit: "count", boundUnit: "m/s2", operator: ">=" }, targetUnit: "count",
     condition: { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" }, sourceParameters: { thresholdValue: "2.5", durationSeconds: "0.3" }, toLegacy: (raw) => raw,
   },
   gpexe_deceleration_events: {
+    storedParameters: { duration_seconds: "0.3", operator: "<=", threshold_value: "-2.5", unit: "m/s2" }, factors: { scale: "1", divisor: "1", offset: "0" },
     sourceMetricKey: "more.events.deceleration_events_count", confirmation: { unit: "count", boundUnit: "m/s2", operator: "<=" }, targetUnit: "count",
     condition: { kind: "event_threshold", operator: "<=", value: "-2.5", durationSeconds: "0.3", unit: "m/s2" }, sourceParameters: { thresholdValue: "-2.5", durationSeconds: "0.3" }, toLegacy: (raw) => raw,
   },
   gpexe_sprint_distance_7mps: {
+    storedParameters: { lower: "7", operator: ">=", unit: "m/s", upper: null }, factors: { scale: "1", divisor: "1", offset: "0" },
     sourceMetricKey: "more.complementary_data.speed.distance", confirmation: { unit: "m", boundUnit: "m/s", operator: ">=" }, targetUnit: "m",
     condition: { kind: "zone", operator: ">=", value: "7", unit: "m/s" }, sourceParameters: { lower: "7", upper: null }, toLegacy: (raw) => raw,
   },
-  gpexe_burst_events: { sourceMetricKey: "details.players.tot_burst_events", confirmation: { unit: "count" }, targetUnit: "count", toLegacy: (raw) => raw },
-  gpexe_brake_events: { sourceMetricKey: "details.players.tot_brake_events", confirmation: { unit: "count" }, targetUnit: "count", toLegacy: (raw) => raw },
-  gpexe_max_speed: { sourceMetricKey: "athlete_session.max_v", confirmation: { unit: "m/s" }, targetUnit: "km/h", conversionNote: "Metres per second to kilometres per hour.", toLegacy: (raw) => raw * 3.6 },
+  gpexe_burst_events: { storedParameters: {}, factors: { scale: "1", divisor: "1", offset: "0" }, sourceMetricKey: "details.players.tot_burst_events", confirmation: { unit: "count" }, targetUnit: "count", toLegacy: (raw) => raw },
+  gpexe_brake_events: { storedParameters: {}, factors: { scale: "1", divisor: "1", offset: "0" }, sourceMetricKey: "details.players.tot_brake_events", confirmation: { unit: "count" }, targetUnit: "count", toLegacy: (raw) => raw },
+  gpexe_max_speed: { storedParameters: {}, factors: { scale: "3.6", divisor: "1", offset: "0" }, sourceMetricKey: "athlete_session.max_v", confirmation: { unit: "m/s" }, targetUnit: "km/h", conversionNote: "Metres per second to kilometres per hour.", toLegacy: (raw) => raw * 3.6 },
 });
 
 // The legacy values of a bundle, as the importer computed them before 9-B,
@@ -179,4 +186,27 @@ export function legacyRowValues({ row, more, thresholds, playerDetails }) {
     out.push(extracted.skip ? { key: spec.key, skip: extracted.skip } : { key: spec.key, value: extracted.value });
   }
   return out;
+}
+
+// A locked activation row of gpexeImportMapping.js readOpenActivations() for
+// one legacy key, built in memory for the pure suites (no database): an
+// active, verified, usable mapping at both levels. overrides replace fields.
+export function activationRowFor(legacyKey, overrides = {}, index = 0) {
+  const spec = SPEC_REGISTRY[legacyKey];
+  const entry = extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: spec.sourceMetricKey });
+  const hex = (n) => n.toString(16).padStart(12, "0");
+  const id = (kind) => `00000000-0000-4000-8${kind}00-${hex(index + 1)}`;
+  return {
+    activationId: id("1"), requirement: "optional", appliesToSession: true, appliesToDrill: true,
+    mappingVersionId: id("2"), mappingId: id("3"), sourceMetricVersionId: id("4"),
+    metricDefinitionId: id("5"), metricDefinitionVersionId: id("6"), sourceParameterFingerprint: `fp-${legacyKey}`,
+    versionStatus: "active", scale: spec.factors.scale, scaleDivisor: spec.factors.divisor, offset: spec.factors.offset,
+    sourceUnit: spec.confirmation.unit, targetUnit: spec.targetUnit, parameterKind: entry.parameterKind,
+    sourceParameters: spec.storedParameters, mappingOwnerScope: "system", mappingOwnerClubId: null,
+    sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: spec.sourceMetricKey, sourceLabel: legacyKey, fieldState: "active",
+    revisionValueShape: entry.valueShape, revisionParameterKind: entry.parameterKind, revisionSourceUnit: spec.confirmation.unit, revisionState: "active", revisionEvidence: "verified",
+    definitionKey: legacyKey.replace(/^gpexe_/, ""), definitionLabel: legacyKey, definitionOwnerScope: "system", definitionState: "active",
+    definitionCurrentVersionId: id("6"), valueType: "numeric", minValue: null, maxValue: null,
+    ...overrides,
+  };
 }
