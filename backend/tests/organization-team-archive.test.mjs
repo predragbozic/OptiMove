@@ -157,7 +157,7 @@ test("3. an archived team: archived again is 200 with nothing written; it is not
   const back = await restoreMembership(roles.clubAdmin.cookie, teamId, a.athleteId);
   assert.deepEqual([back.status, back.body.error], [409, "team_archived"], back.text);
   const added = await addToTeam(roles.clubAdmin.cookie, teamId, a.athleteId);
-  assert.equal(added.status, 404, added.text);
+  assert.deepEqual([added.status, added.body.error], [409, "team_archived"], added.text);
   assert.deepEqual({ team: await team(), memberships: await memberships(a.athleteId) }, before, "nothing written");
 });
 
@@ -368,4 +368,57 @@ test("10. restoring a team membership locks the club membership before the team 
     await holder.end().catch(() => {});
   }
   assert.equal((await memberships(a.athleteId)).find((r) => r.type === "team").status, "active");
+});
+
+test("11. every pre-check tells an archived team from a missing one: add, edit and create into it are 409 team_archived, after the rights, and nothing is written", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 precheck ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  assert.equal((await archive(roles.clubAdmin.cookie, teamId)).status, 200);
+  const before = { memberships: await memberships(a.athleteId), athletes: (await q(`select count(*)::int as n from public.athletes`))[0].n };
+  const added = await addToTeam(roles.clubAdmin.cookie, teamId, a.athleteId);
+  assert.deepEqual([added.status, added.body.error], [409, "team_archived"], `add: ${added.text}`);
+  const edited = await env.api(`/api/organization/athletes/${a.athleteId}`, { method: "PUT", cookie: roles.clubAdmin.cookie, body: { fullName: "D45 precheck", clubId: clubs.c1, teamId } });
+  assert.deepEqual([edited.status, edited.body.error], [409, "team_archived"], `edit: ${edited.text}`);
+  const created = await env.api("/api/organization/athletes", { method: "POST", cookie: roles.clubAdmin.cookie, body: { fullName: `D45 new ${uid()}`, clubId: clubs.c1, teamId } });
+  assert.deepEqual([created.status, created.body.error], [409, "team_archived"], `create: ${created.text}`);
+  const foreign = await addToTeam(roles.stranger.cookie, teamId, a.athleteId);
+  assert.deepEqual([foreign.status, foreign.body.error], [403, "Team is outside your access."], "the rights come first");
+  assert.deepEqual({ memberships: await memberships(a.athleteId), athletes: (await q(`select count(*)::int as n from public.athletes`))[0].n }, before, "nothing written");
+  const missing = await addToTeam(roles.platformAdmin.cookie, "00000000-0000-4000-8000-000000000000", a.athleteId);
+  assert.equal(missing.status, 404, "a missing team stays 404");
+});
+
+test("12. a membership restore and an add of the same athlete without a club membership row deadlock: the loser is 409 try_again with nothing written, never a 500", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 deadlock ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  assert.equal((await removeFromTeam(roles.clubAdmin.cookie, teamId, a.athleteId)).status, 200);
+  // Legacy data: a team membership with no club membership row behind it.
+  await q(`delete from public.athlete_memberships where athlete_id = $1 and membership_type = 'club'`, [a.athleteId]);
+  const teamRow = (await memberships(a.athleteId)).find((r) => r.type === "team");
+  const side = new pg.Client({ connectionString: env.db.url });
+  await side.connect();
+  try {
+    // The team membership is held: the restore waits for it first, the add then
+    // inserts the club row and waits for it behind the restore. Released, the
+    // restore takes the team membership and inserts the club row behind the
+    // add's: a cycle PostgreSQL breaks by aborting one of the two.
+    await side.query("begin");
+    await side.query(`select id from public.athlete_memberships where id = $1 for update`, [teamRow.id]);
+    const restored = restoreMembership(roles.platformAdmin.cookie, teamId, a.athleteId);
+    await waitForLockWaiters(1);
+    const added = addToTeam(roles.platformAdmin.cookie, teamId, a.athleteId);
+    await waitForLockWaiters(2);
+    await side.query("rollback");
+    const answers = await Promise.all([restored, added]);
+    const shapes = answers.map((r) => `${r.status}:${r.status === 200 ? "ok" : r.body.error}`).sort();
+    assert.deepEqual(shapes, ["200:ok", "409:try_again"], answers.map((r) => r.text).join(" | "));
+  } finally {
+    await side.query("rollback").catch(() => {});
+    await side.end().catch(() => {});
+  }
+  const rows = await memberships(a.athleteId);
+  assert.equal(rows.filter((r) => r.type === "club" && r.status === "active").length, 1, "one club membership");
+  assert.equal(rows.find((r) => r.type === "team").status, "active");
 });

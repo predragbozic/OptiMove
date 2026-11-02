@@ -1114,6 +1114,23 @@ async function teamNameTaken(error, clubId, name, exceptTeamId = null) {
 
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TEAM_ARCHIVED = Object.freeze({ error: "team_archived", message: "The team is archived. Restore the team first." });
+const MEMBERSHIP_BUSY = Object.freeze({ error: "try_again", message: "The team or the athlete is being changed right now. Nothing was changed; try again in a moment." });
+
+// D45: the refusals a membership write answers as such, from any of its steps:
+// an archived team (TEAM_ARCHIVED, from a pre-check or requireActiveTeam) and a
+// deadlock or a bounded lock wait (the transaction rolled back, nothing
+// written). True when the answer was sent.
+function answerMembershipRefusal(res, error) {
+  if (error?.code === TEAM_ARCHIVED.error) {
+    res.status(409).json(TEAM_ARCHIVED);
+    return true;
+  }
+  if (error?.code === "40P01" || error?.code === "55P03") {
+    res.status(409).json(MEMBERSHIP_BUSY);
+    return true;
+  }
+  return false;
+}
 
 // D43 (the owner, 2026-11-02): a team's club is fixed after creation — teams
 // never move between clubs (athletes do, through their memberships). The edit
@@ -1329,12 +1346,12 @@ router.post("/athletes", async (req, res, next) => {
       res.status(201).json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
-      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -1387,12 +1404,12 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
       res.json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
-      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -1432,8 +1449,9 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     if (!teamId || !athleteId) return res.status(400).json({ error: "Team and athlete are required." });
     if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
     if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
-    const team = await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true) limit 1`, [teamId]);
+    const team = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [teamId]);
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
+    if (!team.rows[0].active) return res.status(409).json(TEAM_ARCHIVED);
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -1461,12 +1479,12 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
       res.json({ athlete: result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
-      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -2076,12 +2094,12 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       res.json({ ok: true, userId: resultingUserId, athleteId: resultingAthleteId });
     } catch (error) {
       await client.query("rollback").catch(() => {});
-      if (error?.code === TEAM_ARCHIVED.error) return res.status(409).json(TEAM_ARCHIVED);
       throw error;
     } finally {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -2373,6 +2391,7 @@ router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -2441,6 +2460,7 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -2483,6 +2503,7 @@ router.delete("/clubs/:clubId/athletes/:athleteId", async (req, res, next) => {
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -2533,6 +2554,7 @@ router.put("/clubs/:clubId/athletes/:athleteId/restore", async (req, res, next) 
       client.release();
     }
   } catch (error) {
+    if (answerMembershipRefusal(res, error)) return;
     next(error);
   }
 });
@@ -3093,7 +3115,7 @@ async function loadTeams(req) {
   const authz = req.authz;
   if (isPlatformAdministrator(authz)) {
     const result = await query(
-      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, coalesce(c.is_active, true) as club_active
        from public.teams t
        left join public.clubs c on c.id = t.club_id
        where coalesce(t.is_active, true)
@@ -3103,7 +3125,7 @@ async function loadTeams(req) {
   }
   if (authz.clubRoles.length) {
     const result = await query(
-      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, coalesce(c.is_active, true) as club_active
        from public.user_club_roles ucr
        join public.teams t on t.club_id = ucr.club_id
        left join public.clubs c on c.id = t.club_id
@@ -3115,7 +3137,7 @@ async function loadTeams(req) {
   }
   if (authz.teamRoles.length) {
     const result = await query(
-      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
+      `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, coalesce(c.is_active, true) as club_active
        from public.user_team_roles utr
        join public.teams t on t.id = utr.team_id
        left join public.clubs c on c.id = t.club_id
@@ -3741,13 +3763,16 @@ async function resolveAthleteClubTeam(req, requestedClubId, requestedTeamId) {
     error.status = 403;
     throw error;
   }
-  const result = await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true) limit 1`, [teamId]);
+  const result = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [teamId]);
   const team = result.rows[0];
   if (!team) {
     const error = new Error("Team not found.");
     error.status = 404;
     throw error;
   }
+  // D45: an archived team is told apart from a missing one (the rights above
+  // were decided first, so this reveals nothing).
+  if (!team.active) throw Object.assign(new Error(TEAM_ARCHIVED.message), { status: 409, code: TEAM_ARCHIVED.error });
   if (clubId && String(clubId) !== String(team.club_id)) {
     const error = new Error("Selected team does not belong to the selected club.");
     error.status = 400;

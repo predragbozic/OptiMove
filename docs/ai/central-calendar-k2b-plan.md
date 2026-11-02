@@ -912,12 +912,16 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
     `409 try_again` with nothing written;
   - it ends every active team membership of the team the way Remove from team ends one. Both go through one helper,
     `archiveTeamMemberships` (the whole team named explicitly, so a missing athlete id never ends a team): the archived
-    status with its fields (`archived_at` the statement's `clock_timestamp()`, `archived_by_user_id`,
+    status with its fields (`archived_at` = `clock_timestamp()`, taken per row after any wait, so the rows of one
+    archive are microseconds apart; `archived_by_user_id`,
     `archive_reason` = `team_archived`), the v25 trigger closing each membership's period, and each athlete's legacy
     pointer re-pointed (`syncLegacyAthletePointer`, in athlete order).
   - The athletes' club memberships are not touched: the athletes stay in the club. Their history stays: the archived
     memberships and their closed periods. So the calendar and the roster, which judge membership on the day (K1a,
     v25), keep the team's earlier days and show none after the archive.
+  - **The archive's own day, known and accepted:** the calendar counts the day of leaving as a day of membership (K1a:
+    "on the cards through the leaving day"), so a team event at 23:30 on the day of the archive stays on the former
+    athlete's calendar. The roster judges the moment: an activity after the archive's time no longer lists the athlete.
   - The coaches' roles (`user_team_roles`) are kept.
 - **Only the club archives.** The right of a restore: the club's admin or a platform admin. The team's club is read
   from the database and `canManageClub` decides.
@@ -928,7 +932,12 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - A team of an archived club is not archived, as it is not restored: `409 club_archived` after the club's right (no
     route restores a club, so the team could never come back).
   - The archive control (Settings → Organization → Teams) is offered only for a team in `manageableTeamIds`, the
-    club's right the server already computes.
+    club's right the server already computes, and not for a team of an archived club (`loadTeams` carries
+    `club_active`). A refusal (`409 try_again`, `club_archived`, `team_changed`) is shown to the administrator
+    with the server's message, as Restore does.
+  - **The right is the role's, not the active workspace's:** an admin of two clubs may archive a team of club B while
+    club A's workspace is active. This router has always decided so (`PUT /teams`, the restore); it is the existing
+    pattern, recorded here.
 - **No member joins an archived team.** `lockActiveTeam` takes the active team row `for share`, the lock the archive
   waits for and that waits for the archive, before any team membership becomes active.
   - **One lock order** (the internal reviews of this pull request): the team, the club membership, the team membership,
@@ -940,6 +949,12 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - Restoring one athlete's team membership locks the team, then the club membership, then the team membership.
   - So an archive that wins the race leaves nothing to join (`409 team_archived` on every such route), and a join
     that wins is ended by the archive with the others.
+  - **Every pre-check tells an archived team from a missing one** (the independent review of PR #336): adding an athlete
+    to a team and creating or editing an athlete with a team answer an archived team with `409 team_archived`, as the
+    membership restore does; a missing team stays `404`. The rights are decided first, so this reveals nothing.
+  - **A deadlock or a bounded lock wait on a membership route is `409 try_again`** (nothing written, the transaction
+    rolled back), through one helper (`answerMembershipRefusal`) on adding, creating, editing, a join approval, Remove
+    from team, the team-membership restore and the club-membership archive and restore.
 - **A restored team comes back without athletes.** The restore route is unchanged; its comment now says that the
   request's authorization context lists archived teams too (`managedTeamIds` is not filtered on `is_active`) but
   holds no team's club, so the club is read from the database.
@@ -963,8 +978,10 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - Only `active` memberships are ended, as Remove from team ends them; no code writes the `paused` status.
   - An athlete with a team membership but no club membership row (legacy or backfilled data) is the one case the order
     cannot hold: restoring that team membership creates the club row after the team row, so a simultaneous add of the
-    same athlete to the same team may end one of the two requests with a deadlock (a 500, nothing written; the retry
-    works). The internal DB re-review of this pull request (LOW-1).
+    same athlete to the same team may end one of the two requests with a deadlock. That request answers `409
+    try_again` (nothing written; the retry works). The internal DB re-review (LOW-1) and the independent review (S12)
+    of this pull request. Creating the club row before the team row instead would turn the deadlock into a unique-key
+    race on the club row in the add, so the order is kept and the deadlock is answered.
   - The archive reads the club's state without a lock: a club archived during the archive's wait (at most 5 s) still
     lets the team be archived.
 - **Production:** no archived team exists today (the manager's read-only check, 2026-11-02), so no old membership needs a
@@ -983,6 +1000,10 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - the archive's bounded wait (`409 try_again`);
   - an athlete edit during the archive (`409 team_archived`, never a deadlock);
   - a team of an archived club (`409 club_archived`);
-  - the restore of a team membership taking the club membership before the team membership.
+  - the restore of a team membership taking the club membership before the team membership;
+  - every pre-check into an archived team (`409 team_archived`), and the restore / add deadlock answered `409 try_again`.
+
+  The frontend suite covers the archive's refusal shown once with the server's message, and no archive control for a
+  team of an archived club.
 
   `organization-team-club-fixed.test.mjs` test 7 now expects the empty restored team.

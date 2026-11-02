@@ -23,7 +23,8 @@ globalThis.document = {
 // The confirmations: each test sets the answer and reads what was asked.
 const asked = [];
 let confirmAnswer = true;
-globalThis.window = { confirm: (text) => { asked.push(text); return confirmAnswer; }, alert: () => {} };
+const alerted = [];
+globalThis.window = { confirm: (text) => { asked.push(text); return confirmAnswer; }, alert: (text) => { alerted.push(text); } };
 // The form's fields, as FormData reads them.
 globalThis.FormData = class {
   constructor(form) { this.values = form.values || {}; }
@@ -229,4 +230,31 @@ test("D45: a restore asks first that the team comes back without athletes; the a
     confirmAnswer = true;
     restoreFetch();
   }
+});
+
+test("D45: an archive the server refuses is said once, with the server's message, never swallowed or thrown", async () => {
+  resetState();
+  state.activeTab = "organization";
+  for (const body of [
+    { error: "try_again", message: "The team is busy right now. Nothing was changed; try again in a moment." },
+    { error: "club_archived", message: "The team's club is archived." },
+  ]) {
+    installFetchMock([{ status: 409, body }]);
+    try {
+      alerted.length = 0;
+      confirmAnswer = true;
+      const handled = await handleOrganizationAction({ dataset: { action: "organization-delete", orgType: "team", orgId: "team-a" }, disabled: false }, { loadAthletes: noop, renderOrganizationPanel: noop });
+      assert.equal(handled, true);
+      assert.deepEqual(alerted, [body.message], body.error);
+    } finally {
+      restoreFetch();
+    }
+  }
+});
+
+test("D45: no archive control for a team of an archived club (the server refuses it)", () => {
+  resetState();
+  const teams = [{ id: "team-a", club_id: "club-1", name: "First team", club_name: "Club One", club_active: false }];
+  const html = renderOrganizationBrowser(baseData({ teams, manageableTeamIds: ["team-a"] }));
+  assert.ok(!html.includes('data-action="organization-delete" data-org-type="team"'));
 });

@@ -181,9 +181,10 @@ function renderOrganizationSelectableList(title, rows, type, selectedId, options
 
 // D45: only the club archives a team (its admin or a platform admin), the
 // right the server's manageableTeamIds already carries; a team's coach gets no
-// archive control.
+// archive control, and neither does a team of an archived club (the server
+// refuses it, as it refuses to restore one).
 function canArchiveTeam(data, team) {
-  return (data?.manageableTeamIds || []).some((id) => String(id) === String(team.id));
+  return team.club_active !== false && (data?.manageableTeamIds || []).some((id) => String(id) === String(team.id));
 }
 
 function renderOrganizationSelectableRow(row, type, selectedId, { canArchive = null } = {}) {

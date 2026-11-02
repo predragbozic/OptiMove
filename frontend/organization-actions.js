@@ -896,7 +896,13 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   if (type === "organization-delete") {
-    await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
+    // A refusal (a busy team, an archived club, a team that changed) is said,
+    // not swallowed, as Restore does.
+    try {
+      await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.data?.message || error?.message || (action.dataset.orgType === "team" ? "Could not archive this team." : "Could not delete this club."));
+    }
     return true;
   }
   if (type === "organization-toggle-athlete-login") {
