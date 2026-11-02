@@ -3741,6 +3741,25 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13): right after 7h-B,
+  before more clubs are brought on.** Several rights checks lock the role row before the `users` row, while the
+  revocations lock `users` first, so a revocation can deadlock against a write by the same user (`40P01`: the write
+  answers `try_again`, the revocation a 500). 7h-B fixes only the club-admin query of `sourceMetricAccess.js`
+  `rightsStillHold`. The rest, each turned users first, with route-against-route tests:
+  - club-admin branches against `revokeClubAdminRole` (`for update of u, r`): `sourceConnectionService.js:216`,
+    `gpexeAthleteIdentityService.js:155-158` (`lock = true`), `coachRightsStillHold`'s club-admin probe
+    (`sourceMetricAccess.js:165`, `r, u, c`);
+  - platform-admin branches against `loadQualifyingPlatformAdminIds` (`for update of u, g`): `sourceMetricAccess.js:123`,
+    `:131`, `:157`, `sourceConnectionService.js:211`, `gpexeAthleteIdentityService.js:155-157`,
+    `routes/exerciseCollections.js:191-193`;
+  - the team-coach branch, `sourceMetricAccess.js:177`, once the team-coach revocation's own order is checked.
+- **The import window's post-check block 8 counts ended instances (the *Nezavisni revizor*'s L1 on PR #330, LOW; after
+  7h and 7i).** `docs/runbooks/gpexe-import-window-postcheck.sql` block 8 lists every gpexe instance row of the team and
+  expects exactly one, so an instance ended earlier (7g, `inactive`) would stop a window without a real problem; the
+  preflight's block 6 does not show how many inactive ones the team has. Fix: the row with `instance_state = active`
+  must meet every expectation and an extra row is allowed only if `inactive`; preflight block 6 shows the team's
+  inactive count; new sha256 of both files and a test. It did not affect M6: on production block 8 returned exactly one
+  row.
 - **14 candidates with a version 2 preview (after M6, 2026-11-02).** The First team holds 14 candidates of sessions
   from 05.10.2026 to 21.10.2026 that are still actionable, with the version 2 preview written before 9-B.
   - Only a new check of their dates refreshes them to version 3.
