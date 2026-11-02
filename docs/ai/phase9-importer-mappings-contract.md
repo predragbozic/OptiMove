@@ -738,6 +738,79 @@ request, reads or writes no persistent database, and touches no Render or Supaba
   conversions) and the requirement of each activation, for O6;
 - the evidence document of P1 with its anchor, from the owner's sanitized table.
 
+#### As built (9-R: the window's two SELECT files)
+
+The *Rukovodilac* asked for them after step 8 passed (2026-11-02). They do not include the M6 runbook or the proposals.
+They merge under the standing merge order after the *Rukovodilac*'s GO: the owner's work order `628d0be9`
+(section 12.3) covers section 2's 9-R row and step 6a for PRs without a migration.
+
+- **`docs/runbooks/gpexe-import-window-preflight.sql`** (step 11), 14 numbered blocks:
+  1. the migrations: v51 last, with its checksum, nothing later;
+  2. nothing running: checks and identity loads;
+  3. a quiet moment: idle transactions, write locks on the import's tables, advisory locks;
+  4. every binding with an open activation, in any binding state; one row expected, 980 on `server3`;
+  5. the open activations against O6: each row `as_decided`;
+  6. the First team's T7 instance: none, `NULL / NULL` or `server3 / 980`;
+  7. link gate (1);
+  8. nothing imported yet: approvals, imported candidates, T6, GPEXE events, batches, team-owned `gpexe_*`
+     definitions;
+  9. every actionable candidate by id, with its GPEXE session and date;
+  10. the team's candidates counted, and its newest check;
+  11. every active platform admin, with name, basis and role times;
+  12. every grant of the team that is not revoked, whether it gives the right now or not;
+  13. the rights counted;
+  14. freshness: per table, the row count and the newest time in UTC; the *Rukovodilac* compares them with the
+      backup's time.
+- **`docs/runbooks/gpexe-import-window-postcheck.sql`** (step 16), 11 numbered blocks:
+  1. the migrations;
+  2. nothing running, and no check of the team since the approval;
+  3. the approval, and that it is the First team's;
+  4. the candidate imported, its preview the approved one, no other candidate imported;
+  5. every count against the approved preview: results, occasions, values, T6 rows, Left-out entries, participants;
+  6. value by value against the preview entries;
+  7. the T6 chain: binding, instance, open activation, pinned version, system variable, aggregation role, coverage;
+  8. the T7 keys, and the import written under that instance;
+  9. no stored value, and above all no zero, where the preview left one out;
+  10. no `gpexe_*` definition;
+  11. the event, the threshold binding, the batch, the activity, the identities, and no roster decision.
+- **No parameter, no id.**
+  - The First team is the one active GPEXE binding with an open activation. Blocks 6, 10, 12 and 13 print
+    `first_team_bindings`; block 9 lists nothing unless it is 1.
+  - The approval is the only row of the append-only approvals table, since step 11's block 8 shows none. Each
+    post-check block reads that row only while exactly one exists. Blocks 2, 3, 9 and 10 print `approvals_total`, so
+    a second approval shows itself rather than as an error.
+  - Every block is one plain SELECT, valid inside the connector's `begin transaction read only;` … `rollback;`.
+- **Pinned.** The files name v51 and its checksum, and the three decided mappings (`duration`, `total_distance`,
+  `maximal_running_speed`, with their units and factors). If main gains a migration, or the decided mappings change,
+  before step 11, both files are re-issued under new sha256s; both headers say so.
+- **Kept out.**
+  - Neither file prints an email, a credential column, a grant or revoke reason, or a stored source answer.
+  - The rights blocks print the user's display name (else the full name, never the email): the owner accepts each
+    row by person (the *Rukovodilac*'s decision, 2026-11-02). Post-check block 3 prints the approver's name the same
+    way, so that it can be compared with step 11's list (the executor's addition).
+  - Re-reading blocks 11 to 13 right before step 14 belongs to the M6 runbook, outside these files.
+  - Read outside the files: the served commit (`/api/health`), the approval read
+    (`GET …/approvals/:approvalId`) and the switch (`importSwitch`).
+- **Evidence.** `backend/tests/gpexe-import-window-sql-9r.test.mjs` (disposable `optimove_tests_gpexe_*`, fake
+  `server3` source, no GPEXE request). These runs send every block exactly as the connector does, and each asserts
+  the block's exact list of output columns:
+  - the pilot built as production's: the three system variables under their production keys, Required, at both
+    levels; one team bound to 980;
+  - the preflight after one succeeded check;
+  - one approval through the single-candidate route, with the switch on and then off;
+  - the post-check, then the preflight again (block 8 and the freshness rows then name the import);
+  - block 3 again while a real second session holds a read, then a write lock and an advisory lock, and a third
+    session holds an advisory lock in another database (not counted).
+
+  30 planted cases are each rolled back, and run the same block text inside the planting transaction. They cover:
+  - the stops of both files' blocks 1 and 2;
+  - preflight blocks 4 to 7, 9 to 14 (block 14 only for an instance with no keys);
+  - post-check blocks 3 to 10, and block 11 only for a second approval.
+  The file-shape check (LF, blocks 1..N, one SELECT each, no parameter, no write, no lock, no email or credential
+  column) needs no data.
+  43 mutations of the two files are all killed: 25 of the preflight and 18 of the post-check.
+  The staged observations of preflight block 2 are shown only and are not planted.
+
 ---
 
 ## 11. Reviewers and gates
