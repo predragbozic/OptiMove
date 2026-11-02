@@ -1328,8 +1328,8 @@ NON-BLOCKING NOTES; none found a BLOCKER or HIGH. Fixed in the next commit, each
 - **Mobile, LOW:** a v3 table's first column wraps a long unbroken label, and the field note is 0.9rem, full contrast
   and wraps. A non-zero value below 0.005 keeps three significant digits instead of reading "0".
 
-Narrow re-reviews of the fixes: `code-reviewer` and `ux-design-reviewer` answered READY WITH NON-BLOCKING NOTES.
-Applied:
+Narrow re-reviews of the fixes: `code-reviewer`, `ux-design-reviewer` and `db-reviewer` (F1, F2) answered READY WITH
+NON-BLOCKING NOTES; F1 and F2 are closed. Applied:
 - `fmtValue` is pinned for 0.0012345, 0, -0.004 and 0.005;
 - the coach's key sets are also pinned for the session, `thresholdsUsed`, the counts, `gps` and `participation`;
 - `no_mapped_values` also covers "a mapping is switched on but gives no value for this session" (no level covered),
@@ -1347,4 +1347,8 @@ Recorded, not changed:
 - the step-3 refresh of a blocked preview before step 6b (D36, accepted);
 - one pre-existing statement that may grow with history, `assertNoIdentitiesMissingFromSource` (LOW; no EXPLAIN run);
 - a runtime canary test for a value-bearing database error on the approval path beyond the batch's `42P01` (LOW);
-- UX NIT (b) "its data setup" and NIT (c) `white-space: nowrap` for value cells.
+- UX NIT (b) "its data setup" and NIT (c) `white-space: nowrap` for value cells;
+- from the database re-review: the import-first orders of tests 8a, 9 and 10 finish inside the writers' 2 s row lock
+  timeout (a flake risk on a very slow machine, not a correctness gap); A1 replace is not a separate case (it takes only
+  `FOR SHARE` locks the import does not conflict with, so it never waits on the import); a behavioural proof of the
+  READ COMMITTED pin under a `repeatable read` server default is not built (architecture test 7 is static).
