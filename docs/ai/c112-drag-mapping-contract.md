@@ -5,7 +5,7 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 | | |
 |---|---|
 | Status | **Proposed** by the executor on 2026-11-01. It follows the *Rukovodilac*'s order of that day, 20:33 UTC. The order, paraphrased: write the contract now as a proposal, documentation only; code comes after phase 9; sections 1–4 of the plan stay untouched; answer questions (a)–(d) as recommendations for the owner. It was drafted from a discovery and design panel: five fact sheets, three competing designs, and three review lenses (owner intent, security and privacy, database integrity). **No code is written before the owner accepts this contract and decides Q1–Q11, Q13 and Q14. O16 (Q12) gates 18-3, and Q11's answer gates the first real confirmation. No code is written before phase 9 ends, unless the owner says otherwise** (Q10 proposes what "ends" means). |
-| Verified against commit | `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line in `frontend/gpexe-import-view.js` (section 3.1). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
+| Verified against commit | `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line, and the dates Imports pre-fills when the board's after-save link opens it, in `frontend/gpexe-import-view.js` (sections 3.1 and 3.8). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
 | Mark | ★★, proposed. The triggers are 1, 2, 3 and 4 of `CLAUDE.md`, plus the five-point rule for a transaction with an external effect. Trigger 5 applies to the frontend slice unless an integration run against the real routes covers it. A mark, a phase entry and its "Start" line go into the plan only on the owner's direct word (`metrics-core-plan.md:432-435`). For a ★★ phase the owner approves the contract before any code (`:450-452`). |
 | Owner decisions | Section 11.1 (Q1–Q14). Q1–Q11, Q13 and Q14 become C113–C123, C124 and C125 once decided; Q12 stays O16. They are written into section C of the discovery document before any code (the plan's rule A3, `metrics-core-plan.md:458-460`). |
 | Decides | The owner decides Q1–Q14. The *Rukovodilac* decides R1–R9 (section 11.2). The *Nezavisni revizor* reviews this contract and every ★★ slice. |
@@ -33,8 +33,8 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 - On a computer, the admin drags a column onto a variable. Everywhere, keyboard included, the admin can tap the column and then the variable. On a phone, the variables open in a bottom sheet.
 - The server proposes the conversion in words, taken from the one active unit conversion. A unit mismatch is refused with the sketch's sentence.
 - For two athletes of the stored session, the panel shows three columns: what GPEXE sends, what OptiMove will store, and what the GPEXE screen should show. A short guide sits beside it.
-- Active system mappings are already placed for the team. The admin may remove them. Q9 recommends not placing again one that was switched off for the team.
-- Each new column gets its own tick, *Matches GPEXE for both athletes*, given in the panel while its two athletes' values are on screen. A review card lists every new column with those values and its tick. One button, *Save and switch on for <team>*, is enabled only when every new column is ticked. It sends every placement with one request key, in one transaction.
+- Active system mappings are already placed for the team. The admin may remove them. Q9 recommends not placing again one switched off on this binding by an administrator.
+- Each new column gets its own tick, *Matches GPEXE for both athletes*, given in the panel while its two athletes' values are on screen. A column kept unticked reads "Not compared yet · *Compare*" on the board. One button, *Save and switch on for <team>*, opens a review card that lists every new column with those values and its tick. The card's own send is enabled only when every new column is ticked. It sends every placement with one request key, in one transaction.
 - The stored record is the evidence: who confirmed, when, which session, and the two athletes' values. No document is needed.
 
 **What stays as it is.**
@@ -181,10 +181,10 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 | **18-A** | This contract, a J18 row in section J of the discovery document, and an "As built" note on J16's step count (documentation only) | — | `code-reviewer` on the whole document; `db-reviewer` on sections 4–5; `security-reviewer` on sections 4, 6 and 7 | 1, 2, 3, 4 (on its content) | Both ★★ GOs, then the standing merge order. The status stays Proposed until the owner accepts the contract (Q1). C113–C125 enter section C only as each is decided. |
 | **7h (J14)** | Prerequisite with its own contract: a club admin approves, disables and replaces its own club's versions (C108). J18 needs from it only the activation basis: the T4 `activated_basis` CHECK (`v34:811-813`), the transition guard's `source_metric_require_platform_admin` call on activation (`:1192`), and T8's `mapping_status` branch for `needs_review → active` (`v48:322`). The disable basis, the replacement, the version-driven T5 ends (`sourceMetricActivationSteps.js:222-252`) and v48's club-less basis for those ends (`v48:386-387`) are J14's own scope. If Q13 chooses option two, J18 also needs J14's replacement, disable and version-driven end bases: the replacement branch (`v48:324-325`), the disable basis (`v34:816-818`, `v48:323`) and the version-driven end path (`sourceMetricActivationSteps.js:234`, `v48:386-387`). | **v51** if nothing comes between | J14's own | 1, 2, 4 | The standing order for migration PRs |
 | **18-1** | One migration with all of J18's schema: T9, T9s and T9i with their guards; the T4 gate; T8's new column and actions; T2b's observation columns (only if Q2 and Q3 choose them); the expiry and removal rules, with the removal function, its purge marker and the salt; rollback, preflight, post-check and runbook | **v52**, the next free number after 7h | `db-reviewer`, `security-reviewer` | 1, 2, 3, 4 | The standing order for migration PRs: both ★★ GOs; the owner's order naming the file and its sha256; the preflight on the same day; the owner's „da” before the deploy |
-| **18-2** | Backend reads: the board, one placement, and the evidence, each running the removal function first (section 5.8); the pair rule; the display registry | none | `code-reviewer`, `security-reviewer` | 2 | Both ★★ GOs, then the standing merge order |
+| **18-2** | Backend reads: the board, one placement, and the evidence; the board and evidence reads run the removal function first (section 5.8); the board's name reader (section 4.2); the pair rule; the display registry | none | `code-reviewer`, `security-reviewer` | 2 | Both ★★ GOs, then the standing merge order |
 | **18-3** | Backend writes: the save (section 4.3); the scheduled removal of expired values, in its own module that `server.js` starts (section 5.8); route 7; and the erasure | none | `code-reviewer`, `security-reviewer`, `db-reviewer` (transactions and locks) | 2, 3, 4, and the five-point rule | Both ★★ GOs, then the standing merge order. Only after 7h is merged and O16 (Q12) is decided. Q11's answer gates the first real confirmation through it. |
 | **18-P** | Only if Q2 and Q3 choose the observation form: the platform's *Confirm a column for all clubs*, with its routes (8–10) and screen | none (its schema is in 18-1) | `code-reviewer`, `security-reviewer`, `db-reviewer`; plus `mobile-qa` and `ux-design-reviewer` for the screen | 2, 4 | Both ★★ GOs |
-| **18-4** | Frontend: the board, the panel, the phone sheet, the entry points (the Imports one changes `frontend/gpexe-import-view.js`, a 9-0 file; section 3.1), the history and the guide | none | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`, and a narrow `security-reviewer` pass on how values and names are rendered | 2; and 5 unless the real-route run of section 9.4 covers the flow | The *Rukovodilac*'s GO (★ proposed; a mark needs the owner's direct word, `metrics-core-plan.md:432-435`) |
+| **18-4** | Frontend: the board, the panel, the phone sheet, the entry points (the Imports link, and the dates Imports pre-fills after a save, change `frontend/gpexe-import-view.js`, a 9-0 file; sections 3.1 and 3.8), the history and the guide | none | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`, and a narrow `security-reviewer` pass on how values and names are rendered | 2; and 5 unless the real-route run of section 9.4 covers the flow | The *Rukovodilac*'s GO (★ proposed; a mark needs the owner's direct word, `metrics-core-plan.md:432-435`) |
 | **18-E** | Facts after each merge: CURRENT_STATE, the J18 row "As built", and the decisions as built | none | `code-reviewer` | — | The standing merge order |
 
 - **Why one migration.** All of J18's schema is in 18-1, so T8's md5-checked revision guard and v48's actor guard are each replaced only once.
@@ -271,12 +271,12 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
   - The client never sends an athlete id. *Other athletes* asks the server for the next pair by its index (section 6.1).
 - **The tick.** Under the table sits the row's own checkbox, *Matches GPEXE for both athletes* (section 3.7).
 - **The guide** sits beside the table: *What to watch for* (its text is in section 3.11).
-- **Keeping or cancelling.** *Keep this placement* closes the panel and keeps the row, with its tick. *Cancel* removes this placement.
+- **Keeping or cancelling.** *Keep this placement* closes the panel and keeps the row, with its tick. A row kept without its tick reads "Not compared yet · *Compare*" on the board (section 3.7). *Cancel* removes this placement.
 - **A missing variable.** *Create a variable in <unit>* opens the existing M3-0 create form in a sheet, prefilled with the column's unit (`POST /variables`). The board keeps every placement. On return the new variable is in the list and the open placement points to it, still unsaved.
 
 ### 3.6 Pre-placed mappings
 
-- **Which rows are pre-placed.** Every system mapping that is eligible for the team (section 7) is already placed when the board opens. Its badge reads *OptiMove mapping*. Q9 recommends one exception: a system mapping switched off on this binding before is not placed again. It reads "Switched off on <date> · *Add*".
+- **Which rows are pre-placed.** Every system mapping that is eligible for the team (section 7) is already placed when the board opens. Its badge reads *OptiMove mapping*. Q9 recommends one exception: a system mapping switched off on this binding by an administrator is not placed again. That is a *Switch off* (S2) or a replacement on the board. It reads "Switched off by <name> on <date> · *Add*". An end that the platform causes by disabling or replacing a version (A2, the pinned step, a G1 replacement) does not count (section 7).
   - R4 decides whether the club's own active mappings are pre-placed on another team's board in the same way, with the badge *Your club's mapping*.
 - **What the admin can do.** Each row has *Remove*. It shows the two athletes' values like any other row, but they are not stored (section 5.3). It needs no comparison: its field is proven globally, and its version is active (a system version; under R4, the club's own).
 - **Collisions.** A row that would collide with an open activation on the team (same field and parameters, or same variable and level) reads "Replaces <old column> → <variable> for <team>". It is not pre-placed silently. The admin may keep or remove it. After the save it reads "<old column> → <variable> is switched off for <team> and replaced."
@@ -284,29 +284,31 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 ### 3.7 Saving
 
 - **One tick per new column.** In the panel, each new placement (a placement the admin made, not a pre-placed row) has its own checkbox, *Matches GPEXE for both athletes*, 44 px tall, beside its two athletes' values.
-  - It can be ticked only while the panel shows that row's values for the current pair. A row is never kept as ticked otherwise.
-  - The tick clears when the row changes (another column, variable or display unit), when the pair changes, or when the session changes.
+  - It can be ticked only while the panel shows that row's values for the current pair. A tick can be given nowhere else. Once given, it stays until one of the changes below clears it.
+  - The tick clears when the row changes (another column, variable or display unit), when the pair changes, when the session changes, or when a `board_changed` answer names the row. The row then reads *Compare again*.
+  - A new row kept without its tick reads "Not compared yet · *Compare*" on the board, as a row to compare again reads *Compare again*. *Compare* opens the row's panel.
   - Pre-placed rows have no tick: they need no comparison (section 3.6).
 - **One requirement per row.** Each row has a visible toggle *Required*, prefilled as Q8 decides; the recommendation is Required. Its meaning appears beside it, in C110's words (section 8.3).
-- **One primary button:** *Save and switch on for <team>*. It is enabled only when every new row is ticked, or when there is no new row. Before sending, a review card names:
+- **One primary button:** *Save and switch on for <team>*. It opens a review card whenever the board holds at least one row. With no row it is off and says "Place a column first." The review card names:
   - the source and the team with its link ("<team> — linked to GPEXE team <n>", J16 R6);
   - each new row (column → variable, conversion, levels, requirement), with its two athletes' three values (GPEXE sends / OptiMove stores / the GPEXE screen should show) and its tick. An unticked row has *Compare*, which opens its panel;
   - the pre-placed rows in their own group, *OptiMove mappings (no check needed)*, and under R4 *Your club's mappings (no check needed)*, each with its requirement;
   - every replacement.
-- **What one press sends.** It sends one `POST /confirmations`: a fresh request key, every row, and the session and pair it was read for. Each new row carries `checked: true`, its own tick. At most 20 rows are sent (R7). No value, source or target unit, factor, note or reason is sent; only the display-unit code each new row was compared in.
-- **Leaving.** The board uses J16's hooks (section load, leave guard, before-unload, discard, workspace switch reset; `phase8-mappings-screen-contract.md:100-101`). Leaving with unsaved placements asks "Discard the N placements you have not saved?". While a save is in flight or its result is not confirmed, leaving asks first, before-unload included, as J16 does (`frontend/metric-mappings-actions.js:294-296`).
+- **The review card's send** is its own *Save and switch on for <team>*. It is the only gated control: it is enabled only when every new row is ticked, or when there is no new row. While it is off, it names the new columns still unticked: "Tick every new column to save: <column>, <column>." Each of them has *Compare* in the card.
+- **What the save sends.** The review card's send makes one `POST /confirmations`: a fresh request key, every row, and the session and pair it was read for. Each new row carries `checked: true`, its own tick. At most 20 rows are sent (R7). No value, source or target unit, factor, note or reason is sent; only the display-unit code each new row was compared in.
+- **Leaving.** The board uses J16's hooks (section load, leave guard, before-unload, discard, workspace switch reset; `phase8-mappings-screen-contract.md:100-101`). Leaving with unsaved changes asks "Discard the N changes you have not saved?". N counts only the admin's own changes: new placements, pre-placed rows removed or added, and changed requirements. Untouched pre-placed rows never ask. Going back to *Which team?* asks the same question, and placements never move to another team. While a save is in flight or its result is not confirmed, leaving asks first, before-unload included, as J16 does (`frontend/metric-mappings-actions.js:294-296`).
 - **How writes behave,** as J16 section 8:
   - only one write runs at a time;
   - the client bound is 90 s;
   - a lost answer shows *Result not confirmed* with *Check result*, which repeats the same body and key and never sends by itself;
   - `request_key_reused` means a new key;
   - `try_again` reads "The server was busy. Nothing was saved. Try again.";
-  - `board_changed` reads the board again and says which row changed;
+  - `board_changed` reads the board again and says which row changed; that row loses its tick and reads *Compare again*;
   - a generation counter drops older answers (`.claude/rules/frontend.md:59-62`).
 
 ### 3.8 After the save, and the history
 
-- **The answer** names what was switched on: "Saved. Switched on for <team>: <list>. Checked by you on <date> with two athletes: <columns>. OptiMove mappings (no check needed): <columns>." Then: "To use them, run *Find new sessions* in Imports again. Sessions found from then on can be imported with these variables. Drag the next column." A preview made before the save does not see the new activations; the next search does (section 4.4).
+- **The answer** names what was switched on: "Saved. Switched on for <team>: <list>. Checked by you on <date> with two athletes: <columns>. OptiMove mappings (no check needed): <columns>." Then: "To use them, run *Find new sessions* in Imports again, with dates that include <session date>. Sessions found from then on can be imported with these variables. Drag the next column." *Find new sessions* links to Imports and pre-fills a window that includes the session's date, as v33 pre-fills one for a session that needs another search (`frontend/gpexe-import-view.js:393-395, :474-486`). So the default 14-day search (`:414`) never leaves the checked session out. A preview made before the save does not see the new activations; the next search does (section 4.4).
 - **Only if Q10 lets the board ship before 9-B is live,** the sentence reads: "Imports do not use mappings yet; nothing changes in imports until they do." This is J16's R18 sentence.
 - **History** is a secondary tab (R7). For each confirmation it shows: when, by whom (a display name), the session's date, and each row's column, variable, units and conversion.
   - The values of athlete A and B appear until they expire. After that the row reads "Values removed after 90 days", or "Values erased" once a platform admin has erased them. A pre-placed row reads "Not compared" and never had values. Athletes appear there only as *Athlete A* and *Athlete B*, because names are never stored.
@@ -318,7 +320,7 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 - **One sheet at a time.** Tapping a column opens a bottom sheet, *Fill which variable?*, with the same order and reasons as on a computer. Choosing a variable replaces it with the panel, a full-screen sheet. *Back* returns to the variable list. *Create a variable* replaces the panel with the create form, and returning reopens the panel. The page behind a sheet does not scroll.
 - In the panel, *Keep this placement* (primary) closes the sheet and keeps the row, with its tick. *Cancel* removes this placement.
 - Each athlete is a card with three lines (GPEXE sends / OptiMove stores / the GPEXE screen should show), so no table scrolls sideways at 360 px. The row's tick sits under the two cards.
-- *Save and switch on for <team>* sits in a sticky bar at the bottom of the board, never under a sheet. It opens the review card as its own sheet, from which the save is sent. It is full width and 44 px tall, and every input is 16 px.
+- *Save and switch on for <team>* sits in a sticky bar at the bottom of the board, never under a sheet. It opens the review card as its own sheet whenever the board holds a row. The review card's send is the gated control (section 3.7). *Compare* there replaces the review sheet with that row's panel, and *Keep this placement* returns to the review sheet. The bar is full width and 44 px tall, and every input is 16 px.
 - Nothing drags on touch, and no inert control is shown. The layout is checked at 360, 375 and 390 px, and at 1280 px.
 
 ### 3.10 Accessibility
@@ -328,7 +330,7 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 - After a column is chosen, focus moves to the first usable variable, which is announced. After a placement, focus moves to the panel's heading. After *Cancel*, it returns to the column.
 - Sheets are dialogs. Focus stays inside them, and Escape closes them.
 - Colour is never the only signal: each state has a text badge.
-- Every reason and error is linked by `aria-describedby`. The disabled save button says in text why it is disabled: "Tick every new column to save (N left)."
+- Every reason and error is linked by `aria-describedby`. The review card's disabled send says in text why it is off, naming the columns: "Tick every new column to save: <column>, <column>." The board's button with no row says "Place a column first."
 - Drag is only an extra way to do what the tap path already does.
 
 ### 3.11 Texts
@@ -352,14 +354,17 @@ English is the app's language. The sketch's Serbian is quoted where the owner sa
 | The guide, added | GPEXE shows each user's own units. If yours shows another unit, choose it above the table. | — |
 | The tick (one per new column, in the panel) | Matches GPEXE for both athletes | „Proverio sam u GPEXE-u: vrednosti za oba sportista se poklapaju.” |
 | Review card | New columns, each with its two athletes' values and its tick · Compare · OptiMove mappings (no check needed) · Your club's mappings (no check needed) (R4) | — |
-| The save button, disabled | Tick every new column to save (N left). | — |
+| The review card's send, disabled | Tick every new column to save: <column>, <column>. | — |
 | Buttons | Save and switch on for <team> · Keep this placement · Cancel · Back | „Sačuvaj i uključi za First team” · „Odustani” · „Nazad” |
 | Under the button | Saved with it: who confirmed, when, and the two athletes' values of the columns you checked. That is the evidence. The values are kept for 90 days, then removed. | „Čuva se: ko je potvrdio, kada, i ove dve vrednosti. To je dokaz, bez ikakvog dokumenta.” |
-| After saving | Saved. Switched on for <team>: <list>. Checked by you on <date> with two athletes: <columns>. OptiMove mappings (no check needed): <columns>. To use them, run *Find new sessions* in Imports again. Sessions found from then on can be imported with these variables. Drag the next column. | „Sačuvano” · „… je uključeno za First team.” · „Sledeći uvoz upisuje ovu varijablu. Prevuci sledeću kolonu.” |
+| After saving | Saved. Switched on for <team>: <list>. Checked by you on <date> with two athletes: <columns>. OptiMove mappings (no check needed): <columns>. To use them, run *Find new sessions* in Imports again, with dates that include <session date>. Sessions found from then on can be imported with these variables. Drag the next column. | „Sačuvano” · „… je uključeno za First team.” · „Sledeći uvoz upisuje ovu varijablu. Prevuci sledeću kolonu.” |
 | Changing the athletes or the session | Your N placements will show two other athletes. Compare each one again in GPEXE. · Compare again · No other athletes have values for all your columns. | — |
-| Leaving | Discard the N placements you have not saved? | — |
+| Leaving, or going back to *Which team?* | Discard the N changes you have not saved? | — |
 | Which team? | <team> — linked to GPEXE team <n> · No team of your club is linked to GPEXE yet. Link one in Settings > Source connections. | — |
 | Not available | Map by drag and drop is not available in this workspace. | — |
+| A new column kept without its tick | Not compared yet · Compare | — |
+| The board's button, with no row | Place a column first. | — |
+| A system mapping switched off on this binding by an administrator (Q9) | Switched off by <name> on <date> · Add | — |
 
 **Departures from the sketch.**
 - The sketch named the athletes „Sportista 1” and „Sportista 2”. The board names them for the admin, because the guide asks the admin to find them in GPEXE.
@@ -379,7 +384,7 @@ English is the app's language. The sketch's Serbian is quoted where the owner sa
   - a coach, an athlete, or a team workspace;
   - the platform workspace, except routes 4–10. There an active platform admin reads any club's confirmations (routes 4–5), erases values (route 6, the confirmer included) and removes expired values (route 7). With 18-P, a platform admin also observes (routes 8–9) and reads stored field observations (route 10, `GET /fields/:fieldId/observations`, platform workspace only);
   - another club, or X's admin working in Y's workspace;
-  - a revoked role, an archived club or team, or an ended binding (routes 1–3; a confirmation on an ended binding stays readable through routes 4–5, section 6.2);
+  - a revoked role, an archived club or team, or an ended binding (routes 1–3). An ended binding never hides a saved confirmation: route 3's replay and read-back, and routes 4–5, use the predicate of section 6.2 (section 4.3 step 4);
   - an unknown id.
 - **Every other id the caller names** is resolved only inside the workspace's readable owner scope, as `createMapping` does (`sourceMetricMappingService.js:921-926`). `target_scope_mismatch` is answered only for a system variable placed where the column does not fill it. A foreign id is the identical 404, never `target_scope_mismatch`, `activation_changed`, `canonical_version_changed`, `board_changed` or a database refusal:
   - `targetId`: a club variable of another club;
@@ -398,12 +403,12 @@ All routes are under `/api/training-load/sources/metrics`, behind `requireAuth`,
 | 1 | `GET /board` | `teamId`; optional `candidateId`; optional `pair` (an index, default 0) | The columns (id, revision, label, key, unit state, placeable or reason, raw A and B); the variables (club's own and system, with unit, current version and whether placeable); rows already on; pre-placed rows with their full placement data and hash; the pair (`index`, `count`, two live labels); the session (candidate id, label, start) | `404`; `400 invalid_query`; `409 no_stored_session`, `snapshot_expired`, `candidate_too_large`, `candidate_source_mismatch`, `candidate_not_importable`, `not_enough_athletes`, `try_again` |
 | 2 | `GET /board/placement` | `teamId`, `candidateId`, `pair`, `fieldId`, `targetId` | `placeable` with the proposal (`same_unit` or the conversion and its words), or a `code`; for A and B: raw, stored, and the GPEXE screen value in each display unit; the levels; collisions; a `placementHash` for each display unit | As route 1. A placement's own refusals (`field_not_confirmed`, `conversion_unavailable`, `target_scope_mismatch` (only for a system variable; a foreign id is the 404, section 4.1), `condition_mismatch`, `level_not_allowed`, `source_metric_target_taken`, `pair_not_distinct`, `value_outside_limits`, `mapping_version_active`) are a `200` answer with `placeable: false`, so the panel can show them |
 | 3 | `POST /confirmations` | `{requestKey, teamId, candidateId, pair, rows: [{kind: "new", fieldId, targetId, expectedTargetVersionId, displayUnit, placementHash, checked: true, requirement, replaces: [activationId]} \| {kind: "preplaced", mappingVersionId, placementHash, requirement, replaces: [...]}]}`, with 1–20 rows | `200 {confirmation: {id, teamId, confirmedAt, rows: [{fieldId, variableId, mappingId, versionId, activationId, requirement}]}, replayed}`; `200` with `verified_after_commit_error` after a verified COMMIT; `200` with `readError` when a committed answer cannot be read back. No values are returned. | `404`; `415 jsonRequired`; `400 invalid_body` (a new row without `checked: true`, an unknown key, a duplicate field or variable among the rows, a requirement missing, a new row's `displayUnit` missing or outside its rule's list); `409` with the codes of section 4.3 step 15, plus `board_changed` (`current.rowIndex`), `canonical_version_changed`, `mapping_version_active`, `activation_changed`, `binding_not_active`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
-| 4 | `GET /confirmations?teamId=&cursor=` | — | Pages of 50: when, who (display name), the session's date, rows (column, variable, version, units, conversion, checked, and A/B values, or "removed" with its kind, `expired` or `erased`, or "not compared" for a pre-placed row) | `404` |
-| 5 | `GET /confirmations/:confirmationId` | — | One confirmation, as in route 4 | `404` |
+| 4 | `GET /confirmations?teamId=&cursor=` | — | Pages of 50: when, who (display name), the session's date, rows (column, variable, version, units, conversion, checked, and A/B values, or "removed" with its kind, `expired` or `erased`, or "not compared" for a pre-placed row) | `404` outside the predicate of section 6.2 |
+| 5 | `GET /confirmations/:confirmationId` | — | One confirmation, as in route 4 | `404` outside the predicate of section 6.2 |
 | 6 | `POST /confirmations/:confirmationId/erase-values` | `{requestKey, reasonCode}`: `erasure_request` or `wrong_confirmation`, never typed text | `200 {confirmation}`, with the values removed | `404` for everyone but an active platform admin in the platform workspace, the confirmer included; `400 invalid_body` (another reason code, or typed text); `409 values_already_removed`, `request_key_reused`, `try_again`; `503 outcome_unknown` |
-| 7 | `POST /confirmations/expired-values/remove` | `{requestKey}` | `200 {removed: N, more: bool}`: at most 200 confirmations per call. It is the on-demand backstop of the scheduled removal: the same function, under the admin's identity, with one keyed T8 `confirmation_values_expired` row naming the count (section 5.8) | `404` for everyone but an active platform admin in the platform workspace; `400 invalid_body`; `409 request_key_reused`, `try_again`; `503 outcome_unknown` |
+| 7 | `POST /confirmations/expired-values/remove` | `{requestKey}` | `200 {removed: N, more: bool}`: at most 200 confirmations per call. It is the on-demand backstop of the scheduled removal: the same function, under the admin's identity, with one T8 `confirmation_values_expired` row per confirmation it removed, the last one keyed. A replay counts those rows by `operation_id`. A run that removes nothing writes no row (section 5.8) | `404` for everyone but an active platform admin in the platform workspace; `400 invalid_body`; `409 request_key_reused`, `try_again`; `503 outcome_unknown` |
 | 8–9 | Only with 18-P (Q2, Q3): `GET /fields/:fieldId/observation?candidateIds=a,b&pairs=i,j` and `POST /fields/:fieldId/revisions/:revisionId/observed-confirmation` | `{requestKey, sessions: [{candidateId, pair, displayUnit, placementHash} × 2], attested: true}` | Fields without parameters only: the observed unit and meaning acts, in one operation | `404` for everyone but an active platform admin in the platform workspace; `409 field_has_parameters`; the M2b codes (`unit_already_verified`, `meaning_already_verified`, `revision_retired`); `board_changed` |
-| 10 | Only with 18-P: `GET /fields/:fieldId/observations` | — | The field's stored observations: when, who (display name), the two sessions' dates, the acts they proved, and the `field_unit` values or "removed" or "expired" | `404` for everyone but an active platform admin in the platform workspace |
+| 10 | Only with 18-P: `GET /fields/:fieldId/observations` | — | The field's stored observations: when, who (display name), the two sessions' dates, the acts they proved, and the `field_unit` values, or "removed" with its kind (`expired` or `erased`) | `404` for everyone but an active platform admin in the platform workspace |
 
 **Routes reused unchanged:**
 - S2 `POST /activations/:id/end`, for *Switch off*;
@@ -411,10 +416,14 @@ All routes are under `/api/training-load/sources/metrics`, behind `requireAuth`,
 - `GET /conversions`;
 - the GPEXE candidates list route;
 - the source-connections read J16 uses for its team list (`frontend/metric-mappings-data.js:17`), for *Which team?* (section 3.1);
-- the identity and link reads, which the board's service calls internally:
+- the link read, which the board's service calls internally:
   - The board resolves the workspace once (`resolveMappingAdminWith`, `sourceMetricAccess.js:88-90`).
-  - The identity and link reads get a context built from it (the user and the basis) and `expectedClubId` = the workspace's club. They call `listIdentities` (`gpexeAthleteIdentityService.js:246`) and the link reader (`listAthleteLinks`, `gpexeImportService.js:1613`) directly. They never call `resolveGpexeTeamAccess` (`gpexeImportAccess.js:18-25`), `resolveActiveWorkspace` or `identityAdminBasis`.
-  - In a save, the pair choice reads identity rows only with `expires_at > now()` and the binding's id.
+  - It calls the link reader (`listAthleteLinks`, `gpexeImportService.js:1613-1620`) directly. It never calls `resolveGpexeTeamAccess` (`gpexeImportAccess.js:18-25`), `resolveActiveWorkspace` or `identityAdminBasis`.
+
+**The names.** The board never calls `listIdentities` (`gpexeAthleteIdentityService.js:246`). That function also reads dates of birth and a date-of-birth conflict over `public.athletes` (`:276-300`), purges first (`:250`) and opens its own connection (`:251`). The board has a narrow reader of its own:
+- It selects `display_name` only, with the same predicates: `binding_id`, `owner_team_id` and `expires_at > now()` (`:276-281`).
+- It never reads `birth_date` and never runs the conflict query.
+- In a save, the pair choice runs it, and the link read's query, on the save's own client, as plain reads. `listAthleteLinks` reads through the pool (`gpexeImportService.js:1614`), so a save runs the same query on its own client.
 
 **The hashes.** `placementHash` is a SHA-256 over:
 - the candidate's `bundle_hash`;
@@ -437,12 +446,12 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
 **One write transaction, `runWrite`** (`sourceMetricMappingService.js:763-847`):
 
 4. **Start.** The bounds are set first: `statement_timeout` 10 s, the idle bound, and a 5 s lock bound (`:776-778`; `:93-95`). Then the per-user advisory lock is taken (`:779`, up to 5 s), and the row-lock bound becomes 2 s (`:780`). The request record is looked up (`:782`):
-   - a replay answers the current state only after the step 5 scope is checked again, under `FOR SHARE`: the team is active and in the workspace's club; the confirmation's binding is active and its connection belongs to that club (`source_metric_binding_club`, `v48:84-89`); the workspace's club is the confirmation's `owner_club_id`. Any failure is the identical 404. The reread filters by `ctx.owner`, as `writableMappingSummary` does (`sourceMetricMappingService.js:909`);
+   - a replay answers the current state only after the scope of routes 4–5 is checked again, under `FOR SHARE`: the admin's right; the team is active and in the workspace's club; the workspace's club is the confirmation's `owner_club_id` and is active (section 6.2). The binding need not still be active. That is a condition of the first execution only (steps 5 and 13), so an Unbind after the COMMIT never hides a saved confirmation, which History still shows. Any failure is the identical 404. The reread filters by `ctx.owner`, as `writableMappingSummary` does (`sourceMetricMappingService.js:909`);
    - another body under the same key is `409 request_key_reused`.
    Then the v35 actor setting is written (`:797`).
 5. **Plain reads, with no lock:**
    - the team and its one active GPEXE binding. The binding's club must be the workspace's club, and the team must be active. Otherwise the answer is 404.
-   - the candidate, through 7e's scope query (`sourceMetricPreviewService.js:98-121`). It must be stored, not expired, at most 16 MiB, and its last check must have succeeded through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). Otherwise the answer is the 409 of route 1.
+   - the candidate, through 7e's scope query (`sourceMetricPreviewService.js:98-121`). It must be stored, not expired, at most 16 MiB, and its last check must have succeeded through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). It must not be `superseded`, which blocks a candidate everywhere else (`gpexeImportService.js:1327`). Otherwise the answer is the 409 of route 1.
    - every other id of the body (`targetId`, `mappingVersionId`, each id in `replaces`) is read inside the readable owner scope and the binding (section 4.1). One outside it is the identical 404.
    - The candidate row is never locked (section 4.4).
 6. **The recompute.**
@@ -468,7 +477,7 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
 12. **Replaced activations.** The T5 rows listed in `replaces` are taken `FOR NO KEY UPDATE`, in ascending order, by a query that filters on this binding (`id = any($1) and source_team_binding_id = $2`). A row of another binding is neither locked nor told apart: it is the identical 404. A listed row on this binding that is no longer open is `409 activation_changed`.
 13. **The binding** and its team are taken `FOR SHARE` (`lockListedBindings`, `sourceMetricActivationSteps.js:100-128`). The binding must be active. Otherwise the answer is `409 binding_not_active`.
 14. **The rights.** The acting user's role, user and club rows are taken `FOR SHARE` (`rightsStillHold`, `bindingClubHolds`; `sourceMetricAccess.js:66-130`). A lost right is the identical 404, and nothing is written. Every new `42501` text of v52 is added to `ACTOR_REFUSALS` in 18-3 (`sourceMetricMappingService.js:341, :398`), so a right lost under a v52 guard is the 404 too, never a 500.
-15. **The state checks.** First the candidate is read again, as a plain read after the step-14 locks. If its `bundle_hash` or `last_seen_check_id` differs from step 5's, a check was finalized meanwhile (`gpexeImportService.js:2063`), and the answer is `409 board_changed`. The service maps the T9s guard's fixed message for the same case to `board_changed` too, as the backstop. Then the checks run in this order, and the first failure names its row:
+15. **The state checks.** First the candidate is read again, as a plain read after the step-14 locks. If its `bundle_hash`, `last_seen_check_id`, `status` or `superseded_by_check_id` differs from step 5's, a check was finalized meanwhile. It saw the session again (`gpexeImportService.js:2063`), replaced it with newer content (`:2101-2108`) or withdrew it (`:2112-2115`). The answer is `409 board_changed`. The T9s guard refuses the same cases with fixed messages (section 5.4), which the service maps to `board_changed` too, as the backstop. Then the checks run in this order, and the first failure names its row:
     1. the revision;
     2. the target;
     3. the conversion (`conversionsHold`);
@@ -502,10 +511,10 @@ The candidate, the team import lock and the Metrics Core connection (v11) are ne
 | The 9-B approval, or a check-time preview, of the same team | The importer takes the team lock and the binding `FOR SHARE`, then T2b → T3 → T4 → definition → T5 `FOR SHARE`, then v11 `FOR UPDATE` (`phase9-importer-mappings-contract.md:163-216`). This write takes no team lock, no v11 row and no candidate lock. Its binding `FOR SHARE` is compatible with the importer's. It may wait for rows the importer holds `FOR SHARE`, but it never holds something the importer then waits for, so no cycle forms (the 7d argument). A preview that ran before the save does not see the new activations. The next check does (`phase9-importer-mappings-contract.md:75, :444-445`). |
 | A 7g instance end | 7g needs the team's import lock. It is refused while the team has an active binding or an open activation (`v50:21-34`). This write needs an active binding, so the two never act on the same team at once. |
 | An Unbind | This write holds the binding `FOR SHARE` only from step 13 to the COMMIT. Either side waits at most 2 s, then `try_again` (C58, `discovery:557-560`). If the Unbind commits first, this write answers `binding_not_active`. |
-| A new version of the target variable (M3-0, R2, or C111 later) | C9's guard reads T4 without a lock (`v34:1222-1238`). This write locks the definition `FOR SHARE`. If the new version commits first, this write answers `canonical_version_changed`. If this write commits first, the new version is refused with `variable_pinned`. |
+| A new version of the target variable (M3-0, or C111 later), or its archive (the plan's R2, `metrics-core-plan.md:571`) | C9's guard reads T4 without a lock (`v34:1222-1238`). This write locks the definition `FOR SHARE`. If the new version commits first, this write answers `canonical_version_changed`. If this write commits first, the new version is refused with `variable_pinned`. An archive is refused with `archive_pinned` while an active version pins the variable (`canonicalVariableAdminService.js:84`). If the archive commits first, this write answers `canonical_version_changed` (step 11). |
 | A club or team archive | Both rows are held `FOR SHARE` (steps 13–14). The archive waits or lands first. Then the answer is the identical 404. |
 | A role revocation | It meets this write only at the user rows `FOR SHARE`, as in 7c and 7d. |
-| A check finalization of the same team | It rewrites the candidate's `last_seen_check_id` (`gpexeImportService.js:2063`). This write never locks the candidate. Step 15 reads it again and answers `board_changed`; the T9s guard is the backstop (section 5.4). |
+| A check finalization of the same team | It rewrites the candidate's `last_seen_check_id` (`gpexeImportService.js:2063`), or supersedes it (`:2101-2115`). This write never locks the candidate. Step 15 reads it again and answers `board_changed`; the T9s guard is the backstop (section 5.4). |
 | Two admins saving the same placement | The second fails on T3's pair key or on T5's open-row index. The whole operation answers `409 board_changed`, and the screen reads the board again. Nothing of the second save is written. |
 
 ### 4.5 Idempotency and the COMMIT (the five-point rule)
@@ -578,16 +587,16 @@ There is no free text, and no athlete data.
 |---|---|
 | `id`, `confirmation_id`, `session_ordinal`, `item_no` | The session is a foreign key to T9s |
 | `item_kind` | `club_mapping`, `system_mapping` or `field_unit` |
-| `checked` | True for a new row: the admin's own tick for that row (`checked: true` in the body, section 3.7). False for a pre-placed row. |
+| `checked` | True for a new row: the admin's own tick for that row (`checked: true` in the body, section 3.7). False for a pre-placed row. True for a `field_unit` row (route 9's `attested: true`, section 4.2). |
 | `source_metric_version_id` | A foreign key to T2b |
 | `mapping_version_id` | A foreign key to T4, set exactly for the two mapping kinds. Unique per confirmation. |
 | `parameter_fingerprint`, `source_unit`, `target_unit`, `scale`, `scale_divisor`, `offset` | Copies that must equal T4's, and T2b's unit. For `field_unit` there is no target unit or factor. |
 | `compared_level` | `session` only: the level at which the two athletes were compared. It is the evidence for the version as a whole, its drill level included (section 4.3 step 10, R9). |
 | `gpexe_display_rule`, `gpexe_display_unit` | Set exactly for a checked row: a registry code (`^[a-z_]{1,40}$`) and a unit from that rule's closed list, the `displayUnit` the row was sent with. It is what the admin compared against. |
-| `raw_a`, `stored_a`, `raw_b`, `stored_b` | `raw_a` and `raw_b` are set exactly for a checked row. `stored_a` and `stored_b` are set exactly for a checked mapping row; a `field_unit` row has no stored value. A row with `checked = false` stores no values (data minimization, recommended). Finite numerics. While the values are present, a BEFORE trigger checks, with fixed messages, that the two raw values are non-zero and different, and that `stored_*` is D8 of `raw_*` (`source_metric_value_matches`, `v34:156`, which is false for a NULL). These rules are never table CHECKs: a failing CHECK prints the row, values included, in the server log. The table CHECKs stay value-free. |
+| `raw_a`, `stored_a`, `raw_b`, `stored_b` | `raw_a` and `raw_b` are set exactly for a checked row. `stored_a` and `stored_b` are set exactly for a checked mapping row; a `field_unit` row has no stored value. A row with `checked = false` stores no values (data minimization, recommended). Finite numerics. While the values are present, a BEFORE trigger checks, with fixed messages, that the two raw values are non-zero and different, and that `stored_*` is D8 of `raw_*` (`source_metric_value_matches`, `v34:156`, which is false for a NULL). Every other rule of this table that can fail on a row holding values is enforced in the same BEFORE triggers, with fixed messages: the shape of `checked`, the display rule and unit, the salt and the removal facts. A BEFORE ROW trigger runs before the CHECKs, so the table CHECKs are unreachable backstops. This matters because PostgreSQL prints the whole failing row, values included, for any failing CHECK, whatever its expression tests. |
 | `values_salt` | 16 random bytes, generated by the trigger on a checked row. It belongs to the removable column set: it is null exactly when the values are. It is never returned. |
 | `values_digest` | SHA-256 over the salt, the canonical text of the row's facts, and its values. It is computed by the trigger. It survives the removal, but with the salt gone it can no longer be tested against guessed values: it can be checked only until the removal. |
-| `values_removed_at`, `values_removed_kind`, `values_removed_by_user_id` | Kind `expired` or `erased`. On a checked row the values and the salt are null exactly when `values_removed_at` is set. `values_removed_by_user_id` names the actor of an erasure or of route 7, and is null for the scheduled removal (section 5.8). A row with `checked = false` has no values and is never removed. |
+| `values_removed_at`, `values_removed_kind`, `values_removed_by_user_id` | Kind `expired` or `erased`. On a checked row the values and the salt are null exactly when `values_removed_at` is set. `values_removed_by_user_id` is set by the update guard from the v35 actor, never by the writer (section 5.4). It names the actor of an erasure or of route 7, and is null only for the scheduled removal (section 5.8). A row with `checked = false` has no values and is never removed. |
 
 ### 5.4 The guards (the C76 / v35 / v48 pattern)
 
@@ -598,19 +607,21 @@ There is no free text, and no athlete data.
   - A write inside a savepoint is refused.
 - **Plain reads.** Every v52 guard reads the connection, the binding, the check and the candidate as plain reads and never locks them. So an Unbind's order (the connection, then the binding; `CURRENT_STATE.md:824-827`) is never inverted, as v34's T5 trigger keeps it for the v27 rows (`discovery:1285-1287`).
 - **BEFORE INSERT on T9s and T9i:** the row's confirmation must have been written in this transaction by the same actor.
-  - On T9s, the check's facts must hold. For `team_mapping`, the team must be the binding's, and the check must have run through the confirmation's binding. At insert the candidate exists, belongs to `team_id`, has `last_seen_check_id = check_id`, and carries `candidate_bundle_hash`.
+  - On T9s, the check's facts must hold. For `team_mapping`, the team must be the binding's, and the check must have run through the confirmation's binding. At insert the candidate exists, belongs to `team_id`, has `last_seen_check_id = check_id`, carries `candidate_bundle_hash`, and is not `superseded`. Each failure has its fixed message.
   - On T9i, the T4 and T2b facts must be equal; the T4's owner must be the confirmation's club for `club_mapping`, and `system` for `system_mapping`; the T2b revision must be active and verified.
-  - The salt and the digest are computed by the trigger. A salt or digest the writer supplies is overwritten. The value rules of section 5.3 are checked here, with fixed messages.
-- **UPDATE:** refused on T9 and T9s. On T9i, only the two removals of section 5.8: the values and the salt set to null, with `values_removed_at`, `values_removed_kind` and `values_removed_by_user_id`, and nothing else.
-  - An `expired` removal needs the confirmation past its `values_expire_at` and the purge marker. If an actor is set, it must be an active platform admin, and it is recorded.
-  - An `erased` removal needs an actor who is an active platform admin.
+  - The salt and the digest are computed by the trigger. A salt or digest the writer supplies is overwritten. Every rule of section 5.3 that can fail on a row holding values is checked here, with fixed messages, before any CHECK.
+- **UPDATE:** refused on T9 and T9s. On T9i, only the two removals of section 5.8: the values and the salt set to null, with `values_removed_at`, `values_removed_kind` and `values_removed_by_user_id`, and nothing else. The guard checks the removal's shape itself, with fixed messages, before any CHECK.
+  - **The actor.** The guard reads the v35 actor setting without raising. An absent or empty setting is "no actor". A present setting that is not valid (not canonical, or of another transaction; `v35:66-77`) is `42501`, never "no actor". The guard sets `values_removed_by_user_id` to the actor, or to null with no actor. A value the writer supplies is overwritten.
+  - An `expired` removal needs the confirmation past its `values_expire_at` and the valid purge marker (section 5.8), so it happens only inside the removal function. With an actor, the actor must be an active platform admin.
+  - An `erased` removal always needs an actor who is an active platform admin, and always its T8 row.
+  - **The one exemption from a T8 row** is one predicate: kind `expired`, no v35 actor setting, the purge marker present and valid, and `values_removed_by_user_id` null. Every other removal has an actor and its T8 row.
 - DELETE and TRUNCATE are refused on all three tables.
-- **Deferred checks, at COMMIT:**
+- **Deferred checks, at COMMIT.** The first four are `AFTER INSERT` constraint triggers only, so a later removal never runs them:
   - A confirmation has its keyed T8 row of the same operation, by the same user (`mapping_confirmation`, or `source_metric_unit_observed` for a field).
   - A `team_mapping` act has exactly one session and at least one row. Every mapping row's version is active and has an open activation on the confirmation's binding, started in this transaction.
   - `attested` is true exactly when a row is checked.
   - A `field_observation` act has exactly two sessions and two `field_unit` rows, and T2b's unit act names it in the same transaction (section 5.7).
-  - A T9i row whose values an actor removed has the T8 row of its kind, written in this transaction by the same user: `confirmation_values_erased` naming its confirmation, or route 7's `confirmation_values_expired`, whose `removed_count` matches. This is a deferred constraint trigger `AFTER UPDATE … WHEN (old.values_removed_at IS NULL AND new.values_removed_at IS NOT NULL)`, as v48 does for T5 ends (`v48:280-285`). The scheduled removal, with no actor and under the purge marker, needs no T8 row.
+  - A T9i row whose values an actor removed has the T8 row of its kind: `confirmation_values_erased`, or route 7's `confirmation_values_expired`. This is a deferred constraint trigger `AFTER UPDATE … WHEN (old.values_removed_at IS NULL AND new.values_removed_at IS NOT NULL AND new.values_removed_by_user_id IS NOT NULL)`, as v48 does for T5 ends (`v48:280-285`). It finds its T8 row by the same user, the action of its kind, the row's confirmation, and a T8 xmin equal to this transaction (`source_metric_current_xmin()`, `v35:116-119`, as v48's end link uses it, `v48:259-261`). The guard sets the user column from the actor, so an actor's removal never reaches COMMIT with a null user. The scheduled removal, under the exemption above, needs no T8 row.
 
 ### 5.5 The gate on a club admin's activation
 
@@ -632,17 +643,18 @@ There is no free text, and no athlete data.
 
 ### 5.6 T8
 
-- **Two new nullable columns:** `confirmation_id`, referencing T9 with `on delete restrict`, and `removed_count`, from 0 to 200 (a count, not a value). A CHECK ties them to the new actions: `confirmation_id` is set exactly for `mapping_confirmation`, `confirmation_values_erased` and the two observed acts; `removed_count` exactly for `confirmation_values_expired`.
+- **One new nullable column:** `confirmation_id`, referencing T9 with `on delete restrict`. A CHECK ties it to the new actions: it is set exactly for `mapping_confirmation`, `confirmation_values_expired`, `confirmation_values_erased` and the two observed acts. It is a typed foreign key, not a value (D10 as extended, section 8.6).
 - **New actions** are added to the closed list. Every existing branch of `row_ok` stays byte for byte:
   - `mapping_confirmation`: the keyed request record of a board save. It names the team and the confirmation, with the basis `platform_admin` or `club_admin`, no reason and no evidence.
-  - `confirmation_values_expired`: the keyed request record of route 7, the last T8 row of its operation (the `startAuditRows` pattern, `sourceMetricActivationSteps.js:192-200`). It names no confirmation. Its `removed_count` says how many confirmations lost their values, 0 included, so a replay answers the same. It has `platform_admin` and no reason. The scheduled removal writes none.
-  - `confirmation_values_erased`: names the confirmation, with `platform_admin` and a fixed reason code as its reason (`erasure_request` or `wrong_confirmation`), never typed text. It comes once per confirmation: a unique index on `(confirmation_id, action)` for this action, as v48 has for activations (`v48:293-295`).
+  - `confirmation_values_expired`: the record of one confirmation whose values route 7 removed. It names that confirmation, with `platform_admin` and no reason. Route 7 writes one per confirmation it removed; the last is the keyed request record of the operation (the `startAuditRows` pattern, `sourceMetricActivationSteps.js:192-200`). A replay counts the operation's rows by `operation_id`, so it answers the same `removed`. A run that removes nothing writes no row, and its replay runs the function again, which is harmless. The scheduled removal writes none.
+  - `confirmation_values_erased`: names the confirmation, with `platform_admin` and a fixed reason code as its reason (`erasure_request` or `wrong_confirmation`), never typed text.
+  - Each of the two comes at most once per confirmation: a unique index on `(confirmation_id, action)` for these two actions, as v48 has for activations (`v48:293-295`). A confirmation's values are removed once.
   - Only with Q2 a2 and Q3 b1: `source_metric_unit_observed` and `source_metric_meaning_observed`. They name T2a, T2b and the confirmation, with `platform_admin` and no `evidence_ref`.
 - **Replaced bodies,** each after its md5 check:
-  - the revision guard gains the new branches. Each row must follow its own T9 or T9i write in this transaction, by the acting user, once per confirmation and action. Route 7's row comes once per operation, after the removals it counts.
+  - the revision guard gains the new branches. Each row must follow its own T9 or T9i write in this transaction, by the acting user, once per confirmation and action. Route 7's rows come one per confirmation, each after that confirmation's removals; the keyed one is last.
   - v48's actor guard admits a `club_admin` basis on `mapping_confirmation` for the confirmation's club.
   - v48's insert guard admits a club-admin `mapping_confirmation` row that names a confirmation of the actor's club.
-- T8 keeps no value-bearing column (D10), and its `request_hash` covers no value (section 4.3 step 3).
+- T8 gains one typed foreign key, `confirmation_id`, and keeps no value-bearing column (D10 as extended, section 8.6). Its `request_hash` covers no value (section 4.3 step 3).
 
 ### 5.7 T2b — only if Q2 chooses a2 and Q3 chooses b1
 
@@ -658,13 +670,15 @@ There is no free text, and no athlete data.
 ### 5.8 Expiry, removal and erasure in the database
 
 - **Expiry.** No route returns a value after its `values_expire_at`, before any physical removal. This is the precedent of `raw_expires_at` (section 1.4).
-- **The scheduled removal** (recommended in Q6). A SQL function, `training_load.remove_expired_confirmation_values(p_limit)`, removes one bounded batch, as v32's purge of GPEXE names does (`v32:88, :325`).
-  - It sets a transaction-local purge marker. The T9i update guard accepts the marker in place of an actor, only for rows past their `values_expire_at`, and only to null the values and the salt and set `values_removed_kind = 'expired'` and `values_removed_at`. Those columns are the record, so it writes no T8 row, and `values_removed_by_user_id` stays null.
-  - It runs on its own 6-hour schedule, in a new module that `server.js` starts, outside `gpexeImportService.js`. It also runs once before every board or history read (routes 1, 4 and 5; route 10 with 18-P), as the identity reads purge first (`gpexeAthleteIdentityService.js:250`). Each run removes batches until none is left.
-  - While the server runs, a value stays physically stored in the live database at most 90 days plus 6 hours.
+- **The scheduled removal** (recommended in Q6). A SQL function, `training_load.remove_expired_confirmation_values(p_limit)`, removes one bounded batch of whole confirmations, as v32's purge of GPEXE names removes one batch (`v32:88, :325-340`).
+  - It takes at most `p_limit` confirmations past their `values_expire_at` that still hold values, `order by values_expire_at, id`, locking their T9 rows `for update skip locked`. Then it nulls all their checked T9i rows and returns their ids, never a value. A confirmation another transaction holds (route 6, or another run) is skipped and taken by a later run. `p_limit` counts confirmations.
+  - It sets a purge marker whose value is the id of this transaction (`'<xid>'`), compared with `pg_current_xact_id()` as v35 compares its actor setting (`v35:66-77`). It sets the marker itself and resets it before it returns, so a session-level or stale marker is refused. The T9i update guard accepts the marker in place of an actor, only for rows past their `values_expire_at`, and only to null the values and the salt and set `values_removed_kind = 'expired'` and `values_removed_at`. With no actor, those columns are the record, so it writes no T8 row, and `values_removed_by_user_id` stays null (the exemption of section 5.4).
+  - The scheduled run comes every 6 hours, from a new module that `server.js` starts, outside `gpexeImportService.js`. It calls the function batch after batch until none is left. Each call is its own short transaction, with `statement_timeout` and `lock_timeout` set.
+  - Before every board or history read (routes 1, 4 and 5; route 10 with 18-P), the read runs ONE batch in its own call, before its read transaction, as the identity reads purge first (`gpexeAthleteIdentityService.js:218-229, :250`). A read transaction is read-only (`sourceMetricMappingService.js:173`), so the batch cannot run inside it. Its failure is logged by code only and never fails the read: no route returns a value past its date anyway (Expiry, above).
+  - While the server runs, a value stays in the live table at most 90 days plus 6 hours. Dead row versions leave with vacuum.
   - The marker can only remove values already past their date, so it can only reduce data. Like the v35 actor setting, it is no defence against whoever holds the database credentials (`v35:42-46`).
-- **Route 7, the on-demand backstop.** An active platform admin runs the same function under their own identity, in one `runWrite`. The removed rows name that admin. The operation writes one keyed T8 `confirmation_values_expired` row, the last T8 row of the operation (the `startAuditRows` pattern, `sourceMetricActivationSteps.js:192-200`), naming the count. The deferred link of section 5.4 requires it.
-- **Erasure on request.** Route 6 removes the values earlier, with `values_removed_kind = 'erased'` and a T8 `confirmation_values_erased` row carrying its fixed reason code.
+- **Route 7, the on-demand backstop.** An active platform admin runs the same function under their own identity, in one `runWrite`. The removed rows name that admin. From the ids the function returns, the operation writes one T8 `confirmation_values_expired` row per confirmation it removed, each naming its confirmation; the last is keyed (the `startAuditRows` pattern, `sourceMetricActivationSteps.js:192-200`). A replay counts them by `operation_id`. A run that removes nothing writes no row: its replay runs the function again, which is harmless, and a lost answer of it can be `503 outcome_unknown`. The deferred link of section 5.4 requires each row.
+- **Erasure on request.** Route 6 removes the values earlier, with `values_removed_kind = 'erased'` and a T8 `confirmation_values_erased` row carrying its fixed reason code. It takes the confirmation's T9 row `FOR UPDATE` first, so it and the removal function never remove one confirmation at once.
   - It needs an active platform admin in the platform workspace. A platform admin who confirmed may erase too: erasure only reduces data, and the T8 row and its actor record who did it.
   - A confirmer or a club admin who is not a platform admin can never remove evidence.
 - **What survives.** The salted digest, the facts, who and when all stay. With the salt gone, the digest can no longer be tested against guessed values.
@@ -737,14 +751,15 @@ There is no free text, and no athlete data.
 | `team_mapping` (a club's save) | That club's active admins, in its workspace; platform admins, in the platform workspace (routes 4–5) or as the club's admin in its workspace | The identical 404 |
 | `field_observation` (the platform's global act) | Platform admins only, in the platform workspace (route 10). The values come from some club's session. | A club admin sees only "Confirmed by OptiMove on <date>" on the field |
 
-- A confirmation stays readable through routes 4–5 after its binding ended, while its team and club are active. Its values follow their own expiry.
+- **The predicate of routes 4–5**, and of route 3's replay and read-back (section 4.3 step 4): the confirmation's `owner_club_id` is the workspace's club, its team is active and currently in that club, and the club is active. Anything else is the identical 404. A platform admin in the platform workspace is unaffected.
+- So a confirmation stays readable after its binding ended. Once its team has moved to another club (possible after an Unbind; no route moves a team today), its old club reads the identical 404. Its values follow their own expiry.
 - The confirmer's user id is never returned.
 - Coaches, athletes, team workspaces and other clubs get no route.
 - Answers are `no-store`.
 
 ### 6.3 Expiry, removal and backups
 
-- **Expiry.** Values are kept for N days after the confirmation (Q6; 90 recommended, like an imported snapshot, `gpexeImportService.js:36`). After that, no read returns them, and the scheduled removal nulls them with no actor (section 5.8). While the server runs, a value stays in the live database at most 90 days plus 6 hours. Route 7 is the on-demand backstop.
+- **Expiry.** Values are kept for N days after the confirmation (Q6; 90 recommended, like an imported snapshot, `gpexeImportService.js:36`). After that, no read returns them, and the scheduled removal nulls them with no actor (section 5.8). While the server runs, a value stays in the live table at most 90 days plus 6 hours; dead row versions leave with vacuum. Route 7 is the on-demand backstop.
 - **Erasure on request.** An active platform admin, the confirmer included, can erase values earlier, with a fixed reason code (sections 5.6 and 5.8).
 - **What stays after removal.** The salted digest proved what was stored until the removal. With the salt gone, it cannot be tested against guessed values. The facts say who confirmed what.
 - **Backups.** A database backup keeps the values for the backup's own retention. Before a restored copy is used, its expired values are removed. This is the v32 precedent (the CURRENT_STATE risk "Backups can outlive the 14-day identity snapshot").
@@ -753,7 +768,7 @@ There is no free text, and no athlete data.
 
 - Names are shown live, only to the board's audience, which lies inside the identity audience of `gpexeAthleteIdentityService.js:138-149`. They come from an athlete link, or from a v32 GPEXE name that has not expired (`v32:88`).
 - The board needs a name, never a date of birth. It points to Link athletes. Loading GPEXE names, which also loads dates of birth, stays a separate, secondary step in Imports, outside the board.
-- The board reads names with one workspace resolution per request (section 4.2).
+- The board reads names with one workspace resolution per request, through its own reader of `display_name` only (section 4.2). It never reads a date of birth.
 - Names are never stored, logged, or returned anywhere else.
 - History shows *Athlete A* and *Athlete B*.
 
@@ -779,7 +794,7 @@ There is no free text, and no athlete data.
 - the version is an active system version, so its revision is verified;
 - its field has an extractor for the binding's family, and a value in the board's session;
 - the team has no open activation of the same field and parameters, and none of the same variable and level (`sourceMetricActivationSteps.js:42-47`);
-- under Q9's recommendation, the mapping has no ended activation on this binding. Such a mapping reads "Switched off on <date> · *Add*" and is placed only on *Add*.
+- under Q9's recommendation, the mapping was not switched off on this binding by an administrator. That is an activation on this binding ended with `end_reason = 'admin_ended'` (`v34:1317-1319`): a *Switch off* (S2, `sourceMetricActivationService.js:193-194`) or a replacement on the board (section 4.3 step 16.2). A version-driven end does not count: A2, the pinned step and a G1 replacement end with `mapping_version_disabled` or `mapping_version_replaced` (`sourceMetricMappingService.js:1465, :1555`; `sourceRevisionLifecycleService.js:245`). Such a mapping reads "Switched off by <name> on <date> · *Add*" and is placed only on *Add*.
 
 **How they are switched on:**
 - The board shows every eligible system mapping already placed, with the badge *OptiMove mapping*.
@@ -793,7 +808,7 @@ There is no free text, and no athlete data.
 
 **Teams bound later, and new system versions:**
 - A team bound later sees its pre-placed rows on its board at its first stored session. Nothing is switched on for it until an admin presses the button.
-- When the platform activates a new system mapping, it appears pre-placed, as *New from OptiMove*, the next time a club opens a board.
+- When the platform activates a new system mapping, it appears pre-placed, as *New from OptiMove*, the next time a club opens a board. A newer version of a mapping switched off on this binding by an administrator follows Q9's answer.
 - When the platform replaces a system version, its own A1 replacement keeps teams on the new version (J16 R7). No version is replaced automatically (C104 Q3).
 
 **Kept:** C8 (an explicit act, per binding), C33's "none is activated automatically", D6, and section G's "never a future binding". In substance, every row is explicit and audited.
@@ -869,9 +884,10 @@ There is no free text, and no athlete data.
 | C61, D4 | Kept. A club uses a system variable only through the system mapping. |
 | C108 (7h) | A dependency, and amended. J18's gate adds a database condition to a club admin's activation of a club version of a field without parameters, which a club admin then activates only through the board (section 5.5, Q13). Zone and threshold versions keep 7h's J16 path. |
 | C109 (7i) and OD7 (b) | Form (a)'s switch-on is done by pre-placed rows. Hiding stays 7i. Amended for form (b), the copy (`discovery:1188-1193`): the J18 gate refuses the activation of a copied club version of a field without parameters until Q14 → C125 is decided. Under its option one, J15 adds the typed copy proof in its own migration (section 5.5). |
-| C74–C79 (v35: one acting user per write) | Kept for every write but one: the scheduled removal of expired evidence values runs with no actor, as v32's purge of GPEXE names does (`v32:325`). It can only null values past their date (section 5.8). |
-| C9, C13, C16, C22, C34, C55, C57, C58, C63, C76, D10 | Kept |
+| C74–C79 (v35: one acting user per write) | Kept for every write but one: the scheduled removal of expired evidence values runs with no actor, as v32's purge of GPEXE names does (`v32:325`). It can only null values past their date (section 5.8; Q6 → C118). |
+| C9, C13, C16, C22, C34, C55, C57, C58, C63, C76 | Kept |
 | The plan's order (`metrics-core-plan.md:1062-1074`) | 7h stays right after phase 9. J18 comes next, then the rest of 7i (Q10, on the owner's direct word). |
+| D10 (T8's closed column set, `discovery:1749-1768`) | Extended by one typed column, `confirmation_id`, a foreign key to T9 (section 5.6). No value-bearing column is added. |
 
 ---
 
@@ -879,42 +895,45 @@ There is no free text, and no athlete data.
 
 ### 9.1 The database (disposable `optimove_tests_*`, the T1 runner)
 
-1. **Every CHECK of T9, T9s and T9i (each value-free), and every value rule of their BEFORE triggers (fixed messages):**
+1. **Every rule of T9, T9s and T9i.** A rule that can fail on a row holding values is refused first by its BEFORE trigger, with a fixed message; the table CHECK behind it is a backstop:
    - the kind and owner pairs;
    - the binding pair;
    - the session counts;
    - the nullable foreign keys by kind;
-   - raw values non-zero and different on a checked row, stored values D8 of the raw ones on a checked mapping row, and no values, salt, display rule or unit on a row with `checked = false`. A failing value rule's message, and the server log, carry no value;
+   - raw values non-zero and different on a checked row, stored values D8 of the raw ones on a checked mapping row, and no values, salt, display rule or unit on a row with `checked = false`;
    - the removal facts;
    - the display rule format, and the display unit within its rule's list;
-   - `compared_level` is `session`.
+   - `compared_level` is `session`;
+   - each rule that can fail on a row holding values is provoked with a planted number in the values. The answer is the trigger's fixed message, and neither the message nor the server log carries the number. Each backstop CHECK is also proven on its own, with its BEFORE trigger disabled on the disposable database.
 2. **The actor guard:**
    - another actor is refused with `42501`;
    - a basis that does not match is refused;
    - a club admin of another club is refused;
    - a write in a savepoint is refused;
    - a club admin writing a `field_observation` is refused.
-3. **The binding's club, connection, team and check facts.** Each wrong fact is refused with `23514`: a candidate of another team, a `last_seen_check_id` other than the row's check, another bundle hash, and a check through another binding included. The guards take no lock on the connection, binding, check or candidate.
+3. **The binding's club, connection, team and check facts.** Each wrong fact is refused with `23514`: a candidate of another team, a `last_seen_check_id` other than the row's check, another bundle hash, a superseded candidate, and a check through another binding included. The guards take no lock on the connection, binding, check or candidate.
 4. **Each row against T4 and T2b.**
    - A wrong revision, fingerprint, unit or factor is refused.
    - A stored value that is not D8 of its raw value is refused.
    - A salt or digest the writer supplies is overwritten. Two rows with the same values get different salts and digests.
 5. **Append-only behaviour.**
    - Any change of a fact is refused. DELETE and TRUNCATE are refused.
-   - The expiry removal is refused before the date, without the purge marker, and for any column but the values, the salt and the removal facts. Under the marker with no actor, it writes no T8 row and leaves `values_removed_by_user_id` null. With an actor, that actor must be an active platform admin.
-   - The erasure is refused for a club admin who is not a platform admin, without an actor, and without its T8 row. An active platform admin who is the confirmer may erase.
+   - The expiry removal is refused before the date, without the purge marker, with a session-level or stale marker (another transaction's id), and for any column but the values, the salt and the removal facts. Under the marker with no actor, it writes no T8 row and leaves `values_removed_by_user_id` null. With an actor, that actor must be an active platform admin.
+   - A present but invalid actor setting (not canonical, or of another transaction) is `42501`, never "no actor". A `values_removed_by_user_id` the writer supplies is overwritten with the actor, or with null when there is none.
+   - The erasure is refused for a club admin who is not a platform admin, and without an actor. An active platform admin who is the confirmer may erase.
 6. **The deferred links.**
    - A confirmation without its keyed T8 row fails at COMMIT.
    - A `team_mapping` act with no rows fails.
    - A row whose version has no open activation started in the same transaction fails.
    - A mismatch between `attested` and `checked` fails.
-   - A removal by an actor without its T8 row fails at COMMIT: an erasure without its `confirmation_values_erased` row, or a route 7 removal without its `confirmation_values_expired` row or with a wrong `removed_count`. A second `confirmation_values_erased` row for one confirmation is refused.
+   - A removal by an actor without its T8 row fails at COMMIT: an erasure without its `confirmation_values_erased` row, or a route 7 removal without the `confirmation_values_expired` row of its confirmation. It fails the same way when the writer supplies a null `values_removed_by_user_id`: an erasure, and an expired removal with an actor. A T8 row of another user or another transaction does not count. The scheduled removal, with no actor, commits with no T8 row. A second `confirmation_values_erased` or `confirmation_values_expired` row for one confirmation is refused.
+   - The first four deferred checks fire on INSERT only: a removal on a confirmation of an earlier transaction commits with its T8 row.
 7. **The gate.**
    - A club-admin activation fails without its row, and with a row of another version (another version of the same mapping included), another club, another transaction or `checked = false`.
    - A platform admin's A1 is unaffected.
    - A club admin's activation of a zone or threshold version is not gated. A club admin's A1 of a version without parameters is refused (Q13). A club admin's activation of a 7i copy, which has no T9i row, is refused until J15's proof exists (Q14).
 8. **T8.**
-   - The new actions' shapes and the `confirmation_id` and `removed_count` CHECKs are enforced. `confirmation_values_erased` takes only its two reason codes, never typed text. A board's `activation_end` row without its reason is refused (`v50:304-306`).
+   - The new actions' shapes and the `confirmation_id` CHECK are enforced. `confirmation_values_erased` takes only its two reason codes, never typed text. A board's `activation_end` row without its reason is refused (`v50:304-306`).
    - The md5 check refuses a different body in force.
    - Every existing branch is unchanged: a byte comparison of each replaced body's untouched part, as v50 did.
 9. **T2b, only if Q2 and Q3 choose it.**
@@ -935,12 +954,13 @@ There is no free text, and no athlete data.
 12. **The board:**
     - proven against expected units; "GPEXE sends values in" never shown for an unproven unit;
     - every reason a column cannot be placed;
-    - pre-placed rows;
+    - pre-placed rows. A system mapping switched off on the binding by S2 or by a board replacement is not pre-placed and reads *Switched off by <name> on <date> · Add*. One whose activation ended by A2 or the pinned step is pre-placed again once a newer version is active;
     - the pair is the same on two calls;
     - named athletes come first; with fewer than two, the refusal of R6 (or its distance option, if chosen);
     - `not_enough_athletes`, `snapshot_expired`, `candidate_too_large`, `candidate_source_mismatch`, `no_stored_session`;
     - a session whose last check ran through another binding is never used;
-    - a scan that no answer or URL carries an athlete id.
+    - a scan that no answer or URL carries an athlete id;
+    - no board or save query reads `birth_date`, and the board never calls `listIdentities` (a query spy).
 13. **A placement:**
     - the proposal is the one active conversion; no active row gives `conversion_unavailable`;
     - the mismatch sentence;
@@ -953,7 +973,7 @@ There is no free text, and no athlete data.
     - First, the one-transaction test with every guard on. If it fails, R8's fallback is used.
     - Replay, `request_key_reused`, and `board_changed` when the snapshot, a value or a row's display unit changed. `mapping_version_active` when the mapping's active version differs, factors included.
     - The request hash is the same for two bodies that differ only in `placementHash`, and T8's `request_hash` depends on no value. A new row without `checked: true` is `400 invalid_body`.
-    - A replay, a verified COMMIT and a read-back after an Unbind, a team archive or a workspace switch answer the identical 404. A right revoked under a v52 guard answers the 404, never a 500.
+    - A replay, a verified COMMIT and a read-back after a team archive, a club archive, a move of the team to another club or a workspace switch answer the identical 404. After an Unbind between the COMMIT and the read-back, the read-back answers `200`, and a replay answers `200` with `replayed: true`, never a 404. A right revoked under a v52 guard answers the 404, never a 500.
     - The seven COMMIT-outcome tests of `gpexe-in-app-import.test.mjs`, in that pattern: verified and unknown outcomes, and a definite refusal at the COMMIT (a deferred J18 link failing), answered as a refusal with nothing written, never `outcome_unknown`.
     - The keyed row is last. The starts carry their fixed reasons (a new row's, a pre-placed row's) and explicit requirements, and the ends carry theirs. A pre-placed row stores no values. Replacements end exactly the listed activations.
     - Run against a 9-B fixture: the importer reads the new activations.
@@ -964,11 +984,11 @@ There is no free text, and no athlete data.
     - route 10 answers only a platform admin in the platform workspace (18-P);
     - the confirmer's id is never returned;
     - values are hidden after expiry, before any removal;
-    - a confirmation on an ended binding stays readable by the club's admins while its team and club are active.
+    - a confirmation on an ended binding stays readable by the club's admins while its team is active and in the club, and the club is active. After an Unbind and a move of the team to another club, the old club's admin reads the identical 404 on routes 4–5, and a platform admin in the platform workspace still reads it.
 17. **Removal:**
-    - the scheduled removal runs with no actor, only on rows past their date, and nulls only the values and the salt; the board and history reads run it first;
+    - the scheduled removal runs with no actor, only on rows past their date, and nulls only the values and the salt; the board and history reads run one batch first, in its own call, and its failure never fails the read; the scheduled run loops batches, each its own short transaction;
     - route 6 works only for an active platform admin in the platform workspace, the confirmer included, and only with one of its two reason codes;
-    - route 7 works only for a platform admin, and writes one keyed T8 row naming the count, as the last T8 row of its operation;
+    - route 7 works only for a platform admin. It writes one T8 row per confirmation it removed, the last one keyed, and a replay answers the same count. A run that removes nothing writes no row;
     - the T8 rows are written;
     - the digest is kept, and the salt is removed.
 
@@ -979,15 +999,16 @@ There is no free text, and no athlete data.
     - against S1 and S2 on the same binding;
     - against an Unbind (`try_again` within 2 s);
     - against a 9-B approval and a check-time preview of the same team;
-    - against a new version of the target (`canonical_version_changed` or `variable_pinned`);
+    - against a new version of the target (`canonical_version_changed` or `variable_pinned`), and against its archive (`canonical_version_changed` or `archive_pinned`);
     - against a club archive and a team archive;
     - two admins saving the same placement;
     - against the revision lifecycle's pinned step;
     - against a conversion retirement;
     - against a 7g end attempt (refused while the binding is active);
     - against a role revocation;
-    - against a check finalization between steps 5 and 16.3 (`board_changed`, nothing written);
-    - two saves with crossed rows, a new row on one mapping and a pre-placed row on another and the reverse: no deadlock.
+    - against a check finalization between steps 5 and 16.3 that sees the session again, replaces it or withdraws it (`board_changed`, nothing written);
+    - two saves with crossed rows, a new row on one mapping and a pre-placed row on another and the reverse: no deadlock;
+    - the scheduled removal against route 6 and route 7 on the same confirmations: each confirmation's values are removed once, with no deadlock.
 
 ### 9.4 Frontend and browser
 
@@ -995,11 +1016,11 @@ There is no free text, and no athlete data.
     - tap-then-tap with `aria-pressed`; Enter, Space and Escape;
     - drag only with a fine pointer and hover; on touch, no `draggable` attribute and no grip;
     - the phone sheet;
-    - each new row's tick: given only while its values are on screen, cleared when the row, the pair or the session changes; the button enabled only when every new row is ticked;
-    - the review card: every new row with its two athletes' values and its tick, and the pre-placed rows in their own group;
+    - each new row's tick: given only while its values are on screen, kept when the panel closes, cleared when the row, the pair or the session changes or a `board_changed` answer names the row (*Compare again*); an unticked kept row reads *Not compared yet · Compare*; the board's button opens the review card whenever there is a row; the review card's send is enabled only when every new row is ticked, and its disabled text names the unticked columns;
+    - the review card: every new row with its two athletes' values and its tick, *Compare* on an unticked row opening its panel, and the pre-placed rows in their own group;
     - *Remove* on a new placement, moving a placed column, and the replace question;
     - changing the athletes or the session: the question, every tick cleared, *Compare again*;
-    - the leave guard with unsaved placements, a save in flight and an unconfirmed result;
+    - the leave guard: N counts only the admin's own changes, untouched pre-placed rows never ask, going back to *Which team?* asks too, and placements never move to another team; and with a save in flight and an unconfirmed result;
     - *Which team?* from Data configuration, and its sentence with no linked team;
     - one sheet at a time on a phone, with *Keep this placement*, *Cancel* and *Back*;
     - the tap texts without a fine pointer, and focus on the first usable variable after a column is chosen;
@@ -1010,7 +1031,8 @@ There is no free text, and no athlete data.
     - hostile labels;
     - removing a pre-placed row;
     - the requirement toggle on every row;
-    - the review card's text.
+    - the review card's text;
+    - the after-save link to Imports, which pre-fills a window that includes the session's date.
 20. **Browser QA** at 1280, 360, 375 and 390 px.
 21. **An integration run on a disposable database with the real routes:** create a club variable, place three columns, tick each, save, read the evidence, switch one off, replay, and let one value expire and be removed by the scheduled run. This is the answer to trigger 5.
 22. **The production build** (`npm --prefix frontend run build`).
@@ -1021,16 +1043,19 @@ Each new guard has a mutation that the suite kills:
 - every CHECK;
 - every trigger condition;
 - the gate and its `parameter_kind = 'none'` condition;
-- the expiry and erasure conditions, and the purge marker's;
+- the expiry and erasure conditions, the purge marker's and its binding to the transaction, the one exemption predicate, and the overwrite of `values_removed_by_user_id`;
 - the salt, and the request hash's field list;
 - the per-row tick, on the client and on the server;
-- the replay scope and the candidate's re-read;
+- the replay scope (with no binding condition) and the candidate's re-read (its status included);
 - each new T8 branch;
 - the audience predicate;
 - the recompute comparison;
 - the pair's distinctness;
 - the limits block;
-- the hiding of `field_observation` values from a club admin.
+- the hiding of `field_observation` values from a club admin;
+- the predicate of routes 4–5;
+- Q9's `end_reason` condition;
+- the name reader's column list.
 
 ### 9.6 Tiers
 
@@ -1099,7 +1124,7 @@ Each new guard has a mutation that the suite kills:
 
 | Option | What it means | Cost |
 |---|---|---|
-| **d1 (recommended)** | The new append-only T9, T9s and T9i (section 5), written in the save's transaction. Exact values sit in a separable column set with a salted database digest. No athlete identity is stored. Values are removed N days after the confirmation by a scheduled purge with no actor, as v32 removes GPEXE names, or erased earlier on request. Readers are as in section 6.2. | A new copy of personal performance data. They are the same athletes' GPS values that OptiMove imports. It needs guards, tests, and backup handling. While the server runs, a value stays in the live database at most N days plus 6 hours. Backups keep it for their own retention, and the removal runs before a restored copy is used. |
+| **d1 (recommended)** | The new append-only T9, T9s and T9i (section 5), written in the save's transaction. Exact values sit in a separable column set with a salted database digest. No athlete identity is stored. Values are removed N days after the confirmation by a scheduled purge with no actor, as v32 removes GPEXE names, or erased earlier on request. Readers are as in section 6.2. | A new copy of personal performance data. They are the same athletes' GPS values that OptiMove imports. It needs guards, tests, and backup handling. While the server runs, a value stays in the live table at most N days plus 6 hours; dead row versions leave with vacuum. Backups keep it for their own retention, and the removal runs before a restored copy is used. |
 | d2 | Values in a `docs/` document, as for C97 | A pull request per confirmation, and athletes' values in the repository. Not possible. |
 | d3 | Values in T8 | D10 refuses it: T8 has no value column, and its rows cannot be erased (`discovery:1763-1768`). |
 | d4 | Only a digest, no values | Nothing readable is kept. "Ove dve vrednosti" is what the owner's sketch asked to keep. |
@@ -1121,13 +1146,13 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
 - **Q5 → C117. (c), for a club:** one stored session, two athletes, the same pair for all rows, chosen by the server, values non-zero and different. Recommended.
 - **Q6 → C118. (d) and its bounds:**
   - d1, with N days. Recommended: 90.
-  - Recommended: a scheduled removal of expired values with no actor, as v32 removes GPEXE names (`v32:88, :325`). It nulls the values and the salt of rows past their date and records the removal on the row. Those columns are the record, so it writes no T8 row. It runs every 6 hours in its own module, outside `gpexeImportService.js`, and before every board or history read. While the server runs, a value stays in the live database at most 90 days plus 6 hours. Route 7 stays as an on-demand backstop by an active platform admin, with one keyed T8 row naming the count (section 5.8).
+  - Recommended: a scheduled removal of expired values with no actor, as v32 removes GPEXE names (`v32:88, :325`). It nulls the values and the salt of rows past their date and records the removal on the row. Those columns are the record, so it writes no T8 row. It runs every 6 hours in its own module, outside `gpexeImportService.js`, batch after batch, and one batch before every board or history read. While the server runs, a value stays in the live table at most 90 days plus 6 hours; dead row versions leave with vacuum. Route 7 stays as an on-demand backstop by an active platform admin, with one T8 row per confirmation it removed, the last one keyed (section 5.8).
   - The alternative: removal only by a platform admin's audited act (route 7). It keeps "every removal has an actor and a T8 row", but expired values stay stored, hidden, until a platform admin acts, with no time limit.
   - Erasure by an active platform admin in the platform workspace, the confirmer included, with a fixed reason code (`erasure_request` or `wrong_confirmation`), never typed text.
   - Backups keep values for their own retention. The removal runs before a restored copy is used (the v32 rule).
 - **Q7 → C119. The two-athlete values** as a scoped exception to C28, J11's OD2 and OD3, and J16 sections 7 and 9. It covers (a) the board, routes 1–3, for the club's admins and a platform admin in that club's workspace; (b) the stored values in the history, routes 4–5, for the same audience and for an active platform admin in the platform workspace; and (c) with 18-P, route 10, for the platform workspace. Recommended.
 - **Q8 → C120. The requirement on the board:** a visible per-row toggle, prefilled *Required* (the owner's pilot choice), explicit in every saved row. The database keeps no default, so C23 stays there. Alternative: no prefill, one tap per row. Recommended: the prefill.
-- **Q9 → C121. What "automatic" switch-on means:** pre-placed and switched on by the same click, under the admin's identity. No background job, no system actor, never a future binding. Recommended, with one rule: a system mapping that has an ended activation on this binding is not placed again. It is shown as "Switched off on <date> · *Add*", so a save made for another column never switches it back on. A truly unattended form needs its own decision (section 7).
+- **Q9 → C121. What "automatic" switch-on means:** pre-placed and switched on by the same click, under the admin's identity. No background job, no system actor, never a future binding. Recommended, with one rule: a system mapping switched off on this binding by an administrator is not placed again. That is a *Switch off* (S2) or a replacement on the board (`end_reason = 'admin_ended'`). A version-driven end (A2, the pinned step, a G1 replacement) does not count. Such a mapping is shown as "Switched off by <name> on <date> · *Add*", so a save made for another column never switches it back on. The owner also decides whether a newer OptiMove version of a mapping switched off this way is offered again as *New from OptiMove*, or stays "Switched off … · *Add*" (section 7). A truly unattended form needs its own decision (section 7).
 - **Q10 → C122. Order, start and mark.**
   - The order: 7h (J14) right after phase 9 as the plan says, then J18, then the rest of 7i.
   - "Phase 9 ends" means 9-B is merged and deployed and M6 is closed (step 16 passed, the freeze ended).
@@ -1173,8 +1198,8 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
 - **The one-transaction save is designed against the guards, not proven.** The test comes first, and R8 is the fallback.
 - **Each user's GPEXE display units differ** (page 11). The third column follows the unit the admin chooses. A wrong choice makes the admin refuse to confirm, which is the safe direction.
 - **Only the session level is checked.** Drill values use the same extractor but are not compared. The session-level comparison is taken as the evidence for the version's drill level too (R9).
-- **A second copy of personal data.** It is bounded: while the server runs, values are removed at most 90 days plus 6 hours after the confirmation, or earlier on request, and a removed value cannot be recovered from the salted digest. Backups keep values for their own retention (section 6.3).
-- **A removal with no actor.** The scheduled removal runs under a purge marker, not a user. It can only null values past their date, so it can only reduce data. Like the v35 actor setting, the marker is no defence against whoever holds the database credentials (`v35:42-46`).
+- **A second copy of personal data.** It is bounded: while the server runs, values are removed from the live table at most 90 days plus 6 hours after the confirmation (dead row versions leave with vacuum), or earlier on request, and a removed value cannot be recovered from the salted digest. Backups keep values for their own retention (section 6.3).
+- **A removal with no actor.** The scheduled removal runs under a purge marker, not a user. The marker is bound to its transaction and set only inside the removal function. It can only null values past their date, so it can only reduce data. Like the v35 actor setting, the marker is no defence against whoever holds the database credentials (`v35:42-46`).
 - **Clubs may wait for the platform.** A new field waits for one platform act. That is the honest limit of "no hassle" under b1.
 - **Dependencies:** 7h, O16 and 9-B; Q14 for 7i's copy; the M6 freeze; a plan order that needs the owner's direct word.
 - **T5 collisions** between system and club mappings on one team. The board shows them before saving.
