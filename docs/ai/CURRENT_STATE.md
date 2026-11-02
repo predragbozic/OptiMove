@@ -47,7 +47,8 @@ of `0117912` and `e6ca433` were added at `e6ca433` (merge of PR #303), with the 
 at `5a2b39d` (merge of PR #305), with the gpexe baseline reproduction on `04fc170`; nothing else was re-derived then.
 PR #307 (those facts), the contract of the minimal phase 8 (J16, PR #308) and phase 8's 8-B, the Mappings screen (PR
 #309), with the deploy of `a0b4436`, were added at `a0b4436` (merge of PR #309), with the frontend baseline reproduction
-on `f8ebb28`; nothing else was re-derived then.
+on `f8ebb28`; nothing else was re-derived then. The central calendar entries (K1a to K2b-1a, and K2b-1b) were added
+on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothing else was re-derived then.
 
 ## Active phase
 
@@ -89,6 +90,29 @@ Where it stands after the pilot (owner-run orders, main session in the pilot acc
 - Test data left on the pilot account for the owner to delete: the exercises
   `cb99c1d2-f902-4a17-8a20-3d9becf9ddcd` and `8cac8fca-7cd4-4fb9-8514-30ff2d7d18fe` and the unassigned
   draft "R2 pilot test program" `430ea51d-e39a-4743-aafa-0fe23f929895`.
+
+**The central calendar** (another track, its own stream manager; plans `docs/ai/central-calendar-k0-discovery.md`,
+`central-calendar-k1-plan.md`, `central-calendar-k1b-plan.md`, `central-calendar-k2a-plan.md`,
+`central-calendar-k2a-2-plan.md`, `central-calendar-k2b-plan.md`). The merge commits are in the repository; the
+deploys and post-checks without a record in this file are as the stream manager reported them:
+- **K1a**, the read API (PR #281): merge `fb33918` (2026-10-30 15:08 UTC); deployed with `fb33918e` (see "Implemented ≠
+  deployed").
+- **K1b**, the read-only screen (PR #292): merge `aa84d57` (2026-10-30 18:02 UTC); live in `aa84d574` by 18:18 UTC.
+- **The icon view switches** (PR #294): merge `6a94ce2` (2026-10-30 18:32 UTC); deployed with `e915a5b`, per the
+  stream manager.
+- **K2a-1a**, events and migration v49 (PR #298): merge `0117912` (2026-10-31 00:22 UTC); deployed; **v49 directly
+  confirmed** by its read-only post-check (the 7e-B entry of the active phase).
+- **K2a-2** (PR #306): merge `2dd0dbd` (2026-11-01 16:31 UTC); deployed 2026-11-01, per the stream manager.
+- **K2a-1b**, an event's links to sessions and activities (PR #313): merge `17dc46d` (2026-11-01 20:14 UTC); no
+  migration; deployed 2026-11-01, per the stream manager.
+- **K2b-1a**, Settings → Calendar and migration v51 (PR #325): merge `a01a116` (2026-11-02 08:44 UTC); deployed
+  2026-11-02 and **v51 directly confirmed** by its read-only post-check, per the stream manager. Runbook
+  `docs/runbooks/calendar-settings-v51.md`.
+- **K2b-1b**, the events use the club's places, details and values (plan section 18; no migration): the pull request
+  that adds this record, open. D41 holds on every read: a place, a detail or a value of another club (a team that
+  moved) is never shown; club B's next edit detaches club A's choices and clears its place (finding 6, option A).
+- Next by the plan: K2b-1c and K2b-1d (the Settings screen and the event form), then K2b-2 (athlete questions through
+  the Tests module, D40).
 
 The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 
