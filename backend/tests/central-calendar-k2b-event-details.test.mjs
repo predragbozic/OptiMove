@@ -167,7 +167,14 @@ test("2. create: no fieldIds copies the type's live default details in their ord
   // A body without the new keys keeps K2a's canonical body, so its request
   // hash is unchanged and a create retried across the deploy replays.
   const k2aCanonical = eventService.validateCreateBody({ requestKey: newKey(), timezone: TZ, day: FUTURE, ...base }).canonical;
-  assert.equal("locationId" in k2aCanonical || "fieldIds" in k2aCanonical, false);
+  assert.deepEqual(Object.keys(k2aCanonical), ["operation", "eventTypeId", "title", "day", "endDay", "startTime", "endTime", "timezone", "location",
+    "expects", "notes", "targets", "externalScheduleId", "testScheduleId"], "K2a's keys, in K2a's order");
+  assert.deepEqual(k2aCanonical, {
+    operation: "create", eventTypeId: match.id, title: "Match", day: FUTURE, endDay: null, startTime: null, endTime: null, timezone: TZ,
+    location: null, expects: null, notes: null, targets: k2aCanonical.targets, externalScheduleId: null, testScheduleId: null,
+  });
+  assert.equal("locationId" in eventService.validateCreateBody({ requestKey: newKey(), timezone: TZ, day: FUTURE, ...base, locationId: null }).canonical, false,
+    "an explicit null place is no key either");
   const byDefault = await createEvent(a.admin.cookie, base);
   assert.equal(byDefault.status, 201, byDefault.text);
   assert.deepEqual(byDefault.body.event.fields.map((f) => f.fieldId), liveDefaults, "the type's live defaults, in order");
@@ -347,6 +354,11 @@ test("4. values: each kind by its rule, a hidden option kept but never newly cho
   assert.deepEqual([valueOf(event, text.id), valueOf(event, yes.id)], [null, false]);
   assert.deepEqual((await q(`select num_nonnulls(option_id, number_value, scale_value, bool_value, text_value) as n from calendar.event_field_values where event_id = $1 and field_id = $2`, [event.id, text.id]))[0], { n: 0 });
   assert.deepEqual((await changesOf(event.id)).at(-1).details.cleared, [text.id]);
+  res = await setValues(a.admin.cookie, event, [{ fieldId: other.id, value: null }]);
+  assert.equal(res.status, 200, res.text);
+  event = res.body.event;
+  assert.deepEqual((await changesOf(event.id)).at(-1).details.cleared, [], "a detail without a value is not named as cleared");
+  assert.equal((await q(`select count(*)::int as n from calendar.event_field_values where event_id = $1 and field_id = $2`, [event.id, other.id]))[0].n, 0);
 
   // A detail not chosen on the event, a detail of another club, an unknown id: the one 400.
   const b = await freshClub("values other");
@@ -372,7 +384,7 @@ test("4. values: each kind by its rule, a hidden option kept but never newly cho
   const replay = await api(`/api/calendar/events/${event.id}/fields`, { method: "POST", cookie: a.admin.cookie, body });
   assert.equal(replay.status, 200, replay.text);
   assert.equal(replay.body.event.revision, first.body.event.revision);
-  assert.equal((await q(`select count(*)::int as n from calendar.event_changes where event_id = $1 and kind = 'set_fields'`, [event.id]))[0].n, 5, "the replay wrote nothing");
+  assert.equal((await q(`select count(*)::int as n from calendar.event_changes where event_id = $1 and kind = 'set_fields'`, [event.id]))[0].n, 6, "the replay wrote nothing");
   const reused = await api(`/api/calendar/events/${event.id}/fields`, { method: "POST", cookie: a.admin.cookie, body: { ...body, values: [{ fieldId: number.id, value: 41 }] } });
   assert.deepEqual([reused.status, reused.body.error], [409, "request_key_reused"]);
   event = first.body.event;
@@ -565,10 +577,19 @@ test("8. D41 and finding 6: after a team moves, club B sees nothing of club A's 
   assert.deepEqual([backA.status, backA.body.error], [400, "location_not_available"]);
   assert.equal((await q(`select count(*)::int as n from calendar.event_selected_fields where event_id = $1`, [event.id]))[0].n, 2, "a refused edit detaches nothing");
 
+  // A refusal's `current` shows nothing of A either (and detaches nothing).
+  const stale = await patchEvent(b.admin.cookie, { ...event, revision: event.revision - 1 }, { title: "Stale" });
+  assert.deepEqual([stale.status, stale.body.error], [409, "event_changed"]);
+  clean(stale.text, "a 409's current");
+
   // B's next edit, whatever it changes (T8): detached and cleared, audited by flags only.
-  const edit = await patchEvent(b.admin.cookie, event, { title: "Renamed by B" });
+  const editBody = { requestKey: newKey(), expectedRevision: event.revision, title: "Renamed by B" };
+  const edit = await api(`/api/calendar/events/${event.id}`, { method: "PATCH", cookie: b.admin.cookie, body: editBody });
   assert.equal(edit.status, 200, edit.text);
   clean(edit.text, "the edit's answer");
+  const editReplay = await api(`/api/calendar/events/${event.id}`, { method: "PATCH", cookie: b.admin.cookie, body: editBody });
+  assert.equal(editReplay.status, 200, editReplay.text);
+  clean(editReplay.text, "the edit's replay");
   assert.deepEqual((await q(`select location_id from calendar.events where id = $1`, [event.id]))[0], { location_id: null });
   assert.equal((await q(`select count(*)::int as n from calendar.event_selected_fields where event_id = $1`, [event.id]))[0].n, 0);
   assert.equal((await q(`select count(*)::int as n from calendar.event_field_values where event_id = $1`, [event.id]))[0].n, 1, "A's value is never deleted");
@@ -596,6 +617,9 @@ test("8. D41 and finding 6: after a team moves, club B sees nothing of club A's 
   const cancelledView = await getEvent(b.admin.cookie, gone.id);
   assert.deepEqual([cancelledView.body.event.place, cancelledView.body.event.fields], [null, []]);
   clean(cancelledView.text, "the cancelled event");
+  const onCancelled = await patchEvent(b.admin.cookie, { ...gone, revision: gone.revision + 1 }, { title: "Too late" });
+  assert.deepEqual([onCancelled.status, onCancelled.body.error], [409, "event_cancelled"]);
+  clean(onCancelled.text, "the cancelled event's 409");
   assert.equal((await q(`select count(*)::int as n from calendar.event_selected_fields where event_id = $1`, [gone.id]))[0].n, 2);
 });
 
@@ -643,6 +667,22 @@ test("9. races: a value against a detail's edit in both orders, a place archived
   assert.equal((await archiving).status, 200);
   const placeRes = await setting;
   assert.deepEqual([placeRes.status, placeRes.body.error], [400, "location_not_available"], placeRes.text);
+
+  // A default detail archived while a create copies the type's list: the
+  // create waits and leaves it out (never a 500).
+  const cat = await catalog(a.admin.cookie);
+  const match = typeOf(cat, "match");
+  const firstDefault = cat.fields.find((f) => f.id === match.fieldIds[0]);
+  gate = pause(hooks, "beforeCommit", "field_archive");
+  const archivingDetail = send(a.admin.cookie, "POST", `/fields/${firstDefault.id}/archive`, { expectedRevision: firstDefault.revision });
+  await gate.arrived;
+  const creating = createEvent(a.admin.cookie, { eventTypeId: match.id, title: "Defaults race", targets: [{ kind: "club", id: a.clubId }] });
+  await waitForLockWait();
+  gate.release();
+  assert.equal((await archivingDetail).status, 200);
+  const created = await creating;
+  assert.equal(created.status, 201, created.text);
+  assert.deepEqual(created.body.event.fields.map((f) => f.fieldId), match.fieldIds.slice(1), "the archived default left out, the order kept");
 
   // The same key twice at once: one write and one replay.
   const body = { requestKey: newKey(), expectedRevision: event.revision, values: [{ fieldId: wind.id, value: 6 }] };

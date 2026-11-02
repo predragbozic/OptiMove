@@ -795,6 +795,12 @@ prove marked "per the stream manager").
 - **The athlete and a moved team:** only a team without memberships can move (a membership's `(team, club)` key and its
   immutability), so no athlete reads a moved team's events today; the athlete's card takes the place from the coach
   card's statement, under the same predicate.
+- **The edit's change row** carries the one-off text before / after under `location` (as K2a did), `locationId` before /
+  after (only a place the event shows, so only of the club now), `fieldIdsBefore` / `fieldIdsAfter` and the flags
+  `foreignFieldsDetached` / `foreignPlaceCleared` — not the `locationTextChanged` 18.2 named. The values command's
+  `cleared` names only a detail whose value it cleared.
+- **The type's default details** are read `FOR SHARE` in ascending id at create: a default archived meanwhile is waited
+  for and left out.
 - **Tests:** `backend/tests/central-calendar-k2b-event-details.test.mjs` (18.6, items 1–7 and 9; the regression of
   item 8 is the four earlier calendar suites, where the athlete's allowlist gained `place` and the settings suite's
   helper event chooses no details so its raw writes choose them).

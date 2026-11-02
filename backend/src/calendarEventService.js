@@ -898,7 +898,7 @@ export async function updateEvent(ctx, eventId, body) {
     const foreignFieldsDetached = (await client.query(
       `delete from calendar.event_selected_fields s
          using calendar.event_fields f, calendar.events e left join public.teams t on t.id = e.owner_team_id
-        where s.event_id = $1 and f.id = s.field_id and e.id = s.event_id and not ${eventShowsFieldSql("e", "t", "f")}`,
+        where s.event_id = $1 and f.id = s.field_id and e.id = s.event_id and (${eventShowsFieldSql("e", "t", "f")}) is not true`,
       [row.id],
     )).rowCount;
     const foreignPlaceCleared = Boolean(row.location_id) && before.locationId === null;
@@ -1003,14 +1003,19 @@ async function lockOwnLiveFields(client, club, fieldIds) {
   if (rows.length !== sorted.length) throw bad("field_not_available", FIELD_NOT_AVAILABLE);
 }
 
-// A type's live default details, in their order (the type is the owner's).
+// A type's live default details, in their order (the type is the owner's,
+// held FOR SHARE by resolveType, so its list does not change meanwhile). The
+// details are held FOR SHARE in ascending id, as every detail lock: one
+// archived meanwhile is waited for and left out (the archived test is checked
+// again on the locked row), never a refusal of the selection's guard.
 async function typeDefaultFieldIds(client, typeId) {
-  return (await client.query(
-    `select l.field_id from calendar.event_type_fields l
+  const rows = (await client.query(
+    `select l.field_id, l.position from calendar.event_type_fields l
        join calendar.event_fields f on f.id = l.field_id and f.archived_at is null
-      where l.event_type_id = $1 order by l.position, l.field_id`,
+      where l.event_type_id = $1 order by f.id for share of f`,
     [typeId],
-  )).rows.map((r) => String(r.field_id));
+  )).rows;
+  return rows.sort((x, y) => x.position - y.position || String(x.field_id).localeCompare(String(y.field_id))).map((r) => String(r.field_id));
 }
 
 // An event's list rewritten by difference (as a type's list in 1a): the
@@ -1090,7 +1095,7 @@ export async function setEventFields(ctx, eventId, body) {
       const field = fieldById.get(v.fieldId);
       const columns = { option_id: null, number_value: null, scale_value: null, bool_value: null, text_value: null };
       if (v.value === null) {
-        cleared.push(v.fieldId);
+        if (current.has(v.fieldId)) cleared.push(v.fieldId);
       } else if (field.value_kind === "choice") {
         const optionId = v.value.toLowerCase();
         // A hidden option kept as it is passes; a new choice is a live option of this detail (D30).
