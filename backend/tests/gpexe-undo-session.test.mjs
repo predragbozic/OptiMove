@@ -8,11 +8,12 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import { assertTriggersEnabled, collectScope, undoImportedSession, main as undoMain } from "../scripts/gpexe-undo-imported-session.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { asSourceTeam } from "./support/gpexe-fake-source.mjs";
+import { definitionDigest, mappedBinding } from "./support/mapped-world.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -22,14 +23,23 @@ let admin;
 
 before(async () => {
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undo" });
+  // The mapped world's services and the manual correction below load db.js:
+  // it points at the disposable database for the whole file, and its pool is
+  // ended once, in after().
+  process.env.DATABASE_URL = db.url;
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
 });
 
 after(async () => {
+  try {
+    const dbModule = await import("../src/db.js");
+    await dbModule.pool.end().catch(() => {});
+  } catch { /* not loaded */ }
   if (admin) await admin.end();
   if (db) await db.drop();
+  process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
 async function newClient() {
@@ -38,16 +48,22 @@ async function newClient() {
   return client;
 }
 
+// 9-B: every team bound to its own GPEXE team (gpexe_team_settings is unique
+// on it) with the eleven legacy specs activated on the binding
+// (support/mapped-world.mjs); every bundle it imports names that team.
+let nextSourceTeamId = 6100;
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
   await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [org.userId]);
-  return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+  const sourceTeamId = nextSourceTeamId++;
+  const { bindingId } = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId: String(sourceTeamId) });
+  return { ...org, bindingId, sourceTeamId, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
 }
 
 async function runImport(org, bundle) {
   const client = await newClient();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), {
+    return await importGpexeBundle(client, asSourceTeam(bundle, org.sourceTeamId), {
       ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId: org.athleteMap, batchFilename: "undo test",
     });
   } finally {
@@ -68,6 +84,10 @@ const COUNTS = {
   batches: `select count(*)::int as c from training_load.metric_import_batches where owner_team_id = $1`,
   connections: `select count(*)::int as c from training_load.metric_source_connections where owner_team_id = $1`,
   definitions: `select count(*)::int as c from training_load.metric_definitions where owner_team_id = $1`,
+  // T6, counted through the team's binding (not through the values), so a
+  // provenance row left behind by a removed value would still show.
+  provenance: `select count(*)::int as c from training_load.metric_value_source_provenance pr
+                where pr.source_team_binding_id in (select b.id from training_load.source_team_bindings b where b.team_id = $1)`,
 };
 
 // tgenabled 'O' = enabled. This is what the protections being "back on" means.
@@ -75,7 +95,8 @@ async function triggerStates() {
   const rows = (await admin.query(
     `select c.relname || '.' || t.tgname as name, t.tgenabled from pg_trigger t
      join pg_class c on c.oid = t.tgrelid
-     where t.tgname in ('metric_values_immutable', 'metric_event_source_bindings_immutable', 'metric_event_source_bindings_no_delete')
+     where t.tgname in ('metric_values_immutable', 'metric_event_source_bindings_immutable', 'metric_event_source_bindings_no_delete',
+                        'metric_value_source_provenance_append_only')
      order by 1`,
   )).rows;
   return Object.fromEntries(rows.map((r) => [r.name, r.tgenabled]));
@@ -84,6 +105,7 @@ async function triggerStates() {
 const ALL_ENABLED = {
   "metric_event_source_bindings.metric_event_source_bindings_immutable": "O",
   "metric_event_source_bindings.metric_event_source_bindings_no_delete": "O",
+  "metric_value_source_provenance.metric_value_source_provenance_append_only": "O",
   "metric_values.metric_values_immutable": "O",
 };
 
@@ -101,6 +123,9 @@ test("undo: removes exactly the imported session and keeps the connection and th
     [before.events, before.participants, before.occasions, before.bindings, before.activities],
     [1, 2, 5, 1, 1],
   );
+  assert.ok(before.values > 0);
+  assert.equal(before.provenance, before.values, "every imported value has its provenance row (T6)");
+  const catalogue = await definitionDigest(admin);
 
   const client = await newClient();
   let log;
@@ -117,12 +142,13 @@ test("undo: removes exactly the imported session and keeps the connection and th
 
   const after = await counts(org.teamId);
   assert.deepEqual(
-    [after.events, after.segments, after.participants, after.bindings, after.identities, after.occasions, after.values, after.activities, after.components, after.batches],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [after.events, after.segments, after.participants, after.bindings, after.identities, after.occasions, after.values, after.provenance, after.activities, after.components, after.batches],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     JSON.stringify(after),
   );
   assert.equal(after.connections, before.connections, "the GPEXE connection is not session-specific and stays");
   assert.equal(after.definitions, before.definitions, "so do the metric definitions");
+  assert.equal(await definitionDigest(admin), catalogue, "the canonical variables the values named are untouched");
 
   // The log says what was removed, for whom and why.
   assert.equal(log.applied, true);
@@ -134,6 +160,14 @@ test("undo: removes exactly the imported session and keeps the connection and th
   assert.equal(String(log.performedByUserId), String(org.userId));
   assert.equal(log.removed.metric_values, before.values);
   assert.equal(log.removed.metric_events, 1);
+  // T6 first: the provenance rows go before the values they name (on delete
+  // restrict), in the same transaction.
+  assert.equal(log.removed.metric_value_source_provenance, before.values);
+  const order = Object.keys(log.removed);
+  assert.ok(
+    order.includes("metric_value_source_provenance") && order.indexOf("metric_value_source_provenance") < order.indexOf("metric_values"),
+    `the provenance is removed before the values (${order.join(", ")})`,
+  );
 
   // The protections are on again afterwards.
   const check = await runImport(org, makeBundle({ sessionId: 6001, athletes: standardAthletes() }));
@@ -141,6 +175,10 @@ test("undo: removes exactly the imported session and keeps the connection and th
   await assert.rejects(
     admin.query(`delete from training_load.metric_event_source_bindings where event_id = $1`, [check.eventId]),
     /cannot be deleted/,
+  );
+  await assert.rejects(
+    admin.query(`delete from training_load.metric_value_source_provenance where source_team_binding_id = $1`, [org.bindingId]),
+    /is append-only/,
   );
   await assert.rejects(
     admin.query(`delete from training_load.metric_values v using training_load.metric_measurement_occasions o, training_load.metric_event_participants p
@@ -179,10 +217,9 @@ test("undo: refuses a session that carries a manual correction", async () => {
     [identity.current_occasion_id],
   )).rows.map((v) => ({ metricDefinitionId: v.metric_definition_id, metricDefinitionVersionId: v.metric_definition_version_id, value: v.value }));
 
-  process.env.DATABASE_URL = db.url;
+  // db.js already points at the disposable database (before()).
   const { correctImportedOccasionManually } = await import("../src/trainingLoadMetricsMeasurements.js");
-  const dbModule = await import("../src/db.js");
-  try {
+  {
     const req = { user: { id: org.userId }, authz: { platformRoles: [], clubRoles: [], teamRoles: [{ role: "team_coach", teamId: org.teamId }], managedTeamIds: [] } };
     const scopeCtx = { type: "team", teamId: org.teamId, ownerContext: { ownerScope: "team", ownerTeamId: org.teamId, ownerClubId: null, ownerUserId: null } };
     const manual = await correctImportedOccasionManually(req, scopeCtx, { requestKey: `undo-${org.teamId}`, sourceIdentityId: identity.id, expectedCurrentOccasionId: identity.current_occasion_id, values });
@@ -201,9 +238,6 @@ test("undo: refuses a session that carries a manual correction", async () => {
       await client.end();
     }
     assert.deepEqual(await counts(org.teamId), before);
-  } finally {
-    await dbModule.pool.end();
-    process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   }
 });
 
@@ -241,6 +275,10 @@ test("undo: an interrupted run rolls back and leaves the protections on", async 
   await assert.rejects(
     admin.query(`delete from training_load.metric_event_source_bindings where event_id = $1`, [summary.eventId]),
     /cannot be deleted/,
+  );
+  await assert.rejects(
+    admin.query(`delete from training_load.metric_value_source_provenance where source_team_binding_id = $1`, [org.bindingId]),
+    /is append-only/,
   );
   await assert.rejects(
     admin.query(`delete from training_load.metric_values v using training_load.metric_measurement_occasions o, training_load.metric_event_participants p
@@ -306,13 +344,21 @@ test("undo: the commit is refused while any protection is still off", async () =
   const before = await counts(org.teamId);
   const client = await newClient();
   try {
-    await assert.doesNotReject(assertTriggersEnabled(client), "all three are on to begin with");
+    await assert.doesNotReject(assertTriggersEnabled(client), "every protection is on to begin with");
     const scope = await collectScope(client, { eventId: summary.eventId });
     // One protection stays off at the moment the run is about to commit.
     await assert.rejects(
       undoImportedSession(client, scope, {
         performedByUserId: org.userId, reason: "protection left off", apply: true,
         onBeforeVerify: (c) => c.query("alter table training_load.metric_values disable trigger metric_values_immutable"),
+      }),
+      /protections are not back on/,
+    );
+    // The same for the provenance's protection (T6, v34).
+    await assert.rejects(
+      undoImportedSession(client, scope, {
+        performedByUserId: org.userId, reason: "provenance protection left off", apply: true,
+        onBeforeVerify: (c) => c.query("alter table training_load.metric_value_source_provenance disable trigger metric_value_source_provenance_append_only"),
       }),
       /protections are not back on/,
     );

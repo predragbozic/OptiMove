@@ -5,8 +5,12 @@
 // Everything runs on ONE disposable database (optimove_tests_gpexe_roster_*)
 // that is created at v24, given pre-v25 membership rows, brought to v25 by
 // the real runner, and dropped at the end. Nothing touches OPTIMOVE or any
-// persistent database. GPEXE is a fake client; the import switch is turned
-// on inside this process only, for the approval tests.
+// persistent database. GPEXE is a fake server3 source, never a real request
+// (9-B: the approval tests check through the team's binding - made through
+// the real Connect / Bind routes - and its mapping activations; a direct
+// import goes through a raw-SQL binding with the eleven legacy activations);
+// the import switch is turned on inside this process only, for the approval
+// tests.
 //
 // Test names carry the owner's numbering (1-35) from the 5a1 order.
 //
@@ -23,8 +27,9 @@ import {
   applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS,
 } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes, TZ } from "./_gpexe-fixtures.mjs";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { activateBinding, mappedBinding } from "./support/mapped-world.mjs";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import {
   assertTriggersEnabled, collectScope, undoImportedSession, ROSTER_DECISIONS_EXIST,
 } from "../scripts/gpexe-undo-imported-session.mjs";
@@ -34,6 +39,17 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see ba
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const ORIGINAL_SWITCH = process.env.GPEXE_IMPORT_APPLY_ENABLED;
 const V25 = "202609251000_training_load_v25_activity_roster_foundation.sql";
+const ORIGINAL_KEYS = process.env.SOURCE_CREDENTIAL_KEYS;
+// The fixtures' session day: a check through a binding reads only its window.
+const SESSION_DAY = "2026-09-14";
+// 9-B: gpexe_team_settings is unique on the GPEXE team id, so every OptiMove
+// team bound here (directly or through the routes) gets its own source team.
+let sourceTeamSeq = 7000;
+const nextSourceTeamId = () => String(sourceTeamSeq++);
+const LEGACY_TRAP = () => { throw new Error("TRAP: the legacy client factory was called"); };
+let src;
+let connections;
+let resolver;
 
 let db;
 let admin;
@@ -221,11 +237,19 @@ async function gpexeTeam(label = "GPEXE") {
   return { clubId, teamId, ids, names, userId };
 }
 
+// 9-B: the writer imports only through the team's one active binding and its
+// mapping activations, so the team is bound once (raw SQL, the eleven legacy
+// activations) to its own GPEXE team, and the bundle carries that team.
 async function importDirect(team, bundle) {
+  if (!team.sourceTeamId) {
+    team.sourceTeamId = nextSourceTeamId();
+    const bound = await mappedBinding(admin, { teamId: team.teamId, clubId: team.clubId, sourceTeamId: team.sourceTeamId });
+    team.bindingId = bound.bindingId;
+  }
   const client = new pg.Client({ connectionString: db.url });
   await client.connect();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), {
+    return await importGpexeBundle(client, asSourceTeam(bundle, team.sourceTeamId), {
       ownerTeamId: team.teamId, performedByUserId: team.userId, athleteIdByGpexeId: team.ids, batchFilename: "roster test",
     });
   } finally {
@@ -314,8 +338,15 @@ before(async () => {
 
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
   const serverModule = await import("../src/server.js");
   service = await import("../src/gpexeImportService.js");
+  connections = await import("../src/sourceConnectionService.js");
+  resolver = await import("../src/sourceImportCredentialResolver.js");
+  src = createFakeSource();
+  connections.setSourceFetchForTests(src.fetchImpl);
+  resolver.setImportSourceFetchForTests(src.fetchImpl);
+  service.setGpexeClientFactory(LEGACY_TRAP);
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   ({ deriveAthleteState, ROSTER_STATE_LABELS } = await import("../src/activityRoster.js"));
@@ -327,6 +358,9 @@ before(async () => {
 
 after(async () => {
   service?.setGpexeClientFactory(null);
+  connections?.setSourceFetchForTests(null);
+  resolver?.setImportSourceFetchForTests(null);
+  if (ORIGINAL_KEYS === undefined) delete process.env.SOURCE_CREDENTIAL_KEYS; else process.env.SOURCE_CREDENTIAL_KEYS = ORIGINAL_KEYS;
   if (server) {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -737,6 +771,7 @@ test("20. the roster read writes nothing to any new table and never runs GPEXE",
   const leaverM = await addMembership({ athleteId: leaver, clubId: team.clubId, teamId: team.teamId });
   await archiveMembership(leaverM, "2026-09-20T00:00:00Z");
   let gpexeCalls = 0;
+  const sourceCallsBefore = src.calls.length;
   service.setGpexeClientFactory(() => { gpexeCalls += 1; throw new Error("no GPEXE in a read"); });
   try {
     const before = await rowCounts();
@@ -749,8 +784,9 @@ test("20. the roster read writes nothing to any new table and never runs GPEXE",
     assert.deepEqual(await rowCounts(), before);
     assert.equal((await q(`select count(*)::int as n from training.activity_completions where activity_id = $1`, [summary.activityId]))[0].n, completionsBefore, "no completion row from a read");
     assert.equal(gpexeCalls, 0);
+    assert.equal(src.calls.length, sourceCallsBefore, "no request to the source from a read");
   } finally {
-    service.setGpexeClientFactory(null);
+    service.setGpexeClientFactory(LEGACY_TRAP);
   }
 });
 
@@ -904,30 +940,29 @@ test("25. a deactivated user or a removed role is refused", async () => {
 // ---------------------------------------------------------------------------
 // Observations from the GPEXE approval, and the undo
 // ---------------------------------------------------------------------------
-function fakeGpexe(bundles) {
-  return () => ({
-    async listTeamSessions() { return bundles.map((b) => ({ id: String(b.teamSession.id) })); },
-    async fetchSessionBundle({ sessionId }) { return structuredClone(bundles.find((b) => String(b.teamSession.id) === sessionId)); },
-  });
-}
-
-let nextGpexeTeamId = 7000;
+// 9-B: a candidate is importable only through the team's binding and its
+// mapping activations (J17 section 3), so the team is bound to its own GPEXE
+// team through the real Connect / Bind routes, the activations are started
+// on that binding, and its sessions are served by the fake server3 source.
 async function approvalTeam(label) {
   const team = await gpexeTeam(label);
   const coach = await coachOf(team.teamId);
   const padmin = await platformAdmin();
-  const gpexeTeamId = nextGpexeTeamId++;
+  const sourceTeamId = nextSourceTeamId();
   const gx = (path, opts) => api(`/api/training-load/gpexe${path}`, opts);
-  assert.equal((await gx(`/teams/${team.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: String(gpexeTeamId) } })).status, 200);
+  assert.equal((await gx(`/teams/${team.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } })).status, 200);
+  src.show(sourceTeamId);
+  const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: team.clubId, teamId: team.teamId, sourceTeamId });
+  await activateBinding(admin, bindingId);
   for (const g of ["101", "102", "103"]) {
     assert.equal((await gx(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId: g, athleteId: team.ids[g] } })).status, 201);
   }
-  return { ...team, coach, padmin, gpexeTeamId, gx };
+  return { ...team, coach, padmin, sourceTeamId, bindingId, gpexeTeamId: Number(sourceTeamId), gx };
 }
 
 async function checkAndApprove(team, bundle) {
-  service.setGpexeClientFactory(fakeGpexe([bundle]));
-  const started = await team.gx(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: {} });
+  src.serve(team.sourceTeamId, [bundle]);
+  const started = await team.gx(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: { from: SESSION_DAY, to: SESSION_DAY } });
   assert.equal(started.status, 202, started.text);
   for (let i = 0; i < 200; i += 1) {
     const r = await team.gx(`/teams/${team.teamId}/checks/${started.body.check.id}`, { cookie: team.coach.cookie });

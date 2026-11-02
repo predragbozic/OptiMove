@@ -11,12 +11,12 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import { PassThrough } from "node:stream";
 import { APP_SCHEMAS, backupAndVerify, backupAndVerifyRemote, checkSchemaList, dumpCreatesSchema, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs, preflightRemote, promptHidden, reconcileMovedSequences, sanitizeRemoteError, sanitizeToolError } from "../scripts/gpexe-backup-verify.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { mappedBinding } from "./support/mapped-world.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -45,17 +45,33 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  // 9-B (J17 section 3): the importer writes only through the mapping
+  // activations of the team's one active gpexe binding. The mapping world
+  // (support/mapped-world.mjs) is written through the real services, which
+  // load db.js - so the process points at the disposable database before they
+  // are imported; the tests that need the server itself keep using
+  // ORIGINAL_DATABASE_URL.
+  process.env.DATABASE_URL = db.url;
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
+  const sourceTeamId = "6301";
+  await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId });
   const client = new pg.Client({ connectionString: db.url });
   await client.connect();
   try {
-    await importGpexePlan(client, buildGpexeImportPlan(makeBundle({ sessionId: 6301, athletes: standardAthletes() })), {
+    await importGpexeBundle(client, makeBundle({ sessionId: 6301, gpexeTeamId: Number(sourceTeamId), athletes: standardAthletes() }), {
       ownerTeamId: org.teamId, performedByUserId: org.userId,
       athleteIdByGpexeId: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] }, batchFilename: "backup verify",
     });
   } finally {
     await client.end();
   }
+  // The services' pool is closed before any backup runs: the source holds no
+  // idle application session while it is dumped, compared and finally dropped.
+  await (await import("../src/db.js")).pool.end();
+  const held = (await admin.query(
+    `select (select count(*)::int from training_load.metric_values) as v, (select count(*)::int from training_load.metric_value_source_provenance) as p`,
+  )).rows[0];
+  assert.deepEqual(held, { v: 53, p: 53 }, "the source holds a real import: its values and their provenance rows (T6)");
   // The shape that made the first real run against the local database fail:
   // a partial index whose WHERE is an IN list on a varchar column.
   await admin.query(`create table public.backup_probe (status varchar(20) not null)`);
@@ -64,6 +80,13 @@ before(async () => {
 });
 
 after(async () => {
+  if (db) {
+    try {
+      const dbModule = await import("../src/db.js");
+      await dbModule.pool.end().catch(() => {});
+    } catch { /* not loaded */ }
+  }
+  process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   if (admin) await admin.end();
   if (db) await db.drop();
   if (workDir) await fsp.rm(workDir, { recursive: true, force: true });

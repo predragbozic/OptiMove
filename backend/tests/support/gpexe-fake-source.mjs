@@ -93,8 +93,12 @@ export function createFakeSource() {
   };
   // Serve the sessions of one source team (replacing what it served before);
   // each bundle is a copy carried by that team (asSourceTeam).
+  // The session-level reads carry no team, so a session id is served for one
+  // team at a time: serving it for this team withdraws it from every other.
   const serve = (sourceTeamId, bundles) => {
     visibleTeams.add(Number(sourceTeamId));
+    const ids = new Set(bundles.map((b) => String(b.teamSession.id)));
+    for (const [team, list] of served) if (team !== String(sourceTeamId)) served.set(team, list.filter((b) => !ids.has(String(b.teamSession.id))));
     served.set(String(sourceTeamId), bundles.map((b) => asSourceTeam(b, sourceTeamId)));
   };
   const show = (sourceTeamId) => visibleTeams.add(Number(sourceTeamId));

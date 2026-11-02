@@ -7,11 +7,12 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { importGpexePlan } from "../src/gpexeImportWriter.js";
+import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import { collectScope, undoImportedSession, main as undoMain } from "../scripts/gpexe-undo-imported-session.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes, TZ } from "./_gpexe-fixtures.mjs";
+import { asSourceTeam } from "./support/gpexe-fake-source.mjs";
+import { mappedBinding } from "./support/mapped-world.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -24,9 +25,21 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  // 9-B: the mapping world (support/mapped-world.mjs) is written through the
+  // real services, which load db.js - so the process points at the disposable
+  // database before they are imported. The last test still reaches the
+  // persistent URL on purpose, through ORIGINAL_DATABASE_URL.
+  process.env.DATABASE_URL = db.url;
 });
 
 after(async () => {
+  if (db) {
+    try {
+      const dbModule = await import("../src/db.js");
+      await dbModule.pool.end().catch(() => {});
+    } catch { /* not loaded */ }
+  }
+  process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   if (admin) await admin.end();
   if (db) await db.drop();
 });
@@ -37,16 +50,24 @@ async function newClient() {
   return client;
 }
 
+// 9-B (J17 section 3): the importer writes only through the mapping
+// activations of the team's one active gpexe binding. Each team gets its own
+// GPEXE team id (gpexe_team_settings is unique on it), a raw-SQL binding with
+// the eleven legacy activations (support/mapped-world.mjs), and every bundle
+// imported for it carries that id.
+let nextSourceTeamId = 6100;
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
   await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [org.userId]);
-  return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+  const sourceTeamId = String(nextSourceTeamId += 1);
+  const { bindingId } = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId });
+  return { ...org, sourceTeamId, bindingId, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
 }
 
 async function runImport(org, bundle) {
   const client = await newClient();
   try {
-    return await importGpexePlan(client, buildGpexeImportPlan(bundle), {
+    return await importGpexeBundle(client, asSourceTeam(bundle, org.sourceTeamId), {
       ownerTeamId: org.teamId, performedByUserId: org.userId, athleteIdByGpexeId: org.athleteMap, batchFilename: "undo guards",
     });
   } finally {
@@ -63,7 +84,12 @@ async function rowCounts(teamId) {
             (select count(*)::int from training_load.metric_values v
              join training_load.metric_measurement_occasions o on o.id = v.occasion_id
              join training_load.metric_event_participants p on p.id = o.event_participant_id
-             join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1) as values`,
+             join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1) as values,
+            (select count(*)::int from training_load.metric_value_source_provenance pr
+             join training_load.metric_values v on v.id = pr.metric_value_id
+             join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+             join training_load.metric_event_participants p on p.id = o.event_participant_id
+             join training_load.metric_events e on e.id = p.event_id where e.owner_team_id = $1) as provenance`,
     [teamId],
   );
   return r.rows[0];
@@ -191,7 +217,7 @@ test("undo: removes the session reservation even when the binding is gone", asyn
     await client.end();
   }
   const after = await rowCounts(org.teamId);
-  assert.deepEqual([after.events, after.identities, after.values, after.activities], [0, 0, 0, 0]);
+  assert.deepEqual([after.events, after.identities, after.values, after.provenance, after.activities], [0, 0, 0, 0, 0]);
 });
 
 test("undo: refuses when two gpexe connections carry the same team_session", async () => {
@@ -249,7 +275,7 @@ test("undo CLI: an applied run through main() removes the session and writes a c
     assert.equal(written.reason, "imported the wrong session");
     assert.equal(written.removed.metric_events, 1);
     const after = await rowCounts(org.teamId);
-    assert.deepEqual([after.events, after.activities, after.identities, after.values], [0, 0, 0, 0]);
+    assert.deepEqual([after.events, after.activities, after.identities, after.values, after.provenance], [0, 0, 0, 0, 0]);
 
     // The runbook sends the operator back to this command to check the
     // database; that must not overwrite the record of what was applied.
@@ -368,6 +394,10 @@ test("undo: the removal and its database log row commit together, and the row sa
   assert.equal(row.reference_set_external_id, "1473");
   assert.equal(row.removed_counts.metric_events, 1);
   assert.equal(row.removed_counts.metric_values, log.removed.metric_values);
+  // 9-B: the standard bundle's 53 values (today's count through the eleven
+  // activations), each with its one provenance row (T6), removed with them.
+  assert.equal(row.removed_counts.metric_values, 53);
+  assert.equal(row.removed_counts.metric_value_source_provenance, 53, "every value's provenance row went with it");
   assert.equal(row.removed_total, Object.values(row.removed_counts).reduce((a, b) => a + b, 0));
   assert.equal(log.removedTotal, row.removed_total);
   assert.equal((await rowCounts(org.teamId)).events, 0);
