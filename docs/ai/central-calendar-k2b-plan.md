@@ -961,6 +961,12 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - Two archives that end one athlete's memberships at the same moment may leave that athlete's legacy pointer on an
     archived team (the pointer is a display field, never read for authorization; the class predates D45).
   - Only `active` memberships are ended, as Remove from team ends them; no code writes the `paused` status.
+  - An athlete with a team membership but no club membership row (legacy or backfilled data) is the one case the order
+    cannot hold: restoring that team membership creates the club row after the team row, so a simultaneous add of the
+    same athlete to the same team may end one of the two requests with a deadlock (a 500, nothing written; the retry
+    works). The internal DB re-review of this pull request (LOW-1).
+  - The archive reads the club's state without a lock: a club archived during the archive's wait (at most 5 s) still
+    lets the team be archived.
 - **Production:** no archived team exists today (the manager's read-only check, 2026-11-02), so no old membership needs a
   repair.
 - **Not run:** `backend/tests/athlete-membership-archive.test.mjs`, the older suite of Remove from team, is of the
@@ -976,6 +982,7 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - the race of an archive with a join, in both orders, made deterministic by a held lock;
   - the archive's bounded wait (`409 try_again`);
   - an athlete edit during the archive (`409 team_archived`, never a deadlock);
-  - a team of an archived club (`409 club_archived`).
+  - a team of an archived club (`409 club_archived`);
+  - the restore of a team membership taking the club membership before the team membership.
 
   `organization-team-club-fixed.test.mjs` test 7 now expects the empty restored team.

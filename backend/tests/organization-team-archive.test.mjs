@@ -332,3 +332,40 @@ test("9. a team of an archived club is not archived (as it is not restored): 409
   assert.equal(await activeOf(teamId), true);
   assert.deepEqual(await memberships(a.athleteId), before);
 });
+
+test("10. restoring a team membership locks the club membership before the team membership (the one lock order)", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 order ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  assert.equal((await removeFromTeam(roles.clubAdmin.cookie, teamId, a.athleteId)).status, 200);
+  const holder = new pg.Client({ connectionString: env.db.url });
+  const prober = new pg.Client({ connectionString: env.db.url });
+  await holder.connect();
+  await prober.connect();
+  try {
+    // The club membership is held: the restore waits there, before it takes the team membership.
+    await holder.query("begin");
+    await holder.query(
+      `select id from public.athlete_memberships where athlete_id = $1 and club_id = $2 and membership_type = 'club' for update`,
+      [a.athleteId, clubs.c1],
+    );
+    const restored = restoreMembership(roles.clubAdmin.cookie, teamId, a.athleteId);
+    await waitForLockWaiters(1);
+    await prober.query("begin");
+    const free = await prober.query(
+      `select id from public.athlete_memberships where athlete_id = $1 and team_id = $2 and membership_type = 'team' for update nowait`,
+      [a.athleteId, teamId],
+    );
+    assert.equal(free.rows.length, 1, "the team membership is not yet held by the restore");
+    await prober.query("rollback");
+    await holder.query("rollback");
+    const answer = await restored;
+    assert.equal(answer.status, 200, answer.text);
+  } finally {
+    await prober.query("rollback").catch(() => {});
+    await holder.query("rollback").catch(() => {});
+    await prober.end().catch(() => {});
+    await holder.end().catch(() => {});
+  }
+  assert.equal((await memberships(a.athleteId)).find((r) => r.type === "team").status, "active");
+});
