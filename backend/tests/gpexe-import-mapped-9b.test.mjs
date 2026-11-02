@@ -225,3 +225,29 @@ test("B1b. a binding whose only activations ended: no_mapped_values, nothing wri
     (error) => error instanceof GpexeImportError && error.code === "no_mapped_values");
   assert.equal((await counts(org.teamId)).metric_values, 0);
 });
+
+test("R12. the Link athletes helper values (Time, Distance, Top speed) read from the snapshot's whole-session row are exactly the values the pre-9-B preview showed: the frozen specs' whole-session time, distance and max speed, as the same JavaScript numbers, for every kept athlete of both fixture bundles", async () => {
+  const { sourceAthleteHelperValues } = await import("../src/gpexeImportService.js");
+  const KEYS = { duration: "gpexe_time_min", distance: "gpexe_total_distance", maxSpeed: "gpexe_max_speed" };
+  let compared = 0;
+  for (const bundle of [makeBundle({ athletes: standardAthletes() }), previewBundle({ gpexeTeamId: 970001 })]) {
+    const oracle = oracleOf(bundle);
+    const kept = new Set([...oracle.keys()].map((k) => k.split("|")[0]));
+    assert.ok(kept.size >= 2, "the fixture keeps several athletes");
+    for (const athlete of kept) {
+      const whole = bundle.athleteSessions.filter((r) => String(r.athlete) === athlete && (r.drill === null || r.drill === undefined));
+      const helper = sourceAthleteHelperValues({ gps: { status: "measured" } }, whole);
+      for (const [field, legacyKey] of Object.entries(KEYS)) {
+        const expected = oracle.get(`${athlete}|full||${legacyKey}`);
+        assert.ok(expected !== undefined, `the oracle has ${legacyKey} for ${athlete}`);
+        assert.equal(helper[field], expected, `${field} of ${athlete}: the snapshot value equals the pre-9-B preview value`);
+        compared += 1;
+      }
+    }
+  }
+  assert.ok(compared >= 12, `compared ${compared}`);
+  // An athlete the preview does not show as measured, or a row count other than one, has no helper values.
+  const none = { duration: null, distance: null, maxSpeed: null };
+  assert.deepEqual(sourceAthleteHelperValues({ gps: { status: "needs_manual_review" } }, [{ total_time: 60 }]), none);
+  assert.deepEqual(sourceAthleteHelperValues({ gps: { status: "measured" } }, []), none);
+});
