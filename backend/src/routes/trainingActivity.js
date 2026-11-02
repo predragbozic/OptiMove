@@ -24,6 +24,8 @@ import {
 } from "../trainingActivityMaterialize.js";
 import { getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
+import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
+import { SourceMetricMappingError } from "../sourceMetricAccess.js";
 import {
   clearAthleteDecision, completeRoster, decideAthlete, decideAthletesBulk, reopenRoster,
 } from "../activityRosterCommands.js";
@@ -153,7 +155,25 @@ async function resolveActivityReadContext(req, res) {
     res.status(403).json({ error: "Forbidden" });
     return null;
   }
-  return { isAthleteSelf: false, athleteId: null, scope };
+  return { isAthleteSelf: false, athleteId: null, scope, workspace };
+}
+
+// 7h-V (C127, J14 O2 (a)): whether this caller may read the names of the
+// club variables in a team activity's results - C99's predicate
+// (resolveVariableEditor: an active coach of an active team of that club,
+// in that team's workspace), with the workspace this request already
+// resolved, as R17 asks it for the import preview (routes/gpexeImport.js).
+// The team workspace must be the activity's own team. Errors propagate: a
+// busy database is the read's stable 503, never a silent "no" that the
+// client would cache as a nameless "Metric".
+function clubVariableNamesAllowedFor(req, workspace) {
+  return async ({ teamId, clubId }) => {
+    if (workspace?.type !== "team" || String(workspace.scopeId).toLowerCase() !== String(teamId).toLowerCase()) return false;
+    const editor = await resolveVariableEditor(req, workspace);
+    return Boolean(editor && editor.view === "coach"
+      && String(editor.owner?.clubId).toLowerCase() === String(clubId).toLowerCase()
+      && (editor.teamId === undefined || String(editor.teamId).toLowerCase() === String(teamId).toLowerCase()));
+  };
 }
 
 // A coach-capable workspace is required for every write route below —
@@ -194,9 +214,17 @@ router.get("/:activityId", async (req, res, next) => {
     if (!validUuid(req.params.activityId)) return res.status(400).json({ error: "Invalid activityId." });
     const readContext = await resolveActivityReadContext(req, res);
     if (!readContext) return;
-    const result = await getCanonicalActivityResults(readContext, req.params.activityId);
+    const result = await getCanonicalActivityResults(readContext, req.params.activityId, {
+      clubVariableNamesAllowed: readContext.isAthleteSelf ? undefined : clubVariableNamesAllowedFor(req, readContext.workspace),
+    });
     res.json(result);
   } catch (error) {
+    // The C99 check's own read bound (try_again) is the same busy database
+    // as a pool checkout timeout: the stable 503 the global handler gives.
+    if (error instanceof SourceMetricMappingError && error.code === "try_again" && !res.headersSent) {
+      res.setHeader("Retry-After", "5");
+      return res.status(503).json({ error: "database_busy", message: "The server is busy right now. Try again in a moment." });
+    }
     respondToServiceError(res, next, error);
   }
 });

@@ -731,10 +731,13 @@ export async function createVariableVersion({ ctx, variableId, body }) {
 // that team's coach). The owner is the team's club; the basis is the
 // strongest the user holds for it - platform admin, then the club's admin,
 // then the team's coach -, the one the database derives (v38). The team is
-// named only for the team_coach basis.
-export async function resolveVariableEditor(req) {
+// named only for the team_coach basis. `known` is the active workspace when
+// the caller already resolved it (7h-V's activity read), so it is not
+// resolved twice; null means "no workspace" (resolveMappingAdminWith's
+// convention).
+export async function resolveVariableEditor(req, known = undefined) {
   if (!req?.user?.id || !req.authz) return null;
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  const workspace = known === undefined ? (await resolveActiveWorkspace(req.user.id, req.authz)).workspace : known;
   if (!workspace) return null;
   if (workspace.type !== "team") {
     const ctx = await resolveMappingAdmin(req, workspace);

@@ -432,6 +432,33 @@ function findSegmentComponent(detail, segmentId) {
   return map.get(segmentId) ?? null;
 }
 
+// 7h-V (C127): the variables a result can be named by. The picker's catalog
+// first; then, for an id the catalog lacks, this activity's own
+// `variableNamesById` - the name and unit of the team's club variables that
+// the server gives the team's coach for the results of this activity only.
+// Never written into the catalog list (metricPicker.definitions), so no other
+// activity, picker or dashboard ever sees it.
+function resultDefinitionList(definitions, detail) {
+  const list = [...(definitions || [])];
+  const known = new Set(list.map((d) => d.id));
+  const names = detail?.variableNamesById;
+  if (names && typeof names === "object") {
+    for (const [id, v] of Object.entries(names)) {
+      if (known.has(id) || !v || typeof v.label !== "string" || !v.label) continue;
+      list.push({
+        id,
+        label: v.label,
+        shortLabel: typeof v.shortLabel === "string" && v.shortLabel ? v.shortLabel : null,
+        unit: typeof v.unit === "string" ? v.unit : "",
+        iconUrl: null,
+        domainLabel: null,
+      });
+      known.add(id);
+    }
+  }
+  return list;
+}
+
 function metricColumnsFromRows(rows, definitions) {
   const ids = new Set();
   for (const row of rows.values()) for (const id of row.metrics.keys()) ids.add(id);
@@ -515,7 +542,7 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
       ${renderPartValuesHintHtml(nav, detail)}
     `;
   }
-  const columns = pickedMetricColumns(nav, rowsMap, nav.metricPicker.definitions);
+  const columns = pickedMetricColumns(nav, rowsMap, resultDefinitionList(nav.metricPicker.definitions, detail));
   const rows = sortRows([...rowsMap.values()], nav.resultsSort, athleteNamesById);
   const showRpe = !nav.selectedComponentId; // session-level RPE never falsely attributed to a component
   return `
@@ -563,10 +590,10 @@ function groupDefinitions(definitions, search) {
   return groups;
 }
 
-function renderMetricPickerHtml(nav) {
+function renderMetricPickerHtml(nav, detail) {
   const picker = nav.metricPicker;
   if (!picker.open) return "";
-  const definitions = picker.definitions || [];
+  const definitions = resultDefinitionList(picker.definitions, detail);
   const groups = groupDefinitions(definitions, picker.search);
   const selected = new Set(picker.selectedIds || []);
   return `
@@ -683,7 +710,7 @@ function renderAthleteDrawerHtml(nav, detail, athleteNamesById) {
   const facts = detail.facts.filter((f) => f.athleteId === athleteId);
   const rpe = facts.find((f) => f.factKind === "rpe");
   const metrics = facts.filter((f) => f.factKind === "metric_value");
-  const groups = athleteMetricGroups(detail, metrics, nav.metricPicker.definitions);
+  const groups = athleteMetricGroups(detail, metrics, resultDefinitionList(nav.metricPicker.definitions, detail));
   return `
     <div class="builder-athlete-overlay tl-athlete-drawer-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="training-load-calendar-close-athlete" aria-label="Close"></button>
@@ -744,7 +771,7 @@ export function renderTrainingLoadCalendarHtml() {
       <div class="tl-calendar-body">
         ${!nav.selectedActivityId ? renderDaySummaryHtml(nav) : renderActivitySectionHtml(nav, detail, athleteNamesById)}
       </div>
-      ${renderMetricPickerHtml(nav)}
+      ${renderMetricPickerHtml(nav, detail)}
       ${renderConflictPanelHtml()}
       ${renderAthleteDrawerHtml(nav, detail, athleteNamesById)}
     </div>

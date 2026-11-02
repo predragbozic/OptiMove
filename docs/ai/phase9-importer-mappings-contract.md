@@ -343,6 +343,7 @@ One source field may carry several mappings (the closed power zone serves 25–6
   **Answered by J14's O2 (C127, accepted 2026-11-02):** a team coach sees a club variable's name and unit in the
   team's results (7h-V, deployed before 7h-B). Until 7h-V is deployed, the rule above stays in force: no club mapping
   is switched on for a team binding.
+  7h-V as built: J14 section 16 (the read `variableNamesById`, the three calendar places, the roster narrowed).
 
 ---
 
@@ -1039,6 +1040,7 @@ Steps 9 to 16 ran on 2026-11-02 for the First team (GPEXE team 980). The facts a
   binding. Recommendation: decide it with 7h (club mapping approval); the pilot uses system variables only.
   **Decided by J14's O2 (C127, accepted 2026-11-02):** (a), the coach sees the name and unit (7h-V, before 7h-B's
   deploy). Until 7h-V is deployed, the rule above stays in force.
+  7h-V as built: J14 section 16 (the read `variableNamesById`, the three calendar places, the roster narrowed).
 
 ### 12.3 Decided by the owner
 

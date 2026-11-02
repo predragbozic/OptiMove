@@ -1085,3 +1085,132 @@ test("a loading activity shows a real loading-state marker, and an error is anno
   html = renderTrainingLoadCalendarHtml();
   assert.match(html, /class="builder-error" role="alert"/);
 });
+
+// ------------------------------------------------------------
+// 7h-V (C127): a club variable's name and unit from the activity's own
+// `variableNamesById`, behind the catalog, on the three places that name a
+// result's variable (the results header, the athlete drawer, the column
+// picker) - never written into the catalog list.
+// ------------------------------------------------------------
+
+const CLUB_NAMES = { "def-club": { label: "Club Sprint Distance", shortLabel: "Club Sprint", unit: "m" } };
+function clubDetail(overrides = {}) {
+  return activityDetailPayload({
+    facts: [rpeFact("ath-1"), metricValueFact("ath-1", { metricDefinitionId: "def-club", valueNumeric: 321, unitAtCapture: "m" })],
+    athleteNamesById: { "ath-1": "Ana Zzzqa" },
+    variableNamesById: CLUB_NAMES,
+    ...overrides,
+  });
+}
+
+test("7h-V: the results header names a club variable from the activity's own names when the catalog lacks it, with its unit", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: clubDetail() });
+  cal.metricPicker.definitions = [];
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /data-column="def-club">Club Sprint <span class="tl-col-unit">\(m\)<\/span>/);
+  assert.doesNotMatch(html, />Metric</, "never the nameless fallback when the server named it");
+  assert.equal(cal.metricPicker.definitions.length, 0, "nothing is written into the catalog list");
+});
+
+test("7h-V: the athlete drawer names the club variable too, with the captured unit", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: clubDetail() });
+  cal.metricPicker.definitions = [];
+  cal.selectedResultsAthleteId = "ath-1";
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /<dt>Club Sprint<\/dt>/);
+  assert.match(html, /321/);
+});
+
+test("7h-V: the catalog wins over the activity's names; an activity without names keeps the nameless fallback", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: clubDetail() });
+  cal.metricPicker.definitions = [{ id: "def-club", label: "Catalog Name", shortLabel: "Catalog", unit: "km", iconUrl: null, domainLabel: null }];
+  let html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /data-column="def-club">Catalog <span class="tl-col-unit">\(km\)<\/span>/);
+  assert.doesNotMatch(html, /Club Sprint/);
+
+  resetState();
+  withActivitySelected(state.trainingLoad.calendar, { detail: clubDetail({ variableNamesById: {} }) });
+  html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /data-column="def-club">Metric</);
+  resetState();
+  withActivitySelected(state.trainingLoad.calendar, { detail: clubDetail({ variableNamesById: undefined }) });
+  assert.match(renderTrainingLoadCalendarHtml(), /data-column="def-club">Metric</, "an older answer without the field reads as before");
+});
+
+test("7h-V: the column picker offers the open activity's club variable (so it can be chosen when the activity has more than 4), without writing it into the catalog; another activity does not offer it", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const facts = [rpeFact("ath-1")];
+  for (let i = 0; i < 4; i += 1) facts.push(metricValueFact("ath-1", { occasionId: `occ-${i}`, metricDefinitionId: `def-${i}`, valueNumeric: 100 + i }));
+  facts.push(metricValueFact("ath-1", { occasionId: "occ-club", metricDefinitionId: "def-club", valueNumeric: 777 }));
+  withActivitySelected(cal, { detail: clubDetail({ facts }) });
+  const catalog = [{ id: "def-0", label: "Zero", shortLabel: "Zero", unit: "", iconUrl: null, domainLabel: null }];
+  cal.metricPicker.definitions = catalog;
+  cal.metricPicker.open = true;
+  let html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /data-metric-id="def-club"/);
+  assert.match(html, /tl-metric-picker-option-label">Club Sprint Distance</);
+  assert.ok(!html.includes(">777<"), "more than 4 metrics: nothing shown before it is picked");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-metric-toggle", metricId: "def-club" }), { renderTrainingLoad });
+  html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /data-column="def-club">Club Sprint/);
+  assert.ok(html.includes("777"));
+  assert.equal(cal.metricPicker.definitions, catalog, "the catalog list is the same array");
+  assert.deepEqual(cal.metricPicker.definitions.map((d) => d.id), ["def-0"]);
+
+  withActivitySelected(cal, { item: activityItem({ activityId: "act-2" }), detail: activityDetailPayload({ canonicalActivityId: "act-2", facts: [metricValueFact("ath-1", { metricDefinitionId: "def-club" })] }) });
+  html = renderTrainingLoadCalendarHtml();
+  assert.doesNotMatch(html, /data-metric-id="def-club"/, "another activity's picker does not offer it");
+});
+
+test("7h-V: a club variable's name is escaped wherever it is shown", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const names = { "def-club": { label: `<img src=x onerror="alert(1)">Load`, shortLabel: null, unit: `<b>u</b>` } };
+  withActivitySelected(cal, { detail: clubDetail({ variableNamesById: names }) });
+  cal.metricPicker.definitions = [];
+  cal.metricPicker.open = true;
+  cal.selectedResultsAthleteId = "ath-1";
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(!html.includes("<img src=x") && !html.includes("<b>u</b>"), "no markup from a name reaches the page");
+  assert.ok(html.includes("&lt;img src=x"));
+});
+
+test("7h-V: a workspace switch drops the activity and its names", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: clubDetail() });
+  cal.metricPicker.definitions = [];
+  assert.match(renderTrainingLoadCalendarHtml(), /Club Sprint/);
+  resetTrainingLoadForWorkspaceChange();
+  assert.equal(state.trainingLoad.calendar.activityDetail.data, null);
+  assert.doesNotMatch(renderTrainingLoadCalendarHtml(), /Club Sprint/);
+});
+
+test("7h-V: a busy server (503) is not cached as an answer without names; the next open reads the names", async () => {
+  resetState();
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "team", scopeId: "team-1" } };
+  let answers = 0;
+  installFetchMock(async (call) => {
+    if (call.url.includes("/api/training-activity/act-1")) {
+      answers += 1;
+      return answers === 1
+        ? { status: 503, body: { error: "database_busy", message: "The server is busy right now. Try again in a moment." } }
+        : { status: 200, body: clubDetail() };
+    }
+    return { status: 200, body: { rows: [] } };
+  });
+  await loadActivityDetail("act-1");
+  const nav = state.trainingLoad.calendar.activityDetail;
+  assert.equal(nav.data, null);
+  assert.ok(nav.error, "the error is shown");
+  await loadActivityDetail("act-1");
+  assert.equal(answers, 2, "the second open asks the server again");
+  assert.deepEqual(nav.data.variableNamesById, CLUB_NAMES);
+});
