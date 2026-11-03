@@ -544,7 +544,7 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
         </div>`}
       </form>`;
   }
-  if (form.mode === "values") return valuesFormHtml(form, locked);
+  if (form.mode === "values") return valuesFormHtml(form, locked, ctx.longDate || ((iso) => iso));
   const title = form.mode === "edit" ? "Edit event" : "New event";
   if (form.loading) return `${headHtml(title)}<p class="cc-panel-note" role="status">${form.mode === "edit" ? "Loading the event…" : "Loading the event types…"}</p>`;
   if (form.loadError) {
@@ -553,7 +553,10 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
   }
   const types = ctx.types || [];
   const catalog = ctx.catalog || { fields: [], locations: [], teamDefaults: {} };
-  const helpers = { fieldId, errorHtml, invalidAttrs, max: CENTRAL_CALENDAR_EVENT_LIMITS.location, types };
+  // The catalog is the event's own unless the platform edits as support or
+  // the types could not be read (code review, LOW).
+  const trusted = !(form.readOnlyTargets || form.typeHint === "types_failed");
+  const helpers = { fieldId, errorHtml, invalidAttrs, max: CENTRAL_CALENDAR_EVENT_LIMITS.location, types, trusted };
   return `${headHtml(title)}
     <form class="cc-event-form" data-cc-event-form novalidate>
       <fieldset class="cc-form-fields"${locked ? " disabled" : ""}>
@@ -565,8 +568,8 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
           ${textFieldHtml(form, "startTime", "Starts", { type: "time" })}
           ${textFieldHtml(form, "endTime", "Ends", { type: "time" })}
         </div>
-        ${renderCentralCalendarPlaceFieldHtml(form, catalog, helpers)}
         ${targetsHtml(form, ctx)}
+        ${renderCentralCalendarPlaceFieldHtml(form, catalog, helpers)}
         ${expectsHtml(form, types)}
         ${renderCentralCalendarDetailsFieldHtml(form, catalog, helpers)}
         <label class="cc-field" for="${fieldId("notes")}">
@@ -586,7 +589,7 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
 
 // "Enter details" (K2b-1d, mode "values"): one input per chosen detail, by its
 // kind (central-calendar-event-details.js); only the changed values are sent.
-function valuesFormHtml(form, locked) {
+function valuesFormHtml(form, locked, longDate) {
   const title = "Enter details";
   if (form.loading) return `${headHtml(title)}<p class="cc-panel-note" role="status">Loading the details…</p>`;
   if (form.loadError) {
@@ -595,7 +598,7 @@ function valuesFormHtml(form, locked) {
   }
   return `${headHtml(title)}
     <form class="cc-event-form" data-cc-event-form novalidate>
-      <p class="cc-cancel-name"><strong>${escapeHtml(form.eventTitle || "Event")}</strong></p>
+      <p class="cc-cancel-name"><strong>${escapeHtml(form.eventTitle || "Event")}</strong><br><span class="cc-panel-note">${escapeHtml(spanText(form, longDate))}</span></p>
       <p class="cc-panel-note">Leave a detail empty to clear it. Only the details you change are saved.</p>
       <fieldset class="cc-form-fields"${locked ? " disabled" : ""}>
         ${form.fields.length ? renderCentralCalendarValuesFieldsHtml(form) : `<p class="cc-panel-note">This event has no details to fill in.</p>`}
@@ -612,5 +615,7 @@ function valuesFormHtml(form, locked) {
 // Enter details, opened from the panel: the event read again (GET /:id, the
 // manager's view) before its inputs are drawn.
 export function newCentralCalendarValuesForm(item) {
-  return baseForm("values", { key: item.key, date: item.date, eventId: item.eventId || item.links?.eventId || "", eventTitle: item.title || "", loading: true });
+  const form = baseForm("values", { key: item.key, date: item.date, eventId: item.eventId || item.links?.eventId || "", eventTitle: item.title || "", loading: true });
+  form.span = item.span || null;
+  return form;
 }

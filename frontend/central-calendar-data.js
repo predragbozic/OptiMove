@@ -280,6 +280,9 @@ export function readCentralCalendarCatalog(cal) {
 async function readCatalogOnce(cal, generation) {
   try {
     const data = await fetchCentralCalendarEventTypes();
+    // A Settings -> Calendar write landed meanwhile: this answer may be the
+    // old catalog, so the read is made again.
+    if (state.centralCalendar === cal && generation !== catalogGeneration && !cal.eventTypes) return readCentralCalendarCatalog(cal);
     const types = Array.isArray(data?.types) ? data.types : [];
     if (state.centralCalendar === cal && generation === catalogGeneration) {
       cal.eventTypes = types;

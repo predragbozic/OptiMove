@@ -233,7 +233,7 @@ function ask(question) {
   return Boolean(globalThis.window?.confirm?.(question));
 }
 
-const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?" });
+const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?", values: "Discard the details you have not saved?" });
 
 // The writes the coach left while their result was not known - in flight or
 // not confirmed (the independent review of PR #306, HIGH-1). Memory only, by
@@ -405,9 +405,16 @@ async function rereadAfterUncertainWrite(cal, render, form) {
   if (state.centralCalendar !== cal) return;
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
+  await reloadOpenPanelEvent(cal, render);
   if (!centralCalendarUncertainWrites().some((entry) => entry.requestKey === form.requestKey)) return;
   cal.notice = uncertainNotice(form, { readFailed: readFailed(cal) });
   render?.();
+}
+
+// The open panel's details after the calendar was read again for a write the
+// coach left (K2b-1d review): the card's counts and the panel's values agree.
+async function reloadOpenPanelEvent(cal, render) {
+  if (state.centralCalendar === cal && cal.panel.open && !cal.form) await loadPanelEvent(cal, render);
 }
 
 // The waiting write to check first, if any: a create before New event, an
@@ -639,6 +646,7 @@ function openCancelForm(item, render) {
 // the calendar on screen is the one from before.
 async function settleAndReload(cal, render, { notice, readFailedNotice = "", panelKey = "", panelDate = "" } = {}) {
   cal.form = null;
+  cal.panelEvent = null;
   if (panelKey && panelDate) cal.panel = { open: true, key: panelKey, date: panelDate, athletes: null, loading: false, error: "" };
   else cal.panel = closedPanel();
   invalidateCentralCalendarCache();
@@ -707,7 +715,7 @@ export async function submitCentralCalendarEventForm({ render } = {}) {
   form.errors = errors;
   form.error = "";
   if (unchanged) {
-    form.error = "Nothing changed: change a field, or Close.";
+    form.error = form.mode === "values" ? "Nothing changed: change a detail, or Close." : "Nothing changed: change a field, or Close.";
     render?.();
     return;
   }
@@ -771,6 +779,7 @@ async function lateAnswer(cal, render, form, outcome) {
   if (state.centralCalendar !== cal) return;
   cal.notice = readFailed(cal) ? `${notice}${READ_FAILED_TAIL}` : notice;
   render?.();
+  await reloadOpenPanelEvent(cal, render);
 }
 
 function formTitle(form, event = null) {
@@ -790,7 +799,7 @@ function notDoneText(form, info, { check = false } = {}) {
   const head = { create: `“${title}” was not created.`, edit: `The change to “${title}” was not saved.`, cancel: `“${title}” was not cancelled.`, values: `The details of “${title}” were not saved.` }[form.mode];
   const why = info.status === 404
     ? form.mode === "create" ? " Events cannot be created in this workspace now." : ` ${NOT_AVAILABLE}`
-    : info.code === "event_changed" ? " The event was changed meanwhile; make your change again."
+    : info.code === "event_changed" ? ` The event was changed meanwhile; ${form.mode === "values" ? "enter the details again" : "make your change again"}.`
       : info.code === "event_cancelled" ? " The event was cancelled meanwhile."
         : " Nothing was saved; you can make it again.";
   return `${check ? "Checked: " : ""}${head}${why}`;
@@ -886,7 +895,9 @@ async function refused(form, info, render, { check = false } = {}) {
     // closes, the calendar is read again, and the panel shows it as it is -
     // or, when that read fails, the line says it could not be read.
     await settleAndReload(cal, render, {
-      notice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile. It is shown as it is now; make your change again." : "Nothing was saved: this event was cancelled meanwhile and can no longer be changed.",
+      notice: info.code === "event_changed"
+        ? `Nothing was saved: this event was changed meanwhile. It is shown as it is now; ${form.mode === "values" ? "enter the details again" : "make your change again"}.`
+        : form.mode === "values" ? "Nothing was saved: this event was cancelled meanwhile; its details can no longer be entered." : "Nothing was saved: this event was cancelled meanwhile and can no longer be changed.",
       readFailedNotice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile, and the calendar could not be read again. Read it again to see the event as it is now before changing it." : "",
       panelKey: form.key, panelDate: form.date,
     });
@@ -1083,6 +1094,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
       return true;
     }
     cal.panel = { open: true, key, date, athletes: null, loading: true, error: "" };
+    cal.panelEvent = null;
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();

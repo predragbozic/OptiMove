@@ -473,7 +473,7 @@ function fieldFormHtml(form, d) {
       <p class="cs-fact"><span class="muted">Filled by</span> coach</p>
       <div class="cs-field">
         <label class="cs-check"><input type="checkbox" id="cs-field-required" data-cs-field="required" aria-describedby="cs-field-required-hint"${form.draft.required === true ? " checked" : ""}> <span>Required</span></label>
-        <span class="cs-field-hint" id="cs-field-required-hint">${escapeHtml(CALENDAR_SETTINGS_REQUIRED_SENTENCE)}</span>
+        <span class="cs-field-hint" id="cs-field-required-hint">${escapeHtml(`${CALENDAR_SETTINGS_REQUIRED_SENTENCE}${!create && (field?.eventCount || 0) ? ` Switching it applies to every event that uses this detail (${plural(field.eventCount, "event", "events")}), past ones included.` : ""}`)}</span>
       </div>
     `);
 }

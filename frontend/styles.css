@@ -21878,7 +21878,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .cc-detail-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: 8px;
 }
 
 .cc-icon-button {
@@ -21894,7 +21894,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   opacity: 0.4;
 }
 
-.cc-detail-add select {
+.cc-event-form .cc-detail-add select {
   flex: 1 1 160px;
   width: auto;
 }
@@ -21920,6 +21920,8 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   width: 20px;
   height: 20px;
   margin: 0;
+  padding: 0;
+  border: 0;
   accent-color: var(--accent);
 }
 

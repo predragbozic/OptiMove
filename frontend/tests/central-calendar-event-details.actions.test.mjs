@@ -14,7 +14,9 @@ import { installFetchMock } from "./support/fetch-mock.mjs";
 import { fakeAction } from "./support/dom.mjs";
 
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false } } };
-globalThis.window = { confirm: () => true };
+let confirmAnswer = true;
+const questions = [];
+globalThis.window = { confirm: (question) => { questions.push(question); return confirmAnswer; } };
 
 const { state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
@@ -133,7 +135,7 @@ function rangeAnswer(url, items, workspace) {
 // The fake server. `fields` decides the values command per call (default:
 // the service's contract - the same key with the same body replays, another
 // body is request_key_reused; a value is written and the card's counts move).
-function server({ items = ITEMS, workspace = { type: "club", scopeId: CLUB }, catalog = CATALOG, event = eventView(), fields = null, loseFirstAnswer = false } = {}) {
+function server({ items = ITEMS, workspace = { type: "club", scopeId: CLUB }, catalog = CATALOG, event = eventView(), fields = null, loseFirstAnswer = false, fieldsGate = null } = {}) {
   const live = items.map((item) => ({ ...item }));
   let current = event;
   const keys = new Map();
@@ -148,6 +150,18 @@ function server({ items = ITEMS, workspace = { type: "club", scopeId: CLUB }, ca
     }
     if (path.endsWith("/fields") && call.method === "POST") {
       if (fields) return fields(call);
+      if (fieldsGate) return fieldsGate.then(() => valuesWrite(call));
+      return valuesWrite(call);
+    }
+    if (path === "/api/calendar/events" && call.method === "POST") {
+      live.push(eventItem(E_NEW, call.body.day, { title: call.body.title, details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } }));
+      return { status: 201, body: { event: eventView({ id: E_NEW, title: call.body.title, day: call.body.day, fields: [], revision: 1 }) } };
+    }
+    if (call.method === "PATCH") return { status: 200, body: { event: { ...current, revision: current.revision + 1 } } };
+    return { status: 404, body: { error: "unexpected", message: call.url } };
+  };
+  function valuesWrite(call) {
+    {
       const { requestKey, ...rest } = call.body || {};
       const hash = JSON.stringify(rest);
       const saved = keys.get(requestKey);
@@ -166,23 +180,19 @@ function server({ items = ITEMS, workspace = { type: "club", scopeId: CLUB }, ca
       }
       return answer;
     }
-    if (path === "/api/calendar/events" && call.method === "POST") {
-      live.push(eventItem(E_NEW, call.body.day, { title: call.body.title, details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } }));
-      return { status: 201, body: { event: eventView({ id: E_NEW, title: call.body.title, day: call.body.day, fields: [], revision: 1 }) } };
-    }
-    if (call.method === "PATCH") return { status: 200, body: { event: { ...current, revision: current.revision + 1 } } };
-    return { status: 404, body: { error: "unexpected", message: call.url } };
-  };
+  }
   responder.live = live;
   return responder;
 }
 
 let rendered = "";
+const renders = [];
 function render() {
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),
   });
+  renders.push(rendered);
 }
 const dom = (html = rendered) => new JSDOM(`<!doctype html><body>${html}</body>`).window.document;
 const act = (dataset) => handleCentralCalendarAction(fakeAction(dataset), { render });
@@ -205,6 +215,9 @@ beforeEach(() => {
   state.activeTab = "central-calendar";
   state.athletes = [];
   rendered = "";
+  renders.length = 0;
+  confirmAnswer = true;
+  questions.length = 0;
 });
 
 async function openCreate(options = {}) {
@@ -265,7 +278,7 @@ test("D2. a new event starts at its team's default place until the place is touc
   assert.equal(form.draft.placeChoice, "", "no team yet: no place");
   input({ ccEventTarget: "team", targetId: U19, targetName: "U19" }, { checked: true });
   assert.equal(form.draft.placeChoice, L_HALL, "U19's default place");
-  assert.match(dom().querySelector("[data-cc-event-place] ~ .cc-field-hint").textContent, /^The team's default place\. No address\./);
+  assert.match(dom().querySelector("[data-cc-event-place] ~ .cc-field-hint").textContent, /^U19's default place\. No address\./, "the hint names the team");
   input({ ccEventTarget: "team", targetId: U17, targetName: "U17" }, { checked: true });
   assert.equal(form.draft.placeChoice, "", "two teams: no default");
   input({ ccEventTarget: "team", targetId: U17, targetName: "U17" }, { checked: false });
@@ -285,6 +298,7 @@ test("D2. a new event starts at its team's default place until the place is touc
   state.currentUser.activeWorkspace = { type: "team", scopeId: U19, label: "U19" };
   await openCreate({ workspace: { type: "team", scopeId: U19 } });
   assert.equal(state.centralCalendar.form.draft.placeChoice, L_HALL);
+  assert.match(dom().querySelector("[data-cc-event-place] ~ .cc-field-hint").textContent, /^U19's default place\./);
 });
 
 test("D3. a private coach (no places): the place is a text alone, sent as location", async () => {
@@ -438,7 +452,7 @@ test("D10. a manager's event with details: one read on open, each value in words
   const calls = await openPanel();
   assert.equal(eventReads(calls).length, 1, "T: one GET /:id");
   const doc = dom();
-  assert.equal(doc.querySelector(".cc-panel-details .cc-panel-note").textContent, "1 of 3 filled in · 1 required is still empty.");
+  assert.equal(doc.querySelector(".cc-panel-details .cc-panel-note").textContent, "1 of 3 filled in · 1 required detail is still empty.");
   assert.deepEqual([...doc.querySelectorAll(".cc-detail-value")].map((row) => `${row.querySelector("dt").textContent}=${row.querySelector("dd").textContent}`), [
     "Weather=Snow", "Our score (required)=Not filled in", "Old note=Not filled in",
   ]);
@@ -476,6 +490,7 @@ test("D12. Enter details: one input per detail by its kind; a hidden option the 
     { fieldId: F_GOOD, label: "Pitch was good", description: null, valueKind: "yes_no", unit: null, minValue: null, maxValue: null, required: false, archived: false, options: [], value: true },
     { fieldId: F_FEEL, label: "Team mood", description: null, valueKind: "scale_1_5", unit: null, minValue: null, maxValue: null, required: false, archived: false, options: [], value: 4 },
     { fieldId: F_OPP, label: "Opponent", description: null, valueKind: "short_text", unit: null, minValue: null, maxValue: null, required: false, archived: false, options: [], value: "Borac" },
+    { fieldId: F_OLD, label: "Temperature", description: null, valueKind: "number", unit: "°C", minValue: -40, maxValue: 50, required: false, archived: false, options: [], value: null },
   ] }) });
   assert.equal(eventReads(calls).length, 2, "the panel's read, then the form's own (the latest values)");
   const form = state.centralCalendar.form;
@@ -485,7 +500,8 @@ test("D12. Enter details: one input per detail by its kind; a hidden option the 
   assert.deepEqual([...weather.options].map((o) => o.textContent), ["Not filled in", "Sunny", "Rain", "Snow (hidden)"]);
   assert.equal(weather.value, O_SNOW);
   const score = doc.querySelector(`input[data-cc-event-value="${F_SCORE}"]`);
-  assert.equal(score.getAttribute("inputmode"), "decimal");
+  assert.equal(score.getAttribute("inputmode"), "decimal", "it cannot be negative: the decimal keypad");
+  assert.equal(doc.querySelector(`input[data-cc-event-value="${F_OLD}"]`).hasAttribute("inputmode"), false, "it can be negative: the iOS decimal keypad has no minus key");
   assert.match(score.closest(".cc-field").textContent, /Goals we scored From 0 to 99 goals\./);
   assert.deepEqual([...doc.querySelectorAll(`input[data-cc-event-value="${F_GOOD}"]`)].map((r) => `${r.value}:${r.checked}`), ["yes:true", "no:false", ":false"]);
   assert.deepEqual([...doc.querySelectorAll(`input[data-cc-event-value="${F_FEEL}"]`)].map((r) => r.value), ["1", "2", "3", "4", "5", ""]);
@@ -503,7 +519,7 @@ test("D12. Enter details: one input per detail by its kind; a hidden option the 
   // Nothing changed: nothing is sent.
   input({ ccEventValue: F_SCORE }, { value: "" });
   await submitCentralCalendarEventForm({ render });
-  assert.equal(form.error, "Nothing changed: change a field, or Close.");
+  assert.equal(form.error, "Nothing changed: change a detail, or Close.");
   assert.equal(writesOf(calls).length, 0);
 });
 
@@ -675,4 +691,120 @@ test("D20. Awaiting details: after RPE, a result and attendance, before device d
   assert.equal(view.centralCalendarCountLabel(card({ details: missing, rpe: { asked: 10, submitted: 3 } })), "RPE 3/10 · Details 1/3");
   assert.equal(view.centralCalendarCountLabel(card({ details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } })), "");
   assert.equal(view.centralCalendarCountLabel(readerItem(DAY(2))), "", "a reader's card has no details");
+  // Before it is due: what its details ask for, never "nothing is expected".
+  const planned = (details) => eventItem(E_MATCH, DAY(1), { status: "none", expects: [], details });
+  assert.equal(view.centralCalendarStatusSentence(planned({ selected: 2, filled: 0, required: 1, filledRequired: 0 })), "Its required details are due after the event.");
+  assert.equal(view.centralCalendarStatusSentence(planned({ selected: 2, filled: 0, required: 0, filledRequired: 0 })), "Nothing is required after this event; its details are optional.");
+  assert.equal(view.centralCalendarStatusSentence({ ...readerItem(DAY(2)), status: "none" }), "Nothing is expected after this event.", "no details: as before");
+});
+
+// --- 6. The review round (code, mobile, UX) ----------------------------------
+
+test("D21. a dirty Enter details form asks before it goes: No keeps it with its values, Yes closes it", async () => {
+  await openValues();
+  input({ ccEventValue: F_SCORE }, { value: "3" });
+  confirmAnswer = false;
+  await act({ action: "central-calendar-event-form-close" });
+  assert.equal(state.centralCalendar.form?.mode, "values", "kept");
+  assert.equal(state.centralCalendar.form.draft.values[F_SCORE], "3");
+  assert.deepEqual(questions, ["Discard the details you have not saved?"]);
+  confirmAnswer = true;
+  await act({ action: "central-calendar-event-form-close" });
+  assert.equal(state.centralCalendar.form, null);
+});
+
+test("D22. an answer that lands after the coach left the saving form reads the panel's details again: the card and the panel agree", async () => {
+  let release;
+  const fieldsGate = new Promise((resolve) => { release = resolve; });
+  const calls = await openValues({ fieldsGate });
+  input({ ccEventValue: F_SCORE }, { value: "2" });
+  const sending = submitCentralCalendarEventForm({ render });
+  await tick();
+  assert.ok(state.centralCalendar.form.busy, "in flight");
+  await act({ action: "central-calendar-event-form-close" });
+  assert.equal(state.centralCalendar.form, null, "left while in flight");
+  // The read made on leaving finishes first (the slow answer is still away):
+  // the panel shows the values from before the write.
+  await tick();
+  await tick();
+  assert.equal(dom().querySelector(".cc-panel-details .cc-panel-note").textContent, "1 of 3 filled in · 1 required detail is still empty.");
+  const readsBefore = eventReads(calls).length;
+  release();
+  await sending;
+  await tick();
+  await tick();
+  assert.ok(eventReads(calls).length > readsBefore, "the panel's details are read again");
+  const doc = dom();
+  assert.equal(doc.querySelector(".cc-panel-details .cc-panel-note").textContent, "2 of 3 filled in.");
+  assert.match(doc.querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"] .cc-card-count`).textContent, /Details 2\/3/);
+  assert.match(state.centralCalendar.notice, /The details of “Cup match” were saved\./);
+});
+
+test("D23. the same number written another way is no change: '2,5' over a stored 2.5 sends nothing", async () => {
+  const calls = await openValues({ event: eventView({ fields: eventView().fields.map((f) => (f.fieldId === F_SCORE ? { ...f, value: 2.5 } : f)) }) });
+  input({ ccEventValue: F_SCORE }, { value: "2,5" });
+  await submitCentralCalendarEventForm({ render });
+  assert.equal(state.centralCalendar.form.error, "Nothing changed: change a detail, or Close.");
+  assert.equal(writesOf(calls).length, 0);
+});
+
+test("D24. the place comes after Who is it for?; Another place says how to leave it empty; the club's places are one group", async () => {
+  await openCreate();
+  const doc = dom();
+  const form = doc.querySelector(".cc-event-form");
+  const targets = form.querySelector("[data-cc-event-target]");
+  const place = form.querySelector("[data-cc-event-place]");
+  assert.ok(targets.compareDocumentPosition(place) & 4, "the place follows the targets it depends on");
+  assert.deepEqual([...place.querySelectorAll("optgroup")].map((g) => g.getAttribute("label")), ["The club's places"]);
+  input({ ccEventPlace: "" }, { value: "other" });
+  const text = dom().querySelector('[data-cc-event-field="location"]').closest(".cc-field");
+  assert.equal(text.querySelector(".cc-field-label").textContent, "Another place");
+  assert.equal(text.querySelector(".cc-field-hint").textContent, "Leave it empty for no place.");
+});
+
+test("D25. the platform edits as support: its catalog is not the club's - the event's place is not called archived and no detail is offered", async () => {
+  state.currentUser.activeWorkspace = { type: "platform", scopeId: null, label: "Platform" };
+  await openPanel({
+    workspace: { type: "platform", scopeId: null },
+    catalog: { types: TYPES, fields: FIELDS, locations: [], teamDefaults: {} },
+  });
+  await act({ action: "central-calendar-edit-event", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  const doc = dom();
+  const select = doc.querySelector("[data-cc-event-place]");
+  assert.equal(select.selectedOptions[0].textContent, "City stadium — Main street 1, Novi Sad", "not '(archived)'");
+  assert.equal(doc.querySelector("[data-cc-event-add-field]"), null);
+  assert.deepEqual([...doc.querySelectorAll(".cc-detail-row .cc-detail-name")].map((el) => el.textContent), ["Weather", "Our score", "Old note"], "the event's own list stays");
+});
+
+test("D26. a panel opened again shows Loading, never the earlier read's values; a catalog read a Settings write overtook is read again", async () => {
+  await openPanel();
+  await act({ action: "central-calendar-close-panel" });
+  renders.length = 0;
+  await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
+  const firstWithPanel = renders.find((html) => html.includes("cc-panel-details"));
+  assert.match(firstWithPanel, /Loading the details/);
+
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let n = 0;
+  const calls = installFetchMock(server({
+    items: [readerItem(DAY(2))],
+    catalog: async () => {
+      n += 1;
+      if (n === 1) await gate;
+      return { status: 200, body: CATALOG };
+    },
+  }));
+  await loadCentralCalendar({ render });
+  const opening = act({ action: "central-calendar-new-event" });
+  await tick();
+  centralCalendarCatalogChanged();
+  release();
+  await opening;
+  await tick();
+  assert.equal(typesReads(calls).length, 2, "read again after the Settings write");
+  assert.equal(state.centralCalendar.form.loading, false);
+  assert.ok(state.centralCalendar.eventCatalog, "the newer catalog is kept");
 });

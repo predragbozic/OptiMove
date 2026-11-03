@@ -82,6 +82,13 @@ function placeTeamOf(form) {
   return teams.length === 1 && !targets.some((target) => target.kind === "club") ? String(teams[0].id) : "";
 }
 
+// The name of the team whose default place a new event starts at.
+function placeTeamName(form) {
+  const owner = form.owner || {};
+  if (owner.scope === "team") return owner.name || "";
+  return (form.draft.targets || []).find((target) => target.kind === "team")?.name || "";
+}
+
 // Until the coach touches the place, a new event's place is its team's default.
 export function applyCentralCalendarTeamPlace(form, catalog) {
   if (form.mode !== "create" || form.placeTouched) return;
@@ -193,33 +200,39 @@ function placeLine(place) {
 
 // One control: the club's places, "Another place…" (the one-off text, shown
 // under it) or none. A private coach has no places: the text alone.
-export function renderCentralCalendarPlaceFieldHtml(form, catalog, { fieldId, errorHtml, invalidAttrs, max }) {
+export function renderCentralCalendarPlaceFieldHtml(form, catalog, { fieldId, errorHtml, invalidAttrs, max, trusted = true }) {
   const d = form.draft;
   const choice = String(d.placeChoice || "");
-  const textInput = (label) => `<label class="cc-field" for="${fieldId("location")}">
-      <span class="cc-field-label">${escapeHtml(label)} <span class="cc-field-optional">(optional)</span></span>
+  // The text alone ("Place", optional) where there are no places; under
+  // "Another place…" the text the coach chose to give (UX review, LOW).
+  const textInput = (label, { optional = true, hint = "" } = {}) => `<label class="cc-field" for="${fieldId("location")}">
+      <span class="cc-field-label">${escapeHtml(label)}${optional ? ` <span class="cc-field-optional">(optional)</span>` : ""}</span>
       <input id="${fieldId("location")}" type="text" name="location" value="${escapeAttr(d.location || "")}" data-cc-event-field="location" data-cc-focus="field:location" maxlength="${max}" autocomplete="off"${invalidAttrs(form, "location")}>
+      ${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}
       ${errorHtml(form, "location")}
     </label>`;
   const places = catalog.locations;
   const archived = form.eventPlace && form.eventPlace.id && !places.some((place) => String(place.id) === form.eventPlace.id) ? form.eventPlace : null;
   if (!places.length && !archived) return textInput("Place");
   const chosen = places.find((place) => String(place.id) === choice) || (archived && archived.id === choice ? archived : null);
+  const teamName = form.placeFromTeam ? placeTeamName(form) : "";
   const hint = chosen
-    ? `${form.placeFromTeam ? "The team's default place. " : ""}${chosen.address ? `Address: ${chosen.address}` : "No address."}`
+    ? `${form.placeFromTeam ? `${teamName ? `${teamName}'s` : "The team's"} default place. ` : ""}${chosen.address ? `Address: ${chosen.address}` : "No address."}`
     : choice === OTHER_PLACE ? "A place that is not in the club's list, for this event only." : "";
   return `<div class="cc-field">
       <label class="cc-field-label" for="${fieldId("placeChoice")}">Place <span class="cc-field-optional">(optional)</span></label>
       <select id="${fieldId("placeChoice")}" data-cc-event-place data-cc-focus="field:placeChoice"${invalidAttrs(form, "placeChoice")}>
         <option value=""${choice ? "" : " selected"}>No place</option>
-        ${archived ? `<option value="${escapeAttr(archived.id)}"${choice === archived.id ? " selected" : ""}>${escapeHtml(`${placeLine(archived)} (archived)`)}</option>` : ""}
-        ${places.map((place) => `<option value="${escapeAttr(place.id)}"${String(place.id) === choice ? " selected" : ""}>${escapeHtml(placeLine(place))}</option>`).join("")}
+        <optgroup label="The club's places">
+          ${archived ? `<option value="${escapeAttr(archived.id)}"${choice === archived.id ? " selected" : ""}>${escapeHtml(`${placeLine(archived)}${trusted ? " (archived)" : ""}`)}</option>` : ""}
+          ${places.map((place) => `<option value="${escapeAttr(place.id)}"${String(place.id) === choice ? " selected" : ""}>${escapeHtml(placeLine(place))}</option>`).join("")}
+        </optgroup>
         <option value="${OTHER_PLACE}"${choice === OTHER_PLACE ? " selected" : ""}>Another place…</option>
       </select>
       ${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}
       ${errorHtml(form, "placeChoice")}
     </div>
-    ${choice === OTHER_PLACE ? textInput("Another place") : ""}`;
+    ${choice === OTHER_PLACE ? textInput("Another place", { optional: false, hint: "Leave it empty for no place." }) : ""}`;
 }
 
 const ARROW = (d) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${d}"/></svg>`;
@@ -227,13 +240,16 @@ const ARROW = (d) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none
 // "Details to fill in after the event" (D36): the chosen ones in order, each
 // with its kind and Required mark; add one from the catalog; on an edit
 // whose type changed, "Replace with the new type's details" (18.7).
-export function renderCentralCalendarDetailsFieldHtml(form, catalog, { types, fieldId, errorHtml }) {
+export function renderCentralCalendarDetailsFieldHtml(form, catalog, { types, fieldId, errorHtml, trusted = true }) {
   const info = fieldInfoOf(form, catalog);
   const list = form.draft.fieldIds;
-  const offer = catalog.fields.filter((field) => !list.includes(String(field.id)));
+  const offer = trusted ? catalog.fields.filter((field) => !list.includes(String(field.id))) : [];
   const type = (types || []).find((entry) => entry.id === form.draft.eventTypeId);
   const typeChanged = form.mode === "edit" && form.original && form.draft.eventTypeId !== form.original.eventTypeId;
-  const replace = typeChanged && type && !sameList(typeDefaults(type, catalog), list);
+  const replace = trusted && typeChanged && type && !sameList(typeDefaults(type, catalog), list);
+  // Nothing chosen and nothing to choose (a private coach, a club with no
+  // details): no section (UX review, LOW).
+  if (!list.length && !offer.length && !replace && !form.errors?.fieldIds) return "";
   const rows = list.map((id, index) => {
     const field = info.get(id) || { label: "A detail that is no longer available", valueKind: "" };
     const words = [KIND_WORDS[field.valueKind] || "", field.required ? "Required" : "", field.archived ? "Archived" : ""].filter(Boolean).join(" · ");
@@ -248,9 +264,10 @@ export function renderCentralCalendarDetailsFieldHtml(form, catalog, { types, fi
   }).join("");
   return `<fieldset class="cc-fieldset"${form.errors?.fieldIds ? ` aria-describedby="${fieldId("fieldIds")}-error"` : ""}>
       <legend>Details to fill in after the event</legend>
-      <span class="cc-field-hint">Filled in by the event's coach in the event's panel. RPE, GPS and test results are under Collected after it.</span>
+      <span class="cc-field-hint">After the event, open it in the calendar and choose Enter details. RPE, GPS and test results are under Collected after it.</span>
       ${list.length ? `<ol class="cc-detail-list">${rows}</ol>` : `<p class="cc-field-hint">No details for this event.</p>`}
-      ${replace ? `<button type="button" class="plain-button cc-form-small" data-action="central-calendar-event-fields-replace">Replace with the new type's details</button>` : ""}
+      ${replace ? `<span class="cc-field-hint">Changing the type keeps this event's details.</span>
+      <button type="button" class="plain-button cc-form-small" data-action="central-calendar-event-fields-replace">Replace with the new type's details</button>` : ""}
       ${offer.length && list.length < CENTRAL_CALENDAR_EVENT_FIELDS_MAX ? `<div class="cc-form-row cc-detail-add">
         <label class="visually-hidden" for="${fieldId("addField")}">Detail to add</label>
         <select id="${fieldId("addField")}" data-cc-event-add-field data-cc-focus="field:addField">
@@ -303,7 +320,7 @@ export function renderCentralCalendarEventDetailsHtml(item, view) {
   const missingRequired = fields.filter((field) => field.required && !field.archived && !centralCalendarValueText(field)).length;
   return `<div class="cc-panel-details">
       <h4 class="cc-panel-subtitle">Details</h4>
-      <p class="cc-panel-note">${escapeHtml(`${filled} of ${fields.length} filled in${missingRequired ? ` · ${missingRequired} required ${missingRequired === 1 ? "is" : "are"} still empty` : ""}.`)}</p>
+      <p class="cc-panel-note">${escapeHtml(`${filled} of ${fields.length} filled in${missingRequired ? ` · ${missingRequired} required ${missingRequired === 1 ? "detail is" : "details are"} still empty` : ""}.`)}</p>
       <dl class="cc-detail-values">
         ${fields.map((field) => {
           const text = centralCalendarValueText(field);
@@ -347,6 +364,13 @@ export function setCentralCalendarValue(form, fieldId, value) {
   return true;
 }
 
+// A typed number as the number it reads as (a comma is a decimal point, at
+// most three decimals), else the trimmed text.
+function numberOrText(raw) {
+  const text = String(raw).trim().replace(",", ".");
+  return /^-?\d{1,9}(\.\d{1,3})?$/.test(text) ? Number(text) : text;
+}
+
 // The command's body: only the changed values; an emptied one is null.
 export function buildCentralCalendarValuesRequest(form) {
   const errors = {};
@@ -354,8 +378,11 @@ export function buildCentralCalendarValuesRequest(form) {
   for (const field of form.fields) {
     const raw = String(form.draft.values[field.fieldId] ?? "");
     const was = String(form.original.values[field.fieldId] ?? "");
-    // Spaces alone, or spaces around the same text, are no change.
-    const same = field.valueKind === "short_text" ? oneLine(raw) === oneLine(was) : raw.trim() === was.trim();
+    // Spaces alone, spaces around the same text, or the same number written
+    // another way ("2,5" for 2.5) are no change.
+    const same = field.valueKind === "short_text" ? oneLine(raw) === oneLine(was)
+      : field.valueKind === "number" ? numberOrText(raw) === numberOrText(was)
+        : raw.trim() === was.trim();
     if (same) continue;
     const key = `value:${field.fieldId}`;
     if (raw.trim() === "") {
@@ -370,8 +397,8 @@ export function buildCentralCalendarValuesRequest(form) {
       else values.push({ fieldId: field.fieldId, value: n });
     } else if (field.valueKind === "number") {
       // A comma is a decimal point; at most three decimals (K2b-1b's rule).
-      const text = String(raw).trim().replace(",", ".");
-      const n = /^-?\d{1,9}(\.\d{1,3})?$/.test(text) ? Number(text) : Number.NaN;
+      const read = numberOrText(raw);
+      const n = typeof read === "number" ? read : Number.NaN;
       const min = field.minValue;
       const max = field.maxValue;
       if (!Number.isFinite(n)) errors[key] = "Use a number with at most three decimals.";
@@ -414,11 +441,12 @@ export function renderCentralCalendarValuesFieldsHtml(form) {
     if (field.valueKind === "choice") {
       control = `<select id="${id}" ${data}${invalid}><option value=""${value ? "" : " selected"}>Not filled in</option>${(field.options || []).map((option) => `<option value="${escapeAttr(option.id)}"${String(option.id) === value ? " selected" : ""}>${escapeHtml(option.label)}${option.hidden ? " (hidden)" : ""}</option>`).join("")}</select>`;
     } else if (field.valueKind === "yes_no" || field.valueKind === "scale_1_5") {
-      const choices = field.valueKind === "yes_no" ? [["yes", "Yes"], ["no", "No"], ["", "Not answered"]] : [["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["5", "5"], ["", "Not answered"]];
+      const choices = field.valueKind === "yes_no" ? [["yes", "Yes"], ["no", "No"], ["", "Not filled in"]] : [["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["5", "5"], ["", "Not filled in"]];
       control = `<div class="cc-value-choices" role="radiogroup" aria-labelledby="${id}-label"${invalid}>${choices.map(([v, text]) => `<label class="cc-value-choice"><input type="radio" name="${id}" value="${v}" ${data}${value === v ? " checked" : ""}><span>${escapeHtml(text)}</span></label>`).join("")}</div>`;
       return `<div class="cc-field cc-value-field"><span class="cc-field-label" id="${id}-label">${label}</span>${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}${control}${error ? `<span class="cc-field-error" id="${id}-error">${escapeHtml(error)}</span>` : ""}</div>`;
     } else if (field.valueKind === "number") {
-      control = `<input id="${id}" type="text" inputmode="decimal" value="${escapeAttr(value)}" ${data} maxlength="16" autocomplete="off"${invalid}>`;
+      const decimalPad = typeof field.minValue === "number" && field.minValue >= 0;
+      control = `<input id="${id}" type="text"${decimalPad ? ` inputmode="decimal"` : ""} value="${escapeAttr(value)}" ${data} maxlength="16" autocomplete="off"${invalid}>`;
     } else {
       control = `<input id="${id}" type="text" value="${escapeAttr(value)}" ${data} maxlength="${CENTRAL_CALENDAR_VALUE_TEXT_MAX}" autocomplete="off"${invalid}>`;
     }

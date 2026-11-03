@@ -348,7 +348,12 @@ export function centralCalendarStatusSentence(item) {
       // An imported activity of today is recorded, not planned.
       return item.kind === "activity" ? "Nothing is due yet: the day has not passed." : "Planned: nothing is due yet.";
     case "none":
-      if (item.kind === "event") return expects.length ? "Nothing is being collected: see the note below." : "Nothing is expected after this event.";
+      if (item.kind === "event") {
+        if (expects.length) return "Nothing is being collected: see the note below.";
+        if (item.details?.required > 0) return "Its required details are due after the event.";
+        if (item.details?.selected > 0) return "Nothing is required after this event; its details are optional.";
+        return "Nothing is expected after this event.";
+      }
       return "Nothing was asked for this item, so there is nothing to wait for.";
     default:
       return "";

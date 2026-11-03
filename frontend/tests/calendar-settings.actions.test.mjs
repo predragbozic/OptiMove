@@ -507,7 +507,7 @@ test("12. Details: the owner's sentence; the Required switch (K2b-1d, 21.5) is o
   assert.ok(required, "the Required switch (P1 turned on in K2b-1d)");
   assert.equal(required.checked, false, "off by default");
   assert.equal(CALENDAR_SETTINGS_REQUIRED_SENTENCE, "Optional details only remind the coach; a required one makes the event wait until it is filled.");
-  assert.equal(page.querySelector(`#${required.getAttribute("aria-describedby")}`).textContent, CALENDAR_SETTINGS_REQUIRED_SENTENCE);
+  assert.equal(page.querySelector(`#${required.getAttribute("aria-describedby")}`).textContent, CALENDAR_SETTINGS_REQUIRED_SENTENCE, "a new detail: D25's sentence alone");
   assert.match(page.querySelector("[data-calendar-settings-form]").textContent, /Filled by coach/);
   type(page, "#cs-field-label", "Pitch");
   type(page, "#cs-field-valueKind", "choice");
@@ -579,6 +579,7 @@ test("14. editing a choice: rename, add, hide and show in one request; a detail 
   // Required changes on an answered detail too (2.3): it is not its meaning.
   assert.equal(page.querySelector("#cs-field-required").checked, true);
   assert.equal(page.querySelector("#cs-field-required").disabled, false);
+  assert.match(page.querySelector("#cs-field-required-hint").textContent, /Switching it applies to every event that uses this detail \(5 events\), past ones included\.$/, "the switch's reach, as the place form says it (UX review)");
   choose(page, "#cs-field-required");
   await submit(page);
   assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, expectedRevision: 3, description: "Goals we scored", required: false });
