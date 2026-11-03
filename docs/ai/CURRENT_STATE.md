@@ -52,7 +52,8 @@ on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothi
 (the import window's SQL files) and the record of the first controlled import (M6) were added on 2026-11-02 at `ca79b33`
 (merge of PR #329); nothing else was re-derived then. The acceptance of the 7h and 7i contracts (J14 and J15, C126–C140;
 PR #333 and PR #334) and the order of their pull requests were added on 2026-11-02 at `93f36615` (merge of PR #334);
-nothing else was re-derived then.
+nothing else was re-derived then. Phase 7h-B (PR #339, migration v52), its deploy, the *Rukovodilac*'s v52 post-check
+and its decisions 1–5 were added on 2026-11-03 at `0334ddbd` (merge of PR #339); nothing else was re-derived then.
 
 ## Active phase
 
@@ -74,12 +75,30 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
   real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
   after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
   between the merge and the post-check;
-  **built, in review** (branch `feature/7h-b-club-mapping-transitions`, base `34b65a75`; J14 section 17): v52
-  (`migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`) with its runbook, preflight,
-  post-check and rollback; the service and the Mappings screen as J14 sections 7 and 8. Not merged, not deployed; v52
-  is applied to no persistent database. The 9-R window files stay pinned to v51 (the first window's record names
-  them); the next window re-issues them before its step 11;
-- then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B) and **the lock-order
+  **done** (J14 section 17):
+  - **Built:** v52 (`migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`) with its runbook,
+    preflight, post-check and rollback; the service and the Mappings screen as J14 sections 7 and 8.
+  - **Merged** as PR #339 (`0334ddbd`, parents `a811e692` and `34203ce9`) on 2026-11-03 at 07:54:47 UTC, exactly from
+    `34203ce9`:
+    - both ★★ GOs on that head: the *Rukovodilac*'s event `ea8fc169` and the *Nezavisni revizor*'s `45cee1c4`;
+    - the owner's order naming v52 (turn `621d4801` in the *Rukovodilac*'s chat);
+    - the *Rukovodilac*'s clean production preflight, blocks 1–9, with block 8 at 07:51:23 UTC;
+    - `main` had moved through PR #336 and #340 (no migration); the targeted tests passed on the merge tree.
+  - **Deployed** by the owner after block 8 was run again (about 08:12 UTC): live at 08:14:38 UTC. Production had
+    been serving `a811e692`, so this deploy brought only 7h-B and v52.
+    - `/api/health` served `0334ddbd` with `ok: true` three times in a row (08:26:55–08:27:16 UTC).
+    - Without a login, `/api/auth/me` answered 200 with no user; activate, disable and the mappings list answered 401.
+  - **The *Rukovodilac*'s read-only post-check** (six blocks) passed. **v52 is directly confirmed on production.**
+    J14's amendments of J8, J10, J16 and the discovery document are in force from the deploy.
+  - **The *Rukovodilac*'s decisions 1–5 at the GO** (J14 section 17):
+    - the Imports step's sentence goes to 7h-F;
+    - the conditional sentences are confirmed;
+    - the 9-R files stay pinned to v51 until the next window re-issues them (Separate tasks);
+    - two `db-reviewer` LOWs are accepted and one is a follow-up;
+    - the follow-ups go to Separate tasks.
+  - No club admin's activation, import, check or switch change was made;
+- then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B; it also takes the
+  Imports step's wording, decision 1 of 7h-B's GO, Separate tasks) and **the lock-order
   pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
   Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
   end in `40P01` with an Unbind and a revocation at once (`try_again` or a 500, nothing written); the *Rukovodilac*
@@ -3815,6 +3834,37 @@ pre-existing; pass/fail counts don't belong in this file
     `:131`, `:157`, `sourceConnectionService.js:211`, `gpexeAthleteIdentityService.js:155-157`,
     `routes/exerciseCollections.js:191-193`;
   - the team-coach branch, `sourceMetricAccess.js:177`, once the team-coach revocation's own order is checked.
+- **Before the next import window: re-issue both 9-R window files (mandatory; the *Rukovodilac*'s decision 3 at 7h-B's
+  GO, event `ea8fc169`, on the *Nezavisni revizor*'s proposal, event `45cee1c4`).**
+  - `docs/runbooks/gpexe-import-window-preflight.sql` and `-postcheck.sql` are pinned to v51. They are the record of
+    the first window (M6), which ran them on production and names their sha256 values, so they stay as they are.
+  - Since v52 their block 1 fails. Before the next window's step 11, both files are re-issued:
+    - with the latest migration and its checksum;
+    - with the fix of post-check block 8 (the *Nezavisni revizor*'s L1 on PR #330, the entry below);
+    - under new sha256 values;
+    - with `backend/tests/gpexe-import-window-sql-9r.test.mjs` building its world through that migration again
+      (today it builds through v51).
+  - J17 section 10.4 says the same. No window may start on the v51 files.
+- **The Imports step's wording for a club's admin (the `ux-design-reviewer`'s note on 7h-B, LOW; decision 1 at 7h-B's GO:
+  goes to 7h-F).** J14 section 8 fixes `SETUP_MAPPINGS_STEP` (`frontend/gpexe-import-view.js`), and 7h-B ships it as
+  written. The reviewer proposes, for the club's admin who usually reads it:
+
+  > Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE
+  > binding (Settings > Source connections), then find new sessions. The club's admin changes the club's own mappings
+  > there. If both look right, ask a platform administrator, who handles system mappings and field confirmations (give
+  > them the Technical details).
+
+  7h-F decides it, with the frontend test of the Imports step.
+- **7h-B follow-ups (decisions 4 (c) and 5 at 7h-B's GO; LOW, no deadline before more clubs are brought on):**
+  - **A club admin's COMMIT that never answers** (the `db-reviewer`'s LOW (c)). The 7h suite has the COMMIT trio for
+    a platform admin's A1 and A2 only. The COMMIT path does not depend on the basis, but a club-admin case would pin
+    the replay and the verified answer on the `club_admin` basis.
+  - **The Disable review when another version waits** (the `ux-design-reviewer`'s note). Disabling the active version
+    while another version of the mapping waits for review does not move the teams to the waiting version. The review
+    should say so.
+  - **Test 1's remaining preflight flips** (the `code-reviewer`'s note). The 7h suite's test 1 flips some of the
+    preflight's hard values, not every one. The rest are flipped the same way: each value changed on a disposable v51
+    database, then the block shows the refusal.
 - **The import window's post-check block 8 counts ended instances (the *Nezavisni revizor*'s L1 on PR #330, LOW; after
   7h and 7i).** `docs/runbooks/gpexe-import-window-postcheck.sql` block 8 lists every gpexe instance row of the team and
   expects exactly one, so an instance ended earlier (7g, `inactive`) would stop a window without a real problem; the

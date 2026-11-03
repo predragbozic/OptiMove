@@ -20,7 +20,7 @@ before this contract is accepted.
 | The owner's decision | **C108 / OD6** (2026-10-30): „Povezivanje veza i raskidanje veza izmedju varijabli radi pre svega klupski admin, moze i sistemski ali pre svega klupski jer je to njegov posao.” (turn `122a4df5`); „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`); „znaci promeni u skladu sta sam hteo, ne vidim problem, da li ti vidis” (turn `88ad60ca`). Section 2 is the *Rukovodilac*'s reading of it (discovery C108), made concrete. |
 | Owner decisions | **O1–O6** (section 11), decided as recommended on 2026-11-02: **C126–C131** in the discovery document's section C (R8). |
 | Decides | The *Rukovodilac*: R1–R13 (section 12) and the acceptance under its order. The owner: O1–O6; for a ★★ phase the owner also approves the contract before any code (`metrics-core-plan.md`, section 3, A1). |
-| Migration | **v52** (the next free number: v51 is `migrations_v2/202611011900_calendar_v51_settings.sql`), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v52_club_mapping_transitions.sql`. No open pull request carries a migration at the time of writing (PR #332 has none). If another migration lands first, 7h takes the next number (R1). |
+| Migration | **v52** (the next free number: v51 is `migrations_v2/202611011900_calendar_v51_settings.sql`), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v52_club_mapping_transitions.sql`. No open pull request carries a migration at the time of writing (PR #332 has none). If another migration lands first, 7h takes the next number (R1). **Built as `migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`; merged as PR #339 (`0334ddbd`) and deployed on 2026-11-03; directly confirmed on production by the post-check (section 17).** |
 
 ---
 
@@ -1345,10 +1345,67 @@ section" that O2 names: the screens, exactly, and what the read returns. **Merge
 
 The pull request 7h-B (branch `feature/7h-b-club-mapping-transitions`, base `34b65a75`, the merge of PR #338; `main`
 was brought in as a plain merge before the Draft pull request) builds sections 2–10 with migration v52. Its plan was
-accepted by the *Rukovodilac* without changes (events `783e3591` and `66b3b71d`). **Not merged, not deployed; v52 is
-applied to no persistent database.** The merge needs both ★★ GOs on one head and the owner's order naming v52; the
-deploy follows the *Rukovodilac*'s preflight, and no other pull request is merged between the merge and the
-post-check (the runbook).
+accepted by the *Rukovodilac* without changes (events `783e3591` and `66b3b71d`).
+
+**Merged and deployed on 2026-11-03; v52 is directly confirmed on production.**
+- **The GOs.** Both ★★ GOs were given on head `34203ce9`, neither with a BLOCKER, HIGH or MEDIUM:
+  - the *Rukovodilac*'s (event `ea8fc169`, 07:15:52 UTC), with its decisions 1–5 (below);
+  - the *Nezavisni revizor*'s (event `45cee1c4`, 07:19:28 UTC).
+- **The owner's order naming v52**, in the *Rukovodilac*'s chat: „Odobravam merge i deploy PR #339 sa migracijom v52”
+  (owner turn `621d4801`, 07:51:14 UTC). The executor checked it in the transcript.
+- **The preflight.** The *Rukovodilac* ran it on production the same UTC day: blocks 1–9 of
+  `docs/runbooks/club-mapping-transitions-v52-preflight.sql` from the file at `34203ce9` (sha256 `cb03d8b8…efbf2`),
+  each block in a read-only wrapper, all clean. Block 8, the quiet moment, ran at 07:51:23 UTC.
+- **The merge.** PR #339 was merged as `0334ddbd` at 07:54:47 UTC, exactly from `34203ce9` (`expectedHeadSha`), with
+  both GO events, the owner's order and the preflight in the merge commit's message.
+  - `main` had moved after both GOs, from `34b65a75` to `a811e692`, through PRs #336 and #340: organization routes, no
+    migration, and no shared file but `docs/ai/CURRENT_STATE.md`.
+  - `git merge-tree` was clean. The club-admin revocation route that test 17 relies on was untouched.
+  - Targeted tests on the trial merge tree, which is the tree of `0334ddbd`: backend 97/97 (7h 21, 7b 17, 7d 14, 9b
+    concurrency 20, organization team archive 14, organization team club fixed 11) and frontend 134/134. This is the
+    precedent of PR #287 and PR #293.
+- **The deploy.**
+  - Before it, the *Rukovodilac* ran block 8 again, at about 08:12 UTC: every count 0.
+  - The owner started the deploy of `0334ddbd` by hand. It was created at 08:13:44 UTC and went live at 08:14:38 UTC.
+  - Production had been serving `a811e692` (#336 and #340, through the deploy hook), so this deploy brought only 7h-B
+    and v52.
+  - `/api/health` served `0334ddbd` with `ok: true` three times in a row (08:26:55, 08:27:05 and 08:27:16 UTC).
+- **The smoke check**, without a login and with the zero UUID:
+  - `/api/auth/me` answered 200 with `{"user":null}`;
+  - `POST …/mappings/<0>/versions/<0>/activate`, `POST …/disable` and `GET …/sources/metrics/mappings` answered 401.
+- **The post-check.** The *Rukovodilac* ran `docs/runbooks/club-mapping-transitions-v52-postcheck.sql` from `main`
+  (sha256 `0d9ce5e4…c999`), each block in a read-only wrapper. All six blocks were as expected:
+  - 1: one v52 row with its checksum, and no later migration;
+  - 2: four bodies at their v52 md5;
+  - 3: both CHECKs and the comment are v52's;
+  - 4: 18 of 18 triggers enabled;
+  - 5: every count 0;
+  - 6: no table lock, no migrator lock, no idle transaction.
+
+  **v52 is directly confirmed on production**, not only inferred from the start-up. So **every mark of section 13
+  ("in force once 7h-B is merged and v52 deployed") is in force from 2026-11-03 08:14:38 UTC.**
+- No mapping version was activated, replaced or disabled by a club's admin at the merge, the deploy or the checks.
+  There was no import, no check, no GPEXE request, and no change to Render or the import switch.
+
+**The *Rukovodilac*'s decisions 1–5 at the GO** (event `ea8fc169`):
+1. The Imports step's sentence (`SETUP_MAPPINGS_STEP`, section 8) stays as it is in 7h-B. The `ux-design-reviewer`'s
+   proposal goes to 7h-F (`docs/ai/CURRENT_STATE.md`, Separate tasks).
+2. The conditional sentences for a field whose meaning is not confirmed (below) are confirmed.
+3. The two 9-R window files stay pinned to v51, and `gpexe-import-window-sql-9r.test.mjs` builds its world through v51.
+   Before the next import window both files are re-issued, with the latest migration and new sha256 values, together
+   with the *Nezavisni revizor*'s L1 of PR #330. This is a mandatory step: the *Nezavisni revizor* proposed it at its
+   GO, and it is now written in J17 section 10.4 and in `docs/ai/CURRENT_STATE.md` (Separate tasks).
+4. The `db-reviewer`'s LOWs:
+   - (a) v52 holding T4 while it waits for T5 and T8 is accepted as written in section 6.3, since the deploy runs at a
+     quiet moment, after block 8;
+   - (b) the rollback taking T4 without `NOWAIT` is accepted: the rollback is for an emergency only and runs with the
+     owner;
+   - (c) a club-admin case of a COMMIT that never answers is a follow-up.
+5. The follow-ups go to `docs/ai/CURRENT_STATE.md`'s Separate tasks:
+   - 4 (c);
+   - the Disable review of an active version while another version waits, which should say that the teams are not
+     moved;
+   - test 1's remaining preflight flips.
 
 - **v52** (`migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`, sha256 of the file
   `b2648244871d6460e5803219bf8de16aa2d83eed5fc6de0f029843a27e180918`, the checksum the runner records), as section 6:
@@ -1441,4 +1498,6 @@ post-check (the runbook).
   and the system mapping's detail have no horizontal overflow, every control at least 44 px, every field 16 px, no page
   error and no write sent.
 - **Known limits:** the A1–Unbind–revocation `40P01` of the runbook, until the lock-order pull request (section 7,
-  R13); everything else of section 14.
+  R13); everything else of section 14. The *Activate*, *Replace* and *Disable* controls show to any user of a club's
+  workspace on that club's own mappings (the `security-reviewer`'s LOW): a hint of the screen only, since the server
+  decides every request again and answers anyone else with the identical 404.
