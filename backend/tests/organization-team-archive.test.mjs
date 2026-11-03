@@ -422,3 +422,47 @@ test("12. a membership restore and an add of the same athlete without a club mem
   assert.equal(rows.filter((r) => r.type === "club" && r.status === "active").length, 1, "one club membership");
   assert.equal(rows.find((r) => r.type === "team").status, "active");
 });
+
+test("13. an id that is not a UUID on a membership route answers as an unknown id, never a 500 or the database's text", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 ids ${uid()}`);
+  const a = await member(clubs.c1, teamId);
+  const bad = "not-a-uuid";
+  const clubMembership = (cookie, clubId, athleteId, restoring = false) => env.api(
+    `/api/organization/clubs/${clubId}/athletes/${athleteId}${restoring ? "/restore" : ""}`, { method: restoring ? "PUT" : "DELETE", cookie });
+  const cases = [
+    ["remove, bad athlete", () => removeFromTeam(roles.platformAdmin.cookie, teamId, bad), 404, "This athlete has no active membership in this team."],
+    ["remove, bad team", () => removeFromTeam(roles.platformAdmin.cookie, bad, a.athleteId), 404, "This athlete has no active membership in this team."],
+    ["remove, bad athlete, the club's admin", () => removeFromTeam(roles.clubAdmin.cookie, teamId, bad), 404, "This athlete has no active membership in this team."],
+    ["remove, bad team, the club's admin", () => removeFromTeam(roles.clubAdmin.cookie, bad, a.athleteId), 403, "Team is outside your access."],
+    ["restore, bad athlete", () => restoreMembership(roles.platformAdmin.cookie, teamId, bad), 404, "No membership in this team was found."],
+    ["restore, bad team", () => restoreMembership(roles.platformAdmin.cookie, bad, a.athleteId), 404, "Team not found."],
+    ["club archive, bad athlete", () => clubMembership(roles.platformAdmin.cookie, clubs.c1, bad), 404, "This athlete has no active membership in this club."],
+    ["club archive, bad club", () => clubMembership(roles.platformAdmin.cookie, bad, a.athleteId), 404, "This athlete has no active membership in this club."],
+    ["club restore, bad athlete", () => clubMembership(roles.platformAdmin.cookie, clubs.c1, bad, true), 404, "No membership in this club was found."],
+    ["club archive, bad club, the club's admin", () => clubMembership(roles.clubAdmin.cookie, bad, a.athleteId), 403, "Club is outside your access."],
+    ["add, bad athlete", () => addToTeam(roles.platformAdmin.cookie, teamId, bad), 404, "Athlete not found."],
+    ["add, bad athlete, the club's admin", () => addToTeam(roles.clubAdmin.cookie, teamId, bad), 403, "Athlete is outside your access."],
+    ["add, bad team", () => addToTeam(roles.platformAdmin.cookie, bad, a.athleteId), 404, "Team not found."],
+  ];
+  for (const [label, call, status, error] of cases) {
+    const res = await call();
+    assert.deepEqual([res.status, res.body.error], [status, error], `${label}: ${res.text}`);
+    assert.ok(!/invalid input syntax|uuid/i.test(res.text), `${label}: no database text`);
+  }
+  assert.equal((await memberships(a.athleteId)).filter((r) => r.status === "active").length, 2, "nothing changed");
+});
+
+test("14. the coach of an archived team adding an athlete learns the team is archived (409 team_archived), not that the athlete is outside; another club's admin learns nothing", async () => {
+  const { clubs, roles } = m;
+  const teamId = await env.fx.makeTeam(clubs.c1, `D45 coach add ${uid()}`);
+  const coach = await env.fx.coachOf(teamId, "D45 coach add");
+  await member(clubs.c1, teamId);
+  assert.equal((await archive(roles.clubAdmin.cookie, teamId)).status, 200);
+  const other = await env.fx.makeAthlete(`D45 elsewhere ${uid()}`, { clubId: clubs.c1 });
+  const byCoach = await addToTeam(coach.cookie, teamId, other.athleteId);
+  assert.deepEqual([byCoach.status, byCoach.body.error], [409, "team_archived"], byCoach.text);
+  const foreign = await addToTeam(roles.stranger.cookie, teamId, other.athleteId);
+  assert.deepEqual([foreign.status, foreign.body.error], [403, "Team is outside your access."], foreign.text);
+  assert.equal(await activeTeamMembers(teamId), 0);
+});
