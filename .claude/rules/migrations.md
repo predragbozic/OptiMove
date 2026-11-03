@@ -48,6 +48,18 @@ the widget row). A new function touching more than one of these tables must foll
 same order, or it's a deadlock risk against the existing functions. See
 `docs/decisions/ADR-003-dashboard-sanctioned-writes.md`.
 
+## Lock order: rights rows, and "every lock before the first write"
+
+- A rights check that locks rows locks the `users` row before the role row (`for share of u, r`, `u, g`, `u, r, c`).
+  That is the order the revocations in `backend/src/routes/organization.js` lock in (`for update of u, r` /
+  `u, g`), and PostgreSQL takes row locks in the order of the `OF` list. Proof:
+  `backend/tests/lock-order-lo1.test.mjs` runs the real revocation against the real write and sees no `40P01`.
+  Database functions that still lock the role row first are listed under LO-2 in `docs/ai/CURRENT_STATE.md`.
+- A transaction whose contract says it takes every lock before its first write has a test that records the SQL it
+  sends and asserts that order: no lock that is not allowed before the first expected lock, and no locking clause
+  between the first write and the COMMIT. A surviving mutation argued "equivalent today" is not that proof. Proof:
+  `lock-order-lo1.test.mjs` test 9c (`docs/ai/phase7h-club-admin-mappings-contract.md` section 18).
+
 ## Never automatic
 
 Running a migration against any persistent database (local OPTIMOVE dev included) is
