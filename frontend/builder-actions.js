@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { matchingAthletes } from "./athlete-list-tools.js";
-import { acknowledgeBuilderItemEdit, clearBuilderItemEdits, pendingBuilderItemEdit, preserveBuilderItemEdits, withoutUntouchedText } from "./builder-item-edits.js";
+import { acknowledgeBuilderItemEdit, clearBuilderItemEdits, noteBuilderItemTextSent, pendingBuilderItemEdit, preserveBuilderItemEdits, withoutUntouchedText } from "./builder-item-edits.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
@@ -1672,7 +1672,9 @@ export async function submitBuilderForm(form, handlers) {
   }
   if (mode === "update-item") {
     const edit = pendingBuilderItemEdit(form.dataset.itemId);
-    const result = await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload({ ...withoutUntouchedText(form.dataset.itemId, edit?.data || data), responseMode: "item" })) });
+    const payload = withoutUntouchedText(form.dataset.itemId, edit?.data || data);
+    noteBuilderItemTextSent(form.dataset.itemId, payload);
+    const result = await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload({ ...payload, responseMode: "item" })) });
     acknowledgeBuilderItemEdit(form.dataset.itemId, edit);
     if (result.item) {
       if (result.planId !== state.builder.draft?.plan.id) return;

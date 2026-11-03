@@ -41,7 +41,7 @@ export function renderExerciseItemHtml(item, itemId, layout) {
             </button>
             ${hasMedia ? `
               <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(title || "Exercise media")}" ${mediaAccessAttributes(media)}>
-                ${renderExerciseThumb(item, "media-thumb")}
+                ${renderExerciseThumb(item, "media-thumb", { name: title })}
               </button>
             ` : ""}
           </div>
@@ -57,7 +57,7 @@ export function renderExerciseItemHtml(item, itemId, layout) {
     <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
       ${hasMedia ? `
         <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(title || "Exercise media")}" ${mediaAccessAttributes(media)}>
-          ${renderExerciseThumb(item, "media-thumb")}
+          ${renderExerciseThumb(item, "media-thumb", { name: title })}
         </button>
       ` : ""}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">

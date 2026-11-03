@@ -446,7 +446,7 @@ function renderSectionPreviewPopover(node, context) {
     <div class="builder-section-preview-popover ${isOpen ? "is-open" : ""}">
       ${items.length ? items.slice(0, 8).map((item) => `
         <span class="builder-section-preview-thumb" title="${escapeAttr(planItemText(item, "title") || "Exercise")}">
-          ${renderExerciseThumb(item, "builder-section-preview-image")}
+          ${renderExerciseThumb(item, "builder-section-preview-image", { name: planItemText(item, "title") })}
         </span>
       `).join("") : `<span class="muted builder-section-preview-empty">No exercises yet</span>`}
     </div>

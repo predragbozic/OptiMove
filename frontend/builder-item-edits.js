@@ -2,13 +2,16 @@ import { planItemText } from "./exercise-text.js";
 import { state } from "./state.js";
 
 const pending = new Map();
-// Items whose Instruction the coach has changed (owner, 2026-11-03). The field
-// shows what the reader reads - the exercise's English for an English reader
-// while the item still carries its exercise's text - so it goes back to the
-// server only once it differs from what was shown; an unchanged one is left
-// out of the save and the stored text stays as it is. Once changed, an item
-// stays marked until the save that carries the change is answered.
-const touchedText = new Set();
+// The Instruction an item showed before the coach changed it (owner,
+// 2026-11-03). The field shows what the reader reads - the exercise's English
+// for an English reader while the item still carries its exercise's text - so
+// it goes back to the server only while it differs from what was shown: an
+// unchanged one, or one typed in and back again, is left out of the save and
+// the stored text stays as it is. Once a changed Instruction has been sent,
+// what the coach types is the item's own text and is sent as typed (sentText).
+// Both are kept until the save that carries the change is answered.
+const shownBefore = new Map();
+const sentText = new Set();
 
 // A textarea or an attribute reads "\r\n" back as "\n" and a leading newline
 // may be dropped, so line ends and outer whitespace do not count as a change.
@@ -28,13 +31,28 @@ function draftItem(itemId) {
 
 export function withoutUntouchedText(itemId, data) {
   if (!Object.hasOwn(data, "description")) return { ...data };
-  if (!touchedText.has(itemId)) {
-    const item = draftItem(itemId);
-    if (item && !sameShownText(data.description, planItemText(item, "description"))) touchedText.add(itemId);
-  }
-  if (touchedText.has(itemId)) return { ...data };
   const { description, ...rest } = data;
-  return rest;
+  const item = draftItem(itemId);
+  if (!shownBefore.has(itemId)) {
+    if (!item) return rest;
+    const shown = planItemText(item, "description");
+    if (sameShownText(description, shown)) return rest;
+    shownBefore.set(itemId, { shown, description: item.description, descriptionEn: item.descriptionEn });
+  }
+  const before = shownBefore.get(itemId);
+  if (!sentText.has(itemId) && sameShownText(description, before.shown)) {
+    // Back to what was shown: the draft item shows its own text again, not
+    // what an earlier pending edit had put there.
+    if (item) Object.assign(item, { description: before.description, descriptionEn: before.descriptionEn });
+    return rest;
+  }
+  return { ...data };
+}
+
+// Called with what a save sends: a changed Instruction on its way to the
+// server is from then on the item's own text.
+export function noteBuilderItemTextSent(itemId, payload) {
+  if (Object.hasOwn(payload, "description")) sentText.add(itemId);
 }
 
 export function rememberBuilderItemEdit(itemId, data) {
@@ -54,12 +72,14 @@ export function pendingBuilderItemEdit(itemId) {
 export function acknowledgeBuilderItemEdit(itemId, edit) {
   if ((pending.get(itemId) ?? null) !== (edit ?? null)) return;
   pending.delete(itemId);
-  touchedText.delete(itemId);
+  shownBefore.delete(itemId);
+  sentText.delete(itemId);
 }
 
 export function clearBuilderItemEdits() {
   pending.clear();
-  touchedText.clear();
+  shownBefore.clear();
+  sentText.clear();
 }
 
 export function preserveBuilderItemEdits(draft) {

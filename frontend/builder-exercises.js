@@ -112,7 +112,7 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
 function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emptyLabel = "" }) {
   const media = exerciseMediaOf(item);
   if (hasAnyMedia(media)) {
-    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass)}</button>`;
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass, { name: planItemText(item, "title") })}</button>`;
   }
   return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (planItemText(item, "title") || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
@@ -261,7 +261,7 @@ export function renderBuilderStickyBar(node, mobileMode) {
     <span class="builder-sticky-bar-thumbs">
       ${recent.map((item) => {
         const media = exerciseMediaOf(item);
-        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(planItemText(item, "title") || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image")}</span>`;
+        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(planItemText(item, "title") || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image", { name: planItemText(item, "title") })}</span>`;
       }).join("")}
       ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
     </span>

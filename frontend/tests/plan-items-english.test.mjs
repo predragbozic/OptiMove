@@ -178,3 +178,56 @@ test("6. while a typed Instruction waits for its save, it is shown as typed, nev
   });
   clearBuilderItemEdits();
 });
+
+test("7. an Instruction typed in and back again within the autosave pause is not sent, and the draft shows its own text again", async () => {
+  clearBuilderItemEdits();
+  useDraft([builderItem({ id: "item-revert" })]);
+  await asAsync(EN, async () => {
+    rememberBuilderItemEdit("item-revert", { sets: "", reps: "", load: "", description: "Step forward.x" });
+    const reverted = rememberBuilderItemEdit("item-revert", { sets: "3", reps: "", load: "", description: "Step forward." });
+    assert.equal(Object.hasOwn(reverted.data, "description"), false);
+    const shown = state.builder.draft.blocks[0].sessions[0].nodes[0].items[0];
+    assert.equal(shown.description, "Korak napred.", "the stored text, not the earlier pending one");
+    assert.equal(planItemText(shown, "description"), "Step forward.");
+    formData([["sets", "3"], ["reps", ""], ["load", ""], ["description", "Step forward."]]);
+    const calls = fetchAnswering({ planId: "plan-1", item: { id: "item-revert", sets: "3", reps: "", load: "", description: "Korak napred.", descriptionEn: "Step forward." } });
+    await submitBuilderForm(updateForm("item-revert"), handlers());
+    assert.equal(Object.hasOwn(calls[0].body, "description"), false, "the English shown is never sent back");
+  });
+});
+
+test("8. once a changed Instruction is on its way, what the coach types next is their own text, even the text that was shown", async () => {
+  clearBuilderItemEdits();
+  useDraft([builderItem({ id: "item-sent" })]);
+  await asAsync(EN, async () => {
+    rememberBuilderItemEdit("item-sent", { sets: "", reps: "", load: "", description: "Step forward slowly." });
+    let release;
+    const calls = [];
+    globalThis.fetch = async (url, options = {}) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) await new Promise((resolve) => { release = resolve; });
+      const sent = calls.at(-1);
+      return { ok: true, status: 200, statusText: "", json: async () => ({ planId: "plan-1", item: { id: "item-sent", sets: "", reps: "", load: "", description: sent.description ?? "Step forward slowly.", descriptionEn: null } }) };
+    };
+    const first = submitBuilderForm(updateForm("item-sent"), handlers());
+    while (!release) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(calls[0].description, "Step forward slowly.");
+    // While that save is in flight the coach types the shown text back: now their own.
+    const back = rememberBuilderItemEdit("item-sent", { sets: "", reps: "", load: "", description: "Step forward." });
+    assert.equal(back.data.description, "Step forward.");
+    release();
+    await first;
+    formData([["sets", ""], ["reps", ""], ["load", ""], ["description", "Step forward."]]);
+    await submitBuilderForm(updateForm("item-sent"), handlers());
+    assert.equal(calls[1].description, "Step forward.");
+  });
+  clearBuilderItemEdits();
+});
+
+test("9. a plan item's thumbnail initials follow the title it shows", () => {
+  const item = row({ image: "https://example.com/lunge.png" });
+  assert.match(as(EN, () => renderExerciseItemHtml(item, "pi-1", "horizontal")), /data-fallback-initials="L"/);
+  assert.match(as(SR, () => renderExerciseItemHtml(item, "pi-1", "horizontal")), /data-fallback-initials="I"/);
+  const builder = builderItem({ id: "item-thumb", imageUrl: "https://example.com/lunge.png" });
+  assert.match(as(EN, () => renderBuilderItems({ items: [builder] })), /data-fallback-initials="L"/);
+});

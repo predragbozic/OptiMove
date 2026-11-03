@@ -15,16 +15,22 @@ const englishWhileSame = (stored, serbian, english) =>
 // rows: anything with exercise_id, title and description (a view row, a
 // Builder row). One query for all of them, none when no row names an
 // exercise, and only the five columns of the exercises the rows already
-// reference.
+// reference. The English is a display extra: should the lookup fail, the
+// rows carry none and show their stored text, and the read (or the answer to
+// a save that already went through) does not fail with it.
 export async function decoratePlanItemEnglish(rows, runQuery) {
   const ids = [...new Set(rows.map((row) => row.exercise_id).filter(Boolean))];
   const byId = new Map();
   if (ids.length) {
-    const found = await runQuery(
-      "select id, name, instruction, name_en, instruction_en from library.exercises where id = any($1::uuid[])",
-      [ids],
-    );
-    for (const exercise of found.rows) byId.set(exercise.id, exercise);
+    try {
+      const found = await runQuery(
+        "select id, name, instruction, name_en, instruction_en from library.exercises where id = any($1::uuid[])",
+        [ids],
+      );
+      for (const exercise of found.rows) byId.set(exercise.id, exercise);
+    } catch {
+      byId.clear();
+    }
   }
   for (const row of rows) {
     const exercise = row.exercise_id ? byId.get(row.exercise_id) : null;

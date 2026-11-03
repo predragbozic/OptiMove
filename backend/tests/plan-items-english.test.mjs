@@ -19,6 +19,7 @@ import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./su
 import { decoratePlanItemEnglish } from "../src/planItemEnglish.js";
 
 const coachId = crypto.randomUUID();
+const otherCoachId = crypto.randomUUID();
 const athleteUuid = crypto.randomUUID();
 let database;
 let client;
@@ -145,7 +146,7 @@ before(async () => {
   `);
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await addMediaSelectionFixture(client.query.bind(client));
-  await client.query("insert into public.users (id) values ($1)", [coachId]);
+  await client.query("insert into public.users (id) values ($1), ($2)", [coachId, otherCoachId]);
   await client.query("insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)", [coachId]);
   await client.query("insert into public.athletes (id, athlete_id, full_name) values ($1, 'A1', 'Ana')", [athleteUuid]);
   for (const [key, name, instruction, nameEn, instructionEn] of [
@@ -170,8 +171,10 @@ before(async () => {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
-    req.user = { id: coachId };
-    req.authz = { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [], capabilities: { coachWorkspace: true } };
+    // x-test-user: other - a coach who may not edit these plans.
+    const other = req.headers["x-test-user"] === "other";
+    req.user = { id: other ? otherCoachId : coachId };
+    req.authz = { platformRoles: other ? [] : ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [], capabilities: { coachWorkspace: true } };
     next();
   });
   app.use("/api/builder", builderRouter);
@@ -278,6 +281,10 @@ test("1. the lookup: one query for every row, only the exercises the rows refere
   await decoratePlanItemEnglish(none, runQuery);
   assert.equal(calls.length, 1, "no query when no row names an exercise");
   assert.deepEqual([none[0].title_en, none[0].description_en], [null, null]);
+  // A failed lookup leaves the stored text and fails nothing.
+  const failing = [{ exercise_id: exercises.lunge, title: "Iskorak", description: "Korak napred." }];
+  await decoratePlanItemEnglish(failing, async () => { throw new Error("lookup down"); });
+  assert.deepEqual([failing[0].title_en, failing[0].description_en], [null, null]);
 });
 
 test("2. the Builder's draft carries titleEn / descriptionEn by the rule, and the stored text as it is", async () => {
@@ -346,4 +353,18 @@ test("5. reading writes nothing", async () => {
   await getJson(`/api/plans/${plans.program}/program`);
   await getJson("/api/athletes/A1/program-data?program=__all_programs__");
   assert.deepEqual(await snapshot(), before_);
+});
+
+test("6. a coach who may not edit the plan gets the same 404 from PATCH, with or without an instruction, and nothing changes", async () => {
+  const id = items.draft.carries;
+  const before_ = (await client.query("select to_jsonb(i) as row from plans.plan_items i where id = $1", [id])).rows[0].row;
+  for (const body of [{ sets: "9" }, { sets: "9", description: "Hijacked." }]) {
+    const response = await fetch(`${baseUrl}/api/builder/items/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json", "x-test-user": "other" }, body: JSON.stringify({ ...body, responseMode: "item" }),
+    });
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: "Program item not found" });
+  }
+  const after_ = (await client.query("select to_jsonb(i) as row from plans.plan_items i where id = $1", [id])).rows[0].row;
+  assert.deepEqual(after_, before_);
 });
