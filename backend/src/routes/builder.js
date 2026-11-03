@@ -9,6 +9,7 @@ import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
+import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 
 const router = Router();
 let activeBatchGuards = 0;
@@ -1712,15 +1713,21 @@ router.patch("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
+    // An instruction the request does not name stays as it is: the Builder
+    // sends it only once the coach has typed in it, so an instruction shown
+    // in English is never written back over the stored text.
+    const descriptionSent = Object.hasOwn(req.body || {}, "description");
     const updated = await query(
-      `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1
-       returning id, sets, reps, load, description`,
-      [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description)],
+      `update plans.plan_items set sets = $2, reps = $3, load = $4,
+         description = case when $6::boolean then $5 else description end, updated_at = now() where id = $1
+       returning id, exercise_id, title, sets, reps, load, description`,
+      [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description), descriptionSent],
     );
     if (req.body?.responseMode === "item" && !wantsBatchSync(req, item.plan)) {
       const row = updated.rows[0];
       if (!row) return res.status(404).json({ error: "Program item not found" });
-      return res.json({ planId: item.plan.id, item: { id: row.id, sets: row.sets || "", reps: row.reps || "", load: row.load || "", description: row.description || "" } });
+      await decoratePlanItemEnglish([row], query);
+      return res.json({ planId: item.plan.id, item: { id: row.id, sets: row.sets || "", reps: row.reps || "", load: row.load || "", description: row.description || "", titleEn: row.title_en, descriptionEn: row.description_en } });
     }
     return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
@@ -1789,6 +1796,7 @@ async function buildDraft(plan) {
      order by pd.block_order nulls last, pd.block_index, ps.session_order nulls last, pn.node_order nulls last, pi.item_order nulls last`, [plan.id],
   );
   await decorateMediaRows(result.rows,'plan_item',query);
+  await decoratePlanItemEnglish(result.rows, query);
   const blocks = new Map();
   result.rows.forEach((row) => {
     if (!blocks.has(row.block_id)) blocks.set(row.block_id, { id: row.block_id, index: row.block_index, name: row.block_name, type: row.block_type, date: row.date || "", dayOrder: Number(row.day_order || 0), note: row.day_note, sessions: [] });
@@ -1802,7 +1810,7 @@ async function buildDraft(plan) {
       node = { id: row.node_id, parentId: row.parent_id || "", type: row.node_type, name: row.node_name, color: row.color || "", iconUrl: row.icon_url || "", shortNote: row.short_note || "", note: row.note || "", order: Number(row.node_order || 0), items: [] };
       session.nodes.push(node);
     }
-    if (row.item_id) node.items.push({ ...(row.media?{media:row.media}:{}),id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
+    if (row.item_id) node.items.push({ ...(row.media?{media:row.media}:{}),id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", titleEn: row.title_en, descriptionEn: row.description_en, imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
   return {
     plan: {

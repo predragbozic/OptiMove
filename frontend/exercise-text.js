@@ -8,8 +8,8 @@ import { state } from "./state.js";
 //
 // It reads the CURRENT exercise row: the library's list rows carry name_en /
 // instruction_en, the exercise detail and the editor nameEn / instructionEn.
-// A plan item keeps its own title, written when the exercise was added, and
-// is shown as it is.
+// A plan item keeps its own title and instruction, written when the exercise
+// was added: planItemText below.
 //
 // state.js imports exercise-editor.js and exercise-view-modes.js, so neither
 // of them (nor anything they import) may import this module: state.js would
@@ -34,6 +34,27 @@ function englishOf(exercise, field) {
 // field: "name" or "instruction".
 export function exerciseText(exercise, field, user = state.currentUser) {
   return (readsEnglish(user) && englishOf(exercise, field)) || exercise?.[field] || "";
+}
+
+// A plan item's title or instruction (field: "title" or "description"). The
+// server sends the exercise's English beside the stored text only while the
+// item still carries that exercise's own Serbian text
+// (backend/src/planItemEnglish.js): an English reader sees it; a coach's own
+// text, a free item and an exercise without English are shown as stored, and
+// so is everything for a Serbian reader.
+const PLAN_ITEM_ENGLISH_KEYS = {
+  title: ["titleEn", "title_en"],
+  description: ["descriptionEn", "description_en"],
+};
+
+export function planItemText(item, field, user = state.currentUser) {
+  if (readsEnglish(user)) {
+    for (const key of PLAN_ITEM_ENGLISH_KEYS[field] || []) {
+      const value = item?.[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return item?.[field] || "";
 }
 
 // The line under a library card's name: the English instruction for an

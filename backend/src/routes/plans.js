@@ -1,4 +1,5 @@
 import { decorateMediaRows } from '../exerciseMedia.js';
+import { decoratePlanItemEnglish } from '../planItemEnglish.js';
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildProgramData, buildWeeks } from "../utils/grouping.js";
@@ -26,6 +27,7 @@ router.get("/:planId/weekly", async (req, res, next) => {
       [req.params.planId],
     );
     await decorateMediaRows(result.rows,'plan_item',query);
+    await decoratePlanItemEnglish(result.rows, query);
     res.json({
       mode: "date",
       weeks: buildWeeks(result.rows),
@@ -57,6 +59,7 @@ router.get("/:planId/program", async (req, res, next) => {
       [req.params.planId],
     );
     await decorateMediaRows(items.rows,'plan_item',query);
+    await decoratePlanItemEnglish(items.rows, query);
     res.json(buildProgramData(summary.rows[0], items.rows));
   } catch (error) {
     next(error);

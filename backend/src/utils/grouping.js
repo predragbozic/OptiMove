@@ -50,6 +50,8 @@ export function toPlanItem(row) {
     section_node_id: row.section_node_id || "",
     title: row.title || "",
     description: row.description || "",
+    title_en: row.title_en || null,
+    description_en: row.description_en || null,
     image: row.image_url || "",
     video: row.video_url || "",
     exercise_order: numberOrNull(row.exercise_order),

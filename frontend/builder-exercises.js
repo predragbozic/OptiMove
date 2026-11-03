@@ -3,7 +3,7 @@ import { libraryDragAvailable } from "./builder-library-drag.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
-import { exerciseText } from "./exercise-text.js";
+import { exerciseText, planItemText } from "./exercise-text.js";
 
 const ICON_ARROW_UP = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
@@ -112,9 +112,9 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
 function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emptyLabel = "" }) {
   const media = exerciseMediaOf(item);
   if (hasAnyMedia(media)) {
-    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass)}</button>`;
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass, { name: planItemText(item, "title") })}</button>`;
   }
-  return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
+  return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (planItemText(item, "title") || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
 // The grip that starts a drag-to-reorder (builder-item-drag.js), shown only
@@ -122,7 +122,7 @@ function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emp
 // a Tab stop nor announced: the up/down buttons next to it are the keyboard
 // and screen-reader path.
 function renderDragHandle(item, index, total, className, content = "") {
-  return `<button class="${className} builder-item-drag-handle" type="button" tabindex="-1" aria-hidden="true" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
+  return `<button class="${className} builder-item-drag-handle" type="button" tabindex="-1" aria-hidden="true" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(planItemText(item, "title") || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
 }
 
 // Desktop-only "Added to section" list: the original full-form-per-item
@@ -137,14 +137,14 @@ export function renderBuilderItems(node) {
       <div class="builder-item-head${node.items.length > 1 ? " has-drag-handle" : ""}">
         ${node.items.length > 1 ? renderDragHandle(item, index, node.items.length, "builder-item-drag") : ""}
         ${renderAddedThumb(item, { containerClass: "builder-added-exercise-media", imageClass: "builder-added-exercise-image", fallbackClass: "builder-added-exercise-fallback", emptyLabel: "Exercise" })}
-        <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === node.items.length - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button></div></div>
+        <div><strong>${escapeHtml(planItemText(item, "title") || "Exercise")}</strong><div class="builder-item-actions"><button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === node.items.length - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button></div></div>
       </div>
       <div class="builder-dose-inputs builder-item-dose">
         <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}"></label>
         <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}"></label>
         <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}"></label>
       </div>
-      <label class="search-field"><span>Instruction</span><textarea name="description" rows="${autogrowRows(item.description)}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(item.description || "")}</textarea></label>
+      <label class="search-field"><span>Instruction</span><textarea name="description" rows="${autogrowRows(planItemText(item, "description"))}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(planItemText(item, "description") || "")}</textarea></label>
       <small class="builder-autosave-hint">Changes save automatically.</small>
     </form>
   `).join("")}</div>`;
@@ -155,22 +155,20 @@ export function renderBuilderItems(node) {
 // same [data-builder-autosave] "update-item" path as the desktop full form
 // and the single-item edit view below - see submitBuilderForm's
 // mode==="update-item" branch in builder-actions.js). The card is itself the
-// autosave <form>; a hidden "description" field always carries the item's
-// current instruction text forward on every submit, since the visible
-// Instruction textarea only ever lives in the single-item edit view - without
-// this hidden field, saving Sets/Reps/Load here would submit no
-// "description" key at all, and PATCH /items/:itemId writes all four
-// columns unconditionally (nullableText(undefined) -> null), silently
-// wiping any existing instruction. "Edit details" now opens the single-item
-// view strictly for Instruction, other detail review, and Previous/Next -
-// dose is never behind it.
+// autosave <form>; a hidden "description" field carries the instruction as
+// shown (the visible Instruction textarea only ever lives in the single-item
+// edit view). A shown instruction the coach did not change is left out of the
+// save (builder-item-edits.js), and PATCH /items/:itemId keeps an instruction
+// the request does not name, so a dose-only save never touches it. "Edit
+// details" now opens the single-item view strictly for Instruction, other
+// detail review, and Previous/Next - dose is never behind it.
 function renderBuilderAddedCard(item, index, total) {
   return `
     <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
       <div class="builder-added-card-top">
         ${total > 1 ? renderDragHandle(item, index, total, "builder-added-card-index", `<span>${index + 1}</span>`) : `<span class="builder-added-card-index">${index + 1}</span>`}
         ${renderAddedThumb(item, { containerClass: "builder-added-card-media", imageClass: "builder-added-card-media-image", fallbackClass: "builder-added-card-media-fallback" })}
-        <strong class="builder-added-card-title" data-clamp-title>${escapeHtml(item.title || "Exercise")}</strong>
+        <strong class="builder-added-card-title" data-clamp-title>${escapeHtml(planItemText(item, "title") || "Exercise")}</strong>
         <div class="builder-added-card-move">
           <button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
           <button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === total - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
@@ -182,7 +180,7 @@ function renderBuilderAddedCard(item, index, total) {
         <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}" placeholder="e.g. 8"></label>
         <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}" placeholder="e.g. 40 kg"></label>
       </div>
-      <input type="hidden" name="description" value="${escapeAttr(item.description || "")}">
+      <input type="hidden" name="description" value="${escapeAttr(planItemText(item, "description") || "")}">
       <button class="text-action builder-added-card-edit" type="button" data-action="builder-open-edit-item" data-item-id="${escapeAttr(item.id)}">${ICON_PENCIL}<span>Edit details</span></button>
     </form>
   `;
@@ -216,7 +214,7 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
       <form class="builder-item builder-item-edit-form" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
         <div class="builder-item-head">
           ${renderAddedThumb(item, { containerClass: "builder-added-exercise-media", imageClass: "builder-added-exercise-image", fallbackClass: "builder-added-exercise-fallback" })}
-          <div><strong>${escapeHtml(item.title || "Exercise")}</strong></div>
+          <div><strong>${escapeHtml(planItemText(item, "title") || "Exercise")}</strong></div>
         </div>
         <div class="builder-dose-inputs builder-item-dose">
           <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}"></label>
@@ -226,16 +224,12 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
         <div class="builder-item-instruction">
           <button class="builder-item-instruction-toggle" type="button" data-action="builder-toggle-item-instruction" aria-expanded="${instructionOpen ? "true" : "false"}"><span>Instruction</span><span aria-hidden="true">${instructionOpen ? "&#9652;" : "&#9662;"}</span></button>
           ${instructionOpen
-            ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="${autogrowRows(item.description)}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(item.description || "")}</textarea></label>`
-            // Instruction is collapsed - no textarea in the DOM, so the
-            // autosave FormData would otherwise omit "description" entirely.
-            // PATCH /items/:itemId writes all four dose/description columns
-            // unconditionally on every save, so a missing key isn't "leave
-            // unchanged" - it's nullableText(undefined) -> null, silently
-            // wiping the instruction the next time Sets/Reps/Load autosaves.
-            // This hidden input keeps the current value in the submitted
-            // form even while collapsed.
-            : `<input type="hidden" name="description" value="${escapeAttr(item.description || "")}">${item.description ? `<p class="builder-item-instruction-preview muted">${escapeHtml(item.description)}</p>` : ""}`}
+            ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="${autogrowRows(planItemText(item, "description"))}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(planItemText(item, "description") || "")}</textarea></label>`
+            // Instruction is collapsed - no textarea in the DOM. This hidden
+            // input carries the instruction as shown; left unchanged, it is
+            // not sent (builder-item-edits.js), and PATCH /items/:itemId keeps
+            // an instruction the request does not name.
+            : `<input type="hidden" name="description" value="${escapeAttr(planItemText(item, "description") || "")}">${planItemText(item, "description") ? `<p class="builder-item-instruction-preview muted">${escapeHtml(planItemText(item, "description"))}</p>` : ""}`}
         </div>
         <small class="builder-autosave-hint">Changes save automatically.</small>
       </form>
@@ -267,7 +261,7 @@ export function renderBuilderStickyBar(node, mobileMode) {
     <span class="builder-sticky-bar-thumbs">
       ${recent.map((item) => {
         const media = exerciseMediaOf(item);
-        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image")}</span>`;
+        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(planItemText(item, "title") || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(planItemText(item, "title") || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image", { name: planItemText(item, "title") })}</span>`;
       }).join("")}
       ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
     </span>
