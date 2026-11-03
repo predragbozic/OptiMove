@@ -50,7 +50,8 @@ const AUTH_FIXTURE_SQL = `
     first_name text,
     last_name text,
     role_hint text not null default 'user',
-    is_active boolean not null default true
+    is_active boolean not null default true,
+    updated_at timestamptz not null default now()
   );
   create table public.auth_sessions (
     id uuid primary key default gen_random_uuid(),
@@ -2451,4 +2452,103 @@ test("the library search answers a coach with an empty search: the first page, i
   assert.deepEqual(keys, [...keys].sort(compare));
   const second = await api("/api/exercises?search=&limit=18&offset=18", { cookie: coach.cookie });
   assert.equal(new Set([...res.body.exercises, ...second.body.exercises].map((exercise) => exercise.id)).size, 36, "the next page continues without repeats");
+});
+
+// English name and instruction of an exercise, and the reader's language
+// (owner, 2026-11-03; migration 202611031200_exercise_english_content.sql,
+// applied by the shared fixture).
+test("English name and instruction: saved trimmed, a blank value as none, kept when a request does not send them, refused when not text", async () => {
+  const coach = await makeCoach("english-save");
+  const created = await api("/api/exercises", { method: "POST", cookie: coach.cookie,
+    body: { name: "Iskorak", nameEn: "  Forward lunge \n", instruction: "Korak napred.", instructionEn: "\tStep forward and lower the back knee.  " } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.nameEn, "Forward lunge");
+  assert.equal(created.body.instructionEn, "Step forward and lower the back knee.");
+  const id = created.body.id;
+  const stored = async () => (await query("select name, name_en, instruction, instruction_en from library.exercises where id = $1", [id])).rows[0];
+  assert.deepEqual(await stored(), { name: "Iskorak", name_en: "Forward lunge", instruction: "Korak napred.", instruction_en: "Step forward and lower the back knee." });
+  const detail = await api(`/api/exercises/${id}`, { cookie: coach.cookie });
+  assert.equal(detail.body.nameEn, "Forward lunge");
+  assert.equal(detail.body.instructionEn, "Step forward and lower the back knee.");
+  assert.equal(detail.body.name, "Iskorak", "the Serbian name is unchanged");
+
+  // A request that does not send them (an older client) keeps them.
+  const without = await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Iskorak napred", instruction: "Korak napred." } });
+  assert.equal(without.status, 200, JSON.stringify(without.body));
+  assert.deepEqual(await stored(), { name: "Iskorak napred", name_en: "Forward lunge", instruction: "Korak napred.", instruction_en: "Step forward and lower the back knee." });
+  assert.equal(without.body.nameEn, "Forward lunge");
+
+  // A blank value or null clears it.
+  const cleared = await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Iskorak napred", nameEn: " \t ", instructionEn: null } });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  assert.equal(cleared.body.nameEn, "");
+  assert.equal(cleared.body.instructionEn, "");
+  assert.deepEqual(await stored(), { name: "Iskorak napred", name_en: null, instruction: null, instruction_en: null });
+
+  // Not text: refused, nothing changed.
+  assert.equal((await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Iskorak napred", nameEn: "Lunge" } })).status, 200);
+  for (const bad of [5, true, {}, ["Lunge"]]) {
+    for (const key of ["nameEn", "instructionEn"]) {
+      const refused = await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Changed", [key]: bad } });
+      assert.equal(refused.status, 400, `${key} = ${JSON.stringify(bad)}`);
+      assert.deepEqual(await stored(), { name: "Iskorak napred", name_en: "Lunge", instruction: null, instruction_en: null }, `${key} = ${JSON.stringify(bad)}: nothing changed`);
+    }
+  }
+  assert.equal((await api("/api/exercises", { method: "POST", cookie: coach.cookie, body: { name: "Refused", nameEn: 1 } })).status, 400);
+  assert.equal((await query("select count(*)::int as n from library.exercises where name = 'Refused'")).rows[0].n, 0, "a refused create writes nothing");
+});
+
+test("English name: the search finds it and ranks an exact match first, the list and the detail carry it, a copy keeps what the copy form sends", async () => {
+  const coach = await makeCoach("english-search");
+  const id = await makeExercise(coach.userId, { name: "Zadržani čučanj" });
+  await query("update library.exercises set name_en = $2, instruction_en = $3 where id = $1", [id, "Paused squat", "Hold two seconds at the bottom."]);
+  const found = await api(`/api/exercises?search=${encodeURIComponent("paused squ")}`, { cookie: coach.cookie });
+  assert.equal(found.status, 200);
+  const row = found.body.exercises.find((exercise) => exercise.id === id);
+  assert.ok(row, "an English word finds the exercise");
+  assert.equal(row.name, "Zadržani čučanj");
+  assert.equal(row.name_en, "Paused squat");
+  assert.equal(row.instruction_en, "Hold two seconds at the bottom.");
+  assert.ok((await api("/api/exercises?search=paused&searchIn=name", { cookie: coach.cookie })).body.exercises.some((exercise) => exercise.id === id), "searching names only finds it too");
+  assert.ok((await api(`/api/exercises?search=${encodeURIComponent("zadržani")}`, { cookie: coach.cookie })).body.exercises.some((exercise) => exercise.id === id), "the Serbian name still finds it");
+
+  const prefix = await makeExercise(coach.userId, { name: "Paused squat ladder" });
+  const exact = await api(`/api/exercises?search=${encodeURIComponent("Paused squat")}`, { cookie: coach.cookie });
+  assert.deepEqual(exact.body.exercises.map((exercise) => exercise.id).slice(0, 2), [id, prefix], "an exact English name ranks before a Serbian name that only starts with it (which sorts first by name)");
+
+  const copy = await api(`/api/exercises/${id}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Moj čučanj", nameEn: "My paused squat", instructionEn: "" } });
+  assert.equal(copy.status, 201, JSON.stringify(copy.body));
+  assert.equal(copy.body.nameEn, "My paused squat");
+  assert.equal(copy.body.instructionEn, "");
+  assert.equal((await query("select name_en from library.exercises where id = $1", [id])).rows[0].name_en, "Paused squat", "the original is unchanged");
+});
+
+test("exercise language: /me answers Serbian by default; a user changes only their own; any other value and a request without a session are refused", async () => {
+  const reader = await makeCoach("language-reader");
+  const other = await makeCoach("language-other");
+  const language = async (user) => (await query("select content_language from public.users where id = $1", [user.userId])).rows[0].content_language;
+  const me = await api("/api/auth/me", { cookie: reader.cookie });
+  assert.equal(me.status, 200, JSON.stringify(me.body));
+  assert.equal(me.body.user.contentLanguage, "sr");
+
+  // There is no user id in the request: a body naming another account changes only the caller's.
+  const set = await api("/api/auth/me/content-language", { method: "PUT", cookie: reader.cookie, body: { contentLanguage: "en", userId: other.userId } });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.deepEqual(set.body, { contentLanguage: "en" });
+  assert.equal((await api("/api/auth/me", { cookie: reader.cookie })).body.user.contentLanguage, "en");
+  assert.equal((await api("/api/auth/me", { cookie: other.cookie })).body.user.contentLanguage, "sr");
+  assert.equal(await language(other), "sr");
+
+  for (const bad of ["de", "EN", "", " en", null, 1, ["en"], { value: "sr" }]) {
+    const refused = await api("/api/auth/me/content-language", { method: "PUT", cookie: reader.cookie, body: { contentLanguage: bad } });
+    assert.equal(refused.status, 400, JSON.stringify(bad));
+    assert.equal(await language(reader), "en", `${JSON.stringify(bad)}: nothing changed`);
+  }
+  assert.equal((await api("/api/auth/me/content-language", { method: "PUT", cookie: reader.cookie, body: {} })).status, 400);
+  const anonymous = await api("/api/auth/me/content-language", { method: "PUT", body: { contentLanguage: "sr" } });
+  assert.equal(anonymous.status, 401);
+  assert.equal(await language(reader), "en");
+
+  assert.equal((await api("/api/auth/me/content-language", { method: "PUT", cookie: reader.cookie, body: { contentLanguage: "sr" } })).status, 200);
+  assert.equal(await language(reader), "sr");
 });

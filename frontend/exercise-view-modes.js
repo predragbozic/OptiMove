@@ -85,8 +85,10 @@ export function renderExerciseThumbBackdrop(sources, asset = null) {
 // screen; should it get none, the same fallbacks and initials apply.
 // `backdrop`: a picture across a card - larger video covers, shown whole
 // over its blurred copy.
-export function renderExerciseThumb(exercise, className, { backdrop = false } = {}) {
-  const name = exercise.name || exercise.title || "Exercise";
+// `name`: the name the screen shows (an English reader's English name), for
+// the initials.
+export function renderExerciseThumb(exercise, className, { backdrop = false, name: shownName = "" } = {}) {
+  const name = shownName || exercise.name || exercise.title || "Exercise";
   const initials = initialsFor(name).toUpperCase() || "?";
   const media = exerciseMediaOf(exercise);
   const sources = [

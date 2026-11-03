@@ -49,6 +49,7 @@ import {
   renderAthleteSettingsHtml,
 } from "./athlete-view.js";
 import { renderCoachAccountHtml } from "./coach-account.js";
+import { saveContentLanguage } from "./account-language.js";
 import {
   renderAthleteProgramCardsRailHtml,
   renderAthleteProgramsPanelHtml,
@@ -942,6 +943,15 @@ async function handleContentSubmit(event) {
   // PUT /api/auth/me/credentials's own header comment in
   // backend/src/routes/auth.js for why this can never touch users.email,
   // even via a hand-crafted request.
+  // Account -> Exercise language: only the caller's own account
+  // (account-language.js).
+  const contentLanguageForm = event.target.closest("[data-account-form='content-language']");
+  if (contentLanguageForm) {
+    event.preventDefault();
+    await saveContentLanguage(contentLanguageForm, { api, currentUser: state.currentUser });
+    return;
+  }
+
   const passwordChangeForm = event.target.closest("[data-account-form='password-change']");
   if (passwordChangeForm) {
     event.preventDefault();

@@ -1,6 +1,7 @@
 import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
+import { exerciseCardDescription, exerciseText } from "./exercise-text.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 export const QUICK_FILTER_KEYS = new Set(["purpose", "tag"]);
@@ -95,7 +96,7 @@ export function isSelectableExercise(exercise) {
 
 function renderExerciseSelectCheck(exercise, selection) {
   if (!selection?.active || !isSelectableExercise(exercise)) return "";
-  const name = exercise.name || "Exercise";
+  const name = exerciseText(exercise, "name") || "Exercise";
   return `<label class="exercise-select-check" title="Select"><input type="checkbox" data-action="exercise-select-toggle" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name)}" ${selection.ids.has(exercise.id) ? "checked" : ""}><span class="visually-hidden">Select ${escapeHtml(name)}</span></label>`;
 }
 
@@ -226,26 +227,27 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
   const tags = exercise.tags || [];
   const check = renderExerciseSelectCheck(exercise, selection);
   const media = exerciseMediaOf(exercise);
+  const name = exerciseText(exercise, "name");
   return `
     <article class="exercise-card${selectableClasses(check, selection, exercise)}"${check ? ` data-exercise-card="${escapeAttr(exercise.id)}"` : ""}>
       ${check}
       ${hasAnyMedia(media) ? `
-        <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" ${mediaAccessAttributes(media)}>
-          ${renderExerciseThumb(exercise, "media-thumb", { backdrop: true })}
+        <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(name || "Exercise media")}" ${mediaAccessAttributes(media)}>
+          ${renderExerciseThumb(exercise, "media-thumb", { backdrop: true, name })}
         </button>
       ` : ""}
       <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="exercise-head">
-          <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
+          <span class="exercise-title">${escapeHtml(name)}</span>
           ${exercise.owner_scope ? `<span class="item-badge">${exercise.owner_scope === "system" ? "Application" : platformAdmin ? "Private exercise" : "My exercise"}</span>` : ""}
         </span>
         <span class="muted">${escapeHtml(exercise.aim || "")}</span>
-        <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
+        <span class="item-description">${escapeHtml(exerciseCardDescription(exercise))}</span>
       </button>
       <div class="exercise-card-actions">
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
-        <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
+        <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
         <button class="text-action" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
         <button class="text-action" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
         ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
@@ -264,13 +266,13 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
 // name opens the exercise, favorite and mark stay one tap away, and Tags /
 // Copy / Edit sit behind "⋯" with the same rules as the Details card.
 function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false, view = "tile", selection = null) {
-  const name = exercise.name || "Exercise";
+  const name = exerciseText(exercise, "name") || "Exercise";
   const check = renderExerciseSelectCheck(exercise, selection);
   const marked = markedExerciseIds.has(exercise.id);
   const favorite = Boolean(exercise.is_favorite);
   const tags = exercise.tags || [];
   // Big shows the whole picture over its blurred copy; Tile and List crop it.
-  const thumb = renderExerciseThumb(exercise, "exercise-view-thumb", { backdrop: view === "big" });
+  const thumb = renderExerciseThumb(exercise, "exercise-view-thumb", { backdrop: view === "big", name });
   const exerciseMedia = exerciseMediaOf(exercise);
   const media = hasAnyMedia(exerciseMedia)
     ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" ${mediaAccessAttributes(exerciseMedia)} aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`

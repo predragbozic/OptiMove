@@ -1,3 +1,4 @@
+import { renderContentLanguageSectionHtml } from "./account-language.js";
 import { renderAccountEmailPasswordSectionsHtml } from "./athlete-view.js";
 import { escapeHtml } from "./utils.js";
 
@@ -18,6 +19,7 @@ export function renderCoachAccountHtml(currentUser, emailChangeStatus) {
           <p class="muted">Manage the login email and password for your own coach account.</p>
         </div>
       </section>
+      ${renderContentLanguageSectionHtml(currentUser)}
       ${renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus)}
     </section>
   `;

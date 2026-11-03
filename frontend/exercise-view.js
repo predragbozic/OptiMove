@@ -1,5 +1,6 @@
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage } from "./media.js";
 import { renderExerciseThumb } from "./exercise-view-modes.js";
+import { exerciseText } from "./exercise-text.js";
 import { clean, escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 export function renderExerciseListHtml(items, itemIds, layout) {
@@ -93,7 +94,9 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
   const hasSequence = currentIndex >= 0 && ids.length > 1;
   const canGoPrevious = hasSequence && currentIndex > 0;
   const canGoNext = hasSequence;
-  const title = clean(item.title || item.name || "Exercise");
+  // A plan item's own title as it was written; a library exercise's name in
+  // the reader's language (exercise-text.js).
+  const title = clean(item.title || exerciseText(item, "name") || "Exercise");
   const media = exerciseMediaOf(item);
   const exerciseId = item.exercise_id || item.id || "";
   const hierarchy = [item.domain, item.category, item.section].filter(Boolean).join(" / ");
@@ -106,7 +109,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
     ["Aim", item.aim],
     ["Description", item.description],
     ["Execution notes", item.execution_notes],
-    ["Instruction", item.instruction],
+    ["Instruction", exerciseText(item, "instruction")],
   ].filter(([, value]) => clean(value));
 
   return `
@@ -128,7 +131,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
           <div class="exercise-detail-media">
             ${hasAnyMedia(media)
               ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" ${mediaAccessAttributes(media)}>
-                  ${renderExerciseThumb(item, "media-thumb")}
+                  ${renderExerciseThumb(item, "media-thumb", { name: title })}
                 </button>`
               : `<div class="detail-media-empty">No image</div>`}
           </div>
@@ -224,7 +227,7 @@ function renderExerciseSiblingStripHtml(ids, itemId, getItemById) {
           const sibling = getItemById(id);
           if (!sibling) return "";
           const isActive = id === itemId;
-          const siblingTitle = clean(sibling.title || sibling.name || "Exercise");
+          const siblingTitle = clean(sibling.title || exerciseText(sibling, "name") || "Exercise");
           const siblingPicture = renderMediaImage(exerciseMediaOf(sibling), "exercise-sibling-image");
           return `
             <button class="exercise-sibling-card ${isActive ? "is-active" : ""}" type="button" data-action="exercise-jump" data-item-id="${escapeAttr(id)}" ${isActive ? "disabled" : ""}>

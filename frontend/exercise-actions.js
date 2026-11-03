@@ -6,6 +6,7 @@ import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { EXERCISE_SELECTION_LIMIT, openExerciseBulkMove } from "./exercise-bulk-move.js";
+import { exerciseText } from "./exercise-text.js";
 import { filterIconSvg, isSelectableExercise, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseSelectionBar, renderExerciseVisibilityFilters, renderExerciseOwnerOptions, syncExerciseFilterSearch } from "./exercise-library.js";
 import { emptyExerciseFilters, emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
@@ -111,7 +112,7 @@ async function handleExerciseSelectionAction(action, handlers) {
     for (const exercise of (state.lastExerciseResults || []).filter(isSelectableExercise)) {
       if (selection.ids.has(exercise.id)) continue;
       if (selection.ids.size >= EXERCISE_SELECTION_LIMIT) { selection.note = selectionLimitNote(); break; }
-      selection.ids.set(exercise.id, exercise.name || "");
+      selection.ids.set(exercise.id, exerciseText(exercise, "name"));
     }
     refreshExerciseSelectionView();
     return true;

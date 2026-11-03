@@ -47,6 +47,18 @@ function slugify(value) {
 
 function text(value) { return String(value ?? "").trim(); }
 function nullableText(value) { return text(value) || null; }
+// An English field is a string or null when it is sent; a request that does
+// not send it (an older client) leaves the stored value as it is.
+const englishFields = { nameEn: "name_en", instructionEn: "instruction_en" };
+function englishValues(body) {
+  const values = {};
+  for (const key of Object.keys(englishFields)) {
+    if (!(key in body)) continue;
+    if (body[key] !== null && typeof body[key] !== "string") return null;
+    values[key] = nullableText(body[key]);
+  }
+  return values;
+}
 
 async function getOrCreateLookup(table, name, userId, extra = {}, runQuery = query, systemOwned = false) {
   const clean = text(name);
@@ -291,15 +303,15 @@ router.get("/", async (req, res, next) => {
 
     if (search) {
       params.push(`%${search}%`);
-      where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length}${searchIn === "all" ? `
+      where += ` and (e.name ilike $${params.length} or e.name_en ilike $${params.length} or e.exercise_code ilike $${params.length}${searchIn === "all" ? `
         or exists (select 1 from (${visibleTagsSql}) search_tags where search_tags.name ilike $${params.length})
         or exists (select 1 from jsonb_each(to_jsonb(effective_classification)) classification_value
           where classification_value.value::text ilike $${params.length})` : ""})`;
       params.push(search);
       const searchParam = `$${params.length}`;
       searchOrder = `case
-        when lower(e.name) = lower(${searchParam}) or lower(e.exercise_code) = lower(${searchParam}) then 0
-        when left(lower(e.name), length(${searchParam})) = lower(${searchParam}) then 1
+        when lower(e.name) = lower(${searchParam}) or lower(e.name_en) = lower(${searchParam}) or lower(e.exercise_code) = lower(${searchParam}) then 0
+        when left(lower(e.name), length(${searchParam})) = lower(${searchParam}) or left(lower(e.name_en), length(${searchParam})) = lower(${searchParam}) then 1
         else 2
       end, `;
     }
@@ -339,9 +351,11 @@ router.get("/", async (req, res, next) => {
         e.id,
         e.exercise_code,
         e.name,
+        e.name_en,
         e.aim,
         e.execution_notes,
         e.instruction,
+        e.instruction_en,
         e.owner_scope,
         e.source_exercise_id,e.copy_parent_id,e.owner_user_id,e.is_active,
         (${exerciseAdministratorSql} or e.owner_scope='user' and e.owner_user_id=$1) as can_edit,
@@ -401,7 +415,7 @@ async function loadExerciseDetail(userId, exerciseId, runQuery = query, includeA
   const result = await runQuery(
     `
     select
-      e.id, e.owner_scope, e.owner_user_id, e.is_active, e.source_exercise_id, e.copy_parent_id, e.exercise_code, e.name, e.aim, e.execution_notes, e.instruction, e.video_url, e.image_url,
+      e.id, e.owner_scope, e.owner_user_id, e.is_active, e.source_exercise_id, e.copy_parent_id, e.exercise_code, e.name, e.name_en, e.aim, e.execution_notes, e.instruction, e.instruction_en, e.video_url, e.image_url,
       coalesce(e.video_url,fallback_media.video_url) as effective_video_url,
       coalesce(e.image_url,fallback_media.image_url) as effective_image_url,
       p.name as place, c.name as complexity, sp.name as starting_position, a.name as attractor,
@@ -459,9 +473,11 @@ router.get("/:exerciseId", async (req, res, next) => {
       sourceExerciseId: row.source_exercise_id || null,
       exerciseCode: row.exercise_code || "",
       name: row.name,
+      nameEn: row.name_en || "",
       aim: row.aim || "",
       executionNotes: row.execution_notes || "",
       instruction: row.instruction || "",
+      instructionEn: row.instruction_en || "",
       videoUrl: row.video_url || "",
       effectiveVideoUrl: row.effective_video_url || "",
       effectiveImageUrl: row.effective_image_url || "",
@@ -485,6 +501,8 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
   const body = req.body || {};
   const name = text(body.name);
   if (!name) { res.status(400).json({ error: "Exercise name is required." }); return; }
+  const english = englishValues(body);
+  if (!english) { res.status(400).json({ error: "The English name and instruction must be text." }); return; }
 
   let selections=mediaSelections(body);
   let previousMedia=null;
@@ -560,22 +578,26 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
         `update library.exercises set
            exercise_code = $2, name = $3, aim = $4, execution_notes = $5, instruction = $6,
            video_url = $7, image_url = $8, place_id = $9, complexity_level_id = $10,
-           starting_position_id = $11, attractor_id = $12, updated_at = now()
+           starting_position_id = $11, attractor_id = $12,
+           name_en = case when $13::boolean then $14::text else name_en end,
+           instruction_en = case when $15::boolean then $16::text else instruction_en end, updated_at = now()
          where id = $1`,
         [exerciseId, exerciseCode, name, nullableText(body.aim), nullableText(body.executionNotes),
           nullableText(body.instruction), videoUrl, imageUrl, placeId, complexityId,
-          startingPositionId, attractorId],
+          startingPositionId, attractorId, "nameEn" in english, english.nameEn ?? null,
+          "instructionEn" in english, english.instructionEn ?? null],
       );
     } else {
       const inserted = await runQuery(
         `insert into library.exercises
            (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, aim, execution_notes,
-            instruction, video_url, image_url, place_id, complexity_level_id, starting_position_id, attractor_id, source_exercise_id, copy_parent_id)
-         values ('user', $1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            instruction, video_url, image_url, place_id, complexity_level_id, starting_position_id, attractor_id, source_exercise_id, copy_parent_id,
+            name_en, instruction_en)
+         values ('user', $1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          returning id`,
         [userId, exerciseCode, `private-${randomUUID()}`, name, nullableText(body.aim), nullableText(body.executionNotes),
           nullableText(body.instruction), videoUrl, imageUrl, placeId, complexityId,
-          startingPositionId, attractorId, copySourceId, copyParentId],
+          startingPositionId, attractorId, copySourceId, copyParentId, english.nameEn ?? null, english.instructionEn ?? null],
       );
       finalId = inserted.rows[0].id;
     }
@@ -628,9 +650,11 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       copyParentId: detail.copy_parent_id || null,
       exerciseCode: detail.exercise_code || "",
       name: detail.name,
+      nameEn: detail.name_en || "",
       aim: detail.aim || "",
       executionNotes: detail.execution_notes || "",
       instruction: detail.instruction || "",
+      instructionEn: detail.instruction_en || "",
       videoUrl: detail.video_url || "",
       imageUrl: detail.image_url || "",
       place: detail.place || "",

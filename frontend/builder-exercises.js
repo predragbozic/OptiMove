@@ -3,6 +3,7 @@ import { libraryDragAvailable } from "./builder-library-drag.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { exerciseText } from "./exercise-text.js";
 
 const ICON_ARROW_UP = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
@@ -51,10 +52,10 @@ export function builderAddedCounts(node) {
 // picture over its blurred copy.
 export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0, { draggable = false, backdrop = false } = {}) {
   const media = exerciseMediaOf(exercise);
-  const title = exercise.name || "Exercise";
+  const title = exerciseText(exercise, "name") || "Exercise";
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
-  const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb", { backdrop });
+  const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb", { backdrop, name: title });
   return `
     <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}"${draggable ? ` draggable="true" data-builder-library-drag data-exercise-id="${escapeAttr(exercise.id)}"` : ""}>
       ${hasAnyMedia(media)

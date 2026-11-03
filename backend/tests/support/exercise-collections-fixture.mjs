@@ -7,6 +7,7 @@ export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
     user_id uuid primary key references public.users(id),workspace_type varchar(20) not null,scope_id uuid,updated_at timestamptz not null default now()
   );
   ${readFileSync(new URL("../../../migrations_v2/202610161100_exercise_personal_tags.sql", import.meta.url), "utf8")}
+  ${readFileSync(new URL("../../../migrations_v2/202611031200_exercise_english_content.sql", import.meta.url), "utf8")}
 
   alter table library.exercises
     add column source_exercise_id uuid references library.exercises(id),
