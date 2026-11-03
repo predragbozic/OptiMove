@@ -8,16 +8,22 @@
 //     DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs \
 //       --file vezbe-en.json --database-name <name of that database>
 //   Apply - one transaction, the same report with what was written:
-//     ... --apply [--overwrite]
+//     ... --apply [--overwrite] [--include-code 758,759]
 //
 // The input is a JSON array of { code, name_sr, instr_sr, name_en, notes_en };
-// notes_en is the English of the Serbian instruction (instr_sr). Only system
-// exercises are matched (a coach's own copy has no code). An English value
-// is written only where the exercise has none; --overwrite also replaces one
-// that differs. A blank English value is never written and never clears
-// anything. A code whose Serbian name differs from the database's is still
-// matched by its code, and listed in the report so the owner can take it out
-// of the file first.
+// notes_en is the English of the Serbian instruction (instr_sr). System
+// exercises are matched by code. An English value is written only where the
+// exercise has none; --overwrite also replaces one that differs. A blank
+// English value is never written and never clears anything.
+//
+// Owner, 2026-11-03 ("Prihvatam sve"):
+// - a matched code whose Serbian name differs from the library's (beyond
+//   whitespace) is listed as "name differs - not written", the two names side
+//   by side, and written only when named in --include-code; never silently;
+// - a copy (no code; source_exercise_id or copy_parent_id pointing at a
+//   matched exercise) whose name AND instruction still equal its source's
+//   gets the same English; a copy that differs is listed as "changed copy -
+//   not written". A copy follows its source: not written while the source is.
 //
 // Guard: DATABASE_URL comes from the environment only (no .env file is
 // read) and is never printed; --database-name must name the database the URL
@@ -28,22 +34,27 @@ import { pathToFileURL } from "node:url";
 import pg from "pg";
 
 export const MIGRATION = "202611031200_exercise_english_content.sql";
-const USAGE = "Usage: DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file <json> --database-name <name> [--apply] [--overwrite]";
+const USAGE = "Usage: DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file <json> --database-name <name> [--apply] [--overwrite] [--include-code <code,code,...>]";
 
 export function parseArgs(argv) {
-  const options = { file: "", databaseName: "", apply: false, overwrite: false };
+  const options = { file: "", databaseName: "", apply: false, overwrite: false, includeCodes: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--apply") options.apply = true;
     else if (arg === "--overwrite") options.overwrite = true;
-    else if (arg === "--file" || arg === "--database-name") {
+    else if (arg === "--file" || arg === "--database-name" || arg === "--include-code") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error(`${arg} needs a value. ${USAGE}`);
-      options[arg === "--file" ? "file" : "databaseName"] = value;
+      if (arg === "--include-code") {
+        const codes = value.split(",").map(normalizeCode);
+        if (codes.some((code) => !code)) throw new Error(`--include-code takes codes separated by commas. ${USAGE}`);
+        options.includeCodes.push(...codes);
+      } else options[arg === "--file" ? "file" : "databaseName"] = value;
       index += 1;
     } else throw new Error(`Unknown argument ${arg}. ${USAGE}`);
   }
   if (!options.file || !options.databaseName) throw new Error(USAGE);
+  options.includeCodes = [...new Set(options.includeCodes)];
   return options;
 }
 
@@ -99,8 +110,9 @@ export async function assertTarget(client, databaseName) {
 }
 
 // The sheet's Serbian names often carry a double space the library does not;
-// only a difference beyond whitespace is reported.
-const sameName = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === String(b || "").replace(/\s+/g, " ").trim();
+// two texts are the same when they differ only in whitespace (a missing text
+// is an empty one).
+const sameText = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === String(b || "").replace(/\s+/g, " ").trim();
 
 function field(planned, stored, overwrite) {
   if (!planned) return "blank";
@@ -109,13 +121,27 @@ function field(planned, stored, overwrite) {
   return "write";
 }
 
+const counts = () => ({ write: 0, alreadyFilled: 0, same: 0, blank: 0 });
+
+// One target (a matched exercise or an unchanged copy) against the file's row:
+// counted per field, and added to the writes when a field is to be written.
+function planTarget(target, row, overwrite, tally, writes) {
+  const name = field(row.nameEn, target.name_en, overwrite);
+  const instruction = field(row.instructionEn, target.instruction_en, overwrite);
+  tally.nameEn[name] += 1;
+  tally.instructionEn[instruction] += 1;
+  if (name === "write" || instruction === "write") {
+    writes.push({ id: target.id, code: row.code, name_en: name === "write" ? row.nameEn : null, instruction_en: instruction === "write" ? row.instructionEn : null });
+  }
+}
+
 // What the file would change, read inside the caller's transaction (FOR NO
-// KEY UPDATE of the matched rows when applying - what the UPDATE needs, and
-// no conflict with the foreign-key checks of a plan save - so nothing changes
-// between the plan and the write).
-export async function planImport(client, rows, { overwrite = false, lock = false } = {}) {
+// KEY UPDATE of the matched rows and their copies when applying - what the
+// UPDATE needs, and no conflict with the foreign-key checks of a plan save -
+// so nothing changes between the plan and the write).
+export async function planImport(client, rows, { overwrite = false, lock = false, includeCodes = [] } = {}) {
   const found = (await client.query(
-    `select id, exercise_code, name, name_en, instruction_en from library.exercises
+    `select id, exercise_code, name, instruction, name_en, instruction_en from library.exercises
       where owner_scope = 'system' and exercise_code = any($1::text[])
       order by exercise_code, id${lock ? " for no key update" : ""}`,
     [rows.map((row) => row.code)],
@@ -125,24 +151,49 @@ export async function planImport(client, rows, { overwrite = false, lock = false
     if (byCode.has(exercise.exercise_code)) throw new Error(`Refusing: code ${exercise.exercise_code} names more than one system exercise.`);
     byCode.set(exercise.exercise_code, exercise);
   }
-  const counts = () => ({ write: 0, alreadyFilled: 0, same: 0, blank: 0 });
-  const report = { rows: rows.length, matched: 0, notFound: [], nameDiffers: [], noEnglish: [], nameEn: counts(), instructionEn: counts() };
+  const report = {
+    rows: rows.length, matched: 0, notFound: [], nameDiffers: [], noEnglish: [], includeCodes,
+    nameEn: counts(), instructionEn: counts(),
+    copies: { unchanged: 0, changed: [], withSourceNotWritten: 0, nameEn: counts(), instructionEn: counts() },
+  };
   const writes = [];
+  // The matched sources: code -> { exercise, row, written } ("written": its
+  // English is planned, so its unchanged copies follow it).
+  const sources = new Map();
   for (const row of rows) {
     const exercise = byCode.get(row.code);
     if (!exercise) { report.notFound.push(row.code); continue; }
     report.matched += 1;
-    if (row.nameSr && !sameName(row.nameSr, exercise.name)) {
-      report.nameDiffers.push({ code: row.code, sheet: row.nameSr, database: exercise.name });
-    }
     if (!row.nameEn && !row.instructionEn) report.noEnglish.push(row.code);
-    const name = field(row.nameEn, exercise.name_en, overwrite);
-    const instruction = field(row.instructionEn, exercise.instruction_en, overwrite);
-    report.nameEn[name] += 1;
-    report.instructionEn[instruction] += 1;
-    if (name === "write" || instruction === "write") {
-      writes.push({ id: exercise.id, code: row.code, name_en: name === "write" ? row.nameEn : null, instruction_en: instruction === "write" ? row.instructionEn : null });
+    const differs = Boolean(row.nameSr) && !sameText(row.nameSr, exercise.name);
+    const included = includeCodes.includes(row.code);
+    if (differs) report.nameDiffers.push({ code: row.code, database: exercise.name, sheet: row.nameSr, written: included });
+    sources.set(exercise.id, { exercise, row, written: !differs || included });
+    if (differs && !included) continue;
+    planTarget(exercise, row, overwrite, report, writes);
+  }
+  // An --include-code that names no name-differing matched code is a typo:
+  // refused before anything is written.
+  const differing = new Set(report.nameDiffers.map((entry) => entry.code));
+  const stray = includeCodes.filter((code) => !differing.has(code));
+  if (stray.length) throw new Error(`Refusing: --include-code ${stray.join(",")} names no matched code whose Serbian name differs from the library's.`);
+
+  // The copies: no code of their own, pointing at a matched exercise.
+  const copies = sources.size ? (await client.query(
+    `select id, name, instruction, name_en, instruction_en, source_exercise_id, copy_parent_id from library.exercises
+      where exercise_code is null and (source_exercise_id = any($1::uuid[]) or copy_parent_id = any($1::uuid[]))
+      order by id${lock ? " for no key update" : ""}`,
+    [[...sources.keys()]],
+  )).rows : [];
+  for (const copy of copies) {
+    const source = sources.get(copy.source_exercise_id) || sources.get(copy.copy_parent_id);
+    if (!source.written) { report.copies.withSourceNotWritten += 1; continue; }
+    if (!sameText(copy.name, source.exercise.name) || !sameText(copy.instruction, source.exercise.instruction)) {
+      report.copies.changed.push({ code: source.row.code, copyId: copy.id });
+      continue;
     }
+    report.copies.unchanged += 1;
+    planTarget(copy, source.row, overwrite, report.copies, writes);
   }
   return { report, writes };
 }
@@ -186,7 +237,7 @@ export function targetOf(databaseUrl) {
 const notKnown = (error) => new Error(`The COMMIT's answer was lost (${error.code || error.message}): whether anything was written is not known. Run the dry run again; it shows what is stored.`);
 
 // createClient: the tests' seam for a lost answer and a failing close.
-export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, createClient = createImportClient }) {
+export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, includeCodes = [], createClient = createImportClient }) {
   if (!databaseUrl) throw new Error("Set DATABASE_URL explicitly; no .env file is read.");
   if (urlDatabaseName(databaseUrl) !== databaseName) throw new Error(`Refusing: DATABASE_URL does not name the database "${databaseName}".`);
   const client = createClient(databaseUrl);
@@ -202,7 +253,7 @@ export async function runImport({ databaseUrl, databaseName, rows, apply = false
     await client.query("set local lock_timeout = '5s'");
     // A client that stops talking does not keep the rows locked.
     await client.query("set local idle_in_transaction_session_timeout = '30s'");
-    const { report, writes } = await planImport(client, rows, { overwrite, lock: apply });
+    const { report, writes } = await planImport(client, rows, { overwrite, lock: apply, includeCodes });
     let written = 0;
     if (apply) {
       written = await applyWrites(client, writes);
@@ -225,7 +276,7 @@ export async function runImport({ databaseUrl, databaseName, rows, apply = false
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const rows = readInput(JSON.parse(await readFile(options.file, "utf8")));
-  const result = await runImport({ databaseUrl: process.env.DATABASE_URL, databaseName: options.databaseName, rows, apply: options.apply, overwrite: options.overwrite });
+  const result = await runImport({ databaseUrl: process.env.DATABASE_URL, databaseName: options.databaseName, rows, apply: options.apply, overwrite: options.overwrite, includeCodes: options.includeCodes });
   console.log(JSON.stringify(result, null, 2));
 }
 
