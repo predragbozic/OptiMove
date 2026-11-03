@@ -407,7 +407,8 @@ async function someoneWaits(c = k, timeoutMs = 5000) {
 async function rowWait(label, tables = null, c = k, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const w = await one(c, `select pid, wait_event from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid() order by pid limit 1`);
+    const w = await one(c, `select pid, wait_event from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'
+                               and pid <> pg_backend_pid() and cardinality(pg_blocking_pids(pid)) > 0 order by pid limit 1`);
     if (w) {
       const held = (await c.query(
         `select distinct n.nspname || '.' || cl.relname as name from pg_locks l join pg_class cl on cl.oid = l.relation join pg_namespace n on n.oid = cl.relnamespace
@@ -923,6 +924,7 @@ test("9. the identical 404 (section 3): club A's admin on a missing id, a system
   const own = await clubWaiting(W.caA);
   const sys = await version(await field(), { target: await variable(W.pa) });
   const clubB = await clubWaiting(W.caB);
+  const own2 = await clubWaiting(W.caA);
   const freeKey = key();
   // Club C archived: its admin's workspace writes nothing, and its own version is the identical 404.
   await setClubActive(W.clubC, false);
@@ -949,6 +951,7 @@ test("9. the identical 404 (section 3): club A's admin on a missing id, a system
     // A mismatched pair: club A's own mapping with a version of another mapping.
     notFoundShape(await activate({ mappingId: own.mappingId, versionId: sys.versionId }, W.caA.cookie, { requestKey: freeKey })),
     notFoundShape(await activate({ mappingId: own.mappingId, versionId: clubB.versionId }, W.caA.cookie, { requestKey: freeKey })),
+    notFoundShape(await activate({ mappingId: own.mappingId, versionId: own2.versionId }, W.caA.cookie, { requestKey: freeKey })),
     notFoundShape(await activate(own, W.caA.cookie, { requestKey: freeKey, starts: [W.bB1] })),
     notFoundShape(await disable(sys, W.caA.cookie, { expectedStatus: "needs_review", requestKey: freeKey })),
     notFoundShape(await disable(clubB, W.caA.cookie, { expectedStatus: "needs_review", requestKey: freeKey })),
@@ -1744,8 +1747,21 @@ test("21. R6 (J14 sections 2.3 and 10.2): club A's admin's A2 and replacement en
   const yEnded = await rows(k, `select * from ${T5} where mapping_version_id = $1 order by id`, [yv.versionId]);
   assert.deepEqual(yEnded.map((r) => [r.ended_basis, r.ended_by_user_id, r.end_reason]), yEnded.map(() => ["club_admin", yAdm.id, "mapping_version_replaced"]));
   const rEnds = await auditOf(`action = 'activation_end' and mapping_version_id = $1`, [yv.versionId]);
-  assert.deepEqual(rEnds.map((r) => [r.basis, r.reason]), rEnds.map(() => ["club_admin", rReason]));
+  assert.deepEqual(rEnds.map((r) => [r.basis, r.performed_by_user_id, r.reason]), rEnds.map(() => ["club_admin", yAdm.id, rReason]));
   assert.equal(rEnds.length, 3);
   assert.deepEqual((await openOn(next)).map((r) => [r.source_team_binding_id, r.activated_basis]), [[keep.bindingId, "club_admin"]]);
+  // A moved team's ended binding: the binding's club is its connection's, so the club admin's A2 still ends it.
+  const z = await freshClub();
+  const [zAdm] = z.admins;
+  const zv = await clubActive(zAdm);
+  const zAct = ok(await start(zAdm, zv, [z.b]), 201).activations[0];
+  await unbind(z.b);
+  const elsewhere = await club("Club Y");
+  await k.query(`update public.teams set club_id = $2 where id = $1`, [z.b.teamId, elsewhere]);
+  const zReason = reasonFor("Disable with a moved team.");
+  assert.equal(ok(await disable(zv, zAdm.cookie, { reason: zReason })).activationsEnded, 1);
+  const zRow = await t5(zAct.id);
+  assert.deepEqual([zRow.ended_basis, zRow.ended_by_user_id, zRow.end_reason], ["club_admin", zAdm.id, "mapping_version_disabled"]);
+  assert.deepEqual((await auditOf(`action = 'activation_end' and activation_id = $1`, [zAct.id])).map((r) => [r.basis, r.performed_by_user_id, r.reason]), [["club_admin", zAdm.id, zReason]]);
   noDeadlock();
 });

@@ -1384,8 +1384,8 @@ post-check (the runbook).
     advisory or a table lock (`rowWait`); the rights
     locked before any trigger; the rights and write hold seams; **L1: the real club-admin revocation route against the
     real A1, both orders** (test 17); submit's R5; the COMMIT trio; the leak scan of answers and of the routes' log
-    lines; R6 (test 21: a club admin's A2 and replacement end the activations on an archived team's binding and on an
-    ended binding, on the `club_admin` basis);
+    lines; R6 (test 21: a club admin's A2 and replacement end the activations on an archived team's binding, on an
+    ended binding and on a moved team's ended binding, on the `club_admin` basis);
   - `backend/tests/fixtures/mapping-transition-rights-7h.json`: the shared table of R12 (ten rows; a platform admin
     reaches a club's workspace only while also holding that club's admin role, so every club-workspace row of a
     platform admin holds both roles), read by the backend suite and by `frontend/tests/metric-mappings.actions.test.mjs`;
@@ -1399,9 +1399,11 @@ post-check (the runbook).
     pinned to v51 as written, the first window ran them on production and its record names their sha256, so a later
     migration makes them stale for the **next** window only, which re-issues them before its step 11 (their headers;
     J17 section 10.4).
-- **Mutations** (section 10.6): 46 in the backend (18 of the service, 25 of v52, 3 of the rollback), 43 killed by a
-  named test (S18, an advisory lock on the mapping in A1 and A2, by test 13's row waits; V25, the T5 guard refusing a
-  club admin's end on an archived team, by test 21); L1's `for share of r, u` (S12) is killed only by test 17, as section 10.6 says. Three survive as
+- **Mutations** (section 10.6, and four beyond it): 48 in the backend (19 of the service, 26 of v52, 3 of the
+  rollback), 45 killed by a named test. Beyond section 10.6: S18, an advisory lock on the mapping in A1 and A2, killed
+  by test 13's row waits; S19, `transitionTarget` without the mapping and version pairing, by test 9; V25, the T5 guard
+  refusing a club admin's end on an archived team, and V26, that end keyed on the team's current club instead of the
+  binding's, both by test 21; L1's `for share of r, u` (S12) is killed only by test 17, as section 10.6 says. Three survive as
   equivalent mutants, named in the pull request:
   - the route gate moved after the body check (S4): after 7h-B the gate refuses no context the resolver builds (a
     platform admin's in the platform or a club workspace, a club admin's in its club's), so its place no longer
