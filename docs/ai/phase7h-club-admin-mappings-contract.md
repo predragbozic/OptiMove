@@ -1340,3 +1340,72 @@ section" that O2 names: the screens, exactly, and what the read returns. **Merge
   every viewer) and seven new tests in `frontend/tests/training-load-calendar.actions.test.mjs`
   (header, drawer, the catalog wins, the picker, escaping, a workspace switch, a `503` not cached). Twelve mutations,
   each killed by a named test, are listed in the pull request.
+
+## 17. 7h-B as built (C126, C108)
+
+The pull request 7h-B (branch `feature/7h-b-club-mapping-transitions`, base `34b65a75`, the merge of PR #338; `main`
+was brought in as a plain merge before the Draft pull request) builds sections 2–10 with migration v52. Its plan was
+accepted by the *Rukovodilac* without changes (events `783e3591` and `66b3b71d`). **Not merged, not deployed; v52 is
+applied to no persistent database.** The merge needs both ★★ GOs on one head and the owner's order naming v52; the
+deploy follows the *Rukovodilac*'s preflight, and no other pull request is merged between the merge and the
+post-check (the runbook).
+
+- **v52** (`migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`, sha256 of the file
+  `b2648244871d6460e5803219bf8de16aa2d83eed5fc6de0f029843a27e180918`, the checksum the runner records), as section 6:
+  - the md5 preconditions on the four bodies in force: v34's T4 update guard `4b64be0b9bed0368cb9bae9fc6d53b17`,
+    v48's `source_metric_audit_row_ok` `764f4ad70de273a443be84bc9bebd87a`, `source_metric_audit_actor_guard`
+    `3622725a1b0d454767704b2021db731c` and `source_metric_activations_update_guard`
+    `f4ce8781c0f1797663064cd4e5c63929`, and on T4's two basis CHECKs; otherwise `23514` and nothing changes;
+  - after v52 the four bodies are md5 `42fb55a2dd043328079fa9b6f4a2c43e` (the T4 guard), `a43a63c2d248cbaf71302468429acb85`
+    (`row_ok`), `94cf466bfa765a1a03f7d290a3ce154a` (the actor guard) and `c99759084f7be3febe084bf421aa7002` (the T5
+    guard): **J18's and J15's md5 preconditions on these bodies move to these values** (section 6.2);
+  - locks: T4 `ACCESS EXCLUSIVE NOWAIT`, then T5 and T8 `SHARE ROW EXCLUSIVE` within the runner's `lock_timeout`;
+  - the runbook `docs/runbooks/club-mapping-transitions-v52.md` and its three SQL files (preflight, nine blocks;
+    post-check, six blocks; rollback), bound to LF by `.gitattributes`. The runbook carries the L2 section (in
+    Serbian, for the owner) on a deploy that fails on its locks: nothing is applied, the rollback is not run, block 8
+    is run again and the same commit is deployed again.
+- **The service**, as section 7: `mayTransitionMappings` written out (`platform_admin` on a system or club scope,
+  `club_admin` on a club scope); `endOpenActivations` and `endAuditRows` write the caller's basis, the pinned step a
+  fixed `platform_admin` context; `rightsStillHold`'s club-admin query `for share of u, r`; `submitVersion` answers
+  `version_not_draft` and `revision_not_usable` only after the right (R5); the comments of section 7. A test-only
+  fault kind `skip_end` (the seam `setMappingTransitionAuditFaultForTests`) leaves out one version-driven
+  `activation_end` audit row, so the deferred link refuses the COMMIT definitely.
+- **The Mappings screen**, as section 8: the one predicate `mayTransition`, the club intro, step 4's one sentence, the
+  dead note removed, the meaning blocker's next step and the missing conversion's sentence in a club workspace only,
+  and the Imports screen's `mapping_not_usable` step.
+- **Tests:**
+  - `backend/tests/source-metric-mapping-club-admin-7h.test.mjs` (new, disposable; 20 tests): the rehearsal on v51
+    (preflight with each hard value flipped, `NOWAIT` on a busy T4, the apply waiting for a T5 writer with the exact
+    catalog delta and the post-check, every rollback refusal, the rollback to v51's catalog and the re-apply waiting
+    for a T8 writer, LF); the shared rights table through the real resolver and the real A1 route; the success paths
+    with `club_admin` on T4, T5 and T8; the identical 404s; the platform-only routes; replays; the direct SQL of
+    section 10.3 (including the J18 chain in one transaction, committed); the races of section 10.4; the rights
+    locked before any trigger; the rights and write hold seams; **L1: the real club-admin revocation route against the
+    real A1, both orders** (test 17); submit's R5; the COMMIT trio; the leak scan;
+  - `backend/tests/fixtures/mapping-transition-rights-7h.json`: the shared table of R12 (ten rows; a platform admin
+    reaches a club's workspace only while also holding that club's admin role, so every club-workspace row of a
+    platform admin holds both roles), read by the backend suite and by `frontend/tests/metric-mappings.actions.test.mjs`;
+  - `backend/tests/gpexe-import-mapped-concurrency-9b.test.mjs` 11a–11c: a club admin's A2 and replacement against an
+    import and against the real approval, both orders;
+  - the existing suites of section 10.7: 7b tests 8 and 9 changed as written; frontend tests 10 and 34 inverted; new
+    frontend tests 40–43 (the shared table, a club admin's activate with teams, replace with kept teams then disable,
+    the system mapping's sentences and the club blockers); the Imports step's sentence in
+    `frontend/tests/gpexe-import.actions.test.mjs`;
+  - `backend/tests/gpexe-import-window-sql-9r.test.mjs` builds its world through v51: the two 9-R window files are
+    pinned to v51 as written, the first window ran them on production and its record names their sha256, so a later
+    migration makes them stale for the **next** window only, which re-issues them before its step 11 (their headers;
+    J17 section 10.4).
+- **Mutations** (section 10.6): 44 in the backend (17 of the service, 24 of v52, 3 of the rollback), 41 killed by a
+  named test; L1's `for share of r, u` (S12) is killed only by test 17, as section 10.6 says. Three survive as
+  equivalent mutants, named in the pull request:
+  - the route gate moved after the body check (S4): after 7h-B the gate refuses no context the resolver builds (a
+    platform admin's in the platform or a club workspace, a club admin's in its club's), so its place no longer
+    changes an answer; the identical 404 before the body comes from the resolver's missing context, which test 9 and
+    7b test 8 pin;
+  - the club taken from the binding instead of the mapping, in the T5 guard (V17) and in the T8 actor guard (V22):
+    the R3 backstop runs first and refuses whenever the binding's club differs from the mapping's, so both clubs are
+    the same where the derivation is reached.
+
+  The frontend mutation (`mayTransition` platform-only) is killed by six tests.
+- **Known limits:** the A1–Unbind–revocation `40P01` of the runbook, until the lock-order pull request (section 7,
+  R13); everything else of section 14.

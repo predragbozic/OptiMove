@@ -74,6 +74,11 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
   real counts, mutations and a browser check, then both ★★ reviews; merged only after both GOs; the owner deploys
   after the *Rukovodilac*'s preflight, the *Rukovodilac* runs the post-check, and nothing else is merged into `main`
   between the merge and the post-check;
+  **built, in review** (branch `feature/7h-b-club-mapping-transitions`, base `34b65a75`; J14 section 17): v52
+  (`migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql`) with its runbook, preflight,
+  post-check and rollback; the service and the Mappings screen as J14 sections 7 and 8. Not merged, not deployed; v52
+  is applied to no persistent database. The 9-R window files stay pinned to v51 (the first window's record names
+  them); the next window re-issues them before its step 11;
 - then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B) and **the lock-order
   pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
   Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
