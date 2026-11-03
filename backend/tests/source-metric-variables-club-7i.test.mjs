@@ -148,6 +148,7 @@ function resetSeams() {
   activations?.setActivationWriteHoldForTests(null);
   steps?.setHideLockHoldForTests(null);
   variables?.setVariableWriteHoldForTests(null);
+  variables?.setVariableClassifyObserverForTests(null);
   connections?.setSourceUnbindHoldForTests(null);
 }
 afterEach(() => {
@@ -925,35 +926,50 @@ test("2c. D5 as the Rukovodilac corrected it: only the request record's exact te
   ]) assert.equal(variables.basisChangedError(err(m)), false, m);
   assert.equal(variables.basisChangedError(err(exact, "23514")), false, "another code");
   // Through the routes: a fresh admin of club A is granted the platform admin role while its write is held at
-  // `where`; the database guard then derives another basis than the request carries.
+  // `where`; the database guard then derives another basis than the request carries. The classify observer
+  // records the raw 42501 the route's classifier received, so each case names the guard that refused it.
   const grantDuring = async (where, send) => {
     const who = await clubAdmin(W.clubA);
+    const guards = [];
+    variables.setVariableClassifyObserverForTests((error) => { if (error?.code === "42501") guards.push(error.message); });
     const hold = holdVariable(where);
     const pending = send(who);
     await until(() => hold.state.entered, `held at ${where}`);
     await setGlobal(who.id, true);
     hold.g.open();
     let res;
-    try { res = await pending; } finally { variables.setVariableWriteHoldForTests(null); }
-    return { who, res };
+    try { res = await pending; } finally {
+      variables.setVariableWriteHoldForTests(null);
+      variables.setVariableClassifyObserverForTests(null);
+    }
+    assert.equal(guards.length, 1, `one guard refusal at ${where}: ${JSON.stringify(guards)}`);
+    return { who, res, guard: guards[0] };
   };
-  const internal = (res, label) => assert.deepEqual([res.status, res.body.error], [500, "internal_error"], `${label}: ${res.text}`);
+  const internal = (r, guard, label) => {
+    assert.deepEqual([r.res.status, r.res.body.error], [500, "internal_error"], `${label}: ${r.res.text}`);
+    assert.equal(r.guard, guard, label);
+  };
   // The request record's guard (the copy held before its request row): try_again, and the same copy then succeeds.
   const a = await systemVariable();
   const bodyA = await copyBody(a.id);
   const first = await nothingWritten(async () => (await grantDuring("variable_copy_before_request", (who) => post(`/variables/${a.id}/copy`, who.cookie, bodyA))));
   refused(first.res, 409, "try_again");
+  assert.equal(first.guard, exact, "the request record's guard");
   const again = ok(await post(`/variables/${a.id}/copy`, first.who.cookie, { ...bodyA, requestKey: key() }), 201);
   assert.equal((await one(k, `select basis from ${COPIES} where club_definition_id = $1`, [again.variable.id])).basis, "platform_admin");
-  // v35's guard of the copied mapping (held before the copied mappings): the same words behind another prefix -> 500.
+  // v35's guard of the copied mapping (held before the copied mappings): the same words behind another prefix -> 500,
+  // and the same request (the same key) then succeeds - the runbook's "the same request then succeeds".
   const b = await systemVariable();
-  internal((await nothingWritten(() => grantDuring("variable_copy_before_mappings", async (who) => copy(who, b.id)))).res, "the copied mapping's guard");
+  const bodyB = await copyBody(b.id);
+  const rb = await nothingWritten(() => grantDuring("variable_copy_before_mappings", (who) => post(`/variables/${b.id}/copy`, who.cookie, bodyB)));
+  internal(rb, "source metric mapping: the basis is not the acting user's own", "the copied mapping's guard");
+  ok(await post(`/variables/${b.id}/copy`, rb.who.cookie, bodyB), 201);
   // The copy row's guard (held before every write): 'may not copy into this club' -> 500.
   const c = await systemVariable({ n: 0 });
-  internal((await nothingWritten(() => grantDuring("variable_copy", async (who) => copy(who, c.id)))).res, "the copy row's guard");
+  internal(await nothingWritten(() => grantDuring("variable_copy", async (who) => copy(who, c.id))), "metric variable copy: the acting user may not copy into this club", "the copy row's guard");
   // The hide row's guard: 'may not hide for this club' -> 500.
   const h = await systemVariable();
-  internal((await nothingWritten(() => grantDuring("variable_hide", (who) => hide(who, h.id)))).res, "the hide row's guard");
+  internal(await nothingWritten(() => grantDuring("variable_hide", (who) => hide(who, h.id))), "metric variable hide: the acting user may not hide for this club", "the hide row's guard");
 });
 
 test("3. hide and show by each allowed actor; idempotent repeats (a no-op key acts later; a lost no-op, another admin's change, then the same key: the state this admin asked for); a hide key refused for a show and the reverse; variable_in_use with an open system activation on the club's binding; hide_not_system", async () => {
@@ -1243,7 +1259,7 @@ test("8. reads: a system row in club A's workspace carries club A's facts and th
 // ---------------------------------------------------------------------------
 // 9. Dashboard template clones (J15 section 4.4, case by case)
 // ---------------------------------------------------------------------------
-test("9. template resolution: in club A's data workspace a same-key copy and the original are ambiguous until the original is hidden; hidden, the copy resolves; hidden with no club variable of that key, or one the hint's unit, valueType or scopeLevel filter drops, the system variable resolves, never unresolved; a team data workspace resolves the system variable hidden or not; another club unchanged", async () => {
+test("9. template resolution: in club A's data workspace a same-key copy and the original are ambiguous until the original is hidden; hidden, the copy resolves; hidden with no club variable of that key, or one the hint's unit, valueType or scopeLevel filter drops, the system variable resolves, never unresolved; a team data workspace resolves the system variable hidden or not; another club unchanged; another club's hide never changes club A's result (J15 section 3: another club's hides are never revealed)", async () => {
   const widgets = await import("../src/trainingLoadDashboardWidgets.js");
   const resolve = async (hint, ws = ["club", W.clubA]) => {
     const spec = [{ sourceSeriesId: "s", hints: [hint] }];
@@ -1272,6 +1288,15 @@ test("9. template resolution: in club A's data workspace a same-key copy and the
   assert.deepEqual(await resolve(lone.key, ["team", teamA]), { status: "resolved", candidateIds: [lone.id] });
   // Another club: unchanged (club B has no copy and no hide).
   assert.deepEqual(await resolve(lone.key, ["club", W.clubB]), { status: "resolved", candidateIds: [lone.id] });
+  // Another club's hide (the Nezavisni revizor's L1): club B hides a system variable that club A has copied under the
+  // same key and does not hide; club A's template stays ambiguous, so it learns nothing about club B's hides.
+  const other = await systemVariable({ n: 0 });
+  const otherCopy = ok(await copy(W.caA, other.id), 201).variable;
+  ok(await hide(W.caB, other.id));
+  const notHere = await resolve(other.key);
+  assert.deepEqual([notHere.status, [...notHere.candidateIds].sort()], ["ambiguous", [other.id, otherCopy.id].sort()], "club B's hide does not apply in club A");
+  assert.deepEqual(await resolve(other.key, ["club", W.clubB]), { status: "resolved", candidateIds: [other.id] }, "in club B: hidden, no club variable of that key there");
+  ok(await show(W.caB, other.id));
   ok(await show(W.caA, lone.id));
   ok(await show(W.caA, sys.id));
 });
@@ -1937,7 +1962,11 @@ test("16b. copy against a new system version, an archive and A2 of the copied sy
 });
 
 test("16c. D1 with a seam (the Rukovodilac's order): a new system version activated between the copy's plain read of the active set and its T3 locks - a second mapping's version, or the copied version replaced - makes the copy, reading the set again under its locks, answer try_again with nothing written; the copy then copies the set in force", async () => {
-  const copiesOf = async (id) => (await one(k, `select count(*)::int as n from ${COPIES} where system_definition_id = $1`, [id])).n;
+  // What a copy writes - its copy row, its links, its variable_copy request record and club A's definitions (not the
+  // whole of nothingWritten: the activation during the hold writes T4 / T8 rows of its own).
+  const copyWrites = async () => one(k, `select (select count(*)::int from ${COPIES}) as copies, (select count(*)::int from ${LINKS}) as links,
+    (select count(*)::int from ${REQUESTS} where operation = 'variable_copy') as requests,
+    (select count(*)::int from training_load.metric_definitions where owner_scope = 'club' and owner_club_id = $1) as club_definitions`, [W.clubA]);
   const heldCopy = async (sys, during) => {
     const hold = holdVariable("variable_copy_before_locks");
     const copying = copy(W.caA, sys.id);
@@ -1949,15 +1978,17 @@ test("16c. D1 with a seam (the Rukovodilac's order): a new system version activa
   // (i) A second system mapping of the variable gets an active version.
   const sys = await systemVariable();
   const extra = await version(await field(), { target: sys.target });
+  const before = await copyWrites();
   refused(await heldCopy(sys, async () => ok(await activate(extra, W.pa.cookie))), 409, "try_again");
-  assert.equal(await copiesOf(sys.id), 0, "the copy wrote nothing");
+  assert.deepEqual(await copyWrites(), before, "the copy wrote nothing");
   const made = ok(await copy(W.caA, sys.id), 201).variable;
   assert.deepEqual((await copiedDrafts(made.id)).map((d) => d.system_version_id).sort(), [sys.versions[0].versionId, extra.versionId].sort());
   // (ii) The copied version is replaced by the next one.
   const sys2 = await systemVariable();
   const next = await version({ fieldId: sys2.versions[0].fieldId, revId: sys2.versions[0].revId }, { target: sys2.target });
+  const before2 = await copyWrites();
   refused(await heldCopy(sys2, async () => ok(await activate(next, W.pa.cookie, { expected: sys2.versions[0].versionId, reason: reasonFor("Replace.") }))), 409, "try_again");
-  assert.equal(await copiesOf(sys2.id), 0, "the copy wrote nothing");
+  assert.deepEqual(await copyWrites(), before2, "the copy wrote nothing");
   const made2 = ok(await copy(W.caA, sys2.id), 201).variable;
   assert.deepEqual((await copiedDrafts(made2.id)).map((d) => d.system_version_id), [next.versionId]);
 });

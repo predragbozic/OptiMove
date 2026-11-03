@@ -689,11 +689,19 @@ async function unitsAgree(client, units) {
   return true;
 }
 
-// Test seam (never set by the application): runs inside a write's transaction
-// after every lock is taken and every check passed, right before the first row
-// is written.
+// Test seams (never set by the application). writeHold runs inside a write's
+// transaction at the named point. A point named after the operation comes after
+// every lock and check, right before the first row is written; the others are
+// variable_copy_before_locks (after the copy's plain read of the active set,
+// before its locks), variable_copy_before_mappings and
+// variable_copy_before_request (between the copy's writes), and
+// variable_hide_before_hide_lock / variable_show_before_hide_lock (after the
+// rights, before the hide lock). classifyObserver sees every raw error the
+// copy's and the hide's classifiers receive, before they map it.
 let writeHold = null;
 export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
+let classifyObserver = null;
+export function setVariableClassifyObserverForTests(fn) { classifyObserver = fn ?? null; }
 
 // POST /variables - a canonical variable: the definition, its version 1 and
 // its levels, in the workspace's owner scope, in one transaction.
@@ -1111,9 +1119,10 @@ function clubWriteOnly(ctx) {
 // The database guards of v53 derive the basis again. Only the request
 // record's exact "basis is not the acting user's own" (a stronger role granted
 // after the rights were checked) is the request to repeat (try_again, as an R2
-// change): the copy and hide guards' own 42501 texts also cover a missing
-// right, so they stay a sanitized 500 (D5 as corrected by the Rukovodilac).
-const basisChanged = basisChangedError;
+// change), and only the copy writes a request record: the copy and hide guards'
+// own 42501 texts also cover a missing right, so they stay a sanitized 500 (D5
+// as corrected by the Rukovodilac). The hide and the show write no request
+// record, so no 42501 of theirs is ever try_again.
 
 // POST /variables/:id/copy (J15 sections 2.2 and 4.1): one transaction writes
 // the club variable (version 1 equal to the system variable's current version
@@ -1149,8 +1158,9 @@ export async function copyVariable({ ctx, variableId, body }) {
   });
   const progress = { sourceMetricId: null };
   const classify = (error) => {
+    if (classifyObserver) classifyObserver(error);
     if (error instanceof SourceMetricMappingError) return error;
-    if (basisChanged(error)) return refusal(409, "try_again", MESSAGES.try_again);
+    if (basisChangedError(error)) return refusal(409, "try_again", MESSAGES.try_again);
     if (error?.code === "23505" && error.constraint === "metric_definition_copies_one_per_club") return refusal(409, "already_copied", TEXT.already_copied);
     const variable = classifyVariableError(error);
     if (variable) return variable;
@@ -1328,8 +1338,8 @@ async function setHidden({ ctx, variableId, body, hide }) {
   const operation = hide ? "variable_hide" : "variable_show";
   const requestHash = hashOf({ contract: CONTRACT, operation, clubId: ctx.owner.clubId, variableId: id, body: {} });
   const classify = (error) => {
+    if (classifyObserver) classifyObserver(error);
     if (error instanceof SourceMetricMappingError) return error;
-    if (basisChanged(error)) return refusal(409, "try_again", MESSAGES.try_again);
     if (error?.code === "23514" && !error.constraint && HIDE_GUARD_REFUSALS.has(error.message)) {
       const code = HIDE_GUARD_REFUSALS.get(error.message);
       return refusal(409, code, TEXT[code]);

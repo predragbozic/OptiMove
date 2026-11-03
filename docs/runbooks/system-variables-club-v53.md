@@ -159,12 +159,14 @@ hide or a start committed before the lock was granted.
 ## Which copies are refused
 
 Preflight block 9 counts, before the merge, the active system variables a copy would refuse with
-`409 copy_source_unsupported`; its `current.reason` names the case:
+`409 copy_source_unsupported`; its `current.reason` names the case. The copy gives the first reason that applies, in
+the table's order; block 9 counts each column on its own, so one variable can appear in several columns (a variable
+with no unit and no level counts under `unit_not_token` and `no_levels`, and its copy answers `unit`).
 
 | `current.reason` | The system variable | Block 9 column |
 |---|---|---|
 | `not_numeric` | does not hold a number | `not_numeric` |
-| `unit` | has a unit (or a condition's unit) that is not a unit token | `unit_not_token` |
+| `unit` | has no unit or a unit that is not a unit token, or a condition whose unit is not a unit token | `unit_not_token`; a condition's unit only under `with_condition_to_review` |
 | `condition` | has a condition in a shape the create rules do not accept | `with_condition_to_review` (to check one by one) |
 | `day_level` | can be recorded per day | `day_level` |
 | `no_levels` | has no level at all | `no_levels` |
@@ -178,5 +180,7 @@ The copy also refuses, case by case at the moment of the request, without a pref
 - `409 copy_too_large`: more than ten active OptiMove mapping versions;
 - `409 source_not_active`, `409 source_version_changed` (names the current version), `409 already_copied` (names the
   club's copy): the state at that moment;
-- `409 try_again`: OptiMove's active mapping versions changed during the copy, or the admin's role changed under the
-  request; nothing was written, the same request can be sent again.
+- `409 try_again`: OptiMove's active mapping versions changed during the copy, or the admin was given the platform admin
+  role just before the copy's request record was written; nothing was written, the same request can be sent again. A
+  role change earlier in the copy (before its own rows) answers a sanitized `500 internal_error` instead, nothing
+  written, and the same request then succeeds.

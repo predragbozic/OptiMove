@@ -1058,8 +1058,9 @@ internal security review.
   holds here in its "or refuses" branch:** the copy never copies a version it did not read before its locks. A new
   active version (another mapping's, or the copied one replaced) answers `409 try_again`, and the copy is not
   completed with the new version. Test 16 drives A1 holding T3. Test 16c, which the *Rukovodilac* ordered, activates
-  the new version at a seam between the copy's plain read and its T3 locks (`variable_copy_before_locks`). Mutation M15
-  (no second read) is killed by both.
+  the new version at a seam between the copy's plain read and its T3 locks (`variable_copy_before_locks`), and checks
+  that the copy wrote no copy row, link, `variable_copy` request record or club definition. Mutation M15 (no second
+  read) is killed by both.
 - **D2.** The defaults of a copy (section 2.2): a system key that the create rules refuse answers `400 key_required`
   (the body names a key), a label they refuse `400 label_required`; a legacy icon URL becomes no icon; a system variable
   with no level is `copy_source_unsupported` (`no_levels`); decimals are copied as stored. The runbook names every case
@@ -1075,11 +1076,18 @@ internal security review.
   `ACTOR_REFUSALS` gives the identical 404, and anything else a sanitized 500. That covers the copy and hide guards' own
   texts ("may not copy into this club", "may not hide for this club"), which also cover a missing right, and the same
   words behind another prefix (v35's "source metric mapping: …"). So a real refusal never becomes an endless retry.
+  Only the copy writes a request record, so only the copy's classifier maps that text; the hide and the show have no
+  `try_again` for a `42501` at all.
   - Test 2c checks the predicate against each text.
-  - Through the routes, test 2c grants a club admin the platform admin role while the copy or the hide is held. Before
-    the copy's request row the answer is `try_again`, and the same copy then succeeds. Before its copied mappings,
-    before its writes, and before the hide row, the answer is a sanitized 500 with nothing written.
-  - Mutations M30 (the guards' texts mapped again) and M31 (a match on the words, not the exact text) are killed.
+  - Through the routes, test 2c grants a club admin the platform admin role while the copy or the hide is held. A test
+    seam (`setVariableClassifyObserverForTests`) records the raw error each classifier receives, so every case names
+    the exact guard text that refused it. Before the copy's request row: the request record's text, `try_again`, and
+    the same copy then succeeds. Before its copied mappings: v35's "source metric mapping: the basis is not the acting
+    user's own", a sanitized 500 with nothing written, and the same request (the same key) then succeeds. Before its
+    writes: "metric variable copy: the acting user may not copy into this club", a sanitized 500. Before the hide row:
+    "metric variable hide: the acting user may not hide for this club", a sanitized 500.
+  - Mutations M30 (the copy guard's text mapped again), M32 (the hide guard's text mapped again) and M31 (a match on
+    the words, not the exact text) are killed.
 - **D6** (from the internal security review). The copy's and the hide's state refusal for a variable that is not a
   system one (`copy_source_not_system`, `hide_not_system`) comes after the right is checked again under its locks, as
   section 4's order says: a caller whose right is gone meanwhile gets the identical 404. The same holds for the copy
@@ -1127,7 +1135,9 @@ internal security review.
   within its bound) answers `503 outcome_unknown` with nothing written, after which the same key writes once;
 - hide and show, the no-op key, the cross-act key and `variable_in_use`; S1 and A1 refused on a hidden variable;
 - the switch, its answers, and its refusals combined in section 4.3's order;
-- the matrix of section 10 (an invalid body included), the reads and the template cases;
+- the matrix of section 10 (an invalid body included), the reads and the template cases, among them another club's
+  hide, which never changes club A's template (a same-key copy in club A stays `ambiguous` while club B hides the
+  original; the *Nezavisni revizor*'s L1 on `cddec20c`, test 9);
 - direct SQL against every v53 guard and the T5 guard's lock;
 - the SQL order of the copy, the hide, the show, S1 with the hide lock, A1 with listed starts (one that replaces a
   version with an open activation included: the hide lock comes before its first end), and the switch (the rule of PR
@@ -1159,7 +1169,7 @@ started by an S1 or an A1 of a system version, which takes the same hide lock fi
 S1, or it existed before the S1's checks, so the S1 answers `activation_exists` there. The position of A1's hide lock
 (before its first end) is pinned by test 12's SQL order for a replacing A1, and by mutation M28.
 
-**Mutations** (31, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
+**Mutations** (33, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
 every one killed.
 - Four end in a real `40P01`, seen as `deadlock detected` in the PostgreSQL server log during their run: the L1
   mutation (the hide locks not sorted); the hide lock before the rights in the hide; the switch's binding after its
@@ -1170,8 +1180,10 @@ every one killed.
   conflict with the A1's `FOR SHARE`, so no deadlock can show it.
 - The hide request lookup broken, and the copy's replay without its copied drafts, are killed by the lost-COMMIT test.
 - The losing copy's race read without its right check is killed by test 15b.
-- D5's guard texts mapped to `try_again` again, and a match on the words instead of the exact text, are killed by test
-  2c.
+- The copy guard's and the hide guard's texts each mapped to `try_again` again, and a match on the words instead of
+  the exact text, are killed by test 2c.
+- The template resolver reading any club's hide instead of the data workspace's club is killed by test 9 (the
+  *Nezavisni revizor*'s mutation H7, which survived the 32 tests of `cddec20c`).
 - The service's hide check removed is killed only by the answer's `current.bindingId`. The T5 guard still refuses, and
   the classifier still answers `409 variable_hidden`, without naming the binding.
 
