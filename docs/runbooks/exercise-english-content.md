@@ -66,26 +66,36 @@ code. The xlsx itself is never changed.
   (the database's CHECK refuses them at either end).
 - A matched code whose Serbian name differs from the library's (beyond whitespace) is listed in `nameDiffers` with
   the library's name and the sheet's side by side, and **not written** (`written: false`) unless the code is named in
-  `--include-code 758,759` (owner, 2026-11-03). A code in `--include-code` whose name does not differ (a typo) is
-  refused before anything is written.
+  `--include-code 758,759` (owner, 2026-11-03). A row with no Serbian name cannot be checked the same way: it is listed
+  in `noSerbianName` with the library's name and written only when named in `--include-code` too. A code in
+  `--include-code` that is not listed (a typo) is refused before anything is written.
 - **Copies** (owner, 2026-11-03): an exercise with no code whose `source_exercise_id` or `copy_parent_id` points at
   a matched exercise, and whose name AND instruction still equal the source's (whitespace aside), gets the same English:
   what the source holds after the run (the sheet's value where the source gets it or already has it, the source's own
-  where it keeps that), under the same rules (`copies.unchanged`, `copies.nameEn`, `copies.instructionEn`). A copy
-  that differs is listed in `copies.changed` (code and copy id) and not written; a copy whose source is not written (a
-  name that differs, not included) is counted in `copies.withSourceNotWritten`. A copy of a copy is not followed, at
-  any depth; it is counted in `copies.ofCopiesNotFollowed`. An exercise with a code of its own is never treated as a
-  copy.
+  where it keeps that) (`copies.unchanged`, `copies.nameEn`, `copies.instructionEn`). It is filled only while both its
+  English fields are empty: `--overwrite` never reaches a copy, and a copy holding English that is not what its source
+  holds is listed in `copies.ownEnglish` and not written. A copy that differs is listed in `copies.changed` and not
+  written; a copy whose source is not written is counted in `copies.withSourceNotWritten`. A copy of a copy is not
+  followed, at any depth; it is counted in `copies.ofCopiesNotFollowed`. An exercise with a code of its own is never
+  treated as a copy.
+- The report prints codes, names and counts; the copies' ids (in `copies.changed` and `copies.ownEnglish`) only with
+  `--verbose`.
 - Guard: `DATABASE_URL` from the environment only (no `.env` is read), never printed; `--database-name` must name the
   database the URL points at and the one the connection is really on; a database without the migration, or without the
-  copy links, is refused.
-  The report's `target` names host, port and database (never a user or a password). TLS as the deployed server
+  copy links, is refused. The report's `target` names the host and port the client really connected to (a `?host=` or
+  `?port=` in the URL wins over its address) and the database, never a user or a password. TLS as the deployed server
   connects (`backend/src/db.js`): for a `supabase.com` host the pooler's certificate is accepted as the server does;
   every other host uses Node's defaults.
 - Bounds: `statement_timeout` 60 s, `lock_timeout` 5 s, `idle_in_transaction_session_timeout` 30 s on the server; the
-  client waits at most 75 s for any answer. During an apply it takes the app's `exercise_collections` advisory lock
-  shared first (as an exercise save does; block writes take it exclusively and wait), then locks the matched rows and
-  the copies it reads `FOR NO KEY UPDATE` in id order, the app's own order.
+  client waits at most 75 s for any answer. During an apply (and an undo) it takes the app's `exercise_collections`
+  advisory lock shared first (as an exercise save does; block writes take it exclusively and wait), then locks the rows
+  it reads `FOR NO KEY UPDATE` in id order, the app's own order.
+- **The record and the undo.** `--apply` needs `--report-json <new file>`. Before the COMMIT is sent, the script writes
+  there every field it writes, with the value that field held before (`previous_name_en`, `previous_instruction_en`),
+  and never over an existing file (an existing file refuses the apply, with nothing written); after the COMMIT it marks
+  the record `committed` (a record left at `commit_sent` holds every write all the same). `--undo <record>` puts back
+  exactly those fields: a field that still holds what the import wrote gets its earlier value (also one an `--overwrite`
+  replaced); a field changed since is left and counted in `changedSince`. A record of another database is refused.
 - Rehearsed on disposable databases by `backend/tests/import-exercise-english.test.mjs`.
 
 **The order, each step on the owner's order (the production run is the owner's, or the manager's with the owner's
@@ -96,36 +106,35 @@ confirmation; `database-safety.md`):**
    - compare the number of non-blank English instructions on the xlsx rows that have a code with the file's (the
      dry run's matched rows minus `instructionEn.blank`): a smaller number in the file means the export lost some;
      export again first. (On 2026-11-03 the sheet had 1083 non-blank English notes, 32 of them on 160 rows without a
-     code; all 1051 on coded rows were in the exported file.)
+     code; all 1051 on coded rows were in the exported file, and every coded row had a Serbian name.)
    - the baseline over the system exercises and the copies (expected `0` on the first run) and the triggers an
      UPDATE could fire (expected: none of them names `name_en` or `instruction_en`):
      `select count(*) filter (where name_en is not null) as names, count(*) filter (where instruction_en is not null) as instructions, max(updated_at) as last_updated from library.exercises where owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null));`
      `select tgname, pg_get_triggerdef(oid) from pg_trigger where tgrelid = 'library.exercises'::regclass and not tgisinternal;`
-   - if the baseline is not `0`, save the ids that already hold English, for the undo of step 7:
-     `select id from library.exercises where (owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null))) and (name_en is not null or instruction_en is not null) order by id;`
 3. Dry run, read-only (`begin read only`, rolled back):
    `DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file vezbe-en.json --database-name <name>`.
    Check the report's `target` (host and port) is the database meant. Read `matched`, `notFound`, `nameDiffers`,
-   `noEnglish`, `copies`, and per field `write` / `alreadyFilled` / `same` / `blank` (for the matched
-   exercises and, under `copies`, for the copies). The owner reads each `nameDiffers` pair and names the codes to
-   write anyway; they go in `--include-code` of the dry run again and of the apply. Take out of the file any other
-   row the owner does not want written.
-4. Apply at a quiet moment, with `--apply` added: one transaction; the report says `written`. An exercise editor that
-   was opened before the import and saved after it sends its (empty) English fields and clears what the import wrote
-   for that exercise, the same lost update as any other field; so run it when nobody edits exercises, and compare in
-   step 5.
+   `noSerbianName`, `noEnglish`, `copies`, and per field `write` / `alreadyFilled` / `same` / `blank` (for the matched
+   exercises and, under `copies`, for the copies). The owner reads each listed pair and names the codes to write
+   anyway; they go in `--include-code` of the dry run again and of the apply. Take out of the file any other row the
+   owner does not want written.
+4. Apply at a quiet moment, with `--apply --report-json <new file>` added: one transaction; the report says `written`
+   and `record: committed`. Keep the record file. An exercise editor that was opened before the import and saved after
+   it sends its (empty) English fields and clears what the import wrote for that exercise, the same lost update as any
+   other field; so run it when nobody edits exercises, and compare in step 5.
 5. Check: run the dry run again. The primary check is that every field's `write` is now 0, for the
    matched exercises and the copies (what was written is now `same`). Then the baseline query of step 2 again: after
    minus before must equal the first dry run's `write` for each field, the matched exercises' and the copies' added
    (`alreadyFilled`, `same` and exercises outside the file were counted before already), and `last_updated` is
    unchanged unless someone saved an exercise meanwhile (the import touches no other column). A smaller difference
-   names an exercise saved meanwhile (step 4): run the apply again. A value replaced under `--overwrite` counts in
-   `write` but leaves the non-null counts as they were, so for those the dry run's `write` of 0 is the check.
+   names an exercise saved meanwhile (step 4): run the apply again, with a new record file. A value replaced under
+   `--overwrite` counts in `write` but leaves the non-null counts as they were, so for those the dry run's `write` of 0
+   is the check.
 6. If the COMMIT's answer is lost, the script says the outcome is not known: run the dry run again; it shows what is
-   stored. A second apply writes nothing that is already there.
-7. Undo, only on its own owner's order, and only while nobody has typed English in the editor since the import. It
-   leaves out the ids saved in step 2 (none when the baseline was 0); a value an `--overwrite` apply replaced there
-   is not restored (the earlier value is not kept):
-   `update library.exercises set name_en = null, instruction_en = null where (owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null))) and (name_en is not null or instruction_en is not null) and id <> all('{<the ids saved in step 2>}'::uuid[]);`
-   in one transaction, checking before COMMIT that the count it reports equals the rows the applies wrote outside
-   those ids (the sum of every apply's `written` when none used `--overwrite`).
+   stored. The record file (`commit_sent`) holds every write either way. A second apply writes nothing that is already
+   there.
+7. Undo, only on its own owner's order, once per record file of step 4, newest first:
+   `DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --undo <record file> --database-name <name>`
+   (a dry run: `reverted` and `changedSince` per field), then the same with `--apply`. It writes only the fields the
+   record names, back to the value each held before the import, and leaves every field changed since (counted in
+   `changedSince`). A second undo of the same record writes nothing.

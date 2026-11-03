@@ -7,55 +7,70 @@
 //   Dry run (the default) - reads, writes nothing, prints the report:
 //     DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs \
 //       --file vezbe-en.json --database-name <name of that database>
-//   Apply - one transaction, the same report with what was written:
-//     ... --apply [--overwrite] [--include-code 758,759]
+//   Apply - one transaction, the same report with what was written; the record
+//   of every written field (with the value it replaced) goes to a new file:
+//     ... --apply --report-json <new file> [--overwrite] [--include-code 758,759]
+//   Undo - puts back exactly what that record says the import wrote, where it
+//   is still there (dry run first, --apply to write):
+//     ... --undo <record file> --database-name <name> [--apply]
 //
 // The input is a JSON array of { code, name_sr, instr_sr, name_en, notes_en };
 // notes_en is the English of the Serbian instruction (instr_sr). System
 // exercises are matched by code. An English value is written only where the
 // exercise has none; --overwrite also replaces one that differs. A blank
-// English value is never written and never clears anything.
+// English value is never written and never clears anything. The report prints
+// codes, names and counts; the copies' ids only with --verbose.
 //
-// Owner, 2026-11-03 ("Prihvatam sve"):
+// Owner, 2026-11-03 ("Prihvatam sve", and the external review's findings):
 // - a matched code whose Serbian name differs from the library's (beyond
-//   whitespace) is listed as "name differs - not written", the two names side
-//   by side, and written only when named in --include-code; never silently;
+//   whitespace), or whose row has no Serbian name to compare, is listed and
+//   written only when named in --include-code; never silently;
 // - a copy (no code; source_exercise_id or copy_parent_id pointing at a
 //   matched exercise) whose name AND instruction still equal its source's
-//   gets the same English (what the source holds after the run); a copy that
-//   differs is listed as "changed copy - not written". A copy follows its
+//   gets the same English (what the source holds after the run), only while
+//   both its English fields are empty: --overwrite never reaches a copy, and
+//   English on a copy that is not its source's is listed, not written. A copy
+//   that differs is listed as "changed copy - not written". A copy follows its
 //   source: not written while the source is. A copy of a copy is counted, not
 //   followed.
 //
 // Guard: DATABASE_URL comes from the environment only (no .env file is
 // read) and is never printed; --database-name must name the database the URL
 // points at and the one the connection is really on (current_database()).
+// The report names the host and port the client really connected to.
 // The production run is the owner's, on its own order (database-safety.md).
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 
 export const MIGRATION = "202611031200_exercise_english_content.sql";
-const USAGE = "Usage: DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file <json> --database-name <name> [--apply] [--overwrite] [--include-code <code,code,...>]";
+export const RECORD_KIND = "exercise-english-import";
+const USAGE = "Usage: DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --database-name <name> (--file <json> [--include-code <code,code,...>] [--overwrite] [--verbose] [--apply --report-json <new file>] | --undo <record file> [--apply])";
+const VALUED = { "--file": "file", "--undo": "undo", "--report-json": "reportJson", "--database-name": "databaseName" };
 
 export function parseArgs(argv) {
-  const options = { file: "", databaseName: "", apply: false, overwrite: false, includeCodes: [] };
+  const options = { file: "", undo: "", reportJson: "", databaseName: "", apply: false, overwrite: false, verbose: false, includeCodes: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--apply") options.apply = true;
     else if (arg === "--overwrite") options.overwrite = true;
-    else if (arg === "--file" || arg === "--database-name" || arg === "--include-code") {
+    else if (arg === "--verbose") options.verbose = true;
+    else if (Object.hasOwn(VALUED, arg) || arg === "--include-code") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error(`${arg} needs a value. ${USAGE}`);
       if (arg === "--include-code") {
         const codes = value.split(",").map(normalizeCode);
         if (codes.some((code) => !code)) throw new Error(`--include-code takes codes separated by commas. ${USAGE}`);
         options.includeCodes.push(...codes);
-      } else options[arg === "--file" ? "file" : "databaseName"] = value;
+      } else options[VALUED[arg]] = value;
       index += 1;
     } else throw new Error(`Unknown argument ${arg}. ${USAGE}`);
   }
-  if (!options.file || !options.databaseName) throw new Error(USAGE);
+  if (!options.databaseName || Boolean(options.file) === Boolean(options.undo)) throw new Error(USAGE);
+  if (options.undo && (options.overwrite || options.verbose || options.reportJson || options.includeCodes.length)) {
+    throw new Error(`--undo takes only --database-name and --apply. ${USAGE}`);
+  }
+  if (options.file && options.apply && !options.reportJson) throw new Error(`--apply needs --report-json <new file>: the record the undo reads. ${USAGE}`);
   options.includeCodes = [...new Set(options.includeCodes)];
   return options;
 }
@@ -114,6 +129,13 @@ export async function assertTarget(client, databaseName) {
   return database;
 }
 
+// Where the run went, for the report: the host and port the client really
+// connected to (a ?host= or ?port= in the URL wins over its address), and the
+// database; never a user or a password (database-safety.md).
+export const connectedTarget = (client, database) => ({
+  host: client.connectionParameters.host, port: String(client.connectionParameters.port), database,
+});
+
 // The sheet's Serbian names often carry a double space the library does not;
 // two texts are the same when they differ only in whitespace (a missing text
 // is an empty one).
@@ -128,24 +150,32 @@ function field(planned, stored, overwrite) {
 
 const counts = () => ({ write: 0, alreadyFilled: 0, same: 0, blank: 0 });
 
-// One target (a matched exercise or an unchanged copy) against the English it
-// is to get: counted per field, and added to the writes when a field is to be
-// written. Returns the two fields' outcomes.
+// One target (a matched exercise or a copy) against the English it is to get:
+// counted per field, and added to the writes when a field is to be written,
+// with the value it replaces (the undo's record). Returns the two outcomes.
 function planTarget(target, english, code, overwrite, tally, writes) {
   const name = field(english.nameEn, target.name_en, overwrite);
   const instruction = field(english.instructionEn, target.instruction_en, overwrite);
   tally.nameEn[name] += 1;
   tally.instructionEn[instruction] += 1;
   if (name === "write" || instruction === "write") {
-    writes.push({ id: target.id, code, name_en: name === "write" ? english.nameEn : null, instruction_en: instruction === "write" ? english.instructionEn : null });
+    writes.push({
+      id: target.id, code,
+      name_en: name === "write" ? english.nameEn : null,
+      instruction_en: instruction === "write" ? english.instructionEn : null,
+      previous_name_en: name === "write" ? target.name_en : null,
+      previous_instruction_en: instruction === "write" ? target.instruction_en : null,
+    });
   }
   return { name, instruction };
 }
 
 // What a source holds after this run: the sheet's value where it is written
 // or already the same, its own otherwise (kept without --overwrite, or a blank
-// in the sheet). An unchanged copy gets exactly that.
+// in the sheet). A copy gets exactly that.
 const heldAfter = (outcome, planned, stored) => (outcome === "write" || outcome === "same" ? planned : stored);
+
+const sharedCollectionsLock = (client) => client.query("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
 
 // What the file would change, read inside the caller's transaction. When
 // applying, the app's shared exercise_collections lock comes first (as an
@@ -153,8 +183,8 @@ const heldAfter = (outcome, planned, stored) => (outcome === "write" || outcome 
 // rows and their copies FOR NO KEY UPDATE in id order (what the UPDATE needs,
 // and no conflict with the foreign-key checks of a plan save), so nothing
 // changes between the plan and the write.
-export async function planImport(client, rows, { overwrite = false, lock = false, includeCodes = [] } = {}) {
-  if (lock) await client.query("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
+export async function planImport(client, rows, { overwrite = false, lock = false, includeCodes = [], verbose = false } = {}) {
+  if (lock) await sharedCollectionsLock(client);
   const found = (await client.query(
     `select id, exercise_code, name, instruction, name_en, instruction_en from library.exercises
       where owner_scope = 'system' and exercise_code = any($1::text[])
@@ -167,37 +197,41 @@ export async function planImport(client, rows, { overwrite = false, lock = false
     byCode.set(exercise.exercise_code, exercise);
   }
   const report = {
-    rows: rows.length, matched: 0, notFound: [], nameDiffers: [], noEnglish: [], includeCodes,
+    overwrite, rows: rows.length, matched: 0, notFound: [], nameDiffers: [], noSerbianName: [], noEnglish: [], includeCodes,
     nameEn: counts(), instructionEn: counts(),
-    copies: { unchanged: 0, changed: [], withSourceNotWritten: 0, ofCopiesNotFollowed: 0, nameEn: counts(), instructionEn: counts() },
+    copies: { unchanged: 0, changed: [], ownEnglish: [], withSourceNotWritten: 0, ofCopiesNotFollowed: 0, nameEn: counts(), instructionEn: counts() },
   };
   const writes = [];
   // The matched sources: id -> { exercise, row, english } ("english": what it
-  // holds after this run, which its unchanged copies get; null when its name
-  // differs and it is not included, so its copies are not written either).
+  // holds after this run, which its copies get; null when it is not written,
+  // so its copies are not written either).
   const sources = new Map();
   for (const row of rows) {
     const exercise = byCode.get(row.code);
     if (!exercise) { report.notFound.push(row.code); continue; }
     report.matched += 1;
     if (!row.nameEn && !row.instructionEn) report.noEnglish.push(row.code);
-    const differs = Boolean(row.nameSr) && !sameText(row.nameSr, exercise.name);
+    // A row without a Serbian name cannot be checked against the library's:
+    // like a name that differs, it is listed and written only when named.
+    const unchecked = !row.nameSr;
+    const differs = !unchecked && !sameText(row.nameSr, exercise.name);
     const included = includeCodes.includes(row.code);
+    if (unchecked) report.noSerbianName.push({ code: row.code, database: exercise.name, written: included });
     if (differs) report.nameDiffers.push({ code: row.code, database: exercise.name, sheet: row.nameSr, written: included });
     const source = { exercise, row, english: null };
     sources.set(exercise.id, source);
-    if (differs && !included) continue;
+    if ((differs || unchecked) && !included) continue;
     const outcome = planTarget(exercise, row, row.code, overwrite, report, writes);
     source.english = {
       nameEn: heldAfter(outcome.name, row.nameEn, exercise.name_en),
       instructionEn: heldAfter(outcome.instruction, row.instructionEn, exercise.instruction_en),
     };
   }
-  // An --include-code that names no name-differing matched code is a typo:
-  // refused before anything is written.
-  const differing = new Set(report.nameDiffers.map((entry) => entry.code));
-  const stray = includeCodes.filter((code) => !differing.has(code));
-  if (stray.length) throw new Error(`Refusing: --include-code ${stray.join(",")} names no matched code whose Serbian name differs from the library's.`);
+  // An --include-code that names no listed code is a typo: refused before
+  // anything is written.
+  const listed = new Set([...report.nameDiffers, ...report.noSerbianName].map((entry) => entry.code));
+  const stray = includeCodes.filter((code) => !listed.has(code));
+  if (stray.length) throw new Error(`Refusing: --include-code ${stray.join(",")} names no matched code whose Serbian name differs from the library's or is missing.`);
 
   // The copies: no code of their own, pointing at a matched exercise.
   const copies = sources.size ? (await client.query(
@@ -209,12 +243,22 @@ export async function planImport(client, rows, { overwrite = false, lock = false
   for (const copy of copies) {
     const source = sources.get(copy.source_exercise_id) || sources.get(copy.copy_parent_id);
     if (!source.english) { report.copies.withSourceNotWritten += 1; continue; }
+    const entry = verbose ? { code: source.row.code, copyId: copy.id } : { code: source.row.code };
     if (!sameText(copy.name, source.exercise.name) || !sameText(copy.instruction, source.exercise.instruction)) {
-      report.copies.changed.push({ code: source.row.code, copyId: copy.id });
+      report.copies.changed.push(entry);
+      continue;
+    }
+    // --overwrite never reaches a copy (owner, 2026-11-03): it is filled only
+    // while both its English fields are empty; one that already holds what its
+    // source holds is the same; any other English on it is the coach's own.
+    const empty = copy.name_en === null && copy.instruction_en === null;
+    const asSource = copy.name_en === source.english.nameEn && copy.instruction_en === source.english.instructionEn;
+    if (!empty && !asSource) {
+      report.copies.ownEnglish.push(entry);
       continue;
     }
     report.copies.unchanged += 1;
-    planTarget(copy, source.english, source.row.code, overwrite, report.copies, writes);
+    planTarget(copy, source.english, source.row.code, false, report.copies, writes);
   }
   // A copy of a copy (no code, pointing at one of these copies, at any depth)
   // is not followed; counted, so none is skipped silently.
@@ -250,6 +294,64 @@ export async function applyWrites(client, writes) {
   return written.rowCount;
 }
 
+// The undo's record: what an apply wrote, field by field, with the value it
+// replaced (null where the field was empty or not written).
+const recordOf = (target, outcome, writes) => JSON.stringify({ kind: RECORD_KIND, target, outcome, at: new Date().toISOString(), writes }, null, 2);
+
+const isText = (value) => value === null || typeof value === "string";
+function readRecord(record) {
+  const ok = record?.kind === RECORD_KIND && typeof record.target?.database === "string" && Array.isArray(record.writes)
+    && record.writes.every((entry) => typeof entry?.id === "string"
+      && ["name_en", "instruction_en", "previous_name_en", "previous_instruction_en"].every((key) => isText(entry[key])));
+  if (!ok) throw new Error("Refusing: the file is not a record of this import.");
+  return record.writes;
+}
+
+// What the record says the import wrote, read inside the caller's transaction
+// (the same locks as an apply): a field still holding what the import wrote
+// gets the value it replaced; one changed since is left and counted.
+export async function planUndo(client, record, database, { lock = false } = {}) {
+  const writes = readRecord(record);
+  if (record.target.database !== database) throw new Error(`Refusing: the record is of the database "${record.target.database}", not "${database}".`);
+  if (lock) await sharedCollectionsLock(client);
+  const current = new Map((await client.query(
+    `select id, name_en, instruction_en from library.exercises where id = any($1::uuid[]) order by id${lock ? " for no key update" : ""}`,
+    [writes.map((entry) => entry.id)],
+  )).rows.map((row) => [row.id, row]));
+  const report = { fromRecord: { outcome: record.outcome, rows: writes.length }, missing: 0, reverted: { nameEn: 0, instructionEn: 0 }, changedSince: { nameEn: 0, instructionEn: 0 } };
+  const reverts = [];
+  for (const entry of writes) {
+    const row = current.get(entry.id);
+    if (!row) { report.missing += 1; continue; }
+    const revert = { id: entry.id, set_name: false, name_en: null, set_instruction: false, instruction_en: null };
+    for (const [column, key, flag] of [["name_en", "nameEn", "set_name"], ["instruction_en", "instructionEn", "set_instruction"]]) {
+      if (entry[column] === null) continue;
+      if (row[column] === entry[column]) {
+        revert[flag] = true;
+        revert[column] = entry[`previous_${column}`];
+        report.reverted[key] += 1;
+      } else report.changedSince[key] += 1;
+    }
+    if (revert.set_name || revert.set_instruction) reverts.push(revert);
+  }
+  return { report, reverts };
+}
+
+export async function applyReverts(client, reverts) {
+  if (!reverts.length) return 0;
+  const written = await client.query(
+    `update library.exercises e set
+       name_en = case when w.set_name then w.name_en else e.name_en end,
+       instruction_en = case when w.set_instruction then w.instruction_en else e.instruction_en end
+     from jsonb_to_recordset($1::jsonb) as w(id uuid, set_name boolean, name_en text, set_instruction boolean, instruction_en text)
+     where e.id = w.id
+     returning e.id`,
+    [JSON.stringify(reverts)],
+  );
+  if (written.rowCount !== reverts.length) throw new Error(`Refusing: ${written.rowCount} rows written instead of ${reverts.length}; nothing is kept.`);
+  return written.rowCount;
+}
+
 // Every statement, the COMMIT included, has a client-side bound beyond the
 // server's statement_timeout (60 s): an answer that never comes ends in the
 // "not known" message instead of a CLI that waits for TCP keepalive.
@@ -262,17 +364,13 @@ export const createImportClient = (databaseUrl) => new pg.Client({
   ssl: databaseUrl.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
 });
 
-// Where the run goes, for the report: host, port and database, never a user or
-// a password (database-safety.md: check them before an apply).
-export function targetOf(databaseUrl) {
-  const url = new URL(databaseUrl);
-  return { host: url.hostname, port: url.port || "5432", database: urlDatabaseName(databaseUrl) };
-}
-
 const notKnown = (error) => new Error(`The COMMIT's answer was lost (${error.code || error.message}): whether anything was written is not known. Run the dry run again; it shows what is stored.`);
 
-// createClient: the tests' seam for a lost answer and a failing close.
-export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, includeCodes = [], createClient = createImportClient }) {
+// One transaction for an import or an undo: the guards, the bounds, then
+// work(client, target) plans and returns { report, write, beforeCommit,
+// afterCommit }. createClient: the tests' seam for a lost answer and a
+// failing close.
+async function inTransaction({ databaseUrl, databaseName, apply, createClient }, work) {
   if (!databaseUrl) throw new Error("Set DATABASE_URL explicitly; no .env file is read.");
   if (urlDatabaseName(databaseUrl) !== databaseName) throw new Error(`Refusing: DATABASE_URL does not name the database "${databaseName}".`);
   const client = createClient(databaseUrl);
@@ -283,21 +381,27 @@ export async function runImport({ databaseUrl, databaseName, rows, apply = false
   await client.connect();
   try {
     const database = await assertTarget(client, databaseName);
+    const target = connectedTarget(client, database);
     await client.query(apply ? "begin isolation level read committed" : "begin read only");
     await client.query("set local statement_timeout = '60s'");
     await client.query("set local lock_timeout = '5s'");
     // A client that stops talking does not keep the rows locked.
     await client.query("set local idle_in_transaction_session_timeout = '30s'");
-    const { report, writes } = await planImport(client, rows, { overwrite, lock: apply, includeCodes });
+    const { report, write, beforeCommit, afterCommit } = await work(client, target);
     let written = 0;
+    let record;
     if (apply) {
-      written = await applyWrites(client, writes);
+      written = await write();
+      await beforeCommit?.(target);
       commitSent = true;
       await client.query("commit");
+      // The COMMIT went through: a record that cannot be marked so still holds
+      // every write ("commit_sent"), which is all the undo reads.
+      if (afterCommit) record = await afterCommit(target).then(() => "committed", () => "commit_sent");
     } else {
       await client.query("rollback");
     }
-    return { mode: apply ? "apply" : "dry-run", target: { ...targetOf(databaseUrl), database }, overwrite, ...report, written };
+    return { mode: apply ? "apply" : "dry-run", target, ...report, written, ...(record ? { record } : {}) };
   } catch (error) {
     if (commitSent) throw notKnown(error);
     await client.query("rollback").catch(() => {});
@@ -308,10 +412,39 @@ export async function runImport({ databaseUrl, databaseName, rows, apply = false
   }
 }
 
+export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, includeCodes = [], verbose = false, reportJson = "", createClient = createImportClient }) {
+  if (apply && !reportJson) throw new Error("Refusing: an apply needs --report-json <new file>, the record the undo reads.");
+  return inTransaction({ databaseUrl, databaseName, apply, createClient }, async (client) => {
+    const { report, writes } = await planImport(client, rows, { overwrite, lock: apply, includeCodes, verbose });
+    return {
+      report,
+      write: () => applyWrites(client, writes),
+      // On disk before the COMMIT is sent, never over an existing file: an
+      // apply never commits without its record.
+      beforeCommit: (target) => writeFile(reportJson, recordOf(target, "commit_sent", writes), { flag: "wx" }).catch((error) => {
+        throw new Error(`Refusing: the record ${reportJson} could not be written (${error.code || error.message}); nothing was written.`);
+      }),
+      afterCommit: (target) => writeFile(reportJson, recordOf(target, "committed", writes)),
+    };
+  });
+}
+
+export async function runUndo({ databaseUrl, databaseName, record, apply = false, createClient = createImportClient }) {
+  return inTransaction({ databaseUrl, databaseName, apply, createClient }, async (client, target) => {
+    const { report, reverts } = await planUndo(client, record, target.database, { lock: apply });
+    return { report: { undo: true, ...report }, write: () => applyReverts(client, reverts) };
+  });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const rows = readInput(JSON.parse(await readFile(options.file, "utf8")));
-  const result = await runImport({ databaseUrl: process.env.DATABASE_URL, databaseName: options.databaseName, rows, apply: options.apply, overwrite: options.overwrite, includeCodes: options.includeCodes });
+  const common = { databaseUrl: process.env.DATABASE_URL, databaseName: options.databaseName, apply: options.apply };
+  const result = options.undo
+    ? await runUndo({ ...common, record: JSON.parse(await readFile(options.undo, "utf8")) })
+    : await runImport({
+      ...common, rows: readInput(JSON.parse(await readFile(options.file, "utf8"))),
+      overwrite: options.overwrite, includeCodes: options.includeCodes, verbose: options.verbose, reportJson: options.reportJson,
+    });
   console.log(JSON.stringify(result, null, 2));
 }
 
