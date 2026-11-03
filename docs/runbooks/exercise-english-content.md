@@ -92,10 +92,17 @@ code. The xlsx itself is never changed.
   it reads `FOR NO KEY UPDATE` in id order, the app's own order.
 - **The record and the undo.** `--apply` needs `--report-json <new file>`. Before the COMMIT is sent, the script writes
   there every field it writes, with the value that field held before (`previous_name_en`, `previous_instruction_en`),
-  and never over an existing file (an existing file refuses the apply, with nothing written); after the COMMIT it marks
-  the record `committed` (a record left at `commit_sent` holds every write all the same). `--undo <record>` puts back
-  exactly those fields: a field that still holds what the import wrote gets its earlier value (also one an `--overwrite`
-  replaced); a field changed since is left and counted in `changedSince`. A record of another database is refused.
+  and syncs it to disk; it never writes over an existing file (one that exists is refused before anything is opened,
+  one that appears meanwhile when the record is created; nothing is written either way). After the COMMIT it marks the
+  record `committed` through a new file renamed over it, never by rewriting it in place; if that fails, the answer says
+  `record: commit_sent` with the error code, and the record is left as written, every write in it. Keep the record
+  outside the repository and never commit it. A `commit_sent` record left by a COMMIT that did not happen is harmless:
+  no field holds what it would have written.
+- `--undo <record>` puts back exactly those fields: a field that still holds what the import wrote gets its earlier
+  value (also one an `--overwrite` replaced); one already back at that value is counted in `alreadyPutBack`; any other
+  is left and counted in `changedSince`. A coach's re-save of the identical English text counts as untouched. The undo
+  runs only through the host, port and database the record names (`fromRecord.target`); any other connection is
+  refused. Run imports and undos one at a time.
 - Rehearsed on disposable databases by `backend/tests/import-exercise-english.test.mjs`.
 
 **The order, each step on the owner's order (the production run is the owner's, or the manager's with the owner's
@@ -135,6 +142,7 @@ confirmation; `database-safety.md`):**
    there.
 7. Undo, only on its own owner's order, once per record file of step 4, newest first:
    `DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --undo <record file> --database-name <name>`
-   (a dry run: `reverted` and `changedSince` per field), then the same with `--apply`. It writes only the fields the
-   record names, back to the value each held before the import, and leaves every field changed since (counted in
-   `changedSince`). A second undo of the same record writes nothing.
+   with the same `DATABASE_URL` as the apply (a dry run: `reverted`, `alreadyPutBack` and `changedSince` per field),
+   then the same with `--apply`. It writes only the fields the record names, back to the value each held before the
+   import, and leaves every field changed since. A second undo of the same record writes nothing. If an undo's COMMIT
+   answer is lost, run the undo's dry run again: `alreadyPutBack` counts what is back.

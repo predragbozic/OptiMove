@@ -39,7 +39,7 @@
 // points at and the one the connection is really on (current_database()).
 // The report names the host and port the client really connected to.
 // The production run is the owner's, on its own order (database-safety.md).
-import { readFile, writeFile } from "node:fs/promises";
+import { access, open, readFile, rename, unlink } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 
@@ -298,27 +298,53 @@ export async function applyWrites(client, writes) {
 // replaced (null where the field was empty or not written).
 const recordOf = (target, outcome, writes) => JSON.stringify({ kind: RECORD_KIND, target, outcome, at: new Date().toISOString(), writes }, null, 2);
 
+// The record, on disk and synced before the file is closed; a file this call
+// created and could not fill is removed again.
+async function writeDurably(file, content) {
+  const handle = await open(file, "wx");
+  try {
+    await handle.writeFile(content);
+    await handle.sync();
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await unlink(file).catch(() => {});
+    throw error;
+  }
+  await handle.close();
+}
+
 const isText = (value) => value === null || typeof value === "string";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function readRecord(record) {
-  const ok = record?.kind === RECORD_KIND && typeof record.target?.database === "string" && Array.isArray(record.writes)
-    && record.writes.every((entry) => typeof entry?.id === "string"
+  const target = record?.target;
+  const ok = record?.kind === RECORD_KIND && Array.isArray(record.writes)
+    && ["host", "port", "database"].every((key) => typeof target?.[key] === "string")
+    && record.writes.every((entry) => typeof entry?.id === "string" && UUID.test(entry.id)
       && ["name_en", "instruction_en", "previous_name_en", "previous_instruction_en"].every((key) => isText(entry[key])));
   if (!ok) throw new Error("Refusing: the file is not a record of this import.");
   return record.writes;
 }
 
 // What the record says the import wrote, read inside the caller's transaction
-// (the same locks as an apply): a field still holding what the import wrote
-// gets the value it replaced; one changed since is left and counted.
-export async function planUndo(client, record, database, { lock = false } = {}) {
+// (the same locks as an apply), only through the host, port and database the
+// apply used: a field still holding what the import wrote gets the value it
+// replaced; one back at that value already is counted (alreadyPutBack); any
+// other is left and counted (changedSince).
+export async function planUndo(client, record, target, { lock = false } = {}) {
   const writes = readRecord(record);
-  if (record.target.database !== database) throw new Error(`Refusing: the record is of the database "${record.target.database}", not "${database}".`);
+  const from = record.target;
+  if (from.host !== target.host || from.port !== target.port || from.database !== target.database) {
+    throw new Error(`Refusing: the record is of ${from.host}:${from.port}/${from.database}, not of ${target.host}:${target.port}/${target.database}; run the undo through the connection the apply used.`);
+  }
   if (lock) await sharedCollectionsLock(client);
   const current = new Map((await client.query(
     `select id, name_en, instruction_en from library.exercises where id = any($1::uuid[]) order by id${lock ? " for no key update" : ""}`,
     [writes.map((entry) => entry.id)],
   )).rows.map((row) => [row.id, row]));
-  const report = { fromRecord: { outcome: record.outcome, rows: writes.length }, missing: 0, reverted: { nameEn: 0, instructionEn: 0 }, changedSince: { nameEn: 0, instructionEn: 0 } };
+  const report = {
+    fromRecord: { outcome: record.outcome, rows: writes.length, target: from }, missing: 0,
+    reverted: { nameEn: 0, instructionEn: 0 }, alreadyPutBack: { nameEn: 0, instructionEn: 0 }, changedSince: { nameEn: 0, instructionEn: 0 },
+  };
   const reverts = [];
   for (const entry of writes) {
     const row = current.get(entry.id);
@@ -330,7 +356,8 @@ export async function planUndo(client, record, database, { lock = false } = {}) 
         revert[flag] = true;
         revert[column] = entry[`previous_${column}`];
         report.reverted[key] += 1;
-      } else report.changedSince[key] += 1;
+      } else if (row[column] === entry[`previous_${column}`]) report.alreadyPutBack[key] += 1;
+      else report.changedSince[key] += 1;
     }
     if (revert.set_name || revert.set_instruction) reverts.push(revert);
   }
@@ -364,13 +391,13 @@ export const createImportClient = (databaseUrl) => new pg.Client({
   ssl: databaseUrl.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
 });
 
-const notKnown = (error) => new Error(`The COMMIT's answer was lost (${error.code || error.message}): whether anything was written is not known. Run the dry run again; it shows what is stored.`);
+const notKnown = (error, recheck) => new Error(`The COMMIT's answer was lost (${error.code || error.message}): whether anything was written is not known. ${recheck}`);
 
 // One transaction for an import or an undo: the guards, the bounds, then
 // work(client, target) plans and returns { report, write, beforeCommit,
 // afterCommit }. createClient: the tests' seam for a lost answer and a
-// failing close.
-async function inTransaction({ databaseUrl, databaseName, apply, createClient }, work) {
+// failing close. recheck: what to run after a lost COMMIT answer.
+async function inTransaction({ databaseUrl, databaseName, apply, createClient, recheck }, work) {
   if (!databaseUrl) throw new Error("Set DATABASE_URL explicitly; no .env file is read.");
   if (urlDatabaseName(databaseUrl) !== databaseName) throw new Error(`Refusing: DATABASE_URL does not name the database "${databaseName}".`);
   const client = createClient(databaseUrl);
@@ -389,21 +416,24 @@ async function inTransaction({ databaseUrl, databaseName, apply, createClient },
     await client.query("set local idle_in_transaction_session_timeout = '30s'");
     const { report, write, beforeCommit, afterCommit } = await work(client, target);
     let written = 0;
-    let record;
+    let record = {};
     if (apply) {
       written = await write();
       await beforeCommit?.(target);
       commitSent = true;
       await client.query("commit");
-      // The COMMIT went through: a record that cannot be marked so still holds
-      // every write ("commit_sent"), which is all the undo reads.
-      if (afterCommit) record = await afterCommit(target).then(() => "committed", () => "commit_sent");
+      // The COMMIT went through: a record that cannot be marked so is left as
+      // it was written ("commit_sent", every write in it), which is all the
+      // undo reads.
+      if (afterCommit) {
+        record = await afterCommit(target).then(() => ({ record: "committed" }), (error) => ({ record: "commit_sent", recordError: error.code || "unknown" }));
+      }
     } else {
       await client.query("rollback");
     }
-    return { mode: apply ? "apply" : "dry-run", target, ...report, written, ...(record ? { record } : {}) };
+    return { mode: apply ? "apply" : "dry-run", target, ...report, written, ...record };
   } catch (error) {
-    if (commitSent) throw notKnown(error);
+    if (commitSent) throw notKnown(error, recheck);
     await client.query("rollback").catch(() => {});
     throw error;
   } finally {
@@ -414,24 +444,39 @@ async function inTransaction({ databaseUrl, databaseName, apply, createClient },
 
 export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, includeCodes = [], verbose = false, reportJson = "", createClient = createImportClient }) {
   if (apply && !reportJson) throw new Error("Refusing: an apply needs --report-json <new file>, the record the undo reads.");
-  return inTransaction({ databaseUrl, databaseName, apply, createClient }, async (client) => {
+  // An existing record is refused before anything is opened; the exclusive
+  // create below still refuses one that appears meanwhile.
+  if (apply) {
+    await access(reportJson).then(() => {
+      throw new Error(`Refusing: the record ${reportJson} already exists; name a new file. Nothing was written.`);
+    }, () => {});
+  }
+  const recheck = "Run the dry run again; it shows what is stored. The record file holds every write either way.";
+  return inTransaction({ databaseUrl, databaseName, apply, createClient, recheck }, async (client) => {
     const { report, writes } = await planImport(client, rows, { overwrite, lock: apply, includeCodes, verbose });
     return {
       report,
       write: () => applyWrites(client, writes),
-      // On disk before the COMMIT is sent, never over an existing file: an
-      // apply never commits without its record.
-      beforeCommit: (target) => writeFile(reportJson, recordOf(target, "commit_sent", writes), { flag: "wx" }).catch((error) => {
+      // On disk and synced before the COMMIT is sent, never over an existing
+      // file: an apply never commits without its record.
+      beforeCommit: (target) => writeDurably(reportJson, recordOf(target, "commit_sent", writes)).catch((error) => {
         throw new Error(`Refusing: the record ${reportJson} could not be written (${error.code || error.message}); nothing was written.`);
       }),
-      afterCommit: (target) => writeFile(reportJson, recordOf(target, "committed", writes)),
+      // Marked committed through a new file renamed over it: the record is
+      // never rewritten in place, so a failure here leaves it as it was.
+      afterCommit: async (target) => {
+        const next = `${reportJson}.tmp`;
+        await writeDurably(next, recordOf(target, "committed", writes));
+        await rename(next, reportJson);
+      },
     };
   });
 }
 
 export async function runUndo({ databaseUrl, databaseName, record, apply = false, createClient = createImportClient }) {
-  return inTransaction({ databaseUrl, databaseName, apply, createClient }, async (client, target) => {
-    const { report, reverts } = await planUndo(client, record, target.database, { lock: apply });
+  const recheck = "Run the undo's dry run again: alreadyPutBack counts what is back.";
+  return inTransaction({ databaseUrl, databaseName, apply, createClient, recheck }, async (client, target) => {
+    const { report, reverts } = await planUndo(client, record, target, { lock: apply });
     return { report: { undo: true, ...report }, write: () => applyReverts(client, reverts) };
   });
 }

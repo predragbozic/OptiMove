@@ -481,7 +481,7 @@ test("13. the record holds every written field with the value it replaced; the u
   const afterApply = await table();
   await c.query("update library.exercises set name_en = null where id = $1", [ids[1]]);
   const changed = await table();
-  await assert.rejects(run({ apply: true, reportJson: record }), /the record .* could not be written \(EEXIST\); nothing was written/);
+  await assert.rejects(run({ apply: true, reportJson: record }), /the record .* already exists; name a new file\. Nothing was written\./);
   assert.deepEqual(await table(), changed, "nothing was written");
   assert.deepEqual(await readRecordFile(record), saved, "the record is unchanged");
   await c.query("update library.exercises set name_en = 'Forward lunge' where id = $1", [ids[1]]);
@@ -491,7 +491,9 @@ test("13. the record holds every written field with the value it replaced; the u
   const dry = await undo(saved);
   assert.equal(dry.mode, "dry-run");
   assert.deepEqual(dry.reverted, { nameEn: 4, instructionEn: 3 });
+  assert.deepEqual(dry.alreadyPutBack, { nameEn: 0, instructionEn: 0 });
   assert.deepEqual(dry.changedSince, { nameEn: 1, instructionEn: 0 });
+  assert.deepEqual(dry.fromRecord, { outcome: "committed", rows: 5, target: saved.target });
   assert.equal(dry.written, 0);
   const undone = await undo(saved, { apply: true });
   assert.equal(undone.written, 5);
@@ -499,9 +501,14 @@ test("13. the record holds every written field with the value it replaced; the u
   assert.deepEqual(await table(), expected, "every field back as it was, the edited one kept");
   const again = await undo(saved, { apply: true });
   assert.equal(again.written, 0, "a second undo finds nothing of the import");
-  await assert.rejects(undo({ ...saved, target: { ...saved.target, database: "someone_else" } }), /the record is of the database "someone_else"/);
+  assert.deepEqual(again.alreadyPutBack, { nameEn: 4, instructionEn: 3 }, "and says what is back already");
+  assert.deepEqual(again.changedSince, { nameEn: 1, instructionEn: 0 });
+  await assert.rejects(undo({ ...saved, target: { ...saved.target, database: "someone_else" } }), /the record is of .*\/someone_else, not of/);
+  await assert.rejects(undo({ ...saved, target: { ...saved.target, host: "elsewhere.invalid" } }), /the record is of elsewhere\.invalid:.* run the undo through the connection the apply used/);
+  await assert.rejects(undo({ ...saved, target: { ...saved.target, port: "1" } }), /the record is of .*:1\//);
   await assert.rejects(undo({ ...saved, kind: "other" }), /not a record of this import/);
   await assert.rejects(undo({ ...saved, writes: [{ id: ids[1], name_en: 5 }] }), /not a record of this import/);
+  await assert.rejects(undo({ ...saved, writes: [{ ...saved.writes[0], id: "1" }] }), /not a record of this import/);
 });
 
 test("14. an undo holds the app's shared lock, then the rows its record names, until it ends, and nothing else", async () => {
@@ -514,7 +521,7 @@ test("14. an undo holds the app's shared lock, then the rows its record names, u
   try {
     await holder.query("begin");
     const statements = [];
-    await planUndo({ query: (sql, params) => { statements.push(sql); return holder.query(sql, params); } }, saved, db.name, { lock: true });
+    await planUndo({ query: (sql, params) => { statements.push(sql); return holder.query(sql, params); } }, saved, saved.target, { lock: true });
     assert.equal(statements[0], "select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
     assert.match(statements[1], /order by id for no key update/);
     assert.equal((await c.query("select pg_try_advisory_lock(hashtextextended('exercise_collections', 0)) as ok")).rows[0].ok, false, "a block write waits");
@@ -530,4 +537,78 @@ test("14. an undo holds the app's shared lock, then the rows its record names, u
     await holder.query("rollback").catch(() => {});
     await holder.end();
   }
+});
+
+test("15. the external review's exact case: an exercise that held name_en before gets instruction_en; the undo clears only that", async () => {
+  await seed();
+  const before_ = await table();
+  const record = recordPath();
+  await run({ apply: true, reportJson: record });
+  const saved = await readRecordFile(record);
+  assert.deepEqual(saved.writes.find((entry) => entry.id === ids[4]),
+    { id: ids[4], code: "4", name_en: null, instruction_en: "Lift the hips.", previous_name_en: null, previous_instruction_en: null });
+  assert.deepEqual((await english())[4], ["Bridge (kept)", "Lift the hips."]);
+  await undo(saved, { apply: true });
+  assert.deepEqual((await english())[4], ["Bridge (kept)", null], "the name it held before is kept");
+  assert.deepEqual(await table(), before_);
+});
+
+test("16. a committed mark that fails leaves the record as it was written, readable, with every write", async () => {
+  await seed();
+  const record = recordPath();
+  await fsp.mkdir(`${record}.tmp`);
+  try {
+    const report = await run({ apply: true, reportJson: record });
+    assert.equal(report.written, 5, "the COMMIT went through");
+    assert.equal(report.record, "commit_sent");
+    assert.equal(report.recordError, "EEXIST");
+    const saved = await readRecordFile(record);
+    assert.equal(saved.outcome, "commit_sent");
+    assert.equal(saved.writes.length, 5);
+    const undone = await undo(saved, { apply: true });
+    assert.equal(undone.written, 5, "and the undo still reads it");
+  } finally {
+    await fsp.rm(`${record}.tmp`, { recursive: true, force: true });
+  }
+});
+
+test("17. a record file that appears during the apply is refused by the exclusive create, kept as it is, and nothing is written", async () => {
+  await seed();
+  const before_ = await table();
+  const record = recordPath();
+  const appearing = (url) => {
+    const client = new pg.Client({ connectionString: url });
+    const query = client.query.bind(client);
+    client.query = async (sql, params) => {
+      if (sql === "set local idle_in_transaction_session_timeout = '30s'") await fsp.writeFile(record, "someone else's file");
+      return query(sql, params);
+    };
+    return client;
+  };
+  await assert.rejects(run({ apply: true, reportJson: record, createClient: appearing }), /the record .* could not be written \(EEXIST\); nothing was written/);
+  assert.deepEqual(await table(), before_, "nothing was written");
+  assert.equal(await fsp.readFile(record, "utf8"), "someone else's file", "a file this run did not create is never removed");
+});
+
+test("18. an undo whose COMMIT answer is lost says so, and its dry run then shows what is back", async () => {
+  await seed();
+  const record = recordPath();
+  await run({ apply: true, reportJson: record });
+  const saved = await readRecordFile(record);
+  const losingCommit = (url) => {
+    const client = new pg.Client({ connectionString: url });
+    const query = client.query.bind(client);
+    client.query = async (sql, params) => {
+      if (sql === "commit") {
+        await query(sql, params);
+        throw new Error("Connection terminated unexpectedly");
+      }
+      return query(sql, params);
+    };
+    return client;
+  };
+  await assert.rejects(undo(saved, { apply: true, createClient: losingCommit }), /whether anything was written is not known\. Run the undo's dry run again: alreadyPutBack counts what is back\./);
+  const check = await undo(saved);
+  assert.deepEqual(check.reverted, { nameEn: 0, instructionEn: 0 });
+  assert.deepEqual(check.alreadyPutBack, { nameEn: 4, instructionEn: 3 });
 });
