@@ -57,6 +57,9 @@ export function normalizeCode(value) {
 function englishText(value, field, code) {
   if (value === undefined || value === null) return "";
   if (typeof value !== "string") throw new Error(`Code ${code}: ${field} must be text.`);
+  // Text the database refuses (a NUL, a lone surrogate) is refused here, so
+  // the dry run never passes what the apply would fail on.
+  if (value.includes("\u0000") || !value.isWellFormed()) throw new Error(`Code ${code}: ${field} holds a character the database cannot store.`);
   return value.trim();
 }
 
@@ -106,14 +109,15 @@ function field(planned, stored, overwrite) {
   return "write";
 }
 
-// What the file would change, read inside the caller's transaction (FOR
-// UPDATE of the matched rows when applying, so nothing changes between the
-// plan and the write).
+// What the file would change, read inside the caller's transaction (FOR NO
+// KEY UPDATE of the matched rows when applying - what the UPDATE needs, and
+// no conflict with the foreign-key checks of a plan save - so nothing changes
+// between the plan and the write).
 export async function planImport(client, rows, { overwrite = false, lock = false } = {}) {
   const found = (await client.query(
     `select id, exercise_code, name, name_en, instruction_en from library.exercises
       where owner_scope = 'system' and exercise_code = any($1::text[])
-      order by exercise_code, id${lock ? " for update" : ""}`,
+      order by exercise_code, id${lock ? " for no key update" : ""}`,
     [rows.map((row) => row.code)],
   )).rows;
   const byCode = new Map();
@@ -160,34 +164,61 @@ export async function applyWrites(client, writes) {
   return written.rowCount;
 }
 
-export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false }) {
+// Every statement, the COMMIT included, has a client-side bound beyond the
+// server's statement_timeout (60 s): an answer that never comes ends in the
+// "not known" message instead of a CLI that waits for TCP keepalive.
+export const QUERY_TIMEOUT_MS = 75000;
+// TLS as the deployed server connects (backend/src/db.js): the Supabase
+// pooler's certificate is not in Node's trust store; the same reason applies
+// here, and to no other host.
+export const createImportClient = (databaseUrl) => new pg.Client({
+  connectionString: databaseUrl, connectionTimeoutMillis: 10000, query_timeout: QUERY_TIMEOUT_MS,
+  ssl: databaseUrl.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
+});
+
+// Where the run goes, for the report: host, port and database, never a user or
+// a password (database-safety.md: check them before an apply).
+export function targetOf(databaseUrl) {
+  const url = new URL(databaseUrl);
+  return { host: url.hostname, port: url.port || "5432", database: urlDatabaseName(databaseUrl) };
+}
+
+const notKnown = (error) => new Error(`The COMMIT's answer was lost (${error.code || error.message}): whether anything was written is not known. Run the dry run again; it shows what is stored.`);
+
+// createClient: the tests' seam for a lost answer and a failing close.
+export async function runImport({ databaseUrl, databaseName, rows, apply = false, overwrite = false, createClient = createImportClient }) {
   if (!databaseUrl) throw new Error("Set DATABASE_URL explicitly; no .env file is read.");
   if (urlDatabaseName(databaseUrl) !== databaseName) throw new Error(`Refusing: DATABASE_URL does not name the database "${databaseName}".`);
-  const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 10000 });
+  const client = createClient(databaseUrl);
+  // A connection lost while idle is reported here instead of ending the
+  // process: the pending query, or the next one, fails with it.
+  client.on("error", () => {});
+  let commitSent = false;
   await client.connect();
   try {
     const database = await assertTarget(client, databaseName);
     await client.query(apply ? "begin isolation level read committed" : "begin read only");
     await client.query("set local statement_timeout = '60s'");
     await client.query("set local lock_timeout = '5s'");
+    // A client that stops talking does not keep the rows locked.
+    await client.query("set local idle_in_transaction_session_timeout = '30s'");
     const { report, writes } = await planImport(client, rows, { overwrite, lock: apply });
     let written = 0;
     if (apply) {
       written = await applyWrites(client, writes);
-      try {
-        await client.query("commit");
-      } catch (error) {
-        throw new Error(`The COMMIT did not answer (${error.code || error.message}): whether anything was written is not known. Run the dry run again; it shows what is stored.`);
-      }
+      commitSent = true;
+      await client.query("commit");
     } else {
       await client.query("rollback");
     }
-    return { mode: apply ? "apply" : "dry-run", database, overwrite, ...report, written };
+    return { mode: apply ? "apply" : "dry-run", target: { ...targetOf(databaseUrl), database }, overwrite, ...report, written };
   } catch (error) {
+    if (commitSent) throw notKnown(error);
     await client.query("rollback").catch(() => {});
     throw error;
   } finally {
-    await client.end();
+    // A failing close never hides the answer of a COMMIT that went through.
+    await client.end().catch(() => {});
   }
 }
 

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb } from "./_gpexe-disposable-db.mjs";
-import { assertTarget, MIGRATION, normalizeCode, parseArgs, readInput, runImport, urlDatabaseName } from "../scripts/import-exercise-english.mjs";
+import { assertTarget, createImportClient, MIGRATION, normalizeCode, parseArgs, QUERY_TIMEOUT_MS, readInput, runImport, targetOf, urlDatabaseName } from "../scripts/import-exercise-english.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(__dirname, "../scripts/import-exercise-english.mjs");
@@ -106,7 +106,10 @@ test("2. a dry run writes nothing and reports what an apply would do", async () 
   const report = await run();
   assert.deepEqual(await table(), before_, "the table is unchanged");
   assert.equal(report.mode, "dry-run");
-  assert.equal(report.database, db.name);
+  const url = new URL(db.url);
+  assert.deepEqual(report.target, { host: url.hostname, port: url.port || "5432", database: db.name }, "host, port and database");
+  assert.equal(Boolean(url.password) && JSON.stringify(report).includes(decodeURIComponent(url.password)), false, "never the password");
+  assert.deepEqual(targetOf("postgresql://someone:secret@db.example.test:6543/postgres"), { host: "db.example.test", port: "6543", database: "postgres" });
   assert.equal(report.rows, 7);
   assert.equal(report.matched, 5);
   assert.deepEqual(report.notFound, ["6", "99"], "a coach's own exercise and an unknown code are not matched");
@@ -168,11 +171,52 @@ test("5. the input: codes as numbers or 12.0, text only, one row per code; a cod
   assert.throws(() => readInput([{ code: "1" }, { code: "1.0" }]), /Code 1 appears twice/);
   assert.throws(() => readInput([{ code: "1", name_en: 5 }]), /Code 1: name_en must be text/);
   assert.throws(() => readInput([{ code: "1", notes_en: ["x"] }]), /Code 1: notes_en must be text/);
+  assert.throws(() => readInput([{ code: "1", name_en: "Lunge\u0000" }]), /Code 1: name_en holds a character the database cannot store/);
+  assert.throws(() => readInput([{ code: "1", notes_en: "Step \ud800 forward" }]), /Code 1: notes_en holds a character the database cannot store/);
   await seed();
   await c.query("insert into library.exercises (exercise_code, name, owner_scope) values ('1', 'Iskorak drugi', 'system')");
   const before_ = await table();
   await assert.rejects(run({ apply: true }), /code 1 names more than one system exercise/);
   assert.deepEqual(await table(), before_, "nothing was written");
+});
+
+test("7. an answer lost after the COMMIT was sent is reported as not known, never as not written; the client has its own bound", async () => {
+  await seed();
+  // The real COMMIT goes out, then the answer is lost.
+  let used = null;
+  const losingCommit = (url) => {
+    const client = new pg.Client({ connectionString: url });
+    used = client;
+    const query = client.query.bind(client);
+    client.query = async (sql, params) => {
+      if (sql === "commit") {
+        await query(sql, params);
+        throw Object.assign(new Error("Connection terminated unexpectedly"), { code: undefined });
+      }
+      return query(sql, params);
+    };
+    return client;
+  };
+  await assert.rejects(run({ apply: true, createClient: losingCommit }), /whether anything was written is not known\. Run the dry run again/);
+  assert.equal((await c.query("select name_en from library.exercises where exercise_code = '1'")).rows[0].name_en, "Forward lunge", "it was written");
+  const again = await run();
+  assert.equal(again.nameEn.write, 0, "the dry run shows what is stored");
+  assert.equal(QUERY_TIMEOUT_MS > 60000, true, "the client waits longer than the server's statement_timeout");
+  assert.equal(createImportClient(db.url).connectionParameters.query_timeout, QUERY_TIMEOUT_MS, "and the real client waits no longer than that");
+  assert.ok(used.listenerCount("error") >= 1, "a connection lost while idle is caught, never an uncaught error");
+});
+
+test("8. a close that fails after a COMMIT that went through never hides the answer", async () => {
+  await seed();
+  const failingClose = (url) => {
+    const client = new pg.Client({ connectionString: url });
+    const end = client.end.bind(client);
+    client.end = async () => { await end(); throw new Error("close failed"); };
+    return client;
+  };
+  const report = await run({ apply: true, createClient: failingClose });
+  assert.equal(report.written, 4);
+  assert.equal((await c.query("select name_en from library.exercises where exercise_code = '1'")).rows[0].name_en, "Forward lunge");
 });
 
 test("6. the CLI: a dry run prints the report and never the connection string; --apply writes", async () => {

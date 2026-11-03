@@ -66,22 +66,43 @@ code. The xlsx itself is never changed.
   (`nameDiffers`: code, the sheet's name, the database's name), so the owner can take it out of the file first.
 - Guard: `DATABASE_URL` from the environment only (no `.env` is read), never printed; `--database-name` must name the
   database the URL points at and the one the connection is really on; a database without the migration is refused.
+  The report's `target` names host, port and database (never a user or a password). TLS as the deployed server
+  connects (`backend/src/db.js`): for a `supabase.com` host the pooler's certificate is accepted as the server does;
+  every other host uses Node's defaults.
+- Bounds: `statement_timeout` 60 s, `lock_timeout` 5 s, `idle_in_transaction_session_timeout` 30 s on the server; the
+  client waits at most 75 s for any answer. The matched rows are locked `FOR NO KEY UPDATE` during an apply.
 - Rehearsed on disposable databases by `backend/tests/import-exercise-english.test.mjs`.
 
 **The order, each step on the owner's order (the production run is the owner's, or the manager's with the owner's
 confirmation; `database-safety.md`):**
 
 1. The migration is applied (its own post-check passed).
-2. Dry run, read-only (`begin read only`, rolled back):
+2. Before anything else, read-only:
+   - compare the number of non-blank English instructions on the xlsx rows that have a code with the file's (the
+     dry run's matched rows minus `instructionEn.blank`): a smaller number in the file means the export lost some;
+     export again first. (On 2026-11-03 the sheet had 1083 non-blank English notes, 32 of them on 160 rows without a
+     code; all 1051 on coded rows were in the exported file.)
+   - the baseline (expected `0` on the first run) and the triggers an UPDATE could fire (expected: none of them
+     names `name_en` or `instruction_en`):
+     `select count(*) filter (where name_en is not null) as names, count(*) filter (where instruction_en is not null) as instructions, max(updated_at) as last_updated from library.exercises where owner_scope = 'system';`
+     `select tgname, pg_get_triggerdef(oid) from pg_trigger where tgrelid = 'library.exercises'::regclass and not tgisinternal;`
+3. Dry run, read-only (`begin read only`, rolled back):
    `DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file vezbe-en.json --database-name <name>`.
-   Read the report: `matched`, `notFound`, `nameDiffers`, `noEnglish`, and per field `write` / `alreadyFilled` /
-   `same` / `blank`. Take out of the file any row the owner does not want written (a renamed exercise, for example).
-3. Apply at a quiet moment, with `--apply` added: one transaction; the report says `written`. An exercise editor that
+   Check the report's `target` (host and port) is the database meant. Read `matched`, `notFound`, `nameDiffers`,
+   `noEnglish`, and per field `write` / `alreadyFilled` / `same` / `blank`. Take out of the file any row the owner
+   does not want written (a renamed exercise, for example).
+4. Apply at a quiet moment, with `--apply` added: one transaction; the report says `written`. An exercise editor that
    was opened before the import and saved after it sends its (empty) English fields and clears what the import wrote
    for that exercise, the same lost update as any other field; so run it when nobody edits exercises, and compare in
-   step 4.
-4. Check: run the dry run again. Every row it reported as `write` is now `same` (`write` is 0), and the number of
-   exercises with English text equals the first dry run's matched rows that had English:
-   `select count(*) filter (where name_en is not null) as names, count(*) filter (where instruction_en is not null) as instructions from library.exercises where owner_scope = 'system';`
-5. If the COMMIT's answer is lost, the script says the outcome is not known: run the dry run again; it shows what is
+   step 5.
+5. Check: run the dry run again. The primary check is that every field's `write` is now 0 (what was written is now
+   `same`). Then the baseline query of step 2 again: after minus before must equal the first dry run's `write` for
+   each field (`alreadyFilled`, `same` and system exercises outside the file were counted before already), and
+   `last_updated` is unchanged (the import touches no other column). A smaller difference names an exercise saved
+   meanwhile (step 4): run the apply again.
+6. If the COMMIT's answer is lost, the script says the outcome is not known: run the dry run again; it shows what is
    stored. A second apply writes nothing that is already there.
+7. Undo, only on its own owner's order, and only while nobody has typed English in the editor since the import (the
+   baseline of step 2 was 0):
+   `update library.exercises set name_en = null, instruction_en = null where owner_scope = 'system' and (name_en is not null or instruction_en is not null);`
+   in one transaction, checking before COMMIT that the count it reports equals the apply's `written`.
