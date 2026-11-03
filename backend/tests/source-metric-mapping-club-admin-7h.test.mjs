@@ -1207,3 +1207,442 @@ test("12. direct SQL against v52 (section 10.3): club A's admin activates, disab
     await b.end().catch(() => {});
   }
 });
+
+// ---------------------------------------------------------------------------
+// Races (section 10.4): each with no 40P01 in the log lines, the second
+// request by another user, waits on rows (never on an advisory lock).
+// ---------------------------------------------------------------------------
+// A fresh club with `admins` active admins and one binding (the archive cases
+// archive it; the shared world stays as it is).
+async function freshClub(admins = 2) {
+  const clubId = await club("Club X");
+  const list = [];
+  for (let i = 0; i < admins; i += 1) list.push(await clubAdmin(clubId));
+  return { clubId, admins: list, b: await binding(clubId) };
+}
+const retireRevision = (f, cookie, { expectedState = "active", reason = reasonFor("Retire.") } = {}) =>
+  post(`/fields/${f.fieldId}/revisions/${f.revId}/retire`, cookie, { requestKey: key(), expectedState, reason });
+async function peerHolds(sql, params) {
+  const peer = await client();
+  await peer.query("begin");
+  await peer.query(sql, params);
+  return peer;
+}
+async function release(peer, how = "commit") {
+  await peer.query(how).catch(() => {});
+  await peer.end().catch(() => {});
+}
+
+test("13. races: two A1 of one mapping (club A's two admins), a club admin's replacement against a platform admin's A2, a club admin's A2 against another admin's S2 on the same activation, A1 and A2 against the pinned step (both orders), A1 with starts against an Unbind, a team archive and a club archive (both orders), A2 against a club archive (both orders) - no 40P01", async () => {
+  // Two A1 of one mapping: the second waits at T3, then active_version_changed.
+  const v1 = await clubWaiting(W.caA);
+  const v2 = await nextVersion(v1, W.caA2);
+  let hold = holdWrite("mapping_version_activate");
+  const first = activate(v1, W.caA.cookie);
+  await until(() => hold.state.entered, "the first A1 holds");
+  const second = activate(v2, W.caA2.cookie);
+  assert.equal(await someoneWaits(), true, "the second A1 waits at T3");
+  hold.g.open();
+  ok(await first);
+  const lost = refused(await second, 409, "active_version_changed");
+  assert.equal(lost.current.activeVersionId, v1.versionId);
+  // A club admin's replacement against a platform admin's A2 of the replaced version.
+  const n1 = await nextVersion(v1, W.caA);
+  hold = holdWrite("mapping_version_replace");
+  const replacing = activate(n1, W.caA.cookie, { expected: v1.versionId, reason: reasonFor("Replace.") });
+  await until(() => hold.state.entered, "the replacement holds");
+  const disabling = disable(v1, W.paA.cookie);
+  assert.equal(await someoneWaits(), true, "the A2 waits");
+  hold.g.open();
+  ok(await replacing);
+  assert.equal(refused(await disabling, 409, "version_status_changed").current.status, "disabled");
+  // A club admin's A2 against another admin's S2 on the same activation.
+  const s = await clubActive(W.caA);
+  const act = ok(await start(W.caA, s, [await binding(W.clubA)]), 201).activations[0];
+  hold = holdWrite("mapping_version_disable");
+  const dis = disable(s, W.caA.cookie);
+  await until(() => hold.state.entered, "the A2 holds");
+  const ending = end(W.caA2, act.id);
+  assert.equal(await someoneWaits(), true, "the S2 waits on the activation");
+  hold.g.open();
+  assert.equal(ok(await dis).activationsEnded, 1);
+  refused(await ending, 409, "activation_not_open");
+  assert.equal((await t5(act.id)).end_reason, "mapping_version_disabled");
+  // A2 against the pinned step: A2 first, then the retirement finds nothing to disable.
+  const pf = await field();
+  const pv = await version(pf, { owner: W.caA, target: await variable(W.caA) });
+  ok(await activate(pv, W.caA.cookie));
+  hold = holdWrite("mapping_version_disable");
+  const pinnedDisable = disable(pv, W.caA.cookie);
+  await until(() => hold.state.entered, "the A2 holds");
+  const retiring = retireRevision(pf, W.pa.cookie);
+  assert.equal(await someoneWaits(), true, "the pinned step waits");
+  hold.g.open();
+  ok(await pinnedDisable);
+  ok(await retiring);
+  assert.equal((await versionRow(pv.versionId)).disabled_basis, "club_admin", "the club admin's disable stands");
+  // The pinned step first, then A1 of a waiting version of the pinned revision.
+  const qf = await field();
+  const qv = await version(qf, { owner: W.caA, target: await variable(W.caA) });
+  const lc = gate();
+  const lcState = { entered: false };
+  lifecycle.setRevisionWriteHoldForTests(async () => { if (lcState.entered) return; lcState.entered = true; await lc.promise; });
+  const retiringFirst = retireRevision(qf, W.pa.cookie);
+  await until(() => lcState.entered, "the pinned step holds");
+  const late = activate(qv, W.caA.cookie);
+  assert.equal(await someoneWaits(), true, "A1 waits for the pinned step");
+  lc.open();
+  ok(await retiringFirst);
+  const lateRes = await late;
+  assert.equal(lateRes.status, 409, lateRes.text);
+  assert.equal(await statusOf(qv), "disabled", "the pinned step disabled the waiting version");
+  // A1 with starts against an Unbind, a team archive and a club archive.
+  for (const kind of ["unbind", "team", "club"]) {
+    const x = await freshClub();
+    const [adm] = x.admins;
+    const xv = await clubWaiting(adm);
+    const before = await counts();
+    // (a) the peer's change lands while A1 holds after its right.
+    hold = holdWrite("mapping_version_activate");
+    const a1 = activate(xv, adm.cookie, { starts: [x.b] });
+    await until(() => hold.state.entered, "A1 holds");
+    let peer;
+    if (kind === "unbind") await unbind(x.b);
+    else if (kind === "team") await k.query(`update public.teams set is_active = false where id = $1`, [x.b.teamId]);
+    else {
+      // The archive waits for A1's FOR SHARE on the club row; A1 commits first
+      // and answers 200 or, when the archive lands before its answer re-checks
+      // the right after the COMMIT, the identical 404 (section 3).
+      peer = await client();
+      const archiving = peer.query(`update public.clubs set is_active = false where id = $1`, [x.clubId]);
+      assert.equal(await someoneWaits(), true, "the club archive waits for A1's FOR SHARE on the club");
+      hold.g.open();
+      const res = await a1;
+      assert.ok([200, 404].includes(res.status), res.text);
+      await archiving;
+      await peer.end();
+      assert.equal(await statusOf(xv), "active", `${kind}: A1 committed first`);
+      assert.equal((await openOn(xv)).length, 1, `${kind}: A1's start committed`);
+      continue;
+    }
+    hold.g.open();
+    const res = await a1;
+    if (kind === "unbind") refused(res, 409, "binding_not_active");
+    else isNotFound(res, "team archived during A1");
+    assert.deepEqual(await counts(), before, `${kind}: nothing written`);
+    // (b) the peer's change held first: A1 waits at the binding, then refuses.
+    const y = await freshClub();
+    const yv = await clubWaiting(y.admins[0]);
+    const holder = kind === "unbind"
+      ? await peerHolds(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Peer unbind.' where id = $1`, [y.b.bindingId, W.pa.id])
+      : await peerHolds(`update public.teams set is_active = false where id = $1`, [y.b.teamId]);
+    const waiting = activate(yv, y.admins[0].cookie, { starts: [y.b] });
+    assert.equal(await someoneWaits(), true, `${kind}: A1 waits for the peer`);
+    await release(holder);
+    const wres = await waiting;
+    if (kind === "unbind") refused(wres, 409, "binding_not_active");
+    else isNotFound(wres, "team archived first");
+    assert.equal(await statusOf(yv), "needs_review");
+  }
+  // The club archive held first: A1 waits at the club row, then the identical 404.
+  const z = await freshClub();
+  const zv = await clubWaiting(z.admins[0]);
+  const zHolder = await peerHolds(`update public.clubs set is_active = false where id = $1`, [z.clubId]);
+  const zA1 = activate(zv, z.admins[0].cookie, { starts: [z.b] });
+  assert.equal(await someoneWaits(), true, "A1 waits for the club archive");
+  await release(zHolder);
+  isNotFound(await zA1, "club archived first");
+  assert.equal(await statusOf(zv), "needs_review");
+  // A2 against a club archive, both orders.
+  const c1 = await freshClub();
+  const c1v = await clubActive(c1.admins[0]);
+  hold = holdWrite("mapping_version_disable");
+  const c1A2 = disable(c1v, c1.admins[0].cookie);
+  await until(() => hold.state.entered, "A2 holds");
+  const archiver = await client();
+  const archiving = archiver.query(`update public.clubs set is_active = false where id = $1`, [c1.clubId]);
+  assert.equal(await someoneWaits(), true, "the archive waits for A2");
+  hold.g.open();
+  const c1res = await c1A2;
+  assert.ok([200, 404].includes(c1res.status), c1res.text);
+  await archiving;
+  await archiver.end();
+  assert.equal(await statusOf(c1v), "disabled", "A2 committed first");
+  const c2 = await freshClub();
+  const c2v = await clubActive(c2.admins[0]);
+  const c2Holder = await peerHolds(`update public.clubs set is_active = false where id = $1`, [c2.clubId]);
+  const c2A2 = disable(c2v, c2.admins[0].cookie);
+  assert.equal(await someoneWaits(), true, "A2 waits for the archive");
+  await release(c2Holder);
+  isNotFound(await c2A2, "club archived before A2");
+  assert.equal(await statusOf(c2v), "active");
+  noDeadlock();
+});
+
+test("14. the service locks the rights rows before any trigger does (the Nezavisni revizor's note): at the write hold of A1, of A1's replacement and of A2, a peer's FOR UPDATE NOWAIT on the admin's users row and on its user_club_roles row each fails with 55P03", async () => {
+  const x = await freshClub();
+  const [adm] = x.admins;
+  const nowaitFails = async (label) => {
+    for (const [what, sql, params] of [
+      ["users", `select 1 from public.users where id = $1 for update nowait`, [adm.id]],
+      ["user_club_roles", `select 1 from public.user_club_roles where user_id = $1 and club_id = $2 and role = 'club_admin' for update nowait`, [adm.id, x.clubId]],
+    ]) {
+      const peer = await client();
+      try {
+        await peer.query("begin");
+        await assert.rejects(peer.query(sql, params), (e) => e.code === "55P03", `${label}: ${what} is held`);
+      } finally {
+        await release(peer, "rollback");
+      }
+    }
+  };
+  const v = await clubWaiting(adm);
+  let hold = holdWrite("mapping_version_activate");
+  let pending = activate(v, adm.cookie);
+  await until(() => hold.state.entered, "A1 holds");
+  await nowaitFails("A1");
+  hold.g.open();
+  ok(await pending);
+  ok(await start(adm, v, [x.b]), 201);
+  const n1 = await nextVersion(v, adm);
+  hold = holdWrite("mapping_version_replace");
+  pending = activate(n1, adm.cookie, { expected: v.versionId, reason: reasonFor("Replace."), starts: [x.b] });
+  await until(() => hold.state.entered, "the replacement holds");
+  await nowaitFails("A1's replacement");
+  hold.g.open();
+  ok(await pending);
+  hold = holdWrite("mapping_version_disable");
+  pending = disable(n1, adm.cookie);
+  await until(() => hold.state.entered, "A2 holds");
+  await nowaitFails("A2");
+  hold.g.open();
+  assert.equal(ok(await pending).activationsEnded, 1);
+});
+
+test("15. the rights hold seam (before the right is checked again) for A1, A1's replacement with starts and A2 with open activations: a revoked role, an archived club or a deactivated user is the identical 404 with nothing written and the key free; a promotion is 409 try_again and the retry writes platform_admin", async () => {
+  const ops = {
+    a1: async (x, adm) => { const v = await clubWaiting(adm); return (opts) => activate(v, adm.cookie, opts); },
+    replace: async (x, adm) => {
+      const v = await clubActive(adm);
+      ok(await start(adm, v, [x.b]), 201);
+      const n1 = await nextVersion(v, adm);
+      const reason = reasonFor("Replace.");
+      return (opts) => activate(n1, adm.cookie, { expected: v.versionId, reason, starts: [x.b], activationReason: reason, ...opts });
+    },
+    a2: async (x, adm) => { const v = await clubActive(adm); ok(await start(adm, v, [x.b]), 201); return (opts) => disable(v, adm.cookie, opts); },
+  };
+  const cases = {
+    revoked: { during: (x, adm) => setClubRole(adm.id, x.clubId, false), after: (x, adm) => setClubRole(adm.id, x.clubId, true) },
+    archived: { during: (x) => setClubActive(x.clubId, false), after: async (x, adm) => { await setClubActive(x.clubId, true); await workspace(adm.id, "club", x.clubId); } },
+    deactivated: { during: (x, adm) => setUserActive(adm.id, false), after: (x, adm) => setUserActive(adm.id, true) },
+  };
+  for (const [opName, make] of Object.entries(ops)) {
+    for (const [caseName, c] of Object.entries(cases)) {
+      const x = await freshClub();
+      const [adm] = x.admins;
+      const send = await make(x, adm);
+      const before = await counts();
+      const k1 = key();
+      const hold = holdRights();
+      const pending = send({ requestKey: k1 });
+      await until(() => hold.state.entered, `${opName}/${caseName}: holds before the right`);
+      await c.during(x, adm);
+      hold.g.open();
+      isNotFound(await pending, `${opName}/${caseName}`);
+      assert.deepEqual(await counts(), before, `${opName}/${caseName}: nothing written`);
+      assert.equal(await keyRow(k1), undefined, `${opName}/${caseName}: the key is free`);
+      await c.after(x, adm);
+      service.setMappingRightsHoldForTests(null);
+      ok(await send({ requestKey: k1 }));
+      assert.equal((await keyRow(k1)).basis, "club_admin", `${opName}/${caseName}: the same key afterwards`);
+    }
+    // A promotion during the request: try_again; the retry writes platform_admin.
+    const x = await freshClub();
+    const [adm] = x.admins;
+    const send = await make(x, adm);
+    const before = await counts();
+    const k2 = key();
+    const hold = holdRights();
+    const pending = send({ requestKey: k2 });
+    await until(() => hold.state.entered, `${opName}/promotion`);
+    await setGlobal(adm.id, true);
+    hold.g.open();
+    refused(await pending, 409, "try_again");
+    assert.deepEqual(await counts(), before, `${opName}/promotion: nothing written`);
+    service.setMappingRightsHoldForTests(null);
+    ok(await send({ requestKey: k2 }));
+    assert.equal((await keyRow(k2)).basis, "platform_admin", `${opName}/promotion: the retry`);
+    await setGlobal(adm.id, false);
+  }
+});
+
+test("16. the write hold seam (after the right, before the first write): a promotion committed there is the sanitized 500 with nothing written and the key free, and the retry writes platform_admin (R4); a club-role revocation from a peer there waits for the write, the write's rows are committed, its answer is 200 or the identical 404, and a replay after the revocation is the identical 404", async () => {
+  for (const at of ["mapping_version_activate", "mapping_version_disable"]) {
+    const x = await freshClub();
+    const [adm] = x.admins;
+    const v = at === "mapping_version_activate" ? await clubWaiting(adm) : await clubActive(adm);
+    const send = (opts) => (at === "mapping_version_activate" ? activate(v, adm.cookie, opts) : disable(v, adm.cookie, opts));
+    const before = await counts();
+    const k1 = key();
+    const hold = holdWrite(at);
+    const pending = send({ requestKey: k1 });
+    await until(() => hold.state.entered, `${at}: holds after the right`);
+    await setGlobal(adm.id, true);
+    hold.g.open();
+    const res = await pending;
+    assert.deepEqual([res.status, res.body.error], [500, "internal_error"], res.text);
+    assert.ok(!/source_metric|training_load|basis|acting user/i.test(res.text), "sanitized");
+    assert.deepEqual(await counts(), before, `${at}: nothing written`);
+    assert.equal(await keyRow(k1), undefined, `${at}: the key is free`);
+    service.setMappingWriteHoldForTests(null);
+    ok(await send({ requestKey: k1 }));
+    assert.equal((await keyRow(k1)).basis, "platform_admin");
+    await setGlobal(adm.id, false);
+  }
+  // A club-role revocation from a peer at the write hold.
+  const x = await freshClub();
+  const [adm] = x.admins;
+  const v = await clubWaiting(adm);
+  const k2 = key();
+  const hold = holdWrite("mapping_version_activate");
+  const pending = activate(v, adm.cookie, { requestKey: k2 });
+  await until(() => hold.state.entered, "A1 holds");
+  const peer = await client();
+  const revoking = peer.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [adm.id, x.clubId]);
+  assert.equal(await someoneWaits(), true, "the revocation waits for the write");
+  hold.g.open();
+  const res = await pending;
+  assert.ok([200, 404].includes(res.status), res.text);
+  if (res.status === 404) assert.deepEqual(res.body, { error: "notFound" });
+  await revoking;
+  await peer.end();
+  assert.deepEqual([await statusOf(v), (await versionRow(v.versionId)).activated_basis], ["active", "club_admin"], "the write's rows are committed");
+  isNotFound(await activate(v, adm.cookie, { requestKey: k2 }), "a replay after the revocation");
+  noDeadlock();
+});
+
+test("17. the real club-admin revocation route against the real write (L1; db review F2), both orders: the revocation queued first on the admin's users row, then A1 released into its right - A1 is the identical 404 with nothing written and the revocation succeeds; A1 holding its right first - the revocation waits, A1's rows commit (200 or the identical 404) and the revocation then succeeds - no 40P01", async () => {
+  const revoke = (adm, clubId) => api(`/users/${adm.id}/club-roles/${clubId}/club_admin`, { method: "DELETE", cookie: W.pa.cookie, prefix: "/api/organization" });
+  // Order 1: the revocation queued first.
+  const x = await freshClub(3);
+  const [adm1, adm2] = x.admins;
+  const v1 = await clubWaiting(adm1);
+  const third = await peerHolds(`select 1 from public.users where id = $1 for update`, [adm1.id]);
+  const revoking = revoke(adm1, x.clubId);
+  await waitingOn("for update of u, r");
+  const rh = holdRights();
+  const a1 = activate(v1, adm1.cookie);
+  await until(() => rh.state.entered, "A1 holds before its right");
+  rh.g.open();
+  await waitingOn("for share of u, r");
+  await release(third);
+  const revoked = await revoking;
+  assert.equal(revoked.status, 200, revoked.text);
+  isNotFound(await a1, "A1 after the revocation");
+  assert.equal(await statusOf(v1), "needs_review", "nothing written");
+  // Order 2: A1 holds its right first.
+  service.setMappingRightsHoldForTests(null);
+  const v2 = await clubWaiting(adm2);
+  const wh = holdWrite("mapping_version_activate");
+  const a2 = activate(v2, adm2.cookie);
+  await until(() => wh.state.entered, "A1 holds after its right");
+  const revoking2 = revoke(adm2, x.clubId);
+  await waitingOn("for update of u, r");
+  wh.g.open();
+  const res = await a2;
+  assert.ok([200, 404].includes(res.status), res.text);
+  assert.deepEqual([await statusOf(v2), (await versionRow(v2.versionId)).activated_basis], ["active", "club_admin"], "A1's rows are committed");
+  assert.equal((await revoking2).status, 200);
+  assert.equal((await one(k, `select is_active from public.user_club_roles where user_id = $1 and club_id = $2`, [adm2.id, x.clubId])).is_active, false);
+  noDeadlock();
+});
+
+test("18. submitVersion (R5): a caller whose right is revoked during the request gets the identical 404, never version_not_draft or revision_not_usable", async () => {
+  const x = await freshClub();
+  const [adm] = x.admins;
+  const submit = (v, opts = {}) => post(`/mappings/${v.mappingId}/versions/${v.versionId}/submit`, adm.cookie, { requestKey: key(), ...opts });
+  // Already submitted: version_not_draft for a caller with the right.
+  const waiting = await clubWaiting(adm);
+  refused(await submit(waiting), 409, "version_not_draft");
+  // A draft whose revision is retired: revision_not_usable for a caller with the right.
+  const f = await field();
+  const draft = await version(f, { owner: adm, target: await variable(adm), submit: false });
+  ok(await retireRevision(f, W.pa.cookie));
+  refused(await submit(draft), 409, "revision_not_usable");
+  for (const [label, v] of [["version_not_draft", waiting], ["revision_not_usable", draft]]) {
+    const hold = holdRights();
+    const pending = submit(v);
+    await until(() => hold.state.entered, label);
+    await setClubRole(adm.id, x.clubId, false);
+    hold.g.open();
+    isNotFound(await pending, `${label} with the right revoked`);
+    service.setMappingRightsHoldForTests(null);
+    await setClubRole(adm.id, x.clubId, true);
+  }
+});
+
+test("19. the COMMIT through a club admin's replacement with starts and A2 with open activations: a lost answer verified by the key (200 verified_after_commit_error), an unverifiable one (503 outcome_unknown, then the same key answers once), and a definite refusal at COMMIT - split_operation (v43's G1) for the replacement, skip_end (v48's end link) for A2 and the replacement - the sanitized 500 with nothing written and the key free", async () => {
+  const setup = async () => {
+    const x = await freshClub();
+    const [adm] = x.admins;
+    const v = await clubActive(adm);
+    ok(await start(adm, v, [x.b]), 201);
+    const n1 = await nextVersion(v, adm);
+    const reason = reasonFor("Replace.");
+    const disableReason = reasonFor("Disable.");
+    return {
+      v, n1, adm,
+      replace: (opts) => activate(n1, adm.cookie, { expected: v.versionId, reason, starts: [x.b], activationReason: reason, ...opts }),
+      a2: (opts) => disable(v, adm.cookie, { reason: disableReason, ...opts }),
+    };
+  };
+  for (const op of ["replace", "a2"]) {
+    // Lost but verified.
+    let s = await setup();
+    service.setMappingCommitForTests({ fault: (c) => c.query("commit").then(() => { throw new Error("answer lost"); }), timeoutMs: 2_000 });
+    let res = await s[op]({});
+    service.setMappingCommitForTests();
+    assert.deepEqual([res.status, res.body.commitConfirmation], [200, "verified_after_commit_error"], `${op}: ${res.text}`);
+    // Lost and not found: 503, then the same key writes once.
+    s = await setup();
+    const k1 = key();
+    service.setMappingCommitForTests({ fault: () => Promise.reject(new Error("socket gone")), timeoutMs: 2_000 });
+    res = await s[op]({ requestKey: k1 });
+    service.setMappingCommitForTests();
+    assert.deepEqual([res.status, res.body.error, res.body.requestKey], [503, "outcome_unknown", k1], `${op}: ${res.text}`);
+    ok(await s[op]({ requestKey: k1 }));
+    assert.equal(ok(await s[op]({ requestKey: k1 })).replayed, true);
+    assert.equal((await auditOf(`request_key = $1`, [k1])).length, 1, `${op}: one request record`);
+    // A definite refusal at COMMIT.
+    for (const fault of op === "replace" ? ["split_operation", "skip_end"] : ["skip_end"]) {
+      s = await setup();
+      const before = await counts();
+      const k2 = key();
+      service.setMappingTransitionAuditFaultForTests(fault);
+      res = await s[op]({ requestKey: k2 });
+      service.setMappingTransitionAuditFaultForTests(null);
+      assert.deepEqual([res.status, res.body.error], [500, "internal_error"], `${op}/${fault}: ${res.text}`);
+      assert.deepEqual(await counts(), before, `${op}/${fault}: nothing written`);
+      assert.equal(await keyRow(k2), undefined, `${op}/${fault}: the key is free`);
+      ok(await s[op]({ requestKey: k2 }));
+      assert.equal((await keyRow(k2)).basis, "club_admin");
+    }
+  }
+});
+
+test("20. no answer of the transition routes carries a reason, an acting user's id, a club id, a trigger text or SQL; no log line carries a reason or a trigger text", async () => {
+  const ids = Object.values(W).filter((x) => x && typeof x === "object" && x.id).map((x) => x.id);
+  const clubs = [W.clubA, W.clubB, W.clubC];
+  const transitionAnswers = responses.filter((t) => /"version"|"replaced"|"activationsEnded"|"notFound"|"internal_error"/.test(t));
+  assert.ok(transitionAnswers.length > 50, `answers scanned: ${transitionAnswers.length}`);
+  for (const text of transitionAnswers) {
+    for (const reason of sentReasons) assert.ok(!text.includes(reason), "no reason in an answer");
+    for (const id of ids) assert.ok(!text.includes(id), "no acting user's id in an answer");
+    for (const c of clubs) assert.ok(!text.includes(c), "no club id in an answer");
+    assert.ok(!/source_metric_|training_load\.|insert into|select .* from|SQLSTATE/i.test(text), `no trigger text or SQL: ${text.slice(0, 200)}`);
+  }
+  for (const line of logLines) {
+    for (const reason of sentReasons) assert.ok(!line.includes(reason), "no reason in a log line");
+    assert.ok(!/a club version's activation is on another club's binding|the basis is not the acting user's own|may not (activate|disable) this mapping version/.test(line), `no trigger text in a log line: ${line.slice(0, 200)}`);
+  }
+});
