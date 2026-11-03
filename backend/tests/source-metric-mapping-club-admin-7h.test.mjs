@@ -1107,6 +1107,19 @@ test("12. direct SQL against v52 (section 10.3): club A's admin activates, disab
   const bVer = await clubActive(W.caB);
   const bStart = ok(await start(W.caB, bVer, [W.bB1]), 201).activations[0];
   refusedWith(await tx(W.caA.id, (c) => endSql(c, [bStart.id], W.caA.id, "club_admin", "mapping_version_disabled")), "42501", ACTOR_T5);
+  // 6b. The T8 actor guard on its own (the T5 end written with the guard off, in
+  // the same transaction): club A's admin's version-driven activation_end row for
+  // a system version's activation and for club B's version's activation - 42501.
+  for (const [label, act] of [["a system version", sysStart], ["club B's version", bStart]]) {
+    const row = await t5(act.id);
+    refusedWith(await tx(W.caA.id, async (c) => {
+      await c.query("set local session_replication_role = replica");
+      await endSql(c, [row.id], W.caA.id, "club_admin", "mapping_version_disabled");
+      await c.query("set local session_replication_role = origin");
+      await endRowSql(c, row, W.caA.id, "club_admin", "T8 only.");
+    }), "42501", ACTOR_T8);
+    assert.equal((await t5(act.id)).ended_at, null, label);
+  }
   // 7. The R3 backstop: a club A version's activation on club B's binding, and on a
   // binding whose connection is not club-owned - in the T5 guard and the T8 guard.
   // On a binding with no club, v48's insert guard refuses a club_admin

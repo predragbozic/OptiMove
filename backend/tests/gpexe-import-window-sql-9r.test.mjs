@@ -22,7 +22,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { verifyRevisionRow } from "./support/source-revisions.mjs";
@@ -114,8 +114,16 @@ let appPool;
 let src;
 const S = {};
 
+// Both files are pinned to v51 as written (their headers): the first window ran
+// them on production at v51, and its record names their sha256. A later
+// migration on main makes them stale for the NEXT window, which re-issues them
+// before its step 11; the files as written are checked on the world they were
+// pinned to, so the world is built through v51 only.
+const THROUGH_V51 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(path.basename(V51)) + 1);
+
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "window_sql_9r" });
+  assert.equal(THROUGH_V51.at(-1), path.basename(V51), "the test migrations carry v51");
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "window_sql_9r", migrations: THROUGH_V51 });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: not a disposable database");
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
