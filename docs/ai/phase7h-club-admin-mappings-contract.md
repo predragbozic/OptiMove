@@ -1512,7 +1512,13 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
 - **Merge:** after both ★★ GOs (trigger 4), under the standing merge order.
 - **Deploy:** by the *Rukovodilac*.
 
-**In review; not merged, not deployed.** Until LO-1 is deployed, section 17's known limit still holds.
+**Merged and deployed.** Merged as PR #344 (`ad0e0d63`) on 2026-11-03 at 10:30:18 UTC, exactly from `5ade6443`,
+after both ★★ GOs on that head (the *Rukovodilac*'s event `ccd3081e`, the *Nezavisni revizor*'s event `a48f9213`);
+deployed by the *Rukovodilac* (live at 10:32:26 UTC; `/api/health` served `ad0e0d63` with `ok: true` three times in a
+row). Since the deploy, section 17's known limit no longer holds. At the GO the *Rukovodilac* also decided:
+`test:backend:shared` stays UNKNOWN (decision 2); LO-2's scope is v23, v26 and v49's `calendar.lock_event_writer`,
+with v34, v35 and v38 for one rule (decision 3); and the lock-order rule goes to `.claude/rules/migrations.md` in a
+separate small pull request, with test 9c as its proof (decision 4).
 
 - **Users first in every service rights check** (the revocations' order: `for update of u, g` for a platform admin,
   `for update of u, r` for a club admin):
@@ -1617,7 +1623,7 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
     `gpexe-rest-v1-adapter-reads`, identical on `origin/main` `192e7ebe`) and 7h test 13 before its case (a) followed
     D's order. `gpexe-check-finalization`'s manifest entry passed (XPASS), in a file LO-1 does not touch;
   - `backend-fast` 25 of 27 files, the same two baselines.
-  - `test:backend:shared` is not run (only on the *Rukovodilac*'s word).
+  - `test:backend:shared` is not run and stays UNKNOWN (the *Rukovodilac*'s decision 2 at its GO).
 - **Recorded by the internal reviews (LOW and NIT; no code change):**
   - **A caller revoked mid-request** (the security review's LO1-S1): A1 now locks its listed bindings and teams before
     its right. A caller revoked after the plain scope read may wait on a binding or team row that an Unbind or an

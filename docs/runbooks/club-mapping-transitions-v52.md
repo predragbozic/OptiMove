@@ -122,12 +122,12 @@ database.
 
 ## A known limit until the lock-order pull request
 
-A club's admin's A1 with listed starts, an Unbind of one of those bindings and a revocation of the club's admins at
-the same moment can end in `40P01`: A1 and the Unbind answer `try_again`, the revocation a 500, and nothing is written.
-A1 locks its rights before its listed bindings (J15 section 5, R13). The lock-order pull request, which follows 7h-B,
-removes it; until then the *Rukovodilac* accepts it (J14 section 15, the acceptance's L2 note). It is built as LO-1
-(J14 section 18): from the deploy of LO-1 on, A1 takes its listed bindings and teams before its rights, and this
-limit no longer holds.
+**No longer holds since LO-1's deploy (2026-11-03, 10:32:26 UTC).** Before it, a club's admin's A1 with listed
+starts, an Unbind of one of those bindings and a revocation of the club's admins at the same moment could end in
+`40P01`: A1 and the Unbind answered `try_again`, the revocation a 500, and nothing was written. A1 locked its rights
+before its listed bindings (J15 section 5, R13). The *Rukovodilac* accepted that until the lock-order pull request (J14
+section 15, the acceptance's L2 note). That pull request is LO-1 (PR #344, J14 section 18): A1 now takes its listed
+bindings and teams before its rights.
 
 ## What a club's admin can do now
 
