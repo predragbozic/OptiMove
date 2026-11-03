@@ -22,6 +22,10 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
   const formData = new FormData(form);
   const payload = Object.fromEntries(formData.entries());
   const editId = form.dataset.organizationEditId;
+  // An athlete's exercise language is sent only when it was changed here
+  // (organization-view.js, renderAthleteContentLanguageField).
+  const language = form.querySelector("select[name='contentLanguage']");
+  if (type === "edit-athlete" && language?.value === language?.dataset.contentLanguageInitial) delete payload.contentLanguage;
   const athleteId = form.dataset.athleteId;
   const teamId = form.dataset.teamId;
   const endpoint = {

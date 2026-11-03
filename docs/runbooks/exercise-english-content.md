@@ -19,6 +19,9 @@ migration only makes room for it.
     value, a blank one clears it, anything but text or null is a 400).
   - `GET /api/auth/me` answers `contentLanguage`, and `PUT /api/auth/me/content-language` sets the caller's own,
     `{ "contentLanguage": "sr" | "en" }`.
+  - An athlete's, on the athlete's login: `PUT /api/organization/athletes/:athleteId` takes `contentLanguage` with the
+    profile, for exactly those who may edit that athlete today (`canManageAthlete`); an athlete without a login is a
+    400. Settings → Athletes lists each athlete's `content_language`.
   - In the app: the editor's "Name (English)" and "Instruction (English)", Account → Exercise language (coach and
     athlete), and the display rule of `frontend/exercise-text.js`.
 
@@ -26,8 +29,10 @@ The runner applies the migration in its own transaction and stops at the first f
 `npm start` runs the migrations before the server. **Lock footprint:** the ADD COLUMNs take ACCESS EXCLUSIVE on
 `library.exercises` and `public.users` for the time the CHECKs need to scan the two tables (both columns are NULL or
 `'sr'`; no table is rewritten), under the runner's `lock_timeout`. Every signed-in request reads its session's user,
-so requests wait for that moment (preflight block 5 is the quiet-moment check). While the migration is applied and the
-old server still serves during the deploy, the old server reads neither column and works unchanged.
+so requests wait for that moment (preflight block 6 is the quiet-moment check). While the migration is applied and the
+old server still serves during the deploy, the old server reads neither column and works unchanged. A request that
+holds a `users` row and then reads `library.exercises` can deadlock with the migration in that moment: PostgreSQL
+aborts one side, and a failed migration leaves the old server serving (deploy again at a quieter moment).
 
 **The order, each step on the owner's order:**
 
@@ -44,4 +49,4 @@ recorded, when a later migration is recorded, and while any exercise has English
 
 **Local development database.** `npm run dev` does not migrate. Until the local OPTIMOVE database has this migration
 (applied only on confirmation), the exercise routes fail there (they read the new columns); `GET /api/auth/me` keeps
-working and answers `sr`.
+working and answers `sr`, and Settings → Athletes lists athletes with `sr`.

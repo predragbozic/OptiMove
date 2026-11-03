@@ -26,6 +26,7 @@ import {
   lockJoinLinkActions,
 } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
+import { CONTENT_LANGUAGE_REFUSED, isContentLanguage } from "../contentLanguage.js";
 import { revokeActiveEmailVerificationTokens, revokeActiveEmailVerificationTokensForJoinLink } from "../emailVerification.js";
 import { EmailConfigError, EmailSendError, sendAccountEmailChangeVerification, sendPasswordResetEmail } from "../email.js";
 import {
@@ -1363,6 +1364,11 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
     const athleteId = clean(req.body?.athleteId);
     const { clubId, teamId } = await resolveAthleteClubTeam(req, clean(req.body?.clubId), clean(req.body?.teamId));
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
+    // The athlete's exercise language (owner, 2026-11-03) is a setting of the
+    // athlete's login: whoever may edit this profile may set it, after the same
+    // check as every other field. A request without it leaves it as it is.
+    const languageSent = Object.hasOwn(req.body || {}, "contentLanguage");
+    if (languageSent && !isContentLanguage(req.body.contentLanguage)) return res.status(400).json({ error: CONTENT_LANGUAGE_REFUSED });
     const { firstName, lastName } = splitName(fullName);
     const client = await pool.connect();
     try {
@@ -1370,6 +1376,7 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
       // The one lock order (D45): the team, the club membership, the team
       // membership, then the athlete row — the order of a team archive and of a
       // club-membership archive, so neither can wait on this edit in a cycle.
+      // The athlete's login (its exercise language) comes last.
       if (!(await client.query(`select 1 from public.athletes where id = $1`, [req.params.athleteId])).rows[0]) {
         await client.query("rollback");
         return res.status(404).json({ error: "Athlete not found." });
@@ -1400,8 +1407,22 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
         await client.query("rollback");
         return res.status(404).json({ error: "Athlete not found." });
       }
+      let contentLanguage = null;
+      if (languageSent) {
+        const login = await client.query(
+          `update public.users u set content_language = $2, updated_at = now()
+             from public.athletes a where a.id = $1 and u.id = a.user_id
+           returning u.content_language`,
+          [req.params.athleteId, req.body.contentLanguage],
+        );
+        if (!login.rows[0]) {
+          await client.query("rollback");
+          return res.status(400).json({ error: "This athlete has no login yet; the exercise language belongs to the login." });
+        }
+        contentLanguage = login.rows[0].content_language;
+      }
       await client.query("commit");
-      res.json({ athlete: result.rows[0] });
+      res.json({ athlete: contentLanguage ? { ...result.rows[0], content_language: contentLanguage } : result.rows[0] });
     } catch (error) {
       await client.query("rollback").catch(() => {});
       throw error;
@@ -3490,6 +3511,10 @@ async function loadManagedAthletes(req) {
          or exists (select 1 from public.user_club_roles ucr4 where ucr4.user_id = a.user_id and ucr4.is_active = true)
          or exists (select 1 from public.user_team_roles utr4 where utr4.user_id = a.user_id and utr4.is_active = true)
        ) end as login_is_multi_role,
+       -- The login's exercise language (owner, 2026-11-03), read through
+       -- to_jsonb like GET /api/auth/me, so a database without the column yet
+       -- (the local development database) still lists athletes.
+       case when u.id is null then null else coalesce(to_jsonb(u) ->> 'content_language', 'sr') end as content_language,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,
        coalesce(ala.can_view_club_library, false) as can_view_club_library,

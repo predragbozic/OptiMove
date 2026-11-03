@@ -6,6 +6,7 @@ import { renderManageAccountStorageSection, renderStorageAdminPanelHtml } from "
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
+import { renderContentLanguageOptions } from "./account-language.js";
 import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { renderSettingsNavHtml } from "./navigation.js";
 import { renderIconGalleryHtml } from "./icon-gallery.js";
@@ -1697,6 +1698,16 @@ function renderOrganizationTeamEditForm(row, clubs) {
   `;
 }
 
+// The athlete's exercise language (owner, 2026-11-03) belongs to the
+// athlete's login, so an athlete without one has no field. The value the form
+// opened with is kept: a save that did not change it does not send it, so a
+// name change never undoes the athlete's own choice made meanwhile.
+function renderAthleteContentLanguageField(row) {
+  if (!row.user_id) return "";
+  const language = row.content_language === "en" ? "en" : "sr";
+  return `<label class="search-field"><span>Exercise language</span><select class="builder-text-input" name="contentLanguage" data-content-language-initial="${language}">${renderContentLanguageOptions(language)}</select></label>`;
+}
+
 function renderOrganizationAthleteEditForm(row, clubs, teams) {
   const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
   const teamOptions = teams.map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
@@ -1705,6 +1716,7 @@ function renderOrganizationAthleteEditForm(row, clubs, teams) {
       <label class="search-field"><span>Athlete name</span><input name="fullName" required value="${escapeAttr(row.name || "")}"></label>
       <label class="search-field"><span>External ID</span><input name="athleteId" value="${escapeAttr(row.athlete_id || row.source_external_id || "")}"></label>
       <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" value="${escapeAttr(row.image_url || "")}"></label>
+      ${renderAthleteContentLanguageField(row)}
       <div class="organization-form-row">
         ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: row.club_id, placeholder: "Type club name", includeEmpty: "No club", extraSelectAttrs: "data-organization-club-select" })}
         ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, value: row.team_id, placeholder: "Type team name", includeEmpty: "No team", extraSelectAttrs: "data-organization-team-select" })}

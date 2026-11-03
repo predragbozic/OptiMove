@@ -23,7 +23,7 @@ select current_setting('server_version_num')::int as server_version_num;
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611031200_exercise_english_content.sql') as this_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name >= 'migrations_v2/202611031200_exercise_english_content.sql') as at_or_after_this,
-  (select migration_name from public.schema_migrations order by migration_name desc limit 1) as last_migration;
+  (select migration_name from public.schema_migrations where migration_name like 'migrations_v2/%' order by migration_name desc limit 1) as last_migration;
 
 -- 3. None of the new columns or constraints exists yet (a column of the same
 --    name made by hand would make the migration fail).
@@ -42,7 +42,15 @@ select
   (select count(*) from library.exercises) as exercises,
   (select count(*) from public.users) as users;
 
--- 5. A quiet moment: no other migration running, no transaction holding a
+-- 5. The role running this (the migrator's) owns both tables: ADD COLUMN
+--    and ADD CONSTRAINT need the owner.
+--    Expected: two rows, owner = running_as on each.
+select c.oid::regclass::text as table_name, pg_get_userbyid(c.relowner) as owner, current_user as running_as
+  from pg_class c
+ where c.oid in ('library.exercises'::regclass, 'public.users'::regclass)
+ order by 1;
+
+-- 6. A quiet moment: no other migration running, no transaction holding a
 --    strong lock on the two tables the migration alters (ADD COLUMN takes
 --    ACCESS EXCLUSIVE on library.exercises and public.users for a moment), no
 --    idle transaction. An ordinary row write's RowExclusiveLock does not count.

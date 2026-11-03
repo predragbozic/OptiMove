@@ -49,6 +49,9 @@ async function shape() {
     order by 1`)).rows.map((row) => row.x);
 }
 
+// The tables' storage files: a rewrite gives a table a new one.
+const storage = async () => (await c.query("select relname, relfilenode from pg_class where oid in ('public.users'::regclass, 'library.exercises'::regclass) order by relname")).rows;
+
 const recorded = async () => Number((await c.query("select count(*) from public.schema_migrations where migration_name = $1", [RECORD])).rows[0].count);
 const rollbackSql = () => fsp.readFile(ROLLBACK_SQL, "utf8");
 
@@ -61,8 +64,10 @@ test("1. the runner applies it: two nullable English columns and the reader's la
   exerciseId = (await c.query("insert into library.exercises default values returning id")).rows[0].id;
   userId = (await c.query("insert into public.users (email) values ('reader@test.local') returning id")).rows[0].id;
   before_ = await shape();
+  const files = await storage();
   await applyGpexeTestMigrations(db.url, [MIGRATION]);
   after_ = await shape();
+  assert.deepEqual(await storage(), files, "neither table is rewritten");
   assert.equal(await recorded(), 1);
   const added = after_.filter((x) => !before_.includes(x)).map((x) => x.split("=")[0]);
   assert.deepEqual(added.sort(), [
@@ -142,6 +147,23 @@ test("3. the rollback refuses while it would lose data or another migration depe
   await c.query("update public.users set content_language = 'en' where id = $1", [userId]);
   await refused(/users who read exercises in English exist/, "an English reader");
   await c.query("update public.users set content_language = 'sr' where id = $1", [userId]);
+
+  // A transaction still writing an exercise: the rollback waits at most its
+  // lock_timeout (5 s), then stops with nothing dropped.
+  const writer = new pg.Client({ connectionString: db.url });
+  await writer.connect();
+  try {
+    await writer.query("begin");
+    await writer.query("update library.exercises set name_en = null where id = $1", [exerciseId]);
+    const started = Date.now();
+    await assert.rejects(c.query(await rollbackSql()), (error) => error.code === "55P03", "a lock timeout");
+    await c.query("rollback");
+    assert.ok(Date.now() - started < 9000, "bounded by the lock_timeout");
+    assert.deepEqual(await shape(), after_, "a held exercise: nothing changed");
+  } finally {
+    await writer.query("rollback").catch(() => {});
+    await writer.end();
+  }
 
   await c.query(await rollbackSql());
   assert.deepEqual(await shape(), before_, "the columns and constraints are exactly as before the migration");

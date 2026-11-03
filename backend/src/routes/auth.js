@@ -15,6 +15,7 @@ import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelec
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
+import { CONTENT_LANGUAGE_REFUSED, isContentLanguage } from "../contentLanguage.js";
 import {
   EmailConfigError,
   EmailSendError,
@@ -104,14 +105,14 @@ router.get("/me", async (req, res, next) => {
 });
 
 // The caller's own exercise language: "sr" or "en". There is no user id in
-// the request, so no one can set another account's.
-const CONTENT_LANGUAGES = ["sr", "en"];
+// the request, so this route never sets another account's (an athlete's is
+// also set by whoever may edit that athlete, PUT /api/organization/athletes/:id).
 router.put("/me/content-language", async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ error: "Unauthorized" });
     const contentLanguage = req.body?.contentLanguage;
-    if (!CONTENT_LANGUAGES.includes(contentLanguage)) {
-      return res.status(400).json({ error: "Choose Srpski or English." });
+    if (!isContentLanguage(contentLanguage)) {
+      return res.status(400).json({ error: CONTENT_LANGUAGE_REFUSED });
     }
     const updated = await query(
       `update public.users set content_language = $2, updated_at = now() where id = $1 returning content_language`,

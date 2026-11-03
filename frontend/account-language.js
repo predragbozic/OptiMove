@@ -6,19 +6,27 @@ import { escapeAttr } from "./utils.js";
 // names and instructions (exercise-text.js), never of the interface.
 const LANGUAGES = [["sr", "Srpski"], ["en", "English"]];
 
+// Where the choice shows today: the screens that read the exercise itself.
+// An exercise already added to a program keeps the name it was added with.
+export const CONTENT_LANGUAGE_SCOPE = "The Exercise Library, an exercise's details, the Builder's exercise list and Home show the English name and instruction where an exercise has one. Exercises already added to programs keep their names.";
+
+export function renderContentLanguageOptions(language) {
+  const current = language === "en" ? "en" : "sr";
+  return LANGUAGES.map(([value, label]) => `<option value="${escapeAttr(value)}"${value === current ? " selected" : ""}>${label}</option>`).join("");
+}
+
 export function renderContentLanguageSectionHtml(currentUser) {
-  const current = currentUser?.contentLanguage === "en" ? "en" : "sr";
   return `
     <section class="panel athlete-settings-card">
       <div>
         <p class="eyebrow">Account</p>
         <h3>Exercise language</h3>
-        <p class="muted">Exercise names and instructions are shown in this language. An exercise without an English text stays in Serbian.</p>
+        <p class="muted">${CONTENT_LANGUAGE_SCOPE}</p>
       </div>
       <form class="organization-form" data-account-form="content-language">
         <label class="search-field"><span>Exercise language</span>
           <select class="builder-text-input" name="contentLanguage">
-            ${LANGUAGES.map(([value, label]) => `<option value="${escapeAttr(value)}"${value === current ? " selected" : ""}>${label}</option>`).join("")}
+            ${renderContentLanguageOptions(currentUser?.contentLanguage)}
           </select>
         </label>
         <p class="builder-error" aria-live="polite"></p>
@@ -47,8 +55,8 @@ export async function saveContentLanguage(form, { api, currentUser }) {
     });
     if (currentUser) currentUser.contentLanguage = saved.contentLanguage === "en" ? "en" : "sr";
     if (success) success.textContent = saved.contentLanguage === "en"
-      ? "Saved. Exercises are shown in English where they have an English text."
-      : "Saved. Exercises are shown in Serbian.";
+      ? "Saved: English. The Exercise Library, the Builder's exercise list and Home show it where an exercise has an English text."
+      : "Saved: Srpski.";
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not save the exercise language.";
   } finally {

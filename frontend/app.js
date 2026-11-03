@@ -939,10 +939,6 @@ async function handleContentSubmit(event) {
     return;
   }
 
-  // security/verified-email-change: password-only now - see
-  // PUT /api/auth/me/credentials's own header comment in
-  // backend/src/routes/auth.js for why this can never touch users.email,
-  // even via a hand-crafted request.
   // Account -> Exercise language: only the caller's own account
   // (account-language.js).
   const contentLanguageForm = event.target.closest("[data-account-form='content-language']");
@@ -952,6 +948,10 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  // security/verified-email-change: password-only now - see
+  // PUT /api/auth/me/credentials's own header comment in
+  // backend/src/routes/auth.js for why this can never touch users.email,
+  // even via a hand-crafted request.
   const passwordChangeForm = event.target.closest("[data-account-form='password-change']");
   if (passwordChangeForm) {
     event.preventDefault();

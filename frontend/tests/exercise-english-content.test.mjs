@@ -165,6 +165,10 @@ test("6. Account -> Exercise language: on the coach's and the athlete's page, sh
     assert.deepEqual([...select.options].map((option) => [option.value, option.textContent]), [["sr", "Srpski"], ["en", "English"]]);
     assert.equal(select.value, "en");
   }
+  // The section names where the choice shows, and that programs keep their names.
+  const intro = doc(renderContentLanguageSectionHtml(EN)).querySelector("p.muted").textContent;
+  assert.match(intro, /^The Exercise Library, an exercise's details, the Builder's exercise list and Home show/);
+  assert.match(intro, /Exercises already added to programs keep their names.$/);
   for (const user of [SR, {}, null]) {
     assert.equal(doc(renderContentLanguageSectionHtml(user)).querySelector("select").value, "sr");
   }
@@ -181,7 +185,9 @@ test("6. Account -> Exercise language: on the coach's and the athlete's page, sh
   await saveContentLanguage(saved, { currentUser: user, api: async (url, options) => { sent.push({ url, method: options.method, body: JSON.parse(options.body) }); return { contentLanguage: "en" }; } });
   assert.deepEqual(sent, [{ url: "/api/auth/me/content-language", method: "PUT", body: { contentLanguage: "en" } }]);
   assert.equal(user.contentLanguage, "en");
-  assert.match(saved.querySelector(".builder-success").textContent, /English/);
+  const savedText = saved.querySelector(".builder-success").textContent;
+  assert.match(savedText, /^Saved: English. The Exercise Library, the Builder's exercise list and Home show it/);
+  assert.doesNotMatch(savedText, /Exercises are shown in English/, "no promise beyond the screens that read the exercise itself");
   assert.equal(saved.querySelector(".builder-error").textContent, "");
   assert.equal(saved.querySelector("button").disabled, false);
   // Refused: nothing changes on the user, the reason is shown.
@@ -193,4 +199,45 @@ test("6. Account -> Exercise language: on the coach's and the athlete's page, sh
   assert.equal(refused.querySelector(".builder-error").textContent, "Choose Srpski or English.");
   assert.equal(refused.querySelector(".builder-success").textContent, "");
   assert.equal(refused.querySelector("button").disabled, false);
+});
+
+test("7. Settings -> Athletes: the athlete form shows the login's exercise language, only for an athlete with a login; it is sent only when changed", async () => {
+  const { renderOrganizationEditModal } = await import("../organization-view.js");
+  const { submitOrganizationForm } = await import("../organization-actions.js");
+  const content = document.querySelector("#content");
+  const row = { id: "a-1", name: "Ana QA", user_id: "u-ana", content_language: "en", athlete_id: "", image_url: "", club_id: "", team_id: "" };
+  const open = (athleteRow) => {
+    state.organizationEditor = { open: true, type: "athlete", row: athleteRow };
+    content.innerHTML = renderOrganizationEditModal({ clubs: [], teams: [] });
+    return content.querySelector('[data-organization-form="edit-athlete"]');
+  };
+  const select = open(row).querySelector('select[name="contentLanguage"]');
+  assert.ok(select, "an athlete with a login has the field");
+  assert.equal(select.closest("label").querySelector("span").textContent, "Exercise language");
+  assert.deepEqual([...select.options].map((option) => [option.value, option.textContent]), [["sr", "Srpski"], ["en", "English"]]);
+  assert.equal(select.value, "en");
+  assert.equal(open({ ...row, content_language: null }).querySelector('select[name="contentLanguage"]').value, "sr");
+  assert.equal(open({ ...row, user_id: null }).querySelector('select[name="contentLanguage"]'), null, "no login, no field");
+
+  const sent = [];
+  globalThis.fetch = async (url, options = {}) => {
+    sent.push({ url: String(url), method: options.method, body: JSON.parse(options.body || "{}") });
+    return { ok: true, status: 200, json: async () => ({ athlete: { id: "a-1" } }) };
+  };
+  const handlers = { loadAthletes: async () => {}, renderOrganizationPanel: async () => {} };
+  globalThis.FormData = dom.window.FormData; // the submit reads the form through the DOM's FormData
+  // Unchanged: a name change does not send it.
+  const unchanged = open(row);
+  unchanged.querySelector('input[name="fullName"]').value = "Ana QA renamed";
+  await submitOrganizationForm(unchanged, handlers);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "/api/organization/athletes/a-1");
+  assert.equal(sent[0].method, "PUT");
+  assert.equal(sent[0].body.fullName, "Ana QA renamed");
+  assert.equal(Object.hasOwn(sent[0].body, "contentLanguage"), false, "an unchanged language is not sent");
+  // Changed: it is sent.
+  const changed = open(row);
+  changed.querySelector('select[name="contentLanguage"]').value = "sr";
+  await submitOrganizationForm(changed, handlers);
+  assert.equal(sent[1].body.contentLanguage, "sr");
 });

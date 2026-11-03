@@ -2515,6 +2515,13 @@ test("English name: the search finds it and ranks an exact match first, the list
   const prefix = await makeExercise(coach.userId, { name: "Paused squat ladder" });
   const exact = await api(`/api/exercises?search=${encodeURIComponent("Paused squat")}`, { cookie: coach.cookie });
   assert.deepEqual(exact.body.exercises.map((exercise) => exercise.id).slice(0, 2), [id, prefix], "an exact English name ranks before a Serbian name that only starts with it (which sorts first by name)");
+  // An English name that starts with the search ranks before a name that
+  // only contains it (which sorts first by name).
+  const englishPrefix = await makeExercise(coach.userId, { name: "Zzz vežba" });
+  await query("update library.exercises set name_en = 'Squat hold to stand' where id = $1", [englishPrefix]);
+  const contains = await makeExercise(coach.userId, { name: "Zz deep squat hold to stand" });
+  const ranked = await api(`/api/exercises?search=${encodeURIComponent("squat hold to")}`, { cookie: coach.cookie });
+  assert.deepEqual(ranked.body.exercises.map((exercise) => exercise.id).filter((value) => [englishPrefix, contains].includes(value)), [englishPrefix, contains]);
 
   const copy = await api(`/api/exercises/${id}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Moj čučanj", nameEn: "My paused squat", instructionEn: "" } });
   assert.equal(copy.status, 201, JSON.stringify(copy.body));
