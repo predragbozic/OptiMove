@@ -99,7 +99,10 @@ export const emptyCentralCalendarState = () => ({
   // types (GET /api/calendar/events/types, read once per workspace; null =
   // not read yet) and the open event form - create, edit or the cancel
   // confirmation (central-calendar-event-form.js), null when none is open.
+  // `eventTypesStale`: Settings -> Calendar changed the catalog while a form
+  // was open; the next form reads the types again (K2b-1c).
   eventTypes: null,
+  eventTypesStale: false,
   form: null,
 });
 

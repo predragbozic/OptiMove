@@ -21,7 +21,7 @@ const questions = [];
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false } } };
 globalThis.window = { confirm: (question) => { questions.push(question); return confirmAnswer; }, matchMedia: () => ({ matches: false }) };
 
-const { emptyCalendarSettingsState, state } = await import("../state.js");
+const { emptyCalendarSettingsState, emptyCentralCalendarState, state } = await import("../state.js");
 const colors = await import("../calendar-colors.js");
 const data = await import("../calendar-settings-data.js");
 const actions = await import("../calendar-settings-actions.js");
@@ -673,10 +673,13 @@ test("18. P2 - with no team colour chosen, every team wears exactly today's colo
   // t4's unknown key counts as no choice and it keeps green (4).
   const teams = [{ teamId: "t0" }, { teamId: "t1", colorKey: "teal" }, { teamId: "t2" }, { teamId: "t3", colorKey: "violet" }, { teamId: "t4", colorKey: "not-a-key" }];
   assert.deepEqual(teams.map((t) => calendarView.centralCalendarTeamIndex(t.teamId, teams)), [1, 0, 2, 11, 4]);
-  // A team pushed off its colour never lands on another team's: t0 chose rust,
-  // so t1 (rust) moves to indigo and t2 (indigo) to plum.
+  // A team pushed off its colour never takes another team's: t0 chose rust, so
+  // only t1 (rust) moves - to the first free colour, teal - and t2 keeps indigo.
   const chain = [{ teamId: "t0", colorKey: "rust" }, { teamId: "t1" }, { teamId: "t2" }];
-  assert.deepEqual(chain.map((t) => calendarView.centralCalendarTeamIndex(t.teamId, chain)), [1, 2, 3]);
+  assert.deepEqual(chain.map((t) => calendarView.centralCalendarTeamIndex(t.teamId, chain)), [1, 0, 2]);
+  // The last team chose teal (t0's): only t0 moves (to plum); t1 and t2 keep theirs.
+  const last = [{ teamId: "t0" }, { teamId: "t1" }, { teamId: "t2" }, { teamId: "t3", colorKey: "teal" }];
+  assert.deepEqual(last.map((t) => calendarView.centralCalendarTeamIndex(t.teamId, last)), [3, 1, 2, 0]);
   // Every automatic colour chosen: a team whose own colour was chosen takes
   // one of the other four.
   const allAuto = colors.CALENDAR_COLOR_KEYS.slice(0, 8).map((key, i) => ({ teamId: `c${i}`, colorKey: key }));
@@ -838,4 +841,114 @@ test("26. app.js repaints this panel only while its section is on screen: never 
   assert.match(body, /^function renderCalendarSettingsSurface\(\) \{\n {2}if \(state\.activeTab !== "organization" \|\| state\.organization\.section !== "calendar"\) return;/);
   assert.ok(body.indexOf('section !== "calendar") return;') < body.indexOf("renderOrganizationPanel("), "the section is checked before any Settings repaint");
   assert.match(body, /panel\.outerHTML = renderCalendarSettingsPanelHtml\(\);/);
+});
+
+// ---------------------------------------------------------------------------
+// The independent review of PR #343 (the stream manager's order of 2026-11-03)
+// ---------------------------------------------------------------------------
+test("27. P2 (S11, S12): one team's choice moves only the team whose colour it took; with no choice, today's colours for 0..20 teams, nulls included", () => {
+  const before = (id, teams) => { const i = teams.findIndex((t) => t.teamId === id); return i < 0 ? -1 : i % 8; };
+  for (let n = 0; n <= 20; n += 1) {
+    const teams = Array.from({ length: n }, (_, i) => ({ teamId: `t${i}`, colorKey: i % 2 ? null : undefined }));
+    for (const team of teams) assert.equal(calendarView.centralCalendarTeamIndex(team.teamId, teams), before(team.teamId, teams), `${n} teams`);
+  }
+  for (let n = 1; n <= 12; n += 1) {
+    for (let chooser = 0; chooser < n; chooser += 1) {
+      for (const key of colors.CALENDAR_COLOR_KEYS) {
+        const teams = Array.from({ length: n }, (_, i) => ({ teamId: `t${i}`, colorKey: i === chooser ? key : null }));
+        const owner = teams.findIndex((t, i) => i !== chooser && i < 8 && colors.CALENDAR_COLOR_KEYS[i % 8] === key);
+        teams.forEach((team, i) => {
+          if (i === chooser || i === owner || n > 8) return;
+          assert.equal(calendarView.centralCalendarTeamIndex(team.teamId, teams), i % 8, `${n} teams, t${chooser} chose ${key}: t${i} keeps its colour`);
+        });
+      }
+    }
+  }
+});
+
+test("28. the calendar reads its catalog again after a Settings write (S18): its view cache is dropped, and the event form's types too - at once with no form open, at the next form when one is open", async () => {
+  const { setCacheData, getCacheEntry, hasCachedData } = await import("../view-cache.js");
+  const types = [{ id: T1, label: "Training" }, { id: T2, label: "Match" }];
+  state.centralCalendar = emptyCentralCalendarState();
+  state.centralCalendar.eventTypes = types;
+  setCacheData("central-calendar", "probe", { days: [] });
+  await loaded();
+  await click('[data-action="calendar-settings-new"][data-kind="type"]');
+  let page = doc();
+  type(page, "#cs-type-label", "Gym");
+  type(page, "#cs-type-kind", "training");
+  await submit(page);
+  assert.equal(d().command, null, "settled");
+  assert.equal(state.centralCalendar.eventTypes, null, "no event form open: the types are read again at the next one");
+  assert.equal(hasCachedData(getCacheEntry("central-calendar", "probe")), false, "the calendar's cached range is dropped");
+  // An event form is open: its list stays until it closes, then the next form reads again.
+  state.centralCalendar.eventTypes = types;
+  state.centralCalendar.form = { mode: "create" };
+  await click(`[data-action="calendar-settings-archive"][data-kind="type"][data-id="${T2}"]`);
+  assert.equal(state.centralCalendar.eventTypes, types, "the open form keeps the list it was made from");
+  assert.equal(state.centralCalendar.eventTypesStale, true);
+  const calendarActions = await import("../central-calendar-actions.js");
+  state.centralCalendar.form = null;
+  state.centralCalendar.data = { workspace: { type: "club", scopeId: CLUB }, teams: [], days: [] };
+  state.centralCalendar.anchor = "2026-11-03";
+  state.centralCalendar.selectedDate = "2026-11-03";
+  calls.length = 0;
+  installFetchMock((call) => {
+    calls.push(call);
+    return call.url === "/api/calendar/events/types" ? { status: 200, body: { types: [types[0]] } } : { status: 404, body: {} };
+  });
+  await calendarActions.handleCentralCalendarAction(fakeAction({ action: "central-calendar-new-event" }), { render });
+  assert.ok(state.centralCalendar.form, "the next event form opened");
+  assert.equal(state.centralCalendar.eventTypesStale, false);
+  assert.ok(calls.some((c) => c.url === "/api/calendar/events/types"), "the next form read the types again");
+  assert.deepEqual(state.centralCalendar.eventTypes, [types[0]], "with the new list");
+  state.centralCalendar = emptyCentralCalendarState();
+  calls = installFetchMock(server);
+});
+
+test("29. an icon or a colour the form never touched is never sent - a saved key this bundle does not know stays (S20)", async () => {
+  db.types[0].iconKey = "a-newer-icon";
+  db.types[0].colorKey = "a-newer-colour";
+  await loaded();
+  await click(`[data-action="calendar-settings-edit"][data-kind="type"][data-id="${T1}"]`);
+  const page = doc();
+  type(page, "#cs-type-label", "Team training");
+  await submit(page);
+  assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, expectedRevision: 1, label: "Team training" });
+  // Choosing in the form does send it.
+  calls.length = 0;
+  await click(`[data-action="calendar-settings-edit"][data-kind="type"][data-id="${T1}"]`);
+  choose(doc(), "#cs-type-color-sky");
+  await submit(doc());
+  assert.equal(writes()[0].body.colorKey, "sky");
+  assert.equal("iconKey" in writes()[0].body, false);
+});
+
+test("30. another role in the same club (not club_admin) is offered no tab", () => {
+  state.currentUser = { activeWorkspace: { type: "club", scopeId: CLUB }, clubs: [{ id: CLUB, role: "club_coach" }, { id: OTHER_CLUB, role: "club_admin" }] };
+  assert.equal(/data-section="calendar"/.test(renderSettingsNavHtml(state.organization.data, "overview")), false);
+  assert.equal(data.calendarSettingsContext(), null);
+});
+
+test("31. a late answer after a workspace switch lands on nothing: no request, no notice, no state in the new slice (S17)", async () => {
+  await loaded();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const seen = installFetchMock(async (call) => {
+    if (call.method !== "GET") await gate;
+    return server(call);
+  });
+  const painted = [];
+  const pending = actions.handleCalendarSettingsAction(doc().querySelector(`[data-action="calendar-settings-archive"][data-kind="type"][data-id="${T2}"]`), { render: () => painted.push(state.calendarSettings.notice) });
+  assert.equal(d().command?.busy, true);
+  data.resetCalendarSettingsForWorkspaceChange();
+  const fresh = state.calendarSettings;
+  const sent = seen.length;
+  painted.length = 0;
+  release();
+  await pending;
+  assert.equal(seen.length, sent, "no request after the late answer (no read again)");
+  assert.deepEqual(painted, [], "nothing painted");
+  assert.deepEqual(fresh, emptyCalendarSettingsState(), "the new slice is untouched");
+  calls = installFetchMock(server);
 });

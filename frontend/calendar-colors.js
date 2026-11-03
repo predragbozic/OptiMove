@@ -17,16 +17,16 @@ export const isCalendarColorKey = (value) => typeof value === "string" && CALEND
 export const calendarColorIndex = (key) => CALENDAR_COLOR_KEYS.indexOf(key);
 
 // Each team's colour, as its palette index, for a list of teams in the
-// workspace's order ({ teamId, colorKey }). A team keeps the colour its club
-// chose. A team without one keeps its colour of before K2b-1c - automatic
-// colour N mod 8 at position N - unless another team chose that colour or an
-// earlier team without a choice already took it: then it takes the next
-// automatic colour that is neither, and when none is left and its own colour
-// was chosen by another team, the first of the other four that is neither.
-// Otherwise it keeps its own colour and shares it, as more than eight teams
-// did before. So with no choice made every team wears exactly the colour it
-// wore before, and one team's choice never moves the colours of the others
-// unless it takes theirs.
+// workspace's order ({ teamId, colorKey }), in two passes. First, a team keeps
+// the colour its club chose, and a team without one keeps its colour of
+// before K2b-1c - automatic colour N mod 8 at position N - when no team chose
+// that colour and no earlier team kept it. Then each team that lost its
+// colour takes the first automatic colour that is still free, or, when none
+// is left and its own colour was chosen by another team, the first free one
+// of the other four; otherwise it keeps its own colour and shares it, as more
+// than eight teams did before. So with no choice made every team wears
+// exactly the colour it wore before, and one team's choice moves only the
+// team whose colour it took.
 const resolved = new WeakMap();
 const AUTO_KEYS = CALENDAR_COLOR_KEYS.slice(0, CALENDAR_AUTO_COLOR_COUNT);
 const OTHER_KEYS = CALENDAR_COLOR_KEYS.slice(CALENDAR_AUTO_COLOR_COUNT);
@@ -37,18 +37,31 @@ export function calendarTeamColorIndexes(teams) {
   if (cached) return cached;
   const chosen = new Set(list.map((team) => team?.colorKey).filter(isCalendarColorKey));
   const taken = new Set();
+  const keys = [];
+  const displaced = [];
+  list.forEach((team, position) => {
+    if (isCalendarColorKey(team?.colorKey)) {
+      keys[position] = team.colorKey;
+      return;
+    }
+    const own = AUTO_KEYS[position % CALENDAR_AUTO_COLOR_COUNT];
+    if (chosen.has(own) || taken.has(own)) {
+      displaced.push(position);
+      return;
+    }
+    taken.add(own);
+    keys[position] = own;
+  });
   const free = (key) => !chosen.has(key) && !taken.has(key);
+  for (const position of displaced) {
+    const own = AUTO_KEYS[position % CALENDAR_AUTO_COLOR_COUNT];
+    const key = AUTO_KEYS.find(free) ?? (chosen.has(own) ? OTHER_KEYS.find(free) : undefined) ?? own;
+    taken.add(key);
+    keys[position] = key;
+  }
   const out = new Map();
   list.forEach((team, position) => {
-    let key = team?.colorKey;
-    if (!isCalendarColorKey(key)) {
-      const own = position % CALENDAR_AUTO_COLOR_COUNT;
-      key = [...AUTO_KEYS.slice(own), ...AUTO_KEYS.slice(0, own)].find(free)
-        ?? (chosen.has(AUTO_KEYS[own]) ? OTHER_KEYS.find(free) : undefined)
-        ?? AUTO_KEYS[own];
-      taken.add(key);
-    }
-    if (team?.teamId !== undefined && !out.has(team.teamId)) out.set(team.teamId, calendarColorIndex(key));
+    if (team?.teamId !== undefined && !out.has(team.teamId)) out.set(team.teamId, calendarColorIndex(keys[position]));
   });
   resolved.set(list, out);
   return out;

@@ -1077,19 +1077,20 @@ Frontend only: no migration, no backend change. The screen works over the K2b-1a
 
 ### 20.3 The team colours (P2, refining 2.5)
 
-A team keeps the colour its club chose. A team without one keeps its colour of before K2b-1c — automatic colour N mod 8
-at position N of the workspace's team list — unless another team chose that colour or an earlier team without a choice
-already took it: then it takes the next automatic colour that is neither; when none is left and its own colour was
-chosen by another team, the first of the other four that is neither; otherwise it keeps its own colour and shares it,
-as more than eight teams did before. So with no choice every team wears exactly today's colour, and one team's choice
-moves no other team unless it takes that team's colour (2.5 said "the first palette colour no other team chose"; that
-reading would move every later team after one choice). The palette's tokens are `--cc-team-0..11` (the first eight
+Two passes over the workspace's team list. First, a team keeps the colour its club chose, and a team without one keeps
+its colour of before K2b-1c — automatic colour N mod 8 at position N — when no team chose that colour and no earlier team
+kept it. Then each team that lost its colour takes the first automatic colour still free; when none is left and its own
+colour was chosen by another team, the first free one of the other four; otherwise it keeps its own colour and shares
+it, as more than eight teams did before. So with no choice every team wears exactly today's colour, and one team's
+choice moves only the team whose colour it took (2.5 said "the first palette colour no other team chose"; that reading
+would move every later team after one choice; the first, one-pass form of this rule let a displaced team take a later
+team's colour — the independent review of PR #343, 20.6). The palette's tokens are `--cc-team-0..11` (the first eight
 unchanged; slate `#52607a`, olive `#6b7a1f`, coral `#e0605f`, violet `#7a4fd0`, each at least 3:1 against white). The
 Settings list names a team's automatic colour the same way, over the same order (the club's active teams by name).
 
 ### 20.4 Tests and the browser check
 
-- `frontend/tests/calendar-settings.actions.test.mjs` (26 tests; JSDOM and a fake of the routes that keeps their
+- `frontend/tests/calendar-settings.actions.test.mjs` (31 tests; JSDOM and a fake of the routes that keeps their
   contracts: the answers' shapes, a stale revision as `<subject>_changed` with `current`, a key's replay and
   `request_key_reused`): the tab's visibility by workspace and role, the read, every write's body and key, one write at
   a time, the lost answer and Check result, the refusals, P1–P3, the team colours (with no choice, today's rule for 0 to
@@ -1137,3 +1138,20 @@ review round (none was needed for a MEDIUM, `.claude/rules/agent-efficiency.md`)
 
 **Open after this round:** a physical iPhone check (the limits' keyboard, `inert` and `:has()` need iOS 15.4–15.5 or later,
 native selects, the keyboard over Save); the three LOW of the last row.
+
+### 20.6 The independent review of PR #343 (on `e7a455c`)
+
+READY WITH NON-BLOCKING NOTES, no BLOCKER or HIGH; its own 18 mutations killed, the preset and the build confirmed. The
+manager ordered the two MEDIUM and the cheap LOW fixed in this pull request, without a new internal round (the manager
+checks the delta).
+
+| Finding | Fix | Test | Mutation |
+|---|---|---|---|
+| MEDIUM-1, P2: 20.3's rule did not hold — t0 choosing rust moved t1 onto t2's colour and t2 too (`[1,2,3]`); t3 choosing teal moved every other team (`[1,2,3,0]`): a displaced team searched on from its own colour and took later teams' | two passes (20.3): `[1,0,2]` and `[3,1,2,0]`; with no choice still today's colours for 0..20 teams | 18 (the chain corrected, the reviewer's S11 / S12 added), 27 (no choice for 0..20 teams with nulls; every single choice in 1..8 teams moves only the team whose colour it took) | M17 one pass again, M18 the first pass not reserving: killed by 18 |
+| MEDIUM-2: after a Settings write the calendar's view cache and its event form's types (`state.centralCalendar.eventTypes`) stayed old — *New event* offered an archived type, missed a new one, kept old names and colours until a reload or a workspace switch | `centralCalendarCatalogChanged()` (central-calendar-data.js) after every settled write and after *Close without checking*: the view cache is dropped; the types are dropped at once when no event form is open, and marked stale under an open one (its fields read the list) — the next *New event* or *Edit* reads them again | 28 (the reviewer's S18, plus the open-form case and the next form's read) | M19 not told, M20 the open form's list dropped, M21 the next form keeps stale types: killed by 28 |
+| LOW-1: an edit of anything else sent a saved `iconKey` the bundle does not know as `null` (an older bundle on a phone would clear the icon) | `iconKey` and `colorKey` are sent only when the form changed them | 29 (the reviewer's S20, the colour too) | M22: killed by 29 |
+| LOW-2a: no test that another role in the same club gets no tab | test | 30 | M23 the tab for any club role: killed by 30 |
+| LOW-2b: no test that a late answer after a workspace switch makes no request, notice or state in the new slice | test (the reviewer's S17, strengthened) | 31 | M24 without the slice check: killed by 31 |
+| NIT, wording | **the manager's decision:** "Collected after it" and the frozen detail's sentence by kind (20.5) stay; the manager shows them to the owner | — | — |
+
+Mutations in all: 24 run, 23 killed, 1 equivalent (M10, 20.4).

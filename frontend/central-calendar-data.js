@@ -68,6 +68,18 @@ export function invalidateCentralCalendarCache() {
   invalidateCacheNamespace(CENTRAL_CALENDAR_DAY_NAMESPACE);
 }
 
+// Settings -> Calendar changed the club's catalog (K2b-1c): the calendar is
+// read again, and so are the event form's types (GET /events/types) at the
+// next New event or Edit. An open event form keeps the list it was made from
+// (its fields read it) until it closes.
+export function centralCalendarCatalogChanged() {
+  invalidateCentralCalendarCache();
+  const cal = state.centralCalendar;
+  if (!cal) return;
+  if (cal.form) cal.eventTypesStale = true;
+  else cal.eventTypes = null;
+}
+
 export function resetCentralCalendarForWorkspaceChange() {
   state.centralCalendar = emptyCentralCalendarState();
   rangeGeneration += 1;

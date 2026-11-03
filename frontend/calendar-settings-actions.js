@@ -28,7 +28,7 @@ import {
   replaceCalendarSettingsTypes,
   sendCalendarSettingsWrite,
 } from "./calendar-settings-data.js";
-import { CENTRAL_CALENDAR_EVENT_EXPECTS, CENTRAL_CALENDAR_EVENT_KINDS } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_EXPECTS, CENTRAL_CALENDAR_EVENT_KINDS, centralCalendarCatalogChanged } from "./central-calendar-data.js";
 import { closeIconPicker, focusIconPicker, handleIconPickerAction, iconPickerOpenFor, openIconPicker } from "./icon-picker.js";
 import { isLibraryKey } from "./icon-render.js";
 import { state } from "./state.js";
@@ -158,8 +158,10 @@ function buildType(form) {
   const b = form.base;
   const body = {};
   if (label !== oneLine(b.label)) body.label = label;
-  if (iconKey !== (b.iconKey ?? null)) body.iconKey = iconKey;
-  if (colorKey !== (b.colorKey ?? null)) body.colorKey = colorKey;
+  // Only what the form changed: a saved icon or colour this bundle does not
+  // know (a newer server) is never sent back as null.
+  if ((d.iconKey ?? null) !== (b.iconKey ?? null)) body.iconKey = iconKey;
+  if ((d.colorKey ?? null) !== (b.colorKey ?? null)) body.colorKey = colorKey;
   if (!sameList(d.defaultExpects, b.defaultExpects)) body.defaultExpects = d.defaultExpects;
   if (!sameList(d.fieldIds, b.fieldIds)) body.fieldIds = d.fieldIds;
   if (!Object.keys(body).length) return { unchanged: true };
@@ -471,6 +473,8 @@ async function settled(cmd, data, render, { check }) {
   for (const kind of ["type", "field", "location", "team"]) if (data?.[kind]) patchCalendarSettings(kind, data[kind]);
   cmd.checked = check;
   setNotice(savedText(cmd, data));
+  // The calendar and its event form hold their own copy of the catalog.
+  centralCalendarCatalogChanged();
   render?.();
   // A move keeps the focus on the moved row, a saved edit goes back to its
   // row's Edit; anything else to the notice that says what happened.
@@ -628,6 +632,8 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
     if (d.command.form && d.form === d.command.form) d.form = null;
     d.command = null;
     setNotice("Not checked. The settings were read again: look whether your change is there before making it again.");
+    // It may have been saved: the calendar reads its catalog again too.
+    centralCalendarCatalogChanged();
     await reread(render);
     return true;
   }
