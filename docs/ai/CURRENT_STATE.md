@@ -3847,6 +3847,9 @@ pre-existing; pass/fail counts don't belong in this file
     decision's step 1), so a club-admin or platform-admin revocation of the same user can meet them in the opposite
     order: the two-way `40P01` LO-1's tests reproduce for the services, nothing written (`try_again` or a 500); not
     yet reproduced for these two functions themselves (LO-2's tests do that first);
+  - `calendar.lock_event_writer` (v49; LO-1's db review, DB-1) locks the owner, then the role row of the basis alone,
+    then the `users` row last. It is the first rights lock of every calendar event write and of v51's settings
+    writes, so it is the same class as v23 and v26;
   - `source_metric_require_platform_admin` / `source_metric_require_club_admin` (v34), `source_metric_actor_basis`
     (v35) and `metric_variable_change_basis` (v38) run inside the write's triggers after the service locked the same
     rows users first, so their role-first re-locks wait for nothing (LO-1's tests 1, 9 and 10 show the write committing
@@ -3854,8 +3857,14 @@ pre-existing; pass/fail counts don't belong in this file
 
   The fix: `CREATE OR REPLACE` of those functions with the users row first, md5 preconditions on the bodies in force,
   a rollback, a preflight and a post-check, under the next free migration number when it is written (if LO-2 lands
-  before 7i-B, 7i takes the number after it); route-against-route tests of an approval and a roster decision against
-  both revocations.
+  before 7i-B, 7i takes the number after it); route-against-route tests of an approval, a roster decision and a
+  calendar event write against both revocations.
+
+  Also recorded (LO-1's db review, DB-2, LOW): an import approval locks its rights rows first and reads T4 later
+  (v23). A1 holds T4 and takes its rights after it. A platform revocation locks every platform admin in user id order.
+  So two platform admins acting at once could close a three-way wait. Users-first fixes the inversion, not this
+  difference in position. Nothing is written (`40P01` / `try_again`). LO-2 decides whether a test or a reordering is
+  worth it.
 - **Before the next import window: re-issue both 9-R window files (mandatory; the *Rukovodilac*'s decision 3 at 7h-B's
   GO, event `ea8fc169`, on the *Nezavisni revizor*'s proposal, event `45cee1c4`).**
   - `docs/runbooks/gpexe-import-window-preflight.sql` and `-postcheck.sql` are pinned to v51. They are the record of

@@ -1544,10 +1544,10 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
 - **The database's re-locks:** the trigger functions of v34 (`source_metric_require_*_admin`), v35
   (`source_metric_actor_basis`) and v38 (`metric_variable_change_basis`) still lock the role row first. They run
   after the service has locked the same rows users first in the same transaction, so they wait for nothing; tests 1, 9
-  and 10 show the write committing while a real revocation waits. Turning them, and the first-lock functions of v23
-  and v26, users first is LO-2.
+  and 10 show the write committing while a real revocation waits. Turning them, and the first-lock functions of v23,
+  v26 and v49 (`calendar.lock_event_writer`, the db review's DB-1), users first is LO-2.
 - **Tests (disposable databases; the real revocation routes against the real write routes; no GPEXE request):**
-  - `backend/tests/lock-order-lo1.test.mjs` (new, 10 tests). In each race the revocation is queued on the user's row
+  - `backend/tests/lock-order-lo1.test.mjs` (new, 12 tests). In each race the revocation is queued on the user's row
     behind a peer, then the write starts, then the peer is released. Users first, the write waits behind the
     revocation and answers the identical 404 or its own refusal; role first, the two deadlock. The second order of a
     pair (the write holding its right first) shows the trigger re-locks waiting for nothing.
@@ -1559,7 +1559,15 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
     - 7 and 8: the locked identity read, for a club admin (both orders) and a platform admin;
     - 9: J15's three-way race of A1 with a listed start, another admin's Unbind of that binding, and the club-admin
       revocation that locks the club's admins in user id order. A1 commits its start; the revocation and the Unbind
-      succeed after it;
+      succeed after it. A1 is held after all its locks, so this test catches the old order (locks after the first
+      end), not every reordering before the end;
+    - 9b (the code review's LO1-T1): A1 held at its right (`setMappingRightsHoldForTests`, before `rightsStillHold`'s
+      own queries) already holds the listed binding, so another admin's real Unbind waits on it (`for update of b`).
+      A1 commits; the Unbind ends the binding after it;
+    - 9c (the code review's LO1-SRC-1 and the db review's DB-3): A1's SQL for a replacement with an open activation
+      and a listed start, in order: the listed bindings, their teams, the rights, the listed bindings' clubs, then the
+      first end, with no row lock between the first end and the COMMIT (the answer's own check of the right after the
+      COMMIT, C69, is a new transaction);
     - 10: a club admin's rename and a coach's rename, each holding its right while the real revocation waits; v38's
       re-locks wait for nothing.
   - `backend/tests/lock-order-exercise-blocks-lo1.test.mjs` (new): an exercise block write against the real
@@ -1576,7 +1584,8 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
       grant's eligibility read by the text `for share of u`, which the administrator's own right check now also
       contains (`for share of u, r`). It now matches the eligibility read alone (a query ending in `for share of u`).
       The behaviour it tests is unchanged.
-- **Mutations** (each applied alone and run against the named test; 14 mutations: 12 killed, 2 survive as equivalent):
+- **Mutations** (each applied alone and run against the named test; 17 mutations: 16 killed, 1 survives as
+  equivalent):
   - each service order turned back to role first deadlocks its test (`40P01`):
     - Metrics Core: L1 (the promotion probe, test 2), L2 (the platform branch, test 1), L3 (the coach's platform probe,
       test 4) and L4 (the coach's club-admin probe, test 3);
@@ -1585,17 +1594,15 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
     - L9 (the locked identity read, tests 7 and 8);
     - L10 (the exercise block write, the blocks test 1);
   - A1:
-    - L11 (the listed bindings, teams and clubs back after the first end, the old order) is killed by test 9's
-      three-way race, and L11b (the same) by 7h test 13 case (a), where the peer no longer waits for A1;
-    - L12 (the bindings before the rights, the clubs back after the first end) **survives, equivalent today**. The
-      only trigger on `public.clubs` is v32's identity cleanup, which locks no row A1 holds before its ends, so a club
-      archive cannot close a cycle against A1's late club lock. "Every lock before the first end" stays D's structural
-      rule (J15 section 5).
+    - L11, L11b and L11c (the old order: the listed bindings, teams and clubs after the first end) are killed by test
+      9's three-way race, by 7h test 13 case (a), where the peer no longer waits for A1, and by test 9c;
+    - L12 (the bindings before the rights, the clubs after the first end) is killed by test 9c;
+    - L14 and L14c (the bindings after the rights, still before the first end) are killed by tests 9b and 9c;
   - L5 (the coach's own team role back to `r, u`) **survives, equivalent**: the team-coach revocation updates only the
-    role row, and no route locks a coach's users row and then the role.
+    role row, and no route locks a coach's users row and then the role;
   - L13 (R17: the import preview resolves the workspace a second time) is killed by the audience test 4.
 - **Runs before review** (Node 22, disposable databases only, the T1 runner):
-  - `lock-order-lo1.test.mjs` 10/10, the blocks test 1/1, `exercises-upsert.test.mjs` 63/63 and
+  - `lock-order-lo1.test.mjs` 12/12 (with 9b and 9c, after the internal reviews), the blocks test 1/1, `exercises-upsert.test.mjs` 63/63 and
     `source-metric-mapping-club-admin-7h.test.mjs` 21/21;
   - the 17 touched or neighbouring suites 363 of 364, the one failure being `exercises-upsert` before its hook was
     fixed;
@@ -1604,3 +1611,16 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
     D's order. `gpexe-check-finalization`'s manifest entry passed (XPASS), in a file LO-1 does not touch;
   - `backend-fast` 25 of 27 files, the same two baselines.
   - `test:backend:shared` is not run (only on the *Rukovodilac*'s word).
+- **Recorded by the internal reviews (LOW and NIT; no code change):**
+  - **A caller revoked mid-request** (the security review's LO1-S1): A1 now locks its listed bindings and teams before
+    its right. A caller revoked after the plain scope read may wait on a binding or team row that an Unbind or an
+    archive holds, and then get `try_again` (the 2 s row-lock bound) instead of the identical 404. This is the same as
+    S1 (J10) and is accepted: no fact leaks, because the scope read refused anything out of scope before any lock.
+  - **An import approval, A1 and a platform revocation** (the db review's DB-2): an approval locks its rights rows
+    first and reads T4 later (v23). A1 holds T4 and takes its rights after it. A platform revocation locks every
+    platform admin in user id order. Two platform admins could close a three-way wait. Users-first fixes the
+    inversion but not this difference in position. It needs two platform admins acting at once, writes nothing (a
+    `40P01` / `try_again`), and is recorded with LO-2 (`docs/ai/CURRENT_STATE.md`, Separate tasks).
+  - **The `OF`-list order is tested behaviour, not a documented PostgreSQL guarantee** (DB-4). A planner change would
+    reintroduce an inversion silently. The route-against-route tests (1–10) run in the `gpexe` and file presets and
+    would fail on it.

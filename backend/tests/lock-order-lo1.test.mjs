@@ -551,6 +551,95 @@ test("9. the three-way race of J15 section 5: a club admin's A1 with a listed st
   noDeadlock(from);
 });
 
+test("9b. D's order itself (the code review's LO1-T1): a club admin's A1 with a listed start held at its right (before rightsStillHold's own queries) already holds the listed binding FOR SHARE, so another admin's real Unbind of that binding waits on it; A1 commits its start, the Unbind ends the binding after it, no 40P01", async () => {
+  const from = logLines.length;
+  const x = await freshClub(2);
+  const [unbinder, activator] = x.admins;
+  const v = await waitingVersion(activator);
+  const b = await binding(x.clubId);
+  const rh = holdRights();
+  const a1 = activate(v, activator, { starts: [b] });
+  await until(() => rh.state.entered, "A1 holds at its right");
+  const unbinding = unbindRoute(unbinder, b);
+  // Rights before bindings, A1 would hold no binding row here and the Unbind
+  // would end the binding at once, never waiting.
+  await waiters("for update of b");
+  rh.g.open();
+  const [activated, unbound] = await Promise.all([a1, unbinding]);
+  ok(activated);
+  assert.deepEqual(await statusOf(v), { status: "active", activated_basis: "club_admin" });
+  assert.equal(unbound.status, 200, unbound.text);
+  assert.equal(await bindingState(b), "ended");
+  const open = await one(k, `select count(*)::int as n from ${T5} where source_team_binding_id = $1 and mapping_version_id = $2 and ended_at is null`, [b.bindingId, v.versionId]);
+  assert.equal(open.n, 1, "A1's start, committed before the Unbind");
+  noDeadlock(from);
+});
+
+test("9c. D's order, step by step (the code review's LO1-SRC-1 and the db review's DB-3): A1 replacing a version with an open activation and listing a start takes the listed bindings and teams, then the rights, then the listed bindings' clubs, all before its first end, and no row lock after it", async () => {
+  const x = await freshClub(1);
+  const [admin] = x.admins;
+  const f = await field();
+  const target = await variable(admin);
+  const mappingId = ok(await post(METRICS, "/mappings", admin.cookie, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id }), 201).mapping.id;
+  const version = async () => {
+    const id = ok(await post(METRICS, `/mappings/${mappingId}/versions`, admin.cookie, { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: true }), 201).version.id;
+    ok(await post(METRICS, `/mappings/${mappingId}/versions/${id}/submit`, admin.cookie, { requestKey: key() }));
+    return { mappingId, versionId: id };
+  };
+  const b1 = await binding(x.clubId);
+  const b2 = await binding(x.clubId);
+  const v1 = await version();
+  ok(await activate(v1, admin, { starts: [b1] }));
+  const v2 = await version();
+  // Record every SQL text the replacement's transaction sends, on the pool
+  // the service uses; every wrapped client is restored afterwards.
+  const seen = [];
+  const wrapped = [];
+  const original = appPool.connect;
+  appPool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    return original.call(this).then((c) => {
+      if (!wrapped.some((w) => w.c === c)) {
+        const send = c.query;
+        wrapped.push({ c, send });
+        c.query = function (...args) {
+          const t = typeof args[0] === "string" ? args[0] : args[0]?.text;
+          if (t) seen.push(t.replace(/\s+/g, " "));
+          return send.apply(this, args);
+        };
+      }
+      return c;
+    });
+  };
+  let res;
+  try {
+    res = await post(METRICS, `/mappings/${mappingId}/versions/${v2.versionId}/activate`, admin.cookie, {
+      requestKey: key(), expectedActiveVersionId: v1.versionId, reason: `Replace ${uid()}`,
+      activations: [{ bindingId: b2.bindingId, requirement: "required" }], activationReason: `Starts ${uid()}`,
+    });
+  } finally {
+    appPool.connect = original;
+    for (const { c, send } of wrapped) c.query = send;
+  }
+  ok(res);
+  const at = (re, from = 0) => seen.findIndex((s, i) => i >= from && re.test(s));
+  const iBindings = at(/from training_load\.source_team_bindings where id = any\(\$1::uuid\[\]\) order by id for share$/);
+  const iTeams = at(/from public\.teams where id = any\(\$1::uuid\[\]\) order by id for share$/, iBindings);
+  const iRights = at(/for share of u, (g|r)$/, iTeams);
+  const iClubs = at(/from public\.clubs where id = any\(\$1::uuid\[\]\) order by id for share$/, iRights);
+  const iEnd = at(/^update training_load\.source_metric_mapping_activations set ended_at/);
+  assert.ok(iBindings >= 0 && iTeams > iBindings && iRights > iTeams && iClubs > iRights && iEnd > iClubs,
+    JSON.stringify({ iBindings, iTeams, iRights, iClubs, iEnd, seen: seen.map((s) => s.slice(0, 90)) }, null, 1));
+  // Between the first end and the COMMIT: no row lock. (The answer's own
+  // check of the right after the COMMIT, C69, is a new transaction.)
+  const iCommit = at(/^commit$/i, iEnd);
+  assert.ok(iCommit > iEnd, "the replacement commits after its ends");
+  const lateLocks = seen.slice(iEnd, iCommit).filter((s) => /\bfor (share|update|no key update)\b/i.test(s));
+  assert.deepEqual(lateLocks, [], "no row lock after the first end");
+  assert.equal((await one(k, `select count(*)::int as n from ${T5} where mapping_version_id = $1 and ended_at is null`, [v1.versionId])).n, 0, "N's activation ended");
+  assert.equal((await one(k, `select count(*)::int as n from ${T5} where mapping_version_id = $1 and source_team_binding_id = $2 and ended_at is null`, [v2.versionId, b2.bindingId])).n, 1, "N+1 started on the listed binding");
+});
+
 // ---------------------------------------------------------------------------
 // 10. The database's own role-first re-locks (v38) after the service's
 // users-first rights (the Rukovodilac's L0 (a): shown by a test)
