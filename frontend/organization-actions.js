@@ -1,5 +1,8 @@
 import { api } from "./api.js";
+import { CALENDAR_SETTINGS_ICON_HOST } from "./calendar-settings-actions.js";
+import { enterCalendarSettingsSection } from "./calendar-settings-data.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
+import { closeIconPicker, iconPickerOpenFor } from "./icon-picker.js";
 import { enterIconGallery } from "./icon-gallery.js";
 import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
 import { emptyAccountStorage, enterStorageAdminSection, loadManageAccountStorage, storageAdminContext } from "./media-storage-admin-data.js";
@@ -305,6 +308,11 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     if (state.organization.section === "storage") enterStorageAdminSection();
     // Icons shows no earlier Copy key result as if it had just happened.
     if (state.organization.section === "icons") enterIconGallery();
+    // Calendar (K2b-1c) reads its catalog again - unless its form or a write
+    // is still open, which the switch keeps as it was.
+    if (state.organization.section === "calendar") enterCalendarSettingsSection();
+    // The icon picker belongs to the section it was opened from.
+    if (next !== "calendar" && iconPickerOpenFor(CALENDAR_SETTINGS_ICON_HOST)) closeIconPicker();
     void renderOrganizationPanel({ refresh: false });
     return true;
   }

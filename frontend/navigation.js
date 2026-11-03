@@ -1,4 +1,5 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
+import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { els } from "./dom.js";
@@ -146,6 +147,10 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ["presets", "Tags & Presets"],
     // The built-in icons (PR-1): read only, for everyone who sees Settings.
     ["icons", "Icons"],
+    // The club's calendar catalog (K2b-1c): an active club workspace and
+    // that club's club_admin role. Every route behind it decides the same
+    // again (T6) and answers everyone else 403 / the one 404.
+    ...(calendarSettingsContext() ? [["calendar", "Calendar"]] : []),
     // Administering a data source is a platform-admin job (F3b). Hiding the
     // tab is not the protection - every route behind it checks the active
     // platform_admin role again on the server.

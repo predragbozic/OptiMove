@@ -1,3 +1,5 @@
+import { calendarSettingsContext } from "./calendar-settings-data.js";
+import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { renderManageAccountStorageSection, renderStorageAdminPanelHtml } from "./media-storage-admin-view.js";
@@ -74,6 +76,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   if (state.organization.section === "dataSources" && !data.isPlatformAdmin) state.organization.section = "overview";
   if (state.organization.section === "sourceConnections" && !sourceConnectionsAdminContext()) state.organization.section = "overview";
   if (state.organization.section === "storage" && !storageAdminContext(data)) state.organization.section = "overview";
+  if (state.organization.section === "calendar" && !calendarSettingsContext()) state.organization.section = "overview";
   return `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -96,7 +99,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
         ${renderOrganizationActions(data)}
         ${renderJoinLinksSection(data)}
       ` : `

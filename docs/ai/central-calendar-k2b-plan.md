@@ -1021,3 +1021,137 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - Not changed: a platform admin adding an unknown athlete (a valid UUID of no athlete) still ends in the membership's
     foreign key (a `500`); it is the route's older behaviour, outside these notes.
   - Tests: `organization-team-archive.test.mjs` tests 13 and 14.
+
+## 20. K2b-1c — Settings → Calendar (the screen)
+
+Frontend only: no migration, no backend change. The screen works over the K2b-1a API as built (section 17). Branch
+`claude/central-calendar-k2b-1c-1e3350` from `origin/main` `a811e69`.
+
+### 20.1 The manager's decisions (2026-11-03)
+
+- **P1 → (a).** K2b-1c offers no *Required* switch. A new detail is sent with `required: false`, an edit never sends
+  `required`, and the current state shows as text (*Required* / *Optional*, also on a detail made required through the
+  API). K2b-1d turns the switch on. So 1c merges and ships on its own (the release order of 18.8 holds).
+- **P2 → yes.** The calendar already colours a team with its chosen colour (`teams[].colorKey`), and a team without one
+  with the automatic rule (20.3). The condition: **with no colour chosen, every colour on screen is today's** (team N at
+  position N wears automatic colour N mod 8). The type's icon and colour on the card and *Awaiting details* stay K2b-1d.
+- **P3 → the sentence** "Details are filled in by the event's coach. Questions for athletes will be asked through
+  Tests." (D40; neither "after the event", since values may be entered earlier, nor RPE).
+- **P4 → inner tabs**, one section on screen at a time. No new element carries `data-tab` (app.js turns any element
+  with it into a menu switch); the section buttons carry `data-calendar-settings-section`.
+- **Visibility (T6):** the sub-tab is offered when the active workspace is a club and the account holds that club's
+  active `club_admin` role (`/me`'s `clubs`), never through `manageableClubIds` (which names every club for a platform
+  admin). The server decides again: 403 / the one 404 read as "Calendar settings are not available in this workspace."
+
+### 20.2 As built
+
+- **Modules:** `frontend/calendar-settings-{data,view,actions}.js`, the state slice `state.calendarSettings`
+  (`emptyCalendarSettingsState`, reset on a workspace switch), `frontend/calendar-colors.js` (the 12 keys, proven equal
+  to `backend/src/calendarColors.js` by a test), the sub-tab in `renderSettingsNavHtml`, the wiring in `app.js`.
+- **The sections:** *Event types* (the live list in order with icon, colour, base kind, what it collects, its details and
+  "Used by N events"; *Move up* / *Move down* send the whole live order; *Add a type* with the base kind fixed afterwards,
+  the icon through the shared `icon-picker.js`, colour swatches, *Collected after it*, the default details added,
+  moved and removed — an archived one already listed stays, a new entry is a live detail; *Edit*; *Archive* / *Restore*,
+  archived ones folded under *Show archived*; the last live type offers no *Archive*). *Details* (kind and limits in
+  words, *Required* / *Optional* as text, *Has answers*; *Add a detail* by kind — a choice starts with two options, a
+  number takes a unit and limits, a comma read as a decimal point; *Edit* sends only what changed; with answers the name,
+  unit, limits and option names are read only and options can still be added, hidden and shown, D30). *Places* (name,
+  address with *Open in maps* — a link built in the browser, a new tab, `noopener noreferrer`, it follows the address as
+  it is typed —, the note on its lines, the teams it is the default of). *Teams* (each active team's colour, chosen or
+  automatic, and its default place; *Edit* with *Automatic* first and the live places).
+- **Writes:** one at a time. Each carries a fresh `requestKey`; a lost answer (no answer, `503 outcome_unknown`, any
+  5xx the service did not write) is *Result not confirmed* · *Check result*, which sends the same method, path and body,
+  or *Close without checking*, which asks and reads the catalog again. A Check result is settled only by a body check or
+  a command refusal (both come after the runner read its request record); busy, no access, signed out, a server error
+  or `request_key_reused` keep it unconfirmed. While a write runs or is not confirmed, every other write control and
+  every form opener is off. A stated refusal says "Nothing was saved" and keeps the form and its values: a taken name
+  marks the field, `*_changed` / `order_changed` / `*_archived` / `*_live` close the form and show the item as it is
+  now, `field_answered` puts the frozen parts back to their saved values and keeps the rest. After every write the
+  catalog is read again.
+- **Leaving:** the open form and an unconfirmed write survive a switch to another section or menu (the slice keeps
+  them, and coming back reads the catalog again only when nothing is open); a workspace switch, a sign-out and the app's
+  update reload ask first; `beforeunload` asks while a write runs or is not confirmed, or a form has unsaved values.
+- **The repaint:** the screen repaints only its own panel (`renderCalendarSettingsSurface` in app.js), at once and
+  without a read of `/api/organization`: the Settings repaint reads it again when its cache is older than 30 s and paints
+  the whole screen a second time, which took the focus away from a form just opened (found in the browser check).
+
+### 20.3 The team colours (P2, refining 2.5)
+
+Two passes over the workspace's team list. First, a team keeps the colour its club chose, and a team without one keeps
+its colour of before K2b-1c — automatic colour N mod 8 at position N — when no team chose that colour and no earlier team
+kept it. Then each team that lost its colour takes the first automatic colour still free; when none is left and its own
+colour was chosen by another team, the first free one of the other four; otherwise it keeps its own colour and shares
+it, as more than eight teams did before. So with no choice every team wears exactly today's colour, and one team's
+choice moves only the team whose colour it took (2.5 said "the first palette colour no other team chose"; that reading
+would move every later team after one choice; the first, one-pass form of this rule let a displaced team take a later
+team's colour — the independent review of PR #343, 20.6). The palette's tokens are `--cc-team-0..11` (the first eight
+unchanged; slate `#52607a`, olive `#6b7a1f`, coral `#e0605f`, violet `#7a4fd0`, each at least 3:1 against white). The
+Settings list names a team's automatic colour the same way, over the same order (the club's active teams by name).
+
+### 20.4 Tests and the browser check
+
+- `frontend/tests/calendar-settings.actions.test.mjs` (31 tests; JSDOM and a fake of the routes that keeps their
+  contracts: the answers' shapes, a stale revision as `<subject>_changed` with `current`, a key's replay and
+  `request_key_reused`): the tab's visibility by workspace and role, the read, every write's body and key, one write at
+  a time, the lost answer and Check result, the refusals, P1–P3, the team colours (with no choice, today's rule for 0 to
+  20 teams), the palette against the server's list and the CSS tokens, escaping, leaving.
+- Three wiring tests changed with the wiring: `central-calendar-events.actions` 11g (sign-out also asks Settings →
+  Calendar), `app-update` 8 (the update reload too), `training-load-dashboards-h4` (the workspace switch too).
+- Mutations (a scratch script: each edits one file, runs the suite, restores it): 16 run, 15 killed, 1 equivalent —
+  Check result with a new key, a Check result settled before the record, P1, P2's position rule, the tab through
+  `manageableClubIds`, a form opened while a write is not confirmed, a frozen part typed, a lost answer that unlocks
+  the screen; and from the review round: an option clash checked only against untouched names, a taken option name
+  marked on the detail's name, a detail chosen but not added, a move under an open type edit, the team list patched in
+  place, a form's write invisible from another section, the panel repainted on another Settings section. Equivalent:
+  a hidden option renamed in the same request (the Hide button already puts the saved name back, and a hidden option's
+  field is read only).
+- The browser check on the branch's real server and a disposable database through v51 (the calendar fixture of
+  K2b-1a, the seeded catalog, one event answering *Our score*): a type added with an icon, a colour, *Collected after
+  it* and a detail; moved; archived and restored; the answered detail's frozen form; a place with its maps link; a
+  team's colour and default place — and the calendar's card then wears it. At 390, 375 and 360 px, every section with
+  its form open: no horizontal scroll, no control under 44 px, no field under 16 px. A platform admin without the club's
+  role and a team coach are offered no tab (the coach's read is 403). The app has no dark theme, so only the light one
+  was checked. The legacy `/api/organization` needs tables the disposable schema does not have (the 8-B harness's
+  limit too): the check served Settings' frame from the same database's club and teams.
+
+### 20.5 The internal review round (on `a4fbd76`)
+
+`code-reviewer` READY WITH NON-BLOCKING NOTES, `mobile-qa` (static) no BLOCKER or HIGH, `ux-design-reviewer` READY; no
+BLOCKER or HIGH anywhere. Every MEDIUM and the cheap LOW were applied on the same branch, each with its test; no new
+review round (none was needed for a MEDIUM, `.claude/rules/agent-efficiency.md`).
+
+| Finding | Fix | Test | Status |
+|---|---|---|---|
+| Code MEDIUM: option names were checked only against untouched options; a rename or a Show again into a taken name was sent, and the server's `label_taken` was marked on the detail's own name; rename + hide of one option sent both | uniqueness over the final set (after rename, hide, show, add), marked on the options the form changed; a hidden option keeps its saved name (Hide puts it back); `label_taken` on an edit that keeps the name marks the options | 22 (M9, M11; M10 equivalent) | fixed |
+| Code LOW: a saved team colour showed the old dot (the colours are cached by the team list, which was patched in place) | the team list is replaced, never changed in place | 23 (M14) | fixed |
+| Code LOW: the panel's repaint fell back to a whole Settings repaint on another section, losing values typed there | it paints nothing when its section is not on screen | 26 (M16) | fixed |
+| Mobile MEDIUM: one long unbroken name could widen the panel's grid past the screen, clipped silently by `.panel` | `grid-template-columns: minmax(0, 1fr)` and `overflow-wrap: anywhere` on the panel and its forms, `min-width: 0` on the notice's text | browser: a 59-character name at 360 px — panel `scrollWidth` = `clientWidth` (338), no element past its edge, the notice's text ends at 316 of 350 | fixed |
+| Mobile MEDIUM: `inputmode="decimal"` gives an iPhone no minus key for the limits | no `inputmode`; the hint says a minus is allowed | — (a physical iOS check is still open) | fixed |
+| Mobile LOW / NIT: `font: inherit` on the textarea; accessible names that did not start with the visible words; an `aria-label` on a span | `font-family: inherit`; "Open in maps: …", "Show again: …"; a hidden comma before a tab's count | — | fixed |
+| UX MEDIUM: a detail chosen in the list but not added was dropped on Save | named beside the list, nothing sent | 24 (M12) | fixed |
+| UX MEDIUM: moving a type under its open edit form made that form's Save fail as "changed meanwhile" | the arrows are off under an open type edit, with the sentence why | 24 (M13) | fixed |
+| UX MEDIUM: a form's unconfirmed write could not be seen from another section, which stayed locked | one line there names it and opens its section | 25 (M15) | fixed |
+| UX MEDIUM: "Collected after it" did not say that ticking asks nobody | the event form's sentence, adapted | — | fixed |
+| UX MEDIUM: the base kind's hint did not say what it controls | filters, and only a Test type links to a scheduled test | — | fixed |
+| UX LOW: wording (the restore refusal, the unconfirmed sentence, "Kind of answer", the types' intro, an archived default place, the note seen by athletes, empty states, the frozen sentence by kind, the discard question naming its form, archived details counted apart, the colour hints) and the focus after a saved edit (back to its row's Edit) | applied | 7, 8, 21 (wording) | fixed |
+| UX LOW: an Undo in the archive notice; the archive's side effects named (a team's default place, the types' default details); each swatch naming the team that wears it | — | — | recorded, not done |
+
+**Open after this round:** a physical iPhone check (the limits' keyboard, `inert` and `:has()` need iOS 15.4–15.5 or later,
+native selects, the keyboard over Save); the three LOW of the last row.
+
+### 20.6 The independent review of PR #343 (on `e7a455c`)
+
+READY WITH NON-BLOCKING NOTES, no BLOCKER or HIGH; its own 18 mutations killed, the preset and the build confirmed. The
+manager ordered the two MEDIUM and the cheap LOW fixed in this pull request, without a new internal round (the manager
+checks the delta).
+
+| Finding | Fix | Test | Mutation |
+|---|---|---|---|
+| MEDIUM-1, P2: 20.3's rule did not hold — t0 choosing rust moved t1 onto t2's colour and t2 too (`[1,2,3]`); t3 choosing teal moved every other team (`[1,2,3,0]`): a displaced team searched on from its own colour and took later teams' | two passes (20.3): `[1,0,2]` and `[3,1,2,0]`; with no choice still today's colours for 0..20 teams | 18 (the chain corrected, the reviewer's S11 / S12 added), 27 (no choice for 0..20 teams with nulls; every single choice in 1..8 teams moves only the team whose colour it took) | M17 one pass again, M18 the first pass not reserving: killed by 18 |
+| MEDIUM-2: after a Settings write the calendar's view cache and its event form's types (`state.centralCalendar.eventTypes`) stayed old — *New event* offered an archived type, missed a new one, kept old names and colours until a reload or a workspace switch | `centralCalendarCatalogChanged()` (central-calendar-data.js) after every settled write and after *Close without checking*: the view cache is dropped; the types are dropped at once when no event form is open, and marked stale under an open one (its fields read the list) — the next *New event* or *Edit* reads them again | 28 (the reviewer's S18, plus the open-form case and the next form's read) | M19 not told, M20 the open form's list dropped, M21 the next form keeps stale types: killed by 28 |
+| LOW-1: an edit of anything else sent a saved `iconKey` the bundle does not know as `null` (an older bundle on a phone would clear the icon) | `iconKey` and `colorKey` are sent only when the form changed them | 29 (the reviewer's S20, the colour too) | M22: killed by 29 |
+| LOW-2a: no test that another role in the same club gets no tab | test | 30 | M23 the tab for any club role: killed by 30 |
+| LOW-2b: no test that a late answer after a workspace switch makes no request, notice or state in the new slice | test (the reviewer's S17, strengthened) | 31 | M24 without the slice check: killed by 31 |
+| NIT, wording | **the manager's decision:** "Collected after it" and the frozen detail's sentence by kind (20.5) stay; the manager shows them to the owner | — | — |
+
+Mutations in all: 24 run, 23 killed, 1 equivalent (M10, 20.4).

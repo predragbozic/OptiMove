@@ -433,6 +433,14 @@ function forgetPendingCheck(cal, render) {
 }
 
 // The types are read once per workspace (the slice is reset on a switch).
+// A new form reads the types again when Settings -> Calendar changed them
+// while the last form was open (centralCalendarCatalogChanged).
+function dropStaleEventTypes(cal) {
+  if (!cal.eventTypesStale || cal.form) return;
+  cal.eventTypes = null;
+  cal.eventTypesStale = false;
+}
+
 async function ensureEventTypes(cal) {
   if (cal.eventTypes) return { types: cal.eventTypes };
   try {
@@ -497,6 +505,7 @@ async function openCreateForm(render) {
   // one could be a duplicate.
   const waiting = pendingEntryFor({ mode: "create" });
   if (waiting) return openPendingCheck(cal, waiting, render);
+  dropStaleEventTypes(cal);
   const owner = workspaceOwner(cal);
   const teams = cal.data?.teams || [];
   // A team workspace's own team; a club's teams the Groups chips chose.
@@ -556,6 +565,7 @@ async function openEditForm(item, render) {
   if (!form.eventId) return;
   const waiting = pendingEntryFor({ mode: "edit", eventId: form.eventId });
   if (waiting) return openPendingCheck(cal, waiting, render);
+  dropStaleEventTypes(cal);
   cal.form = form;
   render?.();
   await loadEditEvent(form, cal, render);

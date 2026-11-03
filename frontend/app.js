@@ -135,6 +135,9 @@ import {
 } from "./media.js";
 import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
 import { startAppUpdateWatch } from "./app-update.js";
+import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarSettingsAction, handleCalendarSettingsBeforeUnload, handleCalendarSettingsInput, submitCalendarSettingsForm } from "./calendar-settings-actions.js";
+import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
+import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
   closeMessagesIfOutside,
@@ -298,7 +301,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -424,7 +427,7 @@ function bindEvents() {
   // The central calendar's event form (K2a-2) is asked before the logout
   // request, never after it: a "No" keeps the session and the form.
   els.signOut?.addEventListener("click", () => {
-    if (centralCalendarMayBeLeft({ final: "sign-out" })) void signOut();
+    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" })) void signOut();
   });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
@@ -514,6 +517,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target));
   // Central calendar (K2a-2): the event form's select, dates and boxes too.
   els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
+  // Settings -> Calendar (K2b-1c): a choice in its form (a select, a colour, a box).
+  els.content.addEventListener("change", (event) => handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface }));
   // Data configuration -> Mappings: a checkbox, a radio or a select reports its choice through "change".
   els.content.addEventListener("change", (event) => { if (event.target?.matches?.("select, input[type=checkbox], input[type=radio]")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
@@ -628,6 +633,7 @@ function bindEvents() {
     if (state.iconPicker) {
       const closed = closeIconPicker();
       if (closed?.host === "metric-variables" && state.activeTab === "training-load") renderTrainingLoad();
+      if (closed?.host === CALENDAR_SETTINGS_ICON_HOST) renderCalendarSettingsSurface();
       if (closed?.returnFocus) document.querySelector(closed.returnFocus)?.focus?.();
       return;
     }
@@ -659,6 +665,8 @@ function bindEvents() {
   window.addEventListener("beforeunload", handleDriveImportBeforeUnload);
   // Central calendar (K2a-2): an event save in flight, not confirmed or not made.
   window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
+  // Settings -> Calendar (K2b-1c): a setting being saved, not confirmed or not saved.
+  window.addEventListener("beforeunload", handleCalendarSettingsBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
   // repaints of a running import (toggle does not bubble: caught on the way
   // down), and a repaint of its card waits while a pointer is down, then
@@ -773,6 +781,13 @@ async function handleContentSubmit(event) {
   if (dataSourcesForm) {
     event.preventDefault();
     await submitDataSourcesForm(dataSourcesForm, { render: renderDataSourcesSurface });
+    return;
+  }
+
+  const calendarSettingsForm = event.target.closest("[data-calendar-settings-form]");
+  if (calendarSettingsForm) {
+    event.preventDefault();
+    await submitCalendarSettingsForm(calendarSettingsForm, { render: renderCalendarSettingsSurface });
     return;
   }
 
@@ -1299,6 +1314,8 @@ function handleContentInput(event) {
   if (handleSourceFieldsInput(event.target)) return;
   // Central calendar (K2a-2): the event form's values.
   if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
+  // Settings -> Calendar (K2b-1c): the open form's typed values.
+  if (handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface })) return;
   // Data configuration -> Mappings: typed values (a choice reports through "change").
   if (event.target?.closest?.("[data-mm-field]")) {
     if (event.target.matches?.("input[type=text], textarea")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface });
@@ -1875,7 +1892,7 @@ async function handleGlobalClick(event) {
     return;
   }
   // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -2220,6 +2237,7 @@ async function loadActiveTab() {
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     if (state.organization.section === "storage") enterStorageAdminSection();
     if (state.organization.section === "icons") enterIconGallery();
+    if (state.organization.section === "calendar") enterCalendarSettingsSection();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -2949,6 +2967,7 @@ async function handleContentClick(event) {
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
+  if (await handleCalendarSettingsAction(action, { render: renderCalendarSettingsSurface })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleDriveImportAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
@@ -3056,6 +3075,22 @@ function renderDataSourcesSurface() {
   void renderOrganizationPanel({ refresh: false });
 }
 
+// Settings -> Calendar (K2b-1c) repaints only its own panel, at once: the
+// focus it moves lands on the new markup, and no change of a form reads
+// /api/organization again (a stale Settings cache would repaint the whole
+// screen a moment later and take the focus away). On another Settings
+// section it paints nothing (that section may hold typed values); before its
+// panel is on screen it is the Settings repaint.
+function renderCalendarSettingsSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "calendar") return;
+  const panel = els.content.querySelector(".calendar-settings");
+  if (!panel) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  panel.outerHTML = renderCalendarSettingsPanelHtml();
+}
+
 // From Source connections to the approved pair: the existing Data sources
 // tab (platform admin only), where the GPEXE Team ID of a team is set.
 function openDataSourcesFromSourceConnections() {
@@ -3090,6 +3125,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     // without a chosen club (platform workspace) nothing is sent.
     if (state.organization.section === "sourceConnections" && sourceConnectionsNeedLoad()) {
       void loadSourceConnections(renderDataSourcesSurface);
+    }
+    // Calendar (K2b-1c): the club's catalog, read once on entry and after a write.
+    if (state.organization.section === "calendar" && calendarSettingsNeedLoad()) {
+      void loadCalendarSettings(renderCalendarSettingsSurface);
     }
     // Storage (PR 5): the same one-shot read of the defaults and the accounts.
     if (state.organization.section === "storage" && storageAdminContext(state.organization.data) && storageAdminNeedsLoad()) {
@@ -3155,6 +3194,8 @@ async function onWorkspaceChanged() {
   // open panel never carry over, nor its cached answers.
   resetCentralCalendarForWorkspaceChange();
   invalidateCentralCalendarCache();
+  // Settings -> Calendar reads the new club's catalog (the switch asked first).
+  resetCalendarSettingsForWorkspaceChange();
   state.athletes = [];
   state.selectedAthleteId = null;
   renderAthleteList();

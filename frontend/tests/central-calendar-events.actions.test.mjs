@@ -1276,9 +1276,10 @@ test("11g. MEDIUM-1: a deliberate navigation (sign-out, an athlete-workspace swi
   assert.match(questions.at(-1), /^The result of an event's save is not confirmed\. It cannot be checked after signing out\. Sign out anyway\?/);
   assert.equal(centralCalendarMayBeLeft(), true, "a workspace switch keeps it to check later without asking");
   // app.js: the question comes before signOut() and its logout request, and
-  // the button is the only way into it.
+  // the button is the only way into it. Settings -> Calendar (K2b-1c) is
+  // asked right after the calendar, still before the request.
   const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
-  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: "sign-out" \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
+  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: "sign-out" \}\) && calendarSettingsMayBeLeft\(\{ final: "sign-out" \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
   assert.equal((appJs.match(/\bsignOut\(\);/g) || []).length, 1, "signOut() is called from that listener only");
   assert.doesNotMatch(appJs, /addEventListener\("click", signOut\)/);
   assert.equal(CENTRAL_CALENDAR_STAYED, "stayed", "app.js's Back passes it on as its own BACK_STAYED");

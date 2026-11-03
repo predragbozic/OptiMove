@@ -19875,10 +19875,19 @@ body.exercise-header-pinned #viewToolbar {
    One read of GET /api/calendar per visible range; a month, a week (the
    server's slot order as a list, or a time grid at >= 1024 px) or a day;
    the Groups and Types chips; the card; the item panel (a side column at
-   >= 1024 px, a bottom sheet below). Eight team colours by the team's
-   position in the answer's teams[] (D11: the club picks its own in K2).
+   >= 1024 px, a bottom sheet below). A team's colour is the one its club
+   chose under Settings -> Calendar, else an automatic one by the team's
+   position in the answer's teams[] (calendar-colors.js, K2b-1c).
    ============================================================ */
-.central-calendar {
+/* The calendar's closed palette (K2b-1, D38; plan section 2.5), in the order
+   of calendar-colors.js: --cc-team-N is palette key N. The first eight are
+   the automatic team colours since K1b; the other four appear when a club
+   chooses them, or for a team whose own colour another team chose once all
+   eight are taken. Every one is at least 3:1 against white (a dot, a
+   stripe, a tinted icon). Settings -> Calendar draws its swatches from the
+   same tokens. */
+.central-calendar,
+.calendar-settings {
   --cc-team-0: #1f6f68;
   --cc-team-1: #b5542b;
   --cc-team-2: #4a5fc1;
@@ -19887,6 +19896,12 @@ body.exercise-header-pinned #viewToolbar {
   --cc-team-5: #b07a0a;
   --cc-team-6: #c23a6b;
   --cc-team-7: #3b7f9c;
+  --cc-team-8: #52607a;
+  --cc-team-9: #6b7a1f;
+  --cc-team-10: #e0605f;
+  --cc-team-11: #7a4fd0;
+}
+.central-calendar {
   --cc-team-none: #9aa4b2;
   --cc-done: #2f7d3a;
   --cc-done-soft: #e4f3e6;
@@ -21761,5 +21776,371 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 
   .cc-form-actions .plain-button {
     flex: 1 1 100%;
+  }
+}
+
+/* ============================================================
+   Settings -> Calendar (K2b-1c) - docs/ai/central-calendar-k2b-plan.md
+   sections 8 and 20. The panel is a .data-sources panel, so every input,
+   select and textarea in it is already 44 px tall and 16 px; this block
+   comes after .plain-button and makes its buttons 44 px as well. One
+   section on screen at a time, one form open at most.
+   ============================================================ */
+.calendar-settings .plain-button {
+  min-height: 44px;
+}
+.calendar-settings,
+.calendar-settings .data-sources-form {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+.cs-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cs-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.cs-tab-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+.cs-tab.is-active .cs-tab-count {
+  background: var(--surface);
+  color: var(--accent);
+}
+.cs-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.cs-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.cs-section-head h4 {
+  margin: 0 0 4px;
+}
+.cs-section-head p {
+  margin: 0;
+  max-width: 62ch;
+}
+.cs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.cs-row {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.cs-row.is-editing {
+  border-color: var(--accent);
+}
+.cs-row.is-archived {
+  background: var(--surface-soft);
+}
+.cs-row-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.cs-row-main {
+  flex: 1 1 0;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.cs-row-main p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cs-row-title {
+  font-weight: 700;
+}
+.cs-row-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.cs-row-note {
+  white-space: pre-line;
+  font-size: 0.9rem;
+}
+.cs-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cs-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  padding: 0;
+}
+.cs-type-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+.cs-type-icon.has-color {
+  color: var(--cs-color);
+  background: color-mix(in srgb, var(--cs-color) 12%, var(--surface));
+}
+.cs-dot {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--cs-color);
+}
+.cs-dot.is-none {
+  background: transparent;
+  border: 2px dashed var(--line-strong);
+}
+.cs-archived {
+  display: grid;
+  gap: 8px;
+}
+.cs-archived-toggle {
+  justify-self: start;
+}
+.cs-hint,
+.cs-empty-line,
+.cs-fact,
+.cs-maps-preview,
+.cs-frozen {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cs-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cs-notice p {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+}
+.cs-unconfirmed {
+  display: grid;
+  gap: 8px;
+}
+.cs-unconfirmed p {
+  margin: 0;
+}
+.cs-reread-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.cs-form {
+  min-width: 0;
+}
+.cs-form-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.cs-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.cs-field label,
+.cs-label {
+  font-weight: 600;
+}
+.cs-field-hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.cs-field-error {
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+.calendar-settings textarea {
+  font-family: inherit;
+}
+/* A part of a detail that has answers is read only, and looks it. */
+.calendar-settings input[readonly],
+.calendar-settings textarea[readonly] {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.calendar-settings [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.cs-field-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.cs-fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.cs-fieldset legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.cs-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.cs-check input,
+.cs-swatch input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.cs-icon-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cs-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 6px;
+}
+.cs-swatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+.cs-swatch:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.cs-mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.cs-mini-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cs-mini-row.is-hidden input {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.cs-mini-main {
+  flex: 1 1 200px;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cs-mini-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+.cs-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.cs-add-row select {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.cs-hidden-word {
+  font-size: 0.85rem;
+}
+.cs-maps {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .cs-row-line {
+    flex-wrap: wrap;
+  }
+  .cs-row-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .cs-section-head .data-sources-primary {
+    width: 100%;
   }
 }

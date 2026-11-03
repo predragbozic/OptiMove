@@ -181,8 +181,9 @@ test("7. the watch: the page's own build version counts from the start; it check
 test("8. wiring: app.js starts the watch with the Training Load draft question; the production build stamps the deploy commit into the HTML (not the bundles); the notice sits at the top, clear of the notch, under every overlay, with 44 px buttons", () => {
   const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.match(app, /import \{ startAppUpdateWatch \} from "\.\/app-update\.js";/);
-  // The reload also loses an unsaved or unconfirmed central-calendar event form (K2a-2): it asks too.
-  assert.match(app, /renderRailState\(\);\s+(\/\/[^\n]*\n\s+)*startAppUpdateWatch\(\{ mayLeave: \(\) => confirmLeaveTrainingLoad\(null, \{ discard: false \}\) && centralCalendarMayBeLeft\(\) \}\);/);
+  // The reload also loses an unsaved or unconfirmed central-calendar event form (K2a-2) and a
+  // Settings -> Calendar form or write (K2b-1c): both ask too.
+  assert.match(app, /renderRailState\(\);\s+(\/\/[^\n]*\n\s+)*startAppUpdateWatch\(\{ mayLeave: \(\) => confirmLeaveTrainingLoad\(null, \{ discard: false \}\) && centralCalendarMayBeLeft\(\) && calendarSettingsMayBeLeft\(\) \}\);/);
   const vite = readFileSync(new URL("../vite.config.js", import.meta.url), "utf8");
   assert.match(vite, /process\.env\.RENDER_GIT_COMMIT/);
   assert.match(vite, /transformIndexHtml: \(\) => \(\/\^\[0-9a-f\]\{7,40\}\$\/i\.test\(buildCommit\) \? \[\{ tag: "meta", attrs: \{ name: "optimove-build", content: buildCommit \}, injectTo: "head" \}\] : \[\]\)/);
