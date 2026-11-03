@@ -451,6 +451,13 @@ test("13. an id that is not a UUID on a membership route answers as an unknown i
     assert.ok(!/invalid input syntax|uuid/i.test(res.text), `${label}: no database text`);
   }
   assert.equal((await memberships(a.athleteId)).filter((r) => r.status === "active").length, 2, "nothing changed");
+  // On an archived team, an id that is not a UUID answers as an unknown valid one does.
+  const archivedTeam = await env.fx.makeTeam(clubs.c1, `D45 ids archived ${uid()}`);
+  assert.equal((await archive(roles.clubAdmin.cookie, archivedTeam)).status, 200);
+  for (const athleteId of [bad, "00000000-0000-4000-8000-000000000000"]) {
+    const res = await restoreMembership(roles.platformAdmin.cookie, archivedTeam, athleteId);
+    assert.deepEqual([res.status, res.body.error], [409, "team_archived"], `restore on an archived team, ${athleteId}: ${res.text}`);
+  }
 });
 
 test("14. the coach of an archived team adding an athlete learns the team is archived (409 team_archived), not that the athlete is outside; another club's admin learns nothing", async () => {

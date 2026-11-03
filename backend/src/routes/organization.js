@@ -2415,8 +2415,11 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     // An id that is not a UUID answers as an unknown one (a platform admin gets here with one).
     if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
-    const team = await query(`select id, club_id from public.teams where id = $1 limit 1`, [req.params.teamId]);
+    const team = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [req.params.teamId]);
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
+    // The team's state before the athlete id's form, so an id that is not a UUID
+    // answers as an unknown one does on an archived team too (D45).
+    if (!team.rows[0].active) return res.status(409).json(TEAM_ARCHIVED);
     if (!UUID_TEXT.test(req.params.athleteId)) return res.status(404).json({ error: "No membership in this team was found." });
     const client = await pool.connect();
     try {
