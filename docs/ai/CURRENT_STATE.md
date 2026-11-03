@@ -103,6 +103,10 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
   Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
   end in `40P01` with an Unbind and a revocation at once (`try_again` or a 500, nothing written); the *Rukovodilac*
   accepts that risk (J14 section 15);
+  **the lock-order pull request is built as LO-1** (branch `feature/lock-order-lo1`, J14 section 18; ★★, trigger 4;
+  no migration; in review, not merged): every service rights lock users first, A1 in D's order, R17. The database's
+  own role-first functions are **LO-2**, a later migration (the *Rukovodilac*'s L0 (a), Separate tasks), which 7i-B
+  does not wait for;
 - **7i-B**: only after the lock-order pull request.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
@@ -3804,7 +3808,7 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **R17 resolves the workspace twice (7h-V's internal security review, LOW; accepted by the *Rukovodilac* as a small
-  follow-up, event `28c48113`).** `routes/gpexeImport.js:44` calls `resolveVariableEditor(req)` without `known`, while the
+  follow-up, event `28c48113`). Built in LO-1 (in review; J14 section 18).** `routes/gpexeImport.js:44` calls `resolveVariableEditor(req)` without `known`, while the
   check before it uses `access.workspace`, so a workspace switch between the two resolutions is possible in theory. The
   fix passes `access.workspace` as `known`, as 7h-V's activity route does. To be done in the lock-order pull request or
   in the V2 info-hiding task, whichever is cleaner.
@@ -3820,7 +3824,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
   the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought
-  on.** It also moves **A1 to D's order**: its listed bindings and teams locked before its rights, and every lock
+  on. Built as LO-1 (in review; J14 section 18): every item below; the team-coach branch was checked (its revocation
+  updates only the role row) and turned users first for one rule.** It also moves **A1 to D's order**: its listed bindings and teams locked before its rights, and every lock
   before its first end (today the rights at `sourceMetricMappingService.js:1426`, the ends at `:1465`, the listed
   bindings at `:1485`), with a route-against-route test of A1 against an Unbind and a club-admin revocation (J15
   section 5 and R13: today A1 has the three-way deadlock J15 found for the switch to a copy). Several rights checks lock the role row before the `users` row, while the
@@ -3834,6 +3839,23 @@ pre-existing; pass/fail counts don't belong in this file
     `:131`, `:157`, `sourceConnectionService.js:211`, `gpexeAthleteIdentityService.js:155-157`,
     `routes/exerciseCollections.js:191-193`;
   - the team-coach branch, `sourceMetricAccess.js:177`, once the team-coach revocation's own order is checked.
+- **LO-2: the database's own rights locks users first (the *Rukovodilac*'s L0 (a), 2026-11-03; ★★ with a migration,
+  the owner's order naming it; before more clubs are brought on; 7i-B does not wait for it).** LO-1's discovery found
+  that the database functions lock the role row before the user row too:
+  - `training_load.lock_gpexe_import_approver` (v23: `r, u` and `a, tr, u`) and `training.lock_activity_decider` (v26:
+    `r, u` three times) are the **first** rights lock of their transactions (an import approval's step 6b, a roster
+    decision's step 1), so a club-admin or platform-admin revocation of the same user can meet them in the opposite
+    order: the two-way `40P01` LO-1's tests reproduce for the services, nothing written (`try_again` or a 500); not
+    yet reproduced for these two functions themselves (LO-2's tests do that first);
+  - `source_metric_require_platform_admin` / `source_metric_require_club_admin` (v34), `source_metric_actor_basis`
+    (v35) and `metric_variable_change_basis` (v38) run inside the write's triggers after the service locked the same
+    rows users first, so their role-first re-locks wait for nothing (LO-1's tests 1, 9 and 10 show the write committing
+    with a revocation waiting); LO-2 turns them users first too, for one rule.
+
+  The fix: `CREATE OR REPLACE` of those functions with the users row first, md5 preconditions on the bodies in force,
+  a rollback, a preflight and a post-check, under the next free migration number when it is written (if LO-2 lands
+  before 7i-B, 7i takes the number after it); route-against-route tests of an approval and a roster decision against
+  both revocations.
 - **Before the next import window: re-issue both 9-R window files (mandatory; the *Rukovodilac*'s decision 3 at 7h-B's
   GO, event `ea8fc169`, on the *Nezavisni revizor*'s proposal, event `45cee1c4`).**
   - `docs/runbooks/gpexe-import-window-preflight.sql` and `-postcheck.sql` are pinned to v51. They are the record of

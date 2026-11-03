@@ -419,7 +419,9 @@ reads the hide of the **binding's** club (`source_metric_binding_club`, as the T
   the old version's activations (`:1465`) and only then locks its listed bindings (`:1485`). Its listed starts get
   hide locks in 7i-B only once A1 takes its listed bindings and teams before its rights and every lock before its
   first end (R13). (The same rights-before-binding order is the switch deadlock below; for A1 it exists today, with or
-  without J15.)
+  without J15.) **Built as LO-1 (J14 section 18):** A1 takes its listed bindings and teams `FOR SHARE` before its
+  rights, the clubs right after them, and every lock before its first end; LO-1's test 9 runs this section's three-way
+  race (A1 with a listed start, an Unbind of that binding and a club-admin revocation) with no `40P01`.
 - **Switch to copy:** D's order, as S1 and J18's board take it: T2a / T2b → T3 → T4, ascending over both versions → the
   old T5 `FOR NO KEY UPDATE` → **the binding and its team `FOR SHARE`** → **then the rights** (`u, r`) → the club → the
   end, the start, the T8 rows (`activation_end` unkeyed, `activation_start` keyed last). It starts a club version, so it

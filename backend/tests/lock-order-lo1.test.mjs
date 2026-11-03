@@ -38,7 +38,7 @@ const MEANING_REF = "docs/ai/test-evidence.md#meaning-of-the-field";
 const T4 = "training_load.source_metric_mapping_versions";
 const T5 = "training_load.source_metric_mapping_activations";
 
-let db, k, server, apiBase, service, gpexeIdentity, dbModule, appPool, createSession;
+let db, k, server, apiBase, service, variables, gpexeIdentity, dbModule, appPool, createSession;
 const W = {};
 const logLines = [];
 const originalConsole = {};
@@ -57,6 +57,10 @@ before(async () => {
                    add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,
                    add column if not exists created_at timestamptz not null default now(),
                    add column if not exists updated_at timestamptz not null default now()`);
+  await k.query(`alter table public.user_team_roles add column if not exists granted_by_user_id uuid,
+                   add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,
+                   add column if not exists created_at timestamptz not null default now(),
+                   add column if not exists updated_at timestamptz not null default now()`);
   // The column the identity read compares (public.athletes in the deployed
   // schema has it; the identity suite adds it the same way).
   await k.query(`alter table public.athletes add column if not exists birth_date date`);
@@ -70,6 +74,7 @@ before(async () => {
   }
   const serverModule = await import("../src/server.js");
   service = await import("../src/sourceMetricMappingService.js");
+  variables = await import("../src/canonicalVariableAdminService.js");
   gpexeIdentity = await import("../src/gpexeAthleteIdentityService.js");
   dbModule = await import("../src/db.js");
   ({ createSession } = await import("../src/auth.js"));
@@ -100,6 +105,7 @@ after(async () => {
 function resetSeams() {
   service?.setMappingRightsHoldForTests(null);
   service?.setMappingWriteHoldForTests(null);
+  variables?.setVariableWriteHoldForTests(null);
   gpexeIdentity?.setIdentityListHoldForTests?.(null);
 }
 afterEach(() => {
@@ -224,6 +230,7 @@ const statusOf = async (v) => (await one(k, `select status, activated_basis from
 
 // The real revocations.
 const revokeClub = (target, clubId) => api(ORG, `/users/${target.id}/club-roles/${clubId}/club_admin`, { method: "DELETE", cookie: W.pa.cookie });
+const revokeCoach = (target, teamId) => api(ORG, `/users/${target.id}/team-roles/${teamId}/team_coach`, { method: "DELETE", cookie: W.pa.cookie });
 const revokePlatform = (target) => api(ORG, `/users/${target.id}/global-roles/platform_admin`, { method: "DELETE", cookie: W.pa.cookie });
 const grantPlatform = (userId) => k.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [userId]);
 const grantClub = (userId, clubId) => k.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [userId, clubId]);
@@ -541,5 +548,53 @@ test("9. the three-way race of J15 section 5: a club admin's A1 with a listed st
   // An Unbind never touches an activation (v48): A1's start stays as it was written.
   const open = await one(k, `select count(*)::int as n from ${T5} where source_team_binding_id = $1 and mapping_version_id = $2 and ended_at is null`, [b.bindingId, v.versionId]);
   assert.equal(open.n, 1, "A1's start");
+  noDeadlock(from);
+});
+
+// ---------------------------------------------------------------------------
+// 10. The database's own role-first re-locks (v38) after the service's
+// users-first rights (the Rukovodilac's L0 (a): shown by a test)
+// ---------------------------------------------------------------------------
+test("10. a rename holding its right (users first) while the real revocation of that right waits: the v38 trigger function's role-first re-locks (metric_variable_change_basis) wait for nothing - the club admin's rename and the coach's rename commit, each revocation succeeds after them, no 40P01", async () => {
+  const from = logLines.length;
+  const holdRename = () => {
+    const g = gate();
+    const state = { entered: false };
+    variables.setVariableWriteHoldForTests(async (_client, at) => {
+      if (at !== "variable_rename" || state.entered) return;
+      state.entered = true;
+      await g.promise;
+    });
+    return { g, state };
+  };
+  const lastRename = async (variableId) => one(k, `select basis, requested_by_user_id from training_load.metric_variable_requests
+    where metric_definition_id = $1 and operation = 'variable_rename' order by created_at desc limit 1`, [variableId]);
+  // (a) club_admin: the club-admin revocation waits on the admin's users row.
+  const s1 = await coachWithVariable();
+  const admin = s1.x.admins[0];
+  const read = await api(METRICS, `/variables/${s1.variableId}`, { cookie: admin.cookie });
+  assert.equal(read.status, 200, read.text);
+  const h1 = holdRename();
+  const renaming1 = rename(admin, { variableId: s1.variableId, labelsToken: read.body.variable.labelsToken });
+  await until(() => h1.state.entered, "the club admin's rename holds after its right");
+  const revoking1 = revokeClub(admin, s1.x.clubId);
+  await waiters("for update of u, r");
+  h1.g.open();
+  const res1 = await renaming1;
+  assert.ok([200, 404].includes(res1.status), res1.text);
+  assert.deepEqual({ ...(await lastRename(s1.variableId)) }, { basis: "club_admin", requested_by_user_id: admin.id }, "the rename committed");
+  assert.equal((await revoking1).status, 200);
+  // (b) team_coach: the team-coach revocation waits on the coach's role row.
+  const s2 = await coachWithVariable();
+  const h2 = holdRename();
+  const renaming2 = rename(s2.coach, s2);
+  await until(() => h2.state.entered, "the coach's rename holds after its right");
+  const revoking2 = revokeCoach(s2.coach, s2.coach.teamId);
+  await waiters("update public.user_team_roles");
+  h2.g.open();
+  const res2 = await renaming2;
+  assert.ok([200, 404].includes(res2.status), res2.text);
+  assert.deepEqual({ ...(await lastRename(s2.variableId)) }, { basis: "team_coach", requested_by_user_id: s2.coach.id }, "the rename committed");
+  assert.equal((await revoking2).status, 200);
   noDeadlock(from);
 });

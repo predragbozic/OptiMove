@@ -118,9 +118,9 @@ test("1. a platform admin's block write against the real platform-admin revocati
   await peer.query("commit");
   await peer.end();
   const [revoked, written] = await Promise.all([revoking, writing]);
+  assert.deepEqual(errors.filter((e) => /40P01|deadlock/i.test(e)), [], "no 40P01");
   assert.equal(revoked.status, 200, revoked.text);
   assert.deepEqual([written.status, written.body], [404, { error: "notFound" }], written.text);
   assert.equal((await client.query("select count(*)::int as n from library.exercise_collections")).rows[0].n, 0, "no block saved");
   assert.equal((await client.query("select is_active from public.user_global_roles where user_id = $1", [blockAdminId])).rows[0].is_active, false);
-  assert.deepEqual(errors.filter((e) => /40P01|deadlock/i.test(e)), [], "no 40P01");
 });
