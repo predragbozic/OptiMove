@@ -449,7 +449,10 @@ export function saveAndActivateNote(s = mappingsState(), ctx = mappingsContext()
   const { revision } = flowFacts(s);
   if (!revision || !revisionVerified(revision)) return null;
   const taken = fieldTakenBy(s, f.fieldId, f.targetId, mapping.ownerScope);
-  if (taken) return `This field already fills “${cleanName(taken.target?.label || "another variable")}”. Only one of them can be active at a time, so this version can only be saved as a draft.`;
+  if (taken) {
+    const label = cleanName(taken.target?.label || "another variable");
+    return `This field already fills “${label}”, and only one of them can be active at a time. Save this as a draft; it can be activated only after the mapping to “${label}” is disabled.`;
+  }
   return null;
 }
 // The mapping and the version the chooser of step 4 checks the teams against:
@@ -512,6 +515,11 @@ const CHAIN_STOP = {
 // again." after steps that did save (the ux-design-reviewer's UX-1), and a
 // refused team by name (UX-5); then the next step, when one is the user's.
 function chainStopText(w, info, chain, reasonOverride = null) {
+  // The item is no longer what the screen showed: no claim about what is left,
+  // and for a lost item no teams sentence either (the re-review's UX-R5).
+  if (info.code === "notFound" || READ_AGAIN.has(info.code)) {
+    return ["Save and activate stopped.", refusalText(w.act, info), info.code === "notFound" ? "" : teamsLeft(chain)].filter(Boolean).join(" ");
+  }
   const team = TEAM_CODES.has(info.code) && info.current?.bindingId ? bindingFacts(info.current.bindingId) : null;
   let reason = reasonOverride;
   let next = null;
@@ -519,8 +527,9 @@ function chainStopText(w, info, chain, reasonOverride = null) {
     if (info.code === "try_again") { reason = "The server was busy."; next = "default"; }
     else if (info.code === "internal_error") { reason = "The server could not save this step."; next = "default"; }
     else if (TEAM_CODES.has(info.code)) {
-      const name = cleanName(team?.teamName || teamNameOf(team?.teamId) || "One team");
-      reason = `“${name}” ${TEAM_CODE_TEXT[info.code]}.`;
+      const name = cleanName(team?.teamName || teamNameOf(team?.teamId) || "");
+      // A real name in quotes; otherwise no invented one (UX-R6).
+      reason = name ? `“${name}” ${TEAM_CODE_TEXT[info.code]}.` : `One of the chosen teams ${TEAM_CODE_TEXT[info.code]}.`;
       next = "teams";
     } else {
       const text = refusalText(w.act, info);
@@ -528,8 +537,14 @@ function chainStopText(w, info, chain, reasonOverride = null) {
       if (text === "It was not saved: the server refused it.") next = "default";
     }
   }
+  // The next step carries the chosen teams when there were any (UX-R2).
+  const teams = Boolean(chain?.teams?.length);
   const nextText = next === "teams" ? "Activate it from here and choose the teams again."
-    : next === "default" ? (w.act === "submit" ? "Submit it for review from here." : "Activate it from here.") : "";
+    : next === "default"
+      ? (w.act === "submit"
+        ? (teams ? "Submit it for review from here, then activate it and choose the teams again." : "Submit it for review from here.")
+        : (teams ? "Activate it from here and choose the teams again." : "Activate it from here."))
+      : "";
   return [CHAIN_STOP[w.act](w), reason, nextText, nextText ? "" : teamsLeft(chain)].filter(Boolean).join(" ");
 }
 // The chosen teams are not switched on when the chain stops (UX-6).
@@ -751,7 +766,9 @@ async function refused(w, info, { render, check }) {
     s.flow = null;
     s.view = "detail";
     s.detail = { ...emptyMappingsState().detail, id: w.target.mappingId };
-    setNotice(s, `The mapping is saved, but its draft was not: ${refusalText("draft", info)} Use New version to try again.`, "warning");
+    // Never "Nothing was saved" after a create that did save (the re-review's UX-R1).
+    const why = info.code === "try_again" ? "the server was busy." : info.code === "internal_error" ? "the server could not save it." : refusalText("draft", info);
+    setNotice(s, [`The mapping is saved, but its draft was not: ${why}`, chain ? "Save and activate stopped there." : "", "Use New version to try again.", teamsLeft(chain)].filter(Boolean).join(" "), "warning");
     await loadMapping(w.target.mappingId, render);
     focusNotice();
     return;
@@ -1010,7 +1027,9 @@ export async function handleMappingsAction(action, { render }) {
     s.notice = "";
     openFlow(s, { mapping, fixed: true });
     render();
-    await loadRefs(render);
+    // The list as well: Save and activate is offered only on a list read to its
+    // end (7HF-3), and a write before this reset it (the re-review's 7HF-R1).
+    await Promise.all([loadRefs(render), s.list.loaded ? null : loadMappings(render)]);
     toTitle();
     return true;
   }

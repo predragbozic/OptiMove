@@ -1582,7 +1582,7 @@ test("47. Save and activate is not offered: a mapping with an active version (F1
   render();
   assert.match(text(), /Review the draft/);
   assert.equal(saveAndActivate(), null, "source_metric_target_taken would refuse it");
-  assert.match(text(), /This field already fills “[^”]+”\. Only one of them can be active at a time, so this version can only be saved as a draft\./);
+  assert.match(text(), /This field already fills “([^”]+)”, and only one of them can be active at a time\. Save this as a draft; it can be activated only after the mapping to “\1” is disabled\./);
   assert.equal(posts().length, 0);
 });
 
@@ -1604,7 +1604,8 @@ test("48. a stated refusal stops Save and activate where it stands: the create k
   await click('[data-action="metric-mappings-flow-save-activate"]');
   render();
   assert.deepEqual(posts().map((c) => c.url.split("/").pop()), ["mappings", "versions"]);
-  assert.match(text(), /The mapping is saved, but its draft was not:/);
+  assert.match(text(), /The mapping is saved, but its draft was not: the server was busy\. Save and activate stopped there\. Use New version to try again\./);
+  assert.doesNotMatch(text(), /Nothing was saved/, "the create did save (the re-review's UX-R1)");
   assert.equal(data.mappingsState().chain, null);
   // The submit.
   freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
@@ -1613,7 +1614,8 @@ test("48. a stated refusal stops Save and activate where it stands: the create k
   await click('[data-action="metric-mappings-flow-save-activate"]');
   render();
   assert.deepEqual(posts().map((c) => c.url.split("/").pop()), ["mappings", "versions", "submit"]);
-  assert.match(text(), /The draft is saved but was not submitted for review\./);
+  // A read-again refusal: no claim about what is left (the re-review's UX-R5).
+  assert.match(text(), /Save and activate stopped\. This version changed meanwhile\./);
   // The activate.
   freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
   overrides = [refuseAt("/activate", { error: "revision_not_verified" }), statusful];
@@ -1802,4 +1804,41 @@ test("56. the mapping already exists when the chained create arrives: its draft 
   assert.deepEqual(posts().map((c) => c.url.replace(B, "")), ["/mappings", `/mappings/${M1}/versions`]);
   assert.match(text(), /The draft is saved\. This mapping already existed, so Save and activate stopped there\. Submit it for review, then activate it\. The teams you chose are not switched on yet; choose them again when you activate\./);
   assert.equal(data.mappingsState().chain, null);
+});
+
+test("57. New version after a write reads the mapping list, so Save and activate is offered on step 4 (the re-review's 7HF-R1)", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await click('[data-action="metric-mappings-flow-save"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.match(text(), /The draft is saved\./);
+  assert.equal(data.mappingsState().list.loaded, false, "the write reset the list");
+  await click('[data-action="metric-mappings-new-version"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.equal(data.mappingsState().list.loaded, true, "New version read the list");
+  assert.ok(saveAndActivate(), "offered: no active version, the field is free and the list is read to its end");
+});
+
+test("58. a busy activate with chosen teams names the teams in the next step (the re-review's UX-R2)", async () => {
+  chainWorld();
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "try_again" }, 409) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Version 1 is waiting for review and was not activated\. The server was busy\. Activate it from here and choose the teams again\./);
+  assert.doesNotMatch(text(), /Nothing was saved/);
 });

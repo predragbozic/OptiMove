@@ -67,7 +67,8 @@ function writeHtml(s) {
         </div>
       </div>`;
   }
-  if (w.busy) return `<p class="muted" role="status">Saving...</p>`;
+  // Save and activate's last write says what it is doing (the re-review's UX-R3).
+  if (w.busy) return `<p class="muted" role="status">${w.act === "activate" && w.after?.chained ? "Submitted for review. Activating..." : "Saving..."}</p>`;
   if (w.error) {
     return `<div class="error" role="alert"><p>${escapeHtml(w.error)}</p>
       ${w.code ? `<details class="data-sources-tech"><summary>Technical details</summary><dl><div><dt>Code</dt><dd>${escapeHtml(w.code)}</dd></div></dl></details>` : ""}</div>`;

@@ -1074,12 +1074,13 @@ Each has a recommendation, the consequence and the alternative. **All six were d
     - **F1:** the mapping has no active version. Next to an active version, step 4 keeps *Save draft* only, and a
       replacement goes through the detail's *Replace version N* with its reason, as in 7h-B;
     - the mapping list has been read to its end, because only then can the screen tell that no other mapping fills
-      the field (the code review's 7HF-3: it fails safe).
+      the field (the code review's 7HF-3: it fails safe). *New version* reads the list as *New mapping* does, so a
+      write before it does not hide the button (the re-review's 7HF-R1).
 
     When the button is not offered for a known reason, step 4 says so in one line (the `ux-design-reviewer`'s UX-2):
     "This mapping already has an active version (version N). Save this draft, submit it for review, then replace
-    version N from the mapping's page." or "This field already fills “X”. Only one of them can be active at a time,
-    so this version can only be saved as a draft."
+    version N from the mapping's page." or "This field already fills “X”, and only one of them can be active at a
+    time. Save this as a draft; it can be activated only after the mapping to “X” is disabled." (UX-R4).
   - **The screen:** *Save and activate* is the primary button, and *Save draft* stays beside it. Just above them it
     says "Save and activate makes this version active now: it is saved, submitted for review and activated in one go.
     Save draft only saves it; nothing changes until it is activated." (UX-4).
@@ -1095,9 +1096,13 @@ Each has a recommendation, the consequence and the alternative. **All six were d
       for review." or "Version N is waiting for review and was not activated.". Then it gives the reason and, where
       the next step is the user's, that step:
       - a busy server is "The server was busy." and a server failure "The server could not save this step.", never
-        "Nothing was saved. Try again." after steps that saved (UX-1);
+        "Nothing was saved. Try again." after steps that saved (UX-1). The same holds for a draft refused after a
+        create: "The mapping is saved, but its draft was not: the server was busy." (UX-R1);
+      - with chosen teams, the next step names them ("Activate it from here and choose the teams again.", UX-R2);
       - a refused team is named ("“First team” is no longer linked to GPEXE. Activate it from here and choose the
-        teams again.", UX-5).
+        teams again.", UX-5), or "One of the chosen teams …" when its name is not known (UX-R6);
+      - a refusal that means the item is no longer what the screen showed (a missing item, or one that changed) says
+        "Save and activate stopped." and the reason, with no claim about what is left (UX-R5).
       - A create refused because the mapping already exists saves the draft there and stops, saying so (UX-8).
     - **F2:** a lost answer is *Result not confirmed* · *Check result* (the same key, never sent by itself). When the
       check confirms the step, the chain stops there with a sentence naming the next step (Submit it for review, or
@@ -1107,7 +1112,8 @@ Each has a recommendation, the consequence and the alternative. **All six were d
     - **The chain is the chain's own:** each step records the write it started. Only that write may continue the chain
       or name the step it stopped at. Leaving the screen, *Cancel* or *Close without checking* drops the chain with its
       write, so a later manual write never resumes it (the code review's HIGH 7HF-1).
-    - While the activate follows a submit, the notice reads "Submitted for review. Activating..." (UX-7).
+    - While the activate follows a submit, the notice reads "Submitted for review. Activating...", and the chained
+      activate in flight shows the same words instead of "Saving..." (UX-7, UX-R3).
     - If the submit's answer cannot be read back, or another version became active meanwhile, the chain stops with
       a sentence ("could not be read back" / "already has an active version. Replace it from here.").
   - **The Imports step's sentence** (decision 1 at 7h-B's GO): `SETUP_MAPPINGS_STEP` takes the
@@ -1115,7 +1121,7 @@ Each has a recommendation, the consequence and the alternative. **All six were d
   - **The step-4 fields** take the panel's 44 px / 16 px rule (`.metric-mappings-activate-now` in `styles.css`), and the
     block is spaced like the panel (`mobile-qa`'s M-1). The browser check had found the reason field at 36 px tall
     with a 13.3 px font.
-  - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs` tests 45–56 drive the real handlers against a fake
+  - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs` tests 45–58 drive the real handlers against a fake
     server:
     - the whole chain for a club's admin with a team and for the platform admin;
     - a stated refusal at each step, with its sentence and what is left, a busy activate included;
@@ -1127,17 +1133,20 @@ Each has a recommendation, the consequence and the alternative. **All six were d
     - leaving during the chain drops it, and a manual submit sends no activate (51);
     - *Every team* on step 4 (52);
     - a refused team named (55);
-    - an existing mapping met by the create (56).
+    - an existing mapping met by the create (56);
+    - *New version* after a write offers the button (57);
+    - a busy activate with chosen teams names them in the next step (58).
 
     `frontend/tests/gpexe-import.actions.test.mjs` checks the Imports sentence.
-  - **Mutations** (each applied alone and run against the named test): 20 in total, 18 killed, 2 survive as
+  - **Mutations** (each applied alone and run against the named test): 22 in total, 20 killed, 2 survive as
     equivalent:
     - F4 (offered without `mayTransition`): step 4 is reached only by someone who may write a draft for that owner,
       and since 7h-B that is exactly who may activate it;
     - F15b (the write tag ignored while the leave still drops the chain): the tag is the second guard, and no path
       today keeps a chain while another write starts.
 
-    The leave reset alone (F15a) and both guards removed (F15) are killed by test 51.
+    The leave reset alone (F15a) and both guards removed (F15) are killed by test 51; F19 (New version reads only
+    the refs) by test 57 and F20 (the teams dropped from the busy activate's next step) by test 58.
   - **Internal reviews** (frozen head `8988550b`):
     - `code-reviewer` NOT READY: HIGH 7HF-1 and MEDIUM 7HF-2, both confirmed by two skeptics, plus LOW 7HF-3 and
       7HF-4. All four are fixed as above, with tests 51–54 and mutations F15–F18.
@@ -1145,6 +1154,9 @@ Each has a recommendation, the consequence and the alternative. **All six were d
       above. UX-9 (the shared chooser shows one team's requirement twice) is a follow-up for the chooser in both
       places (`docs/ai/CURRENT_STATE.md`, Separate tasks). UX-10 (the Imports sentence's "there") is left as decided.
     - `mobile-qa` READY WITH NON-BLOCKING NOTES: M-1 is fixed; M-2 needed no change.
+    - The narrow re-review (frozen head `40c7991e`): `code-reviewer` READY WITH NON-BLOCKING NOTES, closing 7HF-1 to
+      7HF-4, with one LOW (7HF-R1); `ux-design-reviewer` READY WITH NON-BLOCKING NOTES, with six LOWs (UX-R1 to
+      UX-R6). All seven are fixed as above, with tests 57 and 58 and mutations F19 and F20.
   - **Browser check** (the real backend and frontend on a disposable database through v52, Chromium; 31/31 after the
     review fixes):
     - **F4:** a club's admin from *New mapping* to an active version with one team in 10 interactions (9 clicks
