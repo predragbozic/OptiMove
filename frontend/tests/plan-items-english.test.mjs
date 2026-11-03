@@ -196,7 +196,7 @@ test("7. an Instruction typed in and back again within the autosave pause is not
   });
 });
 
-test("8. once a changed Instruction is on its way, what the coach types next is their own text, even the text that was shown", async () => {
+test("8. once a changed Instruction is on its way, typing back the text that was shown sends the item's own stored text, never the English", async () => {
   clearBuilderItemEdits();
   useDraft([builderItem({ id: "item-sent" })]);
   await asAsync(EN, async () => {
@@ -210,16 +210,21 @@ test("8. once a changed Instruction is on its way, what the coach types next is 
       return { ok: true, status: 200, statusText: "", json: async () => ({ planId: "plan-1", item: { id: "item-sent", sets: "", reps: "", load: "", description: sent.description ?? "Step forward slowly.", descriptionEn: null } }) };
     };
     const first = submitBuilderForm(updateForm("item-sent"), handlers());
-    while (!release) await new Promise((resolve) => setTimeout(resolve, 1));
-    assert.equal(calls[0].description, "Step forward slowly.");
-    // While that save is in flight the coach types the shown text back: now their own.
-    const back = rememberBuilderItemEdit("item-sent", { sets: "", reps: "", load: "", description: "Step forward." });
-    assert.equal(back.data.description, "Step forward.");
-    release();
+    for (let tick = 0; !release && tick < 500; tick += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.ok(release, "the first save went out");
+    try {
+      assert.equal(calls[0].description, "Step forward slowly.");
+      // While that save is in flight the coach types the shown text back.
+      const back = rememberBuilderItemEdit("item-sent", { sets: "", reps: "", load: "", description: "Step forward." });
+      assert.equal(back.data.description, "Korak napred.", "what the item stored, which shows the same");
+      assert.equal(planItemText(state.builder.draft.blocks[0].sessions[0].nodes[0].items[0], "description"), "Step forward.", "still shown in English meanwhile");
+    } finally {
+      release();
+    }
     await first;
     formData([["sets", ""], ["reps", ""], ["load", ""], ["description", "Step forward."]]);
     await submitBuilderForm(updateForm("item-sent"), handlers());
-    assert.equal(calls[1].description, "Step forward.");
+    assert.equal(calls[1].description, "Korak napred.");
   });
   clearBuilderItemEdits();
 });
@@ -230,4 +235,28 @@ test("9. a plan item's thumbnail initials follow the title it shows", () => {
   assert.match(as(SR, () => renderExerciseItemHtml(item, "pi-1", "horizontal")), /data-fallback-initials="I"/);
   const builder = builderItem({ id: "item-thumb", imageUrl: "https://example.com/lunge.png" });
   assert.match(as(EN, () => renderBuilderItems({ items: [builder] })), /data-fallback-initials="L"/);
+});
+
+test("10. after a save that failed, typing back the text that was shown sends the item's own stored text", async () => {
+  clearBuilderItemEdits();
+  useDraft([builderItem({ id: "item-failed" })]);
+  await asAsync(EN, async () => {
+    const calls = [];
+    let fail = true;
+    globalThis.fetch = async (url, options = {}) => {
+      calls.push(JSON.parse(options.body));
+      if (fail) { fail = false; return { ok: false, status: 503, statusText: "", json: async () => ({ error: "database_busy" }) }; }
+      const sent = calls.at(-1);
+      return { ok: true, status: 200, statusText: "", json: async () => ({ planId: "plan-1", item: { id: "item-failed", sets: "", reps: "", load: "", description: sent.description, descriptionEn: sent.description === "Korak napred." ? "Step forward." : null } }) };
+    };
+    rememberBuilderItemEdit("item-failed", { sets: "", reps: "", load: "", description: "Step forward.x" });
+    await submitBuilderForm(updateForm("item-failed"), handlers()).catch(() => {});
+    assert.equal(calls[0].description, "Step forward.x");
+    rememberBuilderItemEdit("item-failed", { sets: "", reps: "", load: "", description: "Step forward." });
+    formData([["sets", ""], ["reps", ""], ["load", ""], ["description", "Step forward."]]);
+    await submitBuilderForm(updateForm("item-failed"), handlers());
+    assert.equal(calls.at(-1).description, "Korak napred.", "the stored Serbian goes back, not the English");
+    assert.equal(planItemText(state.builder.draft.blocks[0].sessions[0].nodes[0].items[0], "description"), "Step forward.");
+  });
+  clearBuilderItemEdits();
 });

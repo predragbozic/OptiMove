@@ -40,11 +40,17 @@ export function withoutUntouchedText(itemId, data) {
     shownBefore.set(itemId, { shown, description: item.description, descriptionEn: item.descriptionEn });
   }
   const before = shownBefore.get(itemId);
-  if (!sentText.has(itemId) && sameShownText(description, before.shown)) {
-    // Back to what was shown: the draft item shows its own text again, not
-    // what an earlier pending edit had put there.
-    if (item) Object.assign(item, { description: before.description, descriptionEn: before.descriptionEn });
-    return rest;
+  if (sameShownText(description, before.shown)) {
+    if (!sentText.has(itemId)) {
+      // Back to what was shown: the draft item shows its own text again, not
+      // what an earlier pending edit had put there.
+      if (item) Object.assign(item, { description: before.description, descriptionEn: before.descriptionEn });
+      return rest;
+    }
+    // A changed text has already gone out (its save failed or is still on its
+    // way): back to what was shown sends what the item stored, which shows the
+    // same, rather than the English as the item's own text.
+    return { ...rest, description: before.description ?? "" };
   }
   return { ...data };
 }
@@ -90,8 +96,12 @@ export function preserveBuilderItemEdits(draft) {
           const edit = pending.get(item.id);
           if (edit?.planId !== draft.plan.id) continue;
           Object.assign(item, edit.data);
-          // A changed Instruction is shown as typed, never the English.
-          if (Object.hasOwn(edit.data, "description")) item.descriptionEn = null;
+          // A changed Instruction is shown as typed, never the English; the
+          // item's own stored text going back shows as it did.
+          if (Object.hasOwn(edit.data, "description")) {
+            const before = shownBefore.get(item.id);
+            item.descriptionEn = before && edit.data.description === before.description ? before.descriptionEn : null;
+          }
         }
         const move = state.builder.itemMovePending;
         if (move?.planId === draft.plan.id && move.nodeId === node.id) {
