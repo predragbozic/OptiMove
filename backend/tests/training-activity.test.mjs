@@ -14,6 +14,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { createClubHidesStandIn } from "./support/v53-club-hides-stand-in.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -232,6 +233,8 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  // v53's club hides table, empty (the definitions list reads it): see the helper.
+  await createClubHidesStandIn(adminClient);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

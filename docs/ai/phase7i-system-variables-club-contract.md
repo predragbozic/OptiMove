@@ -1077,10 +1077,11 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
 - `canonical-variables-r2.test.mjs` test 4: a system row read in a team workspace of the club carries
   `club: { hidden }` (section 4.4).
 - `source-metric-mapping-club-admin-7h.test.mjs`: v52 is no longer the last test migration.
-- `training-load-dashboard.test.mjs`: its schema stops at v19, and the template resolver now reads v53's club hides in a
-  club data workspace. The suite creates that table empty, with only the columns the readers use, after its
-  migrations; no club hides anything there. v53 itself, and the resolver's rule over real hides, are tested in the 7i
-  suite (tests 9 and 23).
+- `training-load-dashboard.test.mjs`, `training-load-metrics.test.mjs` and `training-activity.test.mjs`: their schemas
+  are fixed, older lists of migrations, and the template resolver and the older definitions list now read v53's club
+  hides. Each suite creates that table empty after its migrations, through one helper
+  (`backend/tests/support/v53-club-hides-stand-in.mjs`), with only the columns the readers use; no club hides anything
+  there. v53 itself, and the readers' rules over real hides, are tested in the 7i suite (tests 8, 9 and 23).
 - `source-instance-end-7g.test.mjs`: the behaviour database is migrated through every test migration, because S1 now
   reads v53's hides. v50's own files (the preflight, the post-check, the rollback and the bodies) are still checked on
   the rehearsal database, which stops at v49 and then applies v50.
