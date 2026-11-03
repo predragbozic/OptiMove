@@ -150,9 +150,11 @@ export function identityAdminBasis(req, access) {
 
 // The right, read live (and FOR SHARE inside a write transaction): an active
 // user with an active platform_admin role, or an active club_admin role of the
-// team's club; and the club itself active.
+// team's club; and the club itself active. Locked users row first, the
+// revocations' order (`for update of u, g` / `u, r`; the lock-order pull
+// request).
 async function rightHolds(executor, ctx, clubId, { lock = false } = {}) {
-  const share = lock ? " for share of r, u" : "";
+  const share = lock ? " for share of u, r" : "";
   const right = ctx.basis === "platform_admin"
     ? await executor.query(`select 1 from public.user_global_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId])
     : await executor.query(`select 1 from public.user_club_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId, clubId]);

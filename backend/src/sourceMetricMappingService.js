@@ -1433,7 +1433,15 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       // NO KEY UPDATE in ascending id (the version being activated, still
       // needs_review, has none: a start needs an active version).
       const ending = replacing && active === expectedActiveVersionId ? await lockOpenActivations(client, [active]) : [];
+      // D's order (J15 section 5 and R13, the lock-order pull request): the
+      // listed bindings and their teams FOR SHARE before the rights, and the
+      // clubs right after them, as S1 and the switch take them - so A1 holds
+      // no user row while it waits for a binding (the three-way deadlock with
+      // an Unbind and a club-admin revocation), and every lock is taken
+      // before the first end. An unknown or archived one is the identical 404.
+      const bindingLocks = listed.length > 0 ? await lockListedBindings(client, listed) : null;
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (listed.length > 0 && !(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
       // The states, answered only now (after the right).
       const status = locked.get(vId);
       if (status !== "needs_review") throw refusal(409, "version_not_submitted", MESSAGES.version_not_submitted, { current: { status } });
@@ -1487,13 +1495,12 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
           where id = $1`,
         [vId, ctx.userId, ctx.basis],
       );
-      // A1's listed starts, as S1's steps 4-7: the bindings FOR SHARE, their
-      // teams, their clubs, the states (the first failing binding named), the
+      // A1's listed starts, as S1's steps 6-7 (the bindings, their teams and
+      // their clubs are already locked above): the states (the first failing
+      // binding named; after N's ends, so a row N held frees its binding), the
       // T5 rows.
       let starts = [];
       if (listed.length > 0) {
-        const bindingLocks = await lockListedBindings(client, listed);
-        if (!(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
         const field = (await client.query(
           `select source_system, api_family from training_load.source_metric_definitions where id = $1`, [v.source_metric_definition_id],
         )).rows[0];

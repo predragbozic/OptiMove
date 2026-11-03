@@ -41,7 +41,10 @@ async function namesClubVariablesFor(req, preview) {
   if (!access || req.gpexeImportAudience !== "other" || !previewHasClubVariable(preview)) return false;
   if (access.workspace?.type !== "team" || String(access.workspace.scopeId) !== String(access.teamId)) return false;
   try {
-    const editor = await resolveVariableEditor(req);
+    // R17 (the lock-order pull request): the workspace this request already
+    // resolved, never a second resolution that a workspace switch in between
+    // could make disagree with the team check above.
+    const editor = await resolveVariableEditor(req, access.workspace);
     return Boolean(editor && editor.view === "coach" && editor.owner?.clubId === access.clubId
       && (editor.teamId === undefined || editor.teamId === access.teamId));
   } catch {

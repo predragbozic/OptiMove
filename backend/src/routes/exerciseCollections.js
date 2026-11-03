@@ -180,8 +180,9 @@ async function checkoutBlockClient() {
 // Every block write: one READ COMMITTED transaction (the block deletion
 // guard requires it), bounded lock waits and idle time - it holds the
 // exclusive block lock that every exercise reuse takes shared -, and the
-// caller still an active platform admin in the platform workspace. A
-// refusal is rolled back.
+// caller still an active platform admin in the platform workspace (its users
+// row locked first, the platform revocation's `for update of u, g` order; the
+// lock-order pull request). A refusal is rolled back.
 async function beginBlockWrite(runQuery, userId) {
   await runQuery("begin isolation level read committed");
   await runQuery("set local lock_timeout = '2s'");
@@ -190,7 +191,7 @@ async function beginBlockWrite(runQuery, userId) {
   await runQuery("select pg_advisory_xact_lock(hashtextextended('exercise_collections', 0))");
   const actor = await runQuery(`select r.id from public.user_global_roles r join public.users u on u.id = r.user_id
     where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
-      and ${exerciseAdministratorSql} for share of r,u`, [userId]);
+      and ${exerciseAdministratorSql} for share of u, r`, [userId]);
   if (actor.rowCount) return null;
   await runQuery("rollback");
   return { status: 404, error: "notFound" };
