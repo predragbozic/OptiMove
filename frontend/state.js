@@ -103,6 +103,11 @@ export const emptyCentralCalendarState = () => ({
   // was open; the next form reads the types again (K2b-1c).
   eventTypes: null,
   eventTypesStale: false,
+  // K2b-1d: the rest of GET /events/types ({ fields, locations, teamDefaults },
+  // null with the types), and the open event panel's manager read (GET /:id:
+  // { key, loading, error, event }) for its details and their values.
+  eventCatalog: null,
+  panelEvent: null,
   form: null,
 });
 

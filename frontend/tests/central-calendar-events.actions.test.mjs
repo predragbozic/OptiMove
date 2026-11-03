@@ -471,7 +471,9 @@ test("4b. Edit and Cancel event only on an event whose card says canManage and t
   await act({ action: "central-calendar-edit-event", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
   await act({ action: "central-calendar-cancel-event", key: `event:${E_MEETING}:${DAY(0)}`, date: DAY(0) });
   assert.equal(state.centralCalendar.form, null);
-  assert.equal(calls.filter((call) => call.url.startsWith("/api/calendar/events")).length, 0, "not even the event is read");
+  // K2b-1d: a manager's card names its type, so the calendar reads the
+  // catalog once for the type's icon; no event is read (no chosen details).
+  assert.deepEqual(calls.filter((call) => call.url.startsWith("/api/calendar/events")).map((call) => call.url), ["/api/calendar/events/types"], "not even the event is read");
 });
 
 // --- 5. Create --------------------------------------------------------------------

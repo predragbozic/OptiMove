@@ -1155,3 +1155,320 @@ checks the delta).
 | NIT, wording | **the manager's decision:** "Collected after it" and the frozen detail's sentence by kind (20.5) stay; the manager shows them to the owner | — | — |
 
 Mutations in all: 24 run, 23 killed, 1 equivalent (M10, 20.4).
+
+## 21. K2b-1d — the event form, the panel and the cards (the manager's GO in 21.9; as built in 21.11)
+
+Branch `central-calendar-k2b-1d` from `origin/main` `bb4b27d` (the merge of PR #343, K2b-1c, deployed). The intent is
+section 7; the API is K2b-1b as built (18.3, 18.8); the catalog screen is section 20. **Frontend only** for everything
+below except where 21.6 says a backend change would be needed — those two points wait for the manager.
+
+### 21.1 What the API gives today (checked in the code)
+
+- `GET /api/calendar/events/types` → `{ types, fields, locations, teamDefaults }`: each type with `iconKey`, `colorKey`
+  and its live `defaultFieldIds`; the workspace's live details (with live options, `required`, unit, bounds); the club's
+  live places; `{ teamId: locationId }` (`backend/src/calendarSettingsService.js` `eventFormOptions`).
+- The calendar card (`backend/src/calendarQuery.js` `publicCard`): `place` (`{ source: "library", locationId, name,
+  address, note }`, `{ source: "one_off", text }` or `null`) and `location` for everyone who sees the card; a
+  **manager's** card also `eventTypeId` and `details: { selected, filled, required, filledRequired }`; the status
+  `awaiting_entry` also counts a chosen required detail without a value after the event's last day (manager cards only).
+  **Not on the card:** the type's icon and colour (section 5.4 named `eventTypeIconKey` / `eventTypeColorKey`; K2b-1b did
+  not add them), and a reader's card carries no `eventTypeId`.
+- `GET /api/calendar/events/:id`: the manager's view adds `locationId`, `place` and `fields` (each chosen detail with its
+  definition, its live options plus a hidden one a value names, and `value`); the reduced view (another coach) `place`
+  only (T7).
+- `POST /api/calendar/events/:id/fields` `{ requestKey, expectedRevision, values: [{ fieldId, value }] }` (1–30): by kind
+  an option id, a number in the bounds (≤ 3 decimals), 1–5, a boolean, a one-line text ≤ 200; `null` clears; refusals
+  `400 field_not_available`, `400 invalid_value { fieldId }`, `409 event_changed { current }`, `409 event_cancelled`, the
+  one 404; the answer `{ event }` (the manager's view).
+- `POST /events` and `PATCH /events/:id` take `locationId` (never with `location`: `400 invalid_location`) and `fieldIds`
+  (absent at create → the type's live defaults; on an edit the list is rewritten by difference; a type change alone never
+  changes it, 18.7).
+- **The platform workspace's calendar answer has no `teams[]`** (`loadWorkspaceTeams` answers `[]` for it), so team names
+  are not available there today (21.6).
+
+### 21.2 The event form (`frontend/central-calendar-event-form.js`, `central-calendar-actions.js`)
+
+- **Place:** two choices, *From the club's places* (a select of the live places, each with its address) and *Another
+  place* (today's one-off text, ≤ 120); never both in a body. A private coach (no `locations`) sees the text only. A new
+  team event, or a new club event whose targets are exactly one team, pre-selects that team's default place
+  (`teamDefaults`) until the coach touches the place; the hint says where it came from. On an edit the event's place stays
+  as it is (a library place that is archived now shows "(archived)" and is not sent unless changed).
+- **Details to fill in after the event** (the D36 word): at create the chosen type's `defaultFieldIds` pre-chosen and
+  re-chosen on a type change until the coach touches the list (the D19 behaviour of `expects`); *Add a detail* from the
+  workspace's live details; *Remove*; *Move up* / *Move down*; each line with its kind and *Required* mark. A create whose
+  list the coach never touched sends no `fieldIds` (the server copies the type's live defaults); a touched list is sent
+  in order. On an edit the list comes from `GET /:id` `fields`, an archived detail already chosen stays marked
+  "(archived)" and may stay or go; a new entry is a live detail. **A type change on an edit leaves the list as it is**
+  (18.7): the form offers *Replace with the new type's details* (one button, asks nothing, the coach can still undo by
+  editing the list before saving).
+- **Type:** `eventTypeLabel: null` (a moved team's event, D41) reads as the kind's word on the static *Type* line;
+  `eventTypeId: null` makes the type select start at *Choose a type*; an edit that does not change the type sends none
+  (the server keeps the stored one) — the two follow-ups of section 17.
+- One sentence in the form, once: RPE, GPS and test results are under *What should this event collect?*; the details are
+  filled in by a coach.
+
+### 21.3 The event panel (`frontend/central-calendar-view.js` and actions)
+
+- **Place, for everyone who sees the card:** a library place's name, address and note (on its lines) and *Open in maps*
+  (the address alone, built in the browser, a new tab, `rel="noopener noreferrer"`, the K2b-1c helper); a one-off place
+  its text; no link without an address. From the card's `place` — no extra read.
+- **Details, for a manager only (T7):** when the card's `details.selected` > 0 the panel reads `GET /:id` once on open
+  (the edit form's read, reused) and shows each chosen detail with its value ("Not filled in" otherwise) and "2 of 3
+  filled", a required one marked. *Enter details* opens one small form in the panel: per kind a select (the live options
+  and a hidden one the value still names), a number field with its unit and bounds in the hint, five radio buttons for a
+  scale, Yes / No / Not answered for yes-no, a one-line text; clearing a field sends `null`. Only the changed values are
+  sent. The K2a-2 discipline: a fresh `requestKey`, the form locked while it is in flight, the 90 s bound, *Result not
+  confirmed* · *Check result* with the same key and body (settled only by the answers given after the server reads its
+  request record: `invalid_values` / `invalid_value`, `field_not_available`, `event_changed`, `event_cancelled`,
+  `invalid_revision`, `invalid_request_key`), `409 event_changed` reloads the panel with its sentence, `event_cancelled`
+  and `field_not_available` read as sentences, `invalid_value` marks the field. After a saved write the calendar is read
+  again (the status and the counts change).
+- A reader who is not a manager sees the place and nothing of the details; the athlete has no calendar screen before
+  K2b-1e (the API already sends the athlete only the place, D21 / D27).
+
+### 21.4 The cards
+
+- **Type icon and colour:** from the loaded catalog (`/events/types`, read once per workspace with the calendar, already
+  cached in `state.centralCalendar.eventTypes`): a card whose `eventTypeId` is in the catalog shows the type's icon (else
+  the kind's) tinted with its colour; the stripe stays the team's colour. Only a manager's card carries `eventTypeId`, so
+  a reader's card keeps the kind's icon — see 21.6, Q1.
+- **Awaiting details:** `awaiting_entry` on a manager's card whose required details are not all filled
+  (`details.required > details.filledRequired`) reads *Awaiting details* — before *Awaiting device data* (which nothing
+  can satisfy yet), after RPE, result and attendance.
+- **The details count** on a manager's card when the event has chosen details: "Details 2/3" beside the other counts;
+  the panel says it in words.
+
+### 21.5 Settings → Calendar: the *Required* switch (P1 of K2b-1c, turned on)
+
+The detail form gains *Required* (a checkbox, off by default) with D25's sentence: "Optional details only remind the
+coach; a required one makes the event wait until it is filled." Create sends it; an edit sends it when changed (allowed
+on an answered detail too, 2.3). This is why 1d ships whole.
+
+### 21.6 Open points for the manager
+
+- **Q1 — the type's icon and colour on a reader's card.** (a) *Recommended for 1d:* frontend only — a manager's card
+  (it carries `eventTypeId`) shows the type's icon and colour from the catalog; a reader's card keeps the kind's icon.
+  (b) A small backend change: the card gains `eventTypeIconKey` / `eventTypeColorKey` under the D41 predicate of the type
+  label (section 5.4's original plan) — that is a backend change, so it stops here, and it brings the security review and
+  the external review (trigger 2).
+- **Q2 — team names with their club ("U19 · Borac").** The only view with teams of several clubs at once is the platform
+  workspace, and its calendar answer has no `teams[]` at all today (the cards there name no team). So this needs a backend
+  change (`loadWorkspaceTeams` for the platform workspace, with each team's club name). Recommended: its own small
+  backend slice after 1d (with the security review: the platform admin's cross-club read), not in 1d. If another view was
+  meant, the manager names it and it is checked first.
+- **Q3 — where values are entered:** in the panel (recommended: the values are entered after the event, without opening
+  the whole event form), or inside *Edit*.
+- **Q4 — the card's count:** "Details 2/3" whenever the event has chosen details (recommended), or only while a
+  required one is missing.
+- T — the panel's one extra read (`GET /:id`) for a manager's event with details; nothing for other cards.
+
+### 21.7 Not in 1d
+
+"Ask athletes" (K2b-2, through Tests), the athlete's *Upcoming events* (K2b-1e), Builder ↔ calendar (K2c). The LOW of
+1c (an Undo in the archive notice, the archive's side effects named, each swatch naming its team) only if they come
+cheaply on the way; otherwise they stay recorded (20.5).
+
+### 21.8 Tests and checks
+
+- Frontend tests through the real handlers and templates with a fake fetch that keeps the K2b-1b contracts (the card's
+  and the views' shapes, the values command's refusals): the place choice (library / one-off / never both / the team's
+  default pre-selected until touched / a private coach text only), the details list (defaults copied and re-copied until
+  touched, untouched → no `fieldIds`, add / remove / order, an archived one kept marked, *Replace with the new type's
+  details*, a type change alone sending no `fieldIds`), the type fallbacks, the panel (place for every viewer, details
+  for a manager only, one read, each kind's input, `null` clears, only changes sent, a hidden option kept), the values
+  command (same key and body on Check result, the settled set, each refusal's sentence, a re-read after a saved write),
+  the cards (type icon and colour from the catalog, *Awaiting details* and its order, the count), the *Required* switch
+  and D25's sentence; mutations on the key guards.
+- `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA on the branch's real server and a disposable database
+  through v51 at 1280 / 390 / 375 / 360 px (an event with a library place and details, values entered, a past event with
+  a required detail empty → *Awaiting details*, a reader coach's panel); `frontend-fast`, the build, `git diff --check`;
+  push and a pull request, stopping before the merge.
+
+### 21.9 The manager's decisions (2026-11-03) — GO for K2b-1d
+
+- **Q1 → (a).** A manager's card shows the type's icon and colour from the catalog; a reader's card keeps the kind's icon.
+  The backend fields `eventTypeIconKey` / `eventTypeColorKey` under the D41 predicate (option b) go to a small backend
+  slice after 1d, with Q2.
+- **Q2 →** that slice, called **K2b-1d2** (Q1 (b) and Q2 together): the platform workspace's `teams[]` with each team's
+  club name, with the security review. Only recorded in 1d.
+- **Q3 → the panel.** Values are entered in the event's panel, without opening the whole form.
+- **Q4 → "Details 2/3"** whenever the event has chosen details.
+- **T → accepted:** one more `GET /:id` when the panel of a manager's event with details opens.
+- **The words:** the form names RPE, GPS and test results under the heading the Settings screen uses for a type,
+  *Collected after it* (1c); where the two differ they are made the same, and the chosen words are recorded in 21.10.
+
+### 21.10 The words chosen
+
+- **One heading for RPE, GPS and test results.** The event form said *What should this event collect?*, the Settings
+  screen *Collected after it* (1c). They now both say **Collected after it**; the form's line under it ("Ticking a box
+  does not ask anyone…") is unchanged.
+- **The details** in the form: **Details to fill in after the event** (D36), with the one line "After the event,
+  open it in the calendar and choose Enter details. RPE, GPS and test results are under Collected after it." Each row
+  names its kind ("Number · Required", "Short text", "… · Archived"); *Add a detail…* and *Add*; *Remove*; the arrows
+  *Move "…" up* / *down*; on an edit whose type changed, "Changing the type keeps this event's details." and **Replace
+  with the new type's details**. With nothing chosen and nothing to choose, the section is not shown.
+- **The place** in the form, after *Who is it for?* (its default follows the targets): **Place (optional)**, a select of
+  *No place*, the group *The club's places* as "Name — address" (an archived one "… (archived)"), and *Another place…*,
+  which shows the text field **Another place** with "Leave it empty for no place."; the hint is "Address: …" or "No
+  address.", with "First team's default place." (the team's name) in front while it is the team's. Without places the
+  text alone, **Place (optional)**.
+- **The panel:** the place's name, its address with **Open in maps**, its note; **Details**, "2 of 3 filled in · 1
+  required detail is still empty.", each detail with its value or "Not filled in" and "(required)"; **Enter details**.
+  Before the event's day, an event with details and nothing to collect reads "Its required details are due after the
+  event." or "Nothing is required after this event; its details are optional."
+- **Enter details:** the form *Enter details* with the event's title and its days, "Leave a detail empty to clear it.
+  Only the details you change are saved.", *Not filled in* for every kind (a choice, yes / no, the scale), a hidden
+  option "… (hidden)", *Save details*; "Nothing changed: change a detail, or Close."; "Discard the details you have not
+  saved?"; "The details of "…" were saved." / "… were not saved."; after a change by someone else "enter the details
+  again"; the line of a save left unconfirmed "Check the details of "…"".
+- **The card:** **Awaiting details**, and "Details 2/3" (after "RPE 3/10 · " when both are there); the panel's sentence
+  "The event has ended and 1 required detail is still empty." (the server counts it after the event's last day).
+- **Settings → Calendar:** the detail form's fact "Filled by coach" and the switch **Required** with D25's sentence
+  "Optional details only remind the coach; a required one makes the event wait until it is filled."; on an edit of a
+  detail that events use, also "Switching it applies to every event that uses this detail (N events), past ones
+  included." (the place form's sentence of 1c, for the same reach).
+
+### 21.11 As built
+
+- **Modules:** a new `frontend/central-calendar-event-details.js` (the place and the details of the event form, the
+  panel's place and details, the *Enter details* inputs and their request); `central-calendar-event-form.js` (a fourth
+  mode, `values`, beside create, edit and cancel, so *Enter details* shares the K2a-2 write discipline);
+  `central-calendar-actions.js` (the inputs and actions, `WRITES.values`, the panel's read); `central-calendar-data.js`
+  (`setCentralCalendarEventFields`, the catalog read); `central-calendar-view.js` (the panel, the cards);
+  `calendar-settings-{actions,view}.js` (*Required*); `state.js` (`eventCatalog`, `panelEvent`); `styles.css`.
+  **No backend change.**
+- **The catalog** (`readCentralCalendarCatalog`): `GET /api/calendar/events/types` once per workspace, its `types` in
+  `eventTypes` and `{ fields, locations, teamDefaults }` in `eventCatalog`. The calendar reads it after its own answer
+  only when that answer holds a manager's event card with an `eventTypeId` (a reader-only calendar reads nothing more);
+  the cards and a form opened meanwhile share one read; an answer that a Settings → Calendar write overtook is not
+  used: the catalog is read again (`centralCalendarCatalogChanged` counts the writes).
+- **The place in the form:** a library place sends `locationId` alone, *Another place* its text alone, never both. A
+  new team event, or a new club event whose targets are exactly one team and not the club (athletes chosen beside it
+  do not change that; the manager accepted it, 2026-11-03), starts at the team's live
+  default place and follows the targets until the coach touches the place. Without places (a private coach, a club
+  that has added none) the text is the only control and typing it is the choice of *Another place*. An edit starts at
+  the event's place; an archived library place stays chosen as "(archived)" and is sent only when it changes (to
+  another place: `locationId`; to a text: `location`; to none: `locationId: null` or `location: null`). The place is
+  drawn after the targets it follows. Where the catalog is not the event's own — the platform edits as support, or the
+  types could not be read — the event's place is not called archived and no detail is offered or replaced.
+- **The details in the form:** at create the type's defaults that are live in the catalog, chosen again on a type change
+  until the coach touches the list; an untouched list sends no `fieldIds` (the server copies the type's live defaults),
+  a touched one is sent in its order (at most 30). On an edit the list is the event's `fields`, an archived one kept and
+  marked; a type change alone leaves the list and sends no `fieldIds`; *Replace with the new type's details* replaces it
+  (an edit sends `fieldIds` only when the list differs).
+- **The type's fallbacks** (section 17): an event without a type label reads its kind's word; an event without a type
+  starts at *Choose a type*, and an edit sends `eventTypeId` only when one is chosen and differs.
+- **The panel:** the place from the card's `place`, for everyone who sees the card, with no read (*Open in maps* only
+  with an address: the 1c helper, a new tab, `noopener noreferrer`). A manager's event card with `details.selected > 0`
+  reads `GET /:id` once when its panel opens (`cal.panelEvent`, keyed by the card, dropped when an item opens so an
+  earlier read is never shown). After every calendar answer applied (a save, Try again, a refresh; the data module's
+  hook) the open panel is checked against its card: it reads the details when the card has them and the panel has no
+  read of this card, and again when the card's event revision is not the one read — a save here or elsewhere, one whose
+  answer lands after the coach left the form included; a read already running is awaited, never sent twice. A failed
+  read offers *Try again*, except for the identical 404 and a lost sign-in; a reader's card and a manager's card without details read nothing. *Enter
+  details* is not offered on a cancelled event.
+- **Enter details** (the form's `values` mode): opened from the panel, it checks first an unconfirmed write of the same
+  event (the event's Edit and Cancel check a values write too), then reads the event again for its latest values and
+  revision. Inputs by kind: a select with the live options and a hidden one the value still names, a number field
+  (`inputmode="decimal"`, a comma read as a decimal point, at most three decimals, the bounds in the hint), radios for
+  yes / no and the scale with *Not filled in*, a one-line text (≤ 200, the server's `boundedText` rule checked first). Only the changed values are sent (spaces alone
+  are no change, and neither is the same number written another way, "2,5" for 2.5; an emptied one is `null`); a
+  wrong value is marked on its input and nothing is sent. The decimal keypad (`inputmode="decimal"`) only for a detail
+  whose lowest value is 0 or more: the iOS decimal keypad has no minus key. A dirty form asks before it goes. The write: a
+  fresh `requestKey`, the form locked, the 90 s bound, *Result not confirmed* · *Check result* with the same key and
+  body; a Check result is settled also by `invalid_request_key`, `invalid_fields`, `location_not_available`,
+  `field_not_available`, `invalid_values` and `invalid_value` (all given after the request record). `invalid_value`
+  marks its detail (one that names no detail of the form says "A value was not accepted. Check the details and save
+  again. Nothing was saved."); `field_not_available`, `event_changed` and `event_cancelled` close the form and read the calendar
+  and the panel again with their sentence; a 404 or a reader's view on opening closes it with the neutral sentence.
+- **The cards:** a manager's event card whose `eventTypeId` is in the catalog wears the type's icon (when it is one of
+  the library's) tinted with the type's colour; the stripe stays the team's. A reader's card, and a type id on a card
+  without `canManage`, keep the kind's icon (Q1 (a)). *Awaiting details* when the required details are not all filled,
+  after RPE, result and attendance and before device data; "Details x/y" whenever the event has chosen details (Q4).
+- **Settings → Calendar:** the detail form's *Required* switch, off for a new detail; a new detail sends it, an edit only
+  when it changed (on an answered detail too, 2.3).
+- **Recorded, not built (K2b-1d2, 21.9):** the card's `eventTypeIconKey` / `eventTypeColorKey` under the D41 predicate
+  for every viewer (Q1 (b)), and the platform workspace's `teams[]` with each team's club name (Q2) — one small backend
+  step with the security review.
+
+### 21.12 Tests and the browser check
+
+- **Tests** (the T1 runner, Node 24): a new `frontend/tests/central-calendar-event-details.actions.test.mjs` (30 tests,
+  D1–D30, through the real handlers and templates with a fake fetch that keeps K2b-1b's shapes and refusals: the place
+  choice, the team's default, a private coach's text, the details list at create and on an edit, *Replace*, the type's
+  fallbacks, the panel for a manager and for a reader, *Enter details* by kind, its body, its lost answer and Check
+  result, its refusals, the cards, the catalog read and its drop by a Settings write, *Awaiting details* and the
+  counts). Changed: `calendar-settings.actions.test.mjs` 12–14 (the *Required* switch: off by default with D25's
+  sentence, `required: true` when ticked, an edit sends it only when changed, on an answered detail too) and
+  `central-calendar-events.actions.test.mjs` 4b (a manager's card now reads the catalog once, and still no event).
+- **Mutations:** 14 on the key guards (a library place with its text, an untouched list sent, the team's default over a
+  touched place, a type change over a touched list, unchanged values sent, the text without *Another place*, a
+  reader's panel reading the event, `invalid_value` not settling a check, a reader's card trusting a type id, *Awaiting
+  details* after device data, the catalog read for every calendar, *Required* on an edit and at create, a type change
+  sending the list): all killed. After the review round 10 more on its fixes (no discard question, a late answer
+  without the panel's read, a number written another way taken as a change, the platform's catalog trusted, the decimal
+  keypad for every number, a reopened panel keeping the earlier read, an overtaken catalog read used, *Required*
+  without its reach, the place above the targets, a hint without the team's name): all killed — one first survived (a
+  late answer's panel read) and was killed after D22 was made to let the read on leaving finish first.
+- **The browser check** (the branch's real server on a disposable database `optimove_tests_gpexe_k2b1dqa_*` through
+  the calendar fixture, dropped afterwards; the scaffold's missing tables answer 500 for notifications, messages and
+  the athletes list, as in 1c, and every `/api/calendar` request answered 200 / 201): the club admin at 1280 px — the
+  cards (*Awaiting details* and "Details 0/2" on yesterday's match with an empty required detail, "Details 1/3" and
+  the type's colour on the icon), the panel (one `GET /:id`, the library place with its address, note and *Open in
+  maps*, "1 of 3 filled in · 1 required is still empty."), *Enter details* with "2,5" and a text with spaces saved as
+  2.5 and the trimmed text, the calendar and the panel read again ("Details 3/3"); the new event form (the places,
+  *Collected after it*, the details list with its hint, First team's default place with its hint, none for two teams);
+  390 px — the sheet (44 px targets, no sideways scroll), *Edit* adding a scale detail (the rows' buttons wrap under
+  the name), *Enter details* with the scale's radios (44 × 44) sending `4` and an emptied text sending `null`; 375 px —
+  a team coach (a reader): the place with *Open in maps*, no details, no *Enter details*, no `GET /:id`, no catalog
+  read; 360 px — *Another place*'s text field, every field 16 px and every control 44 px, no overflow, and Settings →
+  Calendar's *Required* switch (a 44 px row, D25's sentence) saving `required: true`.
+
+### 21.13 The internal review round (on `34e1f8f`)
+
+`code-reviewer`, `mobile-qa` and `ux-design-reviewer`, each with the full packet (the goal, 21.9, the acceptance
+criteria, the diff, the contracts, the tests and their results). Each answered READY WITH NON-BLOCKING NOTES; no BLOCKER
+or HIGH. Every MEDIUM is fixed in this pull request with a test; the LOWs that were safe and in scope too.
+
+| Finding | Reviewer, severity | Correction | Test | Status |
+|---|---|---|---|---|
+| A dirty *Enter details* form closed without a question (`DISCARD_QUESTION` had no `values`) | code, UX — MEDIUM | "Discard the details you have not saved?" | D21 (M15) | Fixed |
+| A write settled after the coach left its form read the calendar but not the panel's details: the card and the panel disagreed | code — MEDIUM | `lateAnswer` and `rereadAfterUncertainWrite` read the open panel's details again | D22 (M16) | Fixed |
+| The place sat above *Who is it for?* while its default follows the targets; the hint did not name the team | UX — MEDIUM | the place after the targets; "First team's default place." | D24, D2 (M23, M24) | Fixed |
+| *Required* turned on reaches every past event that uses the detail, unsaid | UX — MEDIUM | "Switching it applies to every event that uses this detail (N events), past ones included." on an edit | Settings 14 (M22) | Fixed |
+| The iOS decimal keypad has no minus key, and a detail may be negative (°C) | mobile — MEDIUM | `inputmode="decimal"` only for a lowest value of 0 or more | D12 (M19) | Fixed |
+| A panel opened again showed the earlier read's values for a moment | code — LOW | the read dropped when an item opens and before a re-read | D26 (M20) | Fixed |
+| The platform's support edit trusted a catalog that is not the club's ("(archived)" on a live place, system details offered) | code — LOW | no archived mark and no offer or Replace without the event's own catalog | D25 (M18) | Fixed |
+| A catalog read overtaken by a Settings write was still used for a new form | code — LOW | read again | D26 (M21) | Fixed |
+| "2,5" over a stored 2.5 was sent as a change | code — LOW | compared as numbers | D23 (M17) | Fixed |
+| The radio kept the global input's padding and border | mobile — LOW | `padding: 0; border: 0` (20 × 20 measured) | browser check | Fixed |
+| 4 px between the arrows and *Remove*; `.cc-detail-add select` beat `.cc-event-form select` only by order | mobile — NIT | 8 px; `.cc-event-form .cc-detail-add select` | browser check | Fixed |
+| The words: "in the event's panel"; "Another place (optional)"; no group for the club's places; an empty details section; "Nothing is expected" over optional details; "1 required is"; "Not answered" against "Not filled in"; the edit form's "change a field" / "make your change again"; no days in *Enter details*; *Replace* without a reason | UX — LOW | as in 21.10 | D4, D10, D12, D20, D24 | Fixed |
+
+No narrow re-review: no BLOCKER or HIGH was found (`CLAUDE.md`, the Definition of done). The browser check was run
+again on the branch's real server and a new disposable database (dropped) at 375 px for the delta: the place after the
+targets with "First team's default place.", *Another place* with its hint, the group *The club's places*, the details'
+hint, an 8 px gap, the scale's radio at 20 × 20 with no padding or border, *Enter details* with its day, the discard
+question keeping a dirty form, and Settings' *Required* naming its reach on "Our score" (2 events), with no overflow.
+
+Not checked (recorded): a physical iPhone or Android (the number keypad, the native select with long "name — address"
+options, the radios' painting); 320 px.
+
+### 21.14 The independent review of PR #349 (on `bd4cc08`)
+
+READY WITH NON-BLOCKING NOTES, no BLOCKER, HIGH or MEDIUM. Its 30 scenarios and 2 for Settings passed, with every body
+they made checked by the real backend validators; of its 18 mutations, 3 survived this pull request's tests and were
+killed by its scenarios (M18 cannot be reached from the screen); `frontend-fast` as here, the same 4 files failing on a
+clean `1cfaf64`. The manager ordered one small round with no new internal review; the manager checks the delta.
+
+| Finding | Severity | Correction | Test | Status |
+|---|---|---|---|---|
+| A panel opened while its card had no details stayed at "Loading the details…" after a refresh brought them, with no read (K1); the same gap left the values of an event changed elsewhere stale until the panel opened again | LOW | the data module calls the actions' panel check after every calendar answer applied: a read when the card has details and the panel none of this card, again when the event's revision changed; one read at a time | D27 (M25, M26) | Fixed |
+| `invalid_value` without a `fieldId` (a race on a detail's limits) said "Check the marked fields…" with nothing marked | LOW | "A value was not accepted. Check the details and save again. Nothing was saved." when the refusal names no detail of the form | D28 (M27) | Fixed |
+| The reviewer's L1, T3 and part of D1 had no equivalent here (its M13, M14, M16) | LOW | a late read of event A never lands in event B's panel; a place's markup is text on the card, in the panel and in the form; a detail outside the catalog is never added | D29, D30, D5 (M13′, M14′, M16′) | Fixed |
+| *Try again* after the identical 404 (and a lost sign-in) | NIT | hidden | D11 (M28) | Fixed |
+| 21.11 said *Not answered* where the code says *Not filled in*; the team default's rule with athletes beside one team was not written | NIT | corrected; one line in 21.11 (the manager accepts the rule) | — | Fixed |
+| The server's text rule on a short text was met only by the server | NIT | `TEXT_FORBIDDEN` (the frontend twin of `boundedText`'s list) checked before sending | D12 (M29) | Fixed |
+
+All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
+from elsewhere did not read an open panel's details again — is closed by the first row.

@@ -1,7 +1,12 @@
-import { calendarTeamColorIndexes } from "./calendar-colors.js";
+import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
 import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS } from "./central-calendar-data.js";
+import {
+  centralCalendarCatalogOf,
+  renderCentralCalendarEventDetailsHtml,
+  renderCentralCalendarEventPlaceHtml,
+} from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
-import { renderIconSvg } from "./icon-render.js";
+import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
 // Central calendar (K1b, K2a-2) - the screen over GET /api/calendar
@@ -132,13 +137,36 @@ export function centralCalendarChipCounts(byDate, days) {
   return { teams, kinds, eventKinds, total };
 }
 
-export function centralCalendarItemIconKey(item) {
-  if (item?.kind === "event") return CENTRAL_CALENDAR_EVENT_KIND_ICONS[item.eventKind] || CENTRAL_CALENDAR_KIND_ICONS.event;
+// The workspace's event types by id (the catalog the calendar holds, set on
+// every render): a manager's event card carries its `eventTypeId`, and shows
+// that type's icon and colour (K2b-1d, Q1 (a)). A reader's card names no type
+// and keeps its kind's icon (K2b-1d2 adds the icon to every card).
+let cardTypes = new Map();
+
+export function centralCalendarCardType(item, types = cardTypes) {
+  if (item?.kind !== "event" || item.canManage !== true || !item.eventTypeId) return null;
+  return types.get(String(item.eventTypeId)) || null;
+}
+
+export function centralCalendarItemIconKey(item, types = cardTypes) {
+  if (item?.kind === "event") {
+    const type = centralCalendarCardType(item, types);
+    if (type && isLibraryKey(type.iconKey)) return type.iconKey;
+    return CENTRAL_CALENDAR_EVENT_KIND_ICONS[item.eventKind] || CENTRAL_CALENDAR_KIND_ICONS.event;
+  }
   return CENTRAL_CALENDAR_KIND_ICONS[item?.kind] || CENTRAL_CALENDAR_KIND_ICONS.event;
 }
 
-function itemIconHtml(item, className = "cc-card-icon") {
-  return renderIconSvg(centralCalendarItemIconKey(item), { size: 16, className });
+// The type's colour on its icon (the stripe stays the team's colour).
+function typeColorStyle(item) {
+  const index = calendarColorIndex(centralCalendarCardType(item)?.colorKey);
+  return index < 0 ? null : `--cc-type-color: var(--cc-team-${index})`;
+}
+
+function itemIconHtml(item, className = "cc-card-icon", size = 16) {
+  const color = typeColorStyle(item);
+  const svg = renderIconSvg(centralCalendarItemIconKey(item), { size, className: color ? `${className} has-type-color` : className });
+  return color ? `<span class="cc-type-tint" style="${color}">${svg}</span>` : svg;
 }
 
 function eventKindWord(item) {
@@ -241,6 +269,7 @@ export function centralCalendarStatusBadge(item, today = "") {
       if (expects.includes("rpe") && item.rpe && item.rpe.submitted < item.rpe.asked) return { label: "Awaiting RPE", tone: "awaiting" };
       if (expects.includes("test_result") && item.results && item.results.completed < item.results.expected) return { label: "Awaiting result", tone: "awaiting" };
       if (item.attendance && item.attendance.needsState > 0) return { label: "Awaiting attendance", tone: "awaiting" };
+      if (detailsMissing(item) > 0) return { label: "Awaiting details", tone: "awaiting" };
       // An event's unmet GPS / device data (K2a plan 3.2): the import is the coach's next step.
       if (item.kind === "event" && expects.includes("device_data")) return { label: "Awaiting device data", tone: "awaiting" };
       return { label: "Awaiting entry", tone: "awaiting" };
@@ -260,7 +289,20 @@ export function centralCalendarStatusBadge(item, today = "") {
   }
 }
 
-// The one count a card shows (D14): RPE x/y, x/y present, Results x/y.
+// A manager's event card counts its chosen details (K2b-1b): the required
+// ones still empty, and "Details 2/3" whenever it has any (Q4).
+function detailsMissing(item) {
+  const details = item?.kind === "event" ? item.details : null;
+  return details ? Math.max(0, (Number(details.required) || 0) - (Number(details.filledRequired) || 0)) : 0;
+}
+
+function detailsCountLabel(item) {
+  const details = item?.kind === "event" ? item.details : null;
+  return details && details.selected > 0 ? `Details ${details.filled}/${details.selected}` : "";
+}
+
+// The one count a card shows (D14): RPE x/y, x/y present, Results x/y; an
+// event with chosen details also "Details x/y" (K2b-1d).
 export function centralCalendarCountLabel(item) {
   if (item.kind === "activity") {
     if (item.attendance) return `${item.attendance.present}/${item.attendance.roster} present`;
@@ -268,7 +310,7 @@ export function centralCalendarCountLabel(item) {
     return "";
   }
   if (item.kind === "test") return item.results ? `Results ${item.results.completed}/${item.results.expected}` : "";
-  return item.rpe ? `RPE ${item.rpe.submitted}/${item.rpe.asked}` : "";
+  return [item.rpe ? `RPE ${item.rpe.submitted}/${item.rpe.asked}` : "", detailsCountLabel(item)].filter(Boolean).join(" · ");
 }
 
 // One sentence under the badge in the panel.
@@ -291,6 +333,9 @@ export function centralCalendarStatusSentence(item) {
       if (item.attendance && item.attendance.needsState > 0) {
         return `Attendance is not complete: ${plural(item.attendance.needsState, "athlete still needs", "athletes still need")} a state.`;
       }
+      if (detailsMissing(item) > 0) {
+        return `The event has ended and ${plural(detailsMissing(item), "required detail is", "required details are")} still empty.`;
+      }
       if (item.kind === "event" && expects.includes("device_data")) return "The day has passed and no imported activity is linked to this event yet.";
       return "The day has passed and an entry is still missing.";
     case "missed":
@@ -303,7 +348,12 @@ export function centralCalendarStatusSentence(item) {
       // An imported activity of today is recorded, not planned.
       return item.kind === "activity" ? "Nothing is due yet: the day has not passed." : "Planned: nothing is due yet.";
     case "none":
-      if (item.kind === "event") return expects.length ? "Nothing is being collected: see the note below." : "Nothing is expected after this event.";
+      if (item.kind === "event") {
+        if (expects.length) return "Nothing is being collected: see the note below.";
+        if (item.details?.required > 0) return "Its required details are due after the event.";
+        if (item.details?.selected > 0) return "Nothing is required after this event; its details are optional.";
+        return "Nothing is expected after this event.";
+      }
       return "Nothing was asked for this item, so there is nothing to wait for.";
     default:
       return "";
@@ -348,7 +398,7 @@ function cardAriaLabel(item, teams, today) {
   if (when) parts.push(when);
   const span = centralCalendarSpanLabel(item);
   if (span) parts.push(span);
-  if (item.kind === "event" && item.location) parts.push(item.location);
+  if (item.kind === "event" && eventPlaceText(item)) parts.push(eventPlaceText(item));
   if (centralCalendarScheduleSeparate(item)) parts.push(SEPARATE_WORDS);
   const badge = centralCalendarStatusBadge(item, today);
   if (badge) parts.push(badge.label);
@@ -359,12 +409,21 @@ function cardAriaLabel(item, teams, today) {
   return parts.join(", ");
 }
 
+// The place a card names: a library place's name, a one-off text, else the
+// legacy `location` (K2b-1b's `place`; the address is the panel's).
+function eventPlaceText(item) {
+  const place = item.place;
+  if (place?.source === "library" && place.name) return place.name;
+  if (place?.source === "one_off" && place.text) return place.text;
+  return item.location || "";
+}
+
 export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "" } = {}) {
   const when = centralCalendarWhenLabel(item);
   const count = centralCalendarCountLabel(item);
   const span = centralCalendarSpanLabel(item);
   const firstTeam = (item.teamIds || [])[0];
-  const place = item.kind === "event" && item.location ? item.location : "";
+  const place = item.kind === "event" ? eventPlaceText(item) : "";
   const classes = ["cc-card", `cc-card-${escapeAttr(item.kind)}`];
   if (item.cancelled) classes.push("is-cancelled");
   if (openKey && openKey === item.key) classes.push("is-open");
@@ -388,7 +447,7 @@ function renderMiniCardHtml(item, teams, openKey, today) {
   const firstTeam = (item.teamIds || [])[0];
   return `<button type="button" class="cc-mini cc-mini-${escapeAttr(item.kind)}${item.cancelled ? " is-cancelled" : ""}${openKey === item.key ? " is-open" : ""}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
         <span class="cc-mini-dot" aria-hidden="true"></span>
-        <span class="cc-mini-title">${renderIconSvg(centralCalendarItemIconKey(item), { size: 12, className: "cc-mini-icon" })}${escapeHtml(centralCalendarTitle(item))}</span>
+        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${escapeHtml(centralCalendarTitle(item))}</span>
         ${badge ? `<span class="cc-mini-status cc-mini-status-${badge.tone}" aria-hidden="true"></span>` : ""}
       </button>`;
 }
@@ -783,7 +842,8 @@ function eventDatesText(item) {
 }
 
 // The event's own facts in its panel (K2a-2): the days, the place, what it
-// expects, the gaps, the notes (a manager's view only carries them).
+// expects, the gaps, the notes (a manager's view only carries them); K2b-1d:
+// the place from the card's `place`, and a manager's details below.
 function renderEventFactsHtml(item) {
   const expects = item.expects || [];
   const gaps = (item.gaps || []).map((gap) => GAP_NOTES[gap]).filter(Boolean);
@@ -791,7 +851,7 @@ function renderEventFactsHtml(item) {
   if (item.scheduleFold?.test === "separate") gaps.push("The linked test reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   const multiDay = item.span?.from && item.span?.to && item.span.to !== item.span.from;
   return `${multiDay ? `<p class="cc-panel-note">${escapeHtml(`${eventDatesText(item)} (${centralCalendarSpanLabel(item).toLowerCase()})`)}</p>` : ""}
-      ${item.location ? `<p class="cc-panel-place">${renderIconSvg("map-pin", { size: 16 })}<span>${escapeHtml(item.location)}</span></p>` : ""}
+      ${renderCentralCalendarEventPlaceHtml(item)}
       ${expects.length ? `<p class="cc-panel-note">${escapeHtml(`Collects: ${expects.map((expect) => CENTRAL_CALENDAR_EXPECT_SHORT[expect] || expect).join(", ")}.`)}</p>` : ""}
       ${gaps.map((note) => `<p class="cc-panel-note cc-panel-gap">${escapeHtml(note)}</p>`).join("")}
       ${item.notes ? `<div class="cc-panel-notes"><h4 class="cc-panel-subtitle">Notes <span class="cc-field-optional">(coaches only)</span></h4><p class="cc-panel-notes-text">${escapeHtml(item.notes)}</p></div>` : ""}`;
@@ -842,6 +902,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx) {
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item) : ""}
+      ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
       ${renderEventActionsHtml(item)}
       ${trainingLoad}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
@@ -856,6 +917,7 @@ function renderUncertainWritesHtml(cal, writes) {
   if (cal.form || !writes?.length) return "";
   const label = (entry) => {
     const title = String(entry.eventTitle || "").replace(/\s+/g, " ").trim() || (entry.mode === "create" ? "the new event" : "the event");
+    if (entry.mode === "values") return `Check the details of “${title}”`;
     return entry.mode === "create" ? `Check “${title}”` : entry.mode === "cancel" ? `Check cancelling “${title}”` : `Check the change to “${title}”`;
   };
   return `<div class="cc-refresh-note cc-uncertain-line" role="status">
@@ -876,7 +938,8 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   // The panel column exists only while the open item is really in the answer,
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));
-  const formCtx = { types: cal.eventTypes || [], teams, roster: eventRoster };
+  cardTypes = new Map((cal.eventTypes || []).map((type) => [String(type.id), type]));
+  const formCtx = { types: cal.eventTypes || [], teams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
       ${renderFiltersHtml(cal, counts, teams)}

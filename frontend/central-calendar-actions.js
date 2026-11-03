@@ -11,14 +11,23 @@ import {
   centralCalendarOutcomeUnknown,
   createCentralCalendarEvent,
   fetchCentralCalendarEvent,
-  fetchCentralCalendarEventTypes,
   invalidateCentralCalendarCache,
   loadCentralCalendar,
   loadCentralCalendarDay,
   newCentralCalendarRequestKey,
+  readCentralCalendarCatalog,
+  setCentralCalendarAppliedHook,
+  setCentralCalendarEventFields,
   updateCentralCalendarEvent,
   writeCentralCalendarWeekMode,
 } from "./central-calendar-data.js";
+import {
+  centralCalendarCatalogOf,
+  changeCentralCalendarFields,
+  fillCentralCalendarValuesForm,
+  setCentralCalendarPlaceChoice,
+  setCentralCalendarValue,
+} from "./central-calendar-event-details.js";
 import {
   buildCentralCalendarEventRequest,
   centralCalendarEditFormFromEvent,
@@ -27,6 +36,7 @@ import {
   newCentralCalendarCreateForm,
   newCentralCalendarEditForm,
   newCentralCalendarPendingForm,
+  newCentralCalendarValuesForm,
   renderCentralCalendarAthleteListHtml,
   setCentralCalendarFormExpect,
   setCentralCalendarFormField,
@@ -41,7 +51,8 @@ import { centralCalendarDisplayedDays } from "./central-calendar-view.js";
 // reads through central-calendar-data.js; the two drill-ins hand over to the
 // shell (D5: an athlete's weekly plan on the day; D14: the Training Load
 // activity). The only writes are the event form's (K2a-2): create, edit and
-// cancel, each with a requestKey, never sent again by itself.
+// cancel, and since K2b-1d the details' values (Enter details, the form's
+// "values" mode), each with a requestKey, never sent again by itself.
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -223,7 +234,7 @@ function ask(question) {
   return Boolean(globalThis.window?.confirm?.(question));
 }
 
-const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?" });
+const DISCARD_QUESTION = Object.freeze({ create: "Discard the new event you have not saved?", edit: "Discard the changes you have not saved?", cancel: "Discard the reason you have typed?", values: "Discard the details you have not saved?" });
 
 // The writes the coach left while their result was not known - in flight or
 // not confirmed (the independent review of PR #306, HIGH-1). Memory only, by
@@ -362,10 +373,12 @@ function closeEventForm(render, { asked = false, rereadRender = render } = {}) {
 // - never "the calendar was read again" over the last calendar loaded.
 function uncertainNotice(form, { readFailed }) {
   const title = form.mode === "create" ? oneLineTitle(form.draft.title) : oneLineTitle(form.eventTitle);
-  const what = form.mode === "create" ? `“${title || "the new event"}”` : form.mode === "cancel" ? `cancelling “${title || "the event"}”` : `the change to “${title || "the event"}”`;
+  const what = form.mode === "create" ? `“${title || "the new event"}”` : form.mode === "cancel" ? `cancelling “${title || "the event"}”` : form.mode === "values" ? `the details of “${title || "the event"}”` : `the change to “${title || "the event"}”`;
   const how = form.mode === "create"
     ? "New event offers Check result first: use it before creating the event again."
-    : `The event's Edit and Cancel offer Check result first: use it before ${form.mode === "cancel" ? "cancelling" : "changing"} the event again.`;
+    : form.mode === "values"
+      ? "The event's Enter details, Edit and Cancel offer Check result first: use it before entering the details again."
+      : `The event's Edit and Cancel offer Check result first: use it before ${form.mode === "cancel" ? "cancelling" : "changing"} the event again.`;
   return readFailed
     ? `The result of ${what} is not confirmed, and the calendar could not be read again, so it may not show the result yet. ${how}`
     : `The result of ${what} is not confirmed. The calendar was read again. ${how}`;
@@ -393,10 +406,36 @@ async function rereadAfterUncertainWrite(cal, render, form) {
   if (state.centralCalendar !== cal) return;
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
+  await syncPanelEvent(cal, render);
   if (!centralCalendarUncertainWrites().some((entry) => entry.requestKey === form.requestKey)) return;
   cal.notice = uncertainNotice(form, { readFailed: readFailed(cal) });
   render?.();
 }
+
+// The open panel's details against its card (K2b-1d; the internal and the
+// independent review): run after every calendar answer applied and after a
+// panel opens. A manager's card with details reads them when the panel has no
+// read of this card, and again when the card's event revision is not the one
+// read (a save here or elsewhere); a card without details drops the read. A
+// read already running for the card is awaited, never sent twice; a failed
+// read waits for Try again.
+let panelRead = null;
+function syncPanelEvent(cal, render) {
+  if (state.centralCalendar !== cal || !cal.panel.open || cal.form) return null;
+  const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+  const view = cal.panelEvent;
+  if (!item || item.kind !== "event" || item.canManage !== true || !item.details || item.details.selected < 1) {
+    if (view) cal.panelEvent = null;
+    return null;
+  }
+  if (view && view.key === item.key) {
+    if (view.loading) return panelRead;
+    if (view.error || view.event?.revision === item.revision) return null;
+  }
+  panelRead = loadPanelEvent(cal, render);
+  return panelRead;
+}
+setCentralCalendarAppliedHook(syncPanelEvent);
 
 // The waiting write to check first, if any: a create before New event, an
 // edit or a cancel of the same event before its Edit / Cancel.
@@ -419,6 +458,7 @@ const FORGET_QUESTION = Object.freeze({
   create: "Forget this save without checking? If the event was created, creating it again makes a second one: look for it in the calendar first.",
   edit: "Forget this save without checking? If the change was saved, the event already has it: look at the event first.",
   cancel: "Forget this save without checking? If the event was cancelled, it already shows as cancelled: look at the event first.",
+  values: "Forget this save without checking? If the details were saved, the event already has them: look at its details first.",
 });
 
 function forgetPendingCheck(cal, render) {
@@ -438,20 +478,13 @@ function forgetPendingCheck(cal, render) {
 function dropStaleEventTypes(cal) {
   if (!cal.eventTypesStale || cal.form) return;
   cal.eventTypes = null;
+  cal.eventCatalog = null;
   cal.eventTypesStale = false;
 }
 
-async function ensureEventTypes(cal) {
-  if (cal.eventTypes) return { types: cal.eventTypes };
-  try {
-    const data = await fetchCentralCalendarEventTypes();
-    const types = Array.isArray(data?.types) ? data.types : [];
-    if (state.centralCalendar === cal) cal.eventTypes = types;
-    return { types };
-  } catch (error) {
-    return { error: centralCalendarErrorInfo(error) };
-  }
-}
+// The types and the rest of the catalog (K2b-1d: the details, the places and
+// the teams' default places) - one read, kept for the workspace.
+const ensureEventTypes = (cal) => readCentralCalendarCatalog(cal);
 
 function typesErrorOf(info) {
   if (info.status === 401) return { text: "Please sign in again.", retry: false };
@@ -492,7 +525,7 @@ async function loadCreateTypes(form, cal, render) {
     form.loadError = "No event types are available in this workspace.";
     form.loadRetry = false;
   } else {
-    centralCalendarFormTypesLoaded(form, result.types);
+    centralCalendarFormTypesLoaded(form, result.types, centralCalendarCatalogOf(cal));
   }
   render?.();
   focusPanelStart(cal);
@@ -514,7 +547,7 @@ async function openCreateForm(render) {
     : owner.scope === "club"
       ? teams.filter((team) => cal.filters.teamIds.includes(team.teamId)).map((team) => ({ kind: "team", id: team.teamId, name: team.name || "" }))
       : [];
-  const form = newCentralCalendarCreateForm({ day: newEventDay(cal), owner, types: cal.eventTypes, targets });
+  const form = newCentralCalendarCreateForm({ day: newEventDay(cal), owner, types: cal.eventTypes, targets, catalog: cal.eventTypes ? centralCalendarCatalogOf(cal) : null });
   form.loading = !cal.eventTypes;
   cal.form = form;
   render?.();
@@ -571,6 +604,49 @@ async function openEditForm(item, render) {
   await loadEditEvent(form, cal, render);
 }
 
+// Enter details (K2b-1d, 21.3): the panel's small form for a manager's event.
+// A write of this event left unconfirmed is checked first; the event is read
+// again (GET /:id) so the values and the revision are the latest.
+async function openValuesForm(item, render) {
+  const cal = state.centralCalendar;
+  if (cal.form || item?.kind !== "event" || item.canManage !== true || item.cancelled) return;
+  const form = newCentralCalendarValuesForm(item);
+  if (!form.eventId) return;
+  const waiting = pendingEntryFor({ mode: "values", eventId: form.eventId });
+  if (waiting) return openPendingCheck(cal, waiting, render);
+  cal.form = form;
+  render?.();
+  await loadValuesEvent(form, cal, render);
+}
+
+async function loadValuesEvent(form, cal, render) {
+  let result;
+  try {
+    result = { event: (await fetchCentralCalendarEvent(form.eventId))?.event || null };
+  } catch (error) {
+    result = { error: centralCalendarErrorInfo(error) };
+  }
+  if (state.centralCalendar !== cal || cal.form !== form) return;
+  if (result.error?.status === 404 || (result.event && result.event.canManage !== true)) {
+    await settleAndReload(cal, render, { notice: result.error ? NOT_AVAILABLE : "This event can no longer be changed in this workspace.", panelKey: form.key, panelDate: form.date });
+    return;
+  }
+  if (result.error || !result.event) {
+    form.loading = false;
+    form.loadError = result.error?.status === 401 ? "Please sign in again." : "The event could not be read.";
+    form.loadRetry = result.error?.status !== 401;
+    render?.();
+    return;
+  }
+  if (result.event.status === "cancelled") {
+    await settleAndReload(cal, render, { notice: "This event was cancelled; its details can no longer be entered.", panelKey: form.key, panelDate: form.date });
+    return;
+  }
+  fillCentralCalendarValuesForm(form, result.event);
+  render?.();
+  focusPanelStart(cal);
+}
+
 function openCancelForm(item, render) {
   const cal = state.centralCalendar;
   if (cal.form || item?.kind !== "event" || item.canManage !== true || item.cancelled) return;
@@ -590,6 +666,7 @@ function openCancelForm(item, render) {
 // the calendar on screen is the one from before.
 async function settleAndReload(cal, render, { notice, readFailedNotice = "", panelKey = "", panelDate = "" } = {}) {
   cal.form = null;
+  cal.panelEvent = null;
   if (panelKey && panelDate) cal.panel = { open: true, key: panelKey, date: panelDate, athletes: null, loading: false, error: "" };
   else cal.panel = closedPanel();
   invalidateCentralCalendarCache();
@@ -600,12 +677,46 @@ async function settleAndReload(cal, render, { notice, readFailedNotice = "", pan
   render?.();
   focusPanelStart(cal);
   if (cal.panel.open) await loadCentralCalendarDay({ render, forceRefresh: true });
+  await syncPanelEvent(cal, render);
+}
+
+// K2b-1d (T, 21.9): the open panel of a manager's event with chosen details
+// reads the event once (GET /:id, the manager's view) for the details and
+// their values. A panel that closed or moved to another item drops it.
+async function loadPanelEvent(cal, render) {
+  const { key, date } = cal.panel;
+  const item = findItemOnDay(cal, key, date);
+  if (!item || item.kind !== "event" || item.canManage !== true || !item.details || item.details.selected < 1) {
+    cal.panelEvent = null;
+    return;
+  }
+  const view = { key, loading: true, error: "", event: null };
+  cal.panelEvent = view;
+  render?.();
+  let event = null;
+  let error = "";
+  let retry = true;
+  try {
+    event = (await fetchCentralCalendarEvent(item.eventId))?.event || null;
+    if (!event || event.canManage !== true) error = "The details could not be read.";
+  } catch (failure) {
+    const info = centralCalendarErrorInfo(failure);
+    error = info.status === 401 ? "Please sign in again to see the details." : info.status === 404 ? NOT_AVAILABLE : "The details could not be read.";
+    retry = info.status !== 401 && info.status !== 404;
+  }
+  if (state.centralCalendar !== cal || cal.panelEvent !== view) return;
+  view.loading = false;
+  view.error = error;
+  view.retry = retry;
+  view.event = error ? null : event;
+  render?.();
 }
 
 const WRITES = Object.freeze({
   create: (form) => createCentralCalendarEvent(form.sentBody),
   edit: (form) => updateCentralCalendarEvent(form.eventId, form.sentBody),
   cancel: (form) => cancelCentralCalendarEvent(form.eventId, form.sentBody),
+  values: (form) => setCentralCalendarEventFields(form.eventId, form.sentBody),
 });
 
 function browserTimeZone() {
@@ -627,7 +738,7 @@ export async function submitCentralCalendarEventForm({ render } = {}) {
   form.errors = errors;
   form.error = "";
   if (unchanged) {
-    form.error = "Nothing changed: change a field, or Close.";
+    form.error = form.mode === "values" ? "Nothing changed: change a detail, or Close." : "Nothing changed: change a field, or Close.";
     render?.();
     return;
   }
@@ -691,6 +802,7 @@ async function lateAnswer(cal, render, form, outcome) {
   if (state.centralCalendar !== cal) return;
   cal.notice = readFailed(cal) ? `${notice}${READ_FAILED_TAIL}` : notice;
   render?.();
+  await syncPanelEvent(cal, render);
 }
 
 function formTitle(form, event = null) {
@@ -699,7 +811,7 @@ function formTitle(form, event = null) {
 
 function savedText(form, data, { check = false } = {}) {
   const title = formTitle(form, data?.event || null);
-  const words = { create: `“${title}” was created.`, edit: `Changes to “${title}” were saved.`, cancel: `“${title}” was cancelled.` };
+  const words = { create: `“${title}” was created.`, edit: `Changes to “${title}” were saved.`, cancel: `“${title}” was cancelled.`, values: `The details of “${title}” were saved.` };
   return `${check ? "Checked: " : ""}${words[form.mode]}`;
 }
 
@@ -707,10 +819,10 @@ function savedText(form, data, { check = false } = {}) {
 // answer, a pending check): what was not done, and why when the code says.
 function notDoneText(form, info, { check = false } = {}) {
   const title = formTitle(form);
-  const head = { create: `“${title}” was not created.`, edit: `The change to “${title}” was not saved.`, cancel: `“${title}” was not cancelled.` }[form.mode];
+  const head = { create: `“${title}” was not created.`, edit: `The change to “${title}” was not saved.`, cancel: `“${title}” was not cancelled.`, values: `The details of “${title}” were not saved.` }[form.mode];
   const why = info.status === 404
     ? form.mode === "create" ? " Events cannot be created in this workspace now." : ` ${NOT_AVAILABLE}`
-    : info.code === "event_changed" ? " The event was changed meanwhile; make your change again."
+    : info.code === "event_changed" ? ` The event was changed meanwhile; ${form.mode === "values" ? "enter the details again" : "make your change again"}.`
       : info.code === "event_cancelled" ? " The event was cancelled meanwhile."
         : " Nothing was saved; you can make it again.";
   return `${check ? "Checked: " : ""}${head}${why}`;
@@ -721,6 +833,8 @@ const FIELD_OF_CODE = Object.freeze({
   invalid_type: "eventTypeId", type_not_available: "eventTypeId", invalid_title: "title", invalid_day: "day", invalid_time: "endTime",
   invalid_location: "location", invalid_notes: "notes", invalid_targets: "targets", target_not_available: "targets", invalid_expects: "expects",
   invalid_reason: "reason",
+  // K2b-1d: the place and the details of the event form.
+  location_not_available: "placeChoice", invalid_fields: "fieldIds", field_not_available: "fieldIds",
 });
 const FIELD_TEXT = Object.freeze({
   invalid_type: "Choose a type.",
@@ -734,6 +848,9 @@ const FIELD_TEXT = Object.freeze({
   target_not_available: "One of the chosen groups or athletes is not available in this workspace on that day.",
   invalid_expects: "Choose from the list.",
   invalid_reason: "Use at most 500 characters.",
+  location_not_available: "This place is not available any more (it may have been archived). Choose another one.",
+  invalid_fields: "Check the list of details: at most 30, each once.",
+  field_not_available: "One of these details is not available any more (it may have been archived). Remove it, or choose another.",
 });
 
 export function centralCalendarEventErrorText(info) {
@@ -743,7 +860,8 @@ export function centralCalendarEventErrorText(info) {
   if (info.code === "try_again") return "The calendar is busy. Nothing was saved; try again in a moment.";
   if (info.code === "nothing_to_change") return "Nothing changed: change a field, or Close.";
   if (info.code === "invalid_timezone") return "Your device's time zone is not one OptiMove knows. Nothing was saved.";
-  if (FIELD_OF_CODE[info.code]) return "Check the marked fields. Nothing was saved.";
+  if (FIELD_OF_CODE[info.code] || info.code === "invalid_value") return "Check the marked fields. Nothing was saved.";
+  if (info.code === "invalid_values") return "The details could not be read as sent. Nothing was saved.";
   return "Nothing was saved. Try again.";
 }
 
@@ -782,12 +900,30 @@ async function refused(form, info, render, { check = false } = {}) {
     await settleAndReload(cal, render, { notice: form.mode === "create" ? "Events cannot be created in this workspace now. Nothing was saved." : NOT_AVAILABLE });
     return;
   }
+  if (form.mode === "values" && info.code === "invalid_value") {
+    // The detail it names is marked; a refusal that names none of this form's
+    // details (a race on a detail's limits) says so in words.
+    const marked = Boolean(info.fieldId) && (form.fields || []).some((field) => field.fieldId === info.fieldId);
+    if (marked) form.errors = { ...form.errors, [`value:${info.fieldId}`]: "This value is not accepted for this detail. Check it." };
+    form.error = marked ? centralCalendarEventErrorText(info) : "A value was not accepted. Check the details and save again. Nothing was saved.";
+    render?.();
+    return;
+  }
+  if (form.mode === "values" && info.code === "field_not_available") {
+    await settleAndReload(cal, render, {
+      notice: "Nothing was saved: one of these details is no longer on the event. It is shown as it is now; enter the details again.",
+      panelKey: form.key, panelDate: form.date,
+    });
+    return;
+  }
   if (info.code === "event_changed" || info.code === "event_cancelled") {
     // The form was made from an event that changed or was cancelled: it
     // closes, the calendar is read again, and the panel shows it as it is -
     // or, when that read fails, the line says it could not be read.
     await settleAndReload(cal, render, {
-      notice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile. It is shown as it is now; make your change again." : "Nothing was saved: this event was cancelled meanwhile and can no longer be changed.",
+      notice: info.code === "event_changed"
+        ? `Nothing was saved: this event was changed meanwhile. It is shown as it is now; ${form.mode === "values" ? "enter the details again" : "make your change again"}.`
+        : form.mode === "values" ? "Nothing was saved: this event was cancelled meanwhile; its details can no longer be entered." : "Nothing was saved: this event was cancelled meanwhile and can no longer be changed.",
       readFailedNotice: info.code === "event_changed" ? "Nothing was saved: this event was changed meanwhile, and the calendar could not be read again. Read it again to see the event as it is now before changing it." : "",
       panelKey: form.key, panelDate: form.date,
     });
@@ -807,6 +943,7 @@ async function refused(form, info, render, { check = false } = {}) {
 
 function fieldShown(form, field) {
   if (form.mode === "cancel") return field === "reason";
+  if (form.mode === "values") return false;
   if (field === "targets") return !form.readOnlyTargets;
   if (field === "eventTypeId") return !form.readOnlyType;
   return field !== "reason";
@@ -849,7 +986,22 @@ export function handleCentralCalendarInput(target, { render } = {}) {
   if (!form || form.busy || form.unconfirmed) return true;
   const dataset = target.dataset || {};
   if (dataset.ccEventField) {
-    if (setCentralCalendarFormField(form, dataset.ccEventField, String(target.value ?? ""), { types: cal.eventTypes })) render?.();
+    if (setCentralCalendarFormField(form, dataset.ccEventField, String(target.value ?? ""), { types: cal.eventTypes, catalog: centralCalendarCatalogOf(cal) })) render?.();
+    return true;
+  }
+  // K2b-1d: the place's select (Another place… shows the text), the detail
+  // to add, and a value of Enter details (a radio counts only when chosen).
+  if ("ccEventPlace" in dataset) {
+    if (setCentralCalendarPlaceChoice(form, String(target.value ?? ""))) render?.();
+    return true;
+  }
+  if ("ccEventAddField" in dataset) {
+    form.addFieldId = String(target.value ?? "");
+    return true;
+  }
+  if (dataset.ccEventValue) {
+    if (target.type === "radio" && !target.checked) return true;
+    setCentralCalendarValue(form, dataset.ccEventValue, String(target.value ?? ""));
     return true;
   }
   if (dataset.ccEventExpect) {
@@ -857,7 +1009,7 @@ export function handleCentralCalendarInput(target, { render } = {}) {
     return true;
   }
   if (dataset.ccEventTarget) {
-    if (setCentralCalendarFormTarget(form, { kind: dataset.ccEventTarget, id: dataset.targetId || "", name: dataset.targetName || "" }, Boolean(target.checked))) render?.();
+    if (setCentralCalendarFormTarget(form, { kind: dataset.ccEventTarget, id: dataset.targetId || "", name: dataset.targetName || "" }, Boolean(target.checked), { catalog: centralCalendarCatalogOf(cal) })) render?.();
     return true;
   }
   if ("ccEventAthleteSearch" in dataset) {
@@ -968,10 +1120,16 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
       return true;
     }
     cal.panel = { open: true, key, date, athletes: null, loading: true, error: "" };
+    cal.panelEvent = null;
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
     await loadCentralCalendarDay({ render });
+    if (cal.panel.open && cal.panel.key === key) await syncPanelEvent(cal, render);
+    return true;
+  }
+  if (type === "central-calendar-details-retry") {
+    if (cal.panel.open) await loadPanelEvent(cal, render);
     return true;
   }
   if (type === "central-calendar-close-panel") {
@@ -1045,6 +1203,27 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     else openCancelForm(item, render);
     return true;
   }
+  if (type === "central-calendar-event-field-add" || type === "central-calendar-event-field-remove" || type === "central-calendar-event-field-move" || type === "central-calendar-event-fields-replace") {
+    const form = cal.form;
+    if (!form || form.busy || form.unconfirmed || !["create", "edit"].includes(form.mode)) return true;
+    const change = { "central-calendar-event-field-add": "add", "central-calendar-event-field-remove": "remove", "central-calendar-event-field-move": "move", "central-calendar-event-fields-replace": "replace" }[type];
+    const fieldId = action.dataset.fieldId || "";
+    const typeOf = (cal.eventTypes || []).find((entry) => entry.id === form.draft.eventTypeId) || null;
+    if (!changeCentralCalendarFields(form, change, { id: fieldId, direction: action.dataset.direction || "", type: typeOf, catalog: centralCalendarCatalogOf(cal) })) {
+      if (change === "add") globalThis.document?.querySelector?.('[data-cc-focus="field:addField"]')?.focus?.();
+      return true;
+    }
+    render?.();
+    const doc = globalThis.document;
+    if (change === "move") doc?.querySelector?.(`[data-action="central-calendar-event-field-move"][data-field-id="${fieldId}"][data-direction="${action.dataset.direction}"]:not([disabled])`)?.focus?.();
+    else doc?.querySelector?.('[data-cc-focus="field:addField"]')?.focus?.();
+    return true;
+  }
+  if (type === "central-calendar-enter-details") {
+    const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
+    await openValuesForm(item, render);
+    return true;
+  }
   if (type === "central-calendar-event-form-close") {
     closeEventForm(render);
     return true;
@@ -1070,6 +1249,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     form.loading = true;
     render?.();
     if (form.mode === "edit") await loadEditEvent(form, cal, render);
+    else if (form.mode === "values") await loadValuesEvent(form, cal, render);
     else await loadCreateTypes(form, cal, render);
     return true;
   }
