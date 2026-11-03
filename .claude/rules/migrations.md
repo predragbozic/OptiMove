@@ -52,7 +52,7 @@ same order, or it's a deadlock risk against the existing functions. See
 
 - A rights check that locks rows locks the `users` row before the role row (`for share of u, r`, `u, g`, `u, r, c`).
   That is the order the revocations in `backend/src/routes/organization.js` lock in (`for update of u, r` /
-  `u, g`), and PostgreSQL takes row locks in the order of the `OF` list. Proof:
+  `u, g`), and the order these queries lock in was reproduced by `lock-order-lo1.test.mjs`. Proof:
   `backend/tests/lock-order-lo1.test.mjs` runs the real revocation against the real write and sees no `40P01`.
   Database functions that still lock the role row first are listed under LO-2 in `docs/ai/CURRENT_STATE.md`.
 - A transaction whose contract says it takes every lock before its first write has a test that records the SQL it
