@@ -10,20 +10,42 @@ import { previewError, withPreviewTransaction } from './previewTransaction.js';
 const responseLimit = 2 * 1024 * 1024;
 const issueResult = (status, code, path) => ({ status, issues: [{ code, path, severity: 'error' }] });
 
+function parseMetricsQuery(query = {}) {
+  const keys = ['search', 'afterId', 'limit', 'dataScopeLevel', 'metricDefinitionId'];
+  if (!query || typeof query !== 'object' || Array.isArray(query) || Object.keys(query).some(key => !keys.includes(key) || typeof query[key] !== 'string')) throw previewError('invalidRequest', 400);
+  if (Object.hasOwn(query, 'metricDefinitionId')) {
+    if (Object.keys(query).length !== 1 || !isUuid(query.metricDefinitionId)) throw previewError('invalidRequest', 400);
+    return { metricDefinitionId: query.metricDefinitionId };
+  }
+  const { search = '', afterId = null, limit = '100', dataScopeLevel = null } = query;
+  if (search.length > 200 || !/^(?:[1-9]|[1-9][0-9]|100)$/.test(limit) || afterId !== null && !isUuid(afterId) || dataScopeLevel !== null && !['day', 'session', 'component'].includes(dataScopeLevel)) throw previewError('invalidRequest', 400);
+  return { search, afterId, limit: Number(limit), dataScopeLevel };
+}
+
 export function createSimplePreviewService({ pool, queryDashboard, admission, tokenService, activation = {}, now = () => Date.now(), transactionOptions = {} }) {
   if (!pool || typeof queryDashboard !== 'function') throw new TypeError('Server-owned preview dependencies required');
   const previewEnabled = Boolean(admission && tokenService && activation.coordinatedAdmissionVerified === true && activation.deploymentBudgetVerified === true);
-  async function execute(kind, { req, dashboardId, envelope, signal }) {
+  const atomicSaveEnabled = previewEnabled && activation.atomicSaveVerified === true;
+  async function execute(kind, { req, dashboardId, envelope, query, signal }) {
     if (!req?.user?.id) throw previewError('notFound', 404);
     if (kind === 'preview' && !previewEnabled) throw previewError('previewUnavailable');
     let lease;
     if (kind === 'preview') lease = await admission.tryAcquire({ userId: req.user.id });
     return withPreviewTransaction({ ...transactionOptions, pool: lease?.queryPool ?? pool, signal, onReleased: () => lease?.release() }, async queryRunner => {
       const target = await authorizePreviewTarget(queryRunner, req, dashboardId);
+      if (kind === 'metrics') {
+        const options = parseMetricsQuery(query);
+        const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
+        if (options.metricDefinitionId) {
+          const { metric } = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: { kind: 'metric', metricDefinitionId: options.metricDefinitionId } });
+          return { metrics: [{ ...metric, allowed_aggregations: metric.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] }], nextCursor: null };
+        }
+        return reader.listMetrics({ req: target.req, dataWorkspace: target.workspace, dashboardId, ...options });
+      }
       if (kind === 'capabilities') {
         const widgetTypes = (await queryRunner('select * from training_load.dashboard_widget_types where is_active=true order by key')).rows;
         const builtins = (await queryRunner('select * from training_load.dashboard_builtin_series where is_active=true order by key')).rows.map(row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'], source_policy: 'not_applicable' }));
-        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
+        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
       }
       let existing = null;
       if (envelope?.editTarget != null) {
@@ -49,7 +71,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         draftHash, contextFingerprint, catalogToken: compiled.catalogToken, evaluatedAt, resolvedPeriod: compiled.resolvedPeriod,
         effectiveFilterSummary: compiled.effectiveFilter, dashboardRevision: target.dashboard.revision,
         ...(existing ? { widgetRevision: existing.revision } : {}), normalizedWidget: compiled.widget,
-        capabilities: { preview: previewEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false },
+        capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false },
         suggestion: { type: compiled.widget.widget_type, confidence: 'configurationOnly', reasonCode: 'resultProofRequired' },
       };
       if (kind === 'validate') return common;
@@ -82,6 +104,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
   }
   return {
     capabilities: options => execute('capabilities', options),
+    metrics: options => execute('metrics', options),
     validate: options => execute('validate', options),
     preview: options => execute('preview', options),
   };

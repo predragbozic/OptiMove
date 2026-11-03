@@ -10,9 +10,9 @@ export function captureSimplePreviewRequestBytes(req, res, buffer) {
 export const simpleRequestByteLength = req => originalRequestBytes.get(req);
 
 export function createSimplePreviewRouter({ service }) {
-  if (!service || !['capabilities', 'validate', 'preview'].every(method => typeof service[method] === 'function')) throw new TypeError('Preview service required');
+  if (!service || !['capabilities', 'metrics', 'validate', 'preview'].every(method => typeof service[method] === 'function')) throw new TypeError('Preview service required');
   const router = Router({ mergeParams: true });
-  router.use((req, res, next) => /^\/(capabilities|validate|preview)\/?$/.test(req.path) ? next() : next('router'));
+  router.use((req, res, next) => /^\/(capabilities|metrics|validate|preview)\/?$/.test(req.path) ? next() : next('router'));
   router.use((req, res, next) => req.user?.id ? next() : res.status(401).json({ error: 'unauthorized' }));
   const parseJson = json({ limit: 65536, strict: true, verify: captureSimplePreviewRequestBytes });
   router.use((req, res, next) => req.method === 'POST' ? parseJson(req, res, next) : next());
@@ -24,17 +24,17 @@ export function createSimplePreviewRouter({ service }) {
     }
     next();
   });
-  for (const [method, route, action] of [['get', '/capabilities', 'capabilities'], ['post', '/validate', 'validate'], ['post', '/preview', 'preview']]) {
+  for (const [method, route, action] of [['get', '/capabilities', 'capabilities'], ['get', '/metrics', 'metrics'], ['post', '/validate', 'validate'], ['post', '/preview', 'preview']]) {
     router[method](route, async (req, res) => {
       const controller = new AbortController();
       const abort = () => { if (!res.writableEnded) controller.abort(); };
       req.once('aborted', abort);
       res.once('close', abort);
       try {
-        const result = await service[action]({ req, dashboardId: req.params.dashboardId, envelope: req.body, signal: controller.signal });
+        const result = await service[action]({ req, dashboardId: req.params.dashboardId, envelope: req.body, ...(action === 'metrics' ? { query: req.query } : {}), signal: controller.signal });
         if (!res.destroyed) res.json(result);
       } catch (error) {
-        const code = ['notFound', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'pagesClientRequired', 'catalogChanged', 'previewUnavailable', 'previewBusy', 'previewTimeout', 'previewTooLarge', 'previewQueryFailed', 'previewAborted', 'previewReadOnlyViolation', 'previewCleanupFailed'].includes(error?.code) ? error.code : 'previewFailed';
+        const code = ['invalidRequest', 'notFound', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'pagesClientRequired', 'catalogChanged', 'previewUnavailable', 'previewBusy', 'previewTimeout', 'previewTooLarge', 'previewQueryFailed', 'previewAborted', 'previewReadOnlyViolation', 'previewCleanupFailed'].includes(error?.code) ? error.code : 'previewFailed';
         if (!res.destroyed) {
           if (code === 'previewBusy') res.set('Retry-After', '1');
           res.status(code === 'previewFailed' ? 503 : error.status ?? 503).json({ error: code });
