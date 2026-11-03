@@ -30,13 +30,18 @@ export const refusal = (status, code, message, details) => new SourceMetricMappi
 export const TRY_AGAIN_TEXT = "Another change is running. Nothing was changed; try again in a moment.";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Phase 7b (J8, R3): activating, replacing and disabling a mapping version are
-// an active platform admin's, in the workspace of the mapping's owner (the
-// platform workspace for a system mapping, club X's for a club X mapping;
-// C60). A club admin reads its club's versions but gets the identical 404
-// here; the routes ask this before they look at the body.
+// Phase 7b (J8, R3) and phase 7h (J14, C108, C126): activating, replacing and
+// disabling a mapping version are an active platform admin's, in the
+// workspace of the mapping's owner (the platform workspace for a system
+// mapping, club X's for a club X mapping; C60), and, from 7h, club X's active
+// admin's in club X's workspace. The owner filter of transitionTarget and
+// writableVersion narrows a club workspace to its own club's mappings, so a
+// club admin never reaches a system mapping or another club's here.
+// Everyone else gets the identical 404; the routes ask this before they look
+// at the body. Written out in full, never as "any basis".
 export function mayTransitionMappings(ctx) {
-  return ctx?.basis === "platform_admin" && (ctx.owner?.scope === "system" || ctx.owner?.scope === "club");
+  if (ctx?.basis === "platform_admin") return ctx.owner?.scope === "system" || ctx.owner?.scope === "club";
+  return ctx?.basis === "club_admin" && ctx.owner?.scope === "club";
 }
 
 // Phase 7d (J10, C106): starting and ending a T5 activation are an active
@@ -109,7 +114,13 @@ export const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ct
 export const readableOwnerKeys = (ctx) => (ctx.owner.scope === "system" ? ["system"] : ["system", ctx.owner.clubId]);
 
 // The caller's right and, for a club scope, the club, under FOR SHARE (after
-// every registry row of the lock order).
+// every registry row of the lock order). The club-admin query locks the
+// users row before the role row (`for share of u, r`), the order of the
+// club-admin revocation (routes/organization.js, `for update of u, r`; J14
+// R13): the database's own re-locks (`source_metric_actor_basis`,
+// `source_metric_require_club_admin`: r, u, c) then find both rows already
+// held by this transaction, so a revocation and a write never wait on each
+// other in opposite orders.
 export async function rightsStillHold(client, ctx) {
   if (rightsHold) await rightsHold(client);
   if (ctx.basis === "team_coach") return coachRightsStillHold(client, ctx);
@@ -133,7 +144,7 @@ export async function rightsStillHold(client, ctx) {
     )
     : await client.query(
       `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id
-        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of r, u`,
+        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of u, r`,
       [ctx.userId, ctx.owner.clubId],
     );
   if (right.rowCount === 0) return false;

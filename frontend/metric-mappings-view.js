@@ -94,7 +94,7 @@ function renderListHtml(s, ctx) {
     <div class="metric-variables-head">
       <div>
         <h2 id="metric-mappings-title" tabindex="-1">Mappings</h2>
-        <p class="muted">A mapping tells OptiMove which source field fills which of your variables.${ctx.owner === "club" ? " System mappings come from a platform administrator; you switch them on for your teams." : ""}</p>
+        <p class="muted">A mapping tells OptiMove which source field fills which of your variables.${ctx.owner === "club" ? " System mappings come from a platform administrator; you switch them on for your teams. You activate your club's own mappings yourself." : ""}</p>
         <p class="muted">${ACTS_SENTENCE}</p>
       </div>
       <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-new" ${holds(s) ? "disabled" : ""}>New mapping</button>
@@ -190,7 +190,7 @@ function stepTargetHtml(s, ctx) {
           <span class="metric-variables-item-name">${shown(target.label || target.key || "")}
             ${status.choosable ? (status.badge === "same" ? `<span class="item-badge is-suggested">Same unit</span>` : `<span class="item-badge">Converted from ${escapeHtml(revision.sourceUnit)}</span>`) : ""}</span>
           <span class="metric-variables-item-facts muted">${target.currentVersion?.unit ? `Unit ${escapeHtml(target.currentVersion.unit)}` : "No unit"}</span>
-          ${status.choosable ? "" : `<span class="metric-mappings-reason">${escapeHtml(status.reason)}</span>`}
+          ${status.choosable ? "" : `<span class="metric-mappings-reason">${escapeHtml(status.reason)}${status.conversionMissing && ctx.owner !== "system" ? " Ask a platform administrator to add it." : ""}</span>`}
         </button>
       </li>`).join("")}</ul>` : `<p class="empty">No variables yet.</p>`}
     <p class="muted">Missing a variable? Create it in <button class="plain-button ghost inline-link" type="button" data-action="training-load-section" data-section="variables" data-dc-view="variables">Variables</button>.</p>`;
@@ -273,9 +273,9 @@ function stepReviewHtml(s, locked) {
         ${bound ? `<div><dt>Bound</dt><dd>${escapeHtml(bound)}</dd></div>` : ""}
         ${status.conversion ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(cleanName(f.draft.conversionNote, 500))}</dd></div>` : ""}
       </dl>
-      <p class="muted">${mappingsContext()?.isPlatformAdmin
-        ? "A draft changes nothing yet: submit it for review, then you can activate it."
-        : "A draft changes nothing yet: it is submitted for review, and a platform administrator activates it."}</p>
+      <p class="muted">${fieldStatus(field).meaningPending
+        ? "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is confirmed."
+        : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
     </div>
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
@@ -335,7 +335,7 @@ function versionFactsHtml(s, mapping, v) {
 // waiting for review, Submit a draft, Switch on an active version no team uses.
 function primaryAct(s, mapping, ctx) {
   const waiting = (mapping.versions || []).find((v) => v.status === "needs_review");
-  if (waiting && mayTransition(mapping, ctx) && !activateBlocker(mapping, waiting, s)) return { versionId: waiting.id, act: "activate" };
+  if (waiting && mayTransition(mapping, ctx) && !activateBlocker(mapping, waiting, s, ctx)) return { versionId: waiting.id, act: "activate" };
   const draft = (mapping.versions || []).find((v) => v.status === "draft");
   if (draft && inOwnerWorkspace(mapping, ctx)) return { versionId: draft.id, act: "submit" };
   const active = activeVersion(mapping);
@@ -357,11 +357,9 @@ function versionActsHtml(s, mapping, v, ctx, primary) {
   }
   if (v.status === "needs_review") {
     if (mayTransition(mapping, ctx)) {
-      const blocker = activateBlocker(mapping, v, s);
+      const blocker = activateBlocker(mapping, v, s, ctx);
       if (blocker) notes.push(blocker);
       else acts.push(actButton(primary, v.id, "activate", active ? `Replace version ${escapeHtml(String(active.versionNumber))}` : "Activate", "metric-mappings-activate-open", busy));
-    } else if (mapping.ownerScope === "club" && !ctx.isPlatformAdmin) {
-      notes.push(`Ask a platform administrator who also administers ${cleanName(ctx.clubName) || "this club"} to activate it in this workspace.`);
     } else if (mapping.ownerScope === "system" && ctx.owner === "club") {
       notes.push(ctx.isPlatformAdmin ? "Activate it in the platform workspace." : "A platform administrator activates system mappings in the platform workspace.");
     }

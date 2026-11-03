@@ -241,8 +241,12 @@ async function pinnedDecisions(client, pinned) {
 // disable a version with an open activation), then one statement for the
 // disables of both statuses, before the retirement (v34 refuses a retirement
 // while a pinned version is needs_review or active).
+// The pinned step is an active platform admin's in the platform workspace
+// only (mayChangeRevisions), so its version-driven ends, like its T4 disable
+// and its T8 rows, carry the constant platform admin's basis (J14 section 7).
+const pinnedEndCtx = (ctx) => ({ userId: ctx.userId, basis: "platform_admin" });
 async function disablePinned(client, ctx, toDisable, openActivations) {
-  await endOpenActivations(client, ctx, openActivations, "mapping_version_disabled");
+  await endOpenActivations(client, pinnedEndCtx(ctx), openActivations, "mapping_version_disabled");
   if (toDisable.length === 0) return;
   await client.query(
     `update training_load.source_metric_mapping_versions
@@ -264,7 +268,7 @@ async function disabledAuditRows(client, ctx, toDisable, operationId, openActiva
       [v.mapping_id, v.id, v.status, PINNED_DISABLE_REASON, ctx.userId, operationId],
     );
   }
-  await endAuditRows(client, ctx, openActivations, PINNED_DISABLE_REASON, operationId);
+  await endAuditRows(client, pinnedEndCtx(ctx), openActivations, PINNED_DISABLE_REASON, operationId);
 }
 async function retire(client, ctx, revisionId, reason) {
   await client.query(

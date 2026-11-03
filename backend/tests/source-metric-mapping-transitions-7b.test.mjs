@@ -652,7 +652,7 @@ test("7. A2 disables a draft, a needs_review and an active version with a reason
   assert.equal(await statusOf(moved), "needs_review", "nothing written");
 });
 
-test("8. the order of the answers: without a session the router's 401; a club admin gets the identical 404 before the body is looked at (no body, a wrong content type, a bad body); a platform admin gets 415, then 400 for a non-object body, the identical 404 for a malformed id, then 400 for each body rule; a refusal is no request record (the key works afterwards)", async () => {
+test("8. the order of the answers: without a session the router's 401; a caller with no admin context (a team coach) gets the identical 404 before the body is looked at (no body, a wrong content type, a bad body); from phase 7h club A's admin gets 415, then 400, and club B's admin 415 / 400, then the identical 404 for a well-formed request on club A's version; a platform admin gets 415, then 400 for a non-object body, the identical 404 for a malformed id, then 400 for each body rule; a refusal is no request record (the key works afterwards)", async () => {
   const f = await field({ verified: true });
   const clubV = await version(f, { owner: W.caA, target: W.clubAVar });
   // No session: the router's 401, with and without a body.
@@ -660,12 +660,27 @@ test("8. the order of the answers: without a session the router's 401; a club ad
     assert.equal((await api(p, { method: "POST" })).status, 401, p);
     assert.equal((await post(p, null, { requestKey: key(), expectedActiveVersionId: null, expectedStatus: "draft", reason: "x" })).status, 401, p);
   }
+  // No admin context (a team coach in its team's workspace): the identical 404
+  // before the body is looked at.
   for (const p of [actPath(clubV), disPath(clubV)]) {
-    isNotFound(await api(p, { method: "POST", cookie: W.caA.cookie }), "no body");
-    isNotFound(await api(p, { method: "POST", cookie: W.caA.cookie, body: "x", contentType: "text/plain" }), "text");
-    isNotFound(await post(p, W.caA.cookie, [1]), "array");
-    isNotFound(await post(p, W.caA.cookie, { requestKey: "nope" }), "bad body");
+    isNotFound(await api(p, { method: "POST", cookie: W.coachA.cookie }), "no body");
+    isNotFound(await api(p, { method: "POST", cookie: W.coachA.cookie, body: "x", contentType: "text/plain" }), "text");
+    isNotFound(await post(p, W.coachA.cookie, [1]), "array");
+    isNotFound(await post(p, W.coachA.cookie, { requestKey: "nope" }), "bad body");
   }
+  // Phase 7h (J14 section 10.7): club A's admin passes the route's gate, so the
+  // body is looked at (415, then 400); club B's admin too, and a well-formed
+  // request on club A's version is then the identical 404 (the owner filter).
+  for (const p of [actPath(clubV), disPath(clubV)]) {
+    for (const who of [W.caA, W.caB]) {
+      assert.equal((await api(p, { method: "POST", cookie: who.cookie, body: "x", contentType: "text/plain" })).status, 415, p);
+      refused(await post(p, who.cookie, [1]), 400, "invalid_body");
+      refused(await post(p, who.cookie, { requestKey: "nope" }), 400, "invalid_body");
+    }
+  }
+  isNotFound(await activate(clubV, W.caB.cookie), "club B's admin activates club A's version");
+  isNotFound(await disable(clubV, W.caB.cookie, { expectedStatus: "needs_review" }), "club B's admin disables club A's version");
+  assert.equal(await statusOf(clubV), "needs_review");
   const v = await version(f);
   for (const p of [actPath(v), disPath(v)]) {
     assert.equal((await api(p, { method: "POST", cookie: W.pa.cookie, body: "x", contentType: "text/plain" })).status, 415);
@@ -701,13 +716,15 @@ test("8. the order of the answers: without a session the router's 401; a club ad
   ok200(await activate(v, W.pa.cookie, { requestKey: k1 }));
 });
 
-test("9. information hiding: a club admin (own and other club), a team coach, a platform admin in another owner's workspace or in a team workspace, an archived club's workspace, a revoked role, a foreign mapping id and a version of another mapping each answer the identical 404 and write nothing (an inactive user has no session: 401); the replay of an activation, a replacement and a disable from another workspace is the identical 404", async () => {
+test("9. information hiding: a club admin of another club or on a system mapping, a team coach, a platform admin in another owner's workspace or in a team workspace, an archived club's workspace, a revoked role, a foreign mapping id and a version of another mapping each answer the identical 404 and write nothing (an inactive user has no session: 401); the replay of an activation, a replacement and a disable from another workspace is the identical 404", async () => {
   const f = await field();
   const sysV = await version(f);
   const g = await field();
   const clubV = await version(g, { owner: W.caA, target: W.clubAVar });
   const callers = [
-    ["club admin of the club", W.caA, clubV], ["club admin of another club", W.caB, clubV], ["team coach of the club", W.coachA, clubV],
+    // Club A's admin on club A's own version is a success from phase 7h (J14;
+    // backend/tests/source-metric-mapping-club-admin-7h.test.mjs).
+    ["club admin of another club", W.caB, clubV], ["team coach of the club", W.coachA, clubV],
     ["platform admin in another club's workspace", W.paB, clubV], ["platform admin in the club's workspace on a system mapping", W.paA, sysV],
     ["platform admin in the platform workspace on a club mapping", W.pa, clubV], ["club admin on a system mapping", W.caA, sysV],
   ];

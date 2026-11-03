@@ -26,7 +26,10 @@
 //   9 - the writer against the revision lifecycle's pinned step (L5), both
 //       orders;
 //  10 - the writer against a canonical variable version create, both orders
-//       (always variable_pinned while a mapping pins the variable, decision 9).
+//       (always variable_pinned while a mapping pins the variable, decision 9);
+//  11 - phase 7h (J14 section 10.4): a club's own mapping, activated and
+//       switched on by the club's admin; the writer, then the real approval,
+//       against that admin's A2 and replacement, both orders.
 // Tests 8-10 disable versions and retire revisions of the memoized world, so
 // they stay last in the file: a test added after them must not start the
 // whole world on a binding.
@@ -48,7 +51,8 @@ import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposabl
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
-import { activateBinding, mappedBinding, platformAdmin as worldPlatformAdmin, t7Keys } from "./support/mapped-world.mjs";
+import { activateBinding, ensureMappedSystem, mappedBinding, platformAdmin as worldPlatformAdmin, t7Keys } from "./support/mapped-world.mjs";
+import { SPEC_REGISTRY } from "./support/gpexe-legacy-specs.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -1277,5 +1281,266 @@ test("10. the writer against a canonical variable version create on the variable
   const summaryB = await within(second.importing, 20_000, "the import (b)");
   assert.deepEqual(await definitionState(variableId), definitionBefore, "the refused create rolled back: the same current version, no new version");
   await assertImportedThrough(b, bundleB, summaryB, "gpexe_max_speed", activationB);
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Phase 7h (J14 section 10.4): a club's own mapping, activated by the
+// club's admin and switched on by that admin on the team's binding, written
+// through by the importer; the admin's A2 and replacement against an import
+// and against the real approval, both orders. The club mapping pins the
+// seeded total-distance revision, which tests 9 and 10 never retire.
+// ---------------------------------------------------------------------------
+const CLUB_KEY = "gpexe_total_distance";
+const rk = () => crypto.randomUUID();
+async function clubAdminOf(clubId) {
+  const id = await makeUser("club admin");
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, clubId]);
+  return { userId: id, basis: "club_admin", owner: { scope: "club", clubId: String(clubId) } };
+}
+async function clubMapped(clubId, bindingId) {
+  const { mappings, variables } = await registryWriters();
+  const pa = await worldPlatformAdmin(admin, "9b-conc-7h");
+  const world = await ensureMappedSystem(admin, { platformAdminId: pa });
+  const spec = SPEC_REGISTRY[CLUB_KEY];
+  const m = world[CLUB_KEY];
+  const ctx = await clubAdminOf(clubId);
+  const variable = (await variables.createVariable({
+    ctx, body: { requestKey: rk(), label: `Club distance ${crypto.randomBytes(3).toString("hex")}`, unit: spec.targetUnit, levels: ["session", "drill"], dailyAggregationMethod: "sum" },
+  })).variable;
+  const mapping = (await mappings.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: m.fieldId, metricDefinitionId: variable.id } })).mapping;
+  const nextVersion = async () => {
+    const v = (await mappings.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: m.revId, appliesToSession: true, appliesToDrill: true } })).version;
+    await mappings.submitVersion({ ctx, mappingId: mapping.id, versionId: v.id, body: { requestKey: rk() } });
+    return String(v.id);
+  };
+  const versionId = await nextVersion();
+  await mappings.activateVersion({ ctx, mappingId: mapping.id, versionId, body: { requestKey: rk(), expectedActiveVersionId: null } });
+  const started = await activations.startActivations({ ctx, body: { requestKey: rk(), mappingId: mapping.id, versionId, bindings: [{ bindingId: String(bindingId), requirement: "optional" }], reason: "7h club start." } });
+  const activationId = String(started.activations[0].id ?? started.activations[0].activationId);
+  const rows = (await admin.query(
+    `select (select activated_basis from training_load.source_metric_mapping_versions where id = $1) as v,
+            (select activated_basis from training_load.source_metric_mapping_activations where id = $2) as a`, [versionId, activationId],
+  )).rows[0];
+  assert.deepEqual([rows.v, rows.a], ["club_admin", "club_admin"], "the club's admin activated the version and switched it on");
+  return {
+    ctx, mappings, variableId: String(variable.id), mappingId: String(mapping.id), versionId, activationId, nextVersion,
+    disable: () => mappings.disableVersion({ ctx, mappingId: mapping.id, versionId, body: { requestKey: rk(), expectedStatus: "active", reason: "7h club disable." } }),
+    replace: (next) => mappings.activateVersion({
+      ctx, mappingId: mapping.id, versionId: next,
+      body: { requestKey: rk(), expectedActiveVersionId: versionId, reason: "7h club replace.", activations: [{ bindingId: String(bindingId), requirement: "optional" }], activationReason: "7h club replace." },
+    }),
+  };
+}
+async function clubTeam() {
+  const org = await createGpexePilotOrg(admin, { athleteNames: ["K101", "K102", "K103"] });
+  const sourceTeamId = nextSourceTeamId();
+  const bound = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId, activate: false });
+  const club = await clubMapped(org.clubId, bound.bindingId);
+  return { ...org, ...bound, sourceTeamId, club, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+}
+async function assertImportedThroughClub(org, bundle, summary) {
+  assert.ok(summary.counts.created > 0, JSON.stringify(summary.counts));
+  const expected = [...oracleOf(bundle).keys()].filter((key) => key.endsWith(`|${CLUB_KEY}`));
+  assert.ok(expected.length > 0);
+  const rows = await teamValueRows(org.teamId);
+  assert.equal(rows.length, expected.length, "exactly the club activation's values");
+  for (const r of rows) {
+    assert.equal(String(r.metric_definition_id), org.club.variableId, "each value is the club's variable");
+    assert.equal(String(r.activation_id), org.club.activationId, "each T6 row names the club admin's activation");
+  }
+}
+const endOfActivation = async (id) => (await admin.query(`select ended_at, ended_basis, end_reason from training_load.source_metric_mapping_activations where id = $1`, [id])).rows[0];
+
+test("11a. a club's admin activates its club's version and switches it on, and an import writes through it; the import first against that admin's A2: held after step 5, the A2 waits at the import's T3 row, the import finishes with exactly its values, and only then the A2 commits ending the activation on the club_admin basis - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const org = await clubTeam();
+  const bundle = writerBundle(org);
+  const { importing, writing } = await importFirst({
+    org, bundle, waitsOn: "training_load.source_metric_mappings",
+    startWriter: () => org.club.disable(),
+    whileHeld: async () => assert.equal(await versionStatus(org.club.versionId), "active"),
+  });
+  const summary = await within(importing, 20_000, "the import");
+  const disabled = await within(writing, 20_000, "the club admin's disable");
+  assert.ok(disabled.activationsEnded >= 1);
+  assert.equal(await versionStatus(org.club.versionId), "disabled");
+  const end = await endOfActivation(org.club.activationId);
+  assert.deepEqual([end.ended_basis, end.end_reason], ["club_admin", "mapping_version_disabled"]);
+  await assertImportedThroughClub(org, bundle, summary);
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("11b. a club's admin's replacement with starts holding its locks first (before its first write): the import waits at the replacement's T3 row in step 5, the replacement commits (the activation ended and restarted on the club_admin basis), and the import's re-check answers mapping_changed with nothing written - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  const org = await clubTeam();
+  const next = await org.club.nextVersion();
+  const { writing, importing } = await writerFirst({
+    org, bundle: writerBundle(org), waitsOn: "training_load.source_metric_mappings",
+    setHold: (fn) => org.club.mappings.setMappingWriteHoldForTests(fn),
+    startWriter: () => org.club.replace(next),
+  });
+  const replaced = await within(writing, 20_000, "the club admin's replacement");
+  assert.deepEqual([replaced.replaced, replaced.activationsEnded, replaced.activations?.length], [org.club.versionId, 1, 1]);
+  const end = await endOfActivation(org.club.activationId);
+  assert.deepEqual([end.ended_basis, end.end_reason], ["club_admin", "mapping_version_replaced"]);
+  await assert.rejects(within(importing, 20_000, "the import"), (error) => error instanceof ImportMappingChangedError && error.code === "mapping_changed");
+  assert.deepEqual(await teamCounts(org.teamId), ZERO, "nothing written");
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+// A route-level team (bound through the real Connect / Bind routes, athletes
+// linked) whose only activation is the club admin's, with one checked,
+// actionable candidate.
+async function clubRouteTeam() {
+  const org = await createGpexePilotOrg(admin, { athleteNames: ["R101", "R102", "R103"] });
+  const padmin = await routePlatformAdmin();
+  const gpexeTeamId = nextSourceTeamId();
+  assert.equal((await gpexe(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId } })).status, 200);
+  src.show(gpexeTeamId);
+  const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
+  const club = await clubMapped(org.clubId, bindingId);
+  for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
+    const r = await gpexe(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } });
+    assert.equal(r.status, 201, r.text);
+  }
+  const team = { ...org, padmin, gpexeTeamId, bindingId, club };
+  src.serve(gpexeTeamId, [routeBundle(nextSession(), gpexeTeamId)]);
+  const check = await checkNow(team);
+  assert.equal(check.status, "succeeded", JSON.stringify(check.error));
+  const [c] = (await gpexe(`/teams/${org.teamId}/candidates`, { cookie: padmin.cookie })).body.candidates;
+  assert.deepEqual(c.approvalBlockers.filter((b) => b !== "import_switch_off"), [], "the candidate is actionable");
+  const candidate = (await gpexe(`/teams/${org.teamId}/candidates/${c.id}`, { cookie: padmin.cookie })).body.candidate;
+  return { team, candidate };
+}
+
+test("11c. the real approval against the club's admin's A2 and replacement, both orders: an approval held after step 5 makes the A2 wait at T3, imports, and the A2 then commits on the club_admin basis; a replacement holding its locks first makes the approval wait at T3, commits, and the approval answers 409 preview_changed with nothing imported - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    // The approval first.
+    const a = await clubRouteTeam();
+    const g = gate();
+    setSourceInstanceHoldForTests(g.hold);
+    let approving;
+    let disabling;
+    try {
+      approving = approve(a.team, a.candidate);
+      const approvalDone = settled(approving);
+      await within(g.reached, 15_000, "the approval reached its hold after step 5");
+      disabling = a.team.club.disable();
+      const disableDone = settled(disabling);
+      const waiter = await waiterBlockedBy(g.pid);
+      assert.ok(waiter, "the A2 waits on the approval's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mappings"]);
+      await sleep(150);
+      assert.deepEqual([approvalDone(), disableDone()], [false, false]);
+    } finally {
+      g.open();
+      setSourceInstanceHoldForTests(null);
+    }
+    const approved = await within(approving, 20_000, "the approval");
+    assert.equal(approved.status, 200, approved.text);
+    const disabled = await within(disabling, 20_000, "the club admin's disable");
+    assert.ok(disabled.activationsEnded >= 1);
+    assert.deepEqual(Object.values(await endOfActivation(a.team.club.activationId)).slice(1), ["club_admin", "mapping_version_disabled"]);
+    const counts = await teamCounts(a.team.teamId);
+    assert.ok(counts.metric_values > 0 && counts.approvals === 1, JSON.stringify(counts));
+    // The replacement first.
+    const b = await clubRouteTeam();
+    const next = await b.team.club.nextVersion();
+    const h = gate();
+    b.team.club.mappings.setMappingWriteHoldForTests(h.hold);
+    let replacing;
+    let approvingB;
+    try {
+      replacing = b.team.club.replace(next);
+      const replaceDone = settled(replacing);
+      await within(h.reached, 15_000, "the replacement holds before its first write");
+      approvingB = approve(b.team, b.candidate);
+      const approvalDone = settled(approvingB);
+      const waiter = await waiterBlockedBy(h.pid);
+      assert.ok(waiter, "the approval waits on the replacement's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mappings"]);
+      await sleep(150);
+      assert.deepEqual([replaceDone(), approvalDone()], [false, false]);
+    } finally {
+      h.open();
+      b.team.club.mappings.setMappingWriteHoldForTests(null);
+    }
+    const replaced = await within(replacing, 20_000, "the replacement");
+    assert.equal(replaced.replaced, b.team.club.versionId);
+    const refusedApproval = await within(approvingB, 20_000, "the approval (b)");
+    assert.deepEqual([refusedApproval.status, refusedApproval.body.error], [409, "preview_changed"], refusedApproval.text);
+    assert.deepEqual(await teamCounts(b.team.teamId), ZERO, "nothing imported");
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+test("11d. the other two orders of the real approval against the club's admin (J14 section 10.4): the A2 holding its locks first makes the approval wait at T3, commits on the club_admin basis, and the approval answers 409 preview_changed with nothing imported; an approval held after step 5 makes the replacement wait at T3, imports, and the replacement then commits ending the activation on the club_admin basis - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    // The A2 first.
+    const a = await clubRouteTeam();
+    const h = gate();
+    a.team.club.mappings.setMappingWriteHoldForTests(h.hold);
+    let disabling;
+    let approving;
+    try {
+      disabling = a.team.club.disable();
+      const disableDone = settled(disabling);
+      await within(h.reached, 15_000, "the A2 holds before its first write");
+      approving = approve(a.team, a.candidate);
+      const approvalDone = settled(approving);
+      const waiter = await waiterBlockedBy(h.pid);
+      assert.ok(waiter, "the approval waits on the A2's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mappings"]);
+      await sleep(150);
+      assert.deepEqual([disableDone(), approvalDone()], [false, false]);
+    } finally {
+      h.open();
+      a.team.club.mappings.setMappingWriteHoldForTests(null);
+    }
+    const disabled = await within(disabling, 20_000, "the club admin's disable");
+    assert.ok(disabled.activationsEnded >= 1);
+    assert.deepEqual(Object.values(await endOfActivation(a.team.club.activationId)).slice(1), ["club_admin", "mapping_version_disabled"]);
+    const refused = await within(approving, 20_000, "the approval");
+    assert.deepEqual([refused.status, refused.body.error], [409, "preview_changed"], refused.text);
+    assert.deepEqual(await teamCounts(a.team.teamId), ZERO, "nothing imported");
+    // The approval first, then the replacement.
+    const b = await clubRouteTeam();
+    const next = await b.team.club.nextVersion();
+    const g = gate();
+    setSourceInstanceHoldForTests(g.hold);
+    let approvingB;
+    let replacing;
+    try {
+      approvingB = approve(b.team, b.candidate);
+      const approvalDone = settled(approvingB);
+      await within(g.reached, 15_000, "the approval reached its hold after step 5");
+      replacing = b.team.club.replace(next);
+      const replaceDone = settled(replacing);
+      const waiter = await waiterBlockedBy(g.pid);
+      assert.ok(waiter, "the replacement waits on the approval's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mappings"]);
+      await sleep(150);
+      assert.deepEqual([approvalDone(), replaceDone()], [false, false]);
+    } finally {
+      g.open();
+      setSourceInstanceHoldForTests(null);
+    }
+    const approved = await within(approvingB, 20_000, "the approval (b)");
+    assert.equal(approved.status, 200, approved.text);
+    const replaced = await within(replacing, 20_000, "the replacement");
+    assert.equal(replaced.replaced, b.team.club.versionId);
+    assert.deepEqual(Object.values(await endOfActivation(b.team.club.activationId)).slice(1), ["club_admin", "mapping_version_replaced"]);
+    const counts = await teamCounts(b.team.teamId);
+    assert.ok(counts.metric_values > 0 && counts.approvals === 1, JSON.stringify(counts));
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
   assert.deepEqual(deadlockLines(logFrom), []);
 });

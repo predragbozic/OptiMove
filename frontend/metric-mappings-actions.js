@@ -260,7 +260,12 @@ export function inOwnerWorkspace(mapping, ctx = mappingsContext()) {
   if (!mapping || !ctx) return false;
   return (mapping.ownerScope === "system") === (ctx.owner === "system");
 }
-export const mayTransition = (mapping, ctx = mappingsContext()) => Boolean(ctx?.isPlatformAdmin && inOwnerWorkspace(mapping, ctx));
+// Activate, replace and disable (J14 section 8): a platform admin in the
+// owner's workspace, and, from phase 7h, a club's admin on the club's own
+// mappings in its club workspace. Written out in full: a later context kind
+// must not widen it. The server decides again (mayTransitionMappings).
+export const mayTransition = (mapping, ctx = mappingsContext()) =>
+  Boolean(ctx && inOwnerWorkspace(mapping, ctx) && (ctx.isPlatformAdmin || (ctx.owner === "club" && mapping.ownerScope === "club")));
 export function fieldOf(mapping, s = mappingsState()) {
   return s.refs.fields.find((f) => f.id === mapping?.sourceMetric?.id) || null;
 }
@@ -269,10 +274,12 @@ export function targetOf(mapping, s = mappingsState()) {
 }
 // Why a version waiting for review cannot be activated yet, from the reads
 // (J16 5); "" when the reads show nothing missing. The server decides again.
-export function activateBlocker(mapping, version, s = mappingsState()) {
+export function activateBlocker(mapping, version, s = mappingsState(), ctx = mappingsContext()) {
   const field = fieldOf(mapping, s);
   const revision = (field?.revisions || []).find((r) => r.id === version.sourceRevisionId) || null;
-  if (!revisionVerified(revision)) return "The field's meaning must be confirmed first.";
+  if (!revisionVerified(revision)) {
+    return `The field's meaning must be confirmed first.${ctx?.owner === "club" ? " A platform administrator confirms it in the platform workspace." : ""}`;
+  }
   const target = targetOf(mapping, s);
   if (!target) return "The variable is no longer active.";
   if (target.currentVersion?.id !== version.metricDefinitionVersionId) return "The variable has a newer version: make a new version.";
@@ -434,8 +441,19 @@ async function succeeded(w, data, render) {
   }
   s.panel = null;
   if (w.act === "submit") {
+    // The next step only for a caller who may activate it, and only from
+    // loaded reads: "You can activate it now." when they show nothing that
+    // blocks it, otherwise the blocker's own sentence; nothing while the
+    // fields are not loaded (a missing field is no blocker).
     const ctx = mappingsContext();
-    setNotice(s, `Submitted for review.${s.detail.mapping && mayTransition(s.detail.mapping, ctx) ? " You can activate it now." : ""}${readError}`);
+    const mapping = s.detail.mapping;
+    const version = w.target?.versionId ? versionOf(s, w.target.versionId) : null;
+    let next = "";
+    if (mapping && version && s.refs.loaded && mayTransition(mapping, ctx)) {
+      const blocker = activateBlocker(mapping, version, s, ctx);
+      next = blocker ? ` ${blocker}` : " You can activate it now.";
+    }
+    setNotice(s, `Submitted for review.${readError}${next}`);
   }
   if (w.act === "activate") {
     const ended = Number(data?.activationsEnded) || 0;

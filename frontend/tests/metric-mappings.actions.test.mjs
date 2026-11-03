@@ -10,6 +10,7 @@
 // fail-closed mark, hostile names, the refusal sentences and the guards.
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { installFetchMock, restoreFetch } from "./support/fetch-mock.mjs";
 
@@ -390,7 +391,7 @@ test("9. mapping_exists continues with the existing mapping; a refused draft lea
   assert.match(text(), /The mapping is saved, but its draft was not: The field's unit \(or its bound\) is not confirmed yet\. Use New version to try again\./);
 });
 
-test("10. the detail: one primary act by state, the acts each caller may use, and the club's waiting-version sentences", async () => {
+test("10. the detail: one primary act by state, the acts each caller may use; a club's admin activates and disables the club's own mapping (phase 7h)", async () => {
   await open("detail");
   const primary = $$(".data-sources-primary").map((b) => b.textContent.trim());
   assert.ok(primary.includes("Replace version 1"), primary.join("|"));
@@ -404,11 +405,16 @@ test("10. the detail: one primary act by state, the acts each caller may use, an
   assert.equal($('[data-action="metric-mappings-disable-open"]'), null);
   assert.match(text(), /A platform administrator activates system mappings in the platform workspace\./);
   assert.equal($('[data-action="metric-mappings-new-version"]'), null);
-  // A club's own mapping, read by its admin.
+  // A club's own mapping, read by its admin (J14 section 8): Replace version 1
+  // as the primary act, Disable on each live version, never the old hand-off.
   db.mappings[0].ownerScope = "club";
   actions.resetMappings();
   await open("detail");
-  assert.match(text(), /Ask a platform administrator who also administers FK Borac to activate it in this workspace\./);
+  assert.doesNotMatch(text(), /who also administers/);
+  assert.ok($(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`));
+  assert.ok($(`[data-action="metric-mappings-disable-open"][data-version-id="${V1}"]`));
+  assert.ok($(`[data-action="metric-mappings-disable-open"][data-version-id="${V2}"]`));
+  assert.ok($$(".data-sources-primary").map((b) => b.textContent.trim()).includes("Replace version 1"));
   assert.ok($('[data-action="metric-mappings-new-version"]'));
   // A platform admin in a club workspace on a system version.
   db.mappings[0].ownerScope = "system";
@@ -1061,7 +1067,7 @@ test("33. an old outcome's sentence never stands above a new act; a lone club is
   assert.equal($('[data-mm-field="flow.drill"]').checked, true);
 });
 
-test("34. labels written by others are cleaned wherever they are shown: list row, heading, conversion note; the platform's step 4 names its own next step", async () => {
+test("34. labels written by others are cleaned wherever they are shown: list row, heading, conversion note; after Submit the platform's and the club's admin are told to activate it", async () => {
   db.mappings[0].target.label = "Dist‮ance\u0007";
   db.mappings[0].sourceMetric.label = "Total‮ distance";
   db.mappings[0].versions[1].conversionNote = "Metres‮ to km";
@@ -1080,7 +1086,7 @@ test("34. labels written by others are cleaned wherever they are shown: list row
   await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
   render();
   assert.match(text(), /Submitted for review\. You can activate it now\./);
-  // A club admin submitting the club's own mapping is not told to activate it.
+  // A club's admin submitting the club's own mapping activates it next (phase 7h).
   db.mappings[0].ownerScope = "club";
   db.mappings[0].versions[0].status = "draft";
   asClub();
@@ -1088,7 +1094,7 @@ test("34. labels written by others are cleaned wherever they are shown: list row
   await open("detail");
   await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
   render();
-  assert.doesNotMatch(text(), /You can activate it now/);
+  assert.match(text(), /Submitted for review\. You can activate it now\./);
 });
 
 test("35. the preview says the two ranges as one; a New version's steps read 3. and 4.", async () => {
@@ -1238,4 +1244,191 @@ test("39. while a result is not confirmed every act that writes is off in the ma
   data.mappingsState().view = "list";
   render();
   assert.equal($('[data-action="metric-mappings-new"]').disabled, true);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7h (J14 section 8): a club's admin activates, replaces and disables the
+// club's own mapping versions. The fake server answers as the real one does: in
+// a club workspace an activate or a disable of a mapping that is not the
+// club's own is the identical 404 (transitionTarget's owner filter).
+// ---------------------------------------------------------------------------
+const clubOwnOnly = (c) => {
+  if (c.method !== "POST" || !/\/(activate|disable)$/.test(c.url)) return null;
+  if (state.currentUser?.activeWorkspace?.type !== "club") return null;
+  const mapping = db.mappings.find((m) => c.url.includes(`/mappings/${m.id}/`));
+  return mapping?.ownerScope === "club" ? null : ok({ error: "notFound" }, 404);
+};
+const RIGHTS = JSON.parse(readFileSync(new URL("../../backend/tests/fixtures/mapping-transition-rights-7h.json", import.meta.url), "utf8"));
+
+test("40. the shared rights table (R12): mayTransition answers every row as the server's mayTransitionMappings plus its owner filter does", () => {
+  const rowsSeen = [];
+  for (const row of RIGHTS.rows) {
+    const available = [...(row.roles.platformAdmin ? [{ type: "platform" }] : []), ...(row.roles.clubAdminOfA ? [{ type: "club", scopeId: CLUB }] : [])];
+    const active = row.workspace === "platform" ? { type: "platform", scopeId: null, label: "Platform" }
+      : row.workspace === "clubA" ? { type: "club", scopeId: CLUB, label: "FK Borac" }
+        : { type: "team", scopeId: TEAM1, label: "First team" };
+    const user = { id: "u1", activeWorkspace: active, availableWorkspaces: available };
+    const mapping = { ownerScope: row.mappingOwner === "system" ? "system" : "club" };
+    assert.equal(actions.mayTransition(mapping, data.mappingsContext(user)), row.expected, row.name);
+    rowsSeen.push(row.name);
+  }
+  assert.equal(rowsSeen.length, RIGHTS.rows.length);
+  assert.ok(RIGHTS.rows.some((r) => r.roles.platformAdmin && r.roles.clubAdminOfA), "a user who holds both roles");
+  assert.ok(RIGHTS.rows.some((r) => r.roles.platformAdmin && r.workspace === "clubA" && r.mappingOwner === "system"), "a platform admin in a club workspace on a system mapping");
+});
+
+test("41. a club's admin activates the club's own waiting version with the club's teams switched on in the same step", async () => {
+  overrides.push(clubOwnOnly);
+  db.mappings[0].ownerScope = "club";
+  db.mappings[0].versions = [ver({ id: V2, versionNumber: 1, status: "needs_review", metricDefinitionVersionId: "tv-d", parameterFingerprint: "fp-a" })];
+  db.activations = [];
+  db.org.clubs = [{ id: CLUB, name: "FK Borac" }];
+  asClub();
+  await open("list");
+  assert.match(text(), /You activate your club's own mappings yourself\./);
+  await click(`[data-action="metric-mappings-open"][data-mapping-id="${M1}"]`);
+  render();
+  assert.ok($$(".data-sources-primary").map((b) => b.textContent.trim()).includes("Activate"));
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  render();
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.equal(data.mappingsState().panel.chooser.clubId, CLUB, "the chooser starts on the club");
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  const post = posts().at(-1);
+  assert.equal(post.url, `${B}/mappings/${M1}/versions/${V2}/activate`);
+  assert.equal(post.body.expectedActiveVersionId, null);
+  assert.deepEqual(post.body.activations, [{ bindingId: B1, requirement: "required" }]);
+  assert.equal(post.body.activationReason, "Our club's distance.");
+  for (const key of ["owner", "ownerScope", "clubId", "basis", "actor", "userId"]) assert.ok(!(key in post.body), key);
+  assert.doesNotMatch(text(), /Whether it was saved is not known|Result not confirmed/);
+});
+
+test("42. a club's admin replaces the club's active version and keeps its teams; then disables the new one", async () => {
+  overrides.push(clubOwnOnly);
+  db.mappings[0].ownerScope = "club";
+  db.activations = [act({ id: id("ac000000", 1), versionId: V1, bindingId: B1, teamId: TEAM1, requirement: "required" })];
+  asClub();
+  await open("detail");
+  await click(`[data-action="metric-mappings-activate-open"][data-version-id="${V2}"]`);
+  for (let i = 0; i < 6; i += 1) await settle();
+  render();
+  assert.match(text(), /First team — linked to GPEXE team 980/);
+  await input('[data-mm-field="reason"]', "Version 2 for the club.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  const replace = posts().at(-1);
+  assert.equal(replace.url, `${B}/mappings/${M1}/versions/${V2}/activate`);
+  assert.equal(replace.body.expectedActiveVersionId, V1);
+  assert.deepEqual(replace.body.activations, [{ bindingId: B1, requirement: "required" }]);
+  assert.doesNotMatch(text(), /Whether it was saved is not known|Result not confirmed/);
+  // The disable of the club's own version, from the same workspace.
+  db.mappings[0].versions = [ver({ id: V2, versionNumber: 2, status: "active", metricDefinitionVersionId: "tv-d" }), ver({ id: V1, versionNumber: 1, status: "disabled", metricDefinitionVersionId: "tv-d" })];
+  db.activations = [act({ id: id("ac000000", 2), versionId: V2, bindingId: B1, teamId: TEAM1, requirement: "required" })];
+  actions.resetMappings();
+  await open("detail");
+  await click(`[data-action="metric-mappings-disable-open"][data-version-id="${V2}"]`);
+  for (let i = 0; i < 6; i += 1) await settle();
+  render();
+  await input('[data-mm-field="reason"]', "Not this season.");
+  await click('[data-action="metric-mappings-review"]');
+  render();
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  const disable = posts().at(-1);
+  assert.equal(disable.url, `${B}/mappings/${M1}/versions/${V2}/disable`);
+  assert.deepEqual(Object.keys(disable.body).sort(), ["expectedStatus", "reason", "requestKey"]);
+  assert.equal(disable.body.expectedStatus, "active");
+  assert.doesNotMatch(text(), /Whether it was saved is not known|Result not confirmed/);
+});
+
+test("43. a club's admin on a system mapping in the club's workspace: no activate or disable, the platform sentence; the club's blockers name who helps", async () => {
+  asClub();
+  await open("detail");
+  assert.equal($('[data-action="metric-mappings-activate-open"]'), null);
+  assert.equal($('[data-action="metric-mappings-disable-open"]'), null);
+  assert.match(text(), /A platform administrator activates system mappings in the platform workspace\./);
+  // The club's own waiting version whose field's meaning is not confirmed yet.
+  db.mappings[0].ownerScope = "club";
+  db.fields[0].revisions[0].evidenceStatus = "observed";
+  actions.resetMappings();
+  await open("detail");
+  assert.match(text(), /The field's meaning must be confirmed first\. A platform administrator confirms it in the platform workspace\./);
+  // A missing conversion in step 2 of a club's flow names who adds it.
+  actions.resetMappings();
+  db.targets.push({ id: id("d0d0d0d0", 9), ownerScope: "club", key: "club_dist", label: "Club distance", currentVersion: { id: "tv-c", versionNumber: 1, unit: "yd", canonicalParameters: null }, scopes: ["session"], versionReady: true, notReadyCode: null });
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  render();
+  assert.match(text(), /There is no conversion from m to yd yet\. Ask a platform administrator to add it\./);
+  // The platform workspace keeps the sentence without that step.
+  asPlatform();
+  actions.resetMappings();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  render();
+  assert.match(text(), /There is no conversion from m to yd yet\./);
+  assert.doesNotMatch(text(), /Ask a platform administrator to add it\./);
+});
+
+test("44. a field whose meaning is not confirmed: step 4, the notice after Submit and the server's refusals say what blocks it and who helps, never that it can be activated now", async () => {
+  // Step 4 of the flow for a field whose meaning is pending.
+  db.fields[0].revisions[0].evidenceStatus = "observed";
+  asPlatform();
+  actions.resetMappings();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  render();
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TK}"]`);
+  render();
+  await input('[data-mm-field="flow.conversionNote"]', "GPEXE gives metres; the variable is in km.");
+  await input('[data-mm-field="flow.session"]', true);
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.match(text(), /A draft changes nothing yet: submit it for review\. It can be activated once the field's meaning is confirmed\./);
+  assert.doesNotMatch(text(), /then you can activate it/);
+  // A club's admin submits the club's own draft of that field: the blocker, not "You can activate it now".
+  db.mappings[0].ownerScope = "club";
+  db.mappings[0].versions.unshift(ver({ id: V3, versionNumber: 3, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  asClub();
+  actions.resetMappings();
+  await open("detail");
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /Submitted for review\. The field's meaning must be confirmed first\. A platform administrator confirms it in the platform workspace\./);
+  assert.doesNotMatch(text(), /You can activate it now/);
+  // While the fields are not loaded, a field not yet read is no blocker: the notice says only that it was submitted.
+  const V4 = id("b0b0b0b0", 4);
+  db.mappings[0].versions.unshift(ver({ id: V4, versionNumber: 4, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  actions.resetMappings();
+  await open("detail");
+  data.mappingsState().refs.loaded = false;
+  data.mappingsState().refs.loading = true;
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V4}"]`);
+  assert.equal(data.mappingsState().notice, "Submitted for review.");
+  // The server's own refusals of an activation name who helps in a club's workspace only.
+  assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }),
+    "The field's unit and meaning must be confirmed first. A platform administrator confirms them in the platform workspace.");
+  assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
+    "This version cannot be activated now: there is no usable conversion between these units now. Ask a platform administrator to add it.");
+  assert.equal(data.refusalText("activate", { code: "level_not_allowed", status: 409 }),
+    "This version cannot be activated now: the field or the variable does not allow this level.");
+  assert.equal(data.refusalText("activate", { code: "source_metric_unsupported", status: 409 }),
+    "This version cannot be activated now: OptiMove cannot read this field with these settings.");
+  asPlatform();
+  assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }), "The field's unit and meaning must be confirmed first.");
+  assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
+    "This version cannot be activated now: there is no usable conversion between these units now.");
 });

@@ -221,32 +221,33 @@ export async function lockOpenActivations(client, versionIds) {
 
 // The ends, one statement, before the versions' status changes (v34 refuses
 // to disable a version with an open activation): at the transaction's time,
-// by the acting user. A version-driven end carries the platform admin's basis
-// the database derives without the club gate (section 2.3): the basis is the
-// constant 'platform_admin' because A1, A2 and the pinned step admit only a
-// platform admin (mayTransitionMappings, the lifecycle's own gate); opening
-// them to another basis must change it here and in endAuditRows (v48 refuses
-// it with 42501 otherwise).
+// by the acting user, on the basis of the version's own transition (J14
+// section 2.4). A1 and A2 pass their caller's context: an active platform
+// admin's 'platform_admin', or, from phase 7h, club X's admin's 'club_admin'
+// on club X's own version (v52 derives the basis the same way and refuses a
+// club version's activation on another club's binding). The revision
+// lifecycle's pinned step passes a platform admin's context of its own.
 export async function endOpenActivations(client, ctx, rows, endReason) {
   if (rows.length === 0) return;
   await client.query(
     `update training_load.source_metric_mapping_activations
-        set ended_at = now(), ended_by_user_id = $2, ended_basis = 'platform_admin', end_reason = $3
+        set ended_at = now(), ended_by_user_id = $2, ended_basis = $3, end_reason = $4
       where id = any($1::uuid[])`,
-    [rows.map((r) => r.id), ctx.userId, endReason],
+    [rows.map((r) => r.id), ctx.userId, ctx.basis, endReason],
   );
 }
 
 // One activation_end audit row per end, with the version's disable_reason as
 // its reason (v48 checks it), after the versions' status changes; the basis is
-// 'platform_admin' for the reason given at endOpenActivations.
+// the context's, as at endOpenActivations (v48 and v52 refuse any other with
+// 42501).
 export async function endAuditRows(client, ctx, rows, reason, operationId) {
   for (const r of rows) {
     await client.query(
       `insert into training_load.source_metric_audit
          (action, mapping_version_id, activation_id, team_id, reason, performed_by_user_id, basis, operation_id)
-       values ('activation_end', $1, $2, $3, $4, $5, 'platform_admin', $6)`,
-      [r.mapping_version_id, r.id, r.team_id, reason, ctx.userId, operationId],
+       values ('activation_end', $1, $2, $3, $4, $5, $6, $7)`,
+      [r.mapping_version_id, r.id, r.team_id, reason, ctx.userId, ctx.basis, operationId],
     );
   }
 }

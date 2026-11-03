@@ -234,10 +234,13 @@ router.get("/mappings/:mappingId/versions/:versionId/preview", handle(async (req
 
 // Phase 7b (J8): A1 activates a submitted version (and, naming the active
 // version, replaces it in the same transaction); A2 disables a version. An
-// active platform admin in the workspace of the mapping's owner only - a club
-// admin and everyone else the identical 404, before the body is looked at;
+// active platform admin in the workspace of the mapping's owner, and from
+// phase 7h (J14) club X's active admin in club X's workspace on club X's own
+// mappings - everyone else the identical 404, before the body is looked at;
 // then 415, a non-object body 400, a malformed id the identical 404, a wrong
-// body shape 400, then the write (200 { version[, replaced] }).
+// body shape 400, then the write (200 { version[, replaced] }); a club admin
+// naming a system mapping or another club's gets the identical 404 from the
+// service's owner filter.
 router.post("/mappings/:mappingId/versions/:versionId/activate", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
