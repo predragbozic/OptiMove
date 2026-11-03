@@ -1007,3 +1007,17 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   team of an archived club.
 
   `organization-team-club-fixed.test.mjs` test 7 now expects the empty restored team.
+
+- **After the merge (the owner's external review of PR #336, two small notes; its own pull request):**
+  - An id that is not a UUID on a membership route (adding an athlete to a team, Remove from team, the team-membership
+    restore, the club-membership archive and restore) answers as an unknown id does, after the rights: a platform
+    admin gets the route's `404`, anyone else the existing refusal. It is never a database error. Before, a platform
+    admin got a `500` whose body carried PostgreSQL's text. That text came from the general error handler
+    (`backend/src/server.js`), which outside production puts a 5xx error's message into the body. In production it
+    answers "Something went wrong." That handler is shared by every router and is left as it is.
+  - Adding an athlete to a team checks the team's state before the right to the athlete, so the coach of an archived
+    team learns that it is archived (`409 team_archived`), not that the athlete is outside their access. Only whoever
+    manages the team gets that far.
+  - Not changed: a platform admin adding an unknown athlete (a valid UUID of no athlete) still ends in the membership's
+    foreign key (a `500`); it is the route's older behaviour, outside these notes.
+  - Tests: `organization-team-archive.test.mjs` tests 13 and 14.

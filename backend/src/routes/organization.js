@@ -1448,10 +1448,20 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     const athleteId = clean(req.body?.athleteId);
     if (!teamId || !athleteId) return res.status(400).json({ error: "Team and athlete are required." });
     if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    // An id that is not a UUID answers as an unknown one, never as a database
+    // error. The team's state comes before the athlete's right: whoever manages
+    // the team may learn that it is archived (its coach included, whose
+    // athletes left it with the archive).
+    if (!UUID_TEXT.test(teamId)) return res.status(404).json({ error: "Team not found." });
     const team = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [teamId]);
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
     if (!team.rows[0].active) return res.status(409).json(TEAM_ARCHIVED);
+    if (!UUID_TEXT.test(athleteId)) {
+      return isPlatformAdministrator(req.authz)
+        ? res.status(404).json({ error: "Athlete not found." })
+        : res.status(403).json({ error: "Athlete is outside your access." });
+    }
+    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2372,6 +2382,10 @@ router.put("/athletes/:athleteId/coach-relationship/restore", async (req, res, n
 router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
   try {
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    // An id that is not a UUID is no membership (a platform admin gets here with one).
+    if (!UUID_TEXT.test(req.params.teamId) || !UUID_TEXT.test(req.params.athleteId)) {
+      return res.status(404).json({ error: "This athlete has no active membership in this team." });
+    }
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2399,8 +2413,14 @@ router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
 router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) => {
   try {
     if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    const team = await query(`select id, club_id from public.teams where id = $1 limit 1`, [req.params.teamId]);
+    // An id that is not a UUID answers as an unknown one (a platform admin gets here with one).
+    if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
+    const team = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [req.params.teamId]);
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
+    // The team's state before the athlete id's form, so an id that is not a UUID
+    // answers as an unknown one does on an archived team too (D45).
+    if (!team.rows[0].active) return res.status(409).json(TEAM_ARCHIVED);
+    if (!UUID_TEXT.test(req.params.athleteId)) return res.status(404).json({ error: "No membership in this team was found." });
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2472,6 +2492,10 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
 router.delete("/clubs/:clubId/athletes/:athleteId", async (req, res, next) => {
   try {
     if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    // An id that is not a UUID is no membership (a platform admin gets here with one).
+    if (!UUID_TEXT.test(req.params.clubId) || !UUID_TEXT.test(req.params.athleteId)) {
+      return res.status(404).json({ error: "This athlete has no active membership in this club." });
+    }
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2515,6 +2539,10 @@ router.delete("/clubs/:clubId/athletes/:athleteId", async (req, res, next) => {
 router.put("/clubs/:clubId/athletes/:athleteId/restore", async (req, res, next) => {
   try {
     if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    // An id that is not a UUID is no membership (a platform admin gets here with one).
+    if (!UUID_TEXT.test(req.params.clubId) || !UUID_TEXT.test(req.params.athleteId)) {
+      return res.status(404).json({ error: "No membership in this club was found." });
+    }
     const client = await pool.connect();
     try {
       await client.query("begin");
