@@ -18,7 +18,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
     if (kind === 'preview' && !previewEnabled) throw previewError('previewUnavailable');
     let lease;
     if (kind === 'preview') lease = await admission.tryAcquire({ userId: req.user.id });
-    return withPreviewTransaction({ ...transactionOptions, pool, signal, onReleased: () => lease?.release() }, async queryRunner => {
+    return withPreviewTransaction({ ...transactionOptions, pool: lease?.queryPool ?? pool, signal, onReleased: () => lease?.release() }, async queryRunner => {
       const target = await authorizePreviewTarget(queryRunner, req, dashboardId);
       if (kind === 'capabilities') {
         const widgetTypes = (await queryRunner('select * from training_load.dashboard_widget_types where is_active=true order by key')).rows;

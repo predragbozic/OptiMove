@@ -58,6 +58,10 @@ export function createPreviewAdmission({ coordinator, processId, poolMax, coordi
       clearTimeout(timer);
     }
     if (!acquiredLease || typeof acquiredLease.release !== 'function') throw previewBusy();
+    if (acquiredLease.queryPool !== undefined && typeof acquiredLease.queryPool?.connect !== 'function') {
+      Promise.resolve().then(() => acquiredLease.release()).catch(() => {});
+      throw previewBusy();
+    }
     let released = false;
     let releasing = null;
     async function release() {
@@ -71,7 +75,7 @@ export function createPreviewAdmission({ coordinator, processId, poolMax, coordi
         releasing = null;
       }
     }
-    return Object.freeze({ release });
+    return Object.freeze({ release, ...(acquiredLease.queryPool ? { queryPool: acquiredLease.queryPool } : {}) });
   }
   return Object.freeze({ tryAcquire, processLimit });
 }
