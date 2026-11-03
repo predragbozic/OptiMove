@@ -10,7 +10,7 @@ import {
 } from "./metric-mappings-data.js";
 import {
   activateBlocker, activeVersion, bindingFacts, chooserTeams, chosenBindings, fieldOf, fieldTakenBy, flowFacts, inOwnerWorkspace,
-  mayTransition, saveAndActivateOffered, teamNameOf,
+  mayTransition, saveAndActivateNote, saveAndActivateOffered, teamNameOf,
 } from "./metric-mappings-actions.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -258,6 +258,7 @@ function stepReviewHtml(s, locked) {
   if (!revision || !target || !status?.choosable) return "";
   // 7h-F: Save and activate, for whoever may activate this mapping (F1-F4).
   const offered = saveAndActivateOffered(s, ctx);
+  const note = offered ? null : saveAndActivateNote(s, ctx);
   const a = f.activate;
   const levels = levelsOf(revision, target);
   const session = levels.session && levels.drill ? f.draft.session : levels.session;
@@ -277,18 +278,18 @@ function stepReviewHtml(s, locked) {
         ${bound ? `<div><dt>Bound</dt><dd>${escapeHtml(bound)}</dd></div>` : ""}
         ${status.conversion ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(cleanName(f.draft.conversionNote, 500))}</dd></div>` : ""}
       </dl>
-      <p class="muted">${fieldStatus(field).meaningPending
+      ${offered ? "" : `<p class="muted">${fieldStatus(field).meaningPending
         ? "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is confirmed."
-        : offered
-          ? "Save and activate saves this version, submits it for review and activates it now. Save draft only saves it: it changes nothing yet."
-          : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
+        : note ? escapeHtml(note) : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>`}
     </div>
     ${offered ? `
     <div class="metric-mappings-activate-now">
       <label class="source-fields-choice"><input type="checkbox" data-mm-field="withTeams" ${a.withTeams ? "checked" : ""} ${locked ? "disabled" : ""}><span>Switch on for teams now</span></label>
       ${a.withTeams ? `${chooserHtml(s, a, ctx, { id: null })}${reasonHtml(a, "Reason", locked)}
-      <p class="muted">The server checks every team again when the version is activated.</p>` : ""}
-    </div>` : ""}
+      <p class="muted">The server checks every team again when the version is activated.</p>`
+        : `<p class="muted">Leave it off to switch teams on later. Until then, no team's imports use this version.</p>`}
+    </div>
+    <p class="metric-mappings-save-activate-note">Save and activate makes this version active now: it is saved, submitted for review and activated in one go. Save draft only saves it; nothing changes until it is activated.</p>` : ""}
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
     <div class="data-sources-form-actions">

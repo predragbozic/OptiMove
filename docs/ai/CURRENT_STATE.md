@@ -3857,6 +3857,12 @@ pre-existing; pass/fail counts don't belong in this file
 
   7h-F decides it, with the frontend test of the Imports step. **Built in 7h-F** (in review): the sentence above, as
   proposed, with that test.
+- **7h-F follow-ups (the internal reviews of PR #345; LOW, not scheduled):**
+  - The shared team chooser shows one team's requirement twice: the per-team *Required* select and the "Required or
+    Optional for the chosen team?" radios (UX-9). Show the per-team select only when two or more teams are chosen, on
+    step 4 and in the detail's panel alike.
+  - While Save and activate waits on *Check result*, the *Result not confirmed* box does not name which of the
+    chain's steps is unconfirmed (UX-6, its first half).
 - **7h-B follow-ups (decisions 4 (c) and 5 at 7h-B's GO; LOW, no deadline before more clubs are brought on):**
   - **A club admin's COMMIT that never answers** (the `db-reviewer`'s LOW (c)). The 7h suite has the COMMIT trio for
     a platform admin's A1 and A2 only. The COMMIT path does not depend on the basis, but a club-admin case would pin

@@ -314,6 +314,9 @@ export function dropMappingsForms() {
   s.flow = null;
   s.panel = null;
   s.write = null;
+  // A Save and activate in progress is dropped with its write (7h-F): a later
+  // manual write never resumes it (the code review's 7HF-1).
+  s.chain = null;
 }
 function leave() {
   if (!mappingsMayBeLeft()) return false;
@@ -402,7 +405,13 @@ export function flowFacts(s = mappingsState()) {
 function flowMappingLike(s, ctx) {
   const f = s.flow;
   if (!f || !ctx) return null;
-  if (f.mappingId) return s.detail.mapping?.id === f.mappingId ? s.detail.mapping : null;
+  if (f.mappingId) {
+    if (s.detail.mapping?.id === f.mappingId) return s.detail.mapping;
+    // The existing mapping chosen from the list: its summary says whether it
+    // has an active version (F1; the ux-design-reviewer's UX-2).
+    const listed = s.list.items.find((m) => m.id === f.mappingId);
+    return listed ? { ...listed, versions: [] } : null;
+  }
   const ownerScope = ctx.owner === "system" ? "system" : "club";
   const listed = existingMapping(s, f.fieldId, f.targetId);
   return { ownerScope, versions: [], activeVersionId: listed?.activeVersionId || null };
@@ -416,9 +425,32 @@ export function saveAndActivateOffered(s = mappingsState(), ctx = mappingsContex
   const { field, revision, target, status } = flowFacts(s);
   if (!field || !revision || !target || !status?.choosable || !revisionVerified(revision)) return false;
   // Another mapping of this owner already fills the variable from this field:
-  // its activation would be refused (source_metric_target_taken).
+  // its activation would be refused (source_metric_target_taken). Only a list
+  // read to its end can say no such mapping exists (the code review's 7HF-3).
+  if (!s.list.loaded || s.list.nextCursor) return false;
   if (fieldTakenBy(s, f.fieldId, f.targetId, mapping.ownerScope)) return false;
   return true;
+}
+// Why step 4 offers Save draft only, for whoever may activate (the
+// ux-design-reviewer's UX-2): null when there is nothing to say, or when the
+// field's meaning sentence already says it.
+export function saveAndActivateNote(s = mappingsState(), ctx = mappingsContext()) {
+  const f = s.flow;
+  if (!f || f.step !== 4 || !s.refs.loaded || !ctx || saveAndActivateOffered(s, ctx)) return null;
+  const mapping = flowMappingLike(s, ctx);
+  if (!mapping || !mayTransition(mapping, ctx)) return null;
+  const active = activeVersion(mapping);
+  if (active || mapping.activeVersionId) {
+    const n = active?.versionNumber;
+    return n
+      ? `This mapping already has an active version (version ${n}). Save this draft, submit it for review, then replace version ${n} from the mapping's page.`
+      : "This mapping already has an active version. Save this draft, submit it for review, then replace the active version from the mapping's page.";
+  }
+  const { revision } = flowFacts(s);
+  if (!revision || !revisionVerified(revision)) return null;
+  const taken = fieldTakenBy(s, f.fieldId, f.targetId, mapping.ownerScope);
+  if (taken) return `This field already fills “${cleanName(taken.target?.label || "another variable")}”. Only one of them can be active at a time, so this version can only be saved as a draft.`;
+  return null;
 }
 // The mapping and the version the chooser of step 4 checks the teams against:
 // the version does not exist yet, so its fingerprint is unknown and only the
@@ -465,12 +497,43 @@ async function send(render) {
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// Save and activate continues, or names the step it stopped at, only for a
+// write the chain itself started (chain.write): never for a manual write of
+// the same version (the code review's 7HF-1).
+const chainOf = (s, w) => (s.chain && s.chain.write === w ? s.chain : null);
+function chainWrite(s, chain) { if (chain) chain.write = s.write; }
 // The step at which a stated refusal stopped Save and activate (7h-F): what was
 // saved before it stays saved, and the sentence says so before the reason.
 const CHAIN_STOP = {
   submit: () => "The draft is saved but was not submitted for review.",
   activate: (w) => `Version ${w.after?.versionNumber ?? ""} is waiting for review and was not activated.`,
 };
+// Why a stated refusal stopped the chain, never "Nothing was saved. Try
+// again." after steps that did save (the ux-design-reviewer's UX-1), and a
+// refused team by name (UX-5); then the next step, when one is the user's.
+function chainStopText(w, info, chain, reasonOverride = null) {
+  const team = TEAM_CODES.has(info.code) && info.current?.bindingId ? bindingFacts(info.current.bindingId) : null;
+  let reason = reasonOverride;
+  let next = null;
+  if (!reason) {
+    if (info.code === "try_again") { reason = "The server was busy."; next = "default"; }
+    else if (info.code === "internal_error") { reason = "The server could not save this step."; next = "default"; }
+    else if (TEAM_CODES.has(info.code)) {
+      const name = cleanName(team?.teamName || teamNameOf(team?.teamId) || "One team");
+      reason = `“${name}” ${TEAM_CODE_TEXT[info.code]}.`;
+      next = "teams";
+    } else {
+      const text = refusalText(w.act, info);
+      reason = text === "It was not saved: the server refused it." ? "The server refused it." : text;
+      if (text === "It was not saved: the server refused it.") next = "default";
+    }
+  }
+  const nextText = next === "teams" ? "Activate it from here and choose the teams again."
+    : next === "default" ? (w.act === "submit" ? "Submit it for review from here." : "Activate it from here.") : "";
+  return [CHAIN_STOP[w.act](w), reason, nextText, nextText ? "" : teamsLeft(chain)].filter(Boolean).join(" ");
+}
+// The chosen teams are not switched on when the chain stops (UX-6).
+const teamsLeft = (chain) => (chain?.teams?.length ? "The teams you chose are not switched on yet; choose them again when you activate." : "");
 // J16 5.1: more teams switched off than the list showed is said, never hidden.
 function endedSentence(ended, listed) {
   return listed !== null && listed !== undefined && ended > listed
@@ -484,14 +547,16 @@ async function succeeded(w, data, render, check = false) {
   if (w.act === "create") {
     // The mapping exists; its draft is the second write, with its own key.
     const mappingId = data?.mapping?.id || data?.mappingId;
-    return continueWithDraft(s, mappingId, render);
+    const chain = chainOf(s, w);
+    if (!chain) s.chain = null;
+    return continueWithDraft(s, mappingId, render, chain);
   }
   s.list = { ...emptyMappingsState().list };
   if (w.act === "draft") {
     s.flow = null;
     s.view = "detail";
     s.detail = { ...emptyMappingsState().detail, id: w.target.mappingId };
-    const chain = s.chain;
+    const chain = chainOf(s, w);
     const versionId = data?.version?.id || null;
     if (chain && !check && !chain.stalled && versionId) {
       // Save and activate, its third write: submit the draft just saved.
@@ -499,12 +564,16 @@ async function succeeded(w, data, render, check = false) {
       await loadMapping(w.target.mappingId, render);
       if (s.chain !== chain || s.write) return;
       startWrite(s, "submit", { mappingId: w.target.mappingId, versionId }, { requestKey: newRequestKey() });
+      chainWrite(s, chain);
       await send(render);
       return;
     }
     s.chain = null;
+    const why = chain?.stopReason === "exists"
+      ? "This mapping already existed, so Save and activate stopped there."
+      : "Save and activate stopped there, because its result had to be checked.";
     setNotice(s, chain
-      ? `The draft is saved.${readError} Save and activate stopped there, because its result had to be checked. Submit it for review, then activate it.`
+      ? [`The draft is saved.${readError} ${why} Submit it for review, then activate it.`, teamsLeft(chain)].filter(Boolean).join(" ")
       : `The draft is saved.${readError} Submit it for review when it is ready.`, chain ? "warning" : "");
     await loadMapping(w.target.mappingId, render);
     focusNotice();
@@ -524,12 +593,15 @@ async function succeeded(w, data, render, check = false) {
       const blocker = activateBlocker(mapping, version, s, ctx);
       next = blocker ? ` ${blocker}` : " You can activate it now.";
     }
-    setNotice(s, `Submitted for review.${readError}${next}`);
-    const chain = s.chain;
-    if (chain && chain.versionId === w.target?.versionId) {
+    const chain = chainOf(s, w);
+    if (!chain) s.chain = null;
+    const chained = chain && chain.versionId === w.target?.versionId;
+    // Within Save and activate the next write follows at once (UX-7).
+    setNotice(s, chained && !check && !chain.stalled ? "Submitted for review. Activating..." : `Submitted for review.${readError}${next}`);
+    if (chained) {
       if (check || chain.stalled) {
         s.chain = null;
-        setNotice(s, `Submitted for review.${readError} Save and activate stopped there, because its result had to be checked. Activate it from here.`, "warning");
+        setNotice(s, [`Submitted for review.${readError} Save and activate stopped there, because its result had to be checked. Activate it from here.`, teamsLeft(chain)].filter(Boolean).join(" "), "warning");
       } else {
         // Save and activate, its last write: the version as it is saved now.
         s.teams = { ...emptyMappingsState().teams, showEnded: s.teams.showEnded };
@@ -541,15 +613,16 @@ async function succeeded(w, data, render, check = false) {
         // activate names the version left waiting (CHAIN_STOP).
         if (!fresh || s.detail.error || !submitted || submitted.status !== "needs_review" || activeVersion(fresh)) s.chain = null;
         if (!fresh || s.detail.error || !submitted || submitted.status !== "needs_review") {
-          setNotice(s, `Submitted for review.${readError} It was not activated, because the mapping could not be read back. Activate it from here.`, "warning");
+          setNotice(s, [`Submitted for review.${readError} It was not activated, because the mapping could not be read back. Activate it from here.`, teamsLeft(chain)].filter(Boolean).join(" "), "warning");
         } else if (activeVersion(fresh)) {
-          setNotice(s, `Submitted for review.${readError} It was not activated, because this mapping already has an active version. Replace it from here.`, "warning");
+          setNotice(s, [`Submitted for review.${readError} It was not activated, because this mapping already has an active version. Replace it from here.`, teamsLeft(chain)].filter(Boolean).join(" "), "warning");
         } else {
           const teams = chain.teams || [];
           startWrite(s, "activate", { mappingId: fresh.id, versionId: chain.versionId }, {
             requestKey: newRequestKey(), expectedActiveVersionId: null,
             ...(teams.length ? { activations: teams, activationReason: chain.reason } : {}),
           }, { versionNumber: submitted.versionNumber, chained: true });
+          chainWrite(s, chain);
           await send(render);
           return;
         }
@@ -573,6 +646,7 @@ async function succeeded(w, data, render, check = false) {
       started && !moved ? `${plural(started, "team is", "teams are")} switched on${data?.replaced ? ` for version ${v}` : ""}.` : "",
       // UX L4 (9-B): a review already open keeps its preview until the next search.
       started ? "Imports use it from the next Find new sessions." : "",
+      w.after.chained && !started ? "No team uses it yet: switch it on for teams below." : "",
       readError,
     ].filter(Boolean).join(" "));
   }
@@ -588,7 +662,7 @@ async function succeeded(w, data, render, check = false) {
   focusNotice();
 }
 
-async function continueWithDraft(s, mappingId, render) {
+async function continueWithDraft(s, mappingId, render, chain = null) {
   const { revision, target } = flowFacts(s);
   if (!mappingId || !revision || !target) {
     setNotice(s, "The mapping is saved, but its draft could not be prepared. Use New version to try again.", "warning");
@@ -601,6 +675,7 @@ async function continueWithDraft(s, mappingId, render) {
   s.flow.mappingId = mappingId;
   const { body } = buildDraftBody({ requestKey: newRequestKey(), revision, target, conversions: s.refs.conversions, draft: s.flow.draft });
   startWrite(s, "draft", { mappingId }, body);
+  chainWrite(s, chain);
   await send(render);
 }
 
@@ -612,20 +687,24 @@ async function refused(w, info, { render, check }) {
     w.unconfirmed = true;
     w.checkNote = check ? checkNoteText(info) : "";
     // Save and activate never continues past a step that had to be checked (F2).
-    if (s.chain) s.chain.stalled = true;
+    const own = chainOf(s, w);
+    if (own) own.stalled = true;
     render();
     return;
   }
   // A stated refusal ends Save and activate where it stands (what was saved
   // before stays saved; the sentence says which step stopped).
-  const chain = s.chain;
+  const chain = chainOf(s, w);
   s.chain = null;
   const chainStop = chain ? CHAIN_STOP[w.act] : null;
   w.unconfirmed = false;
   w.checkNote = "";
   if (w.act === "create" && info.code === "mapping_exists" && info.current?.mappingId) {
     s.write = null;
-    return continueWithDraft(s, info.current.mappingId, render);
+    // Save and activate stops after this draft and says why (UX-8).
+    const stopped = chain ? { ...chain, stalled: true, stopReason: "exists" } : null;
+    s.chain = stopped;
+    return continueWithDraft(s, info.current.mappingId, render, stopped);
   }
   // request_key_reused needs no key change here: a refused write is never sent
   // again; the next attempt is a new write with a new key (startWrite).
@@ -647,7 +726,7 @@ async function refused(w, info, { render, check }) {
     // the item is read again.
     s.write = null;
     s.panel = null;
-    setNotice(s, chainStop ? `${chainStop(w)} ${refusalText(w.act, info)}` : refusalText(w.act, info), "warning");
+    setNotice(s, chainStop ? chainStopText(w, info, chain, refusalText(w.act, info)) : refusalText(w.act, info), "warning");
     if (w.act === "create" || w.act === "draft") {
       s.flow = null;
       if (w.target?.mappingId) {
@@ -682,7 +761,7 @@ async function refused(w, info, { render, check }) {
     const label = await takenTargetLabel(s, s.detail.mapping);
     if (label) w.error = `This field already fills “${label}”. Only one of them can be active at a time.`;
   }
-  if (chainStop) w.error = `${chainStop(w)} ${w.error}`;
+  if (chainStop) w.error = chainStopText(w, info, chain, info.code === "source_metric_target_taken" ? w.error : null);
   w.code = info.code;
   render();
   // A refusal the screen has no sentence for (J16 8, last row): the mapping is
@@ -997,6 +1076,7 @@ export async function handleMappingsAction(action, { render }) {
     const mappingId = s.flow?.fixed ? s.flow.mappingId : null;
     s.flow = null;
     s.write = null;
+    s.chain = null;
     s.view = mappingId ? "detail" : "list";
     render();
     toTitle();
@@ -1044,7 +1124,7 @@ export async function handleMappingsAction(action, { render }) {
     } else {
       startWrite(s, "create", {}, { requestKey: newRequestKey(), sourceMetricId: f.fieldId, metricDefinitionId: f.targetId });
     }
-    s.chain = { versionId: null, teams, reason: teams.length ? cleanReason(a.reason) : null, stalled: false };
+    s.chain = { versionId: null, teams, reason: teams.length ? cleanReason(a.reason) : null, stalled: false, write: s.write };
     await send(render);
     return true;
   }
@@ -1166,10 +1246,13 @@ export async function handleMappingsAction(action, { render }) {
     return true;
   }
   if (type === "metric-mappings-every-team") {
-    const p = s.panel;
+    // The detail's panel, or step 4's Switch on for teams now (7h-F; the code
+    // review's 7HF-2): the same chooser, checked against the version to be.
+    const inFlow = !s.panel && s.flow?.step === 4 && Boolean(s.flow.activate);
+    const p = s.panel || (inFlow ? s.flow.activate : null);
     const chooser = p?.chooser;
     if (!chooser || s.write) return true;
-    const v = versionOf(s, p.versionId);
+    const v = inFlow ? flowChooserTarget(s).version : versionOf(s, p.versionId);
     const group = chooserTeams(s, chooser, v).find((g) => g.connection.id === d.connectionId);
     if (!group) return true;
     let count = Object.keys(chooser.selected).length;

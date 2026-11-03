@@ -1072,45 +1072,87 @@ Each has a recommendation, the consequence and the alternative. **All six were d
     - the field's revision is verified and the variable is choosable;
     - no other mapping of the same owner fills the field;
     - **F1:** the mapping has no active version. Next to an active version, step 4 keeps *Save draft* only, and a
-      replacement goes through the detail's *Replace version N* with its reason, as in 7h-B.
-  - **The screen:** *Save and activate* is the primary button, and *Save draft* stays beside it. The sentence reads
-    "Save and activate saves this version, submits it for review and activates it now. Save draft only saves it: it
-    changes nothing yet." *Switch on for teams now* is inline, with the same team chooser, *Required* / *Optional* and
-    reason as the detail's *Activate*. One confirmation names the field, the variable and the number of teams.
+      replacement goes through the detail's *Replace version N* with its reason, as in 7h-B;
+    - the mapping list has been read to its end, because only then can the screen tell that no other mapping fills
+      the field (the code review's 7HF-3: it fails safe).
+
+    When the button is not offered for a known reason, step 4 says so in one line (the `ux-design-reviewer`'s UX-2):
+    "This mapping already has an active version (version N). Save this draft, submit it for review, then replace
+    version N from the mapping's page." or "This field already fills “X”. Only one of them can be active at a time,
+    so this version can only be saved as a draft."
+  - **The screen:** *Save and activate* is the primary button, and *Save draft* stays beside it. Just above them it
+    says "Save and activate makes this version active now: it is saved, submitted for review and activated in one go.
+    Save draft only saves it; nothing changes until it is activated." (UX-4).
+    - *Switch on for teams now* is inline, with the same team chooser, *Every team of this connection* (7HF-2),
+      *Required* / *Optional* and reason as the detail's *Activate*.
+    - Left off, it says "Leave it off to switch teams on later. Until then, no team's imports use this version."
+      (UX-3), and the success then says "No team uses it yet: switch it on for teams below."
+    - One confirmation names the field, the variable and the number of teams.
   - **The chain:** create (a new mapping only) → draft → submit → activate (with the chosen teams). Each write goes
     alone, with its own request key, and the next starts only after the previous one is confirmed. Nothing is resent
     by itself.
     - A stated refusal stops the chain where it is and says what is left: "The draft is saved but was not submitted
-      for review." or "Version N is waiting for review and was not activated.", followed by the server's sentence.
+      for review." or "Version N is waiting for review and was not activated.". Then it gives the reason and, where
+      the next step is the user's, that step:
+      - a busy server is "The server was busy." and a server failure "The server could not save this step.", never
+        "Nothing was saved. Try again." after steps that saved (UX-1);
+      - a refused team is named ("“First team” is no longer linked to GPEXE. Activate it from here and choose the
+        teams again.", UX-5).
+      - A create refused because the mapping already exists saves the draft there and stops, saying so (UX-8).
     - **F2:** a lost answer is *Result not confirmed* · *Check result* (the same key, never sent by itself). When the
       check confirms the step, the chain stops there with a sentence naming the next step (Submit it for review, or
-      Activate it from here), and the user continues from the detail.
+      Activate it from here), and the user continues from the detail. After a checked create, its draft still follows
+      (as *Save draft* does), and the chain stops after it (the code review's 7HF-4 (c)).
+    - Every stop says when the chosen teams were not switched on (UX-6).
+    - **The chain is the chain's own:** each step records the write it started. Only that write may continue the chain
+      or name the step it stopped at. Leaving the screen, *Cancel* or *Close without checking* drops the chain with its
+      write, so a later manual write never resumes it (the code review's HIGH 7HF-1).
+    - While the activate follows a submit, the notice reads "Submitted for review. Activating..." (UX-7).
     - If the submit's answer cannot be read back, or another version became active meanwhile, the chain stops with
       a sentence ("could not be read back" / "already has an active version. Replace it from here.").
   - **The Imports step's sentence** (decision 1 at 7h-B's GO): `SETUP_MAPPINGS_STEP` takes the
     `ux-design-reviewer`'s proposal (`docs/ai/CURRENT_STATE.md`, Separate tasks), with its frontend test.
-  - **The step-4 fields** take the panel's 44 px / 16 px rule (`.metric-mappings-activate-now` in `styles.css`). The
-    browser check found the reason field at 36 px and 13.3 px before that.
-  - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs` tests 45–50 drive the real handlers against a fake
+  - **The step-4 fields** take the panel's 44 px / 16 px rule (`.metric-mappings-activate-now` in `styles.css`), and the
+    block is spaced like the panel (`mobile-qa`'s M-1). The browser check had found the reason field at 36 px tall
+    with a 13.3 px font.
+  - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs` tests 45–56 drive the real handlers against a fake
     server:
     - the whole chain for a club's admin with a team and for the platform admin;
-    - a stated refusal at each step, with its sentence and what is left;
+    - a stated refusal at each step, with its sentence and what is left, a busy activate included;
     - a lost answer, with the chain stopping after *Check result*;
-    - four different request keys and one write in flight at a time;
-    - where it is not offered: F1, a field whose meaning is not confirmed, and a field another mapping fills;
-    - the interaction count.
+    - four different request keys, and one write in flight while a second click sends nothing (54);
+    - where it is not offered and why: F1, a field whose meaning is not confirmed, a field another mapping fills, and
+      a list not read to its end (53);
+    - the interactions, counted from the clicks and inputs actually dispatched;
+    - leaving during the chain drops it, and a manual submit sends no activate (51);
+    - *Every team* on step 4 (52);
+    - a refused team named (55);
+    - an existing mapping met by the create (56).
 
     `frontend/tests/gpexe-import.actions.test.mjs` checks the Imports sentence.
-  - **Mutations** (each applied alone and run against the named test): 13 of 14 killed. F4 (offered without
-    `mayTransition`) survives as equivalent: step 4 is reached only by someone who may write a draft for that owner,
-    and since 7h-B that is exactly who may activate it.
-  - **Browser check** (the real backend and frontend on a disposable database through v52, Chromium; 29/29):
+  - **Mutations** (each applied alone and run against the named test): 20 in total, 18 killed, 2 survive as
+    equivalent:
+    - F4 (offered without `mayTransition`): step 4 is reached only by someone who may write a draft for that owner,
+      and since 7h-B that is exactly who may activate it;
+    - F15b (the write tag ignored while the leave still drops the chain): the tag is the second guard, and no path
+      today keeps a chain while another write starts.
+
+    The leave reset alone (F15a) and both guards removed (F15) are killed by test 51.
+  - **Internal reviews** (frozen head `8988550b`):
+    - `code-reviewer` NOT READY: HIGH 7HF-1 and MEDIUM 7HF-2, both confirmed by two skeptics, plus LOW 7HF-3 and
+      7HF-4. All four are fixed as above, with tests 51–54 and mutations F15–F18.
+    - `ux-design-reviewer` READY WITH NON-BLOCKING NOTES: MEDIUM UX-1 and UX-2 and LOW UX-3 to UX-8 are fixed as
+      above. UX-9 (the shared chooser shows one team's requirement twice) is a follow-up for the chooser in both
+      places (`docs/ai/CURRENT_STATE.md`, Separate tasks). UX-10 (the Imports sentence's "there") is left as decided.
+    - `mobile-qa` READY WITH NON-BLOCKING NOTES: M-1 is fixed; M-2 needed no change.
+  - **Browser check** (the real backend and frontend on a disposable database through v52, Chromium; 31/31 after the
+    review fixes):
     - **F4:** a club's admin from *New mapping* to an active version with one team in 10 interactions (9 clicks
       including the one confirmation, and 1 typed reason), and without a team, with a conversion note, in 7;
     - the four writes in order with four keys; T4 `active` on the `club_admin` basis; T5 on the chosen team with its
       requirement and reason; T8 `mapping_create`, `mapping_version_create`, two `mapping_status` and
       `activation_start`;
-    - F1 next to the active version;
+    - F1 next to the active version, with its sentence (UX-2); the no-team success sentence (UX-3);
     - F3: the platform admin's system version on the `platform_admin` basis with an optional team;
     - 1280, 390, 375 and 360 px: no overflow, 44 px targets and 16 px fields, with the chooser closed and open.
 

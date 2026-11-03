@@ -21094,6 +21094,12 @@ body.exercise-header-pinned #viewToolbar {
   min-height: 44px;
   font-size: 16px;
 }
+/* Step 4's "Switch on for teams now" (7h-F): spaced like the detail's panel. */
+.metric-mappings-activate-now {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
 /* A reason is a sentence: its field takes the panel's width and looks like
    the screen's other fields (also on step 4's "Switch on for teams now", 7h-F). */
 .metric-mappings-panel textarea,
