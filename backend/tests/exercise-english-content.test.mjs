@@ -158,7 +158,8 @@ test("3. the rollback refuses while it would lose data or another migration depe
     const started = Date.now();
     await assert.rejects(c.query(await rollbackSql()), (error) => error.code === "55P03", "a lock timeout");
     await c.query("rollback");
-    assert.ok(Date.now() - started < 9000, "bounded by the lock_timeout");
+    const waited = Date.now() - started;
+    assert.ok(waited >= 4500 && waited < 9000, `it waited for the 5 s lock_timeout, no longer (${waited} ms)`);
     assert.deepEqual(await shape(), after_, "a held exercise: nothing changed");
   } finally {
     await writer.query("rollback").catch(() => {});

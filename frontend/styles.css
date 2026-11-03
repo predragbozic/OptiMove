@@ -18501,6 +18501,8 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   [data-account-form="content-language"] select,
   [data-account-form="content-language"] .plain-button,
   [data-organization-form="edit-athlete"] select[name="contentLanguage"] { min-height: 44px; }
+  [data-account-form="content-language"] select,
+  [data-organization-form="edit-athlete"] select[name="contentLanguage"] { font-size: 16px; }
 }
 @media (max-width: 760px), (pointer: coarse) {
   .exercise-selection-actions .compact-button,

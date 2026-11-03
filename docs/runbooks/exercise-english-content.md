@@ -49,4 +49,5 @@ recorded, when a later migration is recorded, and while any exercise has English
 
 **Local development database.** `npm run dev` does not migrate. Until the local OPTIMOVE database has this migration
 (applied only on confirmation), the exercise routes fail there (they read the new columns); `GET /api/auth/me` keeps
-working and answers `sr`, and Settings → Athletes lists athletes with `sr`.
+working and answers `sr`, and Settings → Athletes lists athletes with `sr`; saving a language there (Account, or an
+athlete's profile with a changed language) is a 500 until the migration is applied.

@@ -3513,7 +3513,8 @@ async function loadManagedAthletes(req) {
        ) end as login_is_multi_role,
        -- The login's exercise language (owner, 2026-11-03), read through
        -- to_jsonb like GET /api/auth/me, so a database without the column yet
-       -- (the local development database) still lists athletes.
+       -- (the local development database) still lists athletes. The jsonb
+       -- holds the whole user row: take nothing from it but this one key.
        case when u.id is null then null else coalesce(to_jsonb(u) ->> 'content_language', 'sr') end as content_language,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,

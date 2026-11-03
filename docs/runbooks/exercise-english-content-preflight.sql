@@ -44,8 +44,10 @@ select
 
 -- 5. The role running this (the migrator's) owns both tables: ADD COLUMN
 --    and ADD CONSTRAINT need the owner.
---    Expected: two rows, owner = running_as on each.
-select c.oid::regclass::text as table_name, pg_get_userbyid(c.relowner) as owner, current_user as running_as
+--    Expected: two rows, owner = running_as on each (may_alter = true is
+--    enough: a member of the owner role may alter the table too).
+select c.oid::regclass::text as table_name, pg_get_userbyid(c.relowner) as owner, current_user as running_as,
+       pg_has_role(current_user, c.relowner, 'USAGE') as may_alter
   from pg_class c
  where c.oid in ('library.exercises'::regclass, 'public.users'::regclass)
  order by 1;

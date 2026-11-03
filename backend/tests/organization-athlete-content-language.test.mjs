@@ -124,3 +124,30 @@ test("4. a value other than sr or en is a 400 with nothing written; an athlete w
   const plain = await env.api(`/api/organization/athletes/${noLogin}`, { method: "PUT", cookie: roles.clubAdmin.cookie, body: { fullName: "exl renamed" } });
   assert.equal(plain.status, 200, plain.text);
 });
+
+test("5. only the athlete's own login is written: a body naming another user changes nothing of that user", async () => {
+  const { athletes, roles } = m;
+  const athlete = athletes.athlete;
+  await q(`update public.users set content_language = 'sr' where id = any($1::uuid[])`, [[athlete.userId, roles.clubAdmin.id, athletes.athleteU1.userId]]);
+  const res = await edit(roles.clubAdmin.cookie, athlete, { contentLanguage: "en", userId: roles.clubAdmin.id, user_id: athletes.athleteU1.userId });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(await languageOf(athlete.userId), "en", "the athlete's login");
+  assert.equal(await languageOf(roles.clubAdmin.id), "sr", "the caller's own row is untouched");
+  assert.equal(await languageOf(athletes.athleteU1.userId), "sr", "another athlete's login is untouched");
+});
+
+// The brief: exactly who may edit the athlete today, no new rule. So a login
+// that also holds a staff role (unlike PUT .../login-status, which refuses
+// such an account because it toggles users.is_active) has its exercise
+// language set like any other athlete's: a reversible display preference.
+// Pinned here; the owner may choose to refuse it instead.
+test("6. an athlete whose login also holds a staff role: the team's coach sets the language like any other athlete's", async () => {
+  const { roles } = m;
+  const staffAthlete = await env.fx.makeAthlete(`exl staff athlete ${uid()}`, { clubId: m.clubs.c1, teamId: m.teams.t1 });
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1, $2, 'team_coach', true)`, [staffAthlete.userId, m.teams.t2]);
+  const coach = await env.fx.coachOf(m.teams.t1, `exl coach multi ${uid()}`);
+  const res = await edit(coach.cookie, staffAthlete, { contentLanguage: "en" });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(await languageOf(staffAthlete.userId), "en");
+  assert.equal(roles.clubAdmin.id !== staffAthlete.userId, true);
+});
