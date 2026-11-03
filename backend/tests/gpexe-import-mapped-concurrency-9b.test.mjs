@@ -382,7 +382,7 @@ const routeBundle = (sessionId, gpexeTeamId, athletes = standardAthletes()) => m
 // A team with athletes 101, 102, 103 linked (103 has two tracks and stays
 // out), bound to its own GPEXE team with the eleven activations; with
 // `coach`, a coach of the team holding an approver grant.
-async function setupTeam({ coach = false } = {}) {
+async function setupTeam({ coach = false, only = null } = {}) {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["A101", "B102", "C103"] });
   const padmin = await routePlatformAdmin();
   const gpexeTeamId = nextSourceTeamId();
@@ -390,7 +390,7 @@ async function setupTeam({ coach = false } = {}) {
   assert.equal(settings.status, 200, settings.text);
   src.show(gpexeTeamId);
   const { bindingId, connectionId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
-  const { started } = await activateBinding(admin, bindingId);
+  const { started } = await activateBinding(admin, bindingId, { only });
   for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
     const r = await gpexe(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } });
     assert.equal(r.status, 201, r.text);
@@ -1549,12 +1549,15 @@ test("11d. the other two orders of the real approval against the club's admin (J
 // 7i (J15 section 10): a club's admin's switch of the team's system activation
 // to the club's copy, against the real approval of the same team.
 // ---------------------------------------------------------------------------
-const SWITCH_KEY = "gpexe_total_distance";
+// A world key no other test of this file disables, retires or versions (tests
+// 8a-10 change those of total distance, burst, brake, time and max speed in the
+// shared world), activated alone on the team's binding.
+const SWITCH_KEY = "gpexe_acceleration_events";
 // A route-level team with the world's system activations and one checked,
 // actionable candidate; its club's admin copies the SWITCH_KEY variable and
 // activates the copied version (not yet started on the binding).
 async function switchTeam() {
-  const { team, details } = await teamWithCandidates(1);
+  const { team, details } = await teamWithCandidates(1, { only: [SWITCH_KEY] });
   const { mappings, variables } = await registryWriters();
   const world = await ensureMappedSystem(admin, {});
   const sys = world[SWITCH_KEY];
