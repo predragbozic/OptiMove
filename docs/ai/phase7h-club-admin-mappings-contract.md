@@ -1407,5 +1407,15 @@ post-check (the runbook).
     the same where the derivation is reached.
 
   The frontend mutation (`mayTransition` platform-only) is killed by six tests.
+- **The browser check** (section 8; `testing-evidence.md`): the branch's real server and frontend in Chromium on a
+  disposable database through v52, never a persistent one and never a GPEXE request. Club A's admin, in club A's
+  workspace: the club intro; a system mapping waiting for review with no *Activate*, *Disable* or *New version* and the
+  platform sentence; step 2's "Ask a platform administrator to add it." on a variable with no conversion; step 4's
+  sentence; "Submitted for review. You can activate it now."; *Activate* with First team Required (13 interactions from
+  the list, J16's path, one confirmation); *Replace version 1* keeping the team ("Replace and keep 1 team"); *Disable*
+  ("1 team was switched off"); every T4, T5 and T8 row of the path on the `club_admin` basis by that admin. At 1280,
+  390, 375 and 360 px the list, the detail, the replace and disable panels and their reviews, the flow's steps 2 and 4
+  and the system mapping's detail have no horizontal overflow, every control at least 44 px, every field 16 px, no page
+  error and no write sent.
 - **Known limits:** the A1–Unbind–revocation `40P01` of the runbook, until the lock-order pull request (section 7,
   R13); everything else of section 14.
