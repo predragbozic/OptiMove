@@ -52,16 +52,31 @@ select c.oid::regclass::text as table_name, pg_get_userbyid(c.relowner) as owner
  where c.oid in ('library.exercises'::regclass, 'public.users'::regclass)
  order by 1;
 
--- 6. A quiet moment: no other migration running, no transaction holding a
---    strong lock on the two tables the migration alters (ADD COLUMN takes
---    ACCESS EXCLUSIVE on library.exercises and public.users for a moment), no
---    idle transaction. An ordinary row write's RowExclusiveLock does not count.
---    Expected: every count 0.
+-- 6. A quiet moment. ADD COLUMN takes ACCESS EXCLUSIVE on library.exercises
+--    and public.users, which conflicts with EVERY lock, an ordinary read's
+--    AccessShareLock included: the migration waits for each open transaction
+--    that has read or written either table, and every new request (each one
+--    reads its session's user) queues behind the migration meanwhile, up to
+--    the runner's lock_timeout (30 s; then the migration fails and the old
+--    server keeps serving). So: no other migration running, no idle
+--    transaction, no strong lock on the two tables, and no transaction older
+--    than 5 s that holds any lock on them (oldest_lock_holder_seconds shows
+--    the oldest one). Deploy only when this block reads 0 everywhere.
+--    Expected: every count 0; oldest_lock_holder_seconds null (or below 5).
 select
   (select count(*) from pg_stat_activity where state = 'idle in transaction' and pid <> pg_backend_pid()) as idle_in_transaction,
   (select count(*) from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
     where ((n.nspname = 'library' and c.relname = 'exercises') or (n.nspname = 'public' and c.relname = 'users'))
       and l.pid <> pg_backend_pid()
       and l.mode in ('ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')) as strong_locks,
+  (select count(distinct l.pid) from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
+     join pg_stat_activity a on a.pid = l.pid
+    where ((n.nspname = 'library' and c.relname = 'exercises') or (n.nspname = 'public' and c.relname = 'users'))
+      and l.pid <> pg_backend_pid()
+      and a.xact_start < now() - interval '5 seconds') as long_lock_holders,
+  (select round(extract(epoch from max(now() - a.xact_start)))::int from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
+     join pg_stat_activity a on a.pid = l.pid
+    where ((n.nspname = 'library' and c.relname = 'exercises') or (n.nspname = 'public' and c.relname = 'users'))
+      and l.pid <> pg_backend_pid()) as oldest_lock_holder_seconds,
   (select count(*) from pg_stat_activity where query ilike '%schema_migrations%' and pid <> pg_backend_pid() and state <> 'idle') as other_migrators,
   (select count(*) from pg_locks where locktype = 'advisory' and objid = 822026) as migrator_lock_held;
