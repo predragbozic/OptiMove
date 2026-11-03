@@ -136,18 +136,37 @@ test("5. only the athlete's own login is written: a body naming another user cha
   assert.equal(await languageOf(athletes.athleteU1.userId), "sr", "another athlete's login is untouched");
 });
 
-// The brief: exactly who may edit the athlete today, no new rule. So a login
-// that also holds a staff role (unlike PUT .../login-status, which refuses
-// such an account because it toggles users.is_active) has its exercise
-// language set like any other athlete's: a reversible display preference.
-// Pinned here; the owner may choose to refuse it instead.
-test("6. an athlete whose login also holds a staff role: the team's coach sets the language like any other athlete's", async () => {
+// Owner, 2026-11-03 ("Prihvatam sve"): a login that also holds coach or
+// administrator access is refused like the login switch refuses it, with the
+// same rule (loginHasStaffCapability) and the same code; its own Account still
+// sets it.
+test("6. an athlete whose login also holds a staff role: the language is refused with 409 MULTI_ROLE_ACCOUNT and nothing is saved; the login's own Account still sets it; the login switch still refuses it too", async () => {
   const { roles } = m;
   const staffAthlete = await env.fx.makeAthlete(`exl staff athlete ${uid()}`, { clubId: m.clubs.c1, teamId: m.teams.t1 });
   await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1, $2, 'team_coach', true)`, [staffAthlete.userId, m.teams.t2]);
   const coach = await env.fx.coachOf(m.teams.t1, `exl coach multi ${uid()}`);
-  const res = await edit(coach.cookie, staffAthlete, { contentLanguage: "en" });
-  assert.equal(res.status, 200, res.text);
+  for (const caller of [coach, roles.clubAdmin, roles.platformAdmin]) {
+    const res = await edit(caller.cookie, { ...staffAthlete, name: "exl staff renamed" }, { contentLanguage: "en" });
+    assert.equal(res.status, 409, res.text);
+    assert.equal(res.body.error, "MULTI_ROLE_ACCOUNT");
+    assert.match(res.body.message, /also has coach or administrator access/);
+    assert.equal(await languageOf(staffAthlete.userId), "sr", "nothing written");
+    assert.equal(await profile(staffAthlete.athleteId), staffAthlete.name, "the profile is not saved either");
+  }
+  // A save without the language is the profile save as before.
+  const plain = await edit(coach.cookie, staffAthlete);
+  assert.equal(plain.status, 200, plain.text);
+  // The login's own Account is unaffected.
+  const own = await env.api("/api/auth/me/content-language", { method: "PUT", cookie: staffAthlete.cookie, body: { contentLanguage: "en" } });
+  assert.equal(own.status, 200, own.text);
   assert.equal(await languageOf(staffAthlete.userId), "en");
-  assert.equal(roles.clubAdmin.id !== staffAthlete.userId, true);
+  // The same rule still refuses the login switch (one predicate for both).
+  const toggle = await env.api(`/api/organization/athletes/${staffAthlete.athleteId}/login-status`, { method: "PUT", cookie: coach.cookie, body: { active: true } });
+  assert.equal(toggle.status, 409, toggle.text);
+  assert.equal(toggle.body.error, "MULTI_ROLE_ACCOUNT");
+  // A plain athlete of the same coach: set as before.
+  const plainAthlete = await env.fx.makeAthlete(`exl plain athlete ${uid()}`, { clubId: m.clubs.c1, teamId: m.teams.t1 });
+  const ok = await edit(coach.cookie, plainAthlete, { contentLanguage: "en" });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal(await languageOf(plainAthlete.userId), "en");
 });

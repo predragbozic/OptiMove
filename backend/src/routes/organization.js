@@ -1409,6 +1409,18 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
       }
       let contentLanguage = null;
       if (languageSent) {
+        // A login that also holds coach or administrator access is refused
+        // as the login switch refuses it (owner, 2026-11-03): its own
+        // Account sets it. The athlete row is locked by the update above, so
+        // its login cannot change before the write below.
+        const linked = (await client.query(`select user_id from public.athletes where id = $1`, [req.params.athleteId])).rows[0];
+        if (linked?.user_id && await loginHasStaffCapability(linked.user_id)) {
+          await client.query("rollback");
+          return res.status(409).json({
+            error: "MULTI_ROLE_ACCOUNT",
+            message: "This user also has coach or administrator access. Their exercise language cannot be changed from the athlete profile; they set it in their own Account.",
+          });
+        }
         const login = await client.query(
           `update public.users u set content_language = $2, updated_at = now()
              from public.athletes a where a.id = $1 and u.id = a.user_id
@@ -2608,6 +2620,21 @@ router.put("/clubs/:clubId/athletes/:athleteId/restore", async (req, res, next) 
   }
 });
 
+// Whether an athlete's linked login also holds real coach or administrator
+// capability (platform, club, team or independent coach), read from the
+// login's own authorization context, never role_hint. The athlete controls
+// that write the login's own users row - the login switch and the exercise
+// language - refuse such an account, whoever asks. null: no such user.
+async function loginHasStaffCapability(userId) {
+  const targetUser = await query(`select id, role_hint from public.users where id = $1 limit 1`, [userId]);
+  if (!targetUser.rows[0]) return null;
+  const targetAuthz = await loadAuthorizationContext(targetUser.rows[0]);
+  return targetAuthz.platformRoles.length > 0
+    || targetAuthz.clubRoles.length > 0
+    || targetAuthz.teamRoles.length > 0
+    || targetAuthz.isIndependentCoach;
+}
+
 router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
   try {
     if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
@@ -2626,9 +2653,6 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
     }
 
     const targetUserId = athlete.rows[0].user_id;
-    const targetUser = await query(`select id, role_hint from public.users where id = $1 limit 1`, [targetUserId]);
-    if (!targetUser.rows[0]) return res.status(400).json({ error: "This athlete has no login to update." });
-
     // This control toggles users.is_active - a GLOBAL account flag, not
     // something scoped to "athlete access". If the linked account also holds
     // any real coach/admin capability (platform, club, team, or independent
@@ -2636,11 +2660,8 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
     // platform admin), flipping it here would silently kill their staff
     // access too. That is never this endpoint's job; a dedicated, audited
     // account-suspension tool is the right place for that later.
-    const targetAuthz = await loadAuthorizationContext(targetUser.rows[0]);
-    const targetHasStaffCapability = targetAuthz.platformRoles.length > 0
-      || targetAuthz.clubRoles.length > 0
-      || targetAuthz.teamRoles.length > 0
-      || targetAuthz.isIndependentCoach;
+    const targetHasStaffCapability = await loginHasStaffCapability(targetUserId);
+    if (targetHasStaffCapability === null) return res.status(400).json({ error: "This athlete has no login to update." });
     if (targetHasStaffCapability) {
       return res.status(409).json({
         error: "MULTI_ROLE_ACCOUNT",

@@ -1704,6 +1704,11 @@ function renderOrganizationTeamEditForm(row, clubs) {
 // name change never undoes the athlete's own choice made meanwhile.
 function renderAthleteContentLanguageField(row) {
   if (!row.user_id) return "";
+  // A login that also holds coach or administrator access: refused like the
+  // login switch (the server refuses it as well), with the switch's wording.
+  if (row.login_is_multi_role) {
+    return `<div class="search-field organization-fixed-club"><span>Exercise language</span><p>Multi-role account</p><small class="muted">This login also has coach or administrator access - its exercise language can't be changed from here.</small></div>`;
+  }
   const language = row.content_language === "en" ? "en" : "sr";
   return `<label class="search-field"><span>Exercise language</span><select class="builder-text-input" name="contentLanguage" data-content-language-initial="${language}">${renderContentLanguageOptions(language)}</select></label>`;
 }

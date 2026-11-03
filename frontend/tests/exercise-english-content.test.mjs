@@ -218,6 +218,12 @@ test("7. Settings -> Athletes: the athlete form shows the login's exercise langu
   assert.equal(select.value, "en");
   assert.equal(open({ ...row, content_language: null }).querySelector('select[name="contentLanguage"]').value, "sr");
   assert.equal(open({ ...row, user_id: null }).querySelector('select[name="contentLanguage"]'), null, "no login, no field");
+  // A login that also holds coach or administrator access: no select, the
+  // login switch's wording instead.
+  const multiRole = open({ ...row, login_is_multi_role: true });
+  assert.equal(multiRole.querySelector('select[name="contentLanguage"]'), null, "a multi-role login, no select");
+  assert.match(multiRole.textContent, /Multi-role account/);
+  assert.match(multiRole.textContent, /This login also has coach or administrator access - its exercise language can't be changed from here\./);
 
   const sent = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -240,4 +246,11 @@ test("7. Settings -> Athletes: the athlete form shows the login's exercise langu
   changed.querySelector('select[name="contentLanguage"]').value = "sr";
   await submitOrganizationForm(changed, handlers);
   assert.equal(sent[1].body.contentLanguage, "sr");
+  // The server refuses a login that became multi-role meanwhile: its sentence, never the bare code.
+  const refusal = "This user also has coach or administrator access. Their exercise language cannot be changed from the athlete profile; they set it in their own Account.";
+  globalThis.fetch = async () => ({ ok: false, status: 409, statusText: "Conflict", json: async () => ({ error: "MULTI_ROLE_ACCOUNT", message: refusal }) });
+  const refused = open(row);
+  refused.querySelector('select[name="contentLanguage"]').value = "sr";
+  await submitOrganizationForm(refused, handlers);
+  assert.equal(refused.querySelector(".builder-error").textContent, refusal);
 });

@@ -131,7 +131,9 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
         error.append(" ", restore);
       }
     } else if (error) {
-      error.textContent = submitError.message || "Could not save.";
+      // A coded refusal carries its sentence (MULTI_ROLE_ACCOUNT: the athlete's
+      // login also has coach or administrator access).
+      error.textContent = (submitError.data?.error === "MULTI_ROLE_ACCOUNT" && submitError.data.message) || submitError.message || "Could not save.";
     }
   } finally {
     if (button) button.disabled = false;
