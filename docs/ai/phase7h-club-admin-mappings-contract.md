@@ -1408,20 +1408,23 @@ post-check (the runbook).
 
   The frontend mutations are killed too: `mayTransition` platform-only by six tests, and each of the four
   sentence fixes below by test 44.
-- **Three sentences of section 8 made conditional** (the internal `ux-design-reviewer`'s MEDIUM and two LOWs, each
-  confirmed by an adversarial check): a field whose meaning is not confirmed can be saved as a draft and submitted
-  (step 1 says so), but not activated, so
+- **The sentences of section 8 for a field whose meaning is not confirmed** (the internal `ux-design-reviewer`'s
+  MEDIUM and LOWs, each confirmed by an adversarial check): such a field can be saved as a draft and submitted (step 1
+  says so), but not activated, so
   - after *Submit* the notice names the screen's own blocker instead of "You can activate it now." (for a club's
     admin: "Submitted for review. The field's meaning must be confirmed first. A platform administrator confirms it in
-    the platform workspace."); "You can activate it now." stays for every other version;
+    the platform workspace."); "You can activate it now." stays for every other version; while the fields are not
+    loaded the notice says only "Submitted for review." (a field not yet read is no blocker), and "It could not be
+    read back" comes right after the first sentence, as for a draft;
   - step 4 reads "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is
     confirmed." for such a field, and section 8's sentence otherwise;
   - the server's own refusal of an activation (`revision_not_verified`, `conversion_unavailable`,
     `bound_conversion_unavailable`, a race the screen's reads did not show) names who helps in a club's workspace,
     as the screen's blocker does, and "This version cannot be activated now: there is …" is no longer capitalised
     after the colon.
-- **The browser check** (section 8; `testing-evidence.md`): the branch's real server and frontend in Chromium on a
-  disposable database through v52, never a persistent one and never a GPEXE request. Club A's admin, in club A's
+- **The browser check** (section 8; `testing-evidence.md`), run on `05ee4ba4` (the conditional sentences below came
+  after it and are covered by frontend test 44, not by the browser check): the branch's real server and frontend in
+  Chromium on a disposable database through v52, never a persistent one and never a GPEXE request. Club A's admin, in club A's
   workspace: the club intro; a system mapping waiting for review with no *Activate*, *Disable* or *New version* and the
   platform sentence; step 2's "Ask a platform administrator to add it." on a variable with no conversion; step 4's
   sentence; "Submitted for review. You can activate it now."; *Activate* with First team Required (13 interactions from

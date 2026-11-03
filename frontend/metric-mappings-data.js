@@ -525,7 +525,7 @@ export function refusalText(act, info) {
   return info.status ? "It was not saved: the server refused it." : "No answer from the server.";
 }
 const CLUB_NEXT_STEP = {
-  revision_not_verified: "A platform administrator confirms it in the platform workspace.",
+  revision_not_verified: "A platform administrator confirms them in the platform workspace.",
   conversion_unavailable: "Ask a platform administrator to add it.",
   bound_conversion_unavailable: "Ask a platform administrator to add it.",
 };

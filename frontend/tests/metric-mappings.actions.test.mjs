@@ -1409,9 +1409,18 @@ test("44. a field whose meaning is not confirmed: step 4, the notice after Submi
   render();
   assert.match(text(), /Submitted for review\. The field's meaning must be confirmed first\. A platform administrator confirms it in the platform workspace\./);
   assert.doesNotMatch(text(), /You can activate it now/);
+  // While the fields are not loaded, a field not yet read is no blocker: the notice says only that it was submitted.
+  const V4 = id("b0b0b0b0", 4);
+  db.mappings[0].versions.unshift(ver({ id: V4, versionNumber: 4, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  actions.resetMappings();
+  await open("detail");
+  data.mappingsState().refs.loaded = false;
+  data.mappingsState().refs.loading = true;
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V4}"]`);
+  assert.equal(data.mappingsState().notice, "Submitted for review.");
   // The server's own refusals of an activation name who helps in a club's workspace only.
   assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }),
-    "The field's unit and meaning must be confirmed first. A platform administrator confirms it in the platform workspace.");
+    "The field's unit and meaning must be confirmed first. A platform administrator confirms them in the platform workspace.");
   assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
     "This version cannot be activated now: there is no usable conversion between these units now. Ask a platform administrator to add it.");
   assert.equal(data.refusalText("activate", { code: "level_not_allowed", status: 409 }),
