@@ -1544,3 +1544,95 @@ test("11d. the other two orders of the real approval against the club's admin (J
   }
   assert.deepEqual(deadlockLines(logFrom), []);
 });
+
+// ---------------------------------------------------------------------------
+// 7i (J15 section 10): a club's admin's switch of the team's system activation
+// to the club's copy, against the real approval of the same team.
+// ---------------------------------------------------------------------------
+const SWITCH_KEY = "gpexe_total_distance";
+// A route-level team with the world's system activations and one checked,
+// actionable candidate; its club's admin copies the SWITCH_KEY variable and
+// activates the copied version (not yet started on the binding).
+async function switchTeam() {
+  const { team, details } = await teamWithCandidates(1);
+  const { mappings, variables } = await registryWriters();
+  const world = await ensureMappedSystem(admin, {});
+  const sys = world[SWITCH_KEY];
+  const ctx = await clubAdminOf(team.clubId);
+  const expectedSourceVersionId = (await admin.query(`select current_version_id from training_load.metric_definitions where id = $1`, [sys.variableId])).rows[0].current_version_id;
+  const copied = await variables.copyVariable({ ctx, variableId: sys.variableId, body: { requestKey: rk(), expectedSourceVersionId: String(expectedSourceVersionId) } });
+  const [linked] = copied.copiedMappings;
+  assert.equal(String(linked.systemVersionId), String(sys.versionId), "the copy links the system version the team's activation pins");
+  await mappings.submitVersion({ ctx, mappingId: linked.mappingId, versionId: linked.versionId, body: { requestKey: rk() } });
+  await mappings.activateVersion({ ctx, mappingId: linked.mappingId, versionId: linked.versionId, body: { requestKey: rk(), expectedActiveVersionId: null } });
+  const activationId = String(team.started[SWITCH_KEY][0]);
+  return {
+    team, candidate: details[0], ctx, activationId, clubVersionId: String(linked.versionId),
+    switchIt: () => activations.switchToCopy({ ctx, activationId, body: { requestKey: rk(), expectedState: "open", toVersionId: String(linked.versionId), reason: "7i switch to the copy." } }),
+  };
+}
+
+test("12. 7i: the real approval against a club admin's switch to the copy, both orders: an approval held after step 5 (its T5 rows FOR SHARE) makes the switch wait at the activation's row, imports through the system activation, and the switch then commits; a switch holding its locks first makes the approval wait, commits, and the approval answers 409 preview_changed with nothing imported - no 40P01", async () => {
+  const logFrom = errorLines.length;
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    // The approval first.
+    const a = await switchTeam();
+    const g = gate();
+    setSourceInstanceHoldForTests(g.hold);
+    let approving;
+    let switching;
+    try {
+      approving = approve(a.team, a.candidate);
+      const approvalDone = settled(approving);
+      await within(g.reached, 15_000, "the approval reached its hold after step 5");
+      switching = a.switchIt();
+      const switchDone = settled(switching);
+      const waiter = await waiterBlockedBy(g.pid);
+      assert.ok(waiter, "the switch waits on the approval's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mapping_activations"]);
+      await sleep(150);
+      assert.deepEqual([approvalDone(), switchDone()], [false, false]);
+    } finally {
+      g.open();
+      setSourceInstanceHoldForTests(null);
+    }
+    const approved = await within(approving, 20_000, "the approval");
+    assert.equal(approved.status, 200, approved.text);
+    const switched = await within(switching, 20_000, "the switch");
+    assert.equal(String(switched.ended.id), a.activationId);
+    const end = await endOfActivation(a.activationId);
+    assert.deepEqual([end.ended_basis, end.end_reason], ["club_admin", "admin_ended"]);
+    const counts = await teamCounts(a.team.teamId);
+    assert.ok(counts.metric_values > 0 && counts.approvals === 1, JSON.stringify(counts));
+    // The switch first.
+    const b = await switchTeam();
+    const h = gate();
+    activations.setActivationWriteHoldForTests(async (client, at) => { if (at === "activation_switch") await h.hold(client); });
+    let switchingB;
+    let approvingB;
+    try {
+      switchingB = b.switchIt();
+      const switchDone = settled(switchingB);
+      await within(h.reached, 15_000, "the switch holds before its first end");
+      approvingB = approve(b.team, b.candidate);
+      const approvalDone = settled(approvingB);
+      const waiter = await waiterBlockedBy(h.pid);
+      assert.ok(waiter, "the approval waits on the switch's lock");
+      assert.deepEqual(await tupleWaitTables(waiter), ["training_load.source_metric_mapping_activations"]);
+      await sleep(150);
+      assert.deepEqual([switchDone(), approvalDone()], [false, false]);
+    } finally {
+      h.open();
+      activations.setActivationWriteHoldForTests(null);
+    }
+    const switchedB = await within(switchingB, 20_000, "the switch (b)");
+    assert.equal(String(switchedB.ended.id), b.activationId);
+    const refusedApproval = await within(approvingB, 20_000, "the approval (b)");
+    assert.deepEqual([refusedApproval.status, refusedApproval.body.error], [409, "preview_changed"], refusedApproval.text);
+    assert.deepEqual(await teamCounts(b.team.teamId), ZERO, "nothing imported");
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.deepEqual(deadlockLines(logFrom), []);
+});

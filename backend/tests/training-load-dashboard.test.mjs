@@ -241,6 +241,17 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  // The template resolver (resolveTemplateSeriesBatchForWorkspace) reads v53's
+  // club hides in a club data workspace (J15 section 4.4). This suite's schema
+  // stops at v19, so the table is created here empty, with only the columns
+  // the readers use: no club hides anything, and every expectation below is
+  // the one before v53. v53 itself, and the resolver's rule over real hides,
+  // are tested in source-metric-variables-club-7i.test.mjs (tests 9 and 23).
+  await adminClient.query(`create table training_load.metric_definition_club_hides (
+    club_id uuid not null,
+    metric_definition_id uuid not null references training_load.metric_definitions(id),
+    shown_at timestamptz
+  )`);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

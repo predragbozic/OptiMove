@@ -37,8 +37,10 @@
 --   psql -v ON_ERROR_STOP=1 -f system-variables-club-v53-rollback.sql
 -- (the script carries its own BEGIN and COMMIT, so no --single-transaction).
 -- After a refusal the transaction is aborted and nothing is changed. Waits are
--- bounded: a transaction that holds one of the tables (a read included) makes
--- this script fail after 5 s.
+-- bounded: a transaction that holds one of the tables (a read included), or
+-- one of the tables the three new tables' foreign keys reference (public.clubs,
+-- public.users, metric_definitions, metric_definition_versions, T4: dropping
+-- the new tables locks them too), makes this script fail after 5 s.
 begin;
 set local lock_timeout = '5s';
 
@@ -275,6 +277,17 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+-- Both bodies restored byte for byte, or nothing is committed.
+do $$
+begin
+  if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'training_load' and p.proname = 'metric_variable_requests_insert_guard') is distinct from 'ae5bf5e22620546a83cf955b8b1d9a9d'
+     or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname = 'training_load' and p.proname = 'source_metric_activations_insert_guard') is distinct from 'e47f75d4a7a6c63659a19491db97d678' then
+    raise exception 'v53 rollback refused: a restored body is not v36''s or v48''s';
+  end if;
+end $$;
 
 delete from public.schema_migrations
  where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql';

@@ -643,7 +643,15 @@ test("1. copy: one transaction writes the club variable (version 1 equal in ever
     assert.equal(c.owner_key, W.clubA);
     assert.equal(c.version_number, 1);
   }
-  assert.deepEqual(out.copiedMappings.map((m) => m.versionId ?? m.clubVersionId).filter(Boolean).length, 2, JSON.stringify(out.copiedMappings));
+  // The answer's copiedMappings are exactly the links of this operation, in section 4.1's shape.
+  const linked = await rows(k, `select l.club_version_id::text as "versionId", v.mapping_id::text as "mappingId",
+      v.source_metric_definition_id::text as "sourceMetricId", l.system_version_id::text as "systemVersionId"
+    from ${LINKS} l join training_load.source_metric_mapping_versions v on v.id = l.club_version_id
+    where l.operation_id = $1 order by l.system_version_id`, [copyRow.operation_id]);
+  assert.equal(linked.length, 2);
+  const shape = (m) => ({ versionId: String(m.versionId), mappingId: String(m.mappingId), sourceMetricId: String(m.sourceMetricId), systemVersionId: String(m.systemVersionId) });
+  assert.deepEqual(out.copiedMappings.map(shape).sort((a, b) => (a.systemVersionId < b.systemVersionId ? -1 : 1)), linked);
+  for (const m of out.copiedMappings) assert.deepEqual(Object.keys(m).sort(), ["mappingId", "sourceMetricId", "systemVersionId", "versionId"]);
   // The T8 rows: mapping_create and mapping_version_create of this operation, unkeyed.
   const t8 = await auditOf(`operation_id = $1`, [copyRow.operation_id]);
   assert.deepEqual(t8.map((x) => x.action).sort(), ["mapping_create", "mapping_create", "mapping_version_create", "mapping_version_create"]);
@@ -668,54 +676,62 @@ test("2. copy refusals in section 4.1's order, each with nothing written and the
     const again = await post(`/variables/${variableId}/copy`, who.cookie, body);
     assert.notEqual(again.body.error, "request_key_reused", again.text);
   };
+  // Each refusal sent with its own key: nothing written, and no request record holds the key afterwards.
+  const refusedFree = async (who, variableId, status, code, extra = {}) => {
+    const requestKey = key();
+    const out = await nothingWritten(async () => refused(await copy(who, variableId, { requestKey, ...extra }), status, code));
+    assert.equal((await one(k, `select count(*)::int as n from ${REQUESTS} where request_key = $1`, [requestKey])).n, 0, `${code}: the key is free`);
+    return out;
+  };
   // copy_source_not_system: club A's own variable.
   const own = await variable(W.caA);
-  await nothingWritten(async () => refused(await copy(W.caA, own.id), 409, "copy_source_not_system"));
+  await refusedFree(W.caA, own.id, 409, "copy_source_not_system");
   // source_not_active: an archived system variable.
   const archived = await systemVariable({ n: 0 });
   ok(await post(`/variables/${archived.id}/archive`, W.pa.cookie, { requestKey: key(), reason: reasonFor("Archive.") }));
-  await nothingWritten(async () => refused(await copy(W.caA, archived.id), 409, "source_not_active"));
+  await refusedFree(W.caA, archived.id, 409, "source_not_active");
   // source_version_changed: another expected version (with the current named).
   const sys = await systemVariable();
   const stale = { requestKey: key(), expectedSourceVersionId: crypto.randomUUID() };
   const changed = await nothingWritten(async () => refused(await post(`/variables/${sys.id}/copy`, W.caA.cookie, stale), 409, "source_version_changed"));
   assert.equal(changed.current.versionId, await currentVersionOf(sys.id));
+  assert.equal((await one(k, `select count(*)::int as n from ${REQUESTS} where request_key = $1`, [stale.requestKey])).n, 0, "source_version_changed: the key is free");
   await freeKey(W.caA, sys.id, { ...stale, expectedSourceVersionId: await currentVersionOf(sys.id) });
   // already_copied (the copy above).
-  await nothingWritten(async () => refused(await copy(W.caA, sys.id), 409, "already_copied"));
+  await refusedFree(W.caA, sys.id, 409, "already_copied");
   // key_required / label_required: a system key or label the create rules refuse.
   const odd = await systemVariable({ n: 0 });
   await rawDefinition(odd.id, "key", "Not A Key");
-  await nothingWritten(async () => refused(await copy(W.caA, odd.id), 400, "key_required"));
+  await refusedFree(W.caA, odd.id, 400, "key_required");
   const oddLabel = await systemVariable({ n: 0 });
   await rawDefinition(oddLabel.id, "label", " padded ");
-  await nothingWritten(async () => refused(await copy(W.caA, oddLabel.id), 400, "label_required"));
+  await refusedFree(W.caA, oddLabel.id, 400, "label_required");
   ok(await copy(W.caA, oddLabel.id, { label: `Named ${uid()}` }), 201);
   // key_taken: club A already has a variable with that key.
   const sysTaken = await systemVariable({ n: 0 });
   const mine = await post("/variables", W.caA.cookie, { requestKey: key(), key: sysTaken.key, label: `Mine ${uid()}`, unit: "s", levels: ["session"], dailyAggregationMethod: "sum" });
   assert.equal(mine.status, 201, mine.text);
-  await nothingWritten(async () => refused(await copy(W.caA, sysTaken.id), 409, "key_taken"));
+  await refusedFree(W.caA, sysTaken.id, 409, "key_taken");
   ok(await copy(W.caA, sysTaken.id, { key: `other_${uid()}` }), 201);
   // copy_source_unsupported: a day level, no level at all, a value that is not numeric (raw fixtures:
   // variables of the older API, which M3-0's create never makes).
   const dayLevel = await systemVariable({ n: 0 });
   await raw(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1, 'day')`, [dayLevel.id]);
-  assert.equal((await nothingWritten(async () => refused(await copy(W.caA, dayLevel.id), 409, "copy_source_unsupported"))).current.reason, "day_level");
+  assert.equal((await refusedFree(W.caA, dayLevel.id, 409, "copy_source_unsupported")).current.reason, "day_level");
   const noLevels = await systemVariable({ n: 0 });
   await raw(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [noLevels.id]);
-  assert.equal((await nothingWritten(async () => refused(await copy(W.caA, noLevels.id), 409, "copy_source_unsupported"))).current.reason, "no_levels");
+  assert.equal((await refusedFree(W.caA, noLevels.id, 409, "copy_source_unsupported")).current.reason, "no_levels");
   const text = await systemVariable({ n: 0 });
   await raw(`update training_load.metric_definition_versions set value_type = 'text', unit = null where id = $1`, [await currentVersionOf(text.id)]);
-  assert.equal((await nothingWritten(async () => refused(await copy(W.caA, text.id), 409, "copy_source_unsupported"))).current.reason, "not_numeric");
+  assert.equal((await refusedFree(W.caA, text.id, 409, "copy_source_unsupported")).current.reason, "not_numeric");
   // copy_mapping_not_reproducible: the system mapping's field retired.
   const notRepro = await systemVariable();
   await setFieldState(notRepro.versions[0].fieldId, "retired");
-  const nr = await nothingWritten(async () => refused(await copy(W.caA, notRepro.id), 409, "copy_mapping_not_reproducible"));
+  const nr = await refusedFree(W.caA, notRepro.id, 409, "copy_mapping_not_reproducible");
   assert.equal(nr.current.sourceMetricId, notRepro.versions[0].fieldId);
   // copy_too_large: more than ten active system versions.
   const big = await systemVariable({ n: 11 });
-  const tooLarge = await nothingWritten(async () => refused(await copy(W.caA, big.id), 409, "copy_too_large"));
+  const tooLarge = await refusedFree(W.caA, big.id, 409, "copy_too_large");
   assert.equal(tooLarge.limit, 10);
 });
 
@@ -775,6 +791,72 @@ test("1b. the copy's request hash carries the workspace's club: the same key and
   assert.equal((await one(k, `select club_id from ${COPIES} where club_definition_id = $1`, [inB.id])).club_id, W.clubB);
 });
 
+test("1c. a lost COMMIT answer through the copy, the hide, the show and the switch: verified by each request record (the copy's variable_copy request and its operation, the hide row's keys, the switch's T8 row) - 200 verified_after_commit_error (sourceMetrics.js: a create confirmed only after the COMMIT answers 200) and the same key replays; an unverifiable one is 503 outcome_unknown with nothing written, and the same key then writes once", async () => {
+  const lost = () => service.setMappingCommitForTests({ fault: (c) => c.query("commit").then(() => { throw Object.assign(new Error("answer lost"), { code: "08006" }); }), timeoutMs: 2_000 });
+  const gone = () => service.setMappingCommitForTests({ fault: () => Promise.reject(Object.assign(new Error("socket gone"), { code: "08006" })), timeoutMs: 2_000 });
+  const verified = async (send, status) => {
+    lost();
+    const res = await send();
+    service.setMappingCommitForTests();
+    assert.deepEqual([res.status, res.body.commitConfirmation], [status, "verified_after_commit_error"], res.text);
+    return res.body;
+  };
+  const unknown = async (send) => {
+    gone();
+    const res = await nothingWritten(() => send());
+    service.setMappingCommitForTests();
+    assert.deepEqual([res.status, res.body.error], [503, "outcome_unknown"], res.text);
+    return res.body;
+  };
+  // The copy.
+  const sys = await systemVariable();
+  const copyBodyA = await copyBody(sys.id);
+  const copied = await verified(() => post(`/variables/${sys.id}/copy`, W.caA.cookie, copyBodyA), 200);
+  assert.equal((await rows(k, `select 1 from ${COPIES} where club_definition_id = $1`, [copied.variable.id])).length, 1);
+  assert.equal((await copiedDrafts(copied.variable.id)).length, 1, "the copied draft");
+  const copyReplay = ok(await post(`/variables/${sys.id}/copy`, W.caA.cookie, copyBodyA));
+  assert.deepEqual([copyReplay.replayed, copyReplay.variable.id], [true, copied.variable.id]);
+  assert.equal(copyReplay.copiedMappings.length, 1, "the replay names the copied drafts");
+  const sys2 = await systemVariable();
+  const copyBodyB = await copyBody(sys2.id);
+  assert.equal((await unknown(() => post(`/variables/${sys2.id}/copy`, W.caA.cookie, copyBodyB))).requestKey, copyBodyB.requestKey);
+  assert.equal(ok(await post(`/variables/${sys2.id}/copy`, W.caA.cookie, copyBodyB), 201).replayed, false, "the same key writes once");
+  assert.equal(ok(await post(`/variables/${sys2.id}/copy`, W.caA.cookie, copyBodyB)).replayed, true);
+  // The hide and the show.
+  const h = await systemVariable();
+  const hk = key();
+  const hidden = await verified(() => hide(W.caA, h.id, hk), 200);
+  assert.deepEqual([hidden.hidden, hidden.variableId], [true, h.id]);
+  assert.deepEqual([ok(await hide(W.caA, h.id, hk)).replayed, (await hideRow(W.clubA, h.id)).hide_request_key], [true, hk]);
+  const sk = key();
+  const shown = await verified(() => show(W.caA, h.id, sk), 200);
+  assert.equal(shown.hidden, false);
+  assert.deepEqual([ok(await show(W.caA, h.id, sk)).replayed, (await hideRow(W.clubA, h.id)).show_request_key], [true, sk]);
+  const h2 = await systemVariable();
+  const hk2 = key();
+  await unknown(() => hide(W.caA, h2.id, hk2));
+  assert.equal(await hideRow(W.clubA, h2.id), undefined, "nothing hidden");
+  assert.deepEqual([ok(await hide(W.caA, h2.id, hk2)).replayed, ok(await hide(W.caA, h2.id, hk2)).replayed], [false, true]);
+  const sk2 = key();
+  await unknown(() => show(W.caA, h2.id, sk2));
+  assert.equal((await hideRow(W.clubA, h2.id)).shown_at, null, "still hidden");
+  assert.deepEqual([ok(await show(W.caA, h2.id, sk2)).replayed, ok(await show(W.caA, h2.id, sk2)).replayed], [false, true]);
+  // The switch.
+  const sw = await systemVariable();
+  const b = await binding(W.clubA);
+  ok(await start(W.caA, sw.versions[0], [b]), 201);
+  const oldId = await openActivation(sw.versions[0], b);
+  const clubVar = ok(await copy(W.caA, sw.id), 201).variable;
+  const cv = await activateCopied(W.caA, clubVar.id, sw.versions[0]);
+  const body = switchBody(cv.versionId);
+  const sent = () => post(`/activations/${oldId}/switch-to-copy`, W.caA.cookie, body);
+  await unknown(sent);
+  assert.equal((await t5(oldId)).ended_at, null, "the system activation still open");
+  const switched = await verified(sent, 200);
+  assert.equal(switched.ended.id, oldId);
+  assert.equal(ok(await sent()).replayed, true);
+});
+
 test("24. architecture: the copy rows and the hides are written only by the variable service, the links (with the copy's T3, T4 and T8 rows) only by the mapping service; nothing in backend/src switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
@@ -793,6 +875,25 @@ test("24. architecture: the copy rows and the hides are written only by the vari
   assert.deepEqual(writers("metric_definition_club_hides"), ["canonicalVariableAdminService.js"]);
   assert.deepEqual(writers("source_metric_mapping_version_copies"), ["sourceMetricMappingService.js"]);
   assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(src, f)), []);
+});
+
+test("2b. a state answer comes only after the right (security review LOW-1): club A's admin whose role is revoked during the request gets the identical 404, not copy_source_not_system or hide_not_system, for the club's own variable; with the right kept, the 409", async () => {
+  const own = await variable(W.caA);
+  const base = { status: 404, body: { error: "notFound" }, cache: "no-store", retryAfter: null };
+  for (const act of ["copy", "hide"]) {
+    const lose = await clubAdmin(W.clubA);
+    service.setMappingRightsHoldForTests(async () => {
+      await k.query(`update public.user_club_roles set is_active = false where user_id = $1`, [lose.id]);
+    });
+    try {
+      const res = await nothingWritten(() => (act === "copy" ? copy(lose, own.id) : hide(lose, own.id)));
+      assert.deepEqual(notFoundShape(res), base, `${act}: the identical 404`);
+    } finally {
+      service.setMappingRightsHoldForTests(null);
+    }
+  }
+  refused(await copy(W.caA, own.id), 409, "copy_source_not_system");
+  refused(await hide(W.caA, own.id), 409, "hide_not_system");
 });
 
 // ---------------------------------------------------------------------------
@@ -932,6 +1033,23 @@ test("6. switch-to-copy answers: the identical 404 for an unknown activation, an
   await setFieldState(sys.versions[0].fieldId, "retired");
   await nothingWritten(async () => refused(await switchTo(W.caA, oldId, cv.versionId), 409, "field_retired"));
   await setFieldState(sys.versions[0].fieldId, "active");
+});
+
+test("6b. switch-to-copy refusals combined, in section 4.3's order: an ended activation and a club version not linked to it is not_a_copy_of_this_version; an ended activation and its linked copy still a draft is activation_not_open; an open activation and its linked draft is version_not_active - each with nothing written", async () => {
+  const sys = await systemVariable();
+  const b = await binding(W.clubA);
+  ok(await start(W.caA, sys.versions[0], [b]), 201);
+  const oldId = await openActivation(sys.versions[0], b);
+  const clubVar = ok(await copy(W.caA, sys.id), 201).variable;
+  const draft = (await copiedDrafts(clubVar.id))[0];
+  const unlinkedA = await clubActive(W.caA);
+  // Open activation + linked draft: version_not_active.
+  await nothingWritten(async () => refused(await switchTo(W.caA, oldId, draft.club_version_id), 409, "version_not_active"));
+  ok(await end(W.caA, oldId));
+  // Ended + not linked: the link is answered first.
+  await nothingWritten(async () => refused(await switchTo(W.caA, oldId, unlinkedA.versionId), 409, "not_a_copy_of_this_version"));
+  // Ended + linked draft: the activation's state before the version's.
+  await nothingWritten(async () => refused(await switchTo(W.caA, oldId, draft.club_version_id), 409, "activation_not_open"));
 });
 
 // ---------------------------------------------------------------------------
@@ -1428,6 +1546,19 @@ test("12. SQL order of S1 with the hide lock, A1 with listed starts and the swit
   const expected = [[W.clubA, target.id], [W.clubB, target.id]].sort((p, q) => (p[0] < q[0] ? -1 : 1));
   assert.deepEqual(hideLocks, expected, "one hide lock per (club, variable), ascending");
   assert.ok(a1.findIndex((s) => HIDE_LOCK.test(s.text)) > x.clubs && a1.findLastIndex((s) => HIDE_LOCK.test(s.text)) < x["first write"]);
+  // A1 replacing N by N+1 while N has an open activation on a club A binding, N+1 listed on it: the first write is
+  // then the end of N's row, and the hide lock comes before it, with no other lock between them.
+  const rep = await systemVariable();
+  const bR = await binding(W.clubA);
+  ok(await start(W.caA, rep.versions[0], [bR]), 201);
+  const nNext = await version({ fieldId: rep.versions[0].fieldId, revId: rep.versions[0].revId }, { target: rep.target });
+  const a1r = writeTx((await recordSql(async () => ok(await activate(nNext, W.pa.cookie, { expected: rep.versions[0].versionId, reason: reasonFor("Replace."), starts: [bR] })))).seen);
+  const iClubs = a1r.findIndex((s) => /from public\.clubs where id = any\(\$1::uuid\[\]\) order by id for share$/.test(s.text));
+  const iHide = a1r.findIndex((s) => HIDE_LOCK.test(s.text));
+  const iEnd = a1r.findIndex((s) => /^update training_load\.source_metric_mapping_activations\b/.test(s.text));
+  assert.ok(iClubs >= 0 && iHide > iClubs && iEnd > iHide, `A1 (a replacement): the clubs, then the hide lock, then the first end\n${listing(a1r)}`);
+  assert.ok(!a1r.slice(0, iEnd).some((s) => /^(insert|update|delete)\b/i.test(s.text)), "A1 (a replacement): the end is the first write");
+  assert.deepEqual(a1r.slice(iHide + 1, iEnd).filter((s) => LOCKING.test(s.text)).map((s) => s.text), [], "A1 (a replacement): no lock between the hide lock and the first end");
   // The switch.
   const sv = await systemVariable();
   const bs = await binding(W.clubA);
@@ -1642,6 +1773,86 @@ test("16. copy against A1 of the copied system mapping (D1): A1 holding T3 FOR N
   ok(await replacing2);
 });
 
+test("16b. copy against a new system version, an archive and A2 of the copied system mapping, both orders, route against route: the writer holding the variable FOR UPDATE (or T3 FOR NO KEY UPDATE) makes the copy wait at that row; the copy then reads the state again and answers source_version_changed (naming the new version), source_not_active or try_again with nothing written; a copy holding its locks first makes the writer wait, and both commit - no 40P01", async () => {
+  const from = logLines.length;
+  const versionBody = async (id, over = {}) => ({ requestKey: key(), expectedCurrentVersionId: await currentVersionOf(id), unit: "s", dailyAggregationMethod: "max", ...over });
+  const copiesOf = async (id) => (await one(k, `select count(*)::int as n from ${COPIES} where system_definition_id = $1`, [id])).n;
+  // A new system version first: it holds the variable FOR UPDATE while the copy waits at its FOR SHARE.
+  const v1 = await systemVariable({ n: 0 });
+  let held = holdVariable("variable_version_create");
+  const versioning = post(`/variables/${v1.id}/versions`, W.pa.cookie, await versionBody(v1.id));
+  await until(() => held.state.entered, "the new version holds the variable");
+  const copying = copy(W.caA, v1.id);
+  await waitingOn("from training_load\\.metric_definitions where id = \\$1 for share");
+  held.g.open();
+  const made = ok(await versioning, 201);
+  const changed = refused(await copying, 409, "source_version_changed");
+  assert.deepEqual(changed.current.versionId, made.variable.currentVersion.id, "it names the new version");
+  assert.equal(await copiesOf(v1.id), 0, "the copy wrote nothing");
+  // The copy first: the new version waits at the variable's row and commits after it.
+  const v2 = await systemVariable({ n: 0 });
+  held = holdVariable("variable_copy");
+  const copying2 = copy(W.caA, v2.id);
+  await until(() => held.state.entered, "the copy holds after its locks");
+  const versioning2 = post(`/variables/${v2.id}/versions`, W.pa.cookie, await versionBody(v2.id));
+  await waitingOn("from training_load\\.metric_definitions where id = \\$1 for update");
+  held.g.open();
+  ok(await copying2, 201);
+  ok(await versioning2, 201);
+  // An archive first: the copy answers source_not_active.
+  const v3 = await systemVariable({ n: 0 });
+  held = holdVariable("variable_archive");
+  const archiving = post(`/variables/${v3.id}/archive`, W.pa.cookie, { requestKey: key(), reason: reasonFor("Archive.") });
+  await until(() => held.state.entered, "the archive holds the variable");
+  const copying3 = copy(W.caA, v3.id);
+  await waitingOn("from training_load\\.metric_definitions where id = \\$1 for share");
+  held.g.open();
+  ok(await archiving);
+  refused(await copying3, 409, "source_not_active");
+  assert.equal(await copiesOf(v3.id), 0, "the copy wrote nothing");
+  // The copy first: the archive waits and commits after it (the club's copy is its own variable).
+  const v4 = await systemVariable({ n: 0 });
+  held = holdVariable("variable_copy");
+  const copying4 = copy(W.caA, v4.id);
+  await until(() => held.state.entered, "the copy holds after its locks");
+  const archiving4 = post(`/variables/${v4.id}/archive`, W.pa.cookie, { requestKey: key(), reason: reasonFor("Archive.") });
+  await waitingOn("from training_load\\.metric_definitions where id = \\$1 for update");
+  held.g.open();
+  ok(await copying4, 201);
+  ok(await archiving4);
+  // A2 first: it holds T3 FOR NO KEY UPDATE; the copy reads the active set again under its T3 lock and answers try_again.
+  const v5 = await systemVariable();
+  const a2Hold = gate();
+  const a2 = { entered: false };
+  service.setMappingWriteHoldForTests(async (_c, at) => {
+    if (at !== "mapping_version_disable" || a2.entered) return;
+    a2.entered = true;
+    await a2Hold.promise;
+  });
+  const disabling = disable(v5.versions[0], W.pa.cookie);
+  await until(() => a2.entered, "A2 holds after its locks");
+  const copying5 = copy(W.caA, v5.id);
+  assert.ok(await someoneWaits(), "the copy waits on T3");
+  a2Hold.open();
+  ok(await disabling);
+  refused(await copying5, 409, "try_again");
+  assert.equal(await copiesOf(v5.id), 0, "the copy wrote nothing");
+  service.setMappingWriteHoldForTests(null);
+  assert.deepEqual(ok(await copy(W.caA, v5.id), 201).copiedMappings, [], "again: nothing active is left to copy");
+  // The copy first: A2 waits on T3 behind the copy's FOR SHARE, then commits; the copied draft stays.
+  const v6 = await systemVariable();
+  held = holdVariable("variable_copy");
+  const copying6 = copy(W.caA, v6.id);
+  await until(() => held.state.entered, "the copy holds after its locks");
+  const disabling6 = disable(v6.versions[0], W.pa.cookie);
+  assert.ok(await someoneWaits(), "A2 waits on T3");
+  held.g.open();
+  const copied6 = ok(await copying6, 201);
+  ok(await disabling6);
+  assert.deepEqual((await copiedDrafts(copied6.variable.id)).map((d) => d.system_version_id), [v6.versions[0].versionId]);
+  assert.ok(!logLines.slice(from).some((l) => /40P01|deadlock detected/i.test(l)), "no 40P01");
+});
+
 test("17. switch against S2 on one activation: S2 holding its T5 row makes the switch wait; the switch then answers activation_not_open, nothing written", async () => {
   const sys = await systemVariable();
   const b = await binding(W.clubA);
@@ -1723,30 +1934,53 @@ test("19. a switch to the copy, an Unbind of the same binding and the real revoc
   assert.ok(!logLines.slice(from).some((l) => /40P01|deadlock detected/i.test(l)), "no 40P01");
 });
 
-test("20. a hide holding its hide lock and an A1 of the hidden variable's system mapping waiting for it (holding the variable FOR SHARE): no 40P01, and while the hide's guard runs the hide holds the variable's row only FOR KEY SHARE", async () => {
+test("20. a hide holding its hide lock and an A1 of the hidden variable's system mapping waiting for it (holding the variable FOR SHARE): no 40P01, and once the hide's guard has run the hide holds the variable's row only FOR KEY SHARE (pgrowlocks: the row locks actually held, per backend)", async () => {
   const from = logLines.length;
   const sys = await systemVariable({ n: 0 });
   const n1 = await version(await field(), { target: sys.target });
   const b = await binding(W.clubA);
   const hold = gate();
-  const st = { entered: false, modes: null };
+  const atCommit = gate();
+  const st = { entered: false, pid: null };
   variables.setVariableWriteHoldForTests(async (client, at) => {
     if (at !== "variable_hide" || st.entered) return;
     st.entered = true;
     await hold.promise;
   });
+  // The hide's COMMIT held after its guard ran (every write done, every lock still held).
+  service.setMappingCommitForTests({
+    fault: async (c) => {
+      if (!st.pid) {
+        st.pid = (await c.query("select pg_backend_pid() as p")).rows[0].p;
+        await atCommit.promise;
+      }
+      return c.query("commit");
+    },
+    timeoutMs: 30_000,
+  });
   const hiding = hide(W.caA, sys.id);
   await until(() => st.entered, "the hide holds its hide lock");
   const activating = activate(n1, W.pa.cookie, { starts: [b] });
   assert.ok(await advisoryWait(), "A1 waits for the hide lock");
-  // The hide's own lock on the variable row: FOR KEY SHARE only (a lock that conflicts with FOR SHARE would deadlock).
-  const pid = (await one(k, `select pid from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and state = 'idle in transaction'
-                               and query ~* 'pg_advisory_xact_lock\\(hashtextextended\\(''club-variable-hide' limit 1`))?.pid;
-  if (pid) {
-    const modes = (await rows(k, `select mode from pg_locks where pid = $1 and locktype = 'tuple'`, [pid])).map((x) => x.mode);
-    assert.ok(!modes.some((m) => /Exclusive/.test(m) && !/RowShare/.test(m)), `the hide holds no exclusive tuple lock: ${modes}`);
-  }
+  // The hide goes on: its insert and its guard run while A1 holds the row FOR SHARE (a guard lock that conflicts
+  // with FOR SHARE would deadlock here), and it stops before its COMMIT.
   hold.open();
+  await until(() => st.pid !== null, "the hide reached its COMMIT");
+  await k.query("create extension if not exists pgrowlocks");
+  try {
+    const held = await rows(k, `select l.modes, l.pids from pgrowlocks('training_load.metric_definitions') l
+                                  where l.locked_row = (select ctid from training_load.metric_definitions where id = $1)`, [sys.id]);
+    assert.equal(held.length, 1, "the variable's row is locked");
+    const byPid = new Map();
+    // pgrowlocks names a lone locker "For Key Share" and a multixact member "Key Share": one name for both.
+    held[0].pids.forEach((pid, i) => byPid.set(pid, [...(byPid.get(pid) ?? []), held[0].modes[i].replace(/^For /, "")]));
+    assert.deepEqual(byPid.get(st.pid), ["Key Share"], `the hide holds the variable's row only FOR KEY SHARE: ${JSON.stringify(held[0])}`);
+    const others = [...byPid].filter(([pid]) => pid !== st.pid).flatMap(([, modes]) => modes);
+    assert.deepEqual(others, ["Share"], "and the waiting A1 holds it FOR SHARE (the read sees both lockers)");
+  } finally {
+    await k.query("drop extension if exists pgrowlocks");
+    atCommit.open();
+  }
   ok(await hiding);
   assert.deepEqual(refused(await activating, 409, "variable_hidden").current, { bindingId: b.bindingId });
   assert.ok(!logLines.slice(from).some((l) => /40P01|deadlock detected/i.test(l)), "no 40P01");
@@ -1941,6 +2175,15 @@ test("23. rehearsal on v52: the preflight (with planted rows for the copy-refusa
     await holder.end().catch(() => {});
   }
   assert.deepEqual(await catalog(r), v53, "every refusal changed nothing");
+  // A restored body that is not v36's (one byte changed in the script) is refused before the COMMIT.
+  const marker = "-- v36's request insert guard, byte for byte.";
+  const at = rollbackSql.indexOf(marker);
+  assert.ok(at > 0, "the rollback restores v36's body");
+  const bodyAt = rollbackSql.indexOf("begin\n", at);
+  const wrongBody = rollbackSql.slice(0, bodyAt) + "begin \n" + rollbackSql.slice(bodyAt + "begin\n".length);
+  await assert.rejects(r.query(wrongBody), /v53 rollback refused: a restored body is not v36's or v48's/);
+  await r.query("rollback").catch(() => {});
+  assert.deepEqual(await catalog(r), v53, "a wrong restored body changes nothing");
   // A failed last statement changes nothing.
   const failing = rollbackSql.replace(/\ncommit;\s*$/, "\nselect 1 / 0;\ncommit;\n");
   assert.notEqual(failing, rollbackSql);

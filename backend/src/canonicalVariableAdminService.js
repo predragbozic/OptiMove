@@ -1173,7 +1173,12 @@ export async function copyVariable({ ctx, variableId, body }) {
       const readable = readableSql(ctx, params);
       const plain = (await client.query(`select d.id, d.owner_scope from training_load.metric_definitions d where d.id = $1 and ${readable}`, params)).rows[0];
       if (!plain) throw NOT_FOUND();
-      if (plain.owner_scope !== "system") throw refusal(409, "copy_source_not_system", TEXT.copy_source_not_system);
+      // The club's own variable is no source: a state, so answered only after
+      // the right (J15 section 4), without the registry locks it does not need.
+      if (plain.owner_scope !== "system") {
+        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        throw refusal(409, "copy_source_not_system", TEXT.copy_source_not_system);
+      }
       // The locks, in D's order.
       const versions = await readSystemMappingsForCopy(client, id);
       const lockedMappings = await lockSystemMappingsForCopy(client, id, versions);
@@ -1331,7 +1336,11 @@ async function setHidden({ ctx, variableId, body, hide }) {
       const readable = readableSql(ctx, params);
       const plain = (await client.query(`select d.id, d.owner_scope from training_load.metric_definitions d where d.id = $1 and ${readable}`, params)).rows[0];
       if (!plain) throw NOT_FOUND();
-      if (plain.owner_scope !== "system") throw refusal(409, "hide_not_system", TEXT.hide_not_system);
+      // The club's own variable cannot be hidden: a state, answered only after the right.
+      if (plain.owner_scope !== "system") {
+        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        throw refusal(409, "hide_not_system", TEXT.hide_not_system);
+      }
       // The definition FOR KEY SHARE (the guards read it plainly after the
       // hide lock: no row lock follows the hide lock), then the rights.
       await client.query(`select 1 from training_load.metric_definitions where id = $1 for key share`, [id]);
