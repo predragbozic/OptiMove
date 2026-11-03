@@ -901,9 +901,11 @@ test("data setup (9-B): an administrator reads each mapping block's precise sent
   assert.match(steps.no_mapped_values, /Check which mappings are switched on for this team and the levels they cover .*, and any reasons under Left out; then find new sessions\./);
   // UX M2: mapping_not_usable is a catch-all - the step names the binding too and the way out.
   assert.match(steps.mapping_not_usable, /Settings &gt; Source connections/);
-  // Phase 7h (J14 section 8): who fixes what - the club's admin its own mappings,
-  // a platform administrator system mappings and field confirmations.
-  assert.match(steps.mapping_not_usable, /If both look right, your club&#039;s admin fixes the club&#039;s own mappings, and a platform administrator fixes system mappings and field confirmations \(give them the Technical details\)\./);
+  // Phase 7h (J14 section 8) and 7h-F (decision 1 at 7h-B's GO: the
+  // ux-design-reviewer's wording): who fixes what - the club's admin its own
+  // mappings there, a platform administrator system mappings and field
+  // confirmations.
+  assert.match(steps.mapping_not_usable, /then find new sessions\. The club&#039;s admin changes the club&#039;s own mappings there\. If both look right, ask a platform administrator, who handles system mappings and field confirmations \(give them the Technical details\)\./);
   // UX L3: a shape or instance problem is a platform administrator's step, never a screen where nothing is wrong.
   assert.match(steps.source_shape_mismatch, /ask a platform administrator to check that GPEXE field/);
   assert.match(steps.source_instance_held, /Ending a held source instance is a platform administrator(?:'|&#039;)s step/);

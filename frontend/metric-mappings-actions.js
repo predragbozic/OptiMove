@@ -371,7 +371,11 @@ function openFlow(s, { mapping = null, fixed = false } = {}) {
     errors: {},
     error: "",
     dirty: false,
+    // 7h-F: Save and activate's own choices (step 4): teams switched on in
+    // the same step, as the detail's Activate panel takes them.
+    activate: { kind: "activate", withTeams: false, chooser: emptyChooser(mappingsContext() || { owner: "system" }), reason: "", errors: {} },
   };
+  s.chain = null;
   s.view = "flow";
 }
 export function flowFacts(s = mappingsState()) {
@@ -382,6 +386,53 @@ export function flowFacts(s = mappingsState()) {
   const target = s.refs.targets.find((t) => t.id === f.targetId) || null;
   const status = target && revision ? targetStatus(target, revision, s.refs.conversions) : null;
   return { field, revision, target, status };
+}
+
+// 7h-F (J14 O6 (b), C131; the Rukovodilac's F1-F4 of 2026-11-03): Save and
+// activate on step 4 chains the existing writes - create (when the mapping
+// does not exist yet), draft, submit, activate with the listed teams - one at
+// a time, each with its own request key. It is offered only to a caller who
+// may activate the mapping (mayTransition: a platform admin in the owner's
+// workspace, or a club's admin on the club's own mapping), only when the
+// reads show nothing that blocks an activation, and never when the mapping
+// already has an active version (F1: a replacement goes through the mapping's
+// detail). A step whose answer was lost stops the chain once Check result has
+// settled it; the chain never continues by itself (F2). The server decides
+// every step again.
+function flowMappingLike(s, ctx) {
+  const f = s.flow;
+  if (!f || !ctx) return null;
+  if (f.mappingId) return s.detail.mapping?.id === f.mappingId ? s.detail.mapping : null;
+  const ownerScope = ctx.owner === "system" ? "system" : "club";
+  const listed = existingMapping(s, f.fieldId, f.targetId);
+  return { ownerScope, versions: [], activeVersionId: listed?.activeVersionId || null };
+}
+export function saveAndActivateOffered(s = mappingsState(), ctx = mappingsContext()) {
+  const f = s.flow;
+  if (!f || f.step !== 4 || !s.refs.loaded || !ctx) return false;
+  const mapping = flowMappingLike(s, ctx);
+  if (!mapping || activeVersion(mapping) || mapping.activeVersionId) return false;
+  if (!mayTransition(mapping, ctx)) return false;
+  const { field, revision, target, status } = flowFacts(s);
+  if (!field || !revision || !target || !status?.choosable || !revisionVerified(revision)) return false;
+  // Another mapping of this owner already fills the variable from this field:
+  // its activation would be refused (source_metric_target_taken).
+  if (fieldTakenBy(s, f.fieldId, f.targetId, mapping.ownerScope)) return false;
+  return true;
+}
+// The mapping and the version the chooser of step 4 checks the teams against:
+// the version does not exist yet, so its fingerprint is unknown and only the
+// variable-and-level check can run (the server checks every team again).
+function flowChooserTarget(s) {
+  const f = s.flow;
+  const { revision, target } = flowFacts(s);
+  const levels = revision && target ? levelsOf(revision, target) : { session: false, drill: false };
+  const session = levels.session && levels.drill ? f.draft.session : levels.session;
+  const drill = levels.session && levels.drill ? f.draft.drill : levels.drill;
+  return {
+    mapping: { id: f.mappingId, sourceMetric: { id: f.fieldId }, metricDefinitionId: f.targetId },
+    version: { id: null, parameterFingerprint: null, appliesToSession: Boolean(session), appliesToDrill: Boolean(drill) },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -410,17 +461,23 @@ async function send(render) {
     return;
   }
   if (!live(s, generation) || s.write !== w) return;
-  await succeeded(w, data, render);
+  await succeeded(w, data, render, check);
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// The step at which a stated refusal stopped Save and activate (7h-F): what was
+// saved before it stays saved, and the sentence says so before the reason.
+const CHAIN_STOP = {
+  submit: () => "The draft is saved but was not submitted for review.",
+  activate: (w) => `Version ${w.after?.versionNumber ?? ""} is waiting for review and was not activated.`,
+};
 // J16 5.1: more teams switched off than the list showed is said, never hidden.
 function endedSentence(ended, listed) {
   return listed !== null && listed !== undefined && ended > listed
     ? `${plural(ended, "team was", "teams were")} switched off; the list showed fewer.`
     : `${plural(ended, "team was", "teams were")} switched off.`;
 }
-async function succeeded(w, data, render) {
+async function succeeded(w, data, render, check = false) {
   const s = mappingsState();
   const readError = data?.readError ? " It could not be read back; it is read again." : "";
   s.write = null;
@@ -434,7 +491,21 @@ async function succeeded(w, data, render) {
     s.flow = null;
     s.view = "detail";
     s.detail = { ...emptyMappingsState().detail, id: w.target.mappingId };
-    setNotice(s, `The draft is saved.${readError} Submit it for review when it is ready.`);
+    const chain = s.chain;
+    const versionId = data?.version?.id || null;
+    if (chain && !check && !chain.stalled && versionId) {
+      // Save and activate, its third write: submit the draft just saved.
+      chain.versionId = versionId;
+      await loadMapping(w.target.mappingId, render);
+      if (s.chain !== chain || s.write) return;
+      startWrite(s, "submit", { mappingId: w.target.mappingId, versionId }, { requestKey: newRequestKey() });
+      await send(render);
+      return;
+    }
+    s.chain = null;
+    setNotice(s, chain
+      ? `The draft is saved.${readError} Save and activate stopped there, because its result had to be checked. Submit it for review, then activate it.`
+      : `The draft is saved.${readError} Submit it for review when it is ready.`, chain ? "warning" : "");
     await loadMapping(w.target.mappingId, render);
     focusNotice();
     return;
@@ -454,8 +525,41 @@ async function succeeded(w, data, render) {
       next = blocker ? ` ${blocker}` : " You can activate it now.";
     }
     setNotice(s, `Submitted for review.${readError}${next}`);
+    const chain = s.chain;
+    if (chain && chain.versionId === w.target?.versionId) {
+      if (check || chain.stalled) {
+        s.chain = null;
+        setNotice(s, `Submitted for review.${readError} Save and activate stopped there, because its result had to be checked. Activate it from here.`, "warning");
+      } else {
+        // Save and activate, its last write: the version as it is saved now.
+        s.teams = { ...emptyMappingsState().teams, showEnded: s.teams.showEnded };
+        await loadMapping(s.detail.id, render);
+        const fresh = s.detail.mapping;
+        const submitted = fresh ? versionOf(s, chain.versionId) : null;
+        if (s.chain !== chain || s.write) return;
+        // The chain stays set through its last write, so a refusal of the
+        // activate names the version left waiting (CHAIN_STOP).
+        if (!fresh || s.detail.error || !submitted || submitted.status !== "needs_review" || activeVersion(fresh)) s.chain = null;
+        if (!fresh || s.detail.error || !submitted || submitted.status !== "needs_review") {
+          setNotice(s, `Submitted for review.${readError} It was not activated, because the mapping could not be read back. Activate it from here.`, "warning");
+        } else if (activeVersion(fresh)) {
+          setNotice(s, `Submitted for review.${readError} It was not activated, because this mapping already has an active version. Replace it from here.`, "warning");
+        } else {
+          const teams = chain.teams || [];
+          startWrite(s, "activate", { mappingId: fresh.id, versionId: chain.versionId }, {
+            requestKey: newRequestKey(), expectedActiveVersionId: null,
+            ...(teams.length ? { activations: teams, activationReason: chain.reason } : {}),
+          }, { versionNumber: submitted.versionNumber, chained: true });
+          await send(render);
+          return;
+        }
+        focusNotice();
+        return;
+      }
+    }
   }
   if (w.act === "activate") {
+    s.chain = null;
     const ended = Number(data?.activationsEnded) || 0;
     const listed = w.after.listed ?? null;
     const started = Array.isArray(data?.activations) ? data.activations.length : 0;
@@ -507,9 +611,16 @@ async function refused(w, info, { render, check }) {
   if (outcomeUnknown(info) || (check && !checkSettles(w.act, info))) {
     w.unconfirmed = true;
     w.checkNote = check ? checkNoteText(info) : "";
+    // Save and activate never continues past a step that had to be checked (F2).
+    if (s.chain) s.chain.stalled = true;
     render();
     return;
   }
+  // A stated refusal ends Save and activate where it stands (what was saved
+  // before stays saved; the sentence says which step stopped).
+  const chain = s.chain;
+  s.chain = null;
+  const chainStop = chain ? CHAIN_STOP[w.act] : null;
   w.unconfirmed = false;
   w.checkNote = "";
   if (w.act === "create" && info.code === "mapping_exists" && info.current?.mappingId) {
@@ -536,7 +647,7 @@ async function refused(w, info, { render, check }) {
     // the item is read again.
     s.write = null;
     s.panel = null;
-    setNotice(s, refusalText(w.act, info), "warning");
+    setNotice(s, chainStop ? `${chainStop(w)} ${refusalText(w.act, info)}` : refusalText(w.act, info), "warning");
     if (w.act === "create" || w.act === "draft") {
       s.flow = null;
       if (w.target?.mappingId) {
@@ -571,6 +682,7 @@ async function refused(w, info, { render, check }) {
     const label = await takenTargetLabel(s, s.detail.mapping);
     if (label) w.error = `This field already fills “${label}”. Only one of them can be active at a time.`;
   }
+  if (chainStop) w.error = `${chainStop(w)} ${w.error}`;
   w.code = info.code;
   render();
   // A refusal the screen has no sentence for (J16 8, last row): the mapping is
@@ -656,7 +768,7 @@ async function chooseClub(s, chooser, clubId, mapping, version, render) {
   chooser.checks = {};
   if (!clubId) { render(); return; }
   await loadConnections(clubId, render);
-  if (s.panel?.chooser === chooser) await checkTeams(s, chooser, mapping, version, render);
+  if (s.panel?.chooser === chooser || s.flow?.activate?.chooser === chooser) await checkTeams(s, chooser, mapping, version, render);
 }
 // The listed teams of a chooser, as the write sends them.
 export function chosenBindings(chooser) {
@@ -906,6 +1018,37 @@ export async function handleMappingsAction(action, { render }) {
     return true;
   }
 
+  if (type === "metric-mappings-flow-save-activate") {
+    const f = s.flow;
+    if (!f || s.write || f.step !== 4 || !saveAndActivateOffered(s, ctx)) return true;
+    const { revision, target, field } = flowFacts(s);
+    const a = f.activate;
+    a.errors = {};
+    const teams = a.withTeams ? chosenBindings(a.chooser) : [];
+    if (a.withTeams) {
+      if (!teams.length) a.errors.teams = "Choose at least one team.";
+      if (teams.some((b) => !b.requirement)) a.errors.requirement = "Choose Required or Optional.";
+      const e = reasonError(a.reason);
+      if (e) a.errors.reason = e;
+    }
+    if (Object.keys(a.errors).length) { render(); focus('.metric-mappings-flow [aria-invalid="true"]'); return true; }
+    const what = `"${cleanName(target.label || target.key || "")}" from "${cleanName(field.label || field.key || "")}"`;
+    const question = teams.length
+      ? `Save this version of ${what}, submit it and activate it now, switched on for ${plural(teams.length, "team", "teams")}?`
+      : `Save this version of ${what}, submit it and activate it now?`;
+    if (!confirmAsk(question)) return true;
+    if (f.mappingId) {
+      const { body } = buildDraftBody({ requestKey: newRequestKey(), revision, target, conversions: s.refs.conversions, draft: f.draft });
+      if (!body) return true;
+      startWrite(s, "draft", { mappingId: f.mappingId }, body);
+    } else {
+      startWrite(s, "create", {}, { requestKey: newRequestKey(), sourceMetricId: f.fieldId, metricDefinitionId: f.targetId });
+    }
+    s.chain = { versionId: null, teams, reason: teams.length ? cleanReason(a.reason) : null, stalled: false };
+    await send(render);
+    return true;
+  }
+
   // ---- the write in progress
   if (type === "metric-mappings-check-result") { if (s.write?.unconfirmed) await send(render); return true; }
   if (type === "metric-mappings-close-unchecked") {
@@ -913,6 +1056,7 @@ export async function handleMappingsAction(action, { render }) {
     if (!w || w.busy) return true;
     if (!confirmAsk("Close without checking? Whether it was saved stays unknown until the mapping is read again.")) return true;
     s.write = null;
+    s.chain = null;
     s.panel = null;
     s.flow = null;
     setNotice(s, "The result was not checked. The mapping below is as it is saved now.", "warning");
@@ -1180,24 +1324,30 @@ async function applyInput(el, render) {
     if (el.type === "checkbox") repaint();
     return true;
   }
-  const p = s.panel;
+  // Step 4's Save and activate takes its teams like the Activate panel (7h-F).
+  const inFlow = !s.panel && s.flow?.step === 4 && Boolean(s.flow.activate);
+  const p = s.panel || (inFlow ? s.flow.activate : null);
   if (!p) return true;
+  const chooserTarget = () => (inFlow ? flowChooserTarget(s) : { mapping: s.detail.mapping, version: versionOf(s, p.versionId) });
   if (name === "reason") { p.reason = value; if (p.errors?.reason) delete p.errors.reason; return true; }
   if (name === "keep") { p.keep = Boolean(value); repaint(); return true; }
   if (name === "withTeams") {
     p.withTeams = Boolean(value);
+    if (inFlow) s.flow.dirty = true;
     repaint();
     if (p.withTeams && p.kind === "activate") {
       await loadOrg(repaint);
       if (!p.chooser.clubId) p.chooser.clubId = onlyClubId(s);
-      if (p.chooser.clubId && s.detail.mapping) await chooseClub(s, p.chooser, p.chooser.clubId, s.detail.mapping, versionOf(s, p.versionId), repaint);
+      const { mapping, version } = chooserTarget();
+      if (p.chooser.clubId && mapping) await chooseClub(s, p.chooser, p.chooser.clubId, mapping, version, repaint);
       else repaint();
     }
     return true;
   }
   if (name === "club" && p.chooser) {
-    if (!s.detail.mapping) return true;
-    await chooseClub(s, p.chooser, value, s.detail.mapping, versionOf(s, p.versionId), repaint);
+    const { mapping, version } = chooserTarget();
+    if (!mapping) return true;
+    await chooseClub(s, p.chooser, value, mapping, version, repaint);
     return true;
   }
   if (name === "team" && p.chooser) {

@@ -56,6 +56,10 @@ export function emptyMappingsState() {
     panel: null,
     // The one write in flight or not confirmed.
     write: null,
+    // 7h-F: Save and activate in progress - the teams and reason its last
+    // step lists, the version its draft made, and whether a step had to be
+    // checked (then it stops; the Rukovodilac's F2).
+    chain: null,
     notice: "",
     noticeKind: "",
   };

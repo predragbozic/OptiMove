@@ -10,7 +10,7 @@ import {
 } from "./metric-mappings-data.js";
 import {
   activateBlocker, activeVersion, bindingFacts, chooserTeams, chosenBindings, fieldOf, fieldTakenBy, flowFacts, inOwnerWorkspace,
-  mayTransition, teamNameOf,
+  mayTransition, saveAndActivateOffered, teamNameOf,
 } from "./metric-mappings-actions.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -253,8 +253,12 @@ function stepDetailsHtml(s, locked) {
 }
 function stepReviewHtml(s, locked) {
   const f = s.flow;
+  const ctx = mappingsContext();
   const { field, revision, target, status } = flowFacts(s);
   if (!revision || !target || !status?.choosable) return "";
+  // 7h-F: Save and activate, for whoever may activate this mapping (F1-F4).
+  const offered = saveAndActivateOffered(s, ctx);
+  const a = f.activate;
   const levels = levelsOf(revision, target);
   const session = levels.session && levels.drill ? f.draft.session : levels.session;
   const drill = levels.session && levels.drill ? f.draft.drill : levels.drill;
@@ -275,12 +279,23 @@ function stepReviewHtml(s, locked) {
       </dl>
       <p class="muted">${fieldStatus(field).meaningPending
         ? "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is confirmed."
-        : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
+        : offered
+          ? "Save and activate saves this version, submits it for review and activates it now. Save draft only saves it: it changes nothing yet."
+          : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
     </div>
+    ${offered ? `
+    <div class="metric-mappings-activate-now">
+      <label class="source-fields-choice"><input type="checkbox" data-mm-field="withTeams" ${a.withTeams ? "checked" : ""} ${locked ? "disabled" : ""}><span>Switch on for teams now</span></label>
+      ${a.withTeams ? `${chooserHtml(s, a, ctx, { id: null })}${reasonHtml(a, "Reason", locked)}
+      <p class="muted">The server checks every team again when the version is activated.</p>` : ""}
+    </div>` : ""}
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
     <div class="data-sources-form-actions">
-      <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save draft"}</button>
+      ${offered
+        ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save-activate" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save and activate"}</button>
+      <button class="plain-button" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>Save draft</button>`
+        : `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save draft"}</button>`}
       <button class="plain-button ghost" type="button" data-action="metric-mappings-flow-cancel" ${locked ? "disabled" : ""}>Cancel</button>
     </div>`}`;
 }
