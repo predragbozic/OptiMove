@@ -1374,19 +1374,23 @@ post-check (the runbook).
   dead note removed, the meaning blocker's next step and the missing conversion's sentence in a club workspace only,
   and the Imports screen's `mapping_not_usable` step.
 - **Tests:**
-  - `backend/tests/source-metric-mapping-club-admin-7h.test.mjs` (new, disposable; 20 tests): the rehearsal on v51
+  - `backend/tests/source-metric-mapping-club-admin-7h.test.mjs` (new, disposable; 21 tests): the rehearsal on v51
     (preflight with each hard value flipped, `NOWAIT` on a busy T4, the apply waiting for a T5 writer with the exact
     catalog delta and the post-check, every rollback refusal, the rollback to v51's catalog and the re-apply waiting
     for a T8 writer, LF); the shared rights table through the real resolver and the real A1 route; the success paths
-    with `club_admin` on T4, T5 and T8; the identical 404s; the platform-only routes; replays; the direct SQL of
-    section 10.3 (including the J18 chain in one transaction, committed); the races of section 10.4; the rights
+    with `club_admin` on T4, T5 and T8; the identical 404s (a mismatched mapping and version pair included); the
+    platform-only routes; replays; the direct SQL of section 10.3 (including the J18 chain in one transaction,
+    committed); the races of section 10.4, each wait asserted as a wait on a row of the named table, never on an
+    advisory or a table lock (`rowWait`); the rights
     locked before any trigger; the rights and write hold seams; **L1: the real club-admin revocation route against the
-    real A1, both orders** (test 17); submit's R5; the COMMIT trio; the leak scan;
+    real A1, both orders** (test 17); submit's R5; the COMMIT trio; the leak scan of answers and of the routes' log
+    lines; R6 (test 21: a club admin's A2 and replacement end the activations on an archived team's binding and on an
+    ended binding, on the `club_admin` basis);
   - `backend/tests/fixtures/mapping-transition-rights-7h.json`: the shared table of R12 (ten rows; a platform admin
     reaches a club's workspace only while also holding that club's admin role, so every club-workspace row of a
     platform admin holds both roles), read by the backend suite and by `frontend/tests/metric-mappings.actions.test.mjs`;
-  - `backend/tests/gpexe-import-mapped-concurrency-9b.test.mjs` 11a–11c: a club admin's A2 and replacement against an
-    import and against the real approval, both orders;
+  - `backend/tests/gpexe-import-mapped-concurrency-9b.test.mjs` 11a–11d: a club admin's A2 and replacement against an
+    import, and against the real approval in all four orders;
   - the existing suites of section 10.7: 7b tests 8 and 9 changed as written; frontend tests 10 and 34 inverted; new
     frontend tests 40–44 (the shared table, a club admin's activate with teams, replace with kept teams then disable,
     the system mapping's sentences and the club blockers, and a field whose meaning is not confirmed); the Imports
@@ -1395,8 +1399,9 @@ post-check (the runbook).
     pinned to v51 as written, the first window ran them on production and its record names their sha256, so a later
     migration makes them stale for the **next** window only, which re-issues them before its step 11 (their headers;
     J17 section 10.4).
-- **Mutations** (section 10.6): 44 in the backend (17 of the service, 24 of v52, 3 of the rollback), 41 killed by a
-  named test; L1's `for share of r, u` (S12) is killed only by test 17, as section 10.6 says. Three survive as
+- **Mutations** (section 10.6): 46 in the backend (18 of the service, 25 of v52, 3 of the rollback), 43 killed by a
+  named test (S18, an advisory lock on the mapping in A1 and A2, by test 13's row waits; V25, the T5 guard refusing a
+  club admin's end on an archived team, by test 21); L1's `for share of r, u` (S12) is killed only by test 17, as section 10.6 says. Three survive as
   equivalent mutants, named in the pull request:
   - the route gate moved after the body check (S4): after 7h-B the gate refuses no context the resolver builds (a
     platform admin's in the platform or a club workspace, a club admin's in its club's), so its place no longer

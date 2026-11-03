@@ -401,11 +401,30 @@ async function someoneWaits(c = k, timeoutMs = 5000) {
   }
   return false;
 }
+// A backend waiting on a row - a tuple or a transactionid lock, never an
+// advisory or a table lock (J14 section 10.4) - and the tables of the tuple
+// locks it holds or waits for; each of `tables` must be among them.
+async function rowWait(label, tables = null, c = k, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const w = await one(c, `select pid, wait_event from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid() order by pid limit 1`);
+    if (w) {
+      const held = (await c.query(
+        `select distinct n.nspname || '.' || cl.relname as name from pg_locks l join pg_class cl on cl.oid = l.relation join pg_namespace n on n.oid = cl.relnamespace
+          where l.pid = $1 and l.locktype = 'tuple' order by 1`, [w.pid])).rows.map((r) => r.name);
+      assert.ok(["tuple", "transactionid"].includes(w.wait_event), `${label}: waits on a row, not on ${w.wait_event}`);
+      for (const t of tables || []) assert.ok(held.includes(t), `${label}: waits on a row of ${t} (tuple locks: ${held.join(", ") || "none"})`);
+      return { pid: w.pid, waitEvent: w.wait_event, tables: held };
+    }
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  assert.fail(`${label}: nobody waits on a lock`);
+}
 // The pid of a backend waiting on a lock whose query matches `pattern`.
 async function waitingOn(pattern, c = k, timeoutMs = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const row = await one(c, `select pid from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ~ $1 and pid <> pg_backend_pid() limit 1`, [pattern]);
+    const row = await one(c, `select pid from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ~* $1 and pid <> pg_backend_pid() limit 1`, [pattern]);
     if (row) return row.pid;
     await new Promise((res) => setTimeout(res, 20));
   }
@@ -927,6 +946,9 @@ test("9. the identical 404 (section 3): club A's admin on a missing id, a system
     notFoundShape(await activate({ mappingId: key(), versionId: key() }, W.caA.cookie, { requestKey: freeKey })),
     notFoundShape(await activate(sys, W.caA.cookie, { requestKey: freeKey })),
     notFoundShape(await activate(clubB, W.caA.cookie, { requestKey: freeKey })),
+    // A mismatched pair: club A's own mapping with a version of another mapping.
+    notFoundShape(await activate({ mappingId: own.mappingId, versionId: sys.versionId }, W.caA.cookie, { requestKey: freeKey })),
+    notFoundShape(await activate({ mappingId: own.mappingId, versionId: clubB.versionId }, W.caA.cookie, { requestKey: freeKey })),
     notFoundShape(await activate(own, W.caA.cookie, { requestKey: freeKey, starts: [W.bB1] })),
     notFoundShape(await disable(sys, W.caA.cookie, { expectedStatus: "needs_review", requestKey: freeKey })),
     notFoundShape(await disable(clubB, W.caA.cookie, { expectedStatus: "needs_review", requestKey: freeKey })),
@@ -1276,7 +1298,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const first = activate(v1, W.caA.cookie);
   await until(() => hold.state.entered, "the first A1 holds");
   const second = activate(v2, W.caA2.cookie);
-  assert.equal(await someoneWaits(), true, "the second A1 waits at T3");
+  await rowWait("the second A1 waits at T3", ["training_load.source_metric_mappings"]);
   hold.g.open();
   ok(await first);
   const lost = refused(await second, 409, "active_version_changed");
@@ -1287,7 +1309,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const replacing = activate(n1, W.caA.cookie, { expected: v1.versionId, reason: reasonFor("Replace.") });
   await until(() => hold.state.entered, "the replacement holds");
   const disabling = disable(v1, W.paA.cookie);
-  assert.equal(await someoneWaits(), true, "the A2 waits");
+  await rowWait("the A2 waits at T3", ["training_load.source_metric_mappings"]);
   hold.g.open();
   ok(await replacing);
   assert.equal(refused(await disabling, 409, "version_status_changed").current.status, "disabled");
@@ -1298,7 +1320,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const dis = disable(s, W.caA.cookie);
   await until(() => hold.state.entered, "the A2 holds");
   const ending = end(W.caA2, act.id);
-  assert.equal(await someoneWaits(), true, "the S2 waits on the activation");
+  await rowWait("the S2 waits at T3, the mapping row A2 holds", ["training_load.source_metric_mappings"]);
   hold.g.open();
   assert.equal(ok(await dis).activationsEnded, 1);
   refused(await ending, 409, "activation_not_open");
@@ -1311,7 +1333,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const pinnedDisable = disable(pv, W.caA.cookie);
   await until(() => hold.state.entered, "the A2 holds");
   const retiring = retireRevision(pf, W.pa.cookie);
-  assert.equal(await someoneWaits(), true, "the pinned step waits");
+  await rowWait("the pinned step waits at the revision", ["training_load.source_metric_definition_versions"]);
   hold.g.open();
   ok(await pinnedDisable);
   ok(await retiring);
@@ -1325,11 +1347,11 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const retiringFirst = retireRevision(qf, W.pa.cookie);
   await until(() => lcState.entered, "the pinned step holds");
   const late = activate(qv, W.caA.cookie);
-  assert.equal(await someoneWaits(), true, "A1 waits for the pinned step");
+  await rowWait("A1 waits for the pinned step at the revision", ["training_load.source_metric_definition_versions"]);
   lc.open();
   ok(await retiringFirst);
   const lateRes = await late;
-  assert.equal(lateRes.status, 409, lateRes.text);
+  assert.deepEqual([lateRes.status, lateRes.body.error], [409, "version_not_submitted"], lateRes.text);
   assert.equal(await statusOf(qv), "disabled", "the pinned step disabled the waiting version");
   // A1 with starts against an Unbind, a team archive and a club archive.
   for (const kind of ["unbind", "team", "club"]) {
@@ -1350,7 +1372,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
       // the right after the COMMIT, the identical 404 (section 3).
       peer = await client();
       const archiving = peer.query(`update public.clubs set is_active = false where id = $1`, [x.clubId]);
-      assert.equal(await someoneWaits(), true, "the club archive waits for A1's FOR SHARE on the club");
+      await rowWait("the club archive waits for A1's FOR SHARE on the club", ["public.clubs"]);
       hold.g.open();
       const res = await a1;
       assert.ok([200, 404].includes(res.status), res.text);
@@ -1372,7 +1394,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
       ? await peerHolds(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Peer unbind.' where id = $1`, [y.b.bindingId, W.pa.id])
       : await peerHolds(`update public.teams set is_active = false where id = $1`, [y.b.teamId]);
     const waiting = activate(yv, y.admins[0].cookie, { starts: [y.b] });
-    assert.equal(await someoneWaits(), true, `${kind}: A1 waits for the peer`);
+    await rowWait(`${kind}: A1 waits for the peer`, [kind === "unbind" ? "training_load.source_team_bindings" : "public.teams"]);
     await release(holder);
     const wres = await waiting;
     if (kind === "unbind") refused(wres, 409, "binding_not_active");
@@ -1384,7 +1406,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const zv = await clubWaiting(z.admins[0]);
   const zHolder = await peerHolds(`update public.clubs set is_active = false where id = $1`, [z.clubId]);
   const zA1 = activate(zv, z.admins[0].cookie, { starts: [z.b] });
-  assert.equal(await someoneWaits(), true, "A1 waits for the club archive");
+  await rowWait("A1 waits for the club archive", ["public.clubs"]);
   await release(zHolder);
   isNotFound(await zA1, "club archived first");
   assert.equal(await statusOf(zv), "needs_review");
@@ -1396,7 +1418,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   await until(() => hold.state.entered, "A2 holds");
   const archiver = await client();
   const archiving = archiver.query(`update public.clubs set is_active = false where id = $1`, [c1.clubId]);
-  assert.equal(await someoneWaits(), true, "the archive waits for A2");
+  await rowWait("the archive waits for A2", ["public.clubs"]);
   hold.g.open();
   const c1res = await c1A2;
   assert.ok([200, 404].includes(c1res.status), c1res.text);
@@ -1407,7 +1429,7 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
   const c2v = await clubActive(c2.admins[0]);
   const c2Holder = await peerHolds(`update public.clubs set is_active = false where id = $1`, [c2.clubId]);
   const c2A2 = disable(c2v, c2.admins[0].cookie);
-  assert.equal(await someoneWaits(), true, "A2 waits for the archive");
+  await rowWait("A2 waits for the archive", ["public.clubs"]);
   await release(c2Holder);
   isNotFound(await c2A2, "club archived before A2");
   assert.equal(await statusOf(c2v), "active");
@@ -1544,7 +1566,7 @@ test("16. the write hold seam (after the right, before the first write): a promo
   await until(() => hold.state.entered, "A1 holds");
   const peer = await client();
   const revoking = peer.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [adm.id, x.clubId]);
-  assert.equal(await someoneWaits(), true, "the revocation waits for the write");
+  await rowWait("the revocation waits for the write on the role row", ["public.user_club_roles"]);
   hold.g.open();
   const res = await pending;
   assert.ok([200, 404].includes(res.status), res.text);
@@ -1676,8 +1698,54 @@ test("20. no answer of the transition routes carries a reason, an acting user's 
     for (const c of clubs) assert.ok(!text.includes(c), "no club id in an answer");
     assert.ok(!/source_metric_|training_load\.|insert into|select .* from|SQLSTATE/i.test(text), `no trigger text or SQL: ${text.slice(0, 200)}`);
   }
-  for (const line of logLines) {
+  // The migration runner's own lines of the rehearsal (tests 1-6) name migration files; they are not the routes' log.
+  const appLines = logLines.filter((l) => !l.startsWith("[migrate]"));
+  assert.ok(appLines.length > 0, "the routes logged something to scan");
+  for (const line of appLines) {
     for (const reason of sentReasons) assert.ok(!line.includes(reason), "no reason in a log line");
-    assert.ok(!/a club version's activation is on another club's binding|the basis is not the acting user's own|may not (activate|disable) this mapping version/.test(line), `no trigger text in a log line: ${line.slice(0, 200)}`);
+    for (const id of ids) assert.ok(!line.includes(id), `no acting user's id in a log line: ${line.slice(0, 200)}`);
+    for (const c of clubs) assert.ok(!line.includes(c), `no club id in a log line: ${line.slice(0, 200)}`);
+    assert.ok(!/source_metric_|training_load\.|insert into|select .* from|SQLSTATE/i.test(line), `no trigger text or SQL in a log line: ${line.slice(0, 200)}`);
+    assert.ok(!/a club version's activation is on another club's binding|the basis is not the acting user's own|may not (activate|disable) this mapping version|acting user/i.test(line), `no trigger text in a log line: ${line.slice(0, 200)}`);
   }
+});
+
+test("21. R6 (J14 sections 2.3 and 10.2): club A's admin's A2 and replacement end the open activations of the club's own version on an archived team's binding and on an ended binding - club_admin and the admin on the ended T5 row and its T8 activation_end row, the version's reason, never a refusal; the replacement starts only the active team it lists", async () => {
+  // A2 with open activations on an archived team's binding and on an active one.
+  const x = await freshClub();
+  const [adm] = x.admins;
+  const v = await clubActive(adm);
+  const other = await binding(x.clubId);
+  const acts = ok(await start(adm, v, [x.b, other]), 201).activations;
+  await k.query(`update public.teams set is_active = false where id = $1`, [x.b.teamId]);
+  const dReason = reasonFor("Disable with an archived team.");
+  const dis = ok(await disable(v, adm.cookie, { reason: dReason }));
+  assert.equal(dis.activationsEnded, 2);
+  const ended = await rows(k, `select * from ${T5} where mapping_version_id = $1 order by id`, [v.versionId]);
+  assert.equal(ended.length, 2);
+  assert.ok(ended.some((r) => r.source_team_binding_id === x.b.bindingId), "the archived team's activation is among the ended");
+  assert.deepEqual(ended.map((r) => [r.ended_basis, r.ended_by_user_id, r.end_reason]), ended.map(() => ["club_admin", adm.id, "mapping_version_disabled"]));
+  const dEnds = await auditOf(`action = 'activation_end' and mapping_version_id = $1`, [v.versionId]);
+  assert.deepEqual(dEnds.map((r) => [r.basis, r.performed_by_user_id, r.reason]), dEnds.map(() => ["club_admin", adm.id, dReason]));
+  assert.deepEqual(dEnds.map((r) => r.activation_id).sort(), acts.map((a) => a.id).sort());
+  // A replacement: the archived team's and an ended binding's activations end as replaced; the active team listed moves.
+  const y = await freshClub();
+  const [yAdm] = y.admins;
+  const yv = await clubActive(yAdm);
+  const keep = await binding(y.clubId);
+  const gone = await binding(y.clubId);
+  ok(await start(yAdm, yv, [y.b, keep, gone]), 201);
+  await k.query(`update public.teams set is_active = false where id = $1`, [y.b.teamId]);
+  await unbind(gone);
+  const next = await nextVersion(yv, yAdm);
+  const rReason = reasonFor("Replace with an archived team.");
+  const rep = ok(await activate(next, yAdm.cookie, { expected: yv.versionId, reason: rReason, starts: [keep] }));
+  assert.deepEqual([rep.replaced, rep.activationsEnded, rep.activations.length], [yv.versionId, 3, 1]);
+  const yEnded = await rows(k, `select * from ${T5} where mapping_version_id = $1 order by id`, [yv.versionId]);
+  assert.deepEqual(yEnded.map((r) => [r.ended_basis, r.ended_by_user_id, r.end_reason]), yEnded.map(() => ["club_admin", yAdm.id, "mapping_version_replaced"]));
+  const rEnds = await auditOf(`action = 'activation_end' and mapping_version_id = $1`, [yv.versionId]);
+  assert.deepEqual(rEnds.map((r) => [r.basis, r.reason]), rEnds.map(() => ["club_admin", rReason]));
+  assert.equal(rEnds.length, 3);
+  assert.deepEqual((await openOn(next)).map((r) => [r.source_team_binding_id, r.activated_basis]), [[keep.bindingId, "club_admin"]]);
+  noDeadlock();
 });
