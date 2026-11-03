@@ -260,8 +260,15 @@ router.get("/definitions", async (req, res, next) => {
     if (req.query.ownerScope !== undefined && !OWNER_SCOPES.has(req.query.ownerScope)) return res.status(400).json({ error: "Invalid ownerScope." });
     if (req.query.cursorId !== undefined && !validUuid(req.query.cursorId)) return res.status(400).json({ error: "Invalid cursorId." });
     const cursor = req.query.cursorLabel && req.query.cursorId ? { label: req.query.cursorLabel, id: req.query.cursorId } : null;
+    // v53 (J15 section 4.4): the club whose hides flag the system rows,
+    // resolved once from the active workspace - a club workspace's club or a
+    // team workspace's club; none for the platform, a private coach or an
+    // athlete - never from req.authz's roles. The rows themselves and the
+    // visibility rule do not change (the pickers drop flagged rows themselves).
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const hideClubId = workspace?.type === "club" ? workspace.scopeId ?? null : workspace?.type === "team" ? workspace.clubId ?? null : null;
     const { rows, nextCursor } = await listDefinitions(req, {
-      search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit,
+      search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
     });
     res.json({ rows, nextCursor });
   } catch (error) {

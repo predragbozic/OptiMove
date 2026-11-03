@@ -591,7 +591,11 @@ test("4. reads: a team workspace reads the reduced view (Q7) on the list, the de
   for (const item of list.variables) assert.deepEqual(Object.keys(item).sort(), REDUCED);
   const sysList = ok200(await api("/variables?scope=system", { cookie: W.coachA1.cookie }));
   assert.ok(sysList.variables.some((x) => x.id === W.sysVar.id));
-  for (const item of sysList.variables) assert.deepEqual([Object.keys(item).sort(), item.editable, item.actions], [REDUCED, false, []]);
+  // Since v53 (phase 7i, J15 section 4.4) a system row read in a team workspace of the club also says whether the
+  // club hides it, and nothing more of the club: `club: { hidden }`.
+  for (const item of sysList.variables) {
+    assert.deepEqual([Object.keys(item).sort(), item.editable, item.actions, item.club], [[...REDUCED, "club"].sort(), false, [], { hidden: false }]);
+  }
   const detail = ok200(await api(`/variables/${v.id}`, { cookie: W.coachA1.cookie }));
   // The detail also carries the variable's domains and categories (phase 12b, J6 C6).
   assert.deepEqual([Object.keys(detail).sort(), Object.keys(detail.variable).sort(), detail.nextCursor], [["nextCursor", "variable"], [...REDUCED, "classification"].sort(), null]);

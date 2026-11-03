@@ -82,7 +82,7 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V52), "v52 is a test migration");
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V52, "v52 is the last test migration");
+  assert.ok(GPEXE_TEST_MIGRATIONS.indexOf(V52) > 0, "v52 follows v51 (v53, phase 7i-B, comes after it)");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52rb", migrations: UP_TO_V51 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52" }),

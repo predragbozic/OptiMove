@@ -28,6 +28,8 @@ export const ACTIVATION_MESSAGES = Object.freeze({
   activation_exists: "A listed team binding already imports this source field with these parameters.",
   variable_taken_on_binding: "A listed team binding already imports this canonical variable at this level through another activation.",
   activation_not_open: "The activation has ended.",
+  variable_hidden: "The club of a listed team binding hides this variable.",
+  not_a_copy_of_this_version: "The club version is not the copy of this activation's system version.",
 });
 // v34's T5 texts (the backstop of the checks below), exactly; an ended row
 // written again is an end that lost its race.
@@ -38,6 +40,8 @@ export const ACTIVATION_TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_activations: the API family of the binding's host is not the source metric's", "binding_source_mismatch"],
   ["source_metric_mapping_activations: the source metric is retired", "field_retired"],
   ["source_metric_mapping_activations: an ended activation is immutable", "activation_not_open"],
+  // v53 (J15 7.5): a system mapping on a binding whose club hides its variable.
+  ["source_metric_mapping_activations: the variable is hidden in the binding's club", "variable_hidden"],
 ]);
 // The two open-row unique indexes of v34 (by name).
 export const ACTIVATION_UNIQUE_CODES = new Map([
@@ -129,17 +133,78 @@ export async function lockListedBindings(client, bindings) {
   return new Map(locked.map((b) => [b.id, { ...b, api_family: families.get(b.id) ?? null }]));
 }
 
+// ---------------------------------------------------------------------------
+// The club's hide of a system variable (J15 sections 2.3, 5 and 7.5; v53).
+// ---------------------------------------------------------------------------
+// The hide lock of a club and a variable, defined once (J15 section 5): built
+// in SQL from uuid values, seed 0 (runWrite's per-user lock uses seed 34 and
+// another prefix). The T5 insert guard and the hide's guards take the same key.
+export const HIDE_LOCK_SQL =
+  `select pg_advisory_xact_lock(hashtextextended('club-variable-hide:' || $1::uuid::text || ':' || $2::uuid::text, 0))`;
+
+// Takes the hide locks of the (club, variable) pairs, each once, ascending by
+// (club, variable) - the uuid order, which is the order of their lowercase
+// text - one statement per key, so the order is the statements' own. A path
+// calls this after its last row lock and before its state checks and its first
+// write (J15 section 5); no row lock follows it.
+// Test seam (J15 section 10, races): called after each hide lock is granted,
+// with the pair and its place in the ascending order, so a race test can hold
+// a transaction between two hide locks; never set outside the tests.
+let hideLockHold = null;
+export function setHideLockHoldForTests(fn) { hideLockHold = fn ?? null; }
+
+export async function lockHides(client, pairs) {
+  const keyed = new Map();
+  for (const { clubId, definitionId } of pairs) {
+    const club = String(clubId).toLowerCase();
+    const definition = String(definitionId).toLowerCase();
+    keyed.set(`${club}:${definition}`, { club, definition });
+  }
+  const ordered = [...keyed.values()].sort((a, b) => (a.club < b.club ? -1 : a.club > b.club ? 1
+    : a.definition < b.definition ? -1 : a.definition > b.definition ? 1 : 0));
+  for (const [index, { club, definition }] of ordered.entries()) {
+    await client.query(HIDE_LOCK_SQL, [club, definition]);
+    if (hideLockHold) await hideLockHold(client, { clubId: club, definitionId: definition }, index);
+  }
+}
+
+// The hide locks of a start (S1, A1's listed starts): only a system version is
+// ever refused by a hide, so a club version takes none. `clubIds` are the
+// listed bindings' clubs (the connection's owner, source_metric_binding_club).
+export async function lockStartHides(client, v, clubIds) {
+  if (v.owner_key !== "system") return;
+  await lockHides(client, clubIds.map((clubId) => ({ clubId, definitionId: v.metric_definition_id })));
+}
+
+// The listed bindings whose club hides the version's variable (a plain read,
+// after the hide locks): a set of binding ids. A club version is never hidden.
+async function hiddenBindings(client, v, bindings) {
+  if (v.owner_key !== "system") return new Set();
+  return new Set((await client.query(
+    `select b.id::text as id
+       from unnest($1::uuid[]) as b(id)
+      where exists (select 1 from training_load.metric_definition_club_hides h
+                     where h.club_id = training_load.source_metric_binding_club(b.id)
+                       and h.metric_definition_id = $2 and h.shown_at is null)`,
+    [bindings.map((b) => b.bindingId), v.metric_definition_id],
+  )).rows.map((r) => r.id));
+}
+
 // The state checks of the listed starts, one ascending pass (section 4.1 step
 // 6): the first failing binding is named, whatever the kind of failure. `v` is
-// the version (with its field's source and API family). A1 calls this after it
-// has ended N's open activations in the same transaction (section 4.3), so a
-// row it ended no longer holds its binding (test 9 restarts N+1 on N's own
-// binding).
+// the version (with its field's source and API family and its mapping's owner
+// key). A1 calls this after it has ended N's open activations in the same
+// transaction (section 4.3), so a row it ended no longer holds its binding
+// (test 9 restarts N+1 on N's own binding). v53: a system version on a binding
+// whose club hides its variable is refused (J15 section 4.3: a state refusal,
+// after the scope check, by the binding's club; read after the hide locks).
 export async function checkListedStarts(client, v, bindings, locked) {
+  const hidden = await hiddenBindings(client, v, bindings);
   for (const { bindingId } of bindings) {
     const b = locked.get(bindingId);
     if (b.state !== "active") throw stateRefusal("binding_not_active", { bindingId, bindingState: b.state });
     if (b.source_system !== v.source_system || b.api_family !== v.api_family) throw stateRefusal("binding_source_mismatch", { bindingId });
+    if (hidden.has(bindingId)) throw stateRefusal("variable_hidden", { bindingId });
     const sameField = await client.query(
       `select 1 from training_load.source_metric_mapping_activations
         where source_team_binding_id = $1 and source_metric_definition_id = $2 and parameter_fingerprint = $3

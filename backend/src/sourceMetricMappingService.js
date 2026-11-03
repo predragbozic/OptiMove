@@ -50,8 +50,8 @@ import {
 } from "./sourceMetricAccess.js";
 import {
   ACTIVATION_MESSAGES, ACTIVATION_TRIGGER_REFUSALS, ACTIVATION_UNIQUE_CODES, assertListedBindingsInScope, bindingList,
-  checkListedStarts, endAuditRows, endOpenActivations, insertStarts, lockListedBindings, lockOpenActivations, operationEndCount,
-  operationStarts, startAuditRows,
+  checkListedStarts, endAuditRows, endOpenActivations, insertStarts, lockListedBindings, lockOpenActivations, lockStartHides,
+  operationEndCount, operationStarts, startAuditRows,
 } from "./sourceMetricActivationSteps.js";
 import { extractabilityCode, extractorFor } from "./sourceMetricExtractors.js";
 
@@ -114,6 +114,7 @@ let writeHold = null;
 let rereadFault = null;
 let readFault = null;
 let beforeLocksHold = null;
+let beforeHideLocksHold = null;
 let readStatementTimeoutMs = READ_STATEMENT_TIMEOUT_MS;
 let readAnswerTimeoutMs = READ_ANSWER_TIMEOUT_MS;
 let commitTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
@@ -135,6 +136,9 @@ export function setMappingRereadFaultForTests(fn) { rereadFault = fn ?? null; }
 export function setMappingReadFaultForTests(fn) { readFault = fn ?? null; }
 // Runs inside a version create after its plain reads, before the first lock.
 export function setMappingBeforeLocksHoldForTests(fn) { beforeLocksHold = fn ?? null; }
+// v53 (J15 section 10): runs inside A1 with listed starts of a system version
+// after its last row lock (the bindings' clubs) and before its hide locks.
+export function setMappingBeforeHideLocksHoldForTests(fn) { beforeHideLocksHold = fn ?? null; }
 export function setMappingReadBoundsForTests({ statementTimeoutMs = READ_STATEMENT_TIMEOUT_MS, answerTimeoutMs = READ_ANSWER_TIMEOUT_MS } = {}) {
   readStatementTimeoutMs = statementTimeoutMs; readAnswerTimeoutMs = answerTimeoutMs;
 }
@@ -653,8 +657,29 @@ export async function listMappings({ ctx, query }) {
     const nextCursor = rows.length > PAGE_SIZES.mappings
       ? encodeCursor({ v: 1, k: "mappings", o: ownerKeyOf(ctx), s: last.club_part, t: last.cursor_at, i: last.id })
       : null;
-    return { mappings: await summarize(client, page), nextCursor };
+    const hidden = await hiddenTargetsInClub(client, ctx, page);
+    const mappings = (await summarize(client, page)).map((m, i) => withHiddenTarget(m, page[i], ctx, hidden));
+    return { mappings, nextCursor };
   });
+}
+
+// v53 (J15 section 4.4): in club X's workspace, a system mapping row says
+// whether club X hides its target variable (targetHiddenInClub). The set of
+// the page's system targets club X hides, read in the same snapshot; never
+// another club's hides, and nothing in the platform workspace.
+async function hiddenTargetsInClub(executor, ctx, rows) {
+  if (ctx.owner?.scope !== "club") return new Set();
+  const ids = [...new Set(rows.filter((r) => r.owner_scope === "system").map((r) => r.metric_definition_id))];
+  if (ids.length === 0) return new Set();
+  return new Set((await executor.query(
+    `select metric_definition_id::text as id from training_load.metric_definition_club_hides
+      where club_id = $1 and metric_definition_id = any($2::uuid[]) and shown_at is null`,
+    [ctx.owner.clubId, ids],
+  )).rows.map((r) => r.id));
+}
+function withHiddenTarget(out, row, ctx, hidden) {
+  if (ctx.owner?.scope !== "club" || row.owner_scope !== "system") return out;
+  return { ...out, targetHiddenInClub: hidden.has(String(row.metric_definition_id)) };
 }
 
 // The bounded summary of mappings (the list's shape and the answer of a
@@ -741,7 +766,8 @@ export async function getMapping({ ctx, mappingId, query }) {
     const nextCursor = rows.length > PAGE_SIZES.versions
       ? encodeCursor({ v: 1, k: "versions", o: ownerKeyOf(ctx), m: m.id, n: page[page.length - 1].version_number })
       : null;
-    return { mapping: { ...publicMappingBase(m), versions: page.map(publicVersion) }, nextCursor };
+    const hidden = await hiddenTargetsInClub(client, ctx, [m]);
+    return { mapping: withHiddenTarget({ ...publicMappingBase(m), versions: page.map(publicVersion) }, m, ctx, hidden), nextCursor };
   });
 }
 
@@ -1442,6 +1468,15 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       const bindingLocks = listed.length > 0 ? await lockListedBindings(client, listed) : null;
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (listed.length > 0 && !(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
+      // v53 (J15 sections 5 and 7.5, R13): a system version's listed starts
+      // take the hide locks of their clubs, ascending, after the last row lock
+      // (the clubs above) and before the states and the first end; a club
+      // version takes none. The hide itself is read with the starts' states
+      // (checkListedStarts, variable_hidden).
+      if (listed.length > 0 && v.owner_key === "system") {
+        if (beforeHideLocksHold) await beforeHideLocksHold(client, "mapping_version_activate");
+        await lockStartHides(client, v, clubIds);
+      }
       // The states, answered only now (after the right).
       const status = locked.get(vId);
       if (status !== "needs_review") throw refusal(409, "version_not_submitted", MESSAGES.version_not_submitted, { current: { status } });
@@ -1591,6 +1626,205 @@ export async function disableVersion({ ctx, mappingId, versionId, body }) {
 // same input checks and page cursors - never a second copy. Not a public API
 // of the routes.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v53 (J15 sections 2.2, 5 and 7.2): the mapping part of a copy of a system
+// variable into a club - the system variable's active mapping versions,
+// locked in D's order, checked, and cloned as the club's drafts on the copy,
+// each with its link. It runs inside the copy's own transaction
+// (canonicalVariableAdminService.copyVariable), which owns the definition,
+// its version 1, its levels, the copy row and the request record; every T3,
+// T4 and T8 write stays in this module (M2 test 20). A cloned draft carries
+// the system version's stored values; v34's T4 insert guard re-derives and
+// re-checks them against the revision, the copy's version 1, its levels and
+// the active unit conversion, and v53's link guard requires them identical.
+// ---------------------------------------------------------------------------
+export const MAX_COPIED_MAPPINGS = 10;
+export const COPY_NOT_REPRODUCIBLE_MESSAGE = "A mapping of this variable cannot be copied as it is.";
+const COPY_SOURCE_COLUMNS = `v.id, v.mapping_id, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_version_id,
+  v.source_unit, v.target_unit, trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor,
+  trim_scale(v."offset")::text as "offset", v.parameter_kind, v.source_parameters ->> 'unit' as source_bound_unit,
+  v.canonical_parameters ->> 'unit' as canonical_bound_unit, trim_scale(v.parameter_scale)::text as parameter_scale,
+  trim_scale(v.parameter_scale_divisor)::text as parameter_scale_divisor, trim_scale(v.parameter_offset)::text as parameter_offset,
+  v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill`;
+
+// Each system mapping of the variable with its active version (one per
+// mapping at most), ascending by version id: a plain read.
+async function activeSystemVersionsOf(client, definitionId) {
+  return (await client.query(
+    `select ${COPY_SOURCE_COLUMNS}
+       from training_load.source_metric_mapping_versions v
+       join training_load.source_metric_mappings m on m.id = v.mapping_id
+      where m.metric_definition_id = $1 and m.owner_key = 'system' and v.status = 'active'
+      order by v.id`,
+    [definitionId],
+  )).rows;
+}
+
+// The plain read before the copy's first lock (J15 section 5): the versions to
+// copy, so the copy knows which rows to lock.
+export async function readSystemMappingsForCopy(client, definitionId) {
+  return activeSystemVersionsOf(client, definitionId);
+}
+
+// The copy's registry locks, in D's order (v34 :38-49): the active unit
+// conversions of every version in one statement, ascending; T2a, then T2b;
+// the system T3 rows; then, after the active set was read again under the T3
+// locks (A1, A2 and a new draft take T3 FOR NO KEY UPDATE, so no status of
+// these mappings changes once they are held), the system T4 rows FOR SHARE.
+// Every class once, ascending. A set that changed between the plain read and
+// the T3 locks cannot be locked again in order: the copy is refused with
+// try_again (J15 section 6, as built).
+export async function lockSystemMappingsForCopy(client, definitionId, versions) {
+  const ascending = (values) => [...new Set(values)].sort();
+  const pairs = new Set();
+  for (const v of versions) {
+    if (v.source_unit !== v.target_unit) pairs.add(`${v.source_unit}\u001f${v.target_unit}`);
+    if (v.parameter_kind !== "none" && v.source_bound_unit !== v.canonical_bound_unit) {
+      pairs.add(`${v.source_bound_unit}\u001f${v.canonical_bound_unit}`);
+    }
+  }
+  if (pairs.size > 0) {
+    await client.query(
+      `select 1 from training_load.unit_conversions
+        where state = 'active' and from_unit || chr(31) || to_unit = any($1::text[]) order by id for share`,
+      [[...pairs].sort()],
+    );
+  }
+  if (versions.length === 0) {
+    // Nothing to lock, but a system mapping activated since the plain read is
+    // still caught by the read below (it would be copied otherwise).
+    if ((await activeSystemVersionsOf(client, definitionId)).length > 0) throw refusal(409, "try_again", MESSAGES.try_again);
+    return { fields: new Map(), revisions: new Map() };
+  }
+  const fields = new Map((await client.query(
+    `select id, state from training_load.source_metric_definitions where id = any($1::uuid[]) order by id for share`,
+    [ascending(versions.map((v) => v.source_metric_definition_id))],
+  )).rows.map((r) => [r.id, r.state]));
+  const revisions = new Map((await client.query(
+    `select id, state, source_unit from training_load.source_metric_definition_versions where id = any($1::uuid[]) order by id for share`,
+    [ascending(versions.map((v) => v.source_metric_version_id))],
+  )).rows.map((r) => [r.id, r]));
+  await client.query(
+    `select 1 from training_load.source_metric_mappings where id = any($1::uuid[]) order by id for share`,
+    [ascending(versions.map((v) => v.mapping_id))],
+  );
+  const again = await activeSystemVersionsOf(client, definitionId);
+  if (again.length !== versions.length || again.some((v, i) => v.id !== versions[i].id)) {
+    throw refusal(409, "try_again", MESSAGES.try_again);
+  }
+  await client.query(
+    `select 1 from training_load.source_metric_mapping_versions where id = any($1::uuid[]) order by id for share`,
+    [ascending(versions.map((v) => v.id))],
+  );
+  return { fields, revisions };
+}
+
+// After the copy's rights: the first version (ascending) that could not be
+// re-derived as a club draft, as { sourceMetricId, code }, or null. The same
+// facts v34's T4 insert guard checks, answered here with their code (J15 4.1:
+// copy_mapping_not_reproducible with current.sourceMetricId and current.code).
+export async function copiedMappingRefusal(client, versions, { fields, revisions }) {
+  for (const v of versions) {
+    const named = (code) => ({ sourceMetricId: v.source_metric_definition_id, code });
+    if (fields.get(v.source_metric_definition_id) !== "active") return named("source_metric_retired");
+    const revision = revisions.get(v.source_metric_version_id);
+    if (!revision || !["draft", "active"].includes(revision.state) || revision.source_unit === null) return named("revision_not_usable");
+    const facts = (await client.query(
+      `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind,
+              ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
+         from training_load.source_metric_mapping_versions v
+         join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
+         join training_load.source_metric_definition_versions r on r.id = v.source_metric_version_id
+        where v.id = $1`,
+      [v.id],
+    )).rows[0];
+    const extractable = extractabilityCode({
+      sourceSystem: facts.source_system, apiFamily: facts.api_family, sourceMetricKey: facts.source_metric_key,
+      valueShape: facts.value_shape, parameterKind: facts.parameter_kind, sourceParameters: facts.source_parameters,
+    });
+    if (extractable) return named(extractable);
+    const conversion = await conversionsHold(client, v);
+    if (conversion) return named(conversion);
+  }
+  return null;
+}
+
+// The writes, after the copy's definition, version 1, levels and copy row
+// (J15 section 5): the club T3s, the club T4 drafts (the system version's
+// stored values on the copy's version 1), the links, then the unkeyed
+// mapping_create and mapping_version_create audit rows of the copy's
+// operation (the variable request row is its request record). `progress`
+// names the field being written, for the classifier.
+export async function insertCopiedMappings(client, ctx, { clubDefinitionId, clubVersionId, versions, operationId, progress }) {
+  const mappings = [];
+  for (const v of versions) {
+    progress.sourceMetricId = v.source_metric_definition_id;
+    const mappingId = (await client.query(
+      `insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
+       select d.id, d.source_system, d.api_family, $2, 'club', $3, $4 from training_load.source_metric_definitions d where d.id = $1
+       returning id`,
+      [v.source_metric_definition_id, clubDefinitionId, ctx.owner.clubId, ctx.userId],
+    )).rows[0].id;
+    mappings.push({ mappingId, v });
+  }
+  const copied = [];
+  for (const { mappingId, v } of mappings) {
+    progress.sourceMetricId = v.source_metric_definition_id;
+    const created = (await client.query(
+      `insert into training_load.source_metric_mapping_versions
+         (mapping_id, source_metric_definition_id, metric_definition_id, source_metric_version_id, version_number, metric_definition_version_id,
+          conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, conversion_note, parameter_kind,
+          source_parameters, canonical_parameters, parameter_scale, parameter_scale_divisor, parameter_offset,
+          applies_to_session, applies_to_drill, created_by_user_id)
+       select $1, s.source_metric_definition_id, $2, s.source_metric_version_id, 1, $3,
+              s.conversion_kind, s.scale, s.scale_divisor, s."offset", s.source_unit, s.target_unit, s.conversion_note, s.parameter_kind,
+              s.source_parameters, s.canonical_parameters, s.parameter_scale, s.parameter_scale_divisor, s.parameter_offset,
+              s.applies_to_session, s.applies_to_drill, $4
+         from training_load.source_metric_mapping_versions s where s.id = $5
+       returning id, parameter_fingerprint`,
+      [mappingId, clubDefinitionId, clubVersionId, ctx.userId, v.id],
+    )).rows[0];
+    if (created.parameter_fingerprint !== v.parameter_fingerprint) {
+      throw refusal(409, "copy_mapping_not_reproducible", COPY_NOT_REPRODUCIBLE_MESSAGE,
+        { current: { sourceMetricId: v.source_metric_definition_id, code: "parameters_not_equivalent" } });
+    }
+    copied.push({ mappingId, versionId: created.id, sourceMetricId: v.source_metric_definition_id, systemVersionId: v.id });
+  }
+  progress.sourceMetricId = null;
+  for (const c of copied) {
+    await client.query(
+      `insert into training_load.source_metric_mapping_version_copies (club_version_id, system_version_id, operation_id) values ($1, $2, $3)`,
+      [c.versionId, c.systemVersionId, operationId],
+    );
+  }
+  for (const c of copied) {
+    await client.query(
+      `insert into training_load.source_metric_audit (action, mapping_id, performed_by_user_id, basis, operation_id)
+       values ('mapping_create', $1, $2, $3, $4)`,
+      [c.mappingId, ctx.userId, ctx.basis, operationId],
+    );
+    await client.query(
+      `insert into training_load.source_metric_audit (action, mapping_id, mapping_version_id, to_status, performed_by_user_id, basis, operation_id)
+       values ('mapping_version_create', $1, $2, 'draft', $3, $4, $5)`,
+      [c.mappingId, c.versionId, ctx.userId, ctx.basis, operationId],
+    );
+  }
+  return copied;
+}
+
+// The copied mappings of a copy's operation (its answer and its replay).
+export async function copiedMappingsOf(executor, operationId) {
+  return (await executor.query(
+    `select l.club_version_id as "versionId", v.mapping_id as "mappingId", v.source_metric_definition_id as "sourceMetricId",
+            l.system_version_id as "systemVersionId"
+       from training_load.source_metric_mapping_version_copies l
+       join training_load.source_metric_mapping_versions v on v.id = l.club_version_id
+      where l.operation_id = $1
+      order by v.source_metric_definition_id, l.club_version_id`,
+    [operationId],
+  )).rows;
+}
+
 export const adminWriteKit = Object.freeze({
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
   dec, decCmp, hashOf, encodeCursor, decodeCursor, cursorQuery, invalidCursor, ownerKeyOf, CURSOR_AT, LOWER_UUID, UUID,

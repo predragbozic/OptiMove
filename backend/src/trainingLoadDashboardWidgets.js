@@ -103,7 +103,10 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
   // Statement 1/2: every candidate definition for every distinct key this
   // batch could possibly need, already filtered by workspace visibility.
   const candidateRows = await q(
-    `select d.id, d.key, mdv.value_type, mdv.unit
+    `select d.id, d.key, mdv.value_type, mdv.unit, d.owner_scope,
+       (d.owner_scope = 'system' and $2 = 'club'
+          and exists (select 1 from training_load.metric_definition_club_hides ch
+                       where ch.club_id = $3 and ch.metric_definition_id = d.id and ch.shown_at is null)) as hidden_in_club
      from training_load.metric_definitions d
      join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
      where d.key = any($1::text[]) and d.state = 'active'
@@ -151,6 +154,16 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
             return caps.has(hint.scopeLevel);
           });
         }
+      }
+      // v53 (J15 section 4.4): in club X's data workspace, AFTER the hint's
+      // filters, a system definition club X hides is left out only while a
+      // club X definition is still among this hint's rows - so the copy
+      // resolves, and a club template never ends unresolved because of a
+      // hide. hidden_in_club is false outside a club data workspace, so a
+      // team data workspace (and every other) is unchanged: hiding is not an
+      // access boundary.
+      if (dataWorkspaceType === "club" && rows.some((r) => r.owner_scope === "club")) {
+        rows = rows.filter((r) => !r.hidden_in_club);
       }
       if (rows.length === 0) continue;
       if (rows.length === 1) { outcome = { status: "resolved", candidateIds: [rows[0].id] }; break; }

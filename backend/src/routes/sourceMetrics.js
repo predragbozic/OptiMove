@@ -173,6 +173,17 @@ router.post("/activations/:activationId/end", handle(async (req, res) => {
   writeAnswer(res, await activations.endActivation({ ctx, activationId: req.params.activationId, body: req.body }), 200);
 }));
 
+// v53 (J15 sections 2.4 and 4.3): move one team from a system version to its
+// club copy, in one transaction. Club X's workspace only: the platform
+// workspace and everyone else get the identical 404 before the body.
+router.post("/activations/:activationId/switch-to-copy", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!activations.maySwitchToCopy(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await activations.switchToCopy({ ctx, activationId: req.params.activationId, body: req.body }), 200);
+}));
+
 router.get("/mappings", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
@@ -328,6 +339,39 @@ router.post("/variables/:variableId/icon", handle(async (req, res) => {
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.changeVariableIcon({ ctx, variableId: req.params.variableId, body: req.body }), 200);
+}));
+
+// v53 (J15 sections 2.2, 2.3, 4.1 and 4.2): a club copies a system variable
+// (201 { variable, copiedMappings }) or hides it and shows it again (200
+// { variableId, hidden, hiddenAt }, idempotent: true for the state already in
+// force). Club X's own workspace only, through the admin context (no team
+// workspace): the platform workspace and everyone else get the identical 404
+// before the body is looked at.
+const clubAdminContext = async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return null;
+  if (ctx.owner?.scope !== "club") { notFound(res); return null; }
+  return ctx;
+};
+router.post("/variables/:variableId/copy", handle(async (req, res) => {
+  const ctx = await clubAdminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.copyVariable({ ctx, variableId: req.params.variableId, body: req.body }), 201);
+}));
+
+router.post("/variables/:variableId/hide", handle(async (req, res) => {
+  const ctx = await clubAdminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.hideVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
+}));
+
+router.post("/variables/:variableId/show", handle(async (req, res) => {
+  const ctx = await clubAdminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.showVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
 }));
 
 // Domains and categories of canonical variables (phase 12b, J6): the

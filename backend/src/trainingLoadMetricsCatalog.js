@@ -166,7 +166,7 @@ function validateVersionInput(body) {
   };
 }
 
-export async function listDefinitions(req, { search, ownerScope, state, cursor, limit } = {}) {
+export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null } = {}) {
   const params = [];
   const visSql = catalogVisibilitySql(req, "d", params);
   // §6 fix: hideDefinitionForUser() wrote a real row to
@@ -199,6 +199,12 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
     conditions.push(`(d.label, d.id) > ($${params.length - 1}, $${params.length})`);
   }
   const pageSize = clampPageSize(limit);
+  // v53 (J15 section 4.4): a system row says whether the active workspace's
+  // club hides it (hiddenInClub), and every row names its owner scope as the
+  // pickers read it (ownerScope); a select column only - the loaders keep
+  // every row, so results keep their names.
+  params.push(hideClubId);
+  const hideClubIdx = params.length;
   params.push(pageSize + 1);
   // scope_capabilities via one correlated scalar subquery, aggregated —
   // still exactly one round trip for the whole page, never N follow-up
@@ -210,7 +216,11 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
        coalesce(
          (select array_agg(sc.scope_level order by sc.scope_level) from training_load.metric_definition_scope_capabilities sc where sc.metric_definition_id = d.id),
          array[]::varchar[]
-       ) as scope_capabilities
+       ) as scope_capabilities,
+       d.owner_scope as "ownerScope",
+       (d.owner_scope = 'system' and $${hideClubIdx}::uuid is not null
+          and exists (select 1 from training_load.metric_definition_club_hides ch
+                       where ch.club_id = $${hideClubIdx}::uuid and ch.metric_definition_id = d.id and ch.shown_at is null)) as "hiddenInClub"
      from training_load.metric_definitions d
      join training_load.metric_definition_versions dv on dv.id = d.current_version_id
      where ${conditions.join(" and ")}
