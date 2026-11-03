@@ -1064,7 +1064,8 @@ Each has a recommendation, the consequence and the alternative. **All six were d
   - *Alternative:* (a) only, leaving the simplification to J18 and J16's recorded "Save and submit".
 
   **O6 (b) as built: 7h-F** (branch `feature/7h-f-save-and-activate`, base `192e7ebe`; frontend only, no route, body
-  or migration change; in review, not merged). It follows the *Rukovodilac*'s decisions of 2026-11-03 (event
+  or migration change; merged as PR #345, `ee85875c`, on 2026-11-03 at 10:45:38 UTC, and deployed by the *Rukovodilac*,
+  live at 10:47:02 UTC). It follows the *Rukovodilac*'s decisions of 2026-11-03 (event
   `2afaaa35`), F1–F4.
   - **Where it is offered** (`saveAndActivateOffered`, `frontend/metric-mappings-actions.js`): on step 4, for whoever
     may activate the mapping (the same `mayTransition` as the detail: a platform admin, or the club's admin on its own

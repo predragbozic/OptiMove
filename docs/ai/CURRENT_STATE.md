@@ -55,7 +55,9 @@ PR #333 and PR #334) and the order of their pull requests were added on 2026-11-
 nothing else was re-derived then. Phase 7h-B (PR #339, migration v52), its deploy, the *Rukovodilac*'s v52 post-check
 and its decisions 1–5 were added on 2026-11-03 at `0334ddbd` (merge of PR #339); nothing else was re-derived then.
 LO-1, the lock-order pull request (PR #344, no migration), its deploy and the *Rukovodilac*'s decisions 2–4 at its GO
-were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then.
+were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then. Phase 7h-F (PR #345) and
+its deploy, the lock-order rule (PR #346) and the *Rukovodilac*'s acceptance of the 7i-B plan were added on 2026-11-03
+at `355ae868` (merge of PR #346); nothing else was re-derived then.
 
 ## Active phase
 
@@ -100,10 +102,19 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     - the follow-ups go to Separate tasks.
   - No club admin's activation, import, check or switch change was made;
 - then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B; it also takes the
-  Imports step's wording, decision 1 of 7h-B's GO, Separate tasks; **built**, frontend only, branch
-  `feature/7h-f-save-and-activate`, J14 section 11 "O6 (b) as built", in review, not merged) and **the lock-order
-  pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
-  **the lock-order pull request is done as LO-1** (J14 section 18; ★★, trigger 4; no migration): every service rights
+  Imports step's wording, decision 1 of 7h-B's GO, Separate tasks) and **the lock-order pull request** (every
+  remaining role-first rights lock turned users first, and A1 in D's order).
+
+  **7h-F is done** (J14 section 11, "O6 (b) as built"; frontend only, no migration):
+  - **Merged** as PR #345 (`ee85875c`, parents `535b2cf9` and `475ad5cb`) on 2026-11-03 at 10:45:38 UTC, exactly from
+    `475ad5cb`, under the standing merge order after the *Rukovodilac*'s GO on that head (event `4c38f59e`). The
+    merge's tree is the trial merge.
+  - **Deployed** by the *Rukovodilac* through the Render API: live at 10:47:02 UTC.
+    - `/api/health` served `ee85875c` with `ok: true` four times in a row (10:47:11–10:47:42 UTC).
+    - Without a login, `/api/auth/me` answered 200 with no user and the mappings list 401.
+    - The served bundle carries "Save and activate".
+
+  **The lock-order pull request is done as LO-1** (J14 section 18; ★★, trigger 4; no migration): every service rights
   lock users first, A1 in D's order, R17.
   - **Merged** as PR #344 (`ad0e0d63`, parents `bb4b27da` and `5ade6443`) on 2026-11-03 at 10:30:18 UTC, exactly from
     `5ade6443`, under the standing merge order after both ★★ GOs on that head: the *Rukovodilac*'s event `ccd3081e`
@@ -120,13 +131,27 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     and a revocation at once, `40P01`) no longer holds.
   - The rule the *Rukovodilac* accepted at the GO (its decision 4: a transaction that claims to take every lock before
     its first write has a test of its recorded SQL order; a rights check locks `users` before the role row, as the
-    revocations do; proof: `lock-order-lo1` test 9c) is a separate small pull request to
-    `.claude/rules/migrations.md`.
+    revocations do; proof: `lock-order-lo1` test 9c) is in `.claude/rules/migrations.md`: merged as PR #346
+    (`355ae868`) on 2026-11-03 at 10:46:22 UTC, exactly from `c3fc04ad`, after the *Rukovodilac*'s GO (event
+    `4c38f59e`), with its one sentence about PostgreSQL replaced by what `lock-order-lo1.test.mjs` reproduced.
 
   The database's own role-first functions are **LO-2**, a later migration (the *Rukovodilac*'s L0 (a), Separate
   tasks), which 7i-B does not wait for;
-- **7i-B**: unblocked by LO-1's deploy. The *Rukovodilac*'s order of 2026-11-03 (after the deploy): a plan first, with
-  the migration number and the order against LO-2 and J18, before any code.
+- **7i-B**: unblocked by LO-1's deploy. **The plan is accepted** (the *Rukovodilac*, 2026-11-03, event `96ada971`):
+  - **Numbers:** 7i-B is migration v53, LO-2 v54, and J18 v55 or later. If the owner orders LO-2 first, the two
+    numbers swap. Their md5 preconditions cover different functions.
+  - **Two pull requests:**
+    - **7i-B1:** migration v53, the backend and the routes. ★★, the owner's order naming v53, the *Rukovodilac*'s
+      preflight and post-check. Until 7i-B2, copy, hide and the switch to a copy exist only as the API.
+    - **7i-B2:** the screens, after 7i-B1's deploy, from `main` after 7h-F. Reviews: code, ux and mobile, then the
+      *Rukovodilac*'s GO. The *Nezavisni revizor* is needed only if 7i-B2 touches rights or info-hiding on the
+      server, which it should not.
+  - The pilot club stays on form (a) (O8, C139).
+  - Recorded-SQL-order tests (the rule of PR #346) for the copy, the hide, the show, the switch, S1 with its hide lock
+    and A1 with listed starts are mandatory.
+  - `test:backend:shared` per R11 (J14 R9's evidence), with the grep at the head in the packet.
+
+  7i-B1 is in progress on `feature/7i-b1-club-variables`, from `355ae868`.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
@@ -3896,8 +3921,8 @@ pre-existing; pass/fail counts don't belong in this file
   > there. If both look right, ask a platform administrator, who handles system mappings and field confirmations (give
   > them the Technical details).
 
-  7h-F decides it, with the frontend test of the Imports step. **Built in 7h-F** (in review): the sentence above, as
-  proposed, with that test.
+  7h-F decides it, with the frontend test of the Imports step. **Done in 7h-F** (PR #345, merged and deployed on
+  2026-11-03): the sentence above, as proposed, with that test.
 - **7h-F follow-ups (the internal reviews of PR #345; LOW, not scheduled):**
   - The shared team chooser shows one team's requirement twice: the per-team *Required* select and the "Required or
     Optional for the chosen team?" radios (UX-9). Show the per-team select only when two or more teams are chosen, on
