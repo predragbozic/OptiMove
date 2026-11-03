@@ -55,9 +55,7 @@ PR #333 and PR #334) and the order of their pull requests were added on 2026-11-
 nothing else was re-derived then. Phase 7h-B (PR #339, migration v52), its deploy, the *Rukovodilac*'s v52 post-check
 and its decisions 1–5 were added on 2026-11-03 at `0334ddbd` (merge of PR #339); nothing else was re-derived then.
 LO-1, the lock-order pull request (PR #344, no migration), its deploy and the *Rukovodilac*'s decisions 2–4 at its GO
-were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then. 7i-B1 (the 7i-B pull
-request's first part, migration v53; in review) was added on 2026-11-03 at `355ae868` (merge of PR #346), by the 7i-B1
-pull request; nothing else was re-derived then.
+were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then.
 
 ## Active phase
 
@@ -128,12 +126,7 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
   The database's own role-first functions are **LO-2**, a later migration (the *Rukovodilac*'s L0 (a), Separate
   tasks), which 7i-B does not wait for;
 - **7i-B**: unblocked by LO-1's deploy. The *Rukovodilac*'s order of 2026-11-03 (after the deploy): a plan first, with
-  the migration number and the order against LO-2 and J18, before any code. The plan was accepted (event `96ada971`):
-  **7i-B1** is migration **v53**, the backend and the routes (★★: both GOs, the owner's order naming v53, the
-  *Rukovodilac*'s preflight and post-check); **7i-B2**, the screen, follows after 7i-B1's deploy and 7h-F's merge;
-  LO-2 takes v54 and J18 v55 or later. **7i-B1 is built and in review** (branch `feature/7i-b1-club-variables`; J15
-  section 17): not merged, not deployed, v53 applied to no persistent database. Until 7i-B2, copy, hide, show and the
-  move to the copy exist only as an API; the pilot (O8) stays on form (a).
+  the migration number and the order against LO-2 and J18, before any code.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
