@@ -57,7 +57,8 @@ select c.oid::regclass::text as table_name, pg_get_userbyid(c.relowner) as owner
 --    AccessShareLock included: the migration waits for each open transaction
 --    that has read or written either table, and every new request (each one
 --    reads its session's user) queues behind the migration meanwhile, up to
---    the runner's lock_timeout (30 s; then the migration fails and the old
+--    the runner's lock_timeout (30 s) per table, the two ALTERs running one
+--    after the other in one transaction (then the migration fails and the old
 --    server keeps serving). So: no other migration running, no idle
 --    transaction, no strong lock on the two tables, and no transaction older
 --    than 5 s that holds any lock on them (oldest_lock_holder_seconds shows
@@ -73,8 +74,8 @@ select
      join pg_stat_activity a on a.pid = l.pid
     where ((n.nspname = 'library' and c.relname = 'exercises') or (n.nspname = 'public' and c.relname = 'users'))
       and l.pid <> pg_backend_pid()
-      and a.xact_start < now() - interval '5 seconds') as long_lock_holders,
-  (select round(extract(epoch from max(now() - a.xact_start)))::int from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
+      and a.xact_start < clock_timestamp() - interval '5 seconds') as long_lock_holders,
+  (select round(extract(epoch from max(clock_timestamp() - a.xact_start)))::int from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
      join pg_stat_activity a on a.pid = l.pid
     where ((n.nspname = 'library' and c.relname = 'exercises') or (n.nspname = 'public' and c.relname = 'users'))
       and l.pid <> pg_backend_pid()) as oldest_lock_holder_seconds,

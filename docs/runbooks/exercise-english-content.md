@@ -30,9 +30,10 @@ The runner applies the migration in its own transaction and stops at the first f
 `library.exercises` and `public.users` for the time the CHECKs need to scan the two tables (both columns are NULL or
 `'sr'`; no table is rewritten). ACCESS EXCLUSIVE conflicts with every lock, an ordinary read's included: the migration
 first waits for each open transaction that has read or written either table, and every new request (each one reads
-its session's user) queues behind it meanwhile, up to the runner's `lock_timeout` (30 s; then the migration fails and
-the old server keeps serving). **So the deploy goes at a quiet moment:** preflight block 6, run right before it, must
-read 0 everywhere (no transaction older than 5 s holding any lock on the two tables). While the migration is applied and the
+its session's user) queues behind it meanwhile, up to the runner's `lock_timeout` (30 s) per table, the two ALTERs
+running one after the other in one transaction (then the migration fails and the old server keeps serving). **So the deploy goes at a quiet moment:** preflight block 6, run right before it, must
+read every count 0 and `oldest_lock_holder_seconds` null or below 5 (no transaction older than 5 s holding any lock
+on the two tables). While the migration is applied and the
 old server still serves during the deploy, the old server reads neither column and works unchanged. A request that
 holds a `users` row and then reads `library.exercises` can deadlock with the migration in that moment: PostgreSQL
 aborts one side, and a failed migration leaves the old server serving (deploy again at a quieter moment).
