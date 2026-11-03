@@ -3078,11 +3078,12 @@ function renderDataSourcesSurface() {
 // Settings -> Calendar (K2b-1c) repaints only its own panel, at once: the
 // focus it moves lands on the new markup, and no change of a form reads
 // /api/organization again (a stale Settings cache would repaint the whole
-// screen a moment later and take the focus away). Anywhere else - or before
-// the panel is on screen - it is the Settings repaint.
+// screen a moment later and take the focus away). On another Settings
+// section it paints nothing (that section may hold typed values); before its
+// panel is on screen it is the Settings repaint.
 function renderCalendarSettingsSurface() {
-  if (state.activeTab !== "organization") return;
-  const panel = state.organization.section === "calendar" ? els.content.querySelector(".calendar-settings") : null;
+  if (state.activeTab !== "organization" || state.organization.section !== "calendar") return;
+  const panel = els.content.querySelector(".calendar-settings");
   if (!panel) {
     void renderOrganizationPanel({ refresh: false });
     return;

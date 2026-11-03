@@ -382,7 +382,7 @@ test("7. Archive and Restore: the subject's revision, no form; a taken name on R
   faults.push({ match: (c) => c.url.endsWith("/restore"), result: { status: 409, body: { error: "label_taken", message: "taken" } } });
   await click(`[data-action="calendar-settings-restore"][data-kind="type"][data-id="${T3}"]`);
   assert.equal(d().noticeTone, "error");
-  assert.equal(d().notice, "Nothing was saved: a type in use already has this name. Rename that one first, then restore this one.");
+  assert.equal(d().notice, "Nothing was saved: an active (not archived) type already has this name. Rename that one first, then restore this one.");
 });
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ test("8. a lost answer: Result not confirmed, every other write off; Check resul
   faults.push({ match: (c) => c.url.endsWith("/archive"), lose: true });
   await click(`[data-action="calendar-settings-archive"][data-kind="type"][data-id="${T2}"]`);
   let page = doc();
-  assert.match(page.querySelector(".cs-unconfirmed").textContent, /Result not confirmed\. Archiving “Match” may or may not have been saved/);
+  assert.match(page.querySelector(".cs-unconfirmed").textContent, /Result not confirmed\. Archiving “Match”: the answer was lost, so it is not known whether it was saved/);
   assert.equal(page.querySelector('[data-action="calendar-settings-new"][data-kind="type"]').disabled, true, "no new write while unconfirmed");
   assert.equal(page.querySelector(`[data-action="calendar-settings-edit"][data-kind="type"][data-id="${T1}"]`).disabled, true);
   // A click on a disabled control's action does nothing either: no write, no form.
@@ -726,7 +726,7 @@ test("21. a section switch or a menu switch keeps the open form and its values; 
   confirmAnswer = false;
   await click(`[data-action="calendar-settings-edit"][data-kind="type"][data-id="${T2}"]`);
   assert.equal(d().form.id, T1, "declined: the first form stays");
-  assert.match(questions.at(-1), /Discard the change you have not saved\?/);
+  assert.match(questions.at(-1), /^Discard your unsaved changes to the event type “Training”\?$/);
   assert.equal(actions.calendarSettingsMayBeLeft({ final: "switch" }), false);
   confirmAnswer = true;
   await click('[data-action="calendar-settings-cancel"]');
@@ -735,4 +735,107 @@ test("21. a section switch or a menu switch keeps the open form and its values; 
   assert.equal(writes().length, 0, "nothing was sent");
   data.enterCalendarSettingsSection();
   assert.equal(d().stale, true, "with nothing open, coming back reads again");
+});
+
+// ---------------------------------------------------------------------------
+// The review round's fixes (code-reviewer, mobile-qa, ux-design-reviewer)
+// ---------------------------------------------------------------------------
+test("22. option names are unique over the final set: a rename into a taken name, Show again of a hidden twin, and rename + hide send nothing wrong; a taken option name on the server marks the options", async () => {
+  await loaded();
+  d().section = "details";
+  // Rename Sunny into Rain: marked on the renamed option, nothing sent.
+  await click(`[data-action="calendar-settings-edit"][data-kind="field"][data-id="${F1}"]`);
+  let page = doc();
+  type(page, `[data-cs-option="o-${O1}"]`, "rain");
+  await submit(page);
+  assert.equal(writes().length, 0);
+  assert.equal(d().form.errors.optionLabels[`o-${O1}`], "Two options have this name.");
+  assert.equal(d().form.errors.optionLabels[`o-${O2}`], undefined, "the untouched option is not marked");
+  // Rename, then hide the same option: only the hide is sent, under its saved name.
+  type(page, `[data-cs-option="o-${O1}"]`, "Sun");
+  await click(`[data-action="calendar-settings-option-show"][data-option-key="o-${O3}"]`, page);
+  await click(`[data-action="calendar-settings-option-hide"][data-option-key="o-${O1}"]`);
+  assert.equal(d().form.draft.options.find((o) => o.id === O1).label, "Sunny");
+  await submit(doc());
+  assert.deepEqual(writes()[0].body.options, { hide: [O1], show: [O3] });
+  // Show again a hidden option whose name a live one now has.
+  calls.length = 0;
+  db.fields[0].options = [
+    { id: O1, label: "Sunny", sortOrder: 10, archived: false }, { id: O2, label: "Snow", sortOrder: 20, archived: false },
+    { id: O3, label: "snow", sortOrder: 30, archived: true },
+  ];
+  db.fields[0].revision = 7;
+  await data.loadCalendarSettings(render);
+  calls.length = 0;
+  await click(`[data-action="calendar-settings-edit"][data-kind="field"][data-id="${F1}"]`);
+  await click(`[data-action="calendar-settings-option-show"][data-option-key="o-${O3}"]`);
+  await submit(doc());
+  assert.equal(writes().length, 0);
+  assert.equal(d().form.errors.optionLabels[`o-${O3}`], "Two options have this name.");
+  // The server's label_taken on a body that keeps the detail's own name marks the options.
+  await click(`[data-action="calendar-settings-option-hide"][data-option-key="o-${O3}"]`);
+  await click('[data-action="calendar-settings-option-add"]');
+  page = doc();
+  const added = [...page.querySelectorAll("[data-cs-option]")].at(-1);
+  type(page, `[data-cs-option="${added.dataset.csOption}"]`, "Fog");
+  faults.push({ match: (c) => c.method === "PATCH", result: { status: 409, body: { error: "label_taken", message: "taken" } } });
+  await submit(page);
+  assert.equal(d().form.errors.options, "Another option of this detail already has one of these names.");
+  assert.equal(d().form.errors.label, undefined, "never the detail's own name");
+});
+
+test("23. a saved team colour shows at once, even when the read after it fails (the colours are cached by the team list)", async () => {
+  await loaded();
+  d().section = "teams";
+  doc();
+  await click(`[data-action="calendar-settings-edit"][data-kind="team"][data-id="${TM1}"]`);
+  choose(doc(), "#cs-team-color-rose");
+  faults.push({ match: (c) => c.method === "GET", result: { status: 500, body: { error: "internal_error" } } });
+  await submit(doc());
+  const row = [...doc().querySelectorAll(".cs-row")].find((r) => r.textContent.includes("First team"));
+  assert.match(row.querySelector(".cs-dot").getAttribute("style"), /--cc-team-6\)/);
+  assert.match(row.textContent, /Colour: Rose/);
+});
+
+test("24. the type form: a detail chosen but not added is named and nothing is sent; the order cannot change under an open type edit", async () => {
+  await loaded();
+  await click(`[data-action="calendar-settings-edit"][data-kind="type"][data-id="${T1}"]`);
+  let page = doc();
+  type(page, "#cs-type-add-field", F2);
+  await submit(page);
+  assert.equal(writes().length, 0);
+  assert.equal(d().form.errors.addFieldId, "You chose “Opponent” but did not add it: press Add detail, or choose nothing.");
+  page = doc();
+  assert.equal(page.querySelector("#cs-type-add-field").getAttribute("aria-invalid"), "true");
+  assert.equal(page.querySelector(`[data-action="calendar-settings-type-move"][data-id="${T2}"][data-direction="up"]`).disabled, true);
+  assert.match(page.querySelector(".cs-section").textContent, /Save or cancel the open form to change the order\./);
+  await actions.handleCalendarSettingsAction(fakeAction({ action: "calendar-settings-type-move", id: T2, direction: "up" }), { render });
+  assert.equal(writes().length, 0, "the move is refused under the open edit");
+  type(page, "#cs-type-add-field", "");
+  await submit(doc());
+  assert.equal(d().form.error, "Nothing changed: change something, or Cancel.");
+});
+
+test("25. a form's write that is not confirmed is named from another section, with a way back to it", async () => {
+  await loaded();
+  d().section = "details";
+  await click(`[data-action="calendar-settings-edit"][data-kind="field"][data-id="${F2}"]`);
+  let page = doc();
+  type(page, "#cs-field-description", "The club we played");
+  faults.push({ match: (c) => c.method === "PATCH", lose: true });
+  await submit(page);
+  await click('[data-action="calendar-settings-section"][data-calendar-settings-section="places"]');
+  page = doc();
+  assert.match(page.querySelector(".cs-notice").textContent, /The changes to “Opponent”: the result is not confirmed yet\. Open Details to check it\./);
+  assert.equal(page.querySelector('[data-action="calendar-settings-new"][data-kind="location"]').disabled, true);
+  await click('.cs-notice [data-action="calendar-settings-section"][data-calendar-settings-section="details"]', page);
+  assert.ok(doc().querySelector('[data-calendar-settings-form] [data-action="calendar-settings-check-result"]'));
+});
+
+test("26. app.js repaints this panel only while its section is on screen: never another Settings section (it may hold typed values)", () => {
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const body = app.slice(app.indexOf("function renderCalendarSettingsSurface() {"), app.indexOf("// From Source connections to the approved pair"));
+  assert.match(body, /^function renderCalendarSettingsSurface\(\) \{\n {2}if \(state\.activeTab !== "organization" \|\| state\.organization\.section !== "calendar"\) return;/);
+  assert.ok(body.indexOf('section !== "calendar") return;') < body.indexOf("renderOrganizationPanel("), "the section is checked before any Settings repaint");
+  assert.match(body, /panel\.outerHTML = renderCalendarSettingsPanelHtml\(\);/);
 });

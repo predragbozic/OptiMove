@@ -140,7 +140,9 @@ export function patchCalendarSettings(kind, row) {
   const list = d.data[spec.list];
   const at = list.findIndex((entry) => String(entry[key]) === String(row[key]));
   if (kind === "team") {
-    if (at >= 0) list[at] = row;
+    // A new array, never a change in place: the team colours are cached by
+    // the array (calendar-colors.js).
+    if (at >= 0) d.data.teams = list.map((entry, index) => (index === at ? row : entry));
     return;
   }
   const next = list.filter((_, index) => index !== at);

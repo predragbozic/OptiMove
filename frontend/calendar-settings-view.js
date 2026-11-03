@@ -28,6 +28,9 @@ const VALUE_KIND_WORDS = Object.freeze({ choice: "Choice from a list", number: "
 // questions for athletes go (D40).
 export const CALENDAR_SETTINGS_DETAILS_SENTENCE = "Details are filled in by the event's coach. Questions for athletes will be asked through Tests.";
 
+const FROZEN_CHOICE = "This detail already has answers: its meaning can't change. You can still edit the hint, add options, and hide or show options. To change the rest, archive it and create a new one.";
+const FROZEN_OTHER = "This detail already has answers: its meaning can't change. You can still edit the hint. To change the rest, archive it and create a new one.";
+
 const ARROW = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${d}"/></svg>`;
 const ARROW_UP = ARROW("M6 15l6-6l6 6");
 const ARROW_DOWN = ARROW("M6 9l6 6l6-6");
@@ -90,7 +93,7 @@ function tabsHtml(d) {
     teams: d.data.teams.length,
   } : null;
   return `<div class="cs-tabs" role="group" aria-label="Calendar settings sections">
-    ${CALENDAR_SETTINGS_SECTIONS.map((section) => `<button type="button" class="cs-tab${d.section === section ? " is-active" : ""}" data-action="calendar-settings-section" data-calendar-settings-section="${section}"${d.section === section ? ` aria-current="true"` : ""}>${escapeHtml(SECTION_WORDS[section])}${counts ? `<span class="cs-tab-count" aria-label="${escapeAttr(`, ${counts[section]}`)}">${counts[section]}</span>` : ""}</button>`).join("")}
+    ${CALENDAR_SETTINGS_SECTIONS.map((section) => `<button type="button" class="cs-tab${d.section === section ? " is-active" : ""}" data-action="calendar-settings-section" data-calendar-settings-section="${section}"${d.section === section ? ` aria-current="true"` : ""}>${escapeHtml(SECTION_WORDS[section])}${counts ? `<span class="visually-hidden">, </span><span class="cs-tab-count">${counts[section]}</span>` : ""}</button>`).join("")}
   </div>`;
 }
 
@@ -107,10 +110,26 @@ function noticeHtml(d) {
 // top. A form's own write shows inside the form.
 function commandBannerHtml(d) {
   const cmd = d.command;
-  if (!cmd || cmd.form) return "";
+  if (!cmd) return "";
+  if (cmd.form) return otherSectionCommandHtml(d, cmd);
   if (cmd.busy) return `<p class="data-sources-notice cs-busy" role="status">${escapeHtml(commandBusyText(cmd))}</p>`;
   if (cmd.unconfirmed) return unconfirmedHtml(cmd, commandWhat(cmd));
   return "";
+}
+
+// A form's write shows inside its form; from another section (still locked)
+// one line says where it is and opens that section.
+const SECTION_OF_KIND = Object.freeze({ type: "types", field: "details", location: "places", team: "teams" });
+function otherSectionCommandHtml(d, cmd) {
+  const section = SECTION_OF_KIND[cmd.kind];
+  if (!section || section === d.section) return "";
+  const text = cmd.busy
+    ? `${commandBusyText(cmd)} Other changes wait until it is done.`
+    : `${commandWhat(cmd)}: the result is not confirmed yet. Open ${SECTION_WORDS[section]} to check it.`;
+  return `<div class="${cmd.busy ? "data-sources-notice" : "data-sources-error"} cs-notice" role="${cmd.busy ? "status" : "alert"}">
+      <p>${escapeHtml(text)}</p>
+      ${cmd.busy ? "" : `<button class="plain-button" type="button" data-action="calendar-settings-section" data-calendar-settings-section="${section}">Open ${escapeHtml(SECTION_WORDS[section])}</button>`}
+    </div>`;
 }
 
 const VERB_WORDS = Object.freeze({ archive: "Archiving", restore: "Restoring", order: "Moving", create: "Adding", save: "Saving" });
@@ -127,7 +146,7 @@ function commandWhat(cmd) {
 
 function unconfirmedHtml(cmd, what) {
   return `<div class="data-sources-error cs-unconfirmed" role="alert">
-      <p><strong>Result not confirmed.</strong> ${escapeHtml(`${what} may or may not have been saved: the answer was lost. Check result asks again with the same request; it never saves twice.`)}</p>
+      <p><strong>Result not confirmed.</strong> ${escapeHtml(`${what}: the answer was lost, so it is not known whether it was saved. Check result asks the server again with the same request; it never saves twice.`)}</p>
       ${cmd.checkNote ? `<p>${escapeHtml(cmd.checkNote)}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-check-result"${disabledIf(cmd.busy)}>${cmd.busy ? "Checking…" : "Check result"}</button>
@@ -182,10 +201,11 @@ const usedBy = (n) => (n ? `Used by ${plural(n, "event", "events")}` : "Not used
 function typeMeta(type) {
   const expects = (type.defaultExpects || []).map((e) => CENTRAL_CALENDAR_EXPECT_SHORT[e]).filter(Boolean);
   const details = (type.fieldIds || []).length;
+  const archived = (type.fieldIds || []).filter((id) => calendarFieldById(id)?.archived).length;
   return [
     `Base kind: ${CENTRAL_CALENDAR_EVENT_KIND_LABELS[type.kind] || "Event"}`,
     expects.length ? `Collects ${expects.join(", ")}` : "Collects nothing",
-    details ? plural(details, "detail", "details") : "No details",
+    details ? `${plural(details, "detail", "details")}${archived ? ` (${archived} archived)` : ""}` : "No details",
     usedBy(type.eventCount || 0),
   ].join(" · ");
 }
@@ -194,6 +214,7 @@ function typesHtml(d) {
   const live = d.data.types.filter((t) => !t.archived);
   const archived = d.data.types.filter((t) => t.archived);
   const form = d.form?.kind === "type" ? d.form : null;
+  const moveLocked = locked() || form?.mode === "edit";
   const row = (type, index) => {
     const editing = form?.mode === "edit" && form.id === String(type.id);
     const title = subjectTitle("type", type);
@@ -205,8 +226,8 @@ function typesHtml(d) {
             <p class="cs-row-meta">${escapeHtml(typeMeta(type))}</p>
           </div>
           <div class="cs-row-actions">
-            <button class="plain-button cs-icon-button" type="button" data-action="calendar-settings-type-move" data-id="${escapeAttr(type.id)}" data-direction="up" aria-label="${escapeAttr(`Move “${title}” up`)}"${disabledIf(locked() || index === 0)}>${ARROW_UP}</button>
-            <button class="plain-button cs-icon-button" type="button" data-action="calendar-settings-type-move" data-id="${escapeAttr(type.id)}" data-direction="down" aria-label="${escapeAttr(`Move “${title}” down`)}"${disabledIf(locked() || index === live.length - 1)}>${ARROW_DOWN}</button>
+            <button class="plain-button cs-icon-button" type="button" data-action="calendar-settings-type-move" data-id="${escapeAttr(type.id)}" data-direction="up" aria-label="${escapeAttr(`Move “${title}” up`)}"${disabledIf(moveLocked || index === 0)}>${ARROW_UP}</button>
+            <button class="plain-button cs-icon-button" type="button" data-action="calendar-settings-type-move" data-id="${escapeAttr(type.id)}" data-direction="down" aria-label="${escapeAttr(`Move “${title}” down`)}"${disabledIf(moveLocked || index === live.length - 1)}>${ARROW_DOWN}</button>
             ${editButton("type", type)}
             ${live.length > 1 ? archiveButton("type", type) : ""}
           </div>
@@ -222,7 +243,8 @@ function typesHtml(d) {
       </div>
     </li>`;
   return `<div class="cs-section" aria-labelledby="cs-types-title">
-      ${sectionHead("cs-types-title", "Event types", "What coaches choose from when they plan an event, in this order. The first one is offered first.", "type", "Add a type", d)}
+      ${sectionHead("cs-types-title", "Event types", "What coaches choose from when they plan an event. Coaches see them in this order.", "type", "Add a type", d)}
+      ${form?.mode === "edit" && live.length > 1 ? `<p class="muted cs-hint">Save or cancel the open form to change the order.</p>` : ""}
       ${form?.mode === "create" ? typeFormHtml(form, d) : ""}
       <ol class="cs-list">${live.map(row).join("")}</ol>
       ${live.length === 1 ? `<p class="muted cs-hint">The club keeps at least one event type, so the last one cannot be archived.</p>` : ""}
@@ -299,7 +321,7 @@ function typeFormHtml(form, d) {
   const kindRow = create
     ? `<div class="cs-field">
         <label for="cs-type-kind">Base kind</label>
-        <span class="cs-field-hint">How the calendar treats these events. It can't be changed later.</span>
+        <span class="cs-field-hint">The built-in kind this type belongs to: the calendar's filters group it there, and only a Test type can be linked to a scheduled test. It can't be changed later.</span>
         <select id="cs-type-kind" data-cs-field="kind"${invalid(form, "kind")}>
           <option value=""${draft.kind ? "" : " selected"}>Choose a base kind</option>
           ${CENTRAL_CALENDAR_EVENT_KINDS.map((kind) => `<option value="${kind}"${draft.kind === kind ? " selected" : ""}>${escapeHtml(CENTRAL_CALENDAR_EVENT_KIND_LABELS[kind])}</option>`).join("")}
@@ -320,14 +342,14 @@ function typeFormHtml(form, d) {
     </div>`;
   const expects = `<fieldset class="cs-fieldset">
       <legend>Collected after it</legend>
-      <span class="cs-field-hint">A new event of this type starts with these ticked; the coach can change them for that event.</span>
+      <span class="cs-field-hint">Ticking does not ask anyone: an event of this type waits for these after it ends. Ask for RPE or a test the usual way. A new event starts with these ticked; the coach can change them for each event.</span>
       ${CENTRAL_CALENDAR_EVENT_EXPECTS.map((expect) => `<label class="cs-check"><input type="checkbox" data-cs-expect="${expect}"${draft.defaultExpects.includes(expect) ? " checked" : ""}> <span>${escapeHtml(CENTRAL_CALENDAR_EXPECT_LABELS[expect])}</span></label>`).join("")}
     </fieldset>`;
   return formShell(form, d, create ? "New event type" : `Edit “${subjectTitle("type", type)}”`, `
       ${textInput(form, "label", "Name", { max: LIMITS.typeLabel, required: true, first: true })}
       ${kindRow}
       ${iconRow}
-      ${colorFieldset(form, { legend: "Colour", hint: "Tints the type's icon on the calendar." })}
+      ${colorFieldset(form, { legend: "Colour", hint: "Tints the type's icon." })}
       ${expects}
       ${typeDetailsHtml(form, d)}
     `);
@@ -350,16 +372,17 @@ function typeDetailsHtml(form, d) {
   }).join("");
   return `<fieldset class="cs-fieldset"${form.errors?.fieldIds ? ` aria-describedby="cs-type-fieldIds-error"` : ""}>
       <legend>Details to fill in</legend>
-      <span class="cs-field-hint">A new event of this type starts with these details, in this order; the coach can change them for that event.</span>
+      <span class="cs-field-hint">Facts the coach records, from the Details list. A new event of this type starts with these, in this order; the coach can change them for each event.</span>
       ${listed.length ? `<ol class="cs-mini-list">${items}</ol>` : `<p class="muted cs-empty-line">No details yet.</p>`}
       ${listed.length < LIMITS.typeFields ? `<div class="cs-add-row">
         <label class="visually-hidden" for="cs-type-add-field">Detail to add</label>
-        <select id="cs-type-add-field" data-cs-add-field>
-          <option value="">${options.length ? "Choose a detail to add" : "No other detail to add"}</option>
+        <select id="cs-type-add-field" data-cs-add-field${invalid(form, "addFieldId")}>
+          <option value="">${options.length ? "Choose a detail to add" : d.data.fields.some((f) => !f.archived) ? "No other detail to add" : "No details yet: create them under Details"}</option>
           ${options.map((f) => `<option value="${escapeAttr(f.id)}"${form.addFieldId === String(f.id) ? " selected" : ""}>${escapeHtml(f.label)}</option>`).join("")}
         </select>
         <button class="plain-button" type="button" data-action="calendar-settings-type-field-add"${disabledIf(!options.length)}>Add detail</button>
       </div>` : `<p class="muted cs-empty-line">${escapeHtml(`At most ${LIMITS.typeFields} details.`)}</p>`}
+      ${fieldErrorHtml(form, "addFieldId")}
       ${fieldErrorHtml(form, "fieldIds")}
     </fieldset>`;
 }
@@ -424,7 +447,7 @@ function fieldFormHtml(form, d) {
   const answered = form.answered;
   const kindRow = create
     ? `<div class="cs-field">
-        <label for="cs-field-valueKind">Answer</label>
+        <label for="cs-field-valueKind">Kind of answer</label>
         <span class="cs-field-hint">What kind of answer the coach gives. It can't be changed later.</span>
         <select id="cs-field-valueKind" data-cs-field="valueKind"${invalid(form, "valueKind")}>
           <option value=""${kind ? "" : " selected"}>Choose the kind of answer</option>
@@ -432,15 +455,15 @@ function fieldFormHtml(form, d) {
         </select>
         ${fieldErrorHtml(form, "valueKind")}
       </div>`
-    : `<p class="cs-fact"><span class="muted">Answer</span> ${escapeHtml(VALUE_KIND_WORDS[kind] || "Detail")} <span class="muted">(fixed)</span></p>`;
+    : `<p class="cs-fact"><span class="muted">Kind of answer</span> ${escapeHtml(VALUE_KIND_WORDS[kind] || "Detail")} <span class="muted">(fixed)</span></p>`;
   const numberRows = kind === "number" ? `<div class="cs-field-group">
       ${textInput(form, "unit", "Unit", { max: LIMITS.unit, hint: "For example °C, min or km.", readonly: answered, inputmode: "text" })}
-      ${textInput(form, "minValue", "Lowest value", { max: 16, readonly: answered, inputmode: "decimal" })}
-      ${textInput(form, "maxValue", "Highest value", { max: 16, readonly: answered, inputmode: "decimal" })}
+      ${textInput(form, "minValue", "Lowest value", { max: 16, readonly: answered, hint: "A number; a minus sign is allowed." })}
+      ${textInput(form, "maxValue", "Highest value", { max: 16, readonly: answered })}
     </div>` : "";
   const required = field?.required === true;
   return formShell(form, d, create ? "New detail" : `Edit “${subjectTitle("field", field)}”`, `
-      ${answered ? `<p class="data-sources-warn cs-frozen">This detail already has answers: its meaning can't change. Add options, or archive it and create a new one.</p>` : ""}
+      ${answered ? `<p class="data-sources-warn cs-frozen">${escapeHtml(kind === "choice" ? FROZEN_CHOICE : FROZEN_OTHER)}</p>` : ""}
       ${textInput(form, "label", "Name", { max: LIMITS.fieldLabel, required: true, first: !answered, readonly: answered })}
       ${textInput(form, "description", "Hint for the coach", { max: LIMITS.fieldDescription, hint: "One line, for example: “The pitch the session was on.”", first: answered })}
       ${kindRow}
@@ -460,7 +483,7 @@ function optionsHtml(form) {
     const readonly = Boolean(option.id) && answered;
     const action = option.id
       ? option.archived
-        ? `<button class="plain-button" type="button" data-action="calendar-settings-option-show" data-option-key="${escapeAttr(option.key)}" aria-label="${escapeAttr(`Show “${option.original}” again`)}">Show again</button>`
+        ? `<button class="plain-button" type="button" data-action="calendar-settings-option-show" data-option-key="${escapeAttr(option.key)}" aria-label="${escapeAttr(`Show again: “${option.original}”`)}">Show again</button>`
         : `<button class="plain-button ghost" type="button" data-action="calendar-settings-option-hide" data-option-key="${escapeAttr(option.key)}" aria-label="${escapeAttr(`Hide “${option.original}”`)}"${disabledIf(visible <= LIMITS.minOptions)}>Hide</button>`
       : `<button class="plain-button ghost" type="button" data-action="calendar-settings-option-remove" data-option-key="${escapeAttr(option.key)}" aria-label="${escapeAttr(`Remove option ${index + 1}`)}"${disabledIf(visible <= LIMITS.minOptions)}>Remove</button>`;
     return `<li class="cs-mini-row${option.archived ? " is-hidden" : ""}">
@@ -485,7 +508,7 @@ function optionsHtml(form) {
 // ---------------------------------------------------------------------------
 // Places
 // ---------------------------------------------------------------------------
-function mapsLink(address, name, label = `Open “${name}” in maps (opens a new tab)`) {
+function mapsLink(address, name, label = `Open in maps: “${name}” (opens a new tab)`) {
   return `<a class="cs-maps" href="${escapeAttr(calendarSettingsMapsUrl(address))}" target="_blank" rel="noopener noreferrer" aria-label="${escapeAttr(label)}">Open in maps</a>`;
 }
 
@@ -530,8 +553,8 @@ function placeFormHtml(form, d) {
   return formShell(form, d, create ? "New place" : `Edit “${subjectTitle("location", place)}”`, `
       ${textInput(form, "name", "Name", { max: LIMITS.locationName, required: true, first: true })}
       ${textInput(form, "address", "Address", { max: LIMITS.address, hint: "Street, number and town, as a map would find it." })}
-      <p class="cs-maps-preview" data-cs-maps-preview${address ? "" : " hidden"}>${mapsLink(address || " ", "", "Open in maps the address typed above (opens a new tab)")} <span class="muted">to check the address.</span></p>
-      ${textInput(form, "note", "Note", { max: LIMITS.note, hint: "For example the entrance, parking or the changing room.", textarea: true })}
+      <p class="cs-maps-preview" data-cs-maps-preview${address ? "" : " hidden"}>${mapsLink(address || " ", "", "Open in maps: the address typed above (opens a new tab)")} <span class="muted">to check the address.</span></p>
+      ${textInput(form, "note", "Note", { max: LIMITS.note, hint: "For example the entrance, parking or the changing room. Coaches and athletes can see it on the event.", textarea: true })}
       ${!create && (place?.eventCount || 0) ? `<p class="cs-field-hint">${escapeHtml(`A change shows on every event at this place (${plural(place.eventCount, "event", "events")}), past ones included.`)}</p>` : ""}
     `);
 }
@@ -549,7 +572,7 @@ function teamsHtml(d) {
     const index = colors.get(team.teamId) ?? -1;
     const colorWord = team.colorKey ? CALENDAR_COLOR_LABELS[team.colorKey] || "Chosen" : `${CALENDAR_COLOR_LABELS[CALENDAR_COLOR_KEYS[index]] || "Automatic"} (automatic)`;
     const place = team.defaultLocationId ? placeName(team.defaultLocationId) : null;
-    const placeWord = place ? `${place.name}${place.archived ? " (archived: not offered)" : ""}` : "None";
+    const placeWord = place ? `${place.name}${place.archived ? " (archived: new events start with no place)" : ""}` : "None";
     return `<li class="cs-row${editing ? " is-editing" : ""}">
         <div class="cs-row-line">
           ${colorDot(index)}
@@ -564,7 +587,7 @@ function teamsHtml(d) {
   };
   return `<div class="cs-section" aria-labelledby="cs-teams-title">
       ${sectionHead("cs-teams-title", "Teams", "Each team's colour on the calendar, and the place its new events start with. A team without a chosen colour gets an automatic one.", "", "", d)}
-      ${teams.length ? `<ul class="cs-list">${teams.map(row).join("")}</ul>` : `<p class="muted cs-empty-line">The club has no active team.</p>`}
+      ${teams.length ? `<ul class="cs-list">${teams.map(row).join("")}</ul>` : `<p class="muted cs-empty-line">The club has no active team. Add teams under Settings → Teams.</p>`}
     </div>`;
 }
 
@@ -573,7 +596,7 @@ function teamFormHtml(form, d, team) {
   const current = form.draft.defaultLocationId;
   const options = places.filter((l) => !l.archived || String(l.id) === current);
   return formShell(form, d, `Edit “${team.name || "Team"}”`, `
-      ${colorFieldset(form, { auto: true, legend: "Colour on the calendar", hint: "Automatic: the next colour no other team chose." })}
+      ${colorFieldset(form, { auto: true, legend: "Colour on the calendar", hint: "Automatic colours follow the team's place in the club's list, so a team's own calendar may show another one. Choose a colour to keep it the same everywhere." })}
       <div class="cs-field">
         <label for="cs-team-defaultLocationId">Default place <span class="muted">(optional)</span></label>
         <span class="cs-field-hint">A new event of this team starts at this place; the coach can change it.</span>

@@ -1089,16 +1089,21 @@ Settings list names a team's automatic colour the same way, over the same order 
 
 ### 20.4 Tests and the browser check
 
-- `frontend/tests/calendar-settings.actions.test.mjs` (21 tests; JSDOM and a fake of the routes that keeps their
+- `frontend/tests/calendar-settings.actions.test.mjs` (26 tests; JSDOM and a fake of the routes that keeps their
   contracts: the answers' shapes, a stale revision as `<subject>_changed` with `current`, a key's replay and
   `request_key_reused`): the tab's visibility by workspace and role, the read, every write's body and key, one write at
   a time, the lost answer and Check result, the refusals, P1–P3, the team colours (with no choice, today's rule for 0 to
   20 teams), the palette against the server's list and the CSS tokens, escaping, leaving.
 - Three wiring tests changed with the wiring: `central-calendar-events.actions` 11g (sign-out also asks Settings →
   Calendar), `app-update` 8 (the update reload too), `training-load-dashboards-h4` (the workspace switch too).
-- Mutations (a scratch script: each edits one file, runs the suite, restores it): 8 run, 8 killed — Check result with a
-  new key, a Check result settled before the record, P1, P2's position rule, the tab through `manageableClubIds`, a form
-  opened while a write is not confirmed, a frozen part typed, a lost answer that unlocks the screen.
+- Mutations (a scratch script: each edits one file, runs the suite, restores it): 16 run, 15 killed, 1 equivalent —
+  Check result with a new key, a Check result settled before the record, P1, P2's position rule, the tab through
+  `manageableClubIds`, a form opened while a write is not confirmed, a frozen part typed, a lost answer that unlocks
+  the screen; and from the review round: an option clash checked only against untouched names, a taken option name
+  marked on the detail's name, a detail chosen but not added, a move under an open type edit, the team list patched in
+  place, a form's write invisible from another section, the panel repainted on another Settings section. Equivalent:
+  a hidden option renamed in the same request (the Hide button already puts the saved name back, and a hidden option's
+  field is read only).
 - The browser check on the branch's real server and a disposable database through v51 (the calendar fixture of
   K2b-1a, the seeded catalog, one event answering *Our score*): a type added with an icon, a colour, *Collected after
   it* and a detail; moved; archived and restored; the answered detail's frozen form; a place with its maps link; a
@@ -1107,3 +1112,28 @@ Settings list names a team's automatic colour the same way, over the same order 
   role and a team coach are offered no tab (the coach's read is 403). The app has no dark theme, so only the light one
   was checked. The legacy `/api/organization` needs tables the disposable schema does not have (the 8-B harness's
   limit too): the check served Settings' frame from the same database's club and teams.
+
+### 20.5 The internal review round (on `a4fbd76`)
+
+`code-reviewer` READY WITH NON-BLOCKING NOTES, `mobile-qa` (static) no BLOCKER or HIGH, `ux-design-reviewer` READY; no
+BLOCKER or HIGH anywhere. Every MEDIUM and the cheap LOW were applied on the same branch, each with its test; no new
+review round (none was needed for a MEDIUM, `.claude/rules/agent-efficiency.md`).
+
+| Finding | Fix | Test | Status |
+|---|---|---|---|
+| Code MEDIUM: option names were checked only against untouched options; a rename or a Show again into a taken name was sent, and the server's `label_taken` was marked on the detail's own name; rename + hide of one option sent both | uniqueness over the final set (after rename, hide, show, add), marked on the options the form changed; a hidden option keeps its saved name (Hide puts it back); `label_taken` on an edit that keeps the name marks the options | 22 (M9, M11; M10 equivalent) | fixed |
+| Code LOW: a saved team colour showed the old dot (the colours are cached by the team list, which was patched in place) | the team list is replaced, never changed in place | 23 (M14) | fixed |
+| Code LOW: the panel's repaint fell back to a whole Settings repaint on another section, losing values typed there | it paints nothing when its section is not on screen | 26 (M16) | fixed |
+| Mobile MEDIUM: one long unbroken name could widen the panel's grid past the screen, clipped silently by `.panel` | `grid-template-columns: minmax(0, 1fr)` and `overflow-wrap: anywhere` on the panel and its forms, `min-width: 0` on the notice's text | browser: a 59-character name at 360 px — panel `scrollWidth` = `clientWidth` (338), no element past its edge, the notice's text ends at 316 of 350 | fixed |
+| Mobile MEDIUM: `inputmode="decimal"` gives an iPhone no minus key for the limits | no `inputmode`; the hint says a minus is allowed | — (a physical iOS check is still open) | fixed |
+| Mobile LOW / NIT: `font: inherit` on the textarea; accessible names that did not start with the visible words; an `aria-label` on a span | `font-family: inherit`; "Open in maps: …", "Show again: …"; a hidden comma before a tab's count | — | fixed |
+| UX MEDIUM: a detail chosen in the list but not added was dropped on Save | named beside the list, nothing sent | 24 (M12) | fixed |
+| UX MEDIUM: moving a type under its open edit form made that form's Save fail as "changed meanwhile" | the arrows are off under an open type edit, with the sentence why | 24 (M13) | fixed |
+| UX MEDIUM: a form's unconfirmed write could not be seen from another section, which stayed locked | one line there names it and opens its section | 25 (M15) | fixed |
+| UX MEDIUM: "Collected after it" did not say that ticking asks nobody | the event form's sentence, adapted | — | fixed |
+| UX MEDIUM: the base kind's hint did not say what it controls | filters, and only a Test type links to a scheduled test | — | fixed |
+| UX LOW: wording (the restore refusal, the unconfirmed sentence, "Kind of answer", the types' intro, an archived default place, the note seen by athletes, empty states, the frozen sentence by kind, the discard question naming its form, archived details counted apart, the colour hints) and the focus after a saved edit (back to its row's Edit) | applied | 7, 8, 21 (wording) | fixed |
+| UX LOW: an Undo in the archive notice; the archive's side effects named (a team's default place, the types' default details); each swatch naming the team that wears it | — | — | recorded, not done |
+
+**Open after this round:** a physical iPhone check (the limits' keyboard, `inert` and `:has()` need iOS 15.4–15.5 or later,
+native selects, the keyboard over Save); the three LOW of the last row.

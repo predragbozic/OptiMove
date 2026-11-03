@@ -100,12 +100,20 @@ export function calendarSettingsFormDirty(form = cs().form) {
   return Boolean(form) && JSON.stringify(form.draft) !== JSON.stringify(form.base);
 }
 
+// What an open form is about, for the questions that may be asked from
+// another section: "the event type “Training”", "the new place".
+const KIND_WORDS = Object.freeze({ type: "event type", field: "detail", location: "place", team: "team" });
+function formSubject(form) {
+  if (form.mode === "create") return `the new ${KIND_WORDS[form.kind]}`;
+  return `the ${KIND_WORDS[form.kind]} “${subjectTitle(form.kind, SUBJECTS[form.kind](form.id)) || "item"}”`;
+}
+
 // The form is the screen's only place for typing: a second form opens only
 // after the first one's unsaved values are given up (asked).
 function mayReplaceForm() {
   const form = cs().form;
   if (!form || !calendarSettingsFormDirty(form)) return true;
-  return ask("Discard the change you have not saved?");
+  return ask(`Discard your unsaved changes to ${formSubject(form)}?`);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +146,9 @@ function buildType(form) {
   if (labelError) errors.label = labelError;
   if (form.mode === "create" && !CENTRAL_CALENDAR_EVENT_KINDS.includes(d.kind)) errors.kind = "Choose a base kind.";
   if (d.fieldIds.length > LIMITS.typeFields) errors.fieldIds = `At most ${LIMITS.typeFields} details.`;
+  // A detail chosen in the list but never added would silently be left out.
+  const pending = form.addFieldId && !d.fieldIds.includes(form.addFieldId) ? calendarFieldById(form.addFieldId) : null;
+  if (pending) errors.addFieldId = `You chose “${oneLine(pending.label)}” but did not add it: press Add detail, or choose nothing.`;
   if (Object.keys(errors).length) return { errors };
   const iconKey = isLibraryKey(d.iconKey) ? d.iconKey : null;
   const colorKey = isCalendarColorKey(d.colorKey) ? d.colorKey : null;
@@ -177,22 +188,36 @@ function buildField(form) {
     if (Number.isNaN(maxValue)) errors.maxValue = "Use a number with at most three decimals.";
     if (!errors.minValue && !errors.maxValue && minValue !== "" && maxValue !== "" && minValue > maxValue) errors.maxValue = "The highest value cannot be below the lowest.";
   }
-  const options = kind === "choice" ? d.options.map((o) => ({ ...o, label: oneLine(o.label) })) : [];
+  // An option's name as it will be saved: an existing one keeps its name
+  // when it has answers or is hidden (a hidden option is never renamed).
+  const options = kind === "choice"
+    ? d.options.map((o) => {
+      const label = oneLine(o.label);
+      const keepsName = Boolean(o.id) && (form.answered || o.archived);
+      return { ...o, label: keepsName ? o.original : label, renamed: Boolean(o.id) && !keepsName && label !== o.original };
+    })
+    : [];
   if (kind === "choice") {
-    // A name is unique among the options offered (a hidden one's name is
-    // free again, as the database's index says).
+    // A name is unique among the options offered once every rename, hide,
+    // show and add is applied (a hidden option's name is free again, as the
+    // database's index says). The clash is marked on the options this form
+    // changed: a new one, a renamed one, one shown again.
     const optionErrors = {};
-    const seen = new Set();
+    const baseOf = new Map((form.base.options || []).map((o) => [o.id, o]));
+    const touched = (o) => !o.id || o.renamed || (baseOf.get(o.id)?.archived ?? o.archived) !== o.archived;
     for (const option of options) {
-      const renamed = Boolean(option.id) && !form.answered && option.label !== option.original;
-      if (option.id && !renamed) {
-        if (!option.archived) seen.add(option.original.toLowerCase());
-        continue;
-      }
+      if (!touched(option) || option.archived) continue;
       const error = textError(option.label, LIMITS.optionLabel, { required: true });
       if (error) optionErrors[option.key] = error;
-      else if (!option.archived && seen.has(option.label.toLowerCase())) optionErrors[option.key] = "Two options have this name.";
-      if (!option.archived) seen.add(option.label.toLowerCase());
+    }
+    const byName = new Map();
+    for (const option of options.filter((o) => !o.archived && o.label)) {
+      const name = option.label.toLowerCase();
+      byName.set(name, [...(byName.get(name) || []), option]);
+    }
+    for (const clash of byName.values()) {
+      if (clash.length < 2) continue;
+      for (const option of clash.filter(touched)) optionErrors[option.key] ||= "Two options have this name.";
     }
     const visible = options.filter((o) => !o.archived).length;
     if (visible < LIMITS.minOptions) errors.options = `Keep at least ${LIMITS.minOptions} options to choose from.`;
@@ -229,7 +254,7 @@ function buildField(form) {
         continue;
       }
       const before = b.options.find((o) => o.id === option.id);
-      if (!form.answered && option.label !== option.original) ops.rename.push({ id: option.id, label: option.label });
+      if (option.renamed) ops.rename.push({ id: option.id, label: option.label });
       if (before && option.archived !== before.archived) ops[option.archived ? "hide" : "show"].push(option.id);
     }
     if (ops.add.length || ops.rename.length || ops.hide.length || ops.show.length) {
@@ -320,9 +345,9 @@ const LABEL_TAKEN = Object.freeze({
   location: "Another place already has this name.",
 });
 const RESTORE_TAKEN = Object.freeze({
-  type: "Nothing was saved: a type in use already has this name. Rename that one first, then restore this one.",
-  field: "Nothing was saved: a detail in use already has this name. Rename that one first, then restore this one.",
-  location: "Nothing was saved: a place in use already has this name. Rename that one first, then restore this one.",
+  type: "Nothing was saved: an active (not archived) type already has this name. Rename that one first, then restore this one.",
+  field: "Nothing was saved: an active (not archived) detail already has this name. Rename that one first, then restore this one.",
+  location: "Nothing was saved: an active (not archived) place already has this name. Rename that one first, then restore this one.",
 });
 // A refused field of the body, where the form shows it.
 const FIELD_OF_CODE = Object.freeze({
@@ -447,7 +472,11 @@ async function settled(cmd, data, render, { check }) {
   cmd.checked = check;
   setNotice(savedText(cmd, data));
   render?.();
-  focusSoon(cmd.verb === "order" ? `[data-action="calendar-settings-type-move"][data-id="${cmd.id}"]:not([disabled])` : "[data-calendar-settings-notice]");
+  // A move keeps the focus on the moved row, a saved edit goes back to its
+  // row's Edit; anything else to the notice that says what happened.
+  if (cmd.verb === "order") focusSoon(`[data-action="calendar-settings-type-move"][data-id="${cmd.id}"]:not([disabled])`);
+  else if (cmd.verb === "save") focusSoon(`[data-action="calendar-settings-edit"][data-kind="${cmd.kind}"][data-id="${cmd.id}"]`);
+  else focusSoon("[data-calendar-settings-notice]");
   await reread(render);
 }
 
@@ -492,7 +521,13 @@ async function refused(cmd, info, render, { check }) {
     return;
   }
   if (code === "label_taken") {
-    if (form) {
+    // An edit of a detail that renames, shows or adds options but keeps its
+    // own name: the taken name is an option's.
+    const optionTaken = form?.kind === "field" && form.mode === "edit" && cmd.body.options && !("label" in cmd.body);
+    if (optionTaken) {
+      form.errors = { ...form.errors, options: "Another option of this detail already has one of these names." };
+      form.error = `${prefix}Check the marked fields. Nothing was saved.`;
+    } else if (form) {
       form.errors = { ...form.errors, [form.kind === "location" ? "name" : "label"]: LABEL_TAKEN[cmd.kind] };
       form.error = `${prefix}Check the marked fields. Nothing was saved.`;
     } else {
@@ -646,6 +681,9 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
     return true;
   }
   if (type === "calendar-settings-type-move") {
+    // A move changes the revision of the types it moves: never under an open
+    // type's edit form (its save would be refused as changed meanwhile).
+    if (d.form?.kind === "type" && d.form.mode === "edit") return true;
     const list = liveTypes();
     const at = list.findIndex((row) => String(row.id) === id);
     const direction = action.dataset.direction === "up" ? "up" : "down";
@@ -729,6 +767,8 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
     const option = form.draft.options.find((o) => o.key === (action.dataset.optionKey || ""));
     if (form.kind !== "field" || !option?.id) return true;
     option.archived = type === "calendar-settings-option-hide";
+    // A hidden option keeps its saved name (it is never renamed and hidden at once).
+    if (option.archived) option.label = option.original;
     render?.();
     focusSoon(`[data-option-key="${option.key}"][data-action^="calendar-settings-option-"]`);
     return true;
@@ -749,6 +789,10 @@ export function handleCalendarSettingsInput(target, { render } = {}) {
   const value = String(el.value ?? "");
   if (el.dataset.csAddField !== undefined) {
     form.addFieldId = value;
+    if (form.errors?.addFieldId) {
+      form.errors = { ...form.errors };
+      delete form.errors.addFieldId;
+    }
     return true;
   }
   if (el.dataset.csExpect) {
