@@ -59,8 +59,9 @@ after(async () => {
 // six copies (no code): c1 of 1 unchanged (a double space only), c2 of 1
 // renamed, c3 of 4 unchanged with an English name of its own, c4 of 2
 // unchanged through copy_parent_id, c5 of 5 (whose Serbian name differs from
-// the sheet's), c6 of 1 with another instruction; and a coach's coded exercise
-// 7 made from 1, which is no copy (it has a code of its own).
+// the sheet's), c6 of 1 with another instruction; a copy cc of c1 and a copy
+// ccc of cc (not followed, counted); and a coach's coded exercise 7 made from
+// 1, which is no copy (it has a code of its own).
 let ids;
 async function seed() {
   await c.query("delete from library.exercises");
@@ -84,6 +85,8 @@ async function seed() {
   ids.c4 = await add(null, "Čučanj sa tegom", { ownerScope: "user", instruction: "Uputstvo 2", parent: ids[2] });
   ids.c5 = await add(null, "Plank novi", { ownerScope: "user", instruction: "Uputstvo 5", source: ids[5] });
   ids.c6 = await add(null, "Iskorak", { ownerScope: "user", instruction: "Drugo uputstvo", source: ids[1] });
+  ids.cc = await add(null, "Iskorak", { ownerScope: "user", instruction: "Uputstvo 1", parent: ids.c1 });
+  ids.ccc = await add(null, "Iskorak", { ownerScope: "user", instruction: "Uputstvo 1", parent: ids.cc });
   ids.coded = await add("7", "Iskorak", { ownerScope: "user", instruction: "Uputstvo 1", source: ids[1] });
 }
 
@@ -128,6 +131,15 @@ test("1. the guard: the database must be named and must be the one the URL and t
   await assert.rejects(assertTarget(c, "someone_else"), /connected to ".*", not to --database-name "someone_else"/);
   bare = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "exenbare", migrations: [] });
   await assert.rejects(runImport({ databaseUrl: bare.url, databaseName: bare.name, rows: file(), apply: true }), /migration 202611031200_exercise_english_content.sql is not applied/);
+  // The English columns without the copy links (never so through the runner) is refused too.
+  const bareClient = new pg.Client({ connectionString: bare.url });
+  await bareClient.connect();
+  try {
+    await bareClient.query("alter table library.exercises add column name_en text, add column instruction_en text");
+  } finally {
+    await bareClient.end();
+  }
+  await assert.rejects(runImport({ databaseUrl: bare.url, databaseName: bare.name, rows: file(), apply: true }), /has no copy links on library\.exercises/);
   assert.deepEqual(await table(), before_, "nothing was written");
 });
 
@@ -151,6 +163,7 @@ test("2. a dry run writes nothing and reports what an apply would do: a differin
   assert.equal(report.copies.unchanged, 3, "c1, c3, c4");
   assert.deepEqual(sortedChanged(report), [`1:${ids.c2}`, `1:${ids.c6}`].sort(), "c2 renamed, c6 another instruction");
   assert.equal(report.copies.withSourceNotWritten, 1, "c5 follows its source 5");
+  assert.equal(report.copies.ofCopiesNotFollowed, 2, "cc and ccc are counted, not followed");
   assert.deepEqual(report.copies.nameEn, { write: 2, alreadyFilled: 1, same: 0, blank: 0 });
   assert.deepEqual(report.copies.instructionEn, { write: 2, alreadyFilled: 0, same: 0, blank: 1 });
   assert.equal(report.written, 0);
@@ -178,6 +191,8 @@ test("3. an apply writes exactly name_en and instruction_en, of the matched exer
     c4: ["Squat", null],
     c5: [null, null],
     c6: [null, null],
+    cc: [null, null],
+    ccc: [null, null],
     coded: [null, null],
   });
   // A second apply finds everything in place.
@@ -322,12 +337,19 @@ test("10. an apply holds the matched rows and every copy it read until it ends, 
   await holder.connect();
   try {
     await holder.query("begin");
-    await planImport(holder, file(), { lock: true });
+    const statements = [];
+    await planImport({ query: (sql, params) => { statements.push(sql); return holder.query(sql, params); } }, file(), { lock: true });
+    // The app's order: its shared exercise_collections lock first, then the rows in id order.
+    assert.equal(statements[0], "select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
+    assert.match(statements[1], /order by id for no key update/);
+    assert.equal((await c.query("select pg_try_advisory_lock(hashtextextended('exercise_collections', 0)) as ok")).rows[0].ok, false, "a block write waits");
+    assert.equal((await c.query("select pg_try_advisory_lock_shared(hashtextextended('exercise_collections', 0)) as ok")).rows[0].ok, true, "an editor save does not");
+    await c.query("select pg_advisory_unlock_shared(hashtextextended('exercise_collections', 0))");
     await c.query("set lock_timeout = '200ms'");
     for (const key of [1, 4, "c1", "c4", "c6"]) {
       await assert.rejects(c.query("update library.exercises set name = name where id = $1", [ids[key]]), (error) => error.code === "55P03", `${key} is held`);
     }
-    for (const key of ["none", 6, "coded"]) {
+    for (const key of ["none", 6, "coded", "cc", "ccc"]) {
       await c.query("update library.exercises set name = name where id = $1", [ids[key]]);
     }
   } finally {
@@ -335,4 +357,27 @@ test("10. an apply holds the matched rows and every copy it read until it ends, 
     await holder.query("rollback").catch(() => {});
     await holder.end();
   }
+});
+
+test("11. an unchanged copy gets the English its source holds after the run, also one the source keeps", async () => {
+  await seed();
+  await c.query("update library.exercises set instruction_en = 'Keep it' where exercise_code = '3'");
+  const add = async (name, instruction, source) => (await c.query(
+    "insert into library.exercises (name, instruction, owner_scope, source_exercise_id) values ($1, $2, 'user', $3) returning id",
+    [name, instruction, source],
+  )).rows[0].id;
+  const c7 = await add("Most", "Uputstvo 4", ids[4]);
+  const c8 = await add("Sklek", "Uputstvo 3", ids[3]);
+  const pair = async (id) => {
+    const row = (await c.query("select name_en, instruction_en from library.exercises where id = $1", [id])).rows[0];
+    return [row.name_en, row.instruction_en];
+  };
+  await run({ apply: true });
+  assert.deepEqual(await pair(c7), ["Bridge (kept)", "Lift the hips."], "source 4 keeps its own name");
+  assert.deepEqual(await pair(c7), await pair(ids[4]));
+  assert.deepEqual(await pair(c8), [null, "Keep it"], "source 3 keeps its instruction (the sheet's is blank)");
+  assert.deepEqual(await pair(c8), await pair(ids[3]));
+  await run({ apply: true, overwrite: true });
+  assert.deepEqual(await pair(c7), ["Glute bridge", "Lift the hips."], "with --overwrite both get the sheet's");
+  assert.deepEqual(await pair(c7), await pair(ids[4]));
 });

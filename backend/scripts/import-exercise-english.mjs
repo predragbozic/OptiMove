@@ -22,8 +22,10 @@
 //   by side, and written only when named in --include-code; never silently;
 // - a copy (no code; source_exercise_id or copy_parent_id pointing at a
 //   matched exercise) whose name AND instruction still equal its source's
-//   gets the same English; a copy that differs is listed as "changed copy -
-//   not written". A copy follows its source: not written while the source is.
+//   gets the same English (what the source holds after the run); a copy that
+//   differs is listed as "changed copy - not written". A copy follows its
+//   source: not written while the source is. A copy of a copy is counted, not
+//   followed.
 //
 // Guard: DATABASE_URL comes from the environment only (no .env file is
 // read) and is never printed; --database-name must name the database the URL
@@ -106,6 +108,9 @@ export async function assertTarget(client, databaseName) {
   const columns = Number((await client.query(`select count(*) from information_schema.columns
     where table_schema = 'library' and table_name = 'exercises' and column_name in ('name_en', 'instruction_en')`)).rows[0].count);
   if (columns !== 2) throw new Error(`Refusing: "${database}" has no English exercise columns (migration ${MIGRATION} is not applied).`);
+  const links = Number((await client.query(`select count(*) from information_schema.columns
+    where table_schema = 'library' and table_name = 'exercises' and column_name in ('source_exercise_id', 'copy_parent_id')`)).rows[0].count);
+  if (links !== 2) throw new Error(`Refusing: "${database}" has no copy links on library.exercises (source_exercise_id, copy_parent_id).`);
   return database;
 }
 
@@ -123,27 +128,37 @@ function field(planned, stored, overwrite) {
 
 const counts = () => ({ write: 0, alreadyFilled: 0, same: 0, blank: 0 });
 
-// One target (a matched exercise or an unchanged copy) against the file's row:
-// counted per field, and added to the writes when a field is to be written.
-function planTarget(target, row, overwrite, tally, writes) {
-  const name = field(row.nameEn, target.name_en, overwrite);
-  const instruction = field(row.instructionEn, target.instruction_en, overwrite);
+// One target (a matched exercise or an unchanged copy) against the English it
+// is to get: counted per field, and added to the writes when a field is to be
+// written. Returns the two fields' outcomes.
+function planTarget(target, english, code, overwrite, tally, writes) {
+  const name = field(english.nameEn, target.name_en, overwrite);
+  const instruction = field(english.instructionEn, target.instruction_en, overwrite);
   tally.nameEn[name] += 1;
   tally.instructionEn[instruction] += 1;
   if (name === "write" || instruction === "write") {
-    writes.push({ id: target.id, code: row.code, name_en: name === "write" ? row.nameEn : null, instruction_en: instruction === "write" ? row.instructionEn : null });
+    writes.push({ id: target.id, code, name_en: name === "write" ? english.nameEn : null, instruction_en: instruction === "write" ? english.instructionEn : null });
   }
+  return { name, instruction };
 }
 
-// What the file would change, read inside the caller's transaction (FOR NO
-// KEY UPDATE of the matched rows and their copies when applying - what the
-// UPDATE needs, and no conflict with the foreign-key checks of a plan save -
-// so nothing changes between the plan and the write).
+// What a source holds after this run: the sheet's value where it is written
+// or already the same, its own otherwise (kept without --overwrite, or a blank
+// in the sheet). An unchanged copy gets exactly that.
+const heldAfter = (outcome, planned, stored) => (outcome === "write" || outcome === "same" ? planned : stored);
+
+// What the file would change, read inside the caller's transaction. When
+// applying, the app's shared exercise_collections lock comes first (as an
+// editor save takes it; block writes take it exclusively), then the matched
+// rows and their copies FOR NO KEY UPDATE in id order (what the UPDATE needs,
+// and no conflict with the foreign-key checks of a plan save), so nothing
+// changes between the plan and the write.
 export async function planImport(client, rows, { overwrite = false, lock = false, includeCodes = [] } = {}) {
+  if (lock) await client.query("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
   const found = (await client.query(
     `select id, exercise_code, name, instruction, name_en, instruction_en from library.exercises
       where owner_scope = 'system' and exercise_code = any($1::text[])
-      order by exercise_code, id${lock ? " for no key update" : ""}`,
+      order by id${lock ? " for no key update" : ""}`,
     [rows.map((row) => row.code)],
   )).rows;
   const byCode = new Map();
@@ -154,11 +169,12 @@ export async function planImport(client, rows, { overwrite = false, lock = false
   const report = {
     rows: rows.length, matched: 0, notFound: [], nameDiffers: [], noEnglish: [], includeCodes,
     nameEn: counts(), instructionEn: counts(),
-    copies: { unchanged: 0, changed: [], withSourceNotWritten: 0, nameEn: counts(), instructionEn: counts() },
+    copies: { unchanged: 0, changed: [], withSourceNotWritten: 0, ofCopiesNotFollowed: 0, nameEn: counts(), instructionEn: counts() },
   };
   const writes = [];
-  // The matched sources: code -> { exercise, row, written } ("written": its
-  // English is planned, so its unchanged copies follow it).
+  // The matched sources: id -> { exercise, row, english } ("english": what it
+  // holds after this run, which its unchanged copies get; null when its name
+  // differs and it is not included, so its copies are not written either).
   const sources = new Map();
   for (const row of rows) {
     const exercise = byCode.get(row.code);
@@ -168,9 +184,14 @@ export async function planImport(client, rows, { overwrite = false, lock = false
     const differs = Boolean(row.nameSr) && !sameText(row.nameSr, exercise.name);
     const included = includeCodes.includes(row.code);
     if (differs) report.nameDiffers.push({ code: row.code, database: exercise.name, sheet: row.nameSr, written: included });
-    sources.set(exercise.id, { exercise, row, written: !differs || included });
+    const source = { exercise, row, english: null };
+    sources.set(exercise.id, source);
     if (differs && !included) continue;
-    planTarget(exercise, row, overwrite, report, writes);
+    const outcome = planTarget(exercise, row, row.code, overwrite, report, writes);
+    source.english = {
+      nameEn: heldAfter(outcome.name, row.nameEn, exercise.name_en),
+      instructionEn: heldAfter(outcome.instruction, row.instructionEn, exercise.instruction_en),
+    };
   }
   // An --include-code that names no name-differing matched code is a typo:
   // refused before anything is written.
@@ -187,13 +208,27 @@ export async function planImport(client, rows, { overwrite = false, lock = false
   )).rows : [];
   for (const copy of copies) {
     const source = sources.get(copy.source_exercise_id) || sources.get(copy.copy_parent_id);
-    if (!source.written) { report.copies.withSourceNotWritten += 1; continue; }
+    if (!source.english) { report.copies.withSourceNotWritten += 1; continue; }
     if (!sameText(copy.name, source.exercise.name) || !sameText(copy.instruction, source.exercise.instruction)) {
       report.copies.changed.push({ code: source.row.code, copyId: copy.id });
       continue;
     }
     report.copies.unchanged += 1;
-    planTarget(copy, source.row, overwrite, report.copies, writes);
+    planTarget(copy, source.english, source.row.code, overwrite, report.copies, writes);
+  }
+  // A copy of a copy (no code, pointing at one of these copies, at any depth)
+  // is not followed; counted, so none is skipped silently.
+  if (copies.length) {
+    report.copies.ofCopiesNotFollowed = Number((await client.query(
+      `with recursive chain (id) as (
+         select id from library.exercises
+          where exercise_code is null and (source_exercise_id = any($1::uuid[]) or copy_parent_id = any($1::uuid[]))
+         union
+         select e.id from library.exercises e join chain on e.source_exercise_id = chain.id or e.copy_parent_id = chain.id
+          where e.exercise_code is null
+       ) select count(*) from chain`,
+      [copies.map((copy) => copy.id)],
+    )).rows[0].count);
   }
   return { report, writes };
 }

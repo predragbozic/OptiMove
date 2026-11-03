@@ -69,19 +69,23 @@ code. The xlsx itself is never changed.
   `--include-code 758,759` (owner, 2026-11-03). A code in `--include-code` whose name does not differ (a typo) is
   refused before anything is written.
 - **Copies** (owner, 2026-11-03): an exercise with no code whose `source_exercise_id` or `copy_parent_id` points at
-  a matched exercise, and whose name AND instruction still equal the source's (whitespace aside), gets the same English
-  under the same rules (`copies.unchanged`, `copies.nameEn`, `copies.instructionEn`). A copy that differs is listed
-  in `copies.changed` (code and copy id) and not written; a copy whose source is not written (a name that differs, not
-  included) is counted in `copies.withSourceNotWritten`. A copy of a copy is not followed. An exercise with a code of
-  its own is never treated as a copy.
+  a matched exercise, and whose name AND instruction still equal the source's (whitespace aside), gets the same English:
+  what the source holds after the run (the sheet's value where the source gets it or already has it, the source's own
+  where it keeps that), under the same rules (`copies.unchanged`, `copies.nameEn`, `copies.instructionEn`). A copy
+  that differs is listed in `copies.changed` (code and copy id) and not written; a copy whose source is not written (a
+  name that differs, not included) is counted in `copies.withSourceNotWritten`. A copy of a copy is not followed, at
+  any depth; it is counted in `copies.ofCopiesNotFollowed`. An exercise with a code of its own is never treated as a
+  copy.
 - Guard: `DATABASE_URL` from the environment only (no `.env` is read), never printed; `--database-name` must name the
-  database the URL points at and the one the connection is really on; a database without the migration is refused.
+  database the URL points at and the one the connection is really on; a database without the migration, or without the
+  copy links, is refused.
   The report's `target` names host, port and database (never a user or a password). TLS as the deployed server
   connects (`backend/src/db.js`): for a `supabase.com` host the pooler's certificate is accepted as the server does;
   every other host uses Node's defaults.
 - Bounds: `statement_timeout` 60 s, `lock_timeout` 5 s, `idle_in_transaction_session_timeout` 30 s on the server; the
-  client waits at most 75 s for any answer. The matched rows and the copies it reads are locked `FOR NO KEY UPDATE`
-  during an apply.
+  client waits at most 75 s for any answer. During an apply it takes the app's `exercise_collections` advisory lock
+  shared first (as an exercise save does; block writes take it exclusively and wait), then locks the matched rows and
+  the copies it reads `FOR NO KEY UPDATE` in id order, the app's own order.
 - Rehearsed on disposable databases by `backend/tests/import-exercise-english.test.mjs`.
 
 **The order, each step on the owner's order (the production run is the owner's, or the manager's with the owner's
@@ -97,6 +101,8 @@ confirmation; `database-safety.md`):**
      UPDATE could fire (expected: none of them names `name_en` or `instruction_en`):
      `select count(*) filter (where name_en is not null) as names, count(*) filter (where instruction_en is not null) as instructions, max(updated_at) as last_updated from library.exercises where owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null));`
      `select tgname, pg_get_triggerdef(oid) from pg_trigger where tgrelid = 'library.exercises'::regclass and not tgisinternal;`
+   - if the baseline is not `0`, save the ids that already hold English, for the undo of step 7:
+     `select id from library.exercises where (owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null))) and (name_en is not null or instruction_en is not null) order by id;`
 3. Dry run, read-only (`begin read only`, rolled back):
    `DATABASE_URL=<url> node backend/scripts/import-exercise-english.mjs --file vezbe-en.json --database-name <name>`.
    Check the report's `target` (host and port) is the database meant. Read `matched`, `notFound`, `nameDiffers`,
@@ -112,11 +118,14 @@ confirmation; `database-safety.md`):**
    matched exercises and the copies (what was written is now `same`). Then the baseline query of step 2 again: after
    minus before must equal the first dry run's `write` for each field, the matched exercises' and the copies' added
    (`alreadyFilled`, `same` and exercises outside the file were counted before already), and `last_updated` is
-   unchanged unless someone saved an exercise meanwhile (the import touches no other column). A smaller difference names an exercise saved
-   meanwhile (step 4): run the apply again.
+   unchanged unless someone saved an exercise meanwhile (the import touches no other column). A smaller difference
+   names an exercise saved meanwhile (step 4): run the apply again. A value replaced under `--overwrite` counts in
+   `write` but leaves the non-null counts as they were, so for those the dry run's `write` of 0 is the check.
 6. If the COMMIT's answer is lost, the script says the outcome is not known: run the dry run again; it shows what is
    stored. A second apply writes nothing that is already there.
-7. Undo, only on its own owner's order, and only while nobody has typed English in the editor since the import (the
-   baseline of step 2 was 0):
-   `update library.exercises set name_en = null, instruction_en = null where (owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null))) and (name_en is not null or instruction_en is not null);`
-   in one transaction, checking before COMMIT that the count it reports equals the apply's `written`.
+7. Undo, only on its own owner's order, and only while nobody has typed English in the editor since the import. It
+   leaves out the ids saved in step 2 (none when the baseline was 0); a value an `--overwrite` apply replaced there
+   is not restored (the earlier value is not kept):
+   `update library.exercises set name_en = null, instruction_en = null where (owner_scope = 'system' or (exercise_code is null and (source_exercise_id is not null or copy_parent_id is not null))) and (name_en is not null or instruction_en is not null) and id <> all('{<the ids saved in step 2>}'::uuid[]);`
+   in one transaction, checking before COMMIT that the count it reports equals the rows the applies wrote outside
+   those ids (the sum of every apply's `written` when none used `--overwrite`).
