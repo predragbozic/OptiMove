@@ -16,6 +16,7 @@ import {
   loadCentralCalendarDay,
   newCentralCalendarRequestKey,
   readCentralCalendarCatalog,
+  setCentralCalendarAppliedHook,
   setCentralCalendarEventFields,
   updateCentralCalendarEvent,
   writeCentralCalendarWeekMode,
@@ -405,17 +406,36 @@ async function rereadAfterUncertainWrite(cal, render, form) {
   if (state.centralCalendar !== cal) return;
   await loadCentralCalendar({ render, forceRefresh: true });
   if (state.centralCalendar !== cal) return;
-  await reloadOpenPanelEvent(cal, render);
+  await syncPanelEvent(cal, render);
   if (!centralCalendarUncertainWrites().some((entry) => entry.requestKey === form.requestKey)) return;
   cal.notice = uncertainNotice(form, { readFailed: readFailed(cal) });
   render?.();
 }
 
-// The open panel's details after the calendar was read again for a write the
-// coach left (K2b-1d review): the card's counts and the panel's values agree.
-async function reloadOpenPanelEvent(cal, render) {
-  if (state.centralCalendar === cal && cal.panel.open && !cal.form) await loadPanelEvent(cal, render);
+// The open panel's details against its card (K2b-1d; the internal and the
+// independent review): run after every calendar answer applied and after a
+// panel opens. A manager's card with details reads them when the panel has no
+// read of this card, and again when the card's event revision is not the one
+// read (a save here or elsewhere); a card without details drops the read. A
+// read already running for the card is awaited, never sent twice; a failed
+// read waits for Try again.
+let panelRead = null;
+function syncPanelEvent(cal, render) {
+  if (state.centralCalendar !== cal || !cal.panel.open || cal.form) return null;
+  const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+  const view = cal.panelEvent;
+  if (!item || item.kind !== "event" || item.canManage !== true || !item.details || item.details.selected < 1) {
+    if (view) cal.panelEvent = null;
+    return null;
+  }
+  if (view && view.key === item.key) {
+    if (view.loading) return panelRead;
+    if (view.error || view.event?.revision === item.revision) return null;
+  }
+  panelRead = loadPanelEvent(cal, render);
+  return panelRead;
 }
+setCentralCalendarAppliedHook(syncPanelEvent);
 
 // The waiting write to check first, if any: a create before New event, an
 // edit or a cancel of the same event before its Edit / Cancel.
@@ -657,7 +677,7 @@ async function settleAndReload(cal, render, { notice, readFailedNotice = "", pan
   render?.();
   focusPanelStart(cal);
   if (cal.panel.open) await loadCentralCalendarDay({ render, forceRefresh: true });
-  if (cal.panel.open) await loadPanelEvent(cal, render);
+  await syncPanelEvent(cal, render);
 }
 
 // K2b-1d (T, 21.9): the open panel of a manager's event with chosen details
@@ -675,16 +695,19 @@ async function loadPanelEvent(cal, render) {
   render?.();
   let event = null;
   let error = "";
+  let retry = true;
   try {
     event = (await fetchCentralCalendarEvent(item.eventId))?.event || null;
     if (!event || event.canManage !== true) error = "The details could not be read.";
   } catch (failure) {
     const info = centralCalendarErrorInfo(failure);
     error = info.status === 401 ? "Please sign in again to see the details." : info.status === 404 ? NOT_AVAILABLE : "The details could not be read.";
+    retry = info.status !== 401 && info.status !== 404;
   }
   if (state.centralCalendar !== cal || cal.panelEvent !== view) return;
   view.loading = false;
   view.error = error;
+  view.retry = retry;
   view.event = error ? null : event;
   render?.();
 }
@@ -779,7 +802,7 @@ async function lateAnswer(cal, render, form, outcome) {
   if (state.centralCalendar !== cal) return;
   cal.notice = readFailed(cal) ? `${notice}${READ_FAILED_TAIL}` : notice;
   render?.();
-  await reloadOpenPanelEvent(cal, render);
+  await syncPanelEvent(cal, render);
 }
 
 function formTitle(form, event = null) {
@@ -877,9 +900,12 @@ async function refused(form, info, render, { check = false } = {}) {
     await settleAndReload(cal, render, { notice: form.mode === "create" ? "Events cannot be created in this workspace now. Nothing was saved." : NOT_AVAILABLE });
     return;
   }
-  if (form.mode === "values" && info.code === "invalid_value" && info.fieldId) {
-    form.errors = { ...form.errors, [`value:${info.fieldId}`]: "This value is not accepted for this detail. Check it." };
-    form.error = centralCalendarEventErrorText(info);
+  if (form.mode === "values" && info.code === "invalid_value") {
+    // The detail it names is marked; a refusal that names none of this form's
+    // details (a race on a detail's limits) says so in words.
+    const marked = Boolean(info.fieldId) && (form.fields || []).some((field) => field.fieldId === info.fieldId);
+    if (marked) form.errors = { ...form.errors, [`value:${info.fieldId}`]: "This value is not accepted for this detail. Check it." };
+    form.error = marked ? centralCalendarEventErrorText(info) : "A value was not accepted. Check the details and save again. Nothing was saved.";
     render?.();
     return;
   }
@@ -1099,7 +1125,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
     await loadCentralCalendarDay({ render });
-    if (cal.panel.open && cal.panel.key === key) await loadPanelEvent(cal, render);
+    if (cal.panel.open && cal.panel.key === key) await syncPanelEvent(cal, render);
     return true;
   }
   if (type === "central-calendar-details-retry") {

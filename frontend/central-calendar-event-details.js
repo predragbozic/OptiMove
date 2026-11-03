@@ -9,6 +9,7 @@
 // with their values are its manager's GET /api/calendar/events/:id (K2b-1b).
 // Nothing here talks to the server.
 import { calendarSettingsMapsUrl } from "./calendar-settings-data.js";
+import { TEXT_FORBIDDEN } from "./metric-variables-data.js";
 import { renderIconSvg } from "./icon-render.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -312,7 +313,7 @@ export function renderCentralCalendarEventDetailsHtml(item, view) {
   if (!view || view.key !== item.key || view.loading) return `<div class="cc-panel-details"><h4 class="cc-panel-subtitle">Details</h4><p class="cc-panel-note" role="status">Loading the details…</p></div>`;
   if (view.error || !view.event) {
     return `<div class="cc-panel-details"><h4 class="cc-panel-subtitle">Details</h4><p class="cc-panel-note" role="alert">${escapeHtml(view.error || "The details could not be read.")}</p>
-      <button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button></div>`;
+      ${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}</div>`;
   }
   const fields = view.event.fields || [];
   if (!fields.length) return "";
@@ -408,6 +409,7 @@ export function buildCentralCalendarValuesRequest(form) {
       const text = oneLine(raw);
       if (!text) values.push({ fieldId: field.fieldId, value: null });
       else if ([...text].length > CENTRAL_CALENDAR_VALUE_TEXT_MAX) errors[key] = `At most ${CENTRAL_CALENDAR_VALUE_TEXT_MAX} characters.`;
+      else if (TEXT_FORBIDDEN.test(text)) errors[key] = "Remove the hidden or control characters.";
       else values.push({ fieldId: field.fieldId, value: text });
     }
   }

@@ -1343,7 +1343,8 @@ cheaply on the way; otherwise they stay recorded (20.5).
   the cards and a form opened meanwhile share one read; an answer that a Settings → Calendar write overtook is not
   used: the catalog is read again (`centralCalendarCatalogChanged` counts the writes).
 - **The place in the form:** a library place sends `locationId` alone, *Another place* its text alone, never both. A
-  new team event, or a new club event whose targets are exactly one team and not the club, starts at the team's live
+  new team event, or a new club event whose targets are exactly one team and not the club (athletes chosen beside it
+  do not change that; the manager accepted it, 2026-11-03), starts at the team's live
   default place and follows the targets until the coach touches the place. Without places (a private coach, a club
   that has added none) the text is the only control and typing it is the choice of *Another place*. An edit starts at
   the event's place; an archived library place stays chosen as "(archived)" and is sent only when it changes (to
@@ -1360,21 +1361,25 @@ cheaply on the way; otherwise they stay recorded (20.5).
 - **The panel:** the place from the card's `place`, for everyone who sees the card, with no read (*Open in maps* only
   with an address: the 1c helper, a new tab, `noopener noreferrer`). A manager's event card with `details.selected > 0`
   reads `GET /:id` once when its panel opens (`cal.panelEvent`, keyed by the card, dropped when an item opens so an
-  earlier read is never shown), again after a saved write — also one whose answer lands after the coach left the form —
-  and offers *Try again* when the read fails; a reader's card and a manager's card without details read nothing. *Enter
+  earlier read is never shown). After every calendar answer applied (a save, Try again, a refresh; the data module's
+  hook) the open panel is checked against its card: it reads the details when the card has them and the panel has no
+  read of this card, and again when the card's event revision is not the one read — a save here or elsewhere, one whose
+  answer lands after the coach left the form included; a read already running is awaited, never sent twice. A failed
+  read offers *Try again*, except for the identical 404 and a lost sign-in; a reader's card and a manager's card without details read nothing. *Enter
   details* is not offered on a cancelled event.
 - **Enter details** (the form's `values` mode): opened from the panel, it checks first an unconfirmed write of the same
   event (the event's Edit and Cancel check a values write too), then reads the event again for its latest values and
   revision. Inputs by kind: a select with the live options and a hidden one the value still names, a number field
   (`inputmode="decimal"`, a comma read as a decimal point, at most three decimals, the bounds in the hint), radios for
-  yes / no and the scale with *Not answered*, a one-line text (≤ 200). Only the changed values are sent (spaces alone
+  yes / no and the scale with *Not filled in*, a one-line text (≤ 200, the server's `boundedText` rule checked first). Only the changed values are sent (spaces alone
   are no change, and neither is the same number written another way, "2,5" for 2.5; an emptied one is `null`); a
   wrong value is marked on its input and nothing is sent. The decimal keypad (`inputmode="decimal"`) only for a detail
   whose lowest value is 0 or more: the iOS decimal keypad has no minus key. A dirty form asks before it goes. The write: a
   fresh `requestKey`, the form locked, the 90 s bound, *Result not confirmed* · *Check result* with the same key and
   body; a Check result is settled also by `invalid_request_key`, `invalid_fields`, `location_not_available`,
   `field_not_available`, `invalid_values` and `invalid_value` (all given after the request record). `invalid_value`
-  marks its detail; `field_not_available`, `event_changed` and `event_cancelled` close the form and read the calendar
+  marks its detail (one that names no detail of the form says "A value was not accepted. Check the details and save
+  again. Nothing was saved."); `field_not_available`, `event_changed` and `event_cancelled` close the form and read the calendar
   and the panel again with their sentence; a 404 or a reader's view on opening closes it with the neutral sentence.
 - **The cards:** a manager's event card whose `eventTypeId` is in the catalog wears the type's icon (when it is one of
   the library's) tinted with the type's colour; the stripe stays the team's. A reader's card, and a type id on a card
@@ -1388,8 +1393,8 @@ cheaply on the way; otherwise they stay recorded (20.5).
 
 ### 21.12 Tests and the browser check
 
-- **Tests** (the T1 runner, Node 24): a new `frontend/tests/central-calendar-event-details.actions.test.mjs` (26 tests,
-  D1–D26, through the real handlers and templates with a fake fetch that keeps K2b-1b's shapes and refusals: the place
+- **Tests** (the T1 runner, Node 24): a new `frontend/tests/central-calendar-event-details.actions.test.mjs` (30 tests,
+  D1–D30, through the real handlers and templates with a fake fetch that keeps K2b-1b's shapes and refusals: the place
   choice, the team's default, a private coach's text, the details list at create and on an edit, *Replace*, the type's
   fallbacks, the panel for a manager and for a reader, *Enter details* by kind, its body, its lost answer and Check
   result, its refusals, the cards, the catalog read and its drop by a Settings write, *Awaiting details* and the
@@ -1448,3 +1453,22 @@ question keeping a dirty form, and Settings' *Required* naming its reach on "Our
 
 Not checked (recorded): a physical iPhone or Android (the number keypad, the native select with long "name — address"
 options, the radios' painting); 320 px.
+
+### 21.14 The independent review of PR #349 (on `bd4cc08`)
+
+READY WITH NON-BLOCKING NOTES, no BLOCKER, HIGH or MEDIUM. Its 30 scenarios and 2 for Settings passed, with every body
+they made checked by the real backend validators; of its 18 mutations, 3 survived this pull request's tests and were
+killed by its scenarios (M18 cannot be reached from the screen); `frontend-fast` as here, the same 4 files failing on a
+clean `1cfaf64`. The manager ordered one small round with no new internal review; the manager checks the delta.
+
+| Finding | Severity | Correction | Test | Status |
+|---|---|---|---|---|
+| A panel opened while its card had no details stayed at "Loading the details…" after a refresh brought them, with no read (K1); the same gap left the values of an event changed elsewhere stale until the panel opened again | LOW | the data module calls the actions' panel check after every calendar answer applied: a read when the card has details and the panel none of this card, again when the event's revision changed; one read at a time | D27 (M25, M26) | Fixed |
+| `invalid_value` without a `fieldId` (a race on a detail's limits) said "Check the marked fields…" with nothing marked | LOW | "A value was not accepted. Check the details and save again. Nothing was saved." when the refusal names no detail of the form | D28 (M27) | Fixed |
+| The reviewer's L1, T3 and part of D1 had no equivalent here (its M13, M14, M16) | LOW | a late read of event A never lands in event B's panel; a place's markup is text on the card, in the panel and in the form; a detail outside the catalog is never added | D29, D30, D5 (M13′, M14′, M16′) | Fixed |
+| *Try again* after the identical 404 (and a lost sign-in) | NIT | hidden | D11 (M28) | Fixed |
+| 21.11 said *Not answered* where the code says *Not filled in*; the team default's rule with athletes beside one team was not written | NIT | corrected; one line in 21.11 (the manager accepts the rule) | — | Fixed |
+| The server's text rule on a short text was met only by the server | NIT | `TEXT_FORBIDDEN` (the frontend twin of `boundedText`'s list) checked before sending | D12 (M29) | Fixed |
+
+All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
+from elsewhere did not read an open panel's details again — is closed by the first row.

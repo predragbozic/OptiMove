@@ -84,6 +84,15 @@ export function centralCalendarCatalogChanged() {
   }
 }
 
+// K2b-1d (the independent review, K1): the actions module's check of the open
+// panel's details, run after every calendar answer applied, whoever read it
+// (a save, Try again, a refresh): a panel whose card now has details reads
+// them, one whose event changed reads them again.
+let calendarAppliedHook = null;
+export function setCentralCalendarAppliedHook(hook) {
+  calendarAppliedHook = typeof hook === "function" ? hook : null;
+}
+
 // Whether the answer holds a card that names its type (a manager's event card).
 export function centralCalendarNeedsCatalog(data) {
   return (data?.days || []).some((day) => (day.items || []).some((item) => item.kind === "event" && item.canManage === true && item.eventTypeId));
@@ -187,6 +196,7 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
           if (!outcome.error && state.centralCalendar === cal) render?.();
         });
       }
+      void calendarAppliedHook?.(cal, render);
     },
     applyError: (error) => {
       if (!current()) return;
