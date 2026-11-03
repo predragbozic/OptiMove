@@ -1361,35 +1361,32 @@ test("13. races: two A1 of one mapping (club A's two admins), a club admin's rep
     const x = await freshClub();
     const [adm] = x.admins;
     const xv = await clubWaiting(adm);
-    const before = await counts();
-    // (a) the peer's change lands while A1 holds after its right.
+    // (a) A1 holds after its right; the peer's change comes then. In D's order
+    // (J15 section 5, the lock-order pull request LO-1) A1 has already locked
+    // the listed binding and its team FOR SHARE, and the club row with its
+    // right, so the Unbind waits on the binding row, the team archive on the
+    // team row and the club archive on the club row. A1 commits first and
+    // answers 200 - or, for the club archive only, when the archive lands
+    // before A1's answer re-checks the right after the COMMIT, the identical
+    // 404 (section 3) - and the peer's change lands after it.
     hold = holdWrite("mapping_version_activate");
     const a1 = activate(xv, adm.cookie, { starts: [x.b] });
     await until(() => hold.state.entered, "A1 holds");
-    let peer;
-    if (kind === "unbind") await unbind(x.b);
-    else if (kind === "team") await k.query(`update public.teams set is_active = false where id = $1`, [x.b.teamId]);
-    else {
-      // The archive waits for A1's FOR SHARE on the club row; A1 commits first
-      // and answers 200 or, when the archive lands before its answer re-checks
-      // the right after the COMMIT, the identical 404 (section 3).
-      peer = await client();
-      const archiving = peer.query(`update public.clubs set is_active = false where id = $1`, [x.clubId]);
-      await rowWait("the club archive waits for A1's FOR SHARE on the club", ["public.clubs"]);
-      hold.g.open();
-      const res = await a1;
-      assert.ok([200, 404].includes(res.status), res.text);
-      await archiving;
-      await peer.end();
-      assert.equal(await statusOf(xv), "active", `${kind}: A1 committed first`);
-      assert.equal((await openOn(xv)).length, 1, `${kind}: A1's start committed`);
-      continue;
-    }
+    const peer = await client();
+    const changing = kind === "unbind" ? unbind(x.b, peer)
+      : kind === "team" ? peer.query(`update public.teams set is_active = false where id = $1`, [x.b.teamId])
+        : peer.query(`update public.clubs set is_active = false where id = $1`, [x.clubId]);
+    const waitsOn = { unbind: "training_load.source_team_bindings", team: "public.teams", club: "public.clubs" }[kind];
+    await rowWait(`${kind}: the peer waits for A1's FOR SHARE`, [waitsOn]);
     hold.g.open();
     const res = await a1;
-    if (kind === "unbind") refused(res, 409, "binding_not_active");
-    else isNotFound(res, "team archived during A1");
-    assert.deepEqual(await counts(), before, `${kind}: nothing written`);
+    if (kind === "club") assert.ok([200, 404].includes(res.status), res.text);
+    else ok(res);
+    await changing;
+    await peer.end();
+    assert.equal(await statusOf(xv), "active", `${kind}: A1 committed first`);
+    assert.equal((await openOn(xv)).length, 1, `${kind}: A1's start committed (neither an Unbind nor an archive ends a T5 row)`);
+    if (kind === "club") continue;
     // (b) the peer's change held first: A1 waits at the binding, then refuses.
     const y = await freshClub();
     const yv = await clubWaiting(y.admins[0]);

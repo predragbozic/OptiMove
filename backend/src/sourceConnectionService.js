@@ -203,17 +203,18 @@ export async function resolveConnectionAdmin(req) {
 // After the time a source call took, the caller's right and the owning club
 // must still hold before anything is stored — by the context's basis, the
 // rows FOR SHARE so a revocation or an archive running meanwhile is ordered
-// against this transaction.
+// against this transaction - the users row first, the revocations' order
+// (`for update of u, g` / `u, r`; the lock-order pull request).
 async function rightsStillHold(client, ctx, clubId) {
   const right = ctx.basis === "platform_admin"
     ? await client.query(
       `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of u, g`,
       [ctx.userId],
     )
     : await client.query(
       `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id
-        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of r, u`,
+        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of u, r`,
       [ctx.userId, clubId],
     );
   const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);

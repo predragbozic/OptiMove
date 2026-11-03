@@ -114,13 +114,17 @@ export const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ct
 export const readableOwnerKeys = (ctx) => (ctx.owner.scope === "system" ? ["system"] : ["system", ctx.owner.clubId]);
 
 // The caller's right and, for a club scope, the club, under FOR SHARE (after
-// every registry row of the lock order). The club-admin query locks the
-// users row before the role row (`for share of u, r`), the order of the
-// club-admin revocation (routes/organization.js, `for update of u, r`; J14
-// R13): the database's own re-locks (`source_metric_actor_basis`,
-// `source_metric_require_club_admin`: r, u, c) then find both rows already
-// held by this transaction, so a revocation and a write never wait on each
-// other in opposite orders.
+// every registry row of the lock order). Every query here locks the users row
+// before the role row - `for share of u, g` for the platform role, `u, r` for
+// a club or team role, `u, r, c` with the club - the order of the
+// revocations (routes/organization.js: `for update of u, g` for a platform
+// admin, `for update of u, r` for a club admin; J14 and J15 R13, the
+// lock-order pull request): a revocation and a write never wait on each
+// other in opposite orders. The database's own re-locks inside the write's
+// triggers (`source_metric_actor_basis`, `source_metric_require_*_admin`,
+// `metric_variable_change_basis`: role first) then find these rows already
+// held by this transaction and wait for nothing; turning those functions
+// users first too is LO-2 (a migration).
 export async function rightsStillHold(client, ctx) {
   if (rightsHold) await rightsHold(client);
   if (ctx.basis === "team_coach") return coachRightsStillHold(client, ctx);
@@ -128,10 +132,10 @@ export async function rightsStillHold(client, ctx) {
     // The database derives platform_admin for an active platform admin (v35,
     // C79): a club admin granted that role since this request began repeats
     // it (try_again), so the basis it writes is the one the database derives.
-    // The same rows, in the same order, as the v35 basis check.
+    // The same rows as the v35 basis check, users first.
     const promoted = await client.query(
       `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of u, g`,
       [ctx.userId],
     );
     if (promoted.rowCount > 0) throw refusal(409, "try_again", TRY_AGAIN_TEXT);
@@ -139,7 +143,7 @@ export async function rightsStillHold(client, ctx) {
   const right = ctx.basis === "platform_admin"
     ? await client.query(
       `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of u, g`,
       [ctx.userId],
     )
     : await client.query(
@@ -161,11 +165,12 @@ export async function rightsStillHold(client, ctx) {
 // FOR SHARE, which locks only the rows it returns: found means the database
 // would derive another basis, so the request repeats (try_again). Then the
 // team, the club and the coach role with the user, FOR SHARE - v26's
-// lock_activity_decider order.
+// lock_activity_decider order for the team and the club; every role probe
+// takes the users row first (the lock-order pull request).
 async function coachRightsStillHold(client, ctx) {
   const platform = await client.query(
     `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-      where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+      where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of u, g`,
     [ctx.userId],
   );
   if (platform.rowCount > 0) throw refusal(409, "try_again", TRY_AGAIN_TEXT);
@@ -173,7 +178,7 @@ async function coachRightsStillHold(client, ctx) {
     `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id join public.clubs c on c.id = r.club_id
       where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true
         and coalesce(c.is_active, true)
-        for share of r, u, c`,
+        for share of u, r, c`,
     [ctx.userId, ctx.owner.clubId],
   );
   if (clubAdmin.rowCount > 0) throw refusal(409, "try_again", TRY_AGAIN_TEXT);
@@ -185,7 +190,7 @@ async function coachRightsStillHold(client, ctx) {
   if (club.rowCount === 0) return false;
   const role = await client.query(
     `select 1 from public.user_team_roles r join public.users u on u.id = r.user_id
-      where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true for share of r, u`,
+      where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true for share of u, r`,
     [ctx.userId, ctx.teamId],
   );
   return role.rowCount > 0;

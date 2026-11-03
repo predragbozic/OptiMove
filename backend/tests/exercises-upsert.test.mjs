@@ -1267,7 +1267,10 @@ test("a coach role revoked between the dialog's read and the grant refuses the g
       const send = client.query.bind(client);
       client.query = async (...args) => {
         const result = await send(...args);
-        if (typeof args[0] === "string" && args[0].includes("for share of u")) { client.query = send; await revokeRole(); }
+        // The grant's eligibility read is the one ending `for share of u`; the
+        // administrator's own right is read earlier as `for share of u, r` (users
+        // first, the lock-order pull request LO-1) and must not trip this.
+        if (typeof args[0] === "string" && /\bfor share of u\s*$/.test(args[0])) { client.query = send; await revokeRole(); }
         return result;
       };
       return client;

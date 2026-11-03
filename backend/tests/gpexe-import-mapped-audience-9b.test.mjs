@@ -675,6 +675,29 @@ test("4. D29, C110 and R17: a club variable with a maximum, activated alone - an
   }
   for (const e of entries(projectPreview(stored, "other", { namesClubVariables: true }))) assert.equal(e.label, "Club max speed");
 
+  // R17 (the lock-order pull request): the route asks C99 (resolveVariableEditor)
+  // with the workspace this request already resolved, never through a second
+  // read of the stored workspace that a switch in between could make disagree
+  // with the route's own team check. Counted on the app's pool: the coach's
+  // detail read reads the stored workspace exactly once (the request's own
+  // resolution), and still names the club variable.
+  const workspaceReads = [];
+  const realQuery = appPool.query;
+  appPool.query = function countingQuery(text, ...rest) {
+    const sql = typeof text === "string" ? text : text?.text;
+    if (typeof sql === "string" && /user_workspace_preferences/.test(sql)) workspaceReads.push(sql);
+    return realQuery.call(this, text, ...rest);
+  };
+  let named;
+  try {
+    named = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: viewers.coach.cookie });
+  } finally {
+    appPool.query = realQuery;
+  }
+  assert.equal(named.status, 200, named.text);
+  assert.ok(named.text.includes("Club max speed"), "the coach C99 admits reads the club variable's name");
+  assert.equal(workspaceReads.length, 1, `one read of the stored workspace: ${workspaceReads.length}`);
+
   // R17 through the route: the route still admits the team's coach when the
   // team's club is archived (resolveGpexeTeamAccess reads the team only), but
   // C99 (resolveVariableEditor) admits only a coach of an active club - so the
