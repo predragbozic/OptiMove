@@ -788,6 +788,18 @@ They merge under the standing merge order after the *Rukovodilac*'s GO: the owne
 - **Pinned.** The files name v51 and its checksum, and the three decided mappings (`duration`, `total_distance`,
   `maximal_running_speed`, with their units and factors). If main gains a migration, or the decided mappings change,
   before step 11, both files are re-issued under new sha256s; both headers say so.
+  - **The next window re-issues them (mandatory).** The first window (M6) ran these files on production, and its
+    record names their sha256 values, so they stay pinned to v51. v52 (7h-B, deployed on 2026-11-03) makes their
+    block 1 fail.
+  - Before the next window's step 11, both files are re-issued:
+    - with the latest migration and its checksum;
+    - with the fix of post-check block 8, the *Nezavisni revizor*'s L1 on PR #330 (`docs/ai/CURRENT_STATE.md`,
+      Separate tasks);
+    - under new sha256 values.
+  - `backend/tests/gpexe-import-window-sql-9r.test.mjs` builds its world through v51 until then, and through that
+    migration again after the re-issue.
+  - This is the *Rukovodilac*'s decision 3 at 7h-B's GO (event `ea8fc169`), on the *Nezavisni revizor*'s proposal
+    (event `45cee1c4`); J14 section 17.
 - **Kept out.**
   - Neither file prints an email, a credential column, a grant or revoke reason, or a stored source answer.
   - The rights blocks print the user's display name (else the full name, never the email): the owner accepts each

@@ -1072,6 +1072,11 @@ order covers is merged under it; a migration PR that the standing order for migr
   guard, the two CHECKs, `row_ok` and the version-driven ends (J14 section 6). The order of the pull requests is 7h-V
   → 7h-B → 7h-F and the lock-order pull request in either order → 7i-B after the lock-order pull request (C131, J15's
   R13, the *Rukovodilac*'s order of 2026-11-02, event `783e3591`).
+  **Done so far:**
+  - 7h-V was merged as PR #337 (`d3dcb64`) and deployed on 2026-11-02 (J14 section 16).
+  - 7h-B was merged as PR #339 (`0334ddb`) and deployed on 2026-11-03; v52 is directly confirmed on production by
+    the *Rukovodilac*'s read-only post-check (J14 section 17).
+  - Next come 7h-F and the lock-order pull request.
 - **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
   (the copied mappings are the club's drafts, approved under OD6), before more clubs are brought on. A copy is a club variable with the system
   variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
