@@ -1,4 +1,5 @@
 import { decorateMediaRows } from '../exerciseMedia.js';
+import { decoratePlanItemEnglish } from '../planItemEnglish.js';
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildPrograms, buildWeeks } from "../utils/grouping.js";
@@ -290,6 +291,7 @@ async function loadWeeklyData(athleteId) {
     [athleteId],
   );
   await decorateMediaRows(items.rows,'plan_item',query);
+  await decoratePlanItemEnglish(items.rows, query);
   return {
     mode: "date",
     weeks: buildWeeks(items.rows),
@@ -316,6 +318,7 @@ async function loadPrograms(programPlans) {
   );
 
   await decorateMediaRows(items.rows,'plan_item',query);
+  await decoratePlanItemEnglish(items.rows, query);
   const rowsByPlanId = new Map();
   items.rows.forEach((row) => {
     if (!rowsByPlanId.has(row.plan_id)) rowsByPlanId.set(row.plan_id, []);

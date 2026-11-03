@@ -1,6 +1,6 @@
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage } from "./media.js";
 import { renderExerciseThumb } from "./exercise-view-modes.js";
-import { exerciseText } from "./exercise-text.js";
+import { exerciseText, planItemText } from "./exercise-text.js";
 import { clean, escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 export function renderExerciseListHtml(items, itemIds, layout) {
@@ -29,23 +29,25 @@ export function renderExerciseItemHtml(item, itemId, layout) {
   const doseRows = exerciseDoseRows(item);
   const hasMedia = hasAnyMedia(media);
   if (!isExerciseItem(item)) return renderOrganizationItemHtml(item, color);
+  const title = planItemText(item, "title");
+  const description = planItemText(item, "description");
   if (layout === "vertical") {
     return `
       <article class="plan-item exercise-item exercise-item-vertical ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
         <div class="exercise-item-top">
           <div class="exercise-media-stack">
             <button class="exercise-open exercise-title-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
-              <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
+              <span class="item-title">${escapeHtml(title || "Untitled")}</span>
             </button>
             ${hasMedia ? `
-              <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
+              <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(title || "Exercise media")}" ${mediaAccessAttributes(media)}>
                 ${renderExerciseThumb(item, "media-thumb")}
               </button>
             ` : ""}
           </div>
           <button class="exercise-open plan-exercise-open exercise-item-summary" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
             ${doseRows.length ? renderDoseMiniHtml(doseRows) : ""}
-            ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
+            ${description ? `<span class="item-description">${escapeHtml(description)}</span>` : ""}
           </button>
         </div>
       </article>
@@ -54,16 +56,16 @@ export function renderExerciseItemHtml(item, itemId, layout) {
   return `
     <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
       ${hasMedia ? `
-        <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
+        <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(title || "Exercise media")}" ${mediaAccessAttributes(media)}>
           ${renderExerciseThumb(item, "media-thumb")}
         </button>
       ` : ""}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="item-head">
-          <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
+          <span class="item-title">${escapeHtml(title || "Untitled")}</span>
         </span>
         ${doseRows.length ? renderDoseMiniHtml(doseRows) : ""}
-        ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
+        ${description ? `<span class="item-description">${escapeHtml(description)}</span>` : ""}
       </button>
     </article>
   `;
@@ -94,9 +96,10 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
   const hasSequence = currentIndex >= 0 && ids.length > 1;
   const canGoPrevious = hasSequence && currentIndex > 0;
   const canGoNext = hasSequence;
-  // A plan item's own title as it was written; a library exercise's name in
-  // the reader's language (exercise-text.js).
-  const title = clean(item.title || exerciseText(item, "name") || "Exercise");
+  // A plan item's title (its exercise's English while it still carries that
+  // exercise's text); a library exercise's name; both in the reader's
+  // language (exercise-text.js).
+  const title = clean(planItemText(item, "title") || exerciseText(item, "name") || "Exercise");
   const media = exerciseMediaOf(item);
   const exerciseId = item.exercise_id || item.id || "";
   const hierarchy = [item.domain, item.category, item.section].filter(Boolean).join(" / ");
@@ -107,7 +110,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
   ].filter(([, value]) => clean(value));
   const noteRows = [
     ["Aim", item.aim],
-    ["Description", item.description],
+    ["Description", planItemText(item, "description")],
     ["Execution notes", item.execution_notes],
     ["Instruction", exerciseText(item, "instruction")],
   ].filter(([, value]) => clean(value));
@@ -227,7 +230,7 @@ function renderExerciseSiblingStripHtml(ids, itemId, getItemById) {
           const sibling = getItemById(id);
           if (!sibling) return "";
           const isActive = id === itemId;
-          const siblingTitle = clean(sibling.title || exerciseText(sibling, "name") || "Exercise");
+          const siblingTitle = clean(planItemText(sibling, "title") || exerciseText(sibling, "name") || "Exercise");
           const siblingPicture = renderMediaImage(exerciseMediaOf(sibling), "exercise-sibling-image");
           return `
             <button class="exercise-sibling-card ${isActive ? "is-active" : ""}" type="button" data-action="exercise-jump" data-item-id="${escapeAttr(id)}" ${isActive ? "disabled" : ""}>

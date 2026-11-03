@@ -600,7 +600,11 @@ test("17j. editing Sets/Reps/Load never erases the instruction - a duplicated it
     [Symbol.iterator]() { return this.entries[Symbol.iterator](); }
   };
   await submitBuilderForm(form, noopHandlers());
-  assert.equal(calls[0].body.description, "First item's instruction", "the hidden field must carry the existing instruction through a dose-only edit");
+  // Owner, 2026-11-03: an Instruction the coach did not change is not sent
+  // (it may be shown in English), and PATCH /items/:itemId keeps an
+  // instruction the request does not name (plan-items-english.test.mjs).
+  assert.equal(Object.hasOwn(calls[0].body, "description"), false, "a dose-only edit must not send the instruction it did not change");
+  assert.equal(calls[0].body.sets, "10");
   const items = state.builder.draft.blocks[0].sessions[0].nodes[0].items;
   assert.equal(items.find((i) => i.id === "item-1").sets, "10");
   assert.equal(items.find((i) => i.id === "item-2").description, "Second item's instruction", "the untouched duplicate's own instruction must be completely unaffected");
