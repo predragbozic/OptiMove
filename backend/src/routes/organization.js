@@ -1412,7 +1412,8 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
         // A login that also holds coach or administrator access is refused
         // as the login switch refuses it (owner, 2026-11-03): its own
         // Account sets it. The athlete row is locked by the update above, so
-        // its login cannot change before the write below.
+        // its link to the login cannot change before the write below (the
+        // login's roles are read unlocked, as the login switch reads them).
         const linked = (await client.query(`select user_id from public.athletes where id = $1`, [req.params.athleteId])).rows[0];
         if (linked?.user_id && await loginHasStaffCapability(linked.user_id)) {
           await client.query("rollback");
