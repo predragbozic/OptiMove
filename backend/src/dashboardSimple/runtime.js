@@ -46,7 +46,7 @@ export async function createSimpleRuntime({ env = process.env, pool, poolMax, qu
     admission = createPreviewAdmission({ coordinator, processId, poolMax });
   }
   await assertSchema(pool);
-  const preview = createSimplePreviewService({ pool, queryDashboard, admission, tokenService, now, activation: { coordinatedAdmissionVerified: config.mode !== 'drain', deploymentBudgetVerified: config.mode !== 'drain' } });
+  const preview = createSimplePreviewService({ pool, queryDashboard, admission, tokenService, now, activation: { coordinatedAdmissionVerified: config.mode !== 'drain', deploymentBudgetVerified: config.mode !== 'drain', atomicSaveVerified: config.mode === 'enabled' } });
   const save = createSimpleSaveService({ pool, tokenService, now, activation: { atomicSaveVerified: config.mode === 'enabled' } });
   const router = Router({ mergeParams: true });
   router.use(createSimplePreviewRouter({ service: preview }));

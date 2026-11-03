@@ -1,5 +1,6 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
+import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
 import {
   clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
@@ -168,6 +169,7 @@ function releaseAnalysisEditorDraft() {
 // a request (workspace switch, a notification's mark-read) asks first and
 // discards only once that request went through.
 function analysisEditorMayBeDiscarded() {
+  if (!leaveSimpleEditor({ discard: false })) return false;
   const a = state.trainingLoad.analysis;
   if (!a.editor?.open) return true;
   if (a.editor.saving) return false;
@@ -175,6 +177,7 @@ function analysisEditorMayBeDiscarded() {
 }
 
 function discardAnalysisEditorDraft() {
+  simpleEditor.close();
   const a = state.trainingLoad.analysis;
   if (a.editor?.open) a.editor = closedAnalysisWidgetEditor();
 }
@@ -214,7 +217,7 @@ function discardAnalysisLayoutDraft() {
 // it navigates; a successful workspace switch resets Training Load anyway
 // (resetTrainingLoadForWorkspaceChange) or reloads the page.
 export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
-  if (state.activeTab !== "training-load") return true;
+  if (state.activeTab !== "training-load") return leaveSimpleEditor({ discard });
   // Imports (phase 4b): an import of several sessions that is still running
   // must not be lost unseen, and a selection made but not imported is asked
   // about. Both live in state and survive a move inside the app; a
@@ -265,7 +268,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
+  if (!simpleEditor.model && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -294,6 +297,7 @@ function analysisWidgetActionsBlocked() {
 // while its save is in flight). Returns whether anything closed so the
 // caller knows to re-render.
 export function closeTrainingLoadAnalysisOverlay() {
+  if (simpleEditor.model) return leaveSimpleEditor();
   const a = state.trainingLoad.analysis;
   if (closeAnalysisPopovers()) return true;
   if (a.dashboardForm && !a.dashboardForm.submitting) { a.dashboardForm = null; return true; }
@@ -644,6 +648,17 @@ export function bindTrainingLoadAnalysisLayoutInteractions(root = document, rend
 export async function handleTrainingLoadAction(action, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate }) {
   const type = action.dataset.action;
   if (!type?.startsWith("training-load-")) return false;
+  if (type.startsWith('training-load-simple-')) {
+    const handled = await handleSimpleEditorAction(action, renderTrainingLoad);
+    if (!handled && state.trainingLoad.analysis.simpleAdvancedCreate) {
+      state.trainingLoad.analysis.simpleAdvancedCreate = false;
+      openAnalysisMetricPanel(null);
+      await loadAnalysisMetricDefinitions();
+      renderTrainingLoad();
+    }
+    return true;
+  }
+  if (simpleEditor.model) return true;
   if (type.startsWith("training-load-gpexe-")) return handleGpexeImportAction(action, { renderTrainingLoad });
   if (type.startsWith("training-load-roster-")) return handleActivityRosterAction(action, { render: renderTrainingLoad });
 
@@ -1232,6 +1247,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Dashboards UX H1: guided "Add metric" panel --------------------
   if (type === "training-load-analysis-add-widget") {
     if (!state.trainingLoad.analysis.dashboard) return true;
+    if (analysisWidgetActionsBlocked()) return true;
+    if (await openSimpleEditor(null, renderTrainingLoad)) return true;
     openAnalysisMetricPanel(null);
     // The catalog load flips metricPicker.loading synchronously, so this
     // first render already shows "Loading metrics..." under the built-ins;
@@ -1388,6 +1405,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // Cancel); the full per-series editor stays behind "Advanced settings".
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
     if (!widget || analysisWidgetActionsBlocked()) { closeAnalysisPopovers(); renderTrainingLoad(); return true; }
+    if (await openSimpleEditor(widget, renderTrainingLoad)) return true;
     // The panel labels a catalog-backed series from the loaded definitions,
     // so make sure they're in before staging the widget.
     await loadAnalysisMetricDefinitions();
@@ -2709,6 +2727,7 @@ async function submitRpeForm(renderTrainingLoad) {
 // function's own comment in training-load-data.js).
 // ------------------------------------------------------------
 export function resetTrainingLoadForWorkspaceChange() {
+  simpleEditor.close();
   // Bumping the generation counter makes an in-flight response for the OLD
   // workspace bail out via its own early-return before it ever reaches the
   // line that clears `loading` - so `loading` must be reset HERE too, or a
