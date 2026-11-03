@@ -180,9 +180,13 @@ const $$ = (selector) => [...content.querySelectorAll(selector)];
 const text = () => content.textContent.replace(/\s+/g, " ");
 const posts = () => calls.filter((c) => c.method === "POST");
 const gets = () => calls.filter((c) => c.method === "GET").map((c) => c.url);
+// Every click and input a test dispatches (test 45 counts the interactions of
+// Save and activate from it, F4).
+let dispatches = 0;
 async function click(selector) {
   const element = $(selector);
   assert.ok(element, `${selector} is on the screen`);
+  dispatches += 1;
   await actions.handleMappingsAction(element, { render });
 }
 // Wait for the input handler's reads (it is not awaited by app.js).
@@ -191,6 +195,7 @@ async function input(selector, value) {
   const element = $(selector);
   assert.ok(element, `${selector} is on the screen`);
   if (element.type === "checkbox" || element.type === "radio") element.checked = value; else element.value = value;
+  dispatches += 1;
   actions.handleMappingsInput(element, { render });
   for (let i = 0; i < 6; i += 1) await settle();
   render();
@@ -1431,4 +1436,409 @@ test("44. a field whose meaning is not confirmed: step 4, the notice after Submi
   assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }), "The field's unit and meaning must be confirmed first.");
   assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
     "This version cannot be activated now: there is no usable conversion between these units now.");
+});
+
+// ---------------------------------------------------------------------------
+// 7h-F: Save and activate on step 4 (J14 O6 (b), C131; the Rukovodilac's F1-F4)
+// ---------------------------------------------------------------------------
+const FV = id("f0f0f0f0", 9), RV = id("a0a0a0a0", 9), TC = id("d0d0d0d0", 9);
+// A verified field no mapping uses yet, and a club's own variable of the same unit.
+function chainWorld() {
+  db.fields.push({ id: FV, sourceSystem: "gpexe", apiFamily: "rest_v1", key: "athlete_session.distance_two", label: "Distance two", state: "active",
+    extractorAvailable: true, revisions: [rev({ id: RV })] });
+  db.targets.push({ id: TC, ownerScope: "club", key: "club_distance", label: "Club distance", currentVersion: { id: "tv-c", versionNumber: 1, unit: "m", canonicalParameters: null },
+    scopes: ["session", "component"], versionReady: true, notReadyCode: null });
+}
+// The server's own status changes, so each step of the chain reads back what
+// the step before it saved; a created mapping belongs to the workspace's owner.
+const statusful = (c) => {
+  if (c.method !== "POST") return null;
+  if (c.url === `${B}/mappings`) {
+    return keyed(c, () => {
+      const club = state.currentUser?.activeWorkspace?.type === "club";
+      const mapping = { id: M2, ownerScope: club ? "club" : "system", sourceMetric: { id: c.body.sourceMetricId, label: "Distance two" }, metricDefinitionId: c.body.metricDefinitionId,
+        target: { label: club ? "Club distance" : "Distance" }, createdAt: "2026-11-03T10:00:00Z", versions: [] };
+      db.mappings.push(mapping);
+      return ok({ mapping: summary(mapping), replayed: false }, 201);
+    });
+  }
+  const m = c.url.match(/\/mappings\/([^/]+)\/versions\/([^/]+)\/(submit|activate)$/);
+  if (!m) return null;
+  return keyed(c, () => {
+    const mapping = db.mappings.find((x) => x.id === m[1]);
+    const v = mapping?.versions.find((x) => x.id === m[2]);
+    if (!v) return ok({ error: "notFound" }, 404);
+    if (m[3] === "submit") { v.status = "needs_review"; return ok({ version: { ...v }, replayed: false }); }
+    v.status = "active";
+    const started = (c.body.activations || []).map((b, i) => act({ id: id("ac0000ff", i + 1), mappingId: mapping.id, versionId: v.id, bindingId: b.bindingId, requirement: b.requirement, teamId: TEAM1 }));
+    db.activations.push(...started);
+    return ok({ version: { ...v }, replaced: null, activationsEnded: 0, activations: started, replayed: false });
+  });
+};
+// Opens the flow and walks it to step 4 for `fieldId` and `targetId`; returns the clicks and inputs it took.
+async function toStep4(fieldId, targetId) {
+  await open();
+  dispatches = 0;
+  await click('[data-action="metric-mappings-new"]');
+  render();
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${fieldId}"]`);
+  render();
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${targetId}"]`);
+  render();
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.match(text(), /Review the draft/);
+  return 4;
+}
+const saveAndActivate = () => $('[data-action="metric-mappings-flow-save-activate"]');
+
+test("45. a club's admin saves and activates a new mapping with one team switched on, in one flow: create, draft, submit and activate, each with its own key, in that order; nothing names an owner or a basis; the interactions are counted (F4)", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  assert.ok(saveAndActivate(), "Save and activate is offered to the club's admin");
+  assert.equal(saveAndActivate().className.includes("data-sources-primary"), true, "it is the primary act");
+  assert.match(text(), /Save and activate makes this version active now: it is saved, submitted for review and activated in one go\./);
+  assert.match(text(), /Leave it off to switch teams on later\. Until then, no team's imports use this version\./);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.equal(data.mappingsState().flow.activate.chooser.clubId, CLUB, "the chooser starts on the club");
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  // Every click and input dispatched since New mapping, plus the one confirmation.
+  const interactions = dispatches + confirmQuestions.length;
+  render();
+  assert.equal(confirmQuestions.length, 1);
+  assert.match(confirmQuestions[0], /submit it and activate it now, switched on for 1 team\?/);
+  const [create, draft, submit, activate] = posts();
+  assert.equal(posts().length, 4);
+  assert.equal(create.url, `${B}/mappings`);
+  assert.equal(draft.url, `${B}/mappings/${M2}/versions`);
+  assert.equal(submit.url, `${B}/mappings/${M2}/versions/${V3}/submit`);
+  assert.equal(activate.url, `${B}/mappings/${M2}/versions/${V3}/activate`);
+  assert.equal(new Set([create, draft, submit, activate].map((c) => c.body.requestKey)).size, 4, "four request keys");
+  assert.equal(activate.body.expectedActiveVersionId, null);
+  assert.deepEqual(activate.body.activations, [{ bindingId: B1, requirement: "required" }]);
+  assert.equal(activate.body.activationReason, "Our club's distance.");
+  for (const c of [create, draft, submit, activate]) for (const key of ["owner", "ownerScope", "clubId", "basis", "actor", "userId"]) assert.ok(!(key in c.body), key);
+  assert.match(text(), /Version 1 is active\. 1 team is switched on\./);
+  assert.equal(data.mappingsState().chain, null);
+  assert.ok(interactions <= 10, `a club's path with one team takes ${interactions} interactions`);
+});
+
+test("46. a platform admin saves and activates a system mapping with no team: three writes after create, the last one without activations", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  await toStep4(FV, TD);
+  assert.ok(saveAndActivate(), "offered to the platform admin");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  const urls = posts().map((c) => c.url.replace(B, ""));
+  assert.deepEqual(urls, ["/mappings", `/mappings/${M2}/versions`, `/mappings/${M2}/versions/${V3}/submit`, `/mappings/${M2}/versions/${V3}/activate`]);
+  const activate = posts().at(-1);
+  assert.deepEqual(Object.keys(activate.body).sort(), ["expectedActiveVersionId", "requestKey"]);
+  assert.match(text(), /Version 1 is active\. No team uses it yet: switch it on for teams below\./);
+});
+
+test("47. Save and activate is not offered: a mapping with an active version (F1, from the list and from New version), a field whose meaning is not confirmed, a field another mapping of the owner already fills", async () => {
+  chainWorld();
+  // F1 from the list: field FA to variable TD is M1, which has an active version.
+  await toStep4(FA, TD);
+  assert.equal(saveAndActivate(), null, "M1 already has an active version");
+  assert.ok($('[data-action="metric-mappings-flow-save"]'), "Save draft stays");
+  assert.match(text(), /This mapping already has an active version\. Save this draft, submit it for review, then replace the active version from the mapping's page\./);
+  // F1 from the detail's New version.
+  actions.resetMappings();
+  await open("detail");
+  await click('[data-action="metric-mappings-new-version"]');
+  render();
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.match(text(), /Review the draft/);
+  assert.equal(saveAndActivate(), null, "a new version next to an active one is replaced from the detail");
+  assert.match(text(), /This mapping already has an active version \(version \d+\)\. Save this draft, submit it for review, then replace version \d+ from the mapping's page\./);
+  // The meaning is not confirmed.
+  actions.resetMappings();
+  db.fields.find((f) => f.id === FV).revisions[0].evidenceStatus = "observed";
+  await toStep4(FV, TD);
+  assert.equal(saveAndActivate(), null, "a field whose meaning is not confirmed");
+  assert.match(text(), /It can be activated once the field's meaning is confirmed\./);
+  db.fields.find((f) => f.id === FV).revisions[0].evidenceStatus = "verified";
+  // Another mapping of the owner fills a variable from this field (M1, FA to TD, active): FA to TK would be refused.
+  actions.resetMappings();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  render();
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TK}"]`);
+  render();
+  await input('[data-mm-field="flow.conversionNote"]', "GPEXE gives metres; the variable is in km.");
+  await input('[data-mm-field="flow.session"]', true);
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.match(text(), /Review the draft/);
+  assert.equal(saveAndActivate(), null, "source_metric_target_taken would refuse it");
+  assert.match(text(), /This field already fills “([^”]+)”, and only one of them can be active at a time\. Save this as a draft; it can be activated only after the mapping to “\1” is disabled\./);
+  assert.equal(posts().length, 0);
+});
+
+test("48. a stated refusal stops Save and activate where it stands: the create keeps the form; the draft leaves the mapping; the submit leaves the draft; the activate leaves the version waiting - each with its sentence and nothing sent after it", async () => {
+  chainWorld();
+  const refuseAt = (suffix, body, status = 409) => (c) => (c.method === "POST" && c.url.endsWith(suffix) ? ok(body, status) : null);
+  // The create.
+  overrides = [refuseAt("/mappings", { error: "try_again" }), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(posts().length, 1);
+  assert.match(text(), /The server was busy\. Nothing was saved\. Try again\./);
+  assert.equal(data.mappingsState().chain, null);
+  // The draft.
+  freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
+  overrides = [refuseAt("/versions", { error: "try_again" }), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.deepEqual(posts().map((c) => c.url.split("/").pop()), ["mappings", "versions"]);
+  assert.match(text(), /The mapping is saved, but its draft was not: the server was busy\. Save and activate stopped there\. Use New version to try again\./);
+  assert.doesNotMatch(text(), /Nothing was saved/, "the create did save (the re-review's UX-R1)");
+  assert.equal(data.mappingsState().chain, null);
+  // The submit.
+  freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
+  overrides = [refuseAt("/submit", { error: "version_not_draft", current: { status: "needs_review" } }), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.deepEqual(posts().map((c) => c.url.split("/").pop()), ["mappings", "versions", "submit"]);
+  // A read-again refusal: no claim about what is left (the re-review's UX-R5).
+  assert.match(text(), /Save and activate stopped\. This version changed meanwhile\./);
+  // The activate.
+  freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
+  overrides = [refuseAt("/activate", { error: "revision_not_verified" }), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(posts().length, 4);
+  assert.match(text(), /Version 1 is waiting for review and was not activated\. The field's unit and meaning must be confirmed first\./);
+  assert.equal(data.mappingsState().chain, null);
+  // A busy server on the activate: what stopped and what is next, never "Nothing was saved" after steps that saved (UX-1).
+  freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
+  overrides = [refuseAt("/activate", { error: "try_again" }), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Version 1 is waiting for review and was not activated\. The server was busy\. Activate it from here\./);
+  assert.doesNotMatch(text(), /Nothing was saved/);
+});
+
+test("49. F2: a lost answer stops Save and activate once Check result has settled it - on the submit (no activate is sent) and on the create (the draft follows, as Save draft does, then nothing)", async () => {
+  chainWorld();
+  let first = true;
+  overrides = [(c) => (c.method === "POST" && c.url.endsWith("/submit") && first ? ((first = false), { throwNetworkError: true }) : null), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Result not confirmed\./);
+  assert.equal(data.mappingsState().chain.stalled, true);
+  await click('[data-action="metric-mappings-check-result"]');
+  render();
+  const kinds = posts().map((c) => c.url.split("/").pop());
+  assert.deepEqual(kinds, ["mappings", "versions", "submit", "submit"]);
+  assert.equal(posts()[2].rawBody, posts()[3].rawBody, "the check sends the same submit");
+  assert.match(text(), /Submitted for review\. Save and activate stopped there, because its result had to be checked\. Activate it from here\./);
+  assert.equal(data.mappingsState().chain, null);
+  // On the create.
+  freshDb(); chainWorld(); actions.resetMappings(); calls.length = 0;
+  first = true;
+  overrides = [(c) => (c.method === "POST" && c.url === `${B}/mappings` && first ? ((first = false), { throwNetworkError: true }) : null), statusful];
+  await toStep4(FV, TD);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  await click('[data-action="metric-mappings-check-result"]');
+  render();
+  assert.deepEqual(posts().map((c) => c.url.split("/").pop()), ["mappings", "mappings", "versions"]);
+  assert.match(text(), /The draft is saved\. Save and activate stopped there, because its result had to be checked\. Submit it for review, then activate it\./);
+});
+
+test("50. Save and activate with teams checks the choices first (a team, Required or Optional, a reason) and sends nothing when its one confirmation is declined", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Choose at least one team\./);
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Choose Required or Optional\./);
+  await input('[data-mm-field="requirement"][value="optional"]', true);
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(data.mappingsState().flow.activate.errors.reason !== undefined, true, "a reason is required with teams");
+  await input('[data-mm-field="reason"]', "For the U19 too.");
+  confirmAnswer = false;
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  assert.equal(posts().length, 0, "declined: nothing sent");
+  assert.equal(data.mappingsState().chain, null);
+});
+
+test("51. leaving during Save and activate drops the chain (the code review's 7HF-1): with the submit's answer still out, '← All mappings' and Leave anyway; the user then submits the same draft by hand, and no activate is sent", async () => {
+  chainWorld();
+  let held = 0;
+  overrides.push((c) => (c.method === "POST" && /\/submit$/.test(c.url) && held++ === 0 ? new Promise(() => {}) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  click('[data-action="metric-mappings-flow-save-activate"]');
+  for (let i = 0; i < 40 && !posts().some((c) => /\/submit$/.test(c.url)); i += 1) await settle();
+  assert.ok(data.mappingsState().write?.busy, "the submit is in flight");
+  render();
+  await click('[data-action="metric-mappings-back"]');
+  assert.match(confirmQuestions.at(-1), /Leave anyway\?/);
+  assert.equal(data.mappingsState().chain, null, "leaving drops the chain");
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click(`[data-action="metric-mappings-open"][data-mapping-id="${M2}"]`);
+  render();
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.equal(posts().filter((c) => /\/submit$/.test(c.url)).length, 2, "the lost submit and the manual one");
+  assert.equal(posts().filter((c) => /\/activate$/.test(c.url)).length, 0, "a manual submit never resumes a dropped chain");
+  assert.match(text(), /Submitted for review\./);
+  assert.doesNotMatch(text(), /Save and activate stopped/);
+});
+
+test("52. 'Every team of this connection' on step 4 checks the connection's teams in the flow's chooser (the code review's 7HF-2)", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click(`[data-action="metric-mappings-every-team"][data-connection-id="${CONN}"]`);
+  render();
+  assert.deepEqual(Object.keys(data.mappingsState().flow.activate.chooser.selected).sort(), [B1, B2].sort());
+  assert.ok($(`[data-mm-field="team"][data-binding-id="${B1}"]`).checked && $(`[data-mm-field="team"][data-binding-id="${B2}"]`).checked);
+  assert.equal(posts().length, 0, "choosing sends nothing");
+});
+
+test("53. Save and activate is not offered while the mapping list is not read to its end (the code review's 7HF-3): another mapping of the owner could fill the field", async () => {
+  chainWorld();
+  overrides.push((c) => (c.method === "GET" && c.url === `${B}/mappings` ? ok({ mappings: db.mappings.map(summary), nextCursor: "next" }) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  assert.equal(saveAndActivate(), null, "a list with a next page cannot prove the field free");
+  assert.ok($('[data-action="metric-mappings-flow-save"]'), "Save draft stays");
+});
+
+test("54. one write in flight at a time: while Save and activate's create is out, nothing else is sent and a second click sends nothing; the chain continues only after its answer", async () => {
+  chainWorld();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/mappings` && !c.body.__seen ? (c.body.__seen = true, gate.then(() => statusful(c))) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  const first = click('[data-action="metric-mappings-flow-save-activate"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.equal(posts().length, 1, "only the create is out");
+  assert.ok(data.mappingsState().write?.busy);
+  const button = saveAndActivate();
+  assert.ok(button.disabled, "the button is off while the write is out");
+  await actions.handleMappingsAction(button, { render });
+  assert.equal(posts().length, 1, "a second click sends nothing");
+  release();
+  await first;
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.deepEqual(posts().map((c) => c.url.replace(B, "")), ["/mappings", `/mappings/${M2}/versions`, `/mappings/${M2}/versions/${V3}/submit`, `/mappings/${M2}/versions/${V3}/activate`]);
+  assert.match(text(), /Version 1 is active\./);
+});
+
+test("55. a team refused on the chained activate is named, with the next step (the ux-design-reviewer's UX-5)", async () => {
+  chainWorld();
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "binding_not_active", current: { bindingId: B1 } }, 409) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(posts().length, 4);
+  assert.match(text(), /Version 1 is waiting for review and was not activated\. “First team” is no longer linked to GPEXE\. Activate it from here and choose the teams again\./);
+  assert.equal(data.mappingsState().chain, null);
+});
+
+test("56. the mapping already exists when the chained create arrives: its draft is saved there, the chain stops and says why and that the chosen teams are not on yet (UX-8, UX-6)", async () => {
+  chainWorld();
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/mappings` ? ok({ error: "mapping_exists", current: { mappingId: M1 } }, 409) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.deepEqual(posts().map((c) => c.url.replace(B, "")), ["/mappings", `/mappings/${M1}/versions`]);
+  assert.match(text(), /The draft is saved\. This mapping already existed, so Save and activate stopped there\. Submit it for review, then activate it\. The teams you chose are not switched on yet; choose them again when you activate\./);
+  assert.equal(data.mappingsState().chain, null);
+});
+
+test("57. New version after a write reads the mapping list, so Save and activate is offered on step 4 (the re-review's 7HF-R1)", async () => {
+  chainWorld();
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await click('[data-action="metric-mappings-flow-save"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  assert.match(text(), /The draft is saved\./);
+  assert.equal(data.mappingsState().list.loaded, false, "the write reset the list");
+  await click('[data-action="metric-mappings-new-version"]');
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.equal(data.mappingsState().list.loaded, true, "New version read the list");
+  assert.ok(saveAndActivate(), "offered: no active version, the field is free and the list is read to its end");
+});
+
+test("58. a busy activate with chosen teams names the teams in the next step (the re-review's UX-R2)", async () => {
+  chainWorld();
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "try_again" }, 409) : null));
+  overrides.push(statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.match(text(), /Version 1 is waiting for review and was not activated\. The server was busy\. Activate it from here and choose the teams again\./);
+  assert.doesNotMatch(text(), /Nothing was saved/);
 });

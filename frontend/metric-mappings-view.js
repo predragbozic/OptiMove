@@ -10,7 +10,7 @@ import {
 } from "./metric-mappings-data.js";
 import {
   activateBlocker, activeVersion, bindingFacts, chooserTeams, chosenBindings, fieldOf, fieldTakenBy, flowFacts, inOwnerWorkspace,
-  mayTransition, teamNameOf,
+  mayTransition, saveAndActivateNote, saveAndActivateOffered, teamNameOf,
 } from "./metric-mappings-actions.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -67,7 +67,8 @@ function writeHtml(s) {
         </div>
       </div>`;
   }
-  if (w.busy) return `<p class="muted" role="status">Saving...</p>`;
+  // Save and activate's last write says what it is doing (the re-review's UX-R3).
+  if (w.busy) return `<p class="muted" role="status">${w.act === "activate" && w.after?.chained ? "Submitted for review. Activating..." : "Saving..."}</p>`;
   if (w.error) {
     return `<div class="error" role="alert"><p>${escapeHtml(w.error)}</p>
       ${w.code ? `<details class="data-sources-tech"><summary>Technical details</summary><dl><div><dt>Code</dt><dd>${escapeHtml(w.code)}</dd></div></dl></details>` : ""}</div>`;
@@ -253,8 +254,13 @@ function stepDetailsHtml(s, locked) {
 }
 function stepReviewHtml(s, locked) {
   const f = s.flow;
+  const ctx = mappingsContext();
   const { field, revision, target, status } = flowFacts(s);
   if (!revision || !target || !status?.choosable) return "";
+  // 7h-F: Save and activate, for whoever may activate this mapping (F1-F4).
+  const offered = saveAndActivateOffered(s, ctx);
+  const note = offered ? null : saveAndActivateNote(s, ctx);
+  const a = f.activate;
   const levels = levelsOf(revision, target);
   const session = levels.session && levels.drill ? f.draft.session : levels.session;
   const drill = levels.session && levels.drill ? f.draft.drill : levels.drill;
@@ -273,14 +279,25 @@ function stepReviewHtml(s, locked) {
         ${bound ? `<div><dt>Bound</dt><dd>${escapeHtml(bound)}</dd></div>` : ""}
         ${status.conversion ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(cleanName(f.draft.conversionNote, 500))}</dd></div>` : ""}
       </dl>
-      <p class="muted">${fieldStatus(field).meaningPending
+      ${offered ? "" : `<p class="muted">${fieldStatus(field).meaningPending
         ? "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is confirmed."
-        : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
+        : note ? escapeHtml(note) : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>`}
     </div>
+    ${offered ? `
+    <div class="metric-mappings-activate-now">
+      <label class="source-fields-choice"><input type="checkbox" data-mm-field="withTeams" ${a.withTeams ? "checked" : ""} ${locked ? "disabled" : ""}><span>Switch on for teams now</span></label>
+      ${a.withTeams ? `${chooserHtml(s, a, ctx, { id: null })}${reasonHtml(a, "Reason", locked)}
+      <p class="muted">The server checks every team again when the version is activated.</p>`
+        : `<p class="muted">Leave it off to switch teams on later. Until then, no team's imports use this version.</p>`}
+    </div>
+    <p class="metric-mappings-save-activate-note">Save and activate makes this version active now: it is saved, submitted for review and activated in one go. Save draft only saves it; nothing changes until it is activated.</p>` : ""}
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
     <div class="data-sources-form-actions">
-      <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save draft"}</button>
+      ${offered
+        ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save-activate" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save and activate"}</button>
+      <button class="plain-button" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>Save draft</button>`
+        : `<button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-flow-save" ${locked ? "disabled" : ""}>${s.write?.busy ? "Saving..." : "Save draft"}</button>`}
       <button class="plain-button ghost" type="button" data-action="metric-mappings-flow-cancel" ${locked ? "disabled" : ""}>Cancel</button>
     </div>`}`;
 }
