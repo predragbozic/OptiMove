@@ -1065,7 +1065,9 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
   `409 try_again`, as v35's.
 - **D6** (from the internal security review). The copy's and the hide's state refusal for a variable that is not a
   system one (`copy_source_not_system`, `hide_not_system`) comes after the right is checked again under its locks, as
-  section 4's order says: a caller whose right is gone meanwhile gets the identical 404.
+  section 4's order says: a caller whose right is gone meanwhile gets the identical 404. The same holds for the copy
+  that loses a race (round 2 of that review): before its answer names the winning copy, its read checks the right again
+  `FOR SHARE`, and a lost right answers the identical 404.
 
 **Changes to existing tests, each a consequence of the contract:**
 - `mapping-activations-7d.test.mjs` test 6: the unique-index backstop of two starts of one system variable on one
@@ -1096,14 +1098,14 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
 - A test seam after each hide lock (`setHideLockHoldForTests`, `sourceMetricActivationSteps.js`) drives the races of
   L1.
 
-**Tests** (`backend/tests/source-metric-variables-club-7i.test.mjs`, 31 tests, disposable databases):
+**Tests** (`backend/tests/source-metric-variables-club-7i.test.mjs`, 32 tests, disposable databases):
 - the copy: its writes, its answer's `copiedMappings` equal to the links of its operation, its refusals in order (each
   sent with its own key, nothing written and no request record holding the key afterwards), its replay and the club in
   the hash;
-- a right lost during a copy or a hide before its state refusal (D6);
+- a right lost during a copy or a hide before its state refusal, and before a losing copy names the winner (D6);
 - a lost COMMIT answer through the copy, the hide, the show and the switch: each verified through its own request record
-  (`verified_after_commit_error`, then the same key replays), and an unverifiable one answers `503 outcome_unknown` with
-  nothing written, after which the same key writes once;
+  (`verified_after_commit_error`, then the same key replays), and an unverifiable one (rejected, or never answered
+  within its bound) answers `503 outcome_unknown` with nothing written, after which the same key writes once;
 - hide and show, the no-op key, the cross-act key and `variable_in_use`; S1 and A1 refused on a hidden variable;
 - the switch, its answers, and its refusals combined in section 4.3's order;
 - the matrix of section 10 (an invalid body included), the reads and the template cases;
@@ -1137,7 +1139,7 @@ started by an S1 or an A1 of a system version, which takes the same hide lock fi
 S1, or it existed before the S1's checks, so the S1 answers `activation_exists` there. The position of A1's hide lock
 (before its first end) is pinned by test 12's SQL order for a replacing A1, and by mutation M28.
 
-**Mutations** (28, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
+**Mutations** (29, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
 every one killed.
 - Four end in a real `40P01`, seen as `deadlock detected` in the PostgreSQL server log during their run: the L1
   mutation (the hide locks not sorted); the hide lock before the rights in the hide; the switch's binding after its
@@ -1147,6 +1149,7 @@ every one killed.
 - A `FOR SHARE` on the variable in the hide guard is killed by test 20's lock-mode assertion. That lock does not
   conflict with the A1's `FOR SHARE`, so no deadlock can show it.
 - The hide request lookup broken, and the copy's replay without its copied drafts, are killed by the lost-COMMIT test.
+- The losing copy's race read without its right check is killed by test 15b.
 - The service's hide check removed is killed only by the answer's `current.bindingId`. The T5 guard still refuses, and
   the classifier still answers `409 variable_hidden`, without naming the binding.
 

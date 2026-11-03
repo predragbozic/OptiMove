@@ -141,6 +141,7 @@ after(async () => {
 
 function resetSeams() {
   service?.setMappingCommitForTests();
+  service?.setMappingReadFaultForTests(null);
   service?.setMappingRightsHoldForTests(null);
   service?.setMappingWriteHoldForTests(null);
   service?.setMappingBeforeHideLocksHoldForTests(null);
@@ -796,15 +797,15 @@ test("1c. a lost COMMIT answer through the copy, the hide, the show and the swit
   const gone = () => service.setMappingCommitForTests({ fault: () => Promise.reject(Object.assign(new Error("socket gone"), { code: "08006" })), timeoutMs: 2_000 });
   const verified = async (send, status) => {
     lost();
-    const res = await send();
-    service.setMappingCommitForTests();
+    let res;
+    try { res = await send(); } finally { service.setMappingCommitForTests(); }
     assert.deepEqual([res.status, res.body.commitConfirmation], [status, "verified_after_commit_error"], res.text);
     return res.body;
   };
   const unknown = async (send) => {
     gone();
-    const res = await nothingWritten(() => send());
-    service.setMappingCommitForTests();
+    let res;
+    try { res = await nothingWritten(() => send()); } finally { service.setMappingCommitForTests(); }
     assert.deepEqual([res.status, res.body.error], [503, "outcome_unknown"], res.text);
     return res.body;
   };
@@ -841,6 +842,16 @@ test("1c. a lost COMMIT answer through the copy, the hide, the show and the swit
   await unknown(() => show(W.caA, h2.id, sk2));
   assert.equal((await hideRow(W.clubA, h2.id)).shown_at, null, "still hidden");
   assert.deepEqual([ok(await show(W.caA, h2.id, sk2)).replayed, ok(await show(W.caA, h2.id, sk2)).replayed], [false, true]);
+  // A COMMIT whose answer never comes: bounded, the connection dropped (the transaction ends unsent), 503, and the
+  // same key then writes once.
+  const h3 = await systemVariable();
+  const hk3 = key();
+  service.setMappingCommitForTests({ fault: () => new Promise(() => {}), timeoutMs: 200 });
+  let hung;
+  try { hung = await nothingWritten(() => hide(W.caA, h3.id, hk3)); } finally { service.setMappingCommitForTests(); }
+  assert.deepEqual([hung.status, hung.body.error], [503, "outcome_unknown"], hung.text);
+  assert.equal(await hideRow(W.clubA, h3.id), undefined, "nothing hidden");
+  assert.deepEqual([ok(await hide(W.caA, h3.id, hk3)).replayed, ok(await hide(W.caA, h3.id, hk3)).replayed], [false, true]);
   // The switch.
   const sw = await systemVariable();
   const b = await binding(W.clubA);
@@ -1734,6 +1745,32 @@ test("15. two copies of one system variable by two admins of club A at once: the
   assert.deepEqual(refused(await first, 409, "already_copied").current, { variableId: made });
   assert.equal((await one(k, `select count(*)::int as n from ${COPIES} where system_definition_id = $1 and club_id = $2`, [sys.id, W.clubA])).n, 1);
   assert.equal((await copiedDrafts(made)).length, 2);
+});
+
+test("15b. the losing copy of 15 whose admin's role is revoked before it names the winner (security review, round 2): the race read checks the right again and answers the identical 404, never the other copy's id", async () => {
+  const sys = await systemVariable();
+  const { clubId, low, high } = await clubOfTwo();
+  const base = notFoundShape(await post(`/variables/${crypto.randomUUID()}/copy`, low.cookie, { requestKey: key(), expectedSourceVersionId: crypto.randomUUID() }));
+  const hold = holdVariable("variable_copy");
+  const first = copy(low, sys.id);
+  await until(() => hold.state.entered, "the first copy holds after its checks");
+  variables.setVariableWriteHoldForTests(null);
+  const made = ok(await copy(high, sys.id), 201).variable.id;
+  // The first copy's own transaction is gone once it meets the winner's rows; its race read then runs on a new
+  // connection - the role is revoked right there.
+  let revoked = false;
+  service.setMappingReadFaultForTests(async () => {
+    if (revoked) return;
+    revoked = true;
+    await setClubRole(low.id, clubId, false);
+  });
+  hold.g.open();
+  let res;
+  try { res = await first; } finally { service.setMappingReadFaultForTests(null); }
+  assert.ok(revoked, "the race read ran");
+  assert.deepEqual(notFoundShape(res), base, "the identical 404");
+  assert.ok(!JSON.stringify(res.body).includes(made), "the winner's id is not named");
+  assert.equal((await one(k, `select count(*)::int as n from ${COPIES} where system_definition_id = $1 and club_id = $2`, [sys.id, clubId])).n, 1);
 });
 
 test("16. copy against A1 of the copied system mapping (D1): A1 holding T3 FOR NO KEY UPDATE makes the copy wait at its T3 lock; the copy reads the active set again and answers try_again, nothing written; a copy holding T3 FOR SHARE makes A1 wait, and A1 commits after it", async () => {

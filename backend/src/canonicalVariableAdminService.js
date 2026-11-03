@@ -1259,10 +1259,18 @@ export async function copyVariable({ ctx, variableId, body }) {
     // before the copy row's (already_copied). When the other copy is now there,
     // the answer is already_copied naming it, as createMapping names its
     // mapping; a key_taken of the pre-check (no copy exists) stays key_taken.
+    // The right is checked again (FOR SHARE) before the other copy is named: a
+    // caller whose right went meanwhile gets the identical 404 (security review
+    // of round 2).
     if (error instanceof SourceMetricMappingError && ["already_copied", "key_taken"].includes(error.code) && !error.details) {
-      const current = await boundedRead(async (client) => (await client.query(
-        `select club_definition_id from training_load.metric_definition_copies where club_id = $1 and system_definition_id = $2`, [ctx.owner.clubId, id],
-      )).rows[0]).catch(() => undefined);
+      let rightLost = false;
+      const current = await boundedRead(async (client) => {
+        if (!(await rightsStillHold(client, ctx))) { rightLost = true; return null; }
+        return (await client.query(
+          `select club_definition_id from training_load.metric_definition_copies where club_id = $1 and system_definition_id = $2`, [ctx.owner.clubId, id],
+        )).rows[0];
+      }, { locks: true }).catch(() => undefined);
+      if (rightLost) throw NOT_FOUND();
       if (current) throw refusal(409, "already_copied", TEXT.already_copied, { current: { variableId: current.club_definition_id } });
     }
     throw error;
