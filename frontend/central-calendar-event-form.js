@@ -1,11 +1,26 @@
 import { CENTRAL_CALENDAR_EVENT_EXPECTS } from "./central-calendar-data.js";
+import {
+  applyCentralCalendarTeamPlace,
+  buildCentralCalendarValuesRequest,
+  centralCalendarDetailsRequest,
+  centralCalendarTypeChangedDetails,
+  initCentralCalendarCreateDetails,
+  initCentralCalendarEditDetails,
+  renderCentralCalendarDetailsFieldHtml,
+  renderCentralCalendarPlaceFieldHtml,
+  renderCentralCalendarValuesFieldsHtml,
+  setCentralCalendarPlaceText,
+} from "./central-calendar-event-details.js";
+import { CENTRAL_CALENDAR_EVENT_KIND_LABELS } from "./central-calendar-view.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 // Central calendar (K2a-2) - the event form: its state, its checks, the
 // request body and its template (docs/ai/central-calendar-k2a-2-plan.md
-// section 4). Three modes share one object in state.centralCalendar.form:
-// "create", "edit" (opened from GET /api/calendar/events/:id) and "cancel"
-// (the confirmation that names the event). Nothing here talks to the server;
+// section 4). Four modes share one object in state.centralCalendar.form:
+// "create", "edit" (opened from GET /api/calendar/events/:id), "cancel"
+// (the confirmation that names the event) and, since K2b-1d, "values" (Enter
+// details, central-calendar-event-details.js). The place and the details of
+// create and edit live in that module too. Nothing here talks to the server;
 // central-calendar-actions.js sends `buildCentralCalendarEventRequest`'s body
 // and keeps the outcome on the same object (busy, unconfirmed, checkNote).
 
@@ -30,7 +45,10 @@ const TYPE_HINTS = Object.freeze({
 });
 
 function blankDraft() {
-  return { eventTypeId: "", title: "", day: "", endDay: "", startTime: "", endTime: "", location: "", notes: "", expects: [], targets: [], reason: "" };
+  // K2b-1d: `placeChoice` is a library place's id, "other" (the one-off text
+  // in `location`) or "" (none); `fieldIds` the details in order; `values`
+  // the "values" mode's inputs by detail.
+  return { eventTypeId: "", title: "", day: "", endDay: "", startTime: "", endTime: "", location: "", placeChoice: "", fieldIds: [], values: {}, notes: "", expects: [], targets: [], reason: "" };
 }
 
 function baseForm(mode, extra = {}) {
@@ -45,6 +63,7 @@ function baseForm(mode, extra = {}) {
     readOnlyType: false, readOnlyTargets: false,
     draft: blankDraft(), original: null, revision: 0,
     expectsTouched: false, titleAuto: true,
+    placeTouched: false, placeFromTeam: false, fieldsTouched: false, addFieldId: "", eventPlace: null, eventFields: [], fields: [],
     athleteQuery: "", athletesOpen: false,
     errors: {}, error: "",
     busy: false, unconfirmed: false, checkNote: "", requestKey: "", sentBody: null, dirty: false,
@@ -55,31 +74,36 @@ function baseForm(mode, extra = {}) {
 const targetKey = (target) => `${target.kind}:${String(target.id).toLowerCase()}`;
 const sameSet = (a, b) => a.length === b.length && a.every((value) => b.includes(value));
 
-// The type's defaults and label (D19): pre-ticked, editable per event.
-export function applyCentralCalendarEventType(form, type) {
+// The type's defaults and label (D19): pre-ticked, editable per event; on a
+// new event its default details too, until the coach touched the list.
+export function applyCentralCalendarEventType(form, type, catalog = null) {
   if (!type || form.draft.eventTypeId === type.id) return false;
   form.draft.eventTypeId = type.id;
   if (!form.expectsTouched) form.draft.expects = CENTRAL_CALENDAR_EVENT_EXPECTS.filter((expect) => (type.defaultExpects || []).includes(expect));
   if (form.titleAuto) form.draft.title = type.label || "";
+  if (catalog) centralCalendarTypeChangedDetails(form, type, catalog);
   return true;
 }
 
 // A new event in the active workspace, on `day`: the first type preselected,
 // a team workspace's own team (or the club's teams the Groups chips chose)
 // as the first target.
-export function newCentralCalendarCreateForm({ day, owner, types, targets = [] }) {
+export function newCentralCalendarCreateForm({ day, owner, types, targets = [], catalog = null }) {
   const form = baseForm("create", { owner, loading: !types });
   form.draft.day = day;
   form.draft.targets = targets.map((target) => ({ ...target }));
   if (types?.length) applyCentralCalendarEventType(form, types[0]);
+  if (types && catalog) initCentralCalendarCreateDetails(form, types[0], catalog);
   return form;
 }
 
 // The types arrived after the form opened: the first is preselected unless
-// the coach chose one meanwhile (the select is not drawn before they arrive).
-export function centralCalendarFormTypesLoaded(form, types) {
+// the coach chose one meanwhile (the select is not drawn before they arrive),
+// and its default details and the team's default place with it.
+export function centralCalendarFormTypesLoaded(form, types, catalog = null) {
   form.loading = false;
   if (form.mode === "create" && !form.draft.eventTypeId && types?.length) applyCentralCalendarEventType(form, types[0]);
+  if (form.mode === "create" && catalog) initCentralCalendarCreateDetails(form, (types || []).find((type) => type.id === form.draft.eventTypeId), catalog);
 }
 
 // Edit, while GET /api/calendar/events/:id is read: the card it came from.
@@ -114,16 +138,21 @@ export function centralCalendarEditFormFromEvent(form, event, { types, readOnly 
   form.eventId = event.id;
   form.eventTitle = event.title || "";
   form.revision = event.revision;
-  form.draft = draft;
-  form.original = { ...draft, targets: draft.targets.map((target) => ({ ...target })), expects: [...draft.expects] };
+  form.draft = { ...blankDraft(), ...draft };
+  initCentralCalendarEditDetails(form, event);
+  form.original = { ...form.draft, targets: form.draft.targets.map((target) => ({ ...target })), expects: [...form.draft.expects], fieldIds: [...form.draft.fieldIds] };
   form.expectsTouched = true;
   form.titleAuto = false;
   form.owner = ownerOfEvent(event, names);
   form.readOnlyTargets = readOnly;
-  const offered = (types || []).some((type) => type.id === draft.eventTypeId);
+  // A type the workspace still offers can be changed here; an event without a
+  // type (a moved team's, D41) starts at "Choose a type" and keeps the
+  // stored one unless a type is chosen (section 17).
+  const untyped = !draft.eventTypeId;
+  const offered = untyped || (types || []).some((type) => type.id === draft.eventTypeId);
   form.readOnlyType = readOnly || typesFailed || !offered;
   form.typeHint = readOnly ? "support" : typesFailed ? "types_failed" : offered ? "" : "not_offered";
-  form.eventTypeLabel = event.eventTypeLabel || "";
+  form.eventTypeLabel = event.eventTypeLabel || CENTRAL_CALENDAR_EVENT_KIND_LABELS[event.eventKind] || "Event";
   return form;
 }
 
@@ -191,15 +220,15 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
     const body = { expectedRevision: form.revision, ...(reason ? { reason } : {}) };
     return { errors, body: Object.keys(errors).length ? null : body, unchanged: false };
   }
+  if (form.mode === "values") return buildCentralCalendarValuesRequest(form);
   const d = form.draft;
   const title = oneLine(d.title);
-  const location = oneLine(d.location);
   const notes = multiLine(d.notes);
   const day = String(d.day || "");
   const endDay = String(d.endDay || "");
   const startTime = String(d.startTime || "");
   const endTime = String(d.endTime || "");
-  if (!d.eventTypeId) errors.eventTypeId = "Choose a type.";
+  if (!d.eventTypeId && form.mode === "create") errors.eventTypeId = "Choose a type.";
   const titleError = lengthError(title, CENTRAL_CALENDAR_EVENT_LIMITS.title, { required: true, requiredText: "Give the event a title." });
   if (titleError) errors.title = titleError;
   if (!ISO_DATE.test(day)) errors.day = "Choose the day.";
@@ -210,8 +239,8 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
   if (endTime && !TIME.test(endTime)) errors.endTime = "Use a time like 19:00.";
   else if (endTime && !startTime) errors.endTime = "An end time needs a start time.";
   else if (endTime && startTime && (!endDay || endDay === day) && endTime <= startTime) errors.endTime = "The end must be after the start.";
-  const locationError = lengthError(location, CENTRAL_CALENDAR_EVENT_LIMITS.location);
-  if (locationError) errors.location = locationError;
+  const details = centralCalendarDetailsRequest(form, { max: CENTRAL_CALENDAR_EVENT_LIMITS.location });
+  Object.assign(errors, details.errors);
   const notesError = lengthError(notes, CENTRAL_CALENDAR_EVENT_LIMITS.notes);
   if (notesError) errors.notes = notesError;
   if (!form.readOnlyTargets) {
@@ -227,7 +256,7 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
     if (endDay && endDay !== day) body.endDay = endDay;
     if (startTime) body.startTime = startTime;
     if (endTime) body.endTime = endTime;
-    if (location) body.location = location;
+    Object.assign(body, details.create);
     if (notes) body.notes = notes;
     return { errors, body, unchanged: false };
   }
@@ -236,7 +265,7 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
   const o = form.original;
   const body = { expectedRevision: form.revision };
   const orNull = (value) => value || null;
-  if (!form.readOnlyType && d.eventTypeId !== o.eventTypeId) body.eventTypeId = d.eventTypeId;
+  if (!form.readOnlyType && d.eventTypeId && d.eventTypeId !== o.eventTypeId) body.eventTypeId = d.eventTypeId;
   if (title !== oneLine(o.title)) body.title = title;
   if (day !== o.day) body.day = day;
   const nextEnd = endDay && endDay !== day ? endDay : "";
@@ -244,7 +273,7 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
   if (nextEnd !== prevEnd || (o.endDay && !prevEnd && day !== o.day)) body.endDay = orNull(nextEnd);
   if (startTime !== o.startTime) body.startTime = orNull(startTime);
   if (endTime !== o.endTime) body.endTime = orNull(endTime);
-  if (location !== oneLine(o.location)) body.location = orNull(location);
+  Object.assign(body, details.edit);
   if (notes !== multiLine(o.notes)) body.notes = orNull(notes);
   if (!sameSet(expects, o.expects)) body.expects = expects;
   if (!form.readOnlyTargets && !sameSet(d.targets.map(targetKey), o.targets.map(targetKey))) body.targets = targets;
@@ -257,17 +286,21 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
 // ---------------------------------------------------------------------------
 // A field's new value; true when the form must be drawn again (a choice that
 // changes other fields or counts), false when the input already shows it.
-export function setCentralCalendarFormField(form, field, value, { types } = {}) {
-  if (!(field in form.draft) || field === "targets" || field === "expects") return false;
+export function setCentralCalendarFormField(form, field, value, { types, catalog = null } = {}) {
+  if (!(field in form.draft) || ["targets", "expects", "fieldIds", "values", "placeChoice"].includes(field)) return false;
   if (form.draft[field] === value) return false;
   form.dirty = true;
   if (field === "eventTypeId") {
     const type = (types || []).find((entry) => entry.id === value);
-    if (type) return applyCentralCalendarEventType(form, type);
+    if (type) return applyCentralCalendarEventType(form, type, catalog);
     form.draft.eventTypeId = value;
     return true;
   }
   if (field === "title") form.titleAuto = false;
+  if (field === "location") {
+    setCentralCalendarPlaceText(form, value);
+    return false;
+  }
   form.draft[field] = value;
   return false;
 }
@@ -282,7 +315,7 @@ export function setCentralCalendarFormExpect(form, expect, checked) {
   return true;
 }
 
-export function setCentralCalendarFormTarget(form, target, checked) {
+export function setCentralCalendarFormTarget(form, target, checked, { catalog = null } = {}) {
   if (form.readOnlyTargets || !target?.id || !["athlete", "team", "club"].includes(target.kind)) return false;
   const key = targetKey(target);
   const index = form.draft.targets.findIndex((entry) => targetKey(entry) === key);
@@ -290,6 +323,8 @@ export function setCentralCalendarFormTarget(form, target, checked) {
   if (checked) form.draft.targets.push({ kind: target.kind, id: String(target.id), name: target.name || "" });
   else form.draft.targets.splice(index, 1);
   form.dirty = true;
+  // A club event for exactly one team starts at that team's default place.
+  if (catalog) applyCentralCalendarTeamPlace(form, catalog);
   return true;
 }
 
@@ -326,7 +361,7 @@ function checkHtml({ checked, attrs, label, focus, note = "" }) {
 function typeFieldHtml(form, types) {
   if (form.readOnlyType) {
     const hint = TYPE_HINTS[form.typeHint] || "";
-    return `<div class="cc-field"><span class="cc-field-label">Type</span><p class="cc-field-static">${escapeHtml(form.eventTypeLabel || "")}</p>${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}</div>`;
+    return `<div class="cc-field"><span class="cc-field-label">Type</span><p class="cc-field-static">${escapeHtml(form.eventTypeLabel || "Event")}</p>${hint ? `<span class="cc-field-hint">${escapeHtml(hint)}</span>` : ""}</div>`;
   }
   return `<label class="cc-field" for="${fieldId("eventTypeId")}">
       <span class="cc-field-label">Type</span>
@@ -348,7 +383,7 @@ function expectsHtml(form, types) {
     ? `As for every ${type.label} event; change it for this event only.`
     : type ? `Changed for this event (a ${type.label} event usually collects ${defaults.length ? defaults.map((e) => CENTRAL_CALENDAR_EXPECT_SHORT[e]).join(", ") : "nothing"}).` : "";
   return `<fieldset class="cc-fieldset"${form.errors?.expects ? ` aria-describedby="${fieldId("expects")}-error"` : ""}>
-      <legend>What should this event collect?</legend>
+      <legend>Collected after it</legend>
       <span class="cc-field-hint">Ticking a box does not ask anyone: it marks what is still missing after the event. Ask for RPE or a test the usual way.</span>
       ${CENTRAL_CALENDAR_EVENT_EXPECTS.map((expect) => checkHtml({
         checked: form.draft.expects.includes(expect), attrs: `data-cc-event-expect="${expect}"`, label: CENTRAL_CALENDAR_EXPECT_LABELS[expect], focus: `expect:${expect}`,
@@ -459,12 +494,13 @@ function spanText(form, longDate) {
 // What a pending check is about, in one sentence.
 function pendingWhatText(form, longDate) {
   const title = String(form.mode === "create" ? form.draft.title : form.eventTitle).replace(/\s+/g, " ").trim();
+  if (form.mode === "values") return `The details of “${title || "the event"}” were sent, but the answer was lost: it is not known whether they were saved.`;
   if (form.mode === "create") return `A new event “${title || "Event"}”${form.draft.day ? ` on ${longDate(form.draft.day)}` : ""} was sent, but its answer was lost: it is not known whether it was created.`;
   if (form.mode === "cancel") return `Cancelling “${title || "the event"}” was sent, but its answer was lost: it is not known whether it was cancelled.`;
   return `A change to “${title || "the event"}” was sent, but its answer was lost: it is not known whether it was saved.`;
 }
 
-const PENDING_BEFORE = Object.freeze({ create: "Check it before creating the event again.", edit: "Check it before changing the event again.", cancel: "Check it before cancelling the event again." });
+const PENDING_BEFORE = Object.freeze({ create: "Check it before creating the event again.", edit: "Check it before changing the event again.", cancel: "Check it before cancelling the event again.", values: "Check it before entering the details again." });
 
 function pendingFormHtml(form, ctx) {
   return `${headHtml("Check the earlier result")}
@@ -508,6 +544,7 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
         </div>`}
       </form>`;
   }
+  if (form.mode === "values") return valuesFormHtml(form, locked);
   const title = form.mode === "edit" ? "Edit event" : "New event";
   if (form.loading) return `${headHtml(title)}<p class="cc-panel-note" role="status">${form.mode === "edit" ? "Loading the event…" : "Loading the event types…"}</p>`;
   if (form.loadError) {
@@ -515,6 +552,8 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
       ${form.loadRetry ? `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-event-form-retry">Try again</button>` : ""}`;
   }
   const types = ctx.types || [];
+  const catalog = ctx.catalog || { fields: [], locations: [], teamDefaults: {} };
+  const helpers = { fieldId, errorHtml, invalidAttrs, max: CENTRAL_CALENDAR_EVENT_LIMITS.location, types };
   return `${headHtml(title)}
     <form class="cc-event-form" data-cc-event-form novalidate>
       <fieldset class="cc-form-fields"${locked ? " disabled" : ""}>
@@ -526,9 +565,10 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
           ${textFieldHtml(form, "startTime", "Starts", { type: "time" })}
           ${textFieldHtml(form, "endTime", "Ends", { type: "time" })}
         </div>
-        ${textFieldHtml(form, "location", "Place", { max: CENTRAL_CALENDAR_EVENT_LIMITS.location })}
+        ${renderCentralCalendarPlaceFieldHtml(form, catalog, helpers)}
         ${targetsHtml(form, ctx)}
         ${expectsHtml(form, types)}
+        ${renderCentralCalendarDetailsFieldHtml(form, catalog, helpers)}
         <label class="cc-field" for="${fieldId("notes")}">
           <span class="cc-field-label">Notes <span class="cc-field-optional">(optional, coaches only)</span></span>
           <textarea id="${fieldId("notes")}" name="notes" rows="3" maxlength="${CENTRAL_CALENDAR_EVENT_LIMITS.notes}" data-cc-event-field="notes" data-cc-focus="field:notes"${invalidAttrs(form, "notes")}>${escapeHtml(form.draft.notes)}</textarea>
@@ -542,4 +582,35 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
         <button type="button" class="plain-button" data-action="central-calendar-event-form-close"${form.busy ? " disabled" : ""}>Close</button>
       </div>`}
     </form>`;
+}
+
+// "Enter details" (K2b-1d, mode "values"): one input per chosen detail, by its
+// kind (central-calendar-event-details.js); only the changed values are sent.
+function valuesFormHtml(form, locked) {
+  const title = "Enter details";
+  if (form.loading) return `${headHtml(title)}<p class="cc-panel-note" role="status">Loading the details…</p>`;
+  if (form.loadError) {
+    return `${headHtml(title)}<p class="cc-form-error" role="alert">${escapeHtml(form.loadError)}</p>
+      ${form.loadRetry ? `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-event-form-retry">Try again</button>` : ""}`;
+  }
+  return `${headHtml(title)}
+    <form class="cc-event-form" data-cc-event-form novalidate>
+      <p class="cc-cancel-name"><strong>${escapeHtml(form.eventTitle || "Event")}</strong></p>
+      <p class="cc-panel-note">Leave a detail empty to clear it. Only the details you change are saved.</p>
+      <fieldset class="cc-form-fields"${locked ? " disabled" : ""}>
+        ${form.fields.length ? renderCentralCalendarValuesFieldsHtml(form) : `<p class="cc-panel-note">This event has no details to fill in.</p>`}
+      </fieldset>
+      ${form.error ? `<p class="cc-form-error" role="alert">${escapeHtml(form.error)}</p>` : ""}
+      ${unconfirmedHtml(form)}
+      ${form.unconfirmed ? "" : `<div class="cc-form-actions">
+        <button type="submit" class="plain-button cc-primary"${form.busy ? " disabled" : ""}>${form.busy ? "Saving…" : "Save details"}</button>
+        <button type="button" class="plain-button" data-action="central-calendar-event-form-close"${form.busy ? " disabled" : ""}>Close</button>
+      </div>`}
+    </form>`;
+}
+
+// Enter details, opened from the panel: the event read again (GET /:id, the
+// manager's view) before its inputs are drawn.
+export function newCentralCalendarValuesForm(item) {
+  return baseForm("values", { key: item.key, date: item.date, eventId: item.eventId || item.links?.eventId || "", eventTitle: item.title || "", loading: true });
 }

@@ -192,9 +192,15 @@ deploys and post-checks without a record in this file are as the stream manager 
   - The open question whether a team's coach may archive their own team is answered by D45: no, only the club.
 - **K2b-1c**, the Settings → Calendar screen (plan section 20; frontend only, no migration): the club's admin edits the
   event types, details, places and team colours over the K2b-1a API; the calendar wears a chosen team colour (with no
-  choice, exactly the earlier colours); no *Required* switch until K2b-1d (P1). The pull request that adds this line, open.
-- Next by the plan: K2b-1d (the event form, panel and card), then K2b-1e (the athlete's *Upcoming events*) and K2b-2
-  (athlete questions through the Tests module, D40).
+  choice, exactly the earlier colours). PR #343: merge `bb4b27d`; deployed, per the stream manager.
+- **K2b-1d**, the event form, the panel and the cards (plan section 21; frontend only, no migration): the event's place
+  (a club's place or a one-off text, the team's default place first) and its details in the form; the place for every
+  viewer and the details with *Enter details* for a manager in the panel; a manager's card with its type's icon and
+  colour, *Awaiting details* and "Details x/y"; Settings → Calendar's *Required* switch. The pull request that adds this
+  line, open.
+- Next by the plan: K2b-1d2 (a small backend step: the type's icon and colour on every card, the platform workspace's
+  teams with their clubs; plan 21.9), then K2b-1e (the athlete's *Upcoming events*) and K2b-2 (athlete questions through
+  the Tests module, D40).
 
 The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 

@@ -75,9 +75,18 @@ export function invalidateCentralCalendarCache() {
 export function centralCalendarCatalogChanged() {
   invalidateCentralCalendarCache();
   const cal = state.centralCalendar;
+  catalogGeneration += 1;
   if (!cal) return;
   if (cal.form) cal.eventTypesStale = true;
-  else cal.eventTypes = null;
+  else {
+    cal.eventTypes = null;
+    cal.eventCatalog = null;
+  }
+}
+
+// Whether the answer holds a card that names its type (a manager's event card).
+export function centralCalendarNeedsCatalog(data) {
+  return (data?.days || []).some((day) => (day.items || []).some((item) => item.kind === "event" && item.canManage === true && item.eventTypeId));
 }
 
 export function resetCentralCalendarForWorkspaceChange() {
@@ -171,6 +180,13 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
         cal.notice = "The item you had open is no longer on this day; the calendar is up to date.";
       }
       render?.();
+      // K2b-1d: a manager's event card shows its type's icon and colour from
+      // the catalog - read once, and only when such a card is in the answer.
+      if (!cal.eventTypes && centralCalendarNeedsCatalog(data)) {
+        void readCentralCalendarCatalog(cal).then((outcome) => {
+          if (!outcome.error && state.centralCalendar === cal) render?.();
+        });
+      }
     },
     applyError: (error) => {
       if (!current()) return;
@@ -238,6 +254,47 @@ export const fetchCentralCalendarEvent = (eventId) => api(eventPath(eventId));
 export const createCentralCalendarEvent = (body) => eventWrite(EVENTS_BASE, "POST", body);
 export const updateCentralCalendarEvent = (eventId, body) => eventWrite(eventPath(eventId), "PATCH", body);
 export const cancelCentralCalendarEvent = (eventId, body) => eventWrite(`${eventPath(eventId)}/cancel`, "POST", body);
+// K2b-1b's values command: { requestKey, expectedRevision, values: [{ fieldId, value }] }.
+export const setCentralCalendarEventFields = (eventId, body) => eventWrite(`${eventPath(eventId)}/fields`, "POST", body);
+
+// The workspace's event catalog (GET /events/types, K2b-1a): the types for
+// the form and the cards, and - additively - the details, the club's places
+// and the teams' default places for the form. Read once per workspace; a
+// Settings -> Calendar write drops it (centralCalendarCatalogChanged). The
+// cards and a form opened at the same time share one read; an answer that a
+// Settings write overtook is not stored.
+let catalogGeneration = 0;
+let catalogRead = null;
+
+export function readCentralCalendarCatalog(cal) {
+  if (cal.eventTypes) return Promise.resolve({ types: cal.eventTypes });
+  if (catalogRead && catalogRead.cal === cal && catalogRead.generation === catalogGeneration) return catalogRead.promise;
+  const read = { cal, generation: catalogGeneration, promise: null };
+  read.promise = readCatalogOnce(cal, read.generation).finally(() => {
+    if (catalogRead === read) catalogRead = null;
+  });
+  catalogRead = read;
+  return read.promise;
+}
+
+async function readCatalogOnce(cal, generation) {
+  try {
+    const data = await fetchCentralCalendarEventTypes();
+    const types = Array.isArray(data?.types) ? data.types : [];
+    if (state.centralCalendar === cal && generation === catalogGeneration) {
+      cal.eventTypes = types;
+      cal.eventCatalog = {
+        fields: Array.isArray(data?.fields) ? data.fields : [],
+        locations: Array.isArray(data?.locations) ? data.locations : [],
+        teamDefaults: data?.teamDefaults && typeof data.teamDefaults === "object" ? data.teamDefaults : {},
+      };
+      cal.eventTypesStale = false;
+    }
+    return { types };
+  } catch (error) {
+    return { error: centralCalendarErrorInfo(error) };
+  }
+}
 
 export function centralCalendarErrorInfo(error) {
   const data = error?.data && typeof error.data === "object" ? error.data : null;
@@ -249,6 +306,8 @@ export function centralCalendarErrorInfo(error) {
     code: typeof data?.error === "string" ? data.error : status ? "error" : "no_answer",
     message: typeof data?.message === "string" ? data.message : "",
     current: data?.current || null,
+    // K2b-1b's invalid_value names the detail it refused.
+    fieldId: typeof data?.fieldId === "string" ? data.fieldId : "",
   };
 }
 
@@ -273,6 +332,8 @@ const SETTLED_ON_CHECK = new Set([
   "schedule_kind_mismatch", "schedule_already_referenced", "nothing_to_change",
   "invalid_type", "invalid_title", "invalid_day", "invalid_time", "invalid_timezone", "invalid_location", "invalid_expects",
   "invalid_notes", "invalid_targets", "invalid_reason", "invalid_revision", "invalid_schedule",
+  // K2b-1b: the place, the details and the values command.
+  "invalid_request_key", "invalid_fields", "location_not_available", "field_not_available", "invalid_values", "invalid_value",
 ]);
 export const centralCalendarCheckSettles = (info) => info.status >= 400 && info.status < 500 && SETTLED_ON_CHECK.has(info.code);
 

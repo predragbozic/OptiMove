@@ -72,6 +72,8 @@ function fieldDraft(field) {
   return {
     label: field?.label || "", valueKind: field?.valueKind || "", description: field?.description || "",
     unit: field?.unit || "", minValue: number(field?.minValue), maxValue: number(field?.maxValue),
+    // K2b-1d (21.5): Required, off by default; it may change on an answered detail too.
+    required: field?.required === true,
     options: field
       ? (field.options || []).map((o) => ({ key: `o-${o.id}`, id: String(o.id), label: o.label, original: o.label, archived: o.archived === true }))
       : [newOption(), newOption()],
@@ -228,7 +230,7 @@ function buildField(form) {
   }
   if (Object.keys(errors).length) return { errors };
   if (form.mode === "create") {
-    const body = { label, valueKind: kind, required: false };
+    const body = { label, valueKind: kind, required: d.required === true };
     if (description) body.description = description;
     if (kind === "number") {
       if (unit) body.unit = unit;
@@ -242,6 +244,7 @@ function buildField(form) {
   const body = {};
   if (label !== oneLine(b.label)) body.label = label;
   if (description !== oneLine(b.description)) body.description = description || null;
+  if ((d.required === true) !== (b.required === true)) body.required = d.required === true;
   if (kind === "number") {
     if (unit !== String(b.unit ?? "").trim()) body.unit = unit || null;
     const was = (raw) => { const v = parseNumber(raw); return v === "" ? null : v; };
@@ -816,6 +819,10 @@ export function handleCalendarSettingsInput(target, { render } = {}) {
     return true;
   }
   const field = el.dataset.csField;
+  if (field === "required" && form.kind === "field") {
+    form.draft.required = el.checked === true;
+    return true;
+  }
   if (!DRAFT_FIELDS.has(field) || !(field in form.draft)) return true;
   if (form.answered && ["label", "unit", "minValue", "maxValue"].includes(field)) return true;
   if (field === "colorKey") {

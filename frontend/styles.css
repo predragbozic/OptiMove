@@ -21559,7 +21559,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   font-weight: 400;
 }
 
-.cc-event-form input:not([type="checkbox"]),
+.cc-event-form input:not([type="checkbox"]):not([type="radio"]),
 .cc-event-form select,
 .cc-event-form textarea {
   box-sizing: border-box;
@@ -21756,6 +21756,177 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .cc-cancel-name {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* K2b-1d: the type's colour on a manager's card icon (the stripe stays the
+   team's), the place and the details in the panel and in the event form,
+   and the "Enter details" inputs. */
+.cc-type-tint {
+  display: contents;
+}
+
+.cc-card-icon.has-type-color,
+.cc-mini-icon.has-type-color,
+.cc-panel-icon.has-type-color {
+  color: var(--cc-type-color);
+}
+
+.cc-panel-place-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cc-panel-place-name,
+.cc-panel-place-address,
+.cc-panel-place-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-panel-place-name {
+  font-weight: 700;
+}
+
+.cc-panel-place-address,
+.cc-panel-place-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cc-maps {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cc-panel-details {
+  display: grid;
+  gap: 6px;
+}
+
+.cc-detail-values {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.cc-detail-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.cc-detail-value dt,
+.cc-detail-value dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-detail-value dt {
+  font-weight: 700;
+}
+
+.cc-detail-value dd.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.cc-detail-list {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cc-detail-main {
+  display: grid;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.cc-detail-name {
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.cc-detail-kind {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cc-detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.cc-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+
+.cc-icon-button:disabled {
+  opacity: 0.4;
+}
+
+.cc-detail-add select {
+  flex: 1 1 160px;
+  width: auto;
+}
+
+.cc-value-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.cc-value-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cc-value-choice input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cc-value-choices[aria-invalid="true"] {
+  padding: 2px 6px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
 }
 
 /* The sheet scrolls a focused field clear of its sticky header. */

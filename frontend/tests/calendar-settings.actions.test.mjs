@@ -25,7 +25,7 @@ const { emptyCalendarSettingsState, emptyCentralCalendarState, state } = await i
 const colors = await import("../calendar-colors.js");
 const data = await import("../calendar-settings-data.js");
 const actions = await import("../calendar-settings-actions.js");
-const { CALENDAR_SETTINGS_DETAILS_SENTENCE, renderCalendarSettingsPanelHtml } = await import("../calendar-settings-view.js");
+const { CALENDAR_SETTINGS_DETAILS_SENTENCE, CALENDAR_SETTINGS_REQUIRED_SENTENCE, renderCalendarSettingsPanelHtml } = await import("../calendar-settings-view.js");
 const { calendarSettingsMapsUrl } = data;
 const { renderSettingsNavHtml } = await import("../navigation.js");
 const { renderOrganizationPanelHtml } = await import("../organization-view.js");
@@ -490,7 +490,7 @@ test("11. a stated refusal keeps the form and its values: a taken name, a busy s
 // ---------------------------------------------------------------------------
 // Details (P1, P3, the frozen meaning)
 // ---------------------------------------------------------------------------
-test("12. Details: the owner's sentence, Required only as text (P1) - a new detail is sent with required: false and the form has no switch", async () => {
+test("12. Details: the owner's sentence; the Required switch (K2b-1d, 21.5) is off by default with D25's sentence, and a new detail sends required: false", async () => {
   await loaded();
   await click('[data-action="calendar-settings-section"][data-calendar-settings-section="details"]');
   let page = doc();
@@ -503,8 +503,12 @@ test("12. Details: the owner's sentence, Required only as text (P1) - a new deta
   assert.match(rows[2].textContent, /Number, 0 to 999.*Required · Has answers · Used by 5 events/s);
   await click('[data-action="calendar-settings-new"][data-kind="field"]', page);
   page = doc();
-  assert.equal(page.querySelector('[data-calendar-settings-form] input[type="checkbox"]'), null, "no Required switch (P1)");
-  assert.match(page.querySelector("[data-calendar-settings-form]").textContent, /Filled by coach · Optional/);
+  const required = page.querySelector('[data-calendar-settings-form] #cs-field-required[type="checkbox"]');
+  assert.ok(required, "the Required switch (P1 turned on in K2b-1d)");
+  assert.equal(required.checked, false, "off by default");
+  assert.equal(CALENDAR_SETTINGS_REQUIRED_SENTENCE, "Optional details only remind the coach; a required one makes the event wait until it is filled.");
+  assert.equal(page.querySelector(`#${required.getAttribute("aria-describedby")}`).textContent, CALENDAR_SETTINGS_REQUIRED_SENTENCE);
+  assert.match(page.querySelector("[data-calendar-settings-form]").textContent, /Filled by coach/);
   type(page, "#cs-field-label", "Pitch");
   type(page, "#cs-field-valueKind", "choice");
   page = doc();
@@ -533,6 +537,7 @@ test("13. a number detail: unit and limits as numbers, a comma read as a decimal
   type(page, "#cs-field-valueKind", "number");
   page = doc();
   type(page, "#cs-field-unit", "°C");
+  choose(page, "#cs-field-required");
   type(page, "#cs-field-minValue", "10");
   type(page, "#cs-field-maxValue", "-40,5");
   await submit(page);
@@ -541,7 +546,7 @@ test("13. a number detail: unit and limits as numbers, a comma read as a decimal
   type(page, "#cs-field-minValue", "-40,5");
   type(page, "#cs-field-maxValue", "50");
   await submit(page);
-  assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, label: "Temperature", valueKind: "number", required: false, unit: "°C", minValue: -40.5, maxValue: 50 });
+  assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, label: "Temperature", valueKind: "number", required: true, unit: "°C", minValue: -40.5, maxValue: 50 }, "the switch on: required: true");
 });
 
 test("14. editing a choice: rename, add, hide and show in one request; a detail with answers keeps its meaning (read only) but takes new and hidden options", async () => {
@@ -560,7 +565,7 @@ test("14. editing a choice: rename, add, hide and show in one request; a detail 
   await submit(page);
   assert.deepEqual(writes()[0].body.options, { add: ["Fog"], rename: [{ id: O1, label: "Sun" }], hide: [O2], show: [O3] });
   assert.equal(writes()[0].body.expectedRevision, 1);
-  assert.equal("required" in writes()[0].body, false, "Edit never sends required (P1)");
+  assert.equal("required" in writes()[0].body, false, "an untouched switch is not sent");
 
   // Our score has answers: name and limits read only.
   calls.length = 0;
@@ -571,8 +576,12 @@ test("14. editing a choice: rename, add, hide and show in one request; a detail 
   type(page, "#cs-field-label", "Goals");
   assert.equal(d().form.draft.label, "Our score", "a frozen part does not change");
   type(page, "#cs-field-description", "Goals we scored");
+  // Required changes on an answered detail too (2.3): it is not its meaning.
+  assert.equal(page.querySelector("#cs-field-required").checked, true);
+  assert.equal(page.querySelector("#cs-field-required").disabled, false);
+  choose(page, "#cs-field-required");
   await submit(page);
-  assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, expectedRevision: 3, description: "Goals we scored" });
+  assert.deepEqual({ ...writes()[0].body, requestKey: undefined }, { requestKey: undefined, expectedRevision: 3, description: "Goals we scored", required: false });
 });
 
 test("15. field_answered: a detail answered meanwhile - its frozen parts go back to the saved values, the rest stays, the sentence says why", async () => {

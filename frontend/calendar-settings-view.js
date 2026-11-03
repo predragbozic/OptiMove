@@ -27,6 +27,8 @@ const VALUE_KIND_WORDS = Object.freeze({ choice: "Choice from a list", number: "
 // The owner's sentence (P3, 2026-11-03): who fills the details in, and where
 // questions for athletes go (D40).
 export const CALENDAR_SETTINGS_DETAILS_SENTENCE = "Details are filled in by the event's coach. Questions for athletes will be asked through Tests.";
+// D25 (K2b-1d, 21.5): what the Required switch does.
+export const CALENDAR_SETTINGS_REQUIRED_SENTENCE = "Optional details only remind the coach; a required one makes the event wait until it is filled.";
 
 const FROZEN_CHOICE = "This detail already has answers: its meaning can't change. You can still edit the hint, add options, and hide or show options. To change the rest, archive it and create a new one.";
 const FROZEN_OTHER = "This detail already has answers: its meaning can't change. You can still edit the hint. To change the rest, archive it and create a new one.";
@@ -461,7 +463,6 @@ function fieldFormHtml(form, d) {
       ${textInput(form, "minValue", "Lowest value", { max: 16, readonly: answered, hint: "A number; a minus sign is allowed." })}
       ${textInput(form, "maxValue", "Highest value", { max: 16, readonly: answered })}
     </div>` : "";
-  const required = field?.required === true;
   return formShell(form, d, create ? "New detail" : `Edit “${subjectTitle("field", field)}”`, `
       ${answered ? `<p class="data-sources-warn cs-frozen">${escapeHtml(kind === "choice" ? FROZEN_CHOICE : FROZEN_OTHER)}</p>` : ""}
       ${textInput(form, "label", "Name", { max: LIMITS.fieldLabel, required: true, first: !answered, readonly: answered })}
@@ -469,7 +470,11 @@ function fieldFormHtml(form, d) {
       ${kindRow}
       ${numberRows}
       ${kind === "choice" ? optionsHtml(form) : ""}
-      <p class="cs-fact"><span class="muted">Filled by</span> coach · ${required ? "Required" : "Optional"}</p>
+      <p class="cs-fact"><span class="muted">Filled by</span> coach</p>
+      <div class="cs-field">
+        <label class="cs-check"><input type="checkbox" id="cs-field-required" data-cs-field="required" aria-describedby="cs-field-required-hint"${form.draft.required === true ? " checked" : ""}> <span>Required</span></label>
+        <span class="cs-field-hint" id="cs-field-required-hint">${escapeHtml(CALENDAR_SETTINGS_REQUIRED_SENTENCE)}</span>
+      </div>
     `);
 }
 
