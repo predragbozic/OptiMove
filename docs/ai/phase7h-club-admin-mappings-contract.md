@@ -1563,11 +1563,16 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
       end), not every reordering before the end;
     - 9b (the code review's LO1-T1): A1 held at its right (`setMappingRightsHoldForTests`, before `rightsStillHold`'s
       own queries) already holds the listed binding, so another admin's real Unbind waits on it (`for update of b`).
-      A1 commits; the Unbind ends the binding after it;
+      A1 commits. The Unbind then ends the binding, or, if A1's tail outlasts its 2 s row-lock bound, it is a clean
+      `try_again` with the binding still active;
     - 9c (the code review's LO1-SRC-1 and the db review's DB-3): A1's SQL for a replacement with an open activation
-      and a listed start, in order: the listed bindings, their teams, the rights, the listed bindings' clubs, then the
-      first end, with no row lock between the first end and the COMMIT (the answer's own check of the right after the
-      COMMIT, C69, is a new transaction);
+      and a listed start, in order:
+      - no users or role row before the listed bindings;
+      - then the bindings, their teams, the rights and the listed bindings' clubs;
+      - then the first end, with no locking clause in the SQL A1 sends between the first end and the COMMIT.
+
+      The writes' own, foreign-key and trigger locks fall on rows A1 already holds (tests 1, 9 and 10 for the trigger
+      re-locks). The answer's own check of the right after the COMMIT (C69) is a new transaction;
     - 10: a club admin's rename and a coach's rename, each holding its right while the real revocation waits; v38's
       re-locks wait for nothing.
   - `backend/tests/lock-order-exercise-blocks-lo1.test.mjs` (new): an exercise block write against the real
@@ -1584,7 +1589,7 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
       grant's eligibility read by the text `for share of u`, which the administrator's own right check now also
       contains (`for share of u, r`). It now matches the eligibility read alone (a query ending in `for share of u`).
       The behaviour it tests is unchanged.
-- **Mutations** (each applied alone and run against the named test; 17 mutations: 16 killed, 1 survives as
+- **Mutations** (each applied alone and run against the named test; 18 mutations: 17 killed, 1 survives as
   equivalent):
   - each service order turned back to role first deadlocks its test (`40P01`):
     - Metrics Core: L1 (the promotion probe, test 2), L2 (the platform branch, test 1), L3 (the coach's platform probe,
@@ -1598,6 +1603,8 @@ section 7 and J15 R13 record. It follows the *Rukovodilac*'s plan decisions of 2
       9's three-way race, by 7h test 13 case (a), where the peer no longer waits for A1, and by test 9c;
     - L12 (the bindings before the rights, the clubs after the first end) is killed by test 9c;
     - L14 and L14c (the bindings after the rights, still before the first end) are killed by tests 9b and 9c;
+    - L15 (an early rights check before the bindings, the late one kept; the re-review's LO1-RR-2) is killed by test
+      9c;
   - L5 (the coach's own team role back to `r, u`) **survives, equivalent**: the team-coach revocation updates only the
     role row, and no route locks a coach's users row and then the role;
   - L13 (R17: the import preview resolves the workspace a second time) is killed by the audience test 4.

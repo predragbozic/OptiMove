@@ -568,14 +568,20 @@ test("9b. D's order itself (the code review's LO1-T1): a club admin's A1 with a 
   const [activated, unbound] = await Promise.all([a1, unbinding]);
   ok(activated);
   assert.deepEqual(await statusOf(v), { status: "active", activated_basis: "club_admin" });
-  assert.equal(unbound.status, 200, unbound.text);
-  assert.equal(await bindingState(b), "ended");
+  // The Unbind's wait is bounded (its 2 s row-lock timeout): on a slow runner
+  // A1's tail can outlast it, and the Unbind is then a clean try_again with
+  // the binding left active. Either way it waited on the binding (above).
+  if (unbound.status === 200) assert.equal(await bindingState(b), "ended");
+  else {
+    assert.deepEqual([unbound.status, unbound.body.error], [409, "try_again"], unbound.text);
+    assert.equal(await bindingState(b), "active");
+  }
   const open = await one(k, `select count(*)::int as n from ${T5} where source_team_binding_id = $1 and mapping_version_id = $2 and ended_at is null`, [b.bindingId, v.versionId]);
   assert.equal(open.n, 1, "A1's start, committed before the Unbind");
   noDeadlock(from);
 });
 
-test("9c. D's order, step by step (the code review's LO1-SRC-1 and the db review's DB-3): A1 replacing a version with an open activation and listing a start takes the listed bindings and teams, then the rights, then the listed bindings' clubs, all before its first end, and no row lock after it", async () => {
+test("9c. D's order, step by step (the code review's LO1-SRC-1 and the db review's DB-3): A1 replacing a version with an open activation and listing a start takes no users or role row before the listed bindings, then the bindings and teams, then the rights, then the listed bindings' clubs, all before its first end, and sends no locking clause between the first end and the COMMIT", async () => {
   const x = await freshClub(1);
   const [admin] = x.admins;
   const f = await field();
@@ -622,6 +628,9 @@ test("9c. D's order, step by step (the code review's LO1-SRC-1 and the db review
     for (const { c, send } of wrapped) c.query = send;
   }
   ok(res);
+  // The patterns are anchored on the services' exact SQL text
+  // (sourceMetricActivationSteps.js, sourceMetricAccess.js): a reworded
+  // statement makes this test fail rather than pass vacuously.
   const at = (re, from = 0) => seen.findIndex((s, i) => i >= from && re.test(s));
   const iBindings = at(/from training_load\.source_team_bindings where id = any\(\$1::uuid\[\]\) order by id for share$/);
   const iTeams = at(/from public\.teams where id = any\(\$1::uuid\[\]\) order by id for share$/, iBindings);
@@ -630,12 +639,20 @@ test("9c. D's order, step by step (the code review's LO1-SRC-1 and the db review
   const iEnd = at(/^update training_load\.source_metric_mapping_activations set ended_at/);
   assert.ok(iBindings >= 0 && iTeams > iBindings && iRights > iTeams && iClubs > iRights && iEnd > iClubs,
     JSON.stringify({ iBindings, iTeams, iRights, iClubs, iEnd, seen: seen.map((s) => s.slice(0, 90)) }, null, 1));
-  // Between the first end and the COMMIT: no row lock. (The answer's own
-  // check of the right after the COMMIT, C69, is a new transaction.)
+  // No users or role row is locked in the transaction before the listed
+  // bindings (the re-review's LO1-RR-2): an early rights check kept beside
+  // the late one would hold the user's row while waiting for a binding.
+  const iBegin = seen.findLastIndex((s, i) => i < iBindings && /^begin/i.test(s));
+  assert.ok(iBegin >= 0, "the replacement's own transaction");
+  assert.deepEqual(seen.slice(iBegin, iBindings).filter((s) => /\bfor (share|update|no key update) of u\b/i.test(s)), [], "no user row before the bindings");
+  // Between the first end and the COMMIT, A1 sends no locking clause. (The
+  // writes' own, foreign-key and trigger locks fall on rows A1 already holds:
+  // tests 1, 9 and 10 for the trigger re-locks. The answer's own check of the
+  // right after the COMMIT, C69, is a new transaction.)
   const iCommit = at(/^commit$/i, iEnd);
   assert.ok(iCommit > iEnd, "the replacement commits after its ends");
   const lateLocks = seen.slice(iEnd, iCommit).filter((s) => /\bfor (share|update|no key update)\b/i.test(s));
-  assert.deepEqual(lateLocks, [], "no row lock after the first end");
+  assert.deepEqual(lateLocks, [], "no locking clause after the first end");
   assert.equal((await one(k, `select count(*)::int as n from ${T5} where mapping_version_id = $1 and ended_at is null`, [v1.versionId])).n, 0, "N's activation ended");
   assert.equal((await one(k, `select count(*)::int as n from ${T5} where mapping_version_id = $1 and source_team_binding_id = $2 and ended_at is null`, [v2.versionId, b2.bindingId])).n, 1, "N+1 started on the listed binding");
 });
