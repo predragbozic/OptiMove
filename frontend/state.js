@@ -41,6 +41,27 @@ export const emptyCoachHomeState = () => ({
   programs: { items: [], loaded: false, loading: false, error: "" },
 });
 
+// Settings -> Calendar (K2b-1c, docs/ai/central-calendar-k2b-plan.md
+// sections 8 and 20): the active club's catalog of GET /api/calendar/settings
+// (types, details, places, teams), the section on screen, the one open form
+// and the one write in flight or not confirmed. Reset on a workspace change
+// (calendar-settings-data.js); a section or menu switch keeps it, so a draft
+// or an unconfirmed write is never lost by moving around.
+export const emptyCalendarSettingsState = () => ({
+  clubId: "",
+  data: null,
+  loading: false,
+  error: "",
+  stale: false,
+  section: "types",
+  showArchived: { types: false, details: false, places: false },
+  // One line: what the last write did ("ok") or why nothing was saved ("error").
+  notice: "",
+  noticeTone: "",
+  form: null,
+  command: null,
+});
+
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
 // read of GET /api/calendar per visible range, shown as a month, a week
 // (a slot-ordered list, or a time grid on a wide screen) or a day. The
@@ -1115,6 +1136,7 @@ export const createInitialState = () => ({
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   coachHome: emptyCoachHomeState(),
   centralCalendar: emptyCentralCalendarState(),
+  calendarSettings: emptyCalendarSettingsState(),
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),

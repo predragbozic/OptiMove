@@ -166,8 +166,11 @@ deploys and post-checks without a record in this file are as the stream manager 
     - known limit, low importance (the owner's external review of PR #332, note 4): a raw database move of a team and
       the order of the checks on a rename.
   - The open question whether a team's coach may archive their own team is answered by D45: no, only the club.
-- Next by the plan: K2b-1c and K2b-1d (the Settings screen and the event form), then K2b-2 (athlete questions through
-  the Tests module, D40).
+- **K2b-1c**, the Settings → Calendar screen (plan section 20; frontend only, no migration): the club's admin edits the
+  event types, details, places and team colours over the K2b-1a API; the calendar wears a chosen team colour (with no
+  choice, exactly the earlier colours); no *Required* switch until K2b-1d (P1). The pull request that adds this line, open.
+- Next by the plan: K2b-1d (the event form, panel and card), then K2b-1e (the athlete's *Upcoming events*) and K2b-2
+  (athlete questions through the Tests module, D40).
 
 The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 

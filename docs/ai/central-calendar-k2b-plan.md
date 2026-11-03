@@ -1021,3 +1021,89 @@ The owner's decision (2026-11-02, through the manager), its own pull request aft
   - Not changed: a platform admin adding an unknown athlete (a valid UUID of no athlete) still ends in the membership's
     foreign key (a `500`); it is the route's older behaviour, outside these notes.
   - Tests: `organization-team-archive.test.mjs` tests 13 and 14.
+
+## 20. K2b-1c — Settings → Calendar (the screen)
+
+Frontend only: no migration, no backend change. The screen works over the K2b-1a API as built (section 17). Branch
+`claude/central-calendar-k2b-1c-1e3350` from `origin/main` `a811e69`.
+
+### 20.1 The manager's decisions (2026-11-03)
+
+- **P1 → (a).** K2b-1c offers no *Required* switch. A new detail is sent with `required: false`, an edit never sends
+  `required`, and the current state shows as text (*Required* / *Optional*, also on a detail made required through the
+  API). K2b-1d turns the switch on. So 1c merges and ships on its own (the release order of 18.8 holds).
+- **P2 → yes.** The calendar already colours a team with its chosen colour (`teams[].colorKey`), and a team without one
+  with the automatic rule (20.3). The condition: **with no colour chosen, every colour on screen is today's** (team N at
+  position N wears automatic colour N mod 8). The type's icon and colour on the card and *Awaiting details* stay K2b-1d.
+- **P3 → the sentence** "Details are filled in by the event's coach. Questions for athletes will be asked through
+  Tests." (D40; neither "after the event", since values may be entered earlier, nor RPE).
+- **P4 → inner tabs**, one section on screen at a time. No new element carries `data-tab` (app.js turns any element
+  with it into a menu switch); the section buttons carry `data-calendar-settings-section`.
+- **Visibility (T6):** the sub-tab is offered when the active workspace is a club and the account holds that club's
+  active `club_admin` role (`/me`'s `clubs`), never through `manageableClubIds` (which names every club for a platform
+  admin). The server decides again: 403 / the one 404 read as "Calendar settings are not available in this workspace."
+
+### 20.2 As built
+
+- **Modules:** `frontend/calendar-settings-{data,view,actions}.js`, the state slice `state.calendarSettings`
+  (`emptyCalendarSettingsState`, reset on a workspace switch), `frontend/calendar-colors.js` (the 12 keys, proven equal
+  to `backend/src/calendarColors.js` by a test), the sub-tab in `renderSettingsNavHtml`, the wiring in `app.js`.
+- **The sections:** *Event types* (the live list in order with icon, colour, base kind, what it collects, its details and
+  "Used by N events"; *Move up* / *Move down* send the whole live order; *Add a type* with the base kind fixed afterwards,
+  the icon through the shared `icon-picker.js`, colour swatches, *Collected after it*, the default details added,
+  moved and removed — an archived one already listed stays, a new entry is a live detail; *Edit*; *Archive* / *Restore*,
+  archived ones folded under *Show archived*; the last live type offers no *Archive*). *Details* (kind and limits in
+  words, *Required* / *Optional* as text, *Has answers*; *Add a detail* by kind — a choice starts with two options, a
+  number takes a unit and limits, a comma read as a decimal point; *Edit* sends only what changed; with answers the name,
+  unit, limits and option names are read only and options can still be added, hidden and shown, D30). *Places* (name,
+  address with *Open in maps* — a link built in the browser, a new tab, `noopener noreferrer`, it follows the address as
+  it is typed —, the note on its lines, the teams it is the default of). *Teams* (each active team's colour, chosen or
+  automatic, and its default place; *Edit* with *Automatic* first and the live places).
+- **Writes:** one at a time. Each carries a fresh `requestKey`; a lost answer (no answer, `503 outcome_unknown`, any
+  5xx the service did not write) is *Result not confirmed* · *Check result*, which sends the same method, path and body,
+  or *Close without checking*, which asks and reads the catalog again. A Check result is settled only by a body check or
+  a command refusal (both come after the runner read its request record); busy, no access, signed out, a server error
+  or `request_key_reused` keep it unconfirmed. While a write runs or is not confirmed, every other write control and
+  every form opener is off. A stated refusal says "Nothing was saved" and keeps the form and its values: a taken name
+  marks the field, `*_changed` / `order_changed` / `*_archived` / `*_live` close the form and show the item as it is
+  now, `field_answered` puts the frozen parts back to their saved values and keeps the rest. After every write the
+  catalog is read again.
+- **Leaving:** the open form and an unconfirmed write survive a switch to another section or menu (the slice keeps
+  them, and coming back reads the catalog again only when nothing is open); a workspace switch, a sign-out and the app's
+  update reload ask first; `beforeunload` asks while a write runs or is not confirmed, or a form has unsaved values.
+- **The repaint:** the screen repaints only its own panel (`renderCalendarSettingsSurface` in app.js), at once and
+  without a read of `/api/organization`: the Settings repaint reads it again when its cache is older than 30 s and paints
+  the whole screen a second time, which took the focus away from a form just opened (found in the browser check).
+
+### 20.3 The team colours (P2, refining 2.5)
+
+A team keeps the colour its club chose. A team without one keeps its colour of before K2b-1c — automatic colour N mod 8
+at position N of the workspace's team list — unless another team chose that colour or an earlier team without a choice
+already took it: then it takes the next automatic colour that is neither; when none is left and its own colour was
+chosen by another team, the first of the other four that is neither; otherwise it keeps its own colour and shares it,
+as more than eight teams did before. So with no choice every team wears exactly today's colour, and one team's choice
+moves no other team unless it takes that team's colour (2.5 said "the first palette colour no other team chose"; that
+reading would move every later team after one choice). The palette's tokens are `--cc-team-0..11` (the first eight
+unchanged; slate `#52607a`, olive `#6b7a1f`, coral `#e0605f`, violet `#7a4fd0`, each at least 3:1 against white). The
+Settings list names a team's automatic colour the same way, over the same order (the club's active teams by name).
+
+### 20.4 Tests and the browser check
+
+- `frontend/tests/calendar-settings.actions.test.mjs` (21 tests; JSDOM and a fake of the routes that keeps their
+  contracts: the answers' shapes, a stale revision as `<subject>_changed` with `current`, a key's replay and
+  `request_key_reused`): the tab's visibility by workspace and role, the read, every write's body and key, one write at
+  a time, the lost answer and Check result, the refusals, P1–P3, the team colours (with no choice, today's rule for 0 to
+  20 teams), the palette against the server's list and the CSS tokens, escaping, leaving.
+- Three wiring tests changed with the wiring: `central-calendar-events.actions` 11g (sign-out also asks Settings →
+  Calendar), `app-update` 8 (the update reload too), `training-load-dashboards-h4` (the workspace switch too).
+- Mutations (a scratch script: each edits one file, runs the suite, restores it): 8 run, 8 killed — Check result with a
+  new key, a Check result settled before the record, P1, P2's position rule, the tab through `manageableClubIds`, a form
+  opened while a write is not confirmed, a frozen part typed, a lost answer that unlocks the screen.
+- The browser check on the branch's real server and a disposable database through v51 (the calendar fixture of
+  K2b-1a, the seeded catalog, one event answering *Our score*): a type added with an icon, a colour, *Collected after
+  it* and a detail; moved; archived and restored; the answered detail's frozen form; a place with its maps link; a
+  team's colour and default place — and the calendar's card then wears it. At 390, 375 and 360 px, every section with
+  its form open: no horizontal scroll, no control under 44 px, no field under 16 px. A platform admin without the club's
+  role and a team coach are offered no tab (the coach's read is 403). The app has no dark theme, so only the light one
+  was checked. The legacy `/api/organization` needs tables the disposable schema does not have (the 8-B harness's
+  limit too): the check served Settings' frame from the same database's club and teams.

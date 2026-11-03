@@ -1,3 +1,4 @@
+import { calendarTeamColorIndexes } from "./calendar-colors.js";
 import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS } from "./central-calendar-data.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
 import { renderIconSvg } from "./icon-render.js";
@@ -29,10 +30,11 @@ export const CENTRAL_CALENDAR_EVENT_KIND_LABELS = Object.freeze({ training: "Tra
 // defaults; K2b makes a type's icon editable), every other card by its kind.
 export const CENTRAL_CALENDAR_EVENT_KIND_ICONS = Object.freeze({ training: "run", match: "trophy", test: "clipboard", travel: "route", meeting: "team", day_off: "bed", camp: "mountain" });
 export const CENTRAL_CALENDAR_KIND_ICONS = Object.freeze({ event: "calendar-event", planned: "barbell", activity: "activity", external: "gauge", test: "stopwatch" });
-// Eight fixed colours by the team's position in the answer's teams[] (D11:
-// the club picks its own in K2). Their values are the --cc-team-N tokens
-// in styles.css; a card or a chip only names the index.
-export const CENTRAL_CALENDAR_PALETTE_SIZE = 8;
+// A team's colour (D11, K2b-1c): the one its club chose under Settings ->
+// Calendar (`teams[].colorKey`), else the next automatic colour by the
+// team's position in the answer's teams[] (calendar-colors.js). Their values
+// are the --cc-team-N tokens in styles.css; a card or a chip only names the
+// palette index. With no choice made, team N wears automatic colour N mod 8.
 const BTA_WORDS = Object.freeze({ B: "Before", T: "Training", A: "After" });
 const EVENT_TYPE_LABELS = Object.freeze({
   match: "Match", friendly: "Friendly match", tournament: "Tournament", training: "Training", travel: "Travel",
@@ -152,8 +154,7 @@ export function centralCalendarScheduleSeparate(item) {
 const SEPARATE_WORDS = "Linked schedule shown separately";
 
 export function centralCalendarTeamIndex(teamId, teams) {
-  const index = (teams || []).findIndex((team) => team.teamId === teamId);
-  return index < 0 ? -1 : index % CENTRAL_CALENDAR_PALETTE_SIZE;
+  return calendarTeamColorIndexes(teams).get(teamId) ?? -1;
 }
 
 function teamColorStyle(teamId, teams) {
