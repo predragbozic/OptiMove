@@ -155,3 +155,28 @@ hide or a start committed before the lock was granted.
 - **Move a team** from OptiMove's variable to the club's copy in one step (`POST /activations/:id/switch-to-copy`):
   the team's activation of the system version ends and the linked club version starts on the same binding, with no
   moment in between.
+
+## Which copies are refused
+
+Preflight block 9 counts, before the merge, the active system variables a copy would refuse with
+`409 copy_source_unsupported`; its `current.reason` names the case:
+
+| `current.reason` | The system variable | Block 9 column |
+|---|---|---|
+| `not_numeric` | does not hold a number | `not_numeric` |
+| `unit` | has a unit (or a condition's unit) that is not a unit token | `unit_not_token` |
+| `condition` | has a condition in a shape the create rules do not accept | `with_condition_to_review` (to check one by one) |
+| `day_level` | can be recorded per day | `day_level` |
+| `no_levels` | has no level at all | `no_levels` |
+
+The copy also refuses, case by case at the moment of the request, without a preflight count:
+- `400 key_required` or `400 label_required`: OptiMove's key or name is not one the create rules accept; the admin sends
+  a `key` or a `label`;
+- `409 key_taken`: the club already has a variable with that key; the admin sends another `key`;
+- `409 copy_mapping_not_reproducible` (names the source field): an active OptiMove mapping version cannot be copied as
+  it is (its field retired, its revision no longer usable, its extraction or unit conversion no longer valid);
+- `409 copy_too_large`: more than ten active OptiMove mapping versions;
+- `409 source_not_active`, `409 source_version_changed` (names the current version), `409 already_copied` (names the
+  club's copy): the state at that moment;
+- `409 try_again`: OptiMove's active mapping versions changed during the copy, or the admin's role changed under the
+  request; nothing was written, the same request can be sent again.

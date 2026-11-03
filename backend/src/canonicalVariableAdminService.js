@@ -889,8 +889,15 @@ export async function resolveVariableEditor(req, known = undefined) {
 // the basis this request writes: exactly that refusal is the request to repeat
 // (J3b.2, try_again); every other database refusal stays a sanitized 500.
 const BASIS_CHANGED = "metric variable request: the basis is not the acting user's own";
+// Exactly that text, nothing more (the Rukovodilac's D5 correction for v53): a
+// 42501 with any other text - a missing right, another guard's wording, even
+// the same words behind another prefix - is never "try again"; it stays
+// ACTOR_REFUSALS' identical 404 or a sanitized 500, so a real refusal can never
+// become an endless retry.
+export const basisChangedError = (error) =>
+  !(error instanceof SourceMetricMappingError) && error?.code === "42501" && error.message === BASIS_CHANGED;
 function classifyChangeError(error) {
-  if (!(error instanceof SourceMetricMappingError) && error?.code === "42501" && error.message === BASIS_CHANGED) {
+  if (basisChangedError(error)) {
     console.error("[metric-variables] try_again (basis changed)");
     return refusal(409, "try_again", MESSAGES.try_again);
   }
@@ -1101,15 +1108,12 @@ function clubWriteOnly(ctx) {
   if (ctx.owner?.scope !== "club" || typeof ctx.owner.clubId !== "string") throw NOT_FOUND();
 }
 
-// The database guards of v53 derive the basis again; a stronger role granted
-// after the rights were checked makes it differ: exactly that refusal is the
-// request to repeat (try_again, as an R2 change).
-const GUARD_BASIS_CHANGED = new Set([
-  BASIS_CHANGED,
-  "metric variable copy: the acting user may not copy into this club",
-  "metric variable hide: the acting user may not hide for this club",
-]);
-const basisChanged = (error) => !(error instanceof SourceMetricMappingError) && error?.code === "42501" && GUARD_BASIS_CHANGED.has(error.message);
+// The database guards of v53 derive the basis again. Only the request
+// record's exact "basis is not the acting user's own" (a stronger role granted
+// after the rights were checked) is the request to repeat (try_again, as an R2
+// change): the copy and hide guards' own 42501 texts also cover a missing
+// right, so they stay a sanitized 500 (D5 as corrected by the Rukovodilac).
+const basisChanged = basisChangedError;
 
 // POST /variables/:id/copy (J15 sections 2.2 and 4.1): one transaction writes
 // the club variable (version 1 equal to the system variable's current version
@@ -1181,6 +1185,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       }
       // The locks, in D's order.
       const versions = await readSystemMappingsForCopy(client, id);
+      if (writeHold) await writeHold(client, "variable_copy_before_locks");
       const lockedMappings = await lockSystemMappingsForCopy(client, id, versions);
       const def = (await client.query(
         `select state, current_version_id from training_load.metric_definitions where id = $1 for share`, [id],
@@ -1246,7 +1251,9 @@ export async function copyVariable({ ctx, variableId, body }) {
          values ($1, $2, $3, $4, $5, $6, $7)`,
         [definitionId, ctx.owner.clubId, id, def.current_version_id, ctx.userId, ctx.basis, operationId],
       );
+      if (writeHold) await writeHold(client, "variable_copy_before_mappings");
       await insertCopiedMappings(client, ctx, { clubDefinitionId: definitionId, clubVersionId: versionId, versions, operationId, progress });
+      if (writeHold) await writeHold(client, "variable_copy_before_request");
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_copy", definitionId, versionId, operationId });
       return {
         operation: "variable_copy", metric_definition_id: definitionId, metric_definition_version_id: versionId,

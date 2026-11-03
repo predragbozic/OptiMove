@@ -910,6 +910,52 @@ test("2b. a state answer comes only after the right (security review LOW-1): clu
 // ---------------------------------------------------------------------------
 // 3. Hide and Show (J15 sections 2.3 and 4.2)
 // ---------------------------------------------------------------------------
+test("2c. D5 as the Rukovodilac corrected it: only the request record's exact text 'metric variable request: the basis is not the acting user's own' (a role changed under the request) is 409 try_again; every other 42501 - the copy and hide guards' own texts, the same words behind another prefix - stays a sanitized 500 with nothing written", async () => {
+  // The predicate on its own: exact text and code only.
+  const err = (message, code = "42501") => Object.assign(new Error(message), { code });
+  const exact = "metric variable request: the basis is not the acting user's own";
+  assert.equal(variables.basisChangedError(err(exact)), true);
+  for (const m of [
+    "metric variable copy: the acting user may not copy into this club",
+    "metric variable hide: the acting user may not hide for this club",
+    "metric variable request: the acting user may not write this owner scope",
+    "source metric mapping: the basis is not the acting user's own",
+    "metric classification request: the basis is not the acting user's own",
+    `${exact} `, ` ${exact}`, exact.toUpperCase(),
+  ]) assert.equal(variables.basisChangedError(err(m)), false, m);
+  assert.equal(variables.basisChangedError(err(exact, "23514")), false, "another code");
+  // Through the routes: a fresh admin of club A is granted the platform admin role while its write is held at
+  // `where`; the database guard then derives another basis than the request carries.
+  const grantDuring = async (where, send) => {
+    const who = await clubAdmin(W.clubA);
+    const hold = holdVariable(where);
+    const pending = send(who);
+    await until(() => hold.state.entered, `held at ${where}`);
+    await setGlobal(who.id, true);
+    hold.g.open();
+    let res;
+    try { res = await pending; } finally { variables.setVariableWriteHoldForTests(null); }
+    return { who, res };
+  };
+  const internal = (res, label) => assert.deepEqual([res.status, res.body.error], [500, "internal_error"], `${label}: ${res.text}`);
+  // The request record's guard (the copy held before its request row): try_again, and the same copy then succeeds.
+  const a = await systemVariable();
+  const bodyA = await copyBody(a.id);
+  const first = await nothingWritten(async () => (await grantDuring("variable_copy_before_request", (who) => post(`/variables/${a.id}/copy`, who.cookie, bodyA))));
+  refused(first.res, 409, "try_again");
+  const again = ok(await post(`/variables/${a.id}/copy`, first.who.cookie, { ...bodyA, requestKey: key() }), 201);
+  assert.equal((await one(k, `select basis from ${COPIES} where club_definition_id = $1`, [again.variable.id])).basis, "platform_admin");
+  // v35's guard of the copied mapping (held before the copied mappings): the same words behind another prefix -> 500.
+  const b = await systemVariable();
+  internal((await nothingWritten(() => grantDuring("variable_copy_before_mappings", async (who) => copy(who, b.id)))).res, "the copied mapping's guard");
+  // The copy row's guard (held before every write): 'may not copy into this club' -> 500.
+  const c = await systemVariable({ n: 0 });
+  internal((await nothingWritten(() => grantDuring("variable_copy", async (who) => copy(who, c.id)))).res, "the copy row's guard");
+  // The hide row's guard: 'may not hide for this club' -> 500.
+  const h = await systemVariable();
+  internal((await nothingWritten(() => grantDuring("variable_hide", (who) => hide(who, h.id)))).res, "the hide row's guard");
+});
+
 test("3. hide and show by each allowed actor; idempotent repeats (a no-op key acts later; a lost no-op, another admin's change, then the same key: the state this admin asked for); a hide key refused for a show and the reverse; variable_in_use with an open system activation on the club's binding; hide_not_system", async () => {
   const sys = await systemVariable();
   for (const who of [W.caA, W.caA2, W.paA]) {
@@ -1888,6 +1934,32 @@ test("16b. copy against a new system version, an archive and A2 of the copied sy
   ok(await disabling6);
   assert.deepEqual((await copiedDrafts(copied6.variable.id)).map((d) => d.system_version_id), [v6.versions[0].versionId]);
   assert.ok(!logLines.slice(from).some((l) => /40P01|deadlock detected/i.test(l)), "no 40P01");
+});
+
+test("16c. D1 with a seam (the Rukovodilac's order): a new system version activated between the copy's plain read of the active set and its T3 locks - a second mapping's version, or the copied version replaced - makes the copy, reading the set again under its locks, answer try_again with nothing written; the copy then copies the set in force", async () => {
+  const copiesOf = async (id) => (await one(k, `select count(*)::int as n from ${COPIES} where system_definition_id = $1`, [id])).n;
+  const heldCopy = async (sys, during) => {
+    const hold = holdVariable("variable_copy_before_locks");
+    const copying = copy(W.caA, sys.id);
+    await until(() => hold.state.entered, "the copy holds after its plain read, before its locks");
+    await during();
+    hold.g.open();
+    try { return await copying; } finally { variables.setVariableWriteHoldForTests(null); }
+  };
+  // (i) A second system mapping of the variable gets an active version.
+  const sys = await systemVariable();
+  const extra = await version(await field(), { target: sys.target });
+  refused(await heldCopy(sys, async () => ok(await activate(extra, W.pa.cookie))), 409, "try_again");
+  assert.equal(await copiesOf(sys.id), 0, "the copy wrote nothing");
+  const made = ok(await copy(W.caA, sys.id), 201).variable;
+  assert.deepEqual((await copiedDrafts(made.id)).map((d) => d.system_version_id).sort(), [sys.versions[0].versionId, extra.versionId].sort());
+  // (ii) The copied version is replaced by the next one.
+  const sys2 = await systemVariable();
+  const next = await version({ fieldId: sys2.versions[0].fieldId, revId: sys2.versions[0].revId }, { target: sys2.target });
+  refused(await heldCopy(sys2, async () => ok(await activate(next, W.pa.cookie, { expected: sys2.versions[0].versionId, reason: reasonFor("Replace.") }))), 409, "try_again");
+  assert.equal(await copiesOf(sys2.id), 0, "the copy wrote nothing");
+  const made2 = ok(await copy(W.caA, sys2.id), 201).variable;
+  assert.deepEqual((await copiedDrafts(made2.id)).map((d) => d.system_version_id), [next.versionId]);
 });
 
 test("17. switch against S2 on one activation: S2 holding its T5 row makes the switch wait; the switch then answers activation_not_open, nothing written", async () => {

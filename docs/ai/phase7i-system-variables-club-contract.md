@@ -1049,20 +1049,37 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
   `GET /api/training-load/metrics/definitions` for the active workspace's club; the template resolver's per-hint rule
   after the hint's filters, still at most three statements.
 
-**Decisions taken while building (D1–D5, sent to the *Rukovodilac* with the recommendation implemented):**
+**Decisions taken while building.** D1–D5 were sent to the *Rukovodilac*, with the recommendation implemented. The
+*Rukovodilac* answered on 2026-11-03: D1–D4 accepted, D2 with a runbook addition, and D5 corrected. D6 comes from the
+internal security review.
 - **D1.** A copy and A1 or A2 of a copied system mapping meet at T3 (the copy `FOR SHARE`, A1 / A2 `FOR NO KEY
   UPDATE`). The copy reads the active system versions plainly, locks them in D's order, and reads the set again under
-  its T3 locks; a set that changed in between answers `409 try_again` with nothing written.
+  its T3 locks; a set that changed in between answers `409 try_again` with nothing written. **Section 6's first row
+  holds here in its "or refuses" branch:** the copy never copies a version it did not read before its locks. A new
+  active version (another mapping's, or the copied one replaced) answers `409 try_again`, and the copy is not
+  completed with the new version. Test 16 drives A1 holding T3. Test 16c, which the *Rukovodilac* ordered, activates
+  the new version at a seam between the copy's plain read and its T3 locks (`variable_copy_before_locks`). Mutation M15
+  (no second read) is killed by both.
 - **D2.** The defaults of a copy (section 2.2): a system key that the create rules refuse answers `400 key_required`
   (the body names a key), a label they refuse `400 label_required`; a legacy icon URL becomes no icon; a system variable
-  with no level is `copy_source_unsupported` (`no_levels`); decimals are copied as stored.
+  with no level is `copy_source_unsupported` (`no_levels`); decimals are copied as stored. The runbook names every case
+  the copy refuses, next to the preflight's count (block 9), in "Which copies are refused".
 - **D3.** Both team-workspace cases are tested: a club's admin who coaches a team of the club, in that team's
   workspace, reads the reduced view with `club: { hidden }` and no acts; a club's admin who chose a team workspace
   without a team role there gets the resolver's fallback (`workspace.js`, `pickFallbackWorkspace`): the club's own
   workspace, stored, and its admin view.
 - **D4.** `not_a_copy_of_this_version` is answered after the rights (a state, as the others of section 4.3).
-- **D5.** A v53 guard's `42501` that only says the basis changed (a stronger role granted mid-request) answers
-  `409 try_again`, as v35's.
+- **D5, as corrected by the *Rukovodilac*.** Only the request record's exact text "metric variable request: the basis
+  is not the acting user's own" (a stronger role granted mid-request) answers `409 try_again`. The match is on the exact
+  text and code, as `classifyChangeError` does it (`basisChangedError`). Every other `42501` stays as it was:
+  `ACTOR_REFUSALS` gives the identical 404, and anything else a sanitized 500. That covers the copy and hide guards' own
+  texts ("may not copy into this club", "may not hide for this club"), which also cover a missing right, and the same
+  words behind another prefix (v35's "source metric mapping: …"). So a real refusal never becomes an endless retry.
+  - Test 2c checks the predicate against each text.
+  - Through the routes, test 2c grants a club admin the platform admin role while the copy or the hide is held. Before
+    the copy's request row the answer is `try_again`, and the same copy then succeeds. Before its copied mappings,
+    before its writes, and before the hide row, the answer is a sanitized 500 with nothing written.
+  - Mutations M30 (the guards' texts mapped again) and M31 (a match on the words, not the exact text) are killed.
 - **D6** (from the internal security review). The copy's and the hide's state refusal for a variable that is not a
   system one (`copy_source_not_system`, `hide_not_system`) comes after the right is checked again under its locks, as
   section 4's order says: a caller whose right is gone meanwhile gets the identical 404. The same holds for the copy
@@ -1099,11 +1116,12 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
 - A test seam after each hide lock (`setHideLockHoldForTests`, `sourceMetricActivationSteps.js`) drives the races of
   L1.
 
-**Tests** (`backend/tests/source-metric-variables-club-7i.test.mjs`, 32 tests, disposable databases):
+**Tests** (`backend/tests/source-metric-variables-club-7i.test.mjs`, 34 tests, disposable databases):
 - the copy: its writes, its answer's `copiedMappings` equal to the links of its operation, its refusals in order (each
   sent with its own key, nothing written and no request record holding the key afterwards), its replay and the club in
   the hash;
 - a right lost during a copy or a hide before its state refusal, and before a losing copy names the winner (D6);
+- a role changed under a copy or a hide: `try_again` only for the request record's exact text (D5, test 2c);
 - a lost COMMIT answer through the copy, the hide, the show and the switch: each verified through its own request record
   (`verified_after_commit_error`, then the same key replays), and an unverifiable one (rejected, or never answered
   within its bound) answers `503 outcome_unknown` with nothing written, after which the same key writes once;
@@ -1118,6 +1136,7 @@ merge, the owner's deploy and the *Rukovodilac*'s post-check.
   - L1: two S1s and two A1s in opposite order;
   - a hide against S1, both orders; two copies;
   - the copy against A1, and against a new system version, an archive and A2, each in both orders;
+  - a new system version activated between the copy's plain read and its T3 locks (D1, test 16c);
   - the switch against S2;
   - the three-way hide / S1 / revocation, and the same with a show; the three-way switch / Unbind / revocation;
   - a hide against A1: once the hide's guard has run, `pgrowlocks` shows the hide holding the variable's row only `Key
@@ -1140,7 +1159,7 @@ started by an S1 or an A1 of a system version, which takes the same hide lock fi
 S1, or it existed before the S1's checks, so the S1 answers `activation_exists` there. The position of A1's hide lock
 (before its first end) is pinned by test 12's SQL order for a replacing A1, and by mutation M28.
 
-**Mutations** (29, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
+**Mutations** (31, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
 every one killed.
 - Four end in a real `40P01`, seen as `deadlock detected` in the PostgreSQL server log during their run: the L1
   mutation (the hide locks not sorted); the hide lock before the rights in the hide; the switch's binding after its
@@ -1151,6 +1170,8 @@ every one killed.
   conflict with the A1's `FOR SHARE`, so no deadlock can show it.
 - The hide request lookup broken, and the copy's replay without its copied drafts, are killed by the lost-COMMIT test.
 - The losing copy's race read without its right check is killed by test 15b.
+- D5's guard texts mapped to `try_again` again, and a match on the words instead of the exact text, are killed by test
+  2c.
 - The service's hide check removed is killed only by the answer's `current.bindingId`. The T5 guard still refuses, and
   the classifier still answers `409 variable_hidden`, without naming the binding.
 
