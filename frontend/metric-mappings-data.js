@@ -484,7 +484,7 @@ const ACT_TEXT = {
     canonical_version_changed: "The variable has a newer version: make a new version.",
     source_metric_target_taken: "This field already fills another variable. Only one of them can be active at a time.",
     ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported"]
-      .map((code) => [code, `This version cannot be activated now: ${DRAFT_TEXT[code]}`])),
+      .map((code) => [code, `This version cannot be activated now: ${DRAFT_TEXT[code].replace(/^(There|The|This)\b/, (w) => w.toLowerCase())}`])),
   },
   disable: { version_status_changed: "This version changed meanwhile." },
   switchOn: { version_not_active: "This version is no longer active.", field_retired: "This version is no longer active." },
@@ -518,9 +518,17 @@ export function refusalText(act, info) {
   if (info.code === "request_key_reused") return "An earlier save of this form may already be stored. Close it and look at the mapping before saving again.";
   if (info.code === "invalid_body" || info.code === "invalid_query") return "The screen sent something the server does not accept. Nothing was saved.";
   const text = ACT_TEXT[act]?.[info.code];
+  // A club's admin cannot confirm a field or add a conversion: the refusal
+  // names who can (J14 section 8, as the screen's own blocker does).
+  if (text && act === "activate" && CLUB_NEXT_STEP[info.code] && mappingsContext()?.owner === "club") return `${text} ${CLUB_NEXT_STEP[info.code]}`;
   if (text) return text;
   return info.status ? "It was not saved: the server refused it." : "No answer from the server.";
 }
+const CLUB_NEXT_STEP = {
+  revision_not_verified: "A platform administrator confirms it in the platform workspace.",
+  conversion_unavailable: "Ask a platform administrator to add it.",
+  bound_conversion_unavailable: "Ask a platform administrator to add it.",
+};
 // The sentence for a refusal of a preview (J16 7).
 export function previewRefusalText(info) {
   if (info.code === "notFound") return "This session is not available for this mapping in this workspace.";

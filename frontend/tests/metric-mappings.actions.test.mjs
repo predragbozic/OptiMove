@@ -1381,3 +1381,45 @@ test("43. a club's admin on a system mapping in the club's workspace: no activat
   assert.match(text(), /There is no conversion from m to yd yet\./);
   assert.doesNotMatch(text(), /Ask a platform administrator to add it\./);
 });
+
+test("44. a field whose meaning is not confirmed: step 4, the notice after Submit and the server's refusals say what blocks it and who helps, never that it can be activated now", async () => {
+  // Step 4 of the flow for a field whose meaning is pending.
+  db.fields[0].revisions[0].evidenceStatus = "observed";
+  asPlatform();
+  actions.resetMappings();
+  await open();
+  await click('[data-action="metric-mappings-new"]');
+  render();
+  await click(`[data-action="metric-mappings-flow-field"][data-field-id="${FA}"]`);
+  await click(`[data-action="metric-mappings-flow-target"][data-target-id="${TK}"]`);
+  render();
+  await input('[data-mm-field="flow.conversionNote"]', "GPEXE gives metres; the variable is in km.");
+  await input('[data-mm-field="flow.session"]', true);
+  await click('[data-action="metric-mappings-flow-review"]');
+  render();
+  assert.match(text(), /A draft changes nothing yet: submit it for review\. It can be activated once the field's meaning is confirmed\./);
+  assert.doesNotMatch(text(), /then you can activate it/);
+  // A club's admin submits the club's own draft of that field: the blocker, not "You can activate it now".
+  db.mappings[0].ownerScope = "club";
+  db.mappings[0].versions.unshift(ver({ id: V3, versionNumber: 3, status: "draft", metricDefinitionVersionId: "tv-d" }));
+  asClub();
+  actions.resetMappings();
+  await open("detail");
+  await click(`[data-action="metric-mappings-submit"][data-version-id="${V3}"]`);
+  render();
+  assert.match(text(), /Submitted for review\. The field's meaning must be confirmed first\. A platform administrator confirms it in the platform workspace\./);
+  assert.doesNotMatch(text(), /You can activate it now/);
+  // The server's own refusals of an activation name who helps in a club's workspace only.
+  assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }),
+    "The field's unit and meaning must be confirmed first. A platform administrator confirms it in the platform workspace.");
+  assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
+    "This version cannot be activated now: there is no usable conversion between these units now. Ask a platform administrator to add it.");
+  assert.equal(data.refusalText("activate", { code: "level_not_allowed", status: 409 }),
+    "This version cannot be activated now: the field or the variable does not allow this level.");
+  assert.equal(data.refusalText("activate", { code: "source_metric_unsupported", status: 409 }),
+    "This version cannot be activated now: OptiMove cannot read this field with these settings.");
+  asPlatform();
+  assert.equal(data.refusalText("activate", { code: "revision_not_verified", status: 409 }), "The field's unit and meaning must be confirmed first.");
+  assert.equal(data.refusalText("activate", { code: "conversion_unavailable", status: 409 }),
+    "This version cannot be activated now: there is no usable conversion between these units now.");
+});

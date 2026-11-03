@@ -441,8 +441,17 @@ async function succeeded(w, data, render) {
   }
   s.panel = null;
   if (w.act === "submit") {
+    // The next step only for a caller who may activate it, and only when the
+    // reads show nothing that blocks it; otherwise the blocker's own sentence.
     const ctx = mappingsContext();
-    setNotice(s, `Submitted for review.${s.detail.mapping && mayTransition(s.detail.mapping, ctx) ? " You can activate it now." : ""}${readError}`);
+    const mapping = s.detail.mapping;
+    const version = w.target?.versionId ? versionOf(s, w.target.versionId) : null;
+    let next = "";
+    if (mapping && version && mayTransition(mapping, ctx)) {
+      const blocker = activateBlocker(mapping, version, s, ctx);
+      next = blocker ? ` ${blocker}` : " You can activate it now.";
+    }
+    setNotice(s, `Submitted for review.${next}${readError}`);
   }
   if (w.act === "activate") {
     const ended = Number(data?.activationsEnded) || 0;

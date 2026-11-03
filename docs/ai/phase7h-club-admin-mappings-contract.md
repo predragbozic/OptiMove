@@ -1388,9 +1388,9 @@ post-check (the runbook).
   - `backend/tests/gpexe-import-mapped-concurrency-9b.test.mjs` 11a–11c: a club admin's A2 and replacement against an
     import and against the real approval, both orders;
   - the existing suites of section 10.7: 7b tests 8 and 9 changed as written; frontend tests 10 and 34 inverted; new
-    frontend tests 40–43 (the shared table, a club admin's activate with teams, replace with kept teams then disable,
-    the system mapping's sentences and the club blockers); the Imports step's sentence in
-    `frontend/tests/gpexe-import.actions.test.mjs`;
+    frontend tests 40–44 (the shared table, a club admin's activate with teams, replace with kept teams then disable,
+    the system mapping's sentences and the club blockers, and a field whose meaning is not confirmed); the Imports
+    step's sentence in `frontend/tests/gpexe-import.actions.test.mjs`;
   - `backend/tests/gpexe-import-window-sql-9r.test.mjs` builds its world through v51: the two 9-R window files are
     pinned to v51 as written, the first window ran them on production and its record names their sha256, so a later
     migration makes them stale for the **next** window only, which re-issues them before its step 11 (their headers;
@@ -1406,7 +1406,20 @@ post-check (the runbook).
     the R3 backstop runs first and refuses whenever the binding's club differs from the mapping's, so both clubs are
     the same where the derivation is reached.
 
-  The frontend mutation (`mayTransition` platform-only) is killed by six tests.
+  The frontend mutations are killed too: `mayTransition` platform-only by six tests, and each of the four
+  sentence fixes below by test 44.
+- **Three sentences of section 8 made conditional** (the internal `ux-design-reviewer`'s MEDIUM and two LOWs, each
+  confirmed by an adversarial check): a field whose meaning is not confirmed can be saved as a draft and submitted
+  (step 1 says so), but not activated, so
+  - after *Submit* the notice names the screen's own blocker instead of "You can activate it now." (for a club's
+    admin: "Submitted for review. The field's meaning must be confirmed first. A platform administrator confirms it in
+    the platform workspace."); "You can activate it now." stays for every other version;
+  - step 4 reads "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is
+    confirmed." for such a field, and section 8's sentence otherwise;
+  - the server's own refusal of an activation (`revision_not_verified`, `conversion_unavailable`,
+    `bound_conversion_unavailable`, a race the screen's reads did not show) names who helps in a club's workspace,
+    as the screen's blocker does, and "This version cannot be activated now: there is …" is no longer capitalised
+    after the colon.
 - **The browser check** (section 8; `testing-evidence.md`): the branch's real server and frontend in Chromium on a
   disposable database through v52, never a persistent one and never a GPEXE request. Club A's admin, in club A's
   workspace: the club intro; a system mapping waiting for review with no *Activate*, *Disable* or *New version* and the

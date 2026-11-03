@@ -273,7 +273,9 @@ function stepReviewHtml(s, locked) {
         ${bound ? `<div><dt>Bound</dt><dd>${escapeHtml(bound)}</dd></div>` : ""}
         ${status.conversion ? `<div class="source-fields-wide"><dt>Conversion note</dt><dd>${escapeHtml(cleanName(f.draft.conversionNote, 500))}</dd></div>` : ""}
       </dl>
-      <p class="muted">A draft changes nothing yet: submit it for review, then you can activate it.</p>
+      <p class="muted">${fieldStatus(field).meaningPending
+        ? "A draft changes nothing yet: submit it for review. It can be activated once the field's meaning is confirmed."
+        : "A draft changes nothing yet: submit it for review, then you can activate it."}</p>
     </div>
     ${writeHtml(s)}
     ${s.write?.unconfirmed ? "" : `
