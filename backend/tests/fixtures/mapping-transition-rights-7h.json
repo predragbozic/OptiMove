@@ -1,0 +1,15 @@
+{
+  "contract": "docs/ai/phase7h-club-admin-mappings-contract.md, section 8 (R12): who may activate, replace and disable a mapping version. The backend suite asserts each row against mayTransitionMappings plus the owner filter (the real resolver's context) and against the real A1 route; the frontend suite asserts it against mayTransition. A platform admin reaches club A's workspace only while also holding club A's admin role, so every club-workspace row of a platform admin is a user who holds both roles. A club mapping is always club A's: in a club workspace the server reads only the workspace's own club's mappings, so another club's mapping never reaches the client.",
+  "rows": [
+    { "name": "a platform admin in the platform workspace, a system mapping", "roles": { "platformAdmin": true, "clubAdminOfA": false }, "workspace": "platform", "mappingOwner": "system", "expected": true },
+    { "name": "a platform admin in the platform workspace, club A's mapping", "roles": { "platformAdmin": true, "clubAdminOfA": false }, "workspace": "platform", "mappingOwner": "clubA", "expected": false },
+    { "name": "a user who holds both roles, in the platform workspace, club A's mapping", "roles": { "platformAdmin": true, "clubAdminOfA": true }, "workspace": "platform", "mappingOwner": "clubA", "expected": false },
+    { "name": "a user who holds both roles, in the platform workspace, a system mapping", "roles": { "platformAdmin": true, "clubAdminOfA": true }, "workspace": "platform", "mappingOwner": "system", "expected": true },
+    { "name": "a platform admin (who also administers club A) in club A's workspace, club A's mapping", "roles": { "platformAdmin": true, "clubAdminOfA": true }, "workspace": "clubA", "mappingOwner": "clubA", "expected": true },
+    { "name": "a platform admin (who also administers club A) in club A's workspace, a system mapping", "roles": { "platformAdmin": true, "clubAdminOfA": true }, "workspace": "clubA", "mappingOwner": "system", "expected": false },
+    { "name": "club A's admin in club A's workspace, club A's mapping", "roles": { "platformAdmin": false, "clubAdminOfA": true }, "workspace": "clubA", "mappingOwner": "clubA", "expected": true },
+    { "name": "club A's admin in club A's workspace, a system mapping", "roles": { "platformAdmin": false, "clubAdminOfA": true }, "workspace": "clubA", "mappingOwner": "system", "expected": false },
+    { "name": "club A's admin in a team workspace of club A, club A's mapping", "roles": { "platformAdmin": false, "clubAdminOfA": true }, "workspace": "teamA", "mappingOwner": "clubA", "expected": false },
+    { "name": "a platform admin in a team workspace of club A, a system mapping", "roles": { "platformAdmin": true, "clubAdminOfA": false }, "workspace": "teamA", "mappingOwner": "system", "expected": false }
+  ]
+}

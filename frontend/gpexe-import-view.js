@@ -1513,7 +1513,7 @@ const SETUP_COACH_TEXT = Object.freeze({
   reason: "This session can't be imported until an administrator finishes its data setup.",
   step: "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.",
 });
-const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. If both look right, ask a platform administrator (give them the Technical details).";
+const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. If both look right, your club's admin fixes the club's own mappings, and a platform administrator fixes system mappings and field confirmations (give them the Technical details).";
 const SETUP_CONNECTION_STEP = "Check this team's GPEXE binding and the binding of the team that holds this GPEXE team (Settings > Source connections). Ending a held source instance is a platform administrator's step (docs/runbooks/source-instance-end-v50.md); then find new sessions.";
 const SETUP_ADMIN_TEXT = Object.freeze({
   mapping_not_usable: { reason: "This session can't be imported through the team's mappings and GPEXE binding as they stand.", step: SETUP_MAPPINGS_STEP },

@@ -38,3 +38,6 @@ docs/runbooks/calendar-settings-v51*.sql text eol=lf
 # 9-R (J17 section 10.4): the import window's preflight and post-check are named by the sha256 of the
 # whole file, so a CRLF checkout must not change them; new files only, same reason.
 docs/runbooks/gpexe-import-window-*.sql text eol=lf
+# Phase 7h (v52): the rollback restores v34's T4 guard and v48's three bodies verbatim, and the preflight and the
+# post-check compare them by md5; new files only, same reason.
+docs/runbooks/club-mapping-transitions-v52*.sql text eol=lf

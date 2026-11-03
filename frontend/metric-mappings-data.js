@@ -1,7 +1,8 @@
 // Training Load -> Data configuration -> Mappings (phase 8, J16:
 // docs/ai/phase8-mappings-screen-contract.md). An administrator connects a
 // source field to an OptiMove variable in a guided flow of three steps, submits
-// the draft, and a platform administrator activates, replaces or disables a
+// the draft, and a platform administrator - or, from phase 7h (J14), the club's
+// admin on the club's own mappings - activates, replaces or disables a
 // version; a version is switched on and off for the club's GPEXE teams by name,
 // and checked against a saved session. Frontend only, over the routes of M2,
 // 7b, 7c (reads), 7d, 7e and 7f: the screen never sends an owner, an actor or a
@@ -281,7 +282,7 @@ export function targetStatus(target, revision, conversions) {
   let badge = "same";
   if (unit !== revision.sourceUnit) {
     conversion = conversionOf(conversions, revision.sourceUnit, unit);
-    if (!conversion) return { choosable: false, reason: `There is no conversion from ${revision.sourceUnit} to ${unit} yet.` };
+    if (!conversion) return { choosable: false, reason: `There is no conversion from ${revision.sourceUnit} to ${unit} yet.`, conversionMissing: true };
     badge = "converted";
   }
   // A variable with a condition is filled only by a field with the same kind

@@ -1207,9 +1207,11 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
       const version = (await client.query(
         `select status from training_load.source_metric_mapping_versions where id = $1 for update`, [vId],
       )).rows[0];
+      // The states, answered only after the right (J14 R5, as A1 and A2): a
+      // caller who lost it meanwhile sees the identical 404, never `current`.
+      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (version.status !== "draft") throw refusal(409, "version_not_draft", "Only a draft version is submitted.", { current: { status: version.status } });
       if (!revision || !["draft", "active"].includes(revision.state)) throw refusal(409, "revision_not_usable", MESSAGES.revision_not_usable);
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (writeHold) await writeHold(client, "mapping_status");
       await client.query(
         `update training_load.source_metric_mapping_versions
@@ -1225,8 +1227,12 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
 
 // ---------------------------------------------------------------------------
 // Phase 7b (J8, C104): activate, replace and disable a mapping version - an
-// active platform admin's only, in the workspace of the mapping's owner
-// (mayTransitionMappings; the routes ask it before the body). Each is one
+// active platform admin's, in the workspace of the mapping's owner, and from
+// phase 7h (J14, C108, C126) also club X's active admin's on club X's own
+// mappings in club X's workspace (mayTransitionMappings; the routes ask it
+// before the body; transitionTarget's owner filter keeps a club admin to its
+// own club's mappings). The basis written on T4, T5 and T8 is the caller's,
+// as the database derives it (v52). Each is one
 // bounded transaction of runWrite in J8's lock order (section 4): the
 // per-user lock and the request record; for an activation the active
 // unit_conversions rows of the value and bound pairs in one statement, in
@@ -1249,8 +1255,12 @@ const INVALID_ACTIVATION_REASON = "activationReason is one line of 1-500 visible
 
 // Test seam (never set by the application): "split_operation" writes the
 // replaced version's mapping_status row under another operation_id, so v43's
-// deferred G1 refuses the COMMIT (J8 section 8: a definite COMMIT refusal).
+// deferred G1 refuses the COMMIT (J8 section 8: a definite COMMIT refusal);
+// "skip_end" leaves the first ended activation without its activation_end row
+// in A1 and A2, so v48's deferred end link refuses the COMMIT (J14 section
+// 10.4).
 let transitionAuditFault = null;
+const auditedEnds = (rows) => (transitionAuditFault === "skip_end" ? rows.slice(1) : rows);
 export function setMappingTransitionAuditFaultForTests(kind) { transitionAuditFault = kind ?? null; }
 
 function transitionPath(mappingId, versionId) {
@@ -1491,7 +1501,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
         await checkListedStarts(client, started, listed, bindingLocks);
         starts = await insertStarts(client, ctx, started, listed, bindingLocks, activationReason);
       }
-      await endAuditRows(client, ctx, ending, reason, operationId);
+      await endAuditRows(client, ctx, auditedEnds(ending), reason, operationId);
       await startAuditRows(client, ctx, starts, activationReason, operationId);
       if (replacing) {
         // The replaced version's own row: no request key (one request record
@@ -1559,7 +1569,7 @@ export async function disableVersion({ ctx, mappingId, versionId, body }) {
           where id = $1`,
         [vId, ctx.userId, ctx.basis, reason],
       );
-      await endAuditRows(client, ctx, ending, reason, operationId);
+      await endAuditRows(client, ctx, auditedEnds(ending), reason, operationId);
       await insertRequestRecord(client, { action: "mapping_status", mappingId: mId, mappingVersionId: vId, fromStatus: status, toStatus: "disabled", reason, ctx, operationId, requestKey, requestHash });
       return { mapping_id: mId, mapping_version_id: vId, operation_id: operationId };
     },
