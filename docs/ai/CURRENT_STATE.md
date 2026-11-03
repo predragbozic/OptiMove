@@ -54,6 +54,8 @@ on 2026-11-02 at `64f6640` (merge of PR #328), by the K2b-1b pull request; nothi
 PR #333 and PR #334) and the order of their pull requests were added on 2026-11-02 at `93f36615` (merge of PR #334);
 nothing else was re-derived then. Phase 7h-B (PR #339, migration v52), its deploy, the *Rukovodilac*'s v52 post-check
 and its decisions 1–5 were added on 2026-11-03 at `0334ddbd` (merge of PR #339); nothing else was re-derived then.
+LO-1, the lock-order pull request (PR #344, no migration), its deploy and the *Rukovodilac*'s decisions 2–4 at its GO
+were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then.
 
 ## Active phase
 
@@ -100,14 +102,30 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
 - then, in either order, **7h-F** (C131 (b), *Save and activate*; it may come right after 7h-B; it also takes the
   Imports step's wording, decision 1 of 7h-B's GO, Separate tasks) and **the lock-order
   pull request** (Separate tasks: every remaining role-first rights lock turned users first, and A1 in D's order).
-  Until the lock-order pull request is deployed, a club's admin's A1 with listed starts (7h-B's and 7h-F's) can rarely
-  end in `40P01` with an Unbind and a revocation at once (`try_again` or a 500, nothing written); the *Rukovodilac*
-  accepts that risk (J14 section 15);
-  **the lock-order pull request is built as LO-1** (branch `feature/lock-order-lo1`, J14 section 18; ★★, trigger 4;
-  no migration; in review, not merged): every service rights lock users first, A1 in D's order, R17. The database's
-  own role-first functions are **LO-2**, a later migration (the *Rukovodilac*'s L0 (a), Separate tasks), which 7i-B
-  does not wait for;
-- **7i-B**: only after the lock-order pull request.
+  **the lock-order pull request is done as LO-1** (J14 section 18; ★★, trigger 4; no migration): every service rights
+  lock users first, A1 in D's order, R17.
+  - **Merged** as PR #344 (`ad0e0d63`, parents `bb4b27da` and `5ade6443`) on 2026-11-03 at 10:30:18 UTC, exactly from
+    `5ade6443`, under the standing merge order after both ★★ GOs on that head: the *Rukovodilac*'s event `ccd3081e`
+    and the *Nezavisni revizor*'s event `a48f9213`. `main` had moved through PR #343 (the central calendar's settings
+    screen, frontend only, no migration); the merge's tree is the tested trial merge.
+  - **Deployed** by the *Rukovodilac* through the Render API: live at 10:32:26 UTC. Production had been serving
+    `bb4b27da` (PR #343).
+    - `/api/health` served `ad0e0d63` with `ok: true` three times in a row (10:32:47, 10:32:57 and 10:33:20 UTC).
+    - Without a login, with the zero UUID: `/api/auth/me` answered 200 with no user; the activate route, the
+      source-connection list, the athlete identities and `/api/exercise-collections` answered 401.
+  - `test:backend:shared` was **not run** and stays UNKNOWN (the *Rukovodilac*'s decision 2 at its GO): there is no
+    local development database here, and the disposable suites cover every changed query.
+  - From this deploy on, the known limit of J14 section 15 (a club's admin's A1 with listed starts against an Unbind
+    and a revocation at once, `40P01`) no longer holds.
+  - The rule the *Rukovodilac* accepted at the GO (its decision 4: a transaction that claims to take every lock before
+    its first write has a test of its recorded SQL order; a rights check locks `users` before the role row, as the
+    revocations do; proof: `lock-order-lo1` test 9c) is a separate small pull request to
+    `.claude/rules/migrations.md`.
+
+  The database's own role-first functions are **LO-2**, a later migration (the *Rukovodilac*'s L0 (a), Separate
+  tasks), which 7i-B does not wait for;
+- **7i-B**: unblocked by LO-1's deploy. The *Rukovodilac*'s order of 2026-11-03 (after the deploy): a plan first, with
+  the migration number and the order against LO-2 and J18, before any code.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
@@ -3810,11 +3828,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **R17 resolves the workspace twice (7h-V's internal security review, LOW; accepted by the *Rukovodilac* as a small
-  follow-up, event `28c48113`). Built in LO-1 (in review; J14 section 18).** `routes/gpexeImport.js:44` calls `resolveVariableEditor(req)` without `known`, while the
-  check before it uses `access.workspace`, so a workspace switch between the two resolutions is possible in theory. The
-  fix passes `access.workspace` as `known`, as 7h-V's activity route does. To be done in the lock-order pull request or
-  in the V2 info-hiding task, whichever is cleaner.
+- **R17 resolves the workspace twice — done in LO-1 (PR #344, merged and deployed 2026-11-03; J14 section 18).** The
+  import preview passes `access.workspace` to `resolveVariableEditor` as `known`, as 7h-V's activity route does.
 
 - **Info hiding of other owners' variable names in team results (the *Rukovodilac*'s V2 (a) of 2026-11-02, event
   `66518c44`; found by 7h-V's discovery; before more clubs are brought on).** `GET /api/training-load/metrics/occasions/:id`
@@ -3825,25 +3840,17 @@ pre-existing; pass/fail counts don't belong in this file
   athlete on their own occasion (7h-V's internal security review, MEDIUM, out of 7h-V's scope). Its own decisions and
   a security review; the security-reviewer gives it its severity.
 
-- **The "lock order" pull request (the *Rukovodilac*'s decision of 2026-11-02, J14 section 7 and R13, widened by J15's R13
-  the same day): after 7h-B, before or after 7h-F, and before 7i-B — 7i-B never comes before it — and before more clubs are brought
-  on. Built as LO-1 (in review; J14 section 18): every item below; the team-coach branch was checked (its revocation
-  updates only the role row) and turned users first for one rule.** It also moves **A1 to D's order**: its listed bindings and teams locked before its rights, and every lock
-  before its first end (today the rights at `sourceMetricMappingService.js:1426`, the ends at `:1465`, the listed
-  bindings at `:1485`), with a route-against-route test of A1 against an Unbind and a club-admin revocation (J15
-  section 5 and R13: today A1 has the three-way deadlock J15 found for the switch to a copy). Several rights checks lock the role row before the `users` row, while the
-  revocations lock `users` first, so a revocation can deadlock against a write by the same user (`40P01`: the write
-  answers `try_again`, the revocation a 500). 7h-B fixes only the club-admin query of `sourceMetricAccess.js`
-  `rightsStillHold`. The rest, each turned users first, with route-against-route tests:
-  - club-admin branches against `revokeClubAdminRole` (`for update of u, r`): `sourceConnectionService.js:216`,
-    `gpexeAthleteIdentityService.js:155-158` (`lock = true`), `coachRightsStillHold`'s club-admin probe
-    (`sourceMetricAccess.js:165`, `r, u, c`);
-  - platform-admin branches against `loadQualifyingPlatformAdminIds` (`for update of u, g`): `sourceMetricAccess.js:123`,
-    `:131`, `:157`, `sourceConnectionService.js:211`, `gpexeAthleteIdentityService.js:155-157`,
-    `routes/exerciseCollections.js:191-193`;
-  - the team-coach branch, `sourceMetricAccess.js:177`, once the team-coach revocation's own order is checked.
+- **The "lock order" pull request — done as LO-1** (PR #344, merged and deployed 2026-11-03; J14 section 18, J15
+  section 5): every service rights check locks the `users` row before the role row, as the revocations do (the
+  club-admin, platform-admin and team-coach branches of `sourceMetricAccess.js`, `sourceConnectionService.js`,
+  `gpexeAthleteIdentityService.js` and `routes/exerciseCollections.js`), and A1 takes D's order (its listed bindings
+  and teams before its rights, the clubs right after them, every lock before its first end), with route-against-route
+  tests (`lock-order-lo1.test.mjs`).
 - **LO-2: the database's own rights locks users first (the *Rukovodilac*'s L0 (a), 2026-11-03; ★★ with a migration,
-  the owner's order naming it; before more clubs are brought on; 7i-B does not wait for it).** LO-1's discovery found
+  the owner's order naming it; before more clubs are brought on; 7i-B does not wait for it). Scope confirmed by the
+  *Rukovodilac* at LO-1's GO (decision 3, event `ccd3081e`): v23, v26 and v49's `calendar.lock_event_writer` (each the
+  first rights lock of its transaction), and v34, v35 and v38 for one rule; md5 preconditions, a rollback, a preflight
+  and a post-check.** LO-1's discovery found
   that the database functions lock the role row before the user row too:
   - `training_load.lock_gpexe_import_approver` (v23: `r, u` and `a, tr, u`) and `training.lock_activity_decider` (v26:
     `r, u` three times) are the **first** rights lock of their transactions (an import approval's step 6b, a roster
