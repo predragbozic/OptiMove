@@ -13,7 +13,7 @@ import { forgetMediaAccess, loadPlayback } from "./media-playback.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
 
 export const emptyExerciseEditorData = () => ({
-  name: "", exerciseCode: "", aim: "", executionNotes: "", instruction: "", videoUrl: "", imageUrl: "",
+  name: "", nameEn: "", exerciseCode: "", aim: "", executionNotes: "", instruction: "", instructionEn: "", videoUrl: "", imageUrl: "",
   place: "", complexity: "", startingPosition: "", attractor: "",
   purposes: [], qualities: [], groups: [], bodyParts: [], movementPatterns: [], tags: [],
 });
@@ -97,6 +97,7 @@ function editorHtml(editor, filterOptions) {
         <div class="exercise-editor-body">
           ${editor.isCopy ? `<p class="muted">Saving creates your private copy without storing the original video or image. Available source media are used as fallback. The original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : editor.ownerScope === "system" ? `<p class="muted">You are editing the application original for all users.</p>` : ""}
           <label class="search-field"><span>Name</span><input class="builder-text-input" data-exercise-editor-field="name" value="${escapeAttr(d.name)}" required></label>
+          <label class="search-field"><span>Name (English)</span><input class="builder-text-input" lang="en" data-exercise-editor-field="nameEn" value="${escapeAttr(d.nameEn)}"></label>
           <div class="exercise-editor-grid">
             <label class="search-field"><span>Exercise code</span><input class="builder-text-input" data-exercise-editor-field="exerciseCode" value="${escapeAttr(d.exerciseCode)}"></label>
           </div>
@@ -104,6 +105,7 @@ function editorHtml(editor, filterOptions) {
           <label class="search-field"><span>Aim</span><textarea class="builder-text-input" rows="2" data-exercise-editor-field="aim">${escapeHtml(d.aim)}</textarea></label>
           <label class="search-field"><span>Execution notes</span><textarea class="builder-text-input" rows="2" data-exercise-editor-field="executionNotes">${escapeHtml(d.executionNotes)}</textarea></label>
           <label class="search-field"><span>Instruction</span><textarea class="builder-text-input" rows="2" data-exercise-editor-field="instruction">${escapeHtml(d.instruction)}</textarea></label>
+          <label class="search-field"><span>Instruction (English)</span><textarea class="builder-text-input" rows="2" lang="en" data-exercise-editor-field="instructionEn">${escapeHtml(d.instructionEn)}</textarea></label>
           <div class="exercise-editor-grid">
             ${SINGLE_FIELDS.map((field) => renderSingleField(field, d[field.key], filterOptions[field.optionsKey] || [])).join("")}
           </div>
@@ -441,8 +443,8 @@ export async function openExerciseEditor(state, handlers, exerciseId, { copy = f
       if (!copy && detail.canEdit === false) throw new Error("You cannot edit this exercise. Use Copy to create your own version.");
       editor.ownerScope = detail.ownerScope || "user";
       editor.data = {
-        name: detail.name || "", exerciseCode: copy ? "" : detail.exerciseCode || "", aim: detail.aim || "",
-        executionNotes: detail.executionNotes || "", instruction: detail.instruction || "",
+        name: detail.name || "", nameEn: detail.nameEn || "", exerciseCode: copy ? "" : detail.exerciseCode || "", aim: detail.aim || "",
+        executionNotes: detail.executionNotes || "", instruction: detail.instruction || "", instructionEn: detail.instructionEn || "",
         videoUrl: copy ? "" : detail.videoUrl || "", imageUrl: copy ? "" : detail.imageUrl || "",
         place: detail.place || "", complexity: detail.complexity || "", startingPosition: detail.startingPosition || "",
         attractor: detail.attractor || "", purposes: detail.purposes || [], qualities: detail.qualities || [],

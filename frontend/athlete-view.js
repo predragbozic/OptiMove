@@ -1,4 +1,5 @@
 import { ICON_CALENDAR, ICON_SPECIFIC_PROGRAMS } from "./athlete-home.js";
+import { renderContentLanguageSectionHtml } from "./account-language.js";
 import { renderImage } from "./media.js";
 import { sortAthletes } from "./athlete-list-tools.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
@@ -131,6 +132,7 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
           </article>
         </div>
       </section>
+      ${renderContentLanguageSectionHtml(currentUser)}
       ${renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus)}
     </section>
   `;

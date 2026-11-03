@@ -15,6 +15,7 @@ import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelec
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
+import { CONTENT_LANGUAGE_REFUSED, isContentLanguage } from "../contentLanguage.js";
 import {
   EmailConfigError,
   EmailSendError,
@@ -67,10 +68,15 @@ router.get("/me", async (req, res, next) => {
     const teamRoles = authz.teamRoles || [];
     const clubIds = clubRoles.map((r) => r.clubId);
     const teamIds = teamRoles.map((r) => r.teamId);
-    const [clubsResult, teamsResult, { workspace: activeWorkspace, availableWorkspaces }] = await Promise.all([
+    const [clubsResult, teamsResult, { workspace: activeWorkspace, availableWorkspaces }, languageResult] = await Promise.all([
       clubIds.length ? query(`select id, name from public.clubs where id = any($1::uuid[])`, [clubIds]) : { rows: [] },
       teamIds.length ? query(`select id, name from public.teams where id = any($1::uuid[])`, [teamIds]) : { rows: [] },
       resolveActiveWorkspace(req.user.id, authz),
+      // Read through to_jsonb so a database without the column yet (the
+      // local development database is migrated only on confirmation, and
+      // `npm run dev` does not migrate) still signs in, in Serbian.
+      query(`select coalesce(to_jsonb(u) ->> 'content_language', 'sr') as content_language
+               from public.users u where u.id = $1`, [req.user.id]),
     ]);
     const clubNameById = new Map(clubsResult.rows.map((c) => [String(c.id), c.name]));
     const teamNameById = new Map(teamsResult.rows.map((t) => [String(t.id), t.name]));
@@ -88,8 +94,32 @@ router.get("/me", async (req, res, next) => {
         teams: teamRoles.map((r) => ({ id: r.teamId, name: teamNameById.get(String(r.teamId)) || null, role: r.role })),
         activeWorkspace,
         availableWorkspaces,
+        // The language of exercise content (names, instructions), not of the
+        // interface.
+        contentLanguage: languageResult.rows[0]?.content_language === "en" ? "en" : "sr",
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The caller's own exercise language: "sr" or "en". There is no user id in
+// the request, so this route never sets another account's (an athlete's is
+// also set by whoever may edit that athlete, PUT /api/organization/athletes/:id).
+router.put("/me/content-language", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const contentLanguage = req.body?.contentLanguage;
+    if (!isContentLanguage(contentLanguage)) {
+      return res.status(400).json({ error: CONTENT_LANGUAGE_REFUSED });
+    }
+    const updated = await query(
+      `update public.users set content_language = $2, updated_at = now() where id = $1 returning content_language`,
+      [req.user.id, contentLanguage],
+    );
+    if (!updated.rows[0]) return res.status(401).json({ error: "Unauthorized" });
+    res.json({ contentLanguage: updated.rows[0].content_language });
   } catch (error) {
     next(error);
   }

@@ -49,6 +49,7 @@ import {
   renderAthleteSettingsHtml,
 } from "./athlete-view.js";
 import { renderCoachAccountHtml } from "./coach-account.js";
+import { saveContentLanguage } from "./account-language.js";
 import {
   renderAthleteProgramCardsRailHtml,
   renderAthleteProgramsPanelHtml,
@@ -935,6 +936,15 @@ async function handleContentSubmit(event) {
     } finally {
       if (button) button.disabled = false;
     }
+    return;
+  }
+
+  // Account -> Exercise language: only the caller's own account
+  // (account-language.js).
+  const contentLanguageForm = event.target.closest("[data-account-form='content-language']");
+  if (contentLanguageForm) {
+    event.preventDefault();
+    await saveContentLanguage(contentLanguageForm, { api, currentUser: state.currentUser });
     return;
   }
 

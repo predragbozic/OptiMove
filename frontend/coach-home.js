@@ -3,6 +3,7 @@ import { athleteMatches, sortAthletes } from "./athlete-list-tools.js";
 import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { emptyCoachHomeState } from "./state.js";
+import { exerciseText } from "./exercise-text.js";
 import { escapeAttr, escapeHtml, localDateIso, monthLabel, monthWeeksIso, programInitials } from "./utils.js";
 
 // Every Home card carries the icon of its item in the main menu
@@ -266,10 +267,13 @@ function renderLibraryStateHtml(part, { loadingText, errorText, emptyText, libra
 }
 
 export function renderCoachHomeExerciseItemsHtml(items) {
-  return items.map((exercise) => `<li><button class="coach-home-strip-item coach-home-strip-card" type="button" data-action="coach-home-open-exercise" data-exercise-id="${escapeAttr(exercise.id)}">
-        <span class="coach-home-strip-media">${renderExerciseThumb(exercise, "coach-home-strip-thumb")}</span>
-        <span class="coach-home-strip-label">${escapeHtml(exercise.name || "Exercise")}</span>
-      </button></li>`).join("");
+  return items.map((exercise) => {
+    const name = exerciseText(exercise, "name") || "Exercise";
+    return `<li><button class="coach-home-strip-item coach-home-strip-card" type="button" data-action="coach-home-open-exercise" data-exercise-id="${escapeAttr(exercise.id)}">
+        <span class="coach-home-strip-media">${renderExerciseThumb(exercise, "coach-home-strip-thumb", { name })}</span>
+        <span class="coach-home-strip-label">${escapeHtml(name)}</span>
+      </button></li>`;
+  }).join("");
 }
 
 // The last item of the exercise strip while a further page loads, or after
