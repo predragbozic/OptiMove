@@ -30,7 +30,12 @@ export async function withPreviewTransaction({ pool, signal, onReleased = () => 
     pendingClient.then(async late => { client = late.client; lifecycle = late.lifecycle; await release(true); }, () => release(false)).catch(() => {});
     throw error;
   }
-  const deadline = performance.now() + transactionTimeoutMs;
+  const transactionStart = pool.transactionStartedAt ?? performance.now();
+  if (!Number.isFinite(transactionStart) || transactionStart < 0 || transactionStart > performance.now()) {
+    await release(true);
+    throw previewError('previewCleanupFailed');
+  }
+  const deadline = transactionStart + transactionTimeoutMs;
   let queue = Promise.resolve();
   const check = () => {
     lifecycle.check();

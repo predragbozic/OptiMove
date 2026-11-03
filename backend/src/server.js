@@ -33,7 +33,9 @@ import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
-import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
+import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
+import { createSimpleRuntime, SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
+import { queryDashboard } from './trainingLoadDashboardQuery.js';
 import { realtimeRouter } from "./realtime.js";
 import { assertEmailConfigValid } from "./email.js";
 
@@ -62,6 +64,8 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
+const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
+if (simpleRuntime.router) app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
 app.use(express.json());
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);
