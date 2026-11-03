@@ -168,25 +168,37 @@ export function normalizeOrganizationSelection(data) {
   if (selectedTeam?.club_id && !state.organization.selectedClubId) state.organization.selectedClubId = selectedTeam.club_id;
 }
 
-function renderOrganizationSelectableList(title, rows, type, selectedId) {
+function renderOrganizationSelectableList(title, rows, type, selectedId, options = {}) {
   return `
     <section class="panel organization-list-card">
       <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
       <div class="organization-list">
-        ${rows.length ? rows.map((row) => renderOrganizationSelectableRow(row, type, selectedId)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
+        ${rows.length ? rows.map((row) => renderOrganizationSelectableRow(row, type, selectedId, options)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
       </div>
     </section>
   `;
 }
 
-function renderOrganizationSelectableRow(row, type, selectedId) {
+// D45: only the club archives a team (its admin or a platform admin), the
+// right the server's manageableTeamIds already carries; a team's coach gets no
+// archive control, and neither does a team of an archived club (the server
+// refuses it, as it refuses to restore one).
+function canArchiveTeam(data, team) {
+  return team.club_active !== false && (data?.manageableTeamIds || []).some((id) => String(id) === String(team.id));
+}
+
+function renderOrganizationSelectableRow(row, type, selectedId, { canArchive = null } = {}) {
   const isSelected = String(row.id) === String(selectedId);
+  const isTeam = type === "team";
+  const deleteControl = isTeam
+    ? (canArchive?.(row) ? `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="team" data-org-id="${escapeAttr(row.id)}" aria-label="Archive team" title="Archive team">${ICON_TRASH}</button>` : "")
+    : `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>`;
   return `
     <article class="organization-row ${isSelected ? "is-selected" : ""}">
       <button class="organization-row-main" type="button" data-action="organization-select-${escapeAttr(type)}" data-${escapeAttr(type)}-id="${escapeAttr(row.id)}">
         ${renderOrganizationRowContent(row, type)}
       </button>
-      <span class="organization-row-actions"><button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button><button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button></span>
+      <span class="organization-row-actions"><button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>${deleteControl}</span>
     </article>
   `;
 }
@@ -260,7 +272,7 @@ export function renderOrganizationBrowser(data) {
       <section class="organization-lists organization-lists-browser">
         ${section === "overview" || section === "users" ? renderOrganizationUsersSection(data) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
-        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes"
           ? selectedTeam
             ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes)
@@ -312,7 +324,7 @@ function renderArchivedTeamsList(teams) {
   return `
     <section class="panel organization-list-card organization-archived-teams">
       <div class="organization-list-head"><p class="eyebrow">Archived teams</p><strong>${teams.length}</strong></div>
-      <p class="muted organization-archived-teams-note">Restoring brings the team back as it was archived, with its coaches and athletes. A membership archived on its own stays archived.</p>
+      <p class="muted organization-archived-teams-note">A restored team comes back without athletes; their history stays. Add this season's athletes after restoring.</p>
       <div class="organization-list">
         ${teams.length ? teams.map(renderArchivedTeamRow).join("") : `<p class="muted">No archived teams.</p>`}
       </div>

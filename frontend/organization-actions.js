@@ -227,7 +227,9 @@ export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrga
   // touches roles, athlete profile, or membership history.
   const labels = { club: "club", team: "team" };
   if (!id || !labels[type]) return;
-  const confirmMessage = `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
+  const confirmMessage = type === "team"
+    ? TEAM_ARCHIVE_CONFIRM
+    : `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
   if (!window.confirm(confirmMessage)) return;
   await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });
   await loadAthletes();
@@ -240,6 +242,10 @@ async function archiveAthleteRelationship(endpoint, confirmMessage, { loadAthlet
   await loadAthletes();
   if (state.activeTab === "organization") await renderOrganizationPanel();
 }
+
+// D45: an archive ends the team's memberships; a restore brings the team back without athletes.
+export const TEAM_ARCHIVE_CONFIRM = "Archive this team? Its athletes leave the team; their history stays. You can restore the team later — it comes back without athletes.";
+export const TEAM_RESTORE_CONFIRM = "Restore this team? It comes back without athletes; their history stays. Add this season's athletes after restoring.";
 
 async function restoreAthleteRelationship(endpoint, { loadAthletes, renderOrganizationPanel }) {
   await api(endpoint, { method: "PUT" });
@@ -344,6 +350,7 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-restore-team") {
     const teamId = action.dataset.teamId;
     if (!teamId) return true;
+    if (!window.confirm(TEAM_RESTORE_CONFIRM)) return true;
     action.disabled = true;
     try {
       await api(`/api/organization/teams/${encodeURIComponent(teamId)}/restore`, { method: "PUT" });
@@ -889,7 +896,13 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   if (type === "organization-delete") {
-    await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
+    // A refusal (a busy team, an archived club, a team that changed) is said,
+    // not swallowed, as Restore does.
+    try {
+      await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.data?.message || error?.message || (action.dataset.orgType === "team" ? "Could not archive this team." : "Could not delete this club."));
+    }
     return true;
   }
   if (type === "organization-toggle-athlete-login") {

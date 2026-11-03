@@ -27,6 +27,11 @@ before(async () => {
   // The legacy schema's name rule (archived teams included), which the
   // scaffold does not carry.
   await env.q(`alter table public.teams add constraint teams_club_name_unique unique (club_id, name)`);
+  // A team archive ends its memberships and re-points the athletes' legacy
+  // pointer (D45), columns the scaffold's athletes do not carry.
+  await env.q(`alter table public.athletes
+    add column if not exists club_id uuid, add column if not exists team_id uuid,
+    add column if not exists updated_at timestamptz not null default now()`);
   m = await calendarRoleMatrix(env, "d43");
 });
 
@@ -138,7 +143,7 @@ test("6. a team of an archived club is not restored before its club", async () =
   assert.equal(await activeOf(teamId), false);
 });
 
-test("7. after a restore the coach reads the team's events again; the athletes' memberships are not touched", async () => {
+test("7. after a restore the coach reads the team's events again; the team comes back without athletes (D45)", async () => {
   const { clubs, roles } = m;
   const teamId = await env.fx.makeTeam(clubs.c1, `D44 season ${uid()}`);
   const coach = await env.fx.coachOf(teamId, "D44 season coach");
@@ -148,11 +153,11 @@ test("7. after a restore the coach reads the team's events again; the athletes' 
   const created = await env.api("/api/calendar/events", { method: "POST", cookie: coach.cookie, body: {
     requestKey: newKey(), eventTypeId: types.find((t) => t.key === "training").id, title: "Season event", day, timezone: "UTC", targets: [{ kind: "team", id: teamId }] } });
   assert.equal(created.status, 201, created.text);
-  const memberships = async () => q(`select to_jsonb(m) as row from public.athlete_memberships m where m.team_id = $1 order by m.id`, [teamId]);
-  const before = await memberships();
+  const statuses = async () => (await q(`select status from public.athlete_memberships where team_id = $1 order by id`, [teamId])).map((r) => r.status);
+  assert.deepEqual(await statuses(), ["active"]);
   assert.equal((await archive(roles.clubAdmin.cookie, teamId)).status, 200);
   assert.equal((await restore(roles.clubAdmin.cookie, teamId)).status, 200);
-  assert.deepEqual(await memberships(), before, "memberships exactly as they were");
+  assert.deepEqual(await statuses(), ["archived"], "the archive ended the membership and the restore brings none back");
   const cal = await env.api(`/api/calendar?from=${day}&to=${day}`, { cookie: coach.cookie });
   assert.equal(cal.status, 200, cal.text);
   assert.ok((cal.body.days || []).flatMap((d) => d.items).some((i) => i.eventId === created.body.event.id), "the coach reads the team's event again");
