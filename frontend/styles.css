@@ -21088,13 +21088,16 @@ body.exercise-header-pinned #viewToolbar {
 .metric-mappings-team-row > select,
 .metric-mappings-panel select,
 .metric-mappings-panel textarea,
+.metric-mappings-activate-now select,
+.metric-mappings-activate-now textarea,
 .metric-mappings-flow input[type="text"] {
   min-height: 44px;
   font-size: 16px;
 }
 /* A reason is a sentence: its field takes the panel's width and looks like
-   the screen's other fields. */
-.metric-mappings-panel textarea {
+   the screen's other fields (also on step 4's "Switch on for teams now", 7h-F). */
+.metric-mappings-panel textarea,
+.metric-mappings-activate-now textarea {
   font: inherit;
   font-size: 16px;
   box-sizing: border-box;

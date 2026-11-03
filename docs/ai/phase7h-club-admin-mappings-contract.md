@@ -1062,6 +1062,58 @@ Each has a recommendation, the consequence and the alternative. **All six were d
   7h-B, and that 7i-B waits for the lock-order pull request.
   - *Alternative:* (a) only, leaving the simplification to J18 and J16's recorded "Save and submit".
 
+  **O6 (b) as built: 7h-F** (branch `feature/7h-f-save-and-activate`, base `192e7ebe`; frontend only, no route, body
+  or migration change; in review, not merged). It follows the *Rukovodilac*'s decisions of 2026-11-03 (event
+  `2afaaa35`), F1–F4.
+  - **Where it is offered** (`saveAndActivateOffered`, `frontend/metric-mappings-actions.js`): on step 4, for whoever
+    may activate the mapping (the same `mayTransition` as the detail: a platform admin, or the club's admin on its own
+    club's mapping in that club's workspace; **F3:** the platform admin gets the same button). It is offered only
+    when:
+    - the field's revision is verified and the variable is choosable;
+    - no other mapping of the same owner fills the field;
+    - **F1:** the mapping has no active version. Next to an active version, step 4 keeps *Save draft* only, and a
+      replacement goes through the detail's *Replace version N* with its reason, as in 7h-B.
+  - **The screen:** *Save and activate* is the primary button, and *Save draft* stays beside it. The sentence reads
+    "Save and activate saves this version, submits it for review and activates it now. Save draft only saves it: it
+    changes nothing yet." *Switch on for teams now* is inline, with the same team chooser, *Required* / *Optional* and
+    reason as the detail's *Activate*. One confirmation names the field, the variable and the number of teams.
+  - **The chain:** create (a new mapping only) → draft → submit → activate (with the chosen teams). Each write goes
+    alone, with its own request key, and the next starts only after the previous one is confirmed. Nothing is resent
+    by itself.
+    - A stated refusal stops the chain where it is and says what is left: "The draft is saved but was not submitted
+      for review." or "Version N is waiting for review and was not activated.", followed by the server's sentence.
+    - **F2:** a lost answer is *Result not confirmed* · *Check result* (the same key, never sent by itself). When the
+      check confirms the step, the chain stops there with a sentence naming the next step (Submit it for review, or
+      Activate it from here), and the user continues from the detail.
+    - If the submit's answer cannot be read back, or another version became active meanwhile, the chain stops with
+      a sentence ("could not be read back" / "already has an active version. Replace it from here.").
+  - **The Imports step's sentence** (decision 1 at 7h-B's GO): `SETUP_MAPPINGS_STEP` takes the
+    `ux-design-reviewer`'s proposal (`docs/ai/CURRENT_STATE.md`, Separate tasks), with its frontend test.
+  - **The step-4 fields** take the panel's 44 px / 16 px rule (`.metric-mappings-activate-now` in `styles.css`). The
+    browser check found the reason field at 36 px and 13.3 px before that.
+  - **Tests:** `frontend/tests/metric-mappings.actions.test.mjs` tests 45–50 drive the real handlers against a fake
+    server:
+    - the whole chain for a club's admin with a team and for the platform admin;
+    - a stated refusal at each step, with its sentence and what is left;
+    - a lost answer, with the chain stopping after *Check result*;
+    - four different request keys and one write in flight at a time;
+    - where it is not offered: F1, a field whose meaning is not confirmed, and a field another mapping fills;
+    - the interaction count.
+
+    `frontend/tests/gpexe-import.actions.test.mjs` checks the Imports sentence.
+  - **Mutations** (each applied alone and run against the named test): 13 of 14 killed. F4 (offered without
+    `mayTransition`) survives as equivalent: step 4 is reached only by someone who may write a draft for that owner,
+    and since 7h-B that is exactly who may activate it.
+  - **Browser check** (the real backend and frontend on a disposable database through v52, Chromium; 29/29):
+    - **F4:** a club's admin from *New mapping* to an active version with one team in 10 interactions (9 clicks
+      including the one confirmation, and 1 typed reason), and without a team, with a conversion note, in 7;
+    - the four writes in order with four keys; T4 `active` on the `club_admin` basis; T5 on the chosen team with its
+      requirement and reason; T8 `mapping_create`, `mapping_version_create`, two `mapping_status` and
+      `activation_start`;
+    - F1 next to the active version;
+    - F3: the platform admin's system version on the `platform_admin` basis with an optional team;
+    - 1280, 390, 375 and 360 px: no overflow, 44 px targets and 16 px fields, with the chooser closed and open.
+
 ## 12. Decisions for the *Rukovodilac* (R1–R13)
 
 Each has a recommendation. **Decided by the *Rukovodilac* on 2026-11-02 (its GO on `44e47340`): R1–R13 as
