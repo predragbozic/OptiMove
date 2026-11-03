@@ -823,6 +823,16 @@ test("7. the shared rights table (R12): for every row the real resolver's contex
       assert.equal(await statusOf(v), "needs_review", row.name);
     }
   }
+  // The predicate itself, written out in full (J14 section 7): never "any
+  // basis", never a club admin on a system scope - contexts the resolver
+  // cannot build today, so only this direct check sees a widened predicate.
+  const ctxOf = (basis, scope) => ({ userId: W.caA.id, basis, owner: { scope, clubId: scope === "club" ? W.clubA : null } });
+  for (const [basis, scope, expected] of [
+    ["platform_admin", "system", true], ["platform_admin", "club", true], ["club_admin", "club", true],
+    ["club_admin", "system", false], ["team_coach", "club", false], ["team_coach", "system", false], ["athlete", "club", false], [undefined, "club", false],
+  ]) assert.equal(service.mayTransitionMappings(ctxOf(basis, scope)), expected, `${basis} / ${scope}`);
+  assert.equal(service.mayTransitionMappings(null), false);
+  assert.equal(service.mayTransitionMappings({ userId: W.caA.id, basis: "club_admin" }), false);
 });
 
 test("8. club A's admin activates, replaces and disables club A's versions (C108): club_admin on T4, T5 and T8; a version-driven end carries the version's disable_reason; club A's second admin replaces or disables what the first admin or a platform admin activated (O4); a platform admin in club A's workspace still writes platform_admin", async () => {
@@ -1164,6 +1174,18 @@ test("12. direct SQL against v52 (section 10.3): club A's admin activates, disab
     return v;
   }));
   assert.equal(await statusOf(chain), "active", "the J18 chain committed under v35's deferred links and v43's G1 and G2");
+  // T4's two basis CHECKs on their own (the guard off, for this statement only):
+  // any other text is a check violation, so the guard never masks a widened CHECK.
+  const cw = await clubWaiting(W.caA);
+  for (const [constraint, sql] of [
+    ["source_metric_mapping_versions_activated_basis_check", `update ${T4} set status = 'active', activated_by_user_id = $2, activated_at = clock_timestamp(), activated_basis = 'bogus' where id = $1`],
+    ["source_metric_mapping_versions_disabled_basis_check", `update ${T4} set status = 'disabled', disabled_by_user_id = $2, disabled_at = clock_timestamp(), disabled_basis = 'bogus', disable_reason = 'R' where id = $1`],
+  ]) {
+    const res = await tx(W.caA.id, async (c) => { await c.query("set local session_replication_role = replica"); await c.query(sql, [cw.versionId, W.caA.id]); });
+    assert.equal(res.ok, false, constraint);
+    assert.deepEqual([res.error.code, res.error.constraint], ["23514", constraint]);
+  }
+  assert.equal(await statusOf(cw), "needs_review");
   // 10. A club-role revocation against a club admin's T4 activation, both orders (v35 test 9).
   const a = await client();
   const b = await client();
