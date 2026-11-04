@@ -1,0 +1,7 @@
+.tl-chart-controls { display:flex; flex-wrap:wrap; gap:.6rem; margin:.75rem 0; }
+.tl-chart-controls label { display:flex; flex-direction:column; gap:.3rem; min-width:0; max-width:100%; }
+.tl-chart-controls select { max-width:100%; min-height:44px; }
+.tl-chart-controls button { max-width:100%; min-height:44px; white-space:normal; overflow-wrap:anywhere; }
+.tl-chart-point-details pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:24rem; overflow:auto; }
+.tl-chart-controls :focus-visible { outline:3px solid #215dc7; outline-offset:3px; }
+@media(max-width:40rem) { .tl-chart-controls label { width:100%; } .tl-chart-controls button { flex:1 1 12rem; } }

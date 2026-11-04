@@ -14,6 +14,7 @@
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
+import { randomUUID } from 'node:crypto';
 import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
@@ -810,7 +811,7 @@ router.post("/:dashboardId/query", async (req, res, next) => {
 
     const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter });
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
-    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => ({ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
+    res.json({ queryId:randomUUID(), resolvedPeriod:{dateFrom:b.dateFrom,dateTo:b.dateTo}, dashboardRevision: dashboard.revision, widgets: result.map((widget) => ({ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

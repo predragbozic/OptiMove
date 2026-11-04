@@ -104,7 +104,7 @@ test("custom aggregation is explicit, independent of daily metadata, with scope 
   assert.match(control(html, "view"), /value="table" checked/);
   assert.match(html, /How to combine measurements<select/);
   assert.match(html, /Use measurements from<select/);
-  assert.match(html, /The preview lists all returned data\. Saved charts use the current dashboard display\./);
+  assert.match(html, /Pregled prikazuje sve vraćene podatke/);
   assert.doesNotMatch(html, /Chart composition and unsupported settings/);
   assert.match(selected(html, "group"), /value="day"/);
   assert.match(selected(html, "aggregation"), /value="" selected disabled>Choose how to combine measurements/);

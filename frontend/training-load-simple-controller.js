@@ -58,7 +58,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
     const context = copy(getContext()), run = generation;
     const draft = simpleDraftFromWidget(widget, uuid);
     model = { open: true, step: 1, context, contextKey: contextKey(context), periodDraft: copy(context.period), draft, widgetId: widget?.id ?? null, widgetRevision: widget?.revision,
-      advancedRequired: !draft, metrics: [], search: '', loading: true, previewLoading: false, saveState: 'idle', error: '', saveError: '', canSave: false, athletes: context.athletes ?? [] };
+      advancedRequired: !draft, canUpgradeChart:Boolean(widget && widget.presentation_config == null), metrics: [], search: '', loading: true, previewLoading: false, saveState: 'idle', error: '', saveError: '', canSave: false, athletes: context.athletes ?? [] };
     const target = model; redraw();
     try {
       const capabilities = await request(`${base(target)}/capabilities`);
@@ -162,7 +162,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
   return { open, close, change, preview, save, status, metrics, get model() { return model; }, get pending() { return locked(model); },
     next() { if (!model?.draft || locked(model)) return; if (model.step === 1 && !model.draft.metricRef) return; if (model.step === 2 && model.draft.athleteSelection.mode === 'selected' && !model.draft.athleteSelection.athleteIds.length) { model.error = 'Choose at least one athlete or use dashboard athletes.'; redraw(); return; } model.error = ''; model.step = Math.min(3, model.step + 1); redraw(); if (model.step === 3) timer = schedule(() => void preview(), 350); },
     back() { if (!model || locked(model)) return; model.step = Math.max(1, model.step - 1); redraw(); },
-    selectMetric(kind, id) { const ref = model?.draft?.metricRef; if (ref?.kind === kind && (kind === 'builtin' ? ref.key : ref.metricDefinitionId) === id) return; change((draft, target) => { draft.metricRef = kind === 'builtin' ? { kind, key: id } : { kind: 'metric', metricDefinitionId: id }; selectMetadata(target); const metric = target.selectedMetric; draft.view = { type: 'table', groupBy: 'day' }; if (metric?.fixed_data_scope_level) { draft.view.dataScopeLevel = metric.fixed_data_scope_level; draft.view.analyticalAggregation = metric.default_analytical_aggregation; } else if (metric?.scope_capabilities?.length === 1) draft.view.dataScopeLevel = metric.scope_capabilities[0]; if (!draft.title.trim()) draft.title = metric?.label ?? ''; }); },
+    selectMetric(kind, id) { const ref = model?.draft?.metricRef; if (ref?.kind === kind && (kind === 'builtin' ? ref.key : ref.metricDefinitionId) === id) return; change((draft, target) => { draft.metricRef = kind === 'builtin' ? { kind, key: id } : { kind: 'metric', metricDefinitionId: id }; selectMetadata(target); const metric = target.selectedMetric; draft.view = { type: 'table', groupBy: 'day' }; if(target.canUpgradeChart)draft.presentation={mode:'preserve'}; if (metric?.fixed_data_scope_level) { draft.view.dataScopeLevel = metric.fixed_data_scope_level; draft.view.analyticalAggregation = metric.default_analytical_aggregation; } else if (metric?.scope_capabilities?.length === 1) draft.view.dataScopeLevel = metric.scope_capabilities[0]; if (!draft.title.trim()) draft.title = metric?.label ?? ''; }); },
     search(value) { if (!model || locked(model)) return; model.search = value; cancel(timer); timer = schedule(() => void metrics(), 350); },
   };
 }
