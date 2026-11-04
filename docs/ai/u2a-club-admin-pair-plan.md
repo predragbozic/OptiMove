@@ -67,3 +67,14 @@ The Data sources screen's "approve pair" control is offered to the club admin in
 - **R-1/R-2:** the owner's D2 relies on each club's GPEXE account seeing only that club's teams. Is that true today (one shared account, eight teams)? If not, U2a is released only when each club has its own account — or the owner accepts that any club admin may pick any team of the shared account for now.
 - **R-3:** is storing the approval's basis (column, migration) wanted, or is the history's user id enough?
 - **Order:** U2a before U2 (the per-team switch), as J19 section 4 says.
+
+## 8. Decisions of the *Rukovodilac* (2026-11-04) and as built
+
+- **R-1 / R-2:** U2a is released to a second club only after that club has connected its OWN GPEXE account. For the pilot club (one account, its eight teams) the risk does not exist. No detection of a "shared account" is built. If it is ever doubted, a platform admin removes the pair through the existing F3b path.
+- **R-3:** no new column: the history row's `configured_by_user_id` and the workspace are enough.
+- **As built (branch `feature/u2a-club-admin-pair`):**
+  - `PUT …/teams/:teamId/settings` accepts the active platform admin, or the active admin of the team's club in that club's own workspace. `setTeamSettings()` gets `clubAdminClubId`; inside its transaction, after the team import lock, `assertClubAdminMayApprovePair()` re-checks the user and role row (`FOR SHARE of u, r`, the revocations' order), the club, the team (active, of that club) and the club's `verified` connection (`409 source_connection_required`; anything else missing is the same 404). A club admin sets a **first** pair only: a different GPEXE team for a team that already has one is `409 pair_change_requires_platform_admin` (the same value stays idempotent); changing and removing stay with a platform admin.
+  - Connect / Test return the whole annotated list to a club admin as to a platform admin (annotations carry only the owning club's own pairs).
+  - The Source connections screen offers *Approve pair* (a team of the club without a pair, one confirmation, the GPEXE team only in the body); the row then offers *Bind*.
+  - Not changed: the bind (it still verifies the team through the club's credential), the F3c2e/v30 guards, the settings history table, any migration.
+  - Security review (2026-11-04): a club admin's refusal for an already-paired GPEXE team is the neutral `409 pair_not_available` (no existence oracle); the same GPEXE team in another spelling over an existing pair is idempotent and keeps who approved it; the user and role rows are locked in two statements (a fixed order). **Accepted risk, recorded:** a club admin can claim a GPEXE team id they cannot see (squatting); the server cannot check visibility without the last Test's list stored (a later migration); the bind refuses an invisible team; a platform admin undoes a squat (F3b).

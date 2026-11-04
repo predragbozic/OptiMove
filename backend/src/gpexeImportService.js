@@ -214,7 +214,43 @@ const GPEXE_TEAM_BOUND_MESSAGE = "This team is bound to its GPEXE team through a
 // The canonical GPEXE team id (no leading zeros), the comparison v30 makes.
 const canonicalGpexeId = (raw) => (typeof raw === "string" && /^[0-9]{1,12}$/.test(raw) ? raw.replace(/^0+(?=[0-9])/, "") : raw);
 
-export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
+// J19 U2a (owner decision D2, 2026-11-04): the active admin of the team's club may approve the
+// pair for a team of THEIR club. The right is checked again here, inside the transaction, after
+// the team import lock and before anything is read or written: the users row and then the
+// role row, each FOR SHARE in its own statement (the revocations' order), the club, the team (still active, still of that
+// club) and the club's verified GPEXE connection FOR SHARE. Anything missing is the same 404 as
+// a team that does not exist, except the connection, which is its own stable refusal. A club
+// admin sets a FIRST pair only: changing one stays with a platform admin.
+async function assertClubAdminMayApprovePair(client, { userId, clubId, teamId }) {
+  // Two statements, so the order is fixed: the users row, then the role row.
+  const userRow = await client.query(`select 1 from public.users where id = $1 and is_active = true for share`, [userId]);
+  const right = userRow.rowCount
+    ? await client.query(`select 1 from public.user_club_roles where user_id = $1 and club_id = $2 and role = 'club_admin' and is_active = true for share`, [userId, clubId])
+    : { rowCount: 0 };
+  const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);
+  const team = await client.query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true) for share`, [teamId, clubId]);
+  if (!right.rowCount || !club.rowCount || !team.rowCount) throw new GpexeImportServiceError(404, "notFound", "Not found.");
+  const connection = await client.query(
+    `select 1 from training_load.source_credential_connections
+      where owner_club_id = $1 and source_system = 'gpexe' and owner_scope = 'club' and state = 'verified' limit 1 for share`,
+    [clubId],
+  );
+  if (!connection.rowCount) {
+    throw new GpexeImportServiceError(409, "source_connection_required", "Your club has no verified GPEXE connection yet. Connect and test it under Settings > Source connections first. Nothing was changed.");
+  }
+}
+
+// A GPEXE team that is already connected to another OptiMove team. A platform admin is told so (stable
+// code, no other team named). A club admin gets a NEUTRAL refusal that does not say whether the id is
+// paired anywhere: otherwise any numeric id could be probed for existence across clubs.
+function takenError(clubAdminClubId) {
+  if (clubAdminClubId) {
+    return new GpexeImportServiceError(409, "pair_not_available", "This pair could not be approved. Ask a platform administrator. Nothing was changed.");
+  }
+  return new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+}
+
+export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clubAdminClubId = null }) {
   if (typeof gpexeTeamId !== "string" || !/^[0-9]{1,12}$/.test(gpexeTeamId)) {
     throw new GpexeImportServiceError(400, "invalid_gpexe_team_id", "gpexeTeamId must be a numeric GPEXE team id.");
   }
@@ -224,15 +260,21 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     // A team whose import or check is running must not make this wait forever.
     await client.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
     await lockTeamForImport(client, teamId);
+    if (clubAdminClubId) await assertClubAdminMayApprovePair(client, { userId, clubId: clubAdminClubId, teamId });
     const current = (await client.query(
       `select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1 for update`,
       [teamId],
     )).rows[0];
 
-    if (current && current.gpexe_team_id === gpexeTeamId) {
+    // A club admin writes a FIRST pair only: the same GPEXE team in any spelling ("0981" for "981")
+    // is the idempotent answer and never overwrites who approved the pair.
+    if (current && (current.gpexe_team_id === gpexeTeamId || (clubAdminClubId && canonicalGpexeId(current.gpexe_team_id) === canonicalGpexeId(gpexeTeamId)))) {
       // Idempotent: nothing is written, so nothing is appended to the history.
       await client.query("commit");
       return getTeamSettings(teamId);
+    }
+    if (clubAdminClubId && current && canonicalGpexeId(current.gpexe_team_id) !== canonicalGpexeId(gpexeTeamId)) {
+      throw new GpexeImportServiceError(409, "pair_change_requires_platform_admin", "This team already has an approved GPEXE team. Changing it is done by a platform administrator (Settings > Data sources). Nothing was changed.");
     }
     // F3c2e (owner decision 2026-10-04): the settings row is the approved
     // pair a source binding is made of. While the team has an active gpexe
@@ -250,7 +292,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
       `select 1 from training_load.gpexe_team_settings where owner_team_id <> $1 and training_load.gpexe_team_id_canonical(gpexe_team_id) = training_load.gpexe_team_id_canonical($2)`,
       [teamId, gpexeTeamId],
     );
-    if (clash.rowCount > 0) throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+    if (clash.rowCount > 0) throw takenError(clubAdminClubId);
 
     // A change needs a reason; a first connection may carry one and it is
     // kept (an empty or whitespace-only one is refused either way).
@@ -282,7 +324,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
   } catch (error) {
     await client.query("rollback").catch(() => {});
     if (error.code === "23505" && ["gpexe_team_settings_gpexe_team_id_key", "gpexe_team_settings_canonical_team_id_key"].includes(error.constraint)) {
-      throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+      throw takenError(clubAdminClubId);
     }
     if (error.code === "23514" && error.constraint === "gpexe_team_settings_bound_team_final") throw new GpexeImportServiceError(409, "gpexe_team_bound", GPEXE_TEAM_BOUND_MESSAGE);
     if (error.code === "55P03" || error.code === "40P01") {

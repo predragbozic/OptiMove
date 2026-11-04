@@ -134,11 +134,16 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
 router.put("/teams/:teamId/settings", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!access.platformAdmin) return forbidden(res);
+  // J19 U2a (D2): an active platform admin, or the active admin of the team's club acting in that
+  // club's own workspace (the service re-checks the right, the club, the team and the club's
+  // verified connection inside its transaction). Everyone else keeps the 403 of before.
+  const clubAdmin = !access.platformAdmin && access.workspace?.type === "club" && access.clubId
+    && String(access.workspace.scopeId) === String(access.clubId) && holdsClubAdminRole(req.authz, access.clubId);
+  if (!access.platformAdmin && !clubAdmin) return forbidden(res);
   // `reason` is only required when an existing connection is changed; the
   // service decides that under its own lock.
   const reason = typeof req.body?.reason === "string" ? req.body.reason : null;
-  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id }) });
+  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id, clubAdminClubId: clubAdmin ? access.clubId : null }) });
 }));
 
 // What the connection was before, and why it was changed. Read-only, and

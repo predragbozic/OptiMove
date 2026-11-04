@@ -1374,6 +1374,12 @@ async function handleContentChange(event) {
   // Exercise media (FE-2): the editor's hidden file input chose a file.
   if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;
   if (await handleTestsContentChange(event)) return;
+  // J19 U2a: choosing the OptiMove team of a pair sends nothing; the choice is kept for the confirmation.
+  const pairTeamSelect = event.target.closest("[data-action='source-connections-pair-team']");
+  if (pairTeamSelect) {
+    void handleSourceConnectionsAction(pairTeamSelect, { render: renderDataSourcesSurface });
+    return;
+  }
   const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
     void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
@@ -2976,6 +2982,9 @@ async function handleContentClick(event) {
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
+  // The team <select> of "Approve pair" acts on its change event only: a click that opens the native list
+  // must not repaint the control it is opening.
+  if (action.dataset.action === "source-connections-pair-team") return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleCalendarSettingsAction(action, { render: renderCalendarSettingsSurface })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;

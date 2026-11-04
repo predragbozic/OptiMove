@@ -405,16 +405,16 @@ test("6. a club admin's whole flow: Connect answers the teams the credential see
   const c = await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: ca.cookie, body: { username: USERNAME, password: PASSWORD }, allowed: [SOURCE_TEAM_NAME_MARKER] });
   assert.equal(c.status, 200, JSON.stringify(c.body));
   assert.equal(c.body.result.state, "verified");
-  // The shared account sees eight teams; the club admin gets exactly the two approved pairs of their club and no fact of the other six.
-  assert.equal(c.body.result.sourceTeamCount, 2);
+  // J19 U2a (D2): the club admin gets the whole list the club's own credential sees (eight teams), annotated with the club's own approved pairs only.
+  assert.equal(c.body.result.sourceTeamCount, 8);
   assert.equal(c.body.result.sourceTeamsTruncated, false);
   const teamName = (await q(`select name from public.teams where id = $1`, [team]))[0].name;
   const team2Name = (await q(`select name from public.teams where id = $1`, [(await q(`select id from public.teams where club_id = $1 and id <> $2`, [club, team]))[0].id]))[0].name;
-  assert.deepEqual(c.body.result.sourceTeams, [
+  assert.equal(c.body.result.sourceTeams.length, 8);
+  assert.deepEqual(c.body.result.sourceTeams.filter((t) => t.approvedTeamId), [
     { sourceTeamId: "981", name: `${SOURCE_TEAM_NAME_MARKER} 981`, approvedTeamId: team, approvedTeamName: teamName },
     { sourceTeamId: "982", name: null, approvedTeamId: (await q(`select id from public.teams where club_id = $1 and id <> $2`, [club, team]))[0].id, approvedTeamName: team2Name },
-  ], "the intersection of the visible teams and the club's approved pairs, in the source's order; a team without a name is null");
-  otherTeamFacts(JSON.stringify(c.body), ["981", "982"]);
+  ], "every visible team is listed in the source's order; only the club's own approved pairs are annotated; a team without a name is null");
   assert.ok(!JSON.stringify(c.body).includes(USERNAME) && !JSON.stringify(c.body).includes(SOURCE_SENTENCE), "no user, no note of the source list");
   assert.deepEqual(src0.calls.map((x) => x.url), [EXCHANGE_URL, `${BASE}team/`]);
   // The bind: the chosen team, read again alone.
@@ -838,7 +838,7 @@ test("18. the platform admin path: create, connect, test and bind for a club wit
   useSource();
   const t = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: ca.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
   assert.equal(t.status, 200);
-  assert.equal(t.body.result.sourceTeams.length, 2, "the club admin sees the two approved pairs of the club, not the eight teams");
+  assert.equal(t.body.result.sourceTeams.length, 8, "the club admin sees the whole list of the club's own credential (U2a)");
   assert.deepEqual(Object.keys(t.body.result.sourceTeams[0]).sort(), TEAM_ENTRY_KEYS);
   const r = await bindApi(conn.id, pa.cookie, { teamId: team, sourceTeamId: "981" });
   assert.equal(r.status, 201);
@@ -920,13 +920,11 @@ test("23. the allowlist decision across clubs: two clubs on the same shared acco
   const connSecond = await verified(caSecond, second.club);
   useSource();
   const tFirst = await api(`/gpexe/connections/${connFirst.id}/test`, { method: "POST", cookie: caFirst.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
-  assert.deepEqual(tFirst.body.result.sourceTeams.map((t) => [t.sourceTeamId, t.approvedTeamId]), [["981", first.team], ["982", first.team2]]);
-  assert.equal(tFirst.body.result.sourceTeamCount, 2);
-  otherTeamFacts(JSON.stringify(tFirst.body), ["981", "982"]);
+  assert.deepEqual(tFirst.body.result.sourceTeams.filter((t) => t.approvedTeamId).map((t) => [t.sourceTeamId, t.approvedTeamId]), [["981", first.team], ["982", first.team2]], "only this club's own pairs are annotated");
+  assert.equal(tFirst.body.result.sourceTeamCount, 8);
   const tSecond = await api(`/gpexe/connections/${connSecond.id}/test`, { method: "POST", cookie: caSecond.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
-  assert.deepEqual(tSecond.body.result.sourceTeams.map((t) => [t.sourceTeamId, t.approvedTeamId]), [["983", second.team]]);
-  assert.equal(tSecond.body.result.sourceTeamCount, 1);
-  otherTeamFacts(JSON.stringify(tSecond.body), ["983"]);
+  assert.deepEqual(tSecond.body.result.sourceTeams.filter((t) => t.approvedTeamId).map((t) => [t.sourceTeamId, t.approvedTeamId]), [["983", second.team]], "never the other club's pairs");
+  assert.equal(tSecond.body.result.sourceTeamCount, 8);
   // The platform admin: the whole bounded list, annotated; truncation reported.
   const tPa = await api(`/gpexe/connections/${connFirst.id}/test`, { method: "POST", cookie: pa.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
   assert.equal(tPa.body.result.sourceTeamCount, 8);
@@ -944,7 +942,7 @@ test("23. the allowlist decision across clubs: two clubs on the same shared acco
   });
   const truncated = await api(`/gpexe/connections/${connFirst.id}/test`, { method: "POST", cookie: caFirst.cookie, body: {} });
   assert.equal(truncated.status, 200, JSON.stringify(truncated.body));
-  assert.deepEqual([truncated.body.result.sourceTeamsTruncated, truncated.body.result.sourceTeams.map((t) => t.sourceTeamId), truncated.body.result.sourceTeamCount], [true, ["981"], 1]);
+  assert.deepEqual([truncated.body.result.sourceTeamsTruncated, truncated.body.result.sourceTeams.length, truncated.body.result.sourceTeams.filter((t) => t.approvedTeamId).map((t) => t.sourceTeamId), truncated.body.result.sourceTeamCount], [true, 100, ["981"], 250]);
   // The platform admin cannot bind outside the pair: 983 is not approved for first.team.
   const src = useSource();
   const outside = await bindApi(connFirst.id, pa.cookie, { teamId: first.team, sourceTeamId: "983" });
@@ -1318,13 +1316,155 @@ test("28. a canonical duplicate ACROSS clubs ('981' in club A, '0981' in club B)
   // With the duplicate gone the list is back for club A.
   useSource();
   const again = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: ca.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
-  assert.deepEqual([again.body.result.sourceTeamsUnavailable, again.body.result.sourceTeams.map((t) => t.sourceTeamId)], [undefined, ["981", "982"]]);
+  assert.deepEqual([again.body.result.sourceTeamsUnavailable, again.body.result.sourceTeams.filter((t) => t.approvedTeamId).map((t) => t.sourceTeamId)], [undefined, ["981", "982"]]);
 });
 
 test("19. this suite runs on a disposable database only and bound nothing persistent: the database is the disposable one and every binding it made is ended", async () => {
   assert.match((await q("select current_database() as db"))[0].db, DISPOSABLE_DB_NAME_PATTERN);
   assert.ok(db.url !== ORIGINAL_DATABASE_URL);
   assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where state = 'active'`))[0].n, 0, "no binding left active");
+});
+
+// ---------------------------------------------------------------------------
+// J19 U2a (owner decision D2, 2026-11-04): the club admin approves the pair.
+// ---------------------------------------------------------------------------
+async function pairApi(teamId, cookie, body) {
+  const res = await fetch(`${apiBase}/api/training-load/gpexe/teams/${teamId}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json = {};
+  try { json = JSON.parse(text); } catch { /* not json */ }
+  return { status: res.status, body: json, text };
+}
+const settingsOf = (teamId) => q(`select gpexe_team_id, configured_by_user_id from training_load.gpexe_team_settings where owner_team_id = $1`, [teamId]);
+const historyOf = (teamId) => q(`select gpexe_team_id, configured_by_user_id from training_load.gpexe_team_settings_history where owner_team_id = $1 order by configured_at, id`, [teamId]);
+
+test("29. U2a: the club admin of the team's club approves a FIRST pair in the club's workspace (history names them), the same value again is idempotent, a different one is refused for a club admin and allowed for a platform admin, and the bind then works", async () => {
+  const o = await org({ approve: false });
+  const ca = await clubAdmin(o.club);
+  const conn = await verified(ca, o.club);
+  approvedTeams.push(o.team);
+  const first = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+  assert.equal(first.status, 200, first.text);
+  assert.deepEqual((await settingsOf(o.team)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["981", ca.id]]);
+  assert.deepEqual((await historyOf(o.team)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["981", ca.id]]);
+  const again = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+  assert.equal(again.status, 200, again.text);
+  assert.equal((await historyOf(o.team)).length, 1, "the same value writes no second history row");
+  const change = await pairApi(o.team, ca.cookie, { gpexeTeamId: "982", reason: "typo" });
+  assert.deepEqual([change.status, change.body.error], [409, "pair_change_requires_platform_admin"], change.text);
+  assert.deepEqual((await settingsOf(o.team)).map((r) => r.gpexe_team_id), ["981"], "nothing changed");
+  // The bind verifies the team through the club's own credential and binds exactly the approved pair.
+  useSource();
+  const bound = await bindApi(conn.id, ca.cookie, { teamId: o.team, sourceTeamId: "981" });
+  assert.equal(bound.status, 201, JSON.stringify(bound.body));
+  await endBindings(conn.id, ca.id);
+  // A platform admin keeps the change (with the reason the F3b rule asks for).
+  const pa = await platformAdmin();
+  const changed = await pairApi(o.team, pa.cookie, { gpexeTeamId: "982", reason: "the club asked" });
+  assert.equal(changed.status, 200, changed.text);
+});
+
+test("30. U2a: everyone else keeps the answers of before - a coach 403, another club's admin 404, a club admin in the wrong workspace 404, a revoked role 404, an archived team 404 - and a club without a VERIFIED connection is 409 source_connection_required with nothing written", async () => {
+  const o = await org({ approve: false });
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(o.club);
+  const coach = await coachOf(o.team);
+  const foreign = await clubAdmin(other.club);
+  const twoClubs = await clubAdmin(o.club, other.club);
+  await addClubAdminRole(twoClubs.id, other.club);
+  const revoked = await clubAdmin(o.club);
+  await q(`update public.user_club_roles set is_active = false where user_id = $1`, [revoked.id]);
+  const body = { gpexeTeamId: "981" };
+  // No connection yet: the club admin is told what is missing, nothing is written.
+  const none = await pairApi(o.team, ca.cookie, body);
+  assert.deepEqual([none.status, none.body.error], [409, "source_connection_required"], none.text);
+  await created(ca, o.club);
+  const unverified = await pairApi(o.team, ca.cookie, body);
+  assert.deepEqual([unverified.status, unverified.body.error], [409, "source_connection_required"], "created but not verified");
+  assert.deepEqual(await settingsOf(o.team), [], "nothing written");
+  await verified(ca, o.club);
+  approvedTeams.push(o.team);
+  assert.equal((await pairApi(o.team, coach.cookie, body)).status, 403, "a team coach: as before");
+  for (const [who, cookie] of [["another club's admin", foreign.cookie], ["an admin of both clubs in the other club's workspace", twoClubs.cookie], ["a revoked admin", revoked.cookie], ["no session", undefined]]) {
+    const r = await pairApi(o.team, cookie, body);
+    assert.ok([401, 404].includes(r.status), `${who}: ${r.status} ${r.text}`);
+    assert.ok(!r.text.includes(other.club) && !r.text.includes("source_connection_required"), `${who}: names nothing`);
+  }
+  assert.deepEqual(await settingsOf(o.team), [], "no refusal wrote anything");
+  // The platform admin never needed a connection.
+  const pa = await platformAdmin();
+  const bare = await org({ approve: false });
+  approvedTeams.push(bare.team);
+  assert.equal((await pairApi(bare.team, pa.cookie, { gpexeTeamId: "982" })).status, 200);
+  // An archived team is the same 404 as before.
+  await q(`update public.teams set is_active = false where id = $1`, [o.team2]);
+  assert.equal((await pairApi(o.team2, ca.cookie, body)).status, 404);
+});
+
+test("31. U2a: the right is checked again INSIDE the write - a role revoked, a club archived, a team archived or moved to another club, or a connection that is no longer verified, between the route's check and the write is the same 404 / 409 and nothing is written", async () => {
+  const o = await org({ approve: false });
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(o.club);
+  const conn = await verified(ca, o.club);
+  const attempt = () => settings.setTeamSettings(o.team, { gpexeTeamId: "981", userId: ca.id, clubAdminClubId: o.club }).then(() => null, (e) => e);
+  approvedTeams.push(o.team);
+  await q(`update public.user_club_roles set is_active = false where user_id = $1`, [ca.id]);
+  let e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [404, "notFound"], "role revoked");
+  await q(`update public.user_club_roles set is_active = true where user_id = $1`, [ca.id]);
+  await q(`update public.users set is_active = false where id = $1`, [ca.id]);
+  e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [404, "notFound"], "user deactivated");
+  await q(`update public.users set is_active = true where id = $1`, [ca.id]);
+  await q(`update public.teams set club_id = $2 where id = $1`, [o.team, other.club]);
+  e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [404, "notFound"], "team moved to another club");
+  await q(`update public.teams set club_id = $2 where id = $1`, [o.team, o.club]);
+  await q(`update public.teams set is_active = false where id = $1`, [o.team]);
+  e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [404, "notFound"], "team archived");
+  await q(`update public.teams set is_active = true where id = $1`, [o.team]);
+  await q(`update public.clubs set is_active = false where id = $1`, [o.club]);
+  e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [404, "notFound"], "club archived");
+  await q(`update public.clubs set is_active = true where id = $1`, [o.club]);
+  await q(`update training_load.source_credential_connections set state = 'needs_reconnect', last_error_code = 'source_auth_rejected', last_error_at = now() where id = $1`, [conn.id]);
+  e = await attempt();
+  assert.deepEqual([e?.status, e?.code], [409, "source_connection_required"], "connection no longer verified");
+  assert.deepEqual(await settingsOf(o.team), [], "nothing was written by any of them");
+  // And the same call with every condition holding writes the pair.
+  await q(`update training_load.source_credential_connections set state = 'verified', last_error_code = null, last_error_at = null where id = $1`, [conn.id]);
+  e = await attempt();
+  assert.equal(e, null, String(e?.message));
+  assert.equal((await settingsOf(o.team)).length, 1);
+});
+
+test("32. U2a: a club admin gets a NEUTRAL refusal for a GPEXE team that is paired anywhere (no probing of other clubs' ids: the same answer whether the id is taken or not is not given - taken is pair_not_available, free is 200), a platform admin keeps gpexe_team_taken, and a canonically equal spelling over an existing pair is idempotent and keeps who approved it", async () => {
+  const o = await org({ approve: false });
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(o.club);
+  await verified(ca, o.club);
+  const pa = await platformAdmin();
+  approvedTeams.push(o.team, o.team2, other.team);
+  assert.equal((await pairApi(other.team, pa.cookie, { gpexeTeamId: "985" })).status, 200);
+  const taken = await pairApi(o.team, ca.cookie, { gpexeTeamId: "985" });
+  assert.deepEqual([taken.status, taken.body.error], [409, "pair_not_available"], taken.text);
+  assert.ok(!/taken|another OptiMove team|connected/i.test(taken.text), "says nothing about why");
+  const taken0 = await pairApi(o.team, ca.cookie, { gpexeTeamId: "0985" });
+  assert.deepEqual([taken0.status, taken0.body.error], [409, "pair_not_available"], "the canonical spelling too");
+  const forPa = await pairApi(o.team, pa.cookie, { gpexeTeamId: "985" });
+  assert.deepEqual([forPa.status, forPa.body.error], [409, "gpexe_team_taken"], "a platform admin keeps the specific code");
+  assert.deepEqual(await settingsOf(o.team), [], "nothing written by any refusal");
+  // The platform admin's pair is not overwritten by a club admin repeating it in another spelling.
+  assert.equal((await pairApi(o.team2, pa.cookie, { gpexeTeamId: "986" })).status, 200);
+  const rewrite = await pairApi(o.team2, ca.cookie, { gpexeTeamId: "0986", reason: "mine" });
+  assert.equal(rewrite.status, 200, rewrite.text);
+  assert.deepEqual((await settingsOf(o.team2)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["986", pa.id]], "still the platform admin's row");
+  assert.equal((await historyOf(o.team2)).length, 1);
 });
 
 test("20. no console line of the whole suite carries a secret marker, a source sentence or a source team name", () => {

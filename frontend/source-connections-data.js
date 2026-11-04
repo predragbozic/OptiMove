@@ -132,6 +132,8 @@ export function resetSourceConnectionsForms() {
   d.credentialError = null;
   d.bindReview = null;
   d.bindError = null;
+  d.pairReview = null;
+  d.pairError = null;
   d.unbindOpen = null;
   d.unbindError = null;
   d.testError = null;
@@ -148,6 +150,7 @@ function resetClubState(clubId) {
   d.credentialBusy = false;
   d.testBusy = "";
   d.bindBusy = false;
+  d.pairBusy = false;
   d.unbindBusy = false;
   d.checkBusy = false;
   d.clubId = String(clubId || "");
@@ -203,7 +206,7 @@ export function loadedForActiveClub() {
 // the screen now would lose the only view of that outcome.
 export function writeInFlight() {
   const d = sc();
-  return Boolean(d.createBusy || d.credentialBusy || d.testBusy || d.bindBusy || d.unbindBusy || d.checkBusy || d.unconfirmed);
+  return Boolean(d.pairBusy || d.createBusy || d.credentialBusy || d.testBusy || d.bindBusy || d.unbindBusy || d.checkBusy || d.unconfirmed);
 }
 
 export async function selectSourceConnectionsClub(clubId, render) {
@@ -486,6 +489,55 @@ export async function bindTeam(render) {
   } finally {
     if (generation === d.generation) {
       d.bindBusy = false;
+      render();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approve the pair (J19 U2a, owner decision D2): the club admin chooses an OptiMove team of
+// their club that has no approved pair yet for a GPEXE team the club's own account sees. One
+// confirmation, one PUT; the same value again is idempotent on the server, so a lost answer is
+// shown as such and may be repeated with the same button.
+// ---------------------------------------------------------------------------
+
+// The club's active OptiMove teams without a pair in the list the last Test returned.
+export function pairableTeams(connection) {
+  const clubId = String(connection?.ownerClubId || "");
+  const result = sc().lastAttempt?.[String(connection?.id)]?.result;
+  const paired = new Set((result?.sourceTeams || []).filter((t) => t.approvedTeamId).map((t) => String(t.approvedTeamId)));
+  return (state.organization?.data?.teams || []).filter((t) => String(t.club_id ?? t.clubId ?? "") === clubId && t.is_active !== false && t.isActive !== false && !paired.has(String(t.id)));
+}
+
+export async function approvePair(render) {
+  const d = sc();
+  const review = d.pairReview;
+  // An unnamed GPEXE team cannot be checked by the admin, so it is never approved from here.
+  if (!review || d.pairBusy || !review.teamId || !review.sourceTeamName) return;
+  const generation = d.generation;
+  const id = String(review.connectionId);
+  d.pairBusy = true;
+  d.pairError = null;
+  render();
+  try {
+    await request(`/api/training-load/gpexe/teams/${encodeURIComponent(review.teamId)}/settings`, { method: "PUT", body: JSON.stringify({ gpexeTeamId: review.sourceTeamId }) });
+    if (generation !== d.generation) return;
+    // The list on screen was read before the pair existed: the row learns its pair here, so
+    // Bind is offered at once; Test connection refreshes the whole list from the server.
+    const result = d.lastAttempt?.[id]?.result;
+    const teamName = teamNameOf(review.teamId);
+    for (const row of result?.sourceTeams || []) {
+      if (String(row.sourceTeamId) === String(review.sourceTeamId)) { row.approvedTeamId = review.teamId; row.approvedTeamName = teamName; }
+    }
+    resetSourceConnectionsForms();
+    d.noticeFor = id;
+    d.notice = `${teamName || "The team"} is now approved for ${SOURCE_NAME} team ${review.sourceTeamName ? `${review.sourceTeamName} (number ${review.sourceTeamId})` : review.sourceTeamId}. Bind it below when you are ready.`;
+  } catch (error) {
+    if (generation !== d.generation) return;
+    d.pairError = errorInfo(error);
+  } finally {
+    if (generation === d.generation) {
+      d.pairBusy = false;
       render();
     }
   }

@@ -902,8 +902,9 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     // decision 2026-10-04): every visible team is matched against the
     // approved pairs of the owning club (the gpexe_team_settings rows of its
     // active teams). A platform admin gets the bounded list with the match
-    // per row (support, setting the allowlist); a club admin gets ONLY the
-    // intersection — no name, id, count or other fact of a team outside it.
+    // per row (support, setting the allowlist); since J19 U2a (owner decision D2,
+    // 2026-11-04) a club admin gets the whole list of THEIR club's own credential too,
+    // annotated with the owning club's own pairs only - never another club's.
     // The truncation of the source list is reported to both.
     let presented = null;
     if (read.ok && !bindBody && Array.isArray(read.sourceTeams)) {
@@ -941,9 +942,12 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
           const pair = row.source_system === "gpexe" ? approved.get(t.sourceTeamId) : undefined;
           return { sourceTeamId: t.sourceTeamId, name: t.name, approvedTeamId: pair?.team_id ?? null, approvedTeamName: pair?.team_name ?? null };
         });
-        // Fail closed: only the platform basis sees the whole list; any other
-        // basis (today club_admin only) sees the intersection.
-        const whole = ctx.basis === "platform_admin";
+        // J19 U2a (owner decision D2, 2026-11-04): the club admin chooses the pair among the teams
+        // THEIR club's own credential sees, so the platform admin and the club admin get the whole
+        // list. Fail closed for any other basis: only the intersection with the approved pairs.
+        // (Releasing this to a second club needs that club's own GPEXE account first: the boundary
+        // is what the club's credential can see.)
+        const whole = ctx.basis === "platform_admin" || ctx.basis === "club_admin";
         const teams = whole ? annotated : annotated.filter((t) => t.approvedTeamId !== null);
         presented = { teams, count: whole ? read.sourceTeamCount : teams.length, truncated: read.sourceTeamsTruncated === true };
       }

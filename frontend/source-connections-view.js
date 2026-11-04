@@ -19,6 +19,7 @@ import {
   clubOptions,
   fmtDateTime,
   hostLabelOf,
+  pairableTeams,
   isIdempotentPending,
   loadedForActiveClub,
   sourceConnectionsAdminContext,
@@ -251,7 +252,7 @@ function renderConnectionCardHtml(d, ctx, connection, clubName) {
   const attempt = d.lastAttempt?.[id] || null;
   const pending = d.unconfirmed && String(d.unconfirmed.connectionId) === id ? d.unconfirmed : null;
   const busy = writeInFlight();
-  const formOpen = (d.credentialOpen && String(d.credentialOpen.connectionId) === id) || (d.bindReview && String(d.bindReview.connectionId) === id) || (d.unbindOpen && String(d.unbindOpen.connectionId) === id);
+  const formOpen = (d.credentialOpen && String(d.credentialOpen.connectionId) === id) || (d.bindReview && String(d.bindReview.connectionId) === id) || (d.pairReview && String(d.pairReview.connectionId) === id) || (d.unbindOpen && String(d.unbindOpen.connectionId) === id);
   return `
     <section class="data-sources-card source-connection" data-connection-id="${escapeAttr(id)}">
       <div class="data-sources-card-head">
@@ -269,6 +270,7 @@ function renderConnectionCardHtml(d, ctx, connection, clubName) {
       </dl>
       ${pending ? renderUnconfirmedHtml(d, pending) : ""}
       ${d.credentialOpen && String(d.credentialOpen.connectionId) === id ? renderCredentialFormHtml(d, connection, clubName) : ""}
+      ${d.pairReview && String(d.pairReview.connectionId) === id ? renderPairReviewHtml(d, connection, clubName) : ""}
       ${d.bindReview && String(d.bindReview.connectionId) === id ? renderBindReviewHtml(d, connection, clubName) : ""}
       ${d.unbindOpen && String(d.unbindOpen.connectionId) === id ? renderUnbindFormHtml(d, connection) : ""}
       ${formOpen || pending ? "" : renderActionsHtml(d, connection, attempt, busy)}
@@ -408,7 +410,7 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
           <p class="data-sources-form-title">${escapeHtml(SOURCE_NAME)} teams this account can see${typeof result.sourceTeamCount === "number" ? ` (${result.sourceTeamCount})` : ""}${result.sourceTeamsTruncated ? " - first page only" : ""}</p>
           <p class="muted">${ctx.basis === "platform_admin"
             ? "Every team the account sees, with the approved OptiMove team where a pair exists under Data sources. Nothing is preselected; a team is bound only from here, after a review."
-            : "Only the teams approved for one of your club's OptiMove teams are listed. A team the account sees without an approved pair is not shown here; ask a platform admin to approve it under Data sources."}</p>
+            : "Every team your club's own GPEXE account sees. Match each GPEXE team to the OptiMove team it belongs to (Approve pair), then press Bind. Nothing is preselected."}</p>
           ${teams.length ? `
             <ul class="source-connections-team-list">
               ${teams.map((team) => {
@@ -417,8 +419,9 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
                 return `
                   <li>
                     <div>
-                      <strong>${escapeHtml(SOURCE_NAME)} team ${escapeHtml(sourceTeamId)}</strong>
-                      ${team.name ? `<span class="muted">${escapeHtml(team.name)}</span>` : ""}
+                      ${ctx.basis === "club_admin"
+                        ? `<strong>${team.name ? escapeHtml(team.name) : `Unnamed ${escapeHtml(SOURCE_NAME)} team`}</strong> <span class="muted">${escapeHtml(SOURCE_NAME)} team number ${escapeHtml(sourceTeamId)}</span>`
+                        : `<strong>${escapeHtml(SOURCE_NAME)} team ${escapeHtml(sourceTeamId)}</strong>${team.name ? ` <span class="muted">${escapeHtml(team.name)}</span>` : ""}`}
                       <span class="muted">${team.approvedTeamId ? `Approved for ${escapeHtml(team.approvedTeamName || "an OptiMove team")}` : "No approved OptiMove team yet"}</span>
                     </div>
                     ${boundRow
@@ -427,16 +430,64 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
                         ? `<button class="plain-button" type="button" data-action="source-connections-bind-open" data-connection-id="${escapeAttr(id)}" data-team-id="${escapeAttr(String(team.approvedTeamId))}" data-team-name="${escapeAttr(team.approvedTeamName || "")}" data-source-team-id="${escapeAttr(sourceTeamId)}" data-source-team-name="${escapeAttr(team.name || "")}" ${busy || connection.state !== "verified" ? "disabled" : ""}>Bind</button>`
                         : ctx.basis === "platform_admin"
                           ? `<button class="plain-button ghost" type="button" data-action="source-connections-open-pair" data-connection-id="${escapeAttr(id)}" ${busy ? "disabled" : ""}>Set the pair for ${escapeHtml(SOURCE_NAME)} team ${escapeHtml(sourceTeamId)} in Data sources</button>`
-                          : ""}
+                          : ctx.basis === "club_admin"
+                            ? `<button class="plain-button" type="button" data-action="source-connections-pair-open" data-connection-id="${escapeAttr(id)}" data-source-team-id="${escapeAttr(sourceTeamId)}" data-source-team-name="${escapeAttr(team.name || "")}" ${busy || connection.state !== "verified" ? "disabled" : ""}>Approve pair</button>`
+                            : ""}
                   </li>
                 `;
               }).join("")}
             </ul>
-          ` : `<p class="muted">${ctx.basis === "platform_admin" ? "The account sees no team." : "None of the teams this account sees is approved for your club yet."}</p>`}
-          <p class="muted">After a pair is set or changed under Data sources, run Test connection again to refresh this list.</p>
+          ` : `<p class="muted">${ctx.basis === "platform_admin" ? "The account sees no team." : "This GPEXE account sees no team. Check with GPEXE that the account has access to your teams, then run Test connection again."}</p>`}
+          <p class="muted">${ctx.basis === "club_admin" ? "If the list looks out of date, run Test connection again." : "After a pair is set or changed under Data sources, run Test connection again to refresh this list."}</p>
         </div>
       ` : ""}
       ${result.sourceTeamsUnavailable ? `<p class="data-sources-warn">The ${escapeHtml(SOURCE_NAME)} team list is withheld right now: the approved pairs under Data sources name the same ${escapeHtml(SOURCE_NAME)} team twice. A platform admin has to settle that first.</p>` : ""}
+    </div>
+  `;
+}
+
+// J19 U2a: the club admin names the OptiMove team a GPEXE team belongs to; one confirmation, both sides named.
+const PAIR_ERRORS = {
+  pair_change_requires_platform_admin: "This team already has an approved GPEXE team. Changing it is done by a platform administrator under Settings > Data sources. Nothing was changed.",
+  gpexe_team_taken: "This GPEXE team is already connected to another OptiMove team. A platform administrator can look into it under Settings > Data sources. Nothing was changed.",
+  source_connection_required: "Your club has no verified GPEXE connection. Connect and test it first. Nothing was changed.",
+  pair_not_available: "This pair could not be approved. Ask a platform administrator. Nothing was changed.",
+  gpexe_team_bound: "This team is bound to its GPEXE team; end the binding first. Nothing was changed.",
+  notFound: "That team is not available any more. Reload the page. Nothing was changed.",
+};
+// Only a coded 4xx refusal says "nothing was changed"; no answer, an uncoded 5xx or the service's own 500 say
+// nothing about whether the write landed, and the same approval is safe to send again (the PUT is idempotent).
+function pairErrorText(info) {
+  if (PAIR_ERRORS[info.code]) return PAIR_ERRORS[info.code];
+  const refused = info.status >= 400 && info.status < 500;
+  if (refused) return "The pair could not be approved. Nothing was changed.";
+  return "No confirmed answer. The pair may have been saved. Send the same approval again; it is safe.";
+}
+function renderPairReviewHtml(d, connection, clubName) {
+  const review = d.pairReview;
+  const teams = pairableTeams(connection);
+  const chosen = teams.find((t) => String(t.id) === String(review.teamId));
+  const info = d.pairError;
+  const named = Boolean(review.sourceTeamName);
+  const sourceLabel = named ? `${review.sourceTeamName}` : `unnamed ${SOURCE_NAME} team`;
+  return `
+    <div class="data-sources-confirm">
+      <p class="data-sources-form-title">Approve the pair</p>
+      <label class="data-sources-field"><span>OptiMove team</span>
+        <select data-action="source-connections-pair-team" ${d.pairBusy ? "disabled" : ""}>
+          <option value="">Choose a team</option>
+          ${teams.map((t) => `<option value="${escapeAttr(String(t.id))}" ${String(t.id) === String(review.teamId) ? "selected" : ""}>${escapeHtml(t.name || "Team")}</option>`).join("")}
+        </select>
+      </label>
+      ${teams.length ? "" : `<p class="data-sources-warn">Every active team of ${escapeHtml(clubName || "your club")} already has an approved GPEXE team, so this GPEXE team cannot be paired here. Create the team first, or ask a platform administrator.</p>`}
+      <p class="data-sources-confirm-line"><strong>${escapeHtml(chosen?.name || "OptiMove team")}</strong> ↔ <strong>${escapeHtml(sourceLabel)}</strong> <span class="muted">${escapeHtml(SOURCE_NAME)} team number ${escapeHtml(review.sourceTeamId)}</span></p>
+      ${named ? "" : `<p class="data-sources-warn">This GPEXE team has no name, so you cannot check what you are approving. Ask your GPEXE administrator to name it, then run Test connection again.</p>`}
+      <p>This says which ${escapeHtml(SOURCE_NAME)} team belongs to which OptiMove team of ${escapeHtml(clubName || "your club")}. It does not import anything and binds nothing yet; you bind the pair next. <strong>Check the name: you cannot undo this yourself</strong> - only a platform administrator can change it afterwards.</p>
+      ${info ? `<p class="data-sources-warn" role="alert">${escapeHtml(pairErrorText(info))}</p>` : ""}
+      <div class="data-sources-form-actions">
+        <button class="plain-button data-sources-primary" type="button" data-action="source-connections-pair-confirm" ${d.pairBusy || !chosen || !named ? "disabled" : ""}>${d.pairBusy ? "Approving..." : "Approve pair"}</button>
+        <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.pairBusy ? "disabled" : ""}>Cancel</button>
+      </div>
     </div>
   `;
 }
