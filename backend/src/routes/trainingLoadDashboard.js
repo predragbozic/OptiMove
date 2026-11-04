@@ -27,6 +27,7 @@ import {
 import { queryDashboard } from "../trainingLoadDashboardQuery.js";
 import { query } from "../db.js";
 import { validateContract } from "../dashboardSimple/schema.js";
+import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
 
 const router = Router();
 
@@ -164,6 +165,7 @@ const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02",
 // field to the client at all).
 const DEFAULT_CODE_FOR_STATUS = { 400: "invalidRequest", 403: "forbidden", 404: "notFound", 409: "conflict" };
 function respondToServiceError(res, next, error) {
+  if (error?.code === 'P4P01') return res.status(409).json({ error: 'pagesClientRequired' });
   if (error?.httpStatus) {
     const code = error.code || DEFAULT_CODE_FOR_STATUS[error.httpStatus] || "requestFailed";
     return res.status(error.httpStatus).json({ error: code, message: error.message });
@@ -223,6 +225,7 @@ async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) 
   const row = r.rows[0];
   if (!row) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
   if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
+  await requireLegacySinglePage(query, row);
   if (row.status === "archived") { res.status(409).json({ error: "dashboardArchived" }); return null; }
   return row;
 }

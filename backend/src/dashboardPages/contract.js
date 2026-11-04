@@ -31,10 +31,16 @@ function jsonSafe(value, seen = new Set(), depth = 0) {
   return valid;
 }
 
+export function pageJsonIssue(value) {
+  if (!jsonSafe(value)) return { code: 'invalidJson', path: '$' };
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 65536) return { code: 'payloadTooLarge', path: '$' };
+  return null;
+}
+
 export function validatePageRequest(operation, value) {
   if (!Object.hasOwn(shapes, operation)) throw new TypeError('Unknown page operation');
-  if (!jsonSafe(value)) return { valid: false, issues: [{ code: 'invalidJson', path: '$' }] };
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 65536) return { valid: false, issues: [{ code: 'payloadTooLarge', path: '$' }] };
+  const jsonIssue = pageJsonIssue(value);
+  if (jsonIssue) return { valid: false, issues: [jsonIssue] };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { valid: false, issues: [{ code: 'invalidType', path: '$' }] };
   const required = ['contractVersion', 'requestId', ...shapes[operation]];
   const allowed = new Set([...required, ...(operation === 'defaults' ? ['periodConfig', 'defaultFilter'] : [])]);

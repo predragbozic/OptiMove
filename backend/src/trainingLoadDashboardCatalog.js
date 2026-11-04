@@ -19,6 +19,8 @@ import {
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
+import { requireLegacySinglePage } from './dashboardPages/legacyGuard.js';
+import { withPreviewTransaction } from './dashboardSimple/previewTransaction.js';
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -30,8 +32,8 @@ function httpError(status, message, code) {
 // Deliberately the SAME 404 whether a dashboard doesn't exist or merely
 // isn't visible to this account — knowing a valid UUID for someone else's
 // private dashboard must not distinguish "not found" from "not yours".
-async function fetchVisibleDashboard(req, dataWorkspace, dashboardId) {
-  const r = await query(`select * from training_load.dashboards where id = $1`, [dashboardId]);
+async function fetchVisibleDashboard(req, dataWorkspace, dashboardId, queryRunner = query) {
+  const r = await queryRunner(`select * from training_load.dashboards where id = $1`, [dashboardId]);
   const row = r.rows[0];
   if (!row || !canViewDashboardRow(req, row, dataWorkspace)) throw httpError(404, "Dashboard not found.");
   return row;
@@ -58,31 +60,34 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
 }
 
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
-  const dashboard = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
-  const widgets = await query(
-    `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, presentation_config, local_filter_override, revision
-     from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`,
-    [dashboardId],
-  );
-  const widgetIds = widgets.rows.map((w) => w.id);
-  let seriesByWidget = new Map();
-  if (widgetIds.length) {
-    const series = await query(
-      `select id, widget_id, series_order, metric_definition_id, built_in_series_key, template_metric_key_hints,
-              resolution_status, template_resolution_candidates, axis, color, display_label, source_policy,
-              source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period
-       from training_load.dashboard_widget_series where widget_id = any($1::uuid[]) order by widget_id, series_order`,
-      [widgetIds],
+  return withPreviewTransaction({ pool, transactionTimeoutMs: 5000, statementTimeoutMs: 3000 }, async query => {
+    const dashboard = await fetchVisibleDashboard(req, dataWorkspace, dashboardId, query);
+    const pageId = await requireLegacySinglePage(query, dashboard);
+    const widgets = await query(
+      `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, presentation_config, local_filter_override, revision
+       from training_load.dashboard_widgets where dashboard_id = $1${pageId ? ' and page_id = $2' : ''} order by widget_order`,
+      pageId ? [dashboardId, pageId] : [dashboardId],
     );
-    for (const s of series.rows) {
-      if (!seriesByWidget.has(s.widget_id)) seriesByWidget.set(s.widget_id, []);
-      seriesByWidget.get(s.widget_id).push(s);
+    const widgetIds = widgets.rows.map((w) => w.id);
+    let seriesByWidget = new Map();
+    if (widgetIds.length) {
+      const series = await query(
+        `select id, widget_id, series_order, metric_definition_id, built_in_series_key, template_metric_key_hints,
+                resolution_status, template_resolution_candidates, axis, color, display_label, source_policy,
+                source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period
+         from training_load.dashboard_widget_series where widget_id = any($1::uuid[]) order by widget_id, series_order`,
+        [widgetIds],
+      );
+      for (const s of series.rows) {
+        if (!seriesByWidget.has(s.widget_id)) seriesByWidget.set(s.widget_id, []);
+        seriesByWidget.get(s.widget_id).push(s);
+      }
     }
-  }
-  return {
-    dashboard,
-    widgets: widgets.rows.map((w) => ({ ...w, series: seriesByWidget.get(w.id) || [] })),
-  };
+    return {
+      dashboard,
+      widgets: widgets.rows.map((w) => ({ ...w, series: seriesByWidget.get(w.id) || [] })),
+    };
+  });
 }
 
 // ------------------------------------------------------------
@@ -291,6 +296,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     if (!templateRow) throw httpError(404, "Template not found.");
     if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
     if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
+    await requireLegacySinglePage((sql, params) => c.query(sql, params), templateRow);
     if (templateRow.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
 
     // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once)

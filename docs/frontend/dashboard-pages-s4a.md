@@ -65,7 +65,7 @@ Backfill pridružuje postojeće widgete početnoj stranici uz iste widget/series
 
 Pre prvog multi-page upisa moraju biti obuhvaćeni:
 
-- flat detail/query i legacy Simple preview/save/status: samo single-page adapter može bez pageId. Na multi-page kontekstu odbiti sa pagesClientRequired pre čitanja celog sadržaja ili promene;
+- flat detail/query i novi legacy Simple preview/save: samo single-page adapter može bez pageId. Na multi-page kontekstu odbiti sa pagesClientRequired pre čitanja celog sadržaja ili promene. Završen identičan legacy zahtev sme vratiti samo originalni autorizovani receipt/status, radi oporavka unknown save-a, bez novog upisa ili čitanja celog sadržaja;
 - layout replace, pojedinačni layout/content/widget create/delete i svi series writer-i: Page članstvo i scope pod dashboard → Page → widget → series lock redosledom;
 - UNIQUE order/mobile pravila i overlap trigger-i: Page scope, uz nepromenjene widget bounds;
 - dashboard/template clone i Page duplicate: sve stranice i konfiguracije se kopiraju, podržane reference remap-uju, unknown sidecar čuva bez evaluacije; unresolved nije potvrđeno validan metric binding;
