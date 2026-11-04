@@ -28,6 +28,10 @@ begin
   end if;
 end $$;
 
+-- Nothing may be written between the checks below and the drops.
+lock table training_load.gpexe_team_import_switch, training_load.gpexe_team_import_switch_history,
+  training_load.gpexe_import_prerequisite_records, training_load.gpexe_import_approvals in access exclusive mode;
+
 do $$
 declare
   v56 constant text := 'migrations_v2/202611041400_training_load_v56_team_import_switch.sql';

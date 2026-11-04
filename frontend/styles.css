@@ -17447,7 +17447,8 @@ p.muted.gpexe-approve-note {
   overflow-wrap: anywhere;
 }
 .imports-condition.is-met { color: var(--text); }
-.imports-condition.is-unmet { color: var(--text-muted, var(--text)); }
+.imports-condition.is-unmet { color: var(--muted, var(--text)); }
+.imports-team-switch .primary-button:disabled { opacity: .45; cursor: not-allowed; }
 .imports-team-switch .gpexe-date { min-width: 0; }
 .imports-team-switch .gpexe-date input { width: 100%; box-sizing: border-box; }
 

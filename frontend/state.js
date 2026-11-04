@@ -784,7 +784,7 @@ export const emptyGpexeImportState = () => ({
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
   identity: emptyGpexeIdentityState(),
   // U2 (v56): the team's import switch, its conditions and the administrator's panel.
-  teamSwitch: { data: null, loading: false, busy: false, error: null, notice: "" },
+  teamSwitch: { data: null, loading: false, busy: false, error: null, notice: "", draft: "" },
   // In-memory positions of GPEXE athletes the source-athletes list does not
   // hold yet (an administrator's labels; never stored, never the id).
   extraOrdinals: {},

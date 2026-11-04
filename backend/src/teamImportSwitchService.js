@@ -34,7 +34,7 @@ const CONDITION_TEXT = {
 
 // What the screens show. `met` for the two dated items is judged by the
 // database when the switch is turned on; here the same arithmetic is shown.
-export async function readTeamImportSwitch(teamId, { detail }) {
+export async function readTeamImportSwitch(teamId, { detail, platform = false }) {
   const sw = (await query(
     `select s.enabled, s.mode, s.changed_at, s.changed_by_user_id, s.change_reason
        from training_load.gpexe_team_import_switch s where s.owner_team_id = $1`,
@@ -59,8 +59,9 @@ export async function readTeamImportSwitch(teamId, { detail }) {
     `select h.enabled, h.mode, h.basis, h.changed_at, h.change_reason
        from training_load.gpexe_team_import_switch_history h where h.owner_team_id = $1 order by h.changed_at desc, h.id limit 20`,
     [teamId],
-  )).rows.map((h) => ({ enabled: h.enabled, mode: h.mode, basis: h.basis, changedAt: h.changed_at, reason: h.change_reason }));
-  return { ...base, changedAt: sw?.changed_at ?? null, reason: sw?.change_reason ?? null, conditions, history };
+  )).rows.map((h) => ({ enabled: h.enabled, mode: h.mode, basis: h.basis, changedAt: h.changed_at, ...(platform ? { reason: h.change_reason } : {}) }));
+  // A reason is a platform administrator's free text (it may name other clubs or teams): only a platform administrator reads it.
+  return { ...base, changedAt: sw?.changed_at ?? null, ...(platform ? { reason: sw?.change_reason ?? null } : {}), conditions, history };
 }
 
 async function inBoundedTransaction(fn) {

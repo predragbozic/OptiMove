@@ -25,6 +25,8 @@
 -- Before anything changes it checks that the body in force of lock_gpexe_import_approver is v54's (md5 of prosrc);
 -- after, that it is this migration's. Rollback: docs/runbooks/team-import-switch-v56-rollback.sql.
 
+set local lock_timeout = '5s';
+
 do $$
 begin
   if (select md5(p.prosrc)
@@ -145,13 +147,14 @@ declare
   v_mode text;
   v_prev_mode text;
 begin
+  -- The acting user's right first (a caller who is not entitled sees the same refusal whatever the input), then the input.
+  v_basis := training_load.team_import_actor_basis(p_actor, p_team);
   if p_enabled is null or (p_mode is not null and p_mode not in ('pilot', 'team')) then
     raise exception 'set_team_import_switch: enabled and mode must be valid' using errcode = '22023';
   end if;
   if length(v_reason) not between 1 and 500 or v_reason ~ '[[:cntrl:]]' then
     raise exception 'set_team_import_switch: the reason is required (1-500 characters, no control characters)' using errcode = '22023';
   end if;
-  v_basis := training_load.team_import_actor_basis(p_actor, p_team);
   -- The team and its club, active, FOR SHARE (this function takes no import lock, so the early team row lock closes no cycle).
   perform 1 from public.teams t where t.id = p_team and coalesce(t.is_active, true) for share;
   if not found then
@@ -160,6 +163,15 @@ begin
   perform 1 from public.teams t join public.clubs c on c.id = t.club_id where t.id = p_team and coalesce(c.is_active, true) for share of c;
   if not found then
     raise exception 'team % is not available', p_team using errcode = '42501';
+  end if;
+  -- A club admin's role was verified against the club the team had when the basis was read (no lock yet); the team row is now
+  -- share-locked, so its club cannot change any more: verify the role again against THAT club (a team moved meanwhile is refused).
+  if v_basis = 'club_admin' then
+    perform 1 from public.user_club_roles cr join public.teams t on t.club_id = cr.club_id
+     where t.id = p_team and cr.user_id = p_actor and cr.role = 'club_admin' and cr.is_active = true for share of cr;
+    if not found then
+      raise exception 'team % is not available', p_team using errcode = '42501';
+    end if;
   end if;
   select s.owner_team_id, s.enabled as is_on, s.mode as cur_mode into v_cur
     from training_load.gpexe_team_import_switch s where s.owner_team_id = p_team for update;
@@ -212,6 +224,14 @@ declare
   v_id uuid;
   v_note text := nullif(btrim(coalesce(p_note, '')), '');
 begin
+  perform 1 from public.users u where u.id = p_actor and u.is_active = true for share;
+  if not found then
+    raise exception 'user % may not record import prerequisites', p_actor using errcode = '42501';
+  end if;
+  perform 1 from public.user_global_roles r where r.user_id = p_actor and r.role = 'platform_admin' and r.is_active = true for share;
+  if not found then
+    raise exception 'user % may not record import prerequisites', p_actor using errcode = '42501';
+  end if;
   if p_kind is null or p_kind not in ('backup', 'restore_probe', 'wrong_link_procedure', 'archived_team_check_stop') then
     raise exception 'record_import_prerequisite: unknown kind' using errcode = '22023';
   end if;
@@ -220,14 +240,6 @@ begin
   end if;
   if v_note is not null and (length(v_note) > 300 or v_note ~ '[[:cntrl:]]') then
     raise exception 'record_import_prerequisite: the note is at most 300 characters without control characters' using errcode = '22023';
-  end if;
-  perform 1 from public.users u where u.id = p_actor and u.is_active = true for share;
-  if not found then
-    raise exception 'user % may not record import prerequisites', p_actor using errcode = '42501';
-  end if;
-  perform 1 from public.user_global_roles r where r.user_id = p_actor and r.role = 'platform_admin' and r.is_active = true for share;
-  if not found then
-    raise exception 'user % may not record import prerequisites', p_actor using errcode = '42501';
   end if;
   perform set_config('optimove.team_import_tx', txid_current()::text, true);
   insert into training_load.gpexe_import_prerequisite_records (kind, recorded_on, recorded_by_user_id, note)

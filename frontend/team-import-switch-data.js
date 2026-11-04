@@ -10,7 +10,7 @@ import { state } from "./state.js";
 
 const BASE = "/api/training-load/gpexe";
 
-export const emptyTeamSwitchState = () => ({ data: null, loading: false, busy: false, error: null, notice: "" });
+export const emptyTeamSwitchState = () => ({ data: null, loading: false, busy: false, error: null, notice: "", draft: "" });
 
 function g() {
   return state.trainingLoad.gpexe;
@@ -29,7 +29,8 @@ export function teamSwitchErrorText(info) {
   if (info.code === "try_again") return "The server was busy or another change was running. Nothing was changed; try again in a moment.";
   if (info.code === "invalid_request") return info.message || "Check the values you entered. Nothing was changed.";
   if (info.code === "notFound") return "This team is not available any more. Nothing was changed.";
-  if (info.status === 0 || info.status >= 500) return "The answer did not arrive, so the result is not confirmed. The current state was read again below; check it before trying again.";
+  if (info.code === "reread_failed") return "The change was saved, but the current state could not be read. Reload the page to check it.";
+  if (info.status === 0 || info.status >= 500) return "The answer did not arrive, so the result is not confirmed. Check the state shown here (or reload) before trying again.";
   return "It could not be done right now. Nothing was changed.";
 }
 
@@ -90,6 +91,7 @@ export async function changeTeamImportSwitch({ enabled, mode, reason }, render) 
     // The old state stays; the error above (if any) says what is known.
     if (ok && generation === gx.generation) ts.error = { status: 0, code: "reread_failed", message: "" };
   }
+  if (ok) ts.draft = "";
   if (ok && !ts.error) ts.notice = enabled ? "Imports are on for this team." : "Imports are off for this team.";
   render();
   return ok;

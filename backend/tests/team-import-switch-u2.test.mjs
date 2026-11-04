@@ -341,8 +341,10 @@ test("3. role matrix of the switch route: platform admin; the club's admin (off 
   assert.equal(asClub.conditions.length, 4);
   assert.ok(asClub.conditions.every((c) => c.met === true));
   assert.ok(asClub.history.length >= 4);
+  assert.ok(asClub.history.every((h) => h.reason === undefined) && asClub.reason === undefined, "a platform administrator's free-text reasons are not shown to the club admin");
   const asPlatform = (await getSwitch(t, t.padmin)).body.importSwitch;
   assert.deepEqual([asPlatform.canManage, asPlatform.canChangeMode, asPlatform.canRecordPrerequisites], [true, true, true]);
+  assert.ok(asPlatform.history.every((h) => typeof h.reason === "string"));
   // A revoked club role is a 404 on the next request.
   await admin.query(`update public.user_club_roles set is_active = false where user_id = $1`, [t.cadmin.id]);
   assert.equal((await putSwitch(t, t.cadmin, { enabled: false, reason: "revoked" })).status, 404);
@@ -708,4 +710,36 @@ test("13. the migration file is the one the runner reads: a unique prefix, the m
   assert.match(sql, /9c3bf3edeb1dcca9c5516b77c30e86ee/);
   const svc = fs.readFileSync(new URL("../src/teamImportSwitchService.js", import.meta.url), "utf8");
   assert.doesNotMatch(svc, /GPEXE_IMPORT_APPLY_ENABLED/, "the team switch is independent of the environment's master switch");
+});
+
+test("14. a club admin's right is verified again against the team's club once the team row is locked: a team moved to another club between the two is refused (42501), nothing is written", async () => {
+  // Unbound teams (a bound team cannot be moved at all - v27 guard); the move is a plain update.
+  const a = await createGpexePilotOrg(admin, { athleteNames: [] });
+  const b = await createGpexePilotOrg(admin, { athleteNames: [] });
+  a.cadmin = await clubAdminOf(a.clubId);
+  await enableTeamImportSwitch(admin, a.teamId, null, { mode: "team", enabled: true });
+  const mover = new pg.Client({ connectionString: db.url });
+  const caller = new pg.Client({ connectionString: db.url });
+  await mover.connect();
+  await caller.connect();
+  try {
+    // The move is held uncommitted: the function reads the old club for the basis, then waits for the team row.
+    await mover.query("begin");
+    await mover.query(`update public.teams set club_id = $1 where id = $2`, [b.clubId, a.teamId]);
+    await caller.query("begin");
+    await caller.query("set local lock_timeout = '10s'");
+    const call = caller.query(`select * from training_load.set_team_import_switch($1, $2, false, null, 'race')`, [a.cadmin.id, a.teamId]).then(() => null, (e) => e);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await mover.query("commit");
+    const error = await call;
+    assert.ok(error && error.code === "42501", `refused with 42501, got ${error?.code}: ${error?.message}`);
+    await caller.query("rollback");
+    assert.equal((await switchRow(a.teamId)).enabled, true, "nothing was written");
+  } finally {
+    await mover.query("rollback").catch(() => {});
+    await caller.query("rollback").catch(() => {});
+    await mover.end();
+    await caller.end();
+    await admin.query(`update public.teams set club_id = $1 where id = $2`, [a.clubId, a.teamId]);
+  }
 });

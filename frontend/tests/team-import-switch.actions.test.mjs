@@ -113,7 +113,7 @@ test("1. a coach sees one sentence about the team's switch and no panel: off say
   responder = server({ sw: switchBody({ manager: false, enabled: false }) });
   await openImports();
   let page = html();
-  assert.match(page, /Imports are switched off for this team\.<\/strong> A platform administrator or the club administrator turns them on\./);
+  assert.match(page, /Imports are switched off for this team\.<\/strong> A platform administrator turns them on\./);
   assert.equal(panel(page), "", "no panel for a coach");
   assert.match(page, /Review only - imports are switched off for this team\./);
   assert.equal(puts().length, 0);
@@ -131,7 +131,7 @@ test("2. a platform administrator: the panel lists the conditions with their dat
   await openImports();
   const p = panel();
   assert.match(p, /Imports are <strong>off<\/strong>\./);
-  assert.match(p, /Pilot mode: only a platform administrator imports\./);
+  assert.match(p, /Pilot mode: a platform administrator, and coaches given the right to approve, import\./);
   assert.match(p, /Database backup \(at most 2 days old\)/);
   assert.match(p, /Restore probe \(at most 35 days old\)/);
   assert.match(p, /Not met: <\/span>Restore probe/);
@@ -183,6 +183,9 @@ test("4. the club administrator: turning off is offered; turning on a pilot team
   const p = panel();
   assert.match(p, /data-action="training-load-gpexe-switch-on"[^>]*disabled/);
   assert.match(p, /While the team is in pilot mode, a platform administrator turns imports on\./);
+  assert.match(p, /aria-describedby="gpexe-switch-why"/);
+  assert.match(html(), /While the team is in pilot mode, a platform administrator turns them on\./, "the line above does not promise an action the button refuses");
+  assert.match(p, /a platform administrator records this/);
   assert.doesNotMatch(p, /switch-mode-(team|pilot)/);
   assert.doesNotMatch(p, /Record a date|training-load-gpexe-switch-record/);
   await act("training-load-gpexe-switch-on");
@@ -193,7 +196,7 @@ test("4. the club administrator: turning off is offered; turning on a pilot team
   fields["[data-gpexe-switch-reason]"] = "pause";
   await act("training-load-gpexe-switch-off");
   assert.deepEqual(puts().map((c) => c.body), [{ enabled: false, reason: "pause" }]);
-  assert.equal(confirmQuestions.length, 0, "turning off asks no confirmation");
+  assert.match(confirmQuestions.at(-1), /Turn imports off for First Team\? Nobody can approve imports of its sessions until they are turned on again\. Sessions already imported stay\./);
 });
 
 test("5. a refused condition reads as the server's sentence plus 'Nothing was changed'; a lost answer is 'not confirmed', never 'nothing changed', and the state is read again", async () => {
@@ -257,5 +260,5 @@ test("8. a refused approval for the team's switch reads as one sentence naming w
   assert.ok(view, "the view module loads");
   const src = (await import("node:fs")).readFileSync(new URL("../gpexe-import-view.js", import.meta.url), "utf8");
   assert.match(src, /team_import_switch_off: "Imports are switched off for this team, so it can't be approved here\."/);
-  assert.match(src, /team_import_switch_off: "Not imported: imports are switched off for this team\. A platform administrator or the club administrator can turn them on\."/);
+  assert.match(src, /team_import_switch_off: "Not imported: imports are switched off for this team\. A platform administrator can turn them on \(the club administrator too, in team mode\)\."/);
 });

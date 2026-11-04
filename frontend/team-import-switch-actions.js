@@ -15,6 +15,7 @@ function teamName(gx) {
 
 function needReason(gx, render) {
   const reason = fieldValue("[data-gpexe-switch-reason]").trim();
+  gx.teamSwitch.draft = reason;
   if (reason) return reason;
   gx.teamSwitch.error = { status: 400, code: "invalid_request", message: "Write a short reason first; it is kept in the history." };
   render();
@@ -28,7 +29,10 @@ export async function handleTeamImportSwitchAction(action, { renderTrainingLoad 
   if (ts.busy) return true;
   if (type === "training-load-gpexe-switch-off") {
     const reason = needReason(gx, renderTrainingLoad);
-    if (reason) await changeTeamImportSwitch({ enabled: false, reason }, renderTrainingLoad);
+    if (!reason) return true;
+    const who = ts.data?.canChangeMode ? "" : ts.data?.mode === "team" ? "" : " Only a platform administrator can turn them on again.";
+    if (!globalThis.window?.confirm?.(`Turn imports off for ${teamName(gx)}? Nobody can approve imports of its sessions until they are turned on again.${who} Sessions already imported stay.`)) return true;
+    await changeTeamImportSwitch({ enabled: false, reason }, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-switch-on") {

@@ -162,7 +162,7 @@ router.get("/teams/:teamId/import-switch", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   const manager = importSwitchManager(access, req);
-  const state = await teamSwitch.readTeamImportSwitch(access.teamId, { detail: manager });
+  const state = await teamSwitch.readTeamImportSwitch(access.teamId, { detail: manager, platform: access.platformAdmin });
   // The recorded dates and the history are an administrator's; a coach gets the switch and its mode.
   res.json({ importSwitch: { ...state, canManage: manager, canChangeMode: access.platformAdmin, canRecordPrerequisites: access.platformAdmin } });
 }));

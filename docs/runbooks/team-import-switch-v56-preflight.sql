@@ -16,8 +16,8 @@ select md5(p.prosrc) as actual_md5, md5(p.prosrc) = '9c3bf3edeb1dcca9c5516b77c30
 select to_regclass('training_load.gpexe_team_import_switch') is null
    and to_regclass('training_load.gpexe_team_import_switch_history') is null
    and to_regclass('training_load.gpexe_import_prerequisite_records') is null as no_v56_table,
-       (select pg_get_constraintdef(c.oid) from pg_constraint c where c.conname = 'gpexe_import_approvals_approval_basis_check')
-         like '%platform_admin%team_grant%' as original_check,
+       coalesce((select pg_get_constraintdef(c.oid) from pg_constraint c where c.conname = 'gpexe_import_approvals_approval_basis_check')
+         like '%platform_admin%team_grant%', false) as original_check,
        not exists (select 1 from training_load.gpexe_import_approvals where approval_basis not in ('platform_admin', 'team_grant')) as no_new_basis_rows;
 
 -- 4. No approval is in flight and the moment is quiet.

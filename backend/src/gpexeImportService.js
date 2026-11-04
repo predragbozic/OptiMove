@@ -46,7 +46,7 @@ export function applyEnabled() {
   return process.env.GPEXE_IMPORT_APPLY_ENABLED === "true";
 }
 
-const TEAM_SWITCH_OFF_MESSAGE = "Imports are switched off for this team. Nothing was imported. A platform administrator or the club administrator can turn them on in Settings.";
+const TEAM_SWITCH_OFF_MESSAGE = "Imports are switched off for this team. Nothing was imported. A platform administrator can turn them on (the club administrator too, once the team is in team mode).";
 function teamSwitchRefusal() {
   return refusal(409, "team_import_switch_off", TEAM_SWITCH_OFF_MESSAGE);
 }
