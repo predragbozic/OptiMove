@@ -4,6 +4,7 @@ import { resolveActiveWorkspaceReadOnly } from '../workspace.js';
 import { canManageDashboardRow, canViewDashboardRow, dataWorkspaceMatches, dataWorkspaceForActiveWorkspace } from '../trainingLoadDashboardAccess.js';
 import { isUuid } from './schema.js';
 import { previewError } from './previewTransaction.js';
+import { simplePageDefaults, simplePagePeriod } from './pageContext.js';
 
 export async function authorizePreviewTarget(queryRunner, req, dashboardId, { requireWritable = true, requireManage = true, requireDataMatch = true } = {}) {
   if (!isUuid(req?.user?.id)) throw previewError('notFound', 404);
@@ -27,9 +28,9 @@ export async function authorizePreviewTarget(queryRunner, req, dashboardId, { re
   return { req: serverReq, dashboard, workspace };
 }
 
-export async function loadPreviewExisting(queryRunner, dashboardId, editTarget) {
+export async function loadPreviewExisting(queryRunner, dashboardId, editTarget, pageId = null) {
   if (!editTarget) return null;
-  const widget = (await queryRunner('select * from training_load.dashboard_widgets where id=$1 and dashboard_id=$2', [editTarget.widgetId, dashboardId])).rows[0];
+  const widget = (await queryRunner(`select * from training_load.dashboard_widgets where id=$1 and dashboard_id=$2${pageId ? ' and page_id=$3' : ''}`, [editTarget.widgetId, dashboardId, ...(pageId ? [pageId] : [])])).rows[0];
   if (!widget) throw previewError('notFound', 404);
   const series = (await queryRunner('select * from training_load.dashboard_widget_series where widget_id=$1 order by series_order, id', [widget.id])).rows;
   return { ...widget, series };
@@ -48,7 +49,8 @@ export async function loadPreviewContext(queryRunner, target, envelope, existing
     athleteSql = 'exists(select 1 from public.user_athletes membership where membership.athlete_id=athlete.id and membership.user_id=$1 and membership.is_active=true)';
   } else if (workspace.dataWorkspaceType === 'athlete') { params.push(workspace.athleteWorkspaceAthleteId); athleteSql = 'athlete.id=$1'; }
   const authorizedAthleteIds = (await queryRunner(`select athlete.id from public.athletes athlete where ${athleteSql} order by athlete.id`, params)).rows.map(row => row.id);
-  const layers = [target.dashboard.default_filter, envelope.context.runtimeFilter, existing?.local_filter_override].filter(Boolean);
+  const defaultFilter = simplePageDefaults(target);
+  const layers = [target.dashboard.default_filter, target.page?.default_filter, envelope.context.runtimeFilter, existing?.local_filter_override].filter(Boolean);
   const activityIds = [...new Set([...layers.map(layer => layer.activityId), envelope.draft.advancedFilter?.activity?.id].filter(isUuid))];
   const componentIds = [...new Set([...layers.map(layer => layer.componentId), envelope.draft.advancedFilter?.component?.id].filter(isUuid))];
   const components = componentIds.length ? (await queryRunner('select id, activity_id from training.activity_components where id=any($1::uuid[])', [componentIds])).rows : [];
@@ -72,12 +74,12 @@ export async function loadPreviewContext(queryRunner, target, envelope, existing
   if (selection?.mode === 'inherit') delete componentLocal.componentId;
   else if (selection?.mode === 'clear') componentLocal.componentId = null;
   else if (selection?.mode === 'selected') componentLocal.componentId = selection.id.toLowerCase();
-  const effectiveComponent = { ...target.dashboard.default_filter, ...envelope.context.runtimeFilter, ...componentLocal }.componentId;
+  const effectiveComponent = { ...defaultFilter, ...envelope.context.runtimeFilter, ...componentLocal }.componentId;
   return {
     authorizedAthleteIds, authorizedFilterIds: { activityId: visibleActivityIds, componentId: components.filter(component => visibleActivityIds.includes(component.activity_id)).map(component => component.id) },
     componentActivityId: components.find(component => component.id === effectiveComponent)?.activity_id,
     athleteWorkspaceAthleteId: workspace.athleteWorkspaceAthleteId,
-    defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter,
-    period: envelope.context.period, evaluatedAt,
+    defaultFilter, runtimeFilter: envelope.context.runtimeFilter,
+    period: envelope.draft.periodIntent ? simplePagePeriod(target, envelope, evaluatedAt) : envelope.context.period, evaluatedAt,
   };
 }

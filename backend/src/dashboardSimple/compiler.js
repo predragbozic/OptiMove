@@ -64,7 +64,7 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   if (m.value_type !== 'numeric' && !['last', 'none'].includes(view.analyticalAggregation)) issue('aggregationType', '$.view.analyticalAggregation');
   if (!aggs.includes(view.analyticalAggregation)) issue('aggregationType', '$.view.analyticalAggregation');
   if (charts.has(view.type) && m.value_type !== 'numeric') issue('numericChartRequired', '$.view.type');
-  if (draft.periodIntent.savePageDefaults && !snapshot.capabilities.pages) issue('unsupportedCapability', '$.periodIntent.savePageDefaults');
+  if (draft.periodIntent.savePageDefaults && !snapshot.capabilities.pages && snapshot.capabilities.pageDefaultsSave !== true) issue('unsupportedCapability', '$.periodIntent.savePageDefaults');
   const localFilter = clone(existing?.local_filter_override ?? {});
   if (draft.athleteSelection.mode === 'inherit') delete localFilter.athleteIds;
   else localFilter.athleteIds = draft.athleteSelection.mode === 'allAuthorized' ? null : [...draft.athleteSelection.athleteIds].map(x => x.toLowerCase()).sort();

@@ -67,7 +67,9 @@ function validateBinding(binding) {
   for (const field of ['workspace', 'target', 'periodIntent', 'resolvedPeriod']) {
     if (!plainObject(binding[field]) || Object.keys(binding[field]).length === 0) throw new TypeError(`Invalid ${field}`);
   }
-  if (!exactFields(binding.target, ['dashboardId', 'widgetId', 'widgetRevision']) || !identifier(binding.target.dashboardId)
+  const targetFields = ['dashboardId', 'widgetId', 'widgetRevision', ...(Object.hasOwn(binding.target, 'pageId') ? ['pageId'] : [])];
+  if (!exactFields(binding.target, targetFields) || !identifier(binding.target.dashboardId)
+    || Object.hasOwn(binding.target, 'pageId') && !identifier(binding.target.pageId)
     || binding.target.widgetId !== null && !identifier(binding.target.widgetId)
     || binding.target.widgetRevision !== null && (!Number.isSafeInteger(binding.target.widgetRevision) || binding.target.widgetRevision < 1)) throw new TypeError('Invalid target');
   if (!timestamp(binding.evaluatedAt)) throw new TypeError('Server ISO evaluatedAt required');

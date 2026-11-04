@@ -9,6 +9,7 @@ import { withPreviewTransaction, previewError } from './previewTransaction.js';
 import { runSimpleSaveTransaction } from './saveTransaction.js';
 import { validateSimpleSaveRequest, simpleSavePayloadHash, SIMPLE_REQUEST_WINDOW_MS } from './saveRequest.js';
 import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
+import { loadSimplePageTarget } from './pageContext.js';
 
 async function lockActor(queryRunner, req) {
   const userId = req.user.id;
@@ -38,6 +39,8 @@ async function lockCatalog(queryRunner, envelope, existing) {
 
 function stableSaveError(error) {
   if (error?.code === 'P4P01') return previewError('pagesClientRequired', 409);
+  if (error?.code === 'P4P04') return previewError('stalePageDefaultsRevision', 409);
+  if (error?.code === 'P4P10') return previewError('notFound', 404);
   const codes = { S2C01: ['idempotencyConflict', 409], S2C02: ['invalidDraft', 400], S2C03: ['advancedRequired', 409], S2C04: ['advancedRequired', 409], S2C05: ['invalidRequest', 400], S2C06: ['requestExpired', 409], S2C07: ['notFound', 404], '40001': ['staleRevision', 409], '40002': ['dashboardArchived', 409], '23514': ['catalogChanged', 409], '23503': ['catalogChanged', 409] };
   return codes[error?.code] ? previewError(...codes[error.code]) : error;
 }
@@ -52,34 +55,37 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
   async function recorded(queryRunner, target, requestId, payloadHash) {
     const row = (await queryRunner('select * from training_load.dashboard_simple_requests where initiator_user_id=$1 and request_id=$2', [target.req.user.id, requestId])).rows[0];
     if (!row) return null;
+    if ((row.page_id ?? null) !== (target.page?.id ?? null)) throw previewError(payloadHash ? 'idempotencyConflict' : 'notFound', payloadHash ? 409 : 404);
     if (row.dashboard_id !== target.dashboard.id || canonicalKey(row.workspace) !== canonicalKey(target.workspace) || payloadHash && row.payload_hash !== payloadHash) {
       throw previewError(payloadHash ? 'idempotencyConflict' : 'notFound', payloadHash ? 409 : 404);
     }
     if (currentTime() > new Date(row.retain_until).getTime()) throw previewError('requestExpired', 409);
     const widgetId = row.receipt?.widgetId;
-    if (!isUuid(widgetId) || !(await queryRunner('select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2', [widgetId, target.dashboard.id])).rows.length) throw previewError('notFound', 404);
+    if (!isUuid(widgetId) || !(await queryRunner(`select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2${target.page ? ' and page_id=$3' : ''}`, [widgetId, target.dashboard.id, ...(target.page ? [target.page.id] : [])])).rows.length) throw previewError('notFound', 404);
     return row.receipt;
   }
   const readOnly = (operation, budget = 5000) => {
     const checkout = Math.min(1000, Math.max(1, Math.floor(budget / 4)));
     return withPreviewTransaction({ pool, checkoutTimeoutMs: checkout, transactionTimeoutMs: Math.max(1, budget - checkout - 500), statementTimeoutMs: Math.min(3000, Math.max(1, budget - checkout - 500)) }, operation);
   };
-  async function status({ req, dashboardId, body }) {
+  async function status({ req, dashboardId, pageId = null, body }) {
     if (!isUuid(req?.user?.id) || !isUuid(dashboardId)) throw previewError('notFound', 404);
     return readOnly(async queryRunner => {
-      const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+      const authorized = await authorizeSaveTarget(queryRunner, req, dashboardId);
+      const target = pageId == null ? authorized : await loadSimplePageTarget(queryRunner, authorized, { pageId });
       if (!body || Object.keys(body).length !== 1 || !isUuid(body.requestId)) throw previewError('invalidRequest', 400);
       const receipt = await recorded(queryRunner, target, body.requestId);
-      if (!receipt) await requireLegacySinglePage(queryRunner, target.dashboard);
+      if (!receipt && !target.page) await requireLegacySinglePage(queryRunner, target.dashboard);
       return receipt ? { status: 'recorded', requestId: body.requestId, receipt } : { status: 'notRecorded', requestId: body.requestId, retrySameRequest: true };
     });
   }
-  async function save({ req, dashboardId, widgetId = null, body }) {
+  async function save({ req, dashboardId, pageId = null, widgetId = null, body }) {
     if (!isUuid(req?.user?.id) || !isUuid(dashboardId)) throw previewError('notFound', 404);
     if (!isUuid(body?.requestId)) throw previewError('invalidRequest', 400);
     let payloadHash;
     const verify = () => readOnly(async queryRunner => {
-      const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+      const authorized = await authorizeSaveTarget(queryRunner, req, dashboardId);
+      const target = pageId == null ? authorized : await loadSimplePageTarget(queryRunner, authorized, { pageId, context: body.input?.context });
       return recorded(queryRunner, target, body.requestId, payloadHash);
     }, transactionOptions.recoveryTimeoutMs ?? 5000);
     try {
@@ -88,18 +94,19 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         await lockActor(queryRunner, req);
         await authorizeSaveTarget(queryRunner, req, dashboardId);
         await queryRunner('select id from training_load.dashboards where id=$1 for update', [dashboardId]);
-        const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+        const authorized = await authorizeSaveTarget(queryRunner, req, dashboardId);
+        const target = pageId == null ? authorized : await loadSimplePageTarget(queryRunner, authorized, { pageId, context: body.input?.context, lock: true });
         const editTarget = body.input?.editTarget;
         for (const candidate of [...new Set([widgetId, editTarget?.widgetId].filter(value => value != null))]) {
           if (!isUuid(candidate)) throw previewError('notFound', 404);
-          if (!(await queryRunner('select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2 for update', [candidate, dashboardId])).rows.length) throw previewError('notFound', 404);
+          if (!(await queryRunner(`select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2${target.page ? ' and page_id=$3' : ''} for update`, [candidate, dashboardId, ...(target.page ? [target.page.id] : [])])).rows.length) throw previewError('notFound', 404);
         }
         validateSimpleSaveRequest(body);
         if ((widgetId?.toLowerCase() ?? null) !== (editTarget?.widgetId?.toLowerCase() ?? null)) throw previewError('invalidRequest', 400);
         payloadHash = simpleSavePayloadHash({ userId: req.user.id, dashboardId, body });
         const receipt = await recorded(queryRunner, target, body.requestId, payloadHash);
         if (receipt) return { receipt, replayed: true };
-        await requireLegacySinglePage(queryRunner, target.dashboard);
+        if (!target.page) await requireLegacySinglePage(queryRunner, target.dashboard);
         if (activation.atomicSaveVerified !== true) throw previewError('saveUnavailable');
         if (target.dashboard.status !== 'active') throw previewError('dashboardArchived', 409);
         if (target.dashboard.is_template) throw previewError('templateRequiresClone', 409);
@@ -110,13 +117,14 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         const signed = tokenService.verifyEnvelope(body.previewToken);
         if (body.requestIssuedAt !== signed.requestIssuedAt) throw previewError('previewRequired', 409, 'requestTimeChanged');
         if (canonicalKey(body.resolvedPeriod) !== canonicalKey(signed.binding.resolvedPeriod)) throw previewError('previewRequired', 409, 'effectivePeriodChanged');
-        if (body.input.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
+        if (!target.page && body.input.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
         if (widgetId) await queryRunner('select id from training_load.dashboard_widget_series where widget_id=$1 order by id for update', [widgetId]);
-        const existing = await loadPreviewExisting(queryRunner, dashboardId, editTarget);
+        const existing = await loadPreviewExisting(queryRunner, dashboardId, editTarget, target.page?.id);
         if (existing && existing.revision !== editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
         await lockCatalog(queryRunner, body.input, existing);
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
         const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: body.input.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
+        if (target.page) snapshot.capabilities = { ...snapshot.capabilities, pageDefaultsSave: true };
         const context = await loadPreviewContext(queryRunner, target, body.input, existing, new Date(currentTime()).toISOString());
         const compiled = compileSimpleDraft(body.input.draft, snapshot, context, existing);
         if (compiled.status !== 'valid') throw Object.assign(previewError(compiled.status === 'advancedRequired' ? 'advancedRequired' : 'invalidDraft', compiled.status === 'advancedRequired' ? 409 : 400), { issues: compiled.issues });
@@ -124,7 +132,12 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         if (body.input.expectedCatalogToken && body.input.expectedCatalogToken !== compiled.catalogToken) throw previewError('catalogChanged', 409);
         const binding = buildSimplePreviewBinding({ target, envelope: body.input, existing, compiled, context, evaluatedAt: signed.binding.evaluatedAt });
         tokenService.verify(body.previewToken, binding);
-        const result = await queryRunner('select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', [req.user.id, body.requestId, payloadHash, body.requestIssuedAt, dashboardId, widgetId, editTarget?.expectedWidgetRevision ?? null, JSON.stringify(compiled.widget), JSON.stringify(compiled.resolvedPeriod), JSON.stringify(target.workspace)]);
+        const args = [req.user.id, body.requestId, payloadHash, body.requestIssuedAt, dashboardId, widgetId, editTarget?.expectedWidgetRevision ?? null, JSON.stringify(compiled.widget), JSON.stringify(compiled.resolvedPeriod), JSON.stringify(target.workspace)];
+        const intent = body.input.draft.periodIntent;
+        if (target.page) args.push(target.page.id, intent.savePageDefaults ? body.input.context.expectedPageDefaultsRevision : null, intent.savePageDefaults ? JSON.stringify(intent.periodConfig) : null);
+        const result = await queryRunner(target.page
+          ? 'select training_load.save_simple_page_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb,$11::uuid,$12::integer,$13::jsonb) as receipt'
+          : 'select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', args);
         if (!result.rows[0]?.receipt) throw previewError('saveFailed');
         return { receipt: result.rows[0].receipt, replayed: false };
       } });

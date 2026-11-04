@@ -16,10 +16,10 @@ export function createSimpleSaveRouter({ service }) {
   for (const [method, path, action] of [['post', '/widgets', 'save'], ['put', '/widgets/:widgetId', 'save'], ['post', '/requests/status', 'status']]) {
     router[method](path, async (req, res) => {
       try {
-        const result = await service[action]({ req, dashboardId: req.params.dashboardId, widgetId: req.params.widgetId ?? null, body: req.body });
+        const result = await service[action]({ req, dashboardId: req.params.dashboardId, pageId: req.params.pageId ?? null, widgetId: req.params.widgetId ?? null, body: req.body });
         if (!res.destroyed) res.json(result);
       } catch (error) {
-        const permitted = ['notFound', 'invalidRequest', 'invalidDraft', 'payloadTooLarge', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'idempotencyConflict', 'requestInProgress', 'requestExpired', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'saveUnavailable', 'saveBusy', 'saveTimeout', 'saveFailed', 'outcomeUnknown'];
+        const permitted = ['notFound', 'invalidRequest', 'invalidDraft', 'payloadTooLarge', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'stalePageDefaultsRevision', 'pagesUnavailable', 'pagePeriodRequired', 'invalidPageDefaults', 'idempotencyConflict', 'requestInProgress', 'requestExpired', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'saveUnavailable', 'saveBusy', 'saveTimeout', 'saveFailed', 'outcomeUnknown'];
         const code = permitted.includes(error?.code) ? error.code : 'saveFailed';
         const body = { error: code };
         if (code === 'outcomeUnknown') body.requestId = req.body?.requestId;

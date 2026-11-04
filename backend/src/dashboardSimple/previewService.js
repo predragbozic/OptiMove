@@ -6,7 +6,7 @@ import { createSimpleCapabilityReader } from './capabilities.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
 import { authorizePreviewTarget, loadPreviewContext, loadPreviewExisting } from './previewContext.js';
 import { previewError, withPreviewTransaction } from './previewTransaction.js';
-import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
+import { loadSimplePageTarget } from './pageContext.js';
 
 const responseLimit = 2 * 1024 * 1024;
 const issueResult = (status, code, path) => ({ status, issues: [{ code, path, severity: 'error' }] });
@@ -27,14 +27,14 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
   if (!pool || typeof queryDashboard !== 'function') throw new TypeError('Server-owned preview dependencies required');
   const previewEnabled = Boolean(admission && tokenService && activation.coordinatedAdmissionVerified === true && activation.deploymentBudgetVerified === true);
   const atomicSaveEnabled = previewEnabled && activation.atomicSaveVerified === true;
-  async function execute(kind, { req, dashboardId, envelope, query, signal }) {
+  async function execute(kind, { req, dashboardId, pageId = null, envelope, query, signal }) {
     if (!req?.user?.id) throw previewError('notFound', 404);
     if (kind === 'preview' && !previewEnabled) throw previewError('previewUnavailable');
     let lease;
     if (kind === 'preview') lease = await admission.tryAcquire({ userId: req.user.id });
     return withPreviewTransaction({ ...transactionOptions, pool: lease?.queryPool ?? pool, signal, onReleased: () => lease?.release() }, async queryRunner => {
-      const target = await authorizePreviewTarget(queryRunner, req, dashboardId);
-      await requireLegacySinglePage(queryRunner, target.dashboard);
+      const authorized = await authorizePreviewTarget(queryRunner, req, dashboardId);
+      const target = await loadSimplePageTarget(queryRunner, authorized, { pageId, context: envelope?.context });
       if (kind === 'metrics') {
         const options = parseMetricsQuery(query);
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
@@ -52,26 +52,28 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       let existing = null;
       if (envelope?.editTarget != null) {
         if (!isUuid(envelope.editTarget.widgetId)) throw previewError('notFound', 404);
-        existing = await loadPreviewExisting(queryRunner, dashboardId, envelope.editTarget);
+        existing = await loadPreviewExisting(queryRunner, dashboardId, envelope.editTarget, target.page?.id);
       }
       const structural = validateContract('envelope', envelope);
       if (!structural.valid) return { status: 'invalid', issues: structural.issues.map(issue => ({ ...issue, severity: 'error' })) };
-      if (envelope.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
       if (existing && existing.revision !== envelope.editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
       const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
       const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: envelope.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
+      if (target.page) snapshot.capabilities = { ...snapshot.capabilities, pageDefaultsSave: true };
       const evaluatedAt = new Date(now()).toISOString();
       const context = await loadPreviewContext(queryRunner, target, envelope, existing, evaluatedAt);
       const compiled = compileSimpleDraft(envelope.draft, snapshot, context, existing);
       if (compiled.status !== 'valid') return { ...compiled, issues: compiled.issues.map(issue => ({ ...issue, severity: 'error' })) };
       if (envelope.expectedCatalogToken && envelope.expectedCatalogToken !== compiled.catalogToken) throw previewError('catalogChanged', 409);
       if (compiled.widget.presentation_config?.tableFormatting?.rules?.length) return issueResult('invalid', 'unsupportedCapability', '$.draft.presentation.tableFormatting');
-      const contextFingerprint = hash({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter ?? {}, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod });
+      const binding = buildSimplePreviewBinding({ target, envelope, existing, compiled, context, evaluatedAt });
+      const contextFingerprint = binding.contextFingerprint;
       const draftHash = hash(envelope.draft);
       const common = {
         contractVersion: 1, status: 'valid', issues: [], draftId: envelope.draft.draftId, draftVersion: envelope.draft.draftVersion,
         draftHash, contextFingerprint, catalogToken: compiled.catalogToken, evaluatedAt, resolvedPeriod: compiled.resolvedPeriod,
         effectiveFilterSummary: compiled.effectiveFilter, dashboardRevision: target.dashboard.revision,
+        ...(target.page ? { pageId: target.page.id, pageDefaultsRevision: target.page.defaults_revision } : {}),
         ...(existing ? { widgetRevision: existing.revision } : {}), normalizedWidget: compiled.widget,
         capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false },
         suggestion: { type: compiled.widget.widget_type, confidence: 'configurationOnly', reasonCode: 'resultProofRequired' },
@@ -94,7 +96,6 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       const warnings = [];
       if (!current.length) warnings.push({ code: 'emptyPreview' });
       if (allRows.some(row => row.conflict || row.typeConflict || row.semanticConflict || row.unitConflict)) warnings.push({ code: 'problemData' });
-      const binding = buildSimplePreviewBinding({ target, envelope, existing, compiled, context, evaluatedAt });
       const response = { ...common, queryId: randomUUID(), widgetResult, presentationAnnotations: [], warnings, ...tokenService.issue(binding) };
       const encoded = JSON.stringify(response, (key, value) => {
         if (typeof value === 'number' && !Number.isFinite(value)) throw previewError('previewQueryFailed');

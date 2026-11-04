@@ -11,6 +11,7 @@ import { createSimpleSaveRouter } from './saveRouter.js';
 import { withPreviewTransaction } from './previewTransaction.js';
 
 export const SIMPLE_RUNTIME_PATH = '/api/training-load/dashboards/:dashboardId/simple';
+export const PAGE_SIMPLE_RUNTIME_PATH = '/api/training-load/dashboards/:dashboardId/pages/:pageId/simple';
 export const SIMPLE_MIGRATION_NAME = 'migrations_v2/202611011300_dashboard_simple_atomic_save.sql';
 export const SIMPLE_MIGRATION_SHA256 = '46efa94af91cd37ff3bc3f5ae2f5be6ce97d3c9e92099642d5912117d0800f28';
 
