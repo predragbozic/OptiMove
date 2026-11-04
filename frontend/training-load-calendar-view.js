@@ -4,6 +4,7 @@ import { renderMetricIconHtml } from "./icon-render.js";
 import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
 import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
+import { pickable, pickerName } from "./metric-picker-visibility.js";
 
 // Training Load Frontend 3A — Activities → activity detail → results table. Deliberately
 // its own module, imported by training-load-view.js's own coach root
@@ -593,9 +594,16 @@ function groupDefinitions(definitions, search) {
 function renderMetricPickerHtml(nav, detail) {
   const picker = nav.metricPicker;
   if (!picker.open) return "";
-  const definitions = resultDefinitionList(picker.definitions, detail);
-  const groups = groupDefinitions(definitions, picker.search);
   const selected = new Set(picker.selectedIds || []);
+  // The results keep every name (resultDefinitionList); the picker leaves out
+  // what the club hides, unless it is checked (so it can still be unchecked).
+  const all = resultDefinitionList(picker.definitions, detail);
+  // Before the coach picks anything the few default columns (pickedMetricColumns) are shown, hidden ones included: they count as chosen.
+  const shownIds = new Set();
+  if (picker.selectedIds === null && detail) for (const f of detail.facts || []) if (f.factKind === "metric_value") shownIds.add(f.detail.metricDefinitionId);
+  const shownByDefault = shownIds.size <= 4 ? [...shownIds] : [];
+  const definitions = pickable(all, { chosen: [...selected, ...shownByDefault] });
+  const groups = groupDefinitions(definitions, picker.search);
   return `
     <div class="builder-athlete-overlay tl-metric-picker-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="training-load-calendar-metric-picker-close" aria-label="Close metric picker"></button>
@@ -614,7 +622,7 @@ function renderMetricPickerHtml(nav, detail) {
                 <label class="tl-metric-picker-option">
                   <input type="checkbox" data-action="training-load-calendar-metric-toggle" data-metric-id="${escapeAttr(d.id)}" ${selected.has(d.id) ? "checked" : ""}>
                   ${renderMetricIconHtml(d.iconUrl, { className: "tl-metric-icon", fallback: `<span class="tl-metric-icon-fallback" aria-hidden="true">&#9679;</span>` })}
-                  <span class="tl-metric-picker-option-label">${escapeHtml(d.label)}</span>
+                  <span class="tl-metric-picker-option-label">${escapeHtml(pickerName(d, all))}</span>
                   ${d.unit ? `<span class="tl-metric-picker-option-unit">${escapeHtml(d.unit)}</span>` : ""}
                 </label>
               `).join("")}

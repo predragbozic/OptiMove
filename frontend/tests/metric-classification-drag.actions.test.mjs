@@ -212,7 +212,7 @@ test("in a club workspace only the club's own active categories take a drop, nev
   assert.deepEqual(targetIds(), [C4]);
   // The tray says it holds the club's own variables, and how a system one is added.
   assert.equal($(".dc-tray h3").textContent, "This club's variables");
-  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /System variables are not listed here: to add one, open it under Variables, in System \(reference\), and choose Add to a category\. Without a mouse, open any variable under Variables and choose Add to a category\./);
+  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /System variables are not listed here: to add one, open it under Variables, in From OptiMove, and choose Add to a category\. Without a mouse, open any variable under Variables and choose Add to a category\./);
   const { over } = await drag(V1, C1);
   assert.equal(over.defaultPrevented, false, "a system category refuses the drag");
   assert.equal(posts().length, 0, "and nothing is sent");
@@ -241,7 +241,7 @@ test("the tray says when it is empty, when only the first 100 are shown, and a f
   asClub();
   tree.categories.push(node({ id: C4, key: "club_work", name: "Club work", ownerScope: "club" }));
   await openCategories();
-  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /This club has no variables of its own yet\. To add a system variable to a category, open it under Variables, in System \(reference\), and choose Add to a category\./);
+  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /This club has no variables of its own yet\. To add a system variable to a category, open it under Variables, in From OptiMove, and choose Add to a category\./);
   asPlatform();
   resetVariables();
   trayItems = [variable()];

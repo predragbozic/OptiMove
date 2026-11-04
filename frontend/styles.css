@@ -18682,6 +18682,85 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .metric-variables-item .item-badge {
   justify-self: start;
 }
+/* From OptiMove (7i-B2, J15 8.2): a row's status, the move card on a copy. */
+.metric-variables-status-chips,
+.metric-variables-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+.metric-variables-status-hidden,
+.metric-variables-status-hiddenByClub,
+.metric-variables-status-noSource {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+.metric-variables-status-used,
+.metric-variables-status-copied,
+.metric-variables-move-moved {
+  background: rgba(31, 111, 104, 0.12);
+  color: var(--accent);
+}
+.metric-variables-move-unknown {
+  background: color-mix(in srgb, var(--tlc-warning, #8a5a00) 14%, transparent);
+  color: var(--tlc-warning, #8a5a00);
+}
+.metric-variables-seeteams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 760px) {
+  .metric-variables-move .data-sources-form-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+.metric-variables-move-refused {
+  background: rgba(162, 59, 59, 0.12);
+  color: var(--danger);
+}
+.metric-variables-move {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.metric-variables-move p,
+.metric-variables-move h3 {
+  margin: 0;
+}
+.metric-variables-move-teams {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.metric-variables-move-teams li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.metric-variables textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  resize: vertical;
+}
 .metric-variables-facts {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

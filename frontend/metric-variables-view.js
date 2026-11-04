@@ -6,6 +6,8 @@ import {
   aggregationLabel, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { isSystemMode } from "./system-variables-data.js";
+import { renderHiddenFilterHtml, renderMoveHtml, renderSystemActionsHtml, renderSystemFormHtml, renderSystemNotesHtml, statusChipsHtml } from "./system-variables-view.js";
 import { iconPickerOpenFor, renderIconPickerHtml } from "./icon-picker.js";
 import { HOME_BACK, variableTileHtml } from "./data-config-tiles.js";
 import { renderDataConfigHomeHtml } from "./data-config-home-view.js";
@@ -39,8 +41,8 @@ export function renderVariablesHtml() {
 function scopeIntro(s, ctx) {
   if (ctx.owner === "system") return "System variables: shared by all clubs. A platform administrator can map any club's source data to them.";
   if (s.scope === "system") {
-    return ctx.view === "coach" ? "System variables, for reference: shared by all clubs and changed only by a platform administrator."
-      : "System variables, for reference: managed in the platform workspace; this club's own mappings cannot target them.";
+    return ctx.view === "coach" ? "OptiMove's ready-made variables, shared by all clubs and changed only by OptiMove. Your club's administrator chooses which ones your teams use."
+      : "OptiMove's ready-made variables. Use one as it is if it measures what you need. Copy it only if your club wants its own name and to decide itself when it changes. Hide the ones you don't need.";
   }
   if (ctx.view === "coach") return "Variables of this team's club, shared by all its teams. As a coach of the team you can rename, archive and restore them; each change applies to every team of the club. An administrator of the club creates them and changes how they are measured.";
   return `Variables of ${escapeHtml(ctx.clubName || "this club")}: this club's own source data can be mapped to them.`;
@@ -63,20 +65,21 @@ function renderListHtml(s, ctx) {
       ${ctx.owner === "club" ? `
         <div class="metric-variables-segmented" role="group" aria-label="Whose variables">
           <button type="button" class="plain-button compact-button ${s.scope === "own" ? "is-active" : ""}" aria-pressed="${s.scope === "own"}" data-action="metric-variables-scope" data-scope="own">This club</button>
-          <button type="button" class="plain-button compact-button ${s.scope === "system" ? "is-active" : ""}" aria-pressed="${s.scope === "system"}" data-action="metric-variables-scope" data-scope="system">System (reference)</button>
+          <button type="button" class="plain-button compact-button ${s.scope === "system" ? "is-active" : ""}" aria-pressed="${s.scope === "system"}" data-action="metric-variables-scope" data-scope="system">From OptiMove</button>
         </div>` : ""}
       <label class="search-field metric-variables-state"><span>Show</span>
         <select data-metric-variables-filter="state">
           ${[["active", "Active"], ["archived", "Archived"], ["all", "Active and archived"]].map(([value, label]) => `<option value="${value}" ${s.stateFilter === value ? "selected" : ""}>${label}</option>`).join("")}
         </select>
       </label>
+      ${ctx.owner === "club" && ctx.view !== "coach" && s.scope === "system" ? renderHiddenFilterHtml(s) : ""}
       ${renderFilterHtml(s)}
     </div>
     ${renderFilterNoteHtml(s, ctx)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading variables...</p>` : ""}
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="metric-variables-reload">Try again</button></div>` : ""}
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">${emptyListText(s, ctx, canCreate)}</p>` : ""}
-    ${list.items.length ? `<ul class="metric-variables-list">${list.items.map(renderListItemHtml).join("")}</ul>` : ""}
+    ${list.items.length ? `<ul class="metric-variables-list">${list.items.map((item) => renderListItemHtml(item, ctx)).join("")}</ul>` : ""}
     ${list.nextCursor ? `<button class="plain-button" type="button" data-action="metric-variables-more" ${list.loadingMore ? "disabled" : ""}>${list.loadingMore ? "Loading..." : "Show more"}</button>` : ""}
   `;
 }
@@ -84,17 +87,17 @@ function renderListHtml(s, ctx) {
 function emptyListText(s, ctx, canCreate) {
   if (s.filter) {
     if (s.stateFilter === "archived") return "No archived variables here.";
-    if (ctx.owner === "club" && s.scope === "own") return "No variables of this club here. System variables placed here are under System (reference).";
-    return ctx.owner === "club" ? "No system variables here." : "No variables here yet.";
+    if (ctx.owner === "club" && s.scope === "own") return "No variables of this club here. OptiMove's ready-made variables are under From OptiMove.";
+    return ctx.owner === "club" ? "No OptiMove variables here." : "No variables here yet.";
   }
   if (s.stateFilter === "archived") return "No archived variables.";
-  if (ctx.owner === "club" && s.scope === "system") return "There are no system variables yet.";
+  if (ctx.owner === "club" && s.scope === "system") return s.hidden === "only" ? "Your club has hidden none of OptiMove's variables." : "There are no OptiMove variables here yet.";
   if (ctx.view === "coach") return "This club has no variables of its own yet. An administrator of the club creates them.";
-  if (ctx.owner === "club") return "This club has no variables of its own yet. Check System (reference) first (a platform administrator maps this club's data to them), and create one here only for a measure that list does not have.";
+  if (ctx.owner === "club") return "This club has no variables of its own yet. Look in From OptiMove first: use one as it is, or copy it. Create one here only for a measure that list does not have.";
   return canCreate ? "No variables yet. Create the first one with New variable." : "No variables yet.";
 }
 
-function renderListItemHtml(item) {
+function renderListItemHtml(item, ctx) {
   const current = item.currentVersion || {};
   const facts = [
     current.unit ? escapeHtml(current.unit) : "",
@@ -110,6 +113,7 @@ function renderListItemHtml(item) {
         <span class="metric-variables-item-name">${cut(item, item.label)}${item.shortLabel ? ` <span class="muted">(${escapeHtml(item.shortLabel)})</span>` : ""}</span>
         <span class="metric-variables-item-facts muted">${facts}</span>
         ${item.state === "archived" ? `<span class="item-badge">Archived</span>` : ""}
+        ${ctx?.owner === "club" ? statusChipsHtml(item) : ""}
       </button>
     </li>
   `;
@@ -127,6 +131,9 @@ function renderDetailHtml(s, ctx) {
   // never worked out here from a role.
   const actions = item.actions || [];
   const reduced = ctx.view === "coach";
+  // OptiMove's own variable seen from a club's administrator: its acts are the
+  // server's `club` block and `actions` (7i-B2), not the platform's.
+  const clubSystem = ctx.owner === "club" && item.ownerScope === "system";
   return `
     ${back}
     <div class="metric-variables-head">
@@ -137,9 +144,11 @@ function renderDetailHtml(s, ctx) {
           ${item.shortLabel ? `<p class="muted">Short name: ${escapeHtml(item.shortLabel)}</p>` : ""}
         </div>
       </div>
-      ${renderActionsHtml(actions)}
+      ${clubSystem ? renderSystemActionsHtml(item, actions, s.sys.mappings) : renderActionsHtml(actions)}
     </div>
     ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
+    ${renderSystemNotesHtml(item, actions, s.sys.mappings)}
+    ${ctx.owner === "club" && ctx.view !== "coach" && item.ownerScope === "club" ? renderMoveHtml(s.sys.move, item) : ""}
     ${item.state === "archived" ? `<p class="muted">${reduced
       ? "Archived: kept with its recorded values and its history; no new values can be entered for it until it is restored."
       : "Archived: kept with its recorded values and its history; until it is restored, no new values can be entered for it, it gets no new version and no new mapping can use it."}</p>` : ""}
@@ -190,7 +199,7 @@ function actionsNoteHtml(item, actions, ctx) {
   const coach = ctx.view === "coach";
   if (item.editable === false) {
     if (item.state !== "active") return "";
-    return `<p class="muted">${coach ? "Read only: system variables are shared by all clubs and changed only by a platform administrator." : "Read only here: system variables are changed in the platform workspace."}</p>`;
+    return `<p class="muted">${coach ? "Read only: system variables are shared by all clubs and changed only by a platform administrator." : ctx.owner === "club" ? "OptiMove changes this variable; your club cannot edit it." : "Read only here: system variables are changed in the platform workspace."}</p>`;
   }
   // Only an active mapping takes Archive away from an active variable (J3b.2).
   if (item.state === "active" && !actions.includes("archive")) {
@@ -326,6 +335,7 @@ function renderConditionHtml(form) {
 
 function renderFormHtml(s, ctx) {
   const form = s.form;
+  if (isSystemMode(form.mode)) return renderSystemFormHtml(form);
   if (CHANGE_MODES.includes(form.mode)) return renderChangeFormHtml(form, ctx);
   const create = form.mode === "create";
   const locked = form.busy || form.unconfirmed;

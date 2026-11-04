@@ -131,7 +131,7 @@ test("a team workspace of a club is offered the screen in the coach's view; a te
   assert.equal(variablesContext().view, "admin");
 });
 
-test("coach: the list says what a coach may do, offers This club and System (reference), and no New variable", async () => {
+test("coach: the list says what a coach may do, offers This club and From OptiMove, and no New variable", async () => {
   await loadVariablesSection(render);
   assert.deepEqual(gets(), [`${BASE}?scope=own&state=active`]);
   assert.match(text(), /Variables of this team's club, shared by all its teams\. As a coach of the team you can rename, archive and restore them/);
@@ -140,7 +140,7 @@ test("coach: the list says what a coach may do, offers This club and System (ref
   assert.match(text(), /Total distance \(TotDist\)/);
   assert.match(text(), /shared by all its teams\. As a coach of the team you can rename, archive and restore them; each change applies to every team of the club\./);
   await click('[data-action="metric-variables-scope"][data-scope="system"]');
-  assert.match(text(), /System variables, for reference: shared by all clubs and changed only by a platform administrator\./);
+  assert.match(text(), /OptiMove's ready-made variables, shared by all clubs and changed only by OptiMove\./);
   current = reduced();
   respond = (call) => (call.url.startsWith(`${BASE}?`) ? { status: 200, body: { variables: [], nextCursor: null } } : { status: 404, body: { error: "notFound" } });
   resetToList();

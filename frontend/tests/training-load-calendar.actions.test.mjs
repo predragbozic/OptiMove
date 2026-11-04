@@ -472,6 +472,43 @@ test("toggling a metric in the picker materializes the smart default and then ad
   assert.ok(!cal.metricPicker.selectedIds.includes("def-a"));
 });
 
+test("7i-B2: the Choose metrics picker leaves out what the club hides, but a hidden one already shown can still be unchecked", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: activityDetailPayload({ facts: [metricValueFact("ath-1", { metricDefinitionId: "def-hidden" })] }) });
+  cal.metricPicker.open = true;
+  cal.metricPicker.definitions = [
+    { id: "def-hidden", label: "Hidden one", shortLabel: "H", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: true },
+    { id: "def-other-hidden", label: "Other hidden", shortLabel: "O", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: true },
+    { id: "def-shown", label: "Shown one", shortLabel: "S", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: false },
+  ];
+  cal.metricPicker.selectedIds = ["def-hidden"];
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("Hidden one"), "a hidden variable that is checked stays, so it can be unchecked");
+  assert.ok(!html.includes("Other hidden"), "a hidden variable that is not checked is not offered");
+  assert.ok(html.includes("Shown one"));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-metric-toggle", metricId: "def-other-hidden" }), { renderTrainingLoad });
+  assert.ok(!cal.metricPicker.selectedIds.includes("def-other-hidden"), "a hidden variable is not added");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-metric-toggle", metricId: "def-hidden" }), { renderTrainingLoad });
+  assert.ok(!cal.metricPicker.selectedIds.includes("def-hidden"), "a hidden variable already shown is removed");
+});
+
+test("7i-B2: before anything is picked, a hidden column shown by default is listed (checked-able); a hidden one with no value is not", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: activityDetailPayload({ facts: [metricValueFact("ath-1", { metricDefinitionId: "def-hidden" })] }) });
+  cal.metricPicker.open = true;
+  cal.metricPicker.definitions = [
+    { id: "def-hidden", label: "Hidden one", shortLabel: "H", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: true },
+    { id: "def-other-hidden", label: "Other hidden", shortLabel: "O", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: true },
+    { id: "def-shown", label: "Shown one", shortLabel: "S", unit: "", iconUrl: null, domainLabel: null, ownerScope: "system", hiddenInClub: false },
+  ];
+  assert.equal(cal.metricPicker.selectedIds, null);
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("Hidden one"));
+  assert.ok(!html.includes("Other hidden"));
+});
+
 // ------------------------------------------------------------
 // 10. A large number of metrics — never rendered all at once by default
 // ------------------------------------------------------------

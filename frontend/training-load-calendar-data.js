@@ -380,6 +380,8 @@ export async function loadCalendarMetricDefinitions() {
       unit: d.unit,
       iconUrl: d.icon_url,
       domainLabel: groupByDefId.get(d.id) || null,
+      ownerScope: d.ownerScope || d.owner_scope || null,
+      hiddenInClub: d.hiddenInClub === true,
     }));
     metricDefinitionsWorkspaceKey = contextKey;
     nav.loading = false;

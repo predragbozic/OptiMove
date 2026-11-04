@@ -4,6 +4,7 @@ import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-displ
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
+import { pickable, pickerName } from "./metric-picker-visibility.js";
 
 const WIDGET_TYPES = [
   { key: "kpi", label: "KPI", hint: "One number" },
@@ -620,7 +621,7 @@ function renderPanelMetricListHtml(panel) {
   const picker = state.trainingLoad.analysis.metricPicker;
   const search = panel.search.trim().toLowerCase();
   const builtIns = BUILT_IN_SERIES.filter((b) => !search || `${b.label} ${b.unit}`.toLowerCase().includes(search));
-  const definitions = (picker.definitions || []).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
+  const definitions = pickable(picker.definitions, { chosen: [panel.metric?.id] }).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
   const groups = new Map();
   for (const d of definitions) {
     const key = d.domainLabel || d.categoryLabel || "Other metrics";
@@ -646,7 +647,7 @@ function renderPanelMetricListHtml(panel) {
           <p class="eyebrow">${escapeHtml(group)}</p>
           ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isSelected({ kind: "metric", id: d.id }) ? "is-selected" : ""}" aria-pressed="${isSelected({ kind: "metric", id: d.id }) ? "true" : "false"}" data-action="training-load-analysis-panel-pick-metric" data-metric-id="${escapeAttr(d.id)}">
             ${renderMetricIconHtml(d.iconUrl, { fallback: `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>` })}
-            <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.categoryLabel].filter(Boolean).join(" · "))}</small></span>
+            <span><strong>${escapeHtml(pickerName(d, picker.definitions))}</strong><small>${escapeHtml([d.unit, d.valueType, d.categoryLabel].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>
       `).join("")}
@@ -747,7 +748,7 @@ function editorMetricLabel(metric, displayLabel = "") {
 function renderMetricPickerHtml(entry) {
   const picker = state.trainingLoad.analysis.metricPicker;
   const search = picker.search.trim().toLowerCase();
-  const definitions = (picker.definitions || []).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
+  const definitions = pickable(picker.definitions, { chosen: [entry.metric?.kind === "metric" ? entry.metric.id : null] }).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
   const groups = new Map();
   for (const d of definitions) {
     const key = d.domainLabel || d.categoryLabel || "Other";
@@ -771,7 +772,7 @@ function renderMetricPickerHtml(entry) {
           <p class="eyebrow">${escapeHtml(group)}</p>
           ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isMetric(d.id) ? "is-active" : ""}" aria-pressed="${isMetric(d.id) ? "true" : "false"}" data-action="training-load-analysis-series-bind-metric" data-series-key="${escapeAttr(entry.key)}" data-metric-id="${escapeAttr(d.id)}">
             ${renderMetricIconHtml(d.iconUrl, { fallback: `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>` })}
-            <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
+            <span><strong>${escapeHtml(pickerName(d, picker.definitions))}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>
       `).join("")}

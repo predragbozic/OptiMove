@@ -57,6 +57,9 @@ export function emptyVariablesState() {
     generation: 0,
     scope: "own",
     stateFilter: "active",
+    // From OptiMove (a club workspace): "exclude" shows the variables the
+    // club has not hidden, "only" the hidden ones, "include" both (7i-B2).
+    hidden: "exclude",
     // The start screen and its screens (layout C, PR-1): "home", "variables",
     // "domains", "categories"; the list's filter by one domain or category
     // ({ kind, id }); the domain or category open.
@@ -65,6 +68,10 @@ export function emptyVariablesState() {
     node: null,
     classification: { tree: null, loaded: false, loading: false, error: null },
     list: { items: [], nextCursor: null, loaded: false, loading: false, loadingMore: false, error: null },
+    // 7i-B2: what the From OptiMove screens read besides the variable itself -
+    // the system mappings of the open system variable ("Use for your teams"),
+    // and for a copy the teams still on OptiMove's variable ("Move your teams").
+    sys: { mappings: { variableId: null, state: "idle", rows: [] }, move: null },
     detail: { id: null, variable: null, nextCursor: null, loading: false, loadingMore: false, error: null },
     form: null,
     notice: "",
@@ -110,8 +117,11 @@ function teamBasis(user, clubId) {
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
-export function listUrl({ scope, stateFilter, filter = null, cursor = null }) {
+export function listUrl({ scope, stateFilter, hidden = "exclude", filter = null, cursor = null }) {
   const params = new URLSearchParams({ scope, state: stateFilter });
+  // The server accepts `hidden` only on the system scope of a club (or a team
+  // of a club); anywhere else it is a 400.
+  if (scope === "system") params.set("hidden", hidden);
   // C6: at most one of a domain (directly or through its categories) and a category.
   if (filter) params.set(filter.kind === "domain" ? "domainId" : "categoryId", filter.id);
   if (cursor) params.set("cursor", cursor);

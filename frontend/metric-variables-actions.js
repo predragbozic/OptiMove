@@ -18,6 +18,10 @@ import {
   errorInfo, fetchKeySuggestion, fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, rebaseRename, renameVariable,
   replaceName, restoreVariable, variablesContext, variablesState,
 } from "./metric-variables-data.js";
+import {
+  SYSTEM_WRITES, buildSystemRequest, clubFacts, hiddenFilterValue, isSystemMode, openSystemForm, savedNotice, systemCheckSettles, systemCodeText,
+} from "./system-variables-data.js";
+import { dropSystemReadCache, ensureMove, ensureSystemMappings, moveNeedsAsk, sendMove } from "./system-variables-actions.js";
 import { ensureSourceFieldsList } from "./source-fields-actions.js";
 import { ensureMappingsList } from "./metric-mappings-actions.js";
 import { mappingsContext } from "./metric-mappings-data.js";
@@ -45,12 +49,12 @@ export async function loadVariables(render, { more = false } = {}) {
   const list = s.list;
   if (more && (!list.nextCursor || list.loadingMore)) return;
   const generation = s.generation;
-  const query = { scope: s.scope, stateFilter: s.stateFilter, filter: s.filter, cursor: more ? list.nextCursor : null };
+  const query = { scope: s.scope, stateFilter: s.stateFilter, hidden: s.hidden, filter: s.filter, cursor: more ? list.nextCursor : null };
   if (more) list.loadingMore = true; else { list.loading = true; list.error = null; }
   render();
   try {
     const data = await fetchVariables(query);
-    if (variablesState().generation !== generation || s.scope !== query.scope || s.stateFilter !== query.stateFilter || s.filter !== query.filter) return;
+    if (variablesState().generation !== generation || s.scope !== query.scope || s.stateFilter !== query.stateFilter || s.hidden !== query.hidden || s.filter !== query.filter) return;
     list.items = more ? [...list.items, ...(data.variables || [])] : data.variables || [];
     list.nextCursor = data.nextCursor || null;
     list.loaded = true;
@@ -93,6 +97,23 @@ export async function loadVariable(id, render, { more = false } = {}) {
     if (variablesState().generation === generation && d.id === id) { d.loading = false; d.loadingMore = false; }
   }
   render();
+  if (!more) await loadSystemFacts(id, render);
+}
+
+// What the From OptiMove screens need besides the variable (7i-B2): for an
+// OptiMove variable with a data source, its system mappings ("Use for your
+// teams", "See the teams"); for a club's own variable, whether it is a copy
+// and which teams still use OptiMove's ("Move your teams to this copy").
+// Administrators of a club only; the server decides again on every request.
+async function loadSystemFacts(id, render) {
+  const s = variablesState();
+  const item = s.detail.variable;
+  const ctx = variablesContext();
+  if (!item || item.id !== id || ctx?.owner !== "club" || ctx.view !== "admin") return;
+  if (s.sys.move && s.sys.move.copyId !== id) s.sys.move = null;
+  const facts = clubFacts(item);
+  if (facts?.admin && item.state === "active" && facts.hasDataSource) await ensureSystemMappings(id, render);
+  else if (item.ownerScope === "club" && item.state === "active") await ensureMove(item, render);
 }
 
 // The start screen (layout C): its counts come from the reads the screens
@@ -112,6 +133,7 @@ export function loadDataConfigHome(render) {
 // Entering the screen: the list is read when it is not there yet.
 export function loadVariablesSection(render) {
   const s = variablesState();
+  dropSystemReadCache(); // coming back from another screen: what a copy or a link was is read again
   if (!variablesContext()) { render(); return Promise.resolve(); }
   if (s.view === "home" && !s.form) return loadDataConfigHome(render);
   if (s.view === "domains" && !s.form) return loadClassification(render);
@@ -140,6 +162,7 @@ export function variablesMayBeLeft() {
   // A drop on the Categories screen (PR-2) in flight or not confirmed: asked
   // first, whether a form is open or not.
   if (dropNeedsAsk() && !confirmAsk(dropLeaveQuestion())) return false;
+  if (moveNeedsAsk() && !confirmAsk("Teams are being moved, or a move is not confirmed. Leave without checking? Look at the copy's teams later.")) return false;
   if (!form) return true;
   if (form.busy) return confirmAsk(`${isClassificationMode(form.mode) ? "A change" : "A variable"} is still being saved. Leave anyway? Its result will not be shown.`);
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");
@@ -160,13 +183,14 @@ const DISCARD_QUESTION = {
   archive: "Discard the archive you have not confirmed?",
   restore: "Discard the restore you have not confirmed?",
   icon: "Discard the icon you have not saved?",
+  copy: "Discard the copy you have not made?",
 };
 // Closing or reloading the page while a save is in flight or not confirmed
 // loses the only view of its outcome; unsaved values are lost too.
 export function variablesUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "variables") return false;
   const form = state.trainingLoad.variables?.form;
-  return Boolean((form && (form.busy || form.unconfirmed || form.dirty)) || (state.trainingLoad.variables && dropNeedsAsk()));
+  return Boolean((form && (form.busy || form.unconfirmed || form.dirty)) || (state.trainingLoad.variables && (dropNeedsAsk() || moveNeedsAsk())));
 }
 function leaveForm({ keepDrop = false } = {}) {
   if (!variablesMayBeLeft()) return false;
@@ -251,6 +275,56 @@ export async function handleVariablesAction(action, { render }) {
     }
     return true;
   }
+  // 7i-B2 (J15 8.2): copy, hide and show a system variable, only where the
+  // server's `actions` names it for this caller in this club.
+  const systemOpen = { "metric-variables-copy-open": "copy", "metric-variables-hide-open": "hide", "metric-variables-show-open": "show" }[type];
+  if (systemOpen) {
+    const variable = s.detail.variable;
+    if (s.form || !variable || s.detail.loading || !(variable.actions || []).includes(systemOpen) || !clubFacts(variable)) return true;
+    s.notice = "";
+    s.form = openSystemForm(systemOpen, { variable });
+    render();
+    focusFirstField();
+    if (systemOpen === "copy") void loadLinkCount(s.form, render);
+    return true;
+  }
+  if (type === "metric-variables-use-reload") {
+    if (s.detail.variable) await ensureSystemMappings(s.detail.variable.id, render);
+    return true;
+  }
+  const move = s.sys.move;
+  if (type === "metric-variables-move-open") {
+    if (!move || move.state !== "ready" || move.busy || s.form || move.teams.some((t) => !t.targetVersionId)) return true;
+    move.review = true;
+    render();
+    return true;
+  }
+  if (type === "metric-variables-move-back") {
+    if (!move || move.busy || move.unconfirmed) return true;
+    move.review = false;
+    move.reasonError = "";
+    render();
+    return true;
+  }
+  if (type === "metric-variables-move-confirm") { await sendMove(render); return true; }
+  if (type === "metric-variables-move-check") { await sendMove(render, { check: true }); return true; }
+  if (type === "metric-variables-move-reload") {
+    const copy = s.detail.variable;
+    if (copy) { s.sys.move = null; dropSystemReadCache(); await ensureMove(copy, render); }
+    return true;
+  }
+  if (type === "metric-variables-hide-original") {
+    const id = action.dataset.variableId || "";
+    if (!id || s.form || !leaveForm()) return true;
+    s.sys.move = null;
+    await loadVariable(id, render);
+    const variable = s.detail.variable;
+    if (variable?.id === id && (variable.actions || []).includes("hide") && clubFacts(variable)) {
+      s.form = openSystemForm("hide", { variable });
+      render();
+    }
+    return true;
+  }
   if (type === "metric-variables-name-replace") {
     const form = s.form;
     const field = action.dataset.mvName || "";
@@ -269,7 +343,10 @@ export async function handleVariablesAction(action, { render }) {
       return true;
     }
     if (form?.unconfirmed) {
-      if (CHANGE_MODES.includes(form.mode) && form.variableId) {
+      if (isSystemMode(form.mode) && form.variableId) {
+        s.notice = "The result was not checked. The variable below is as it is now; look under This club for a copy.";
+        await loadVariable(form.variableId, render);
+      } else if (CHANGE_MODES.includes(form.mode) && form.variableId) {
         s.notice = "The result was not checked. The variable below is as it is saved now.";
         await loadVariable(form.variableId, render);
       } else if (form.mode === "version" && form.variableId) {
@@ -294,6 +371,7 @@ export async function handleVariablesAction(action, { render }) {
   if (type === "metric-variables-back") {
     if (!leaveForm()) return true;
     s.detail = { ...emptyVariablesState().detail };
+    s.sys.move = null;
     s.notice = "";
     if (!s.list.loaded) await loadVariables(render); else render();
     toTitle();
@@ -390,12 +468,27 @@ export function handleVariablesInput(target, { render }) {
     void loadVariables(render);
     return true;
   }
+  if (filter && filter.dataset.metricVariablesFilter === "hidden") {
+    const next = hiddenFilterValue(filter.value);
+    if (next === s.hidden) return true;
+    if (!leaveForm()) { filter.value = s.hidden; return true; }
+    s.hidden = next;
+    s.list = { ...emptyVariablesState().list };
+    void loadVariables(render);
+    return true;
+  }
   if (filter) {
     if (filter.value === s.stateFilter) return true;
     if (!leaveForm()) { filter.value = s.stateFilter; return true; }
     s.stateFilter = ["active", "archived", "all"].includes(filter.value) ? filter.value : "active";
     s.list = { ...emptyVariablesState().list };
     void loadVariables(render);
+    return true;
+  }
+  const moveReason = target.closest?.("[data-mv-move-reason]");
+  if (moveReason) {
+    const move = s.sys?.move;
+    if (move && !move.busy && !move.unconfirmed) { move.reason = moveReason.value; if (move.reasonError) move.reasonError = ""; }
     return true;
   }
   if (handleClassificationInput(target)) return true;
@@ -499,7 +592,7 @@ export async function submitVariablesForm(_formElement, { render }) {
     await submitClassificationForm({ render, load: LOADERS });
     return;
   }
-  const { body, errors, unchanged } = buildRequest(form);
+  const { body, errors, unchanged } = isSystemMode(form.mode) ? buildSystemRequest(form) : buildRequest(form);
   form.errors = errors;
   form.error = "";
   if (unchanged) {
@@ -528,6 +621,7 @@ const WRITES = {
   archive: (form) => archiveVariable(form.variableId, form.sentBody),
   restore: (form) => restoreVariable(form.variableId, form.sentBody),
   icon: (form) => changeVariableIcon(form.variableId, form.sentBody),
+  ...SYSTEM_WRITES,
 };
 
 async function send(render) {
@@ -558,7 +652,8 @@ function refused(form, info, render, { check = false } = {}) {
   // A lost answer, or a Check result answered before the server read its
   // request record: what happened to the first write is still not known, so
   // nothing here may say "Nothing was saved" or unlock the form.
-  if (outcomeUnknown(info) || (check && !checkSettles(info))) {
+  const system = isSystemMode(form.mode);
+  if (outcomeUnknown(info) || (check && !(system ? systemCheckSettles(info) : checkSettles(info)))) {
     form.unconfirmed = true;
     form.checkNote = check ? checkNoteText(info) : "";
     render();
@@ -566,7 +661,9 @@ function refused(form, info, render, { check = false } = {}) {
   }
   form.unconfirmed = false;
   form.checkNote = "";
-  if (info.code === "invalid_unit") form.errors.unit = codeText(info);
+  if (system && (info.code === "key_required" || info.code === "key_taken")) form.errors.key = systemCodeText(info, form);
+  else if (system && info.code === "label_required") form.errors.label = systemCodeText(info, form);
+  else if (info.code === "invalid_unit") form.errors.unit = codeText(info);
   else if (info.code === "invalid_condition") form.errors.conditionKind = codeText(info);
   else if (info.code === "key_required" || info.code === "key_taken") {
     form.errors.key = codeText(info);
@@ -594,18 +691,32 @@ function refused(form, info, render, { check = false } = {}) {
     void loadVariable(id, render);
     return;
   }
-  form.error = codeText(info, form.mode);
+  // A system variable that changed under the card (copied by someone else,
+  // changed by OptiMove, used by a team again): the card is closed and the
+  // variable read again, so the coach starts from how it is now.
+  if (system && SYSTEM_CLOSES.has(info.code)) {
+    const id = form.variableId;
+    s.form = null;
+    s.notice = systemCodeText(info, form);
+    void loadVariable(id, render);
+    return;
+  }
+  form.error = system ? systemCodeText(info, form) : codeText(info, form.mode);
   render();
 }
+const SYSTEM_CLOSES = new Set(["already_copied", "source_version_changed", "source_not_active", "variable_in_use", "copy_source_not_system", "hide_not_system"]);
 const CLOSES_CHANGE = new Set(["variable_changed", "variable_not_active", "variable_active", "variable_pinned", "restore_by_admin"]);
 
 async function saved(form, data, render) {
+  if (isSystemMode(form.mode)) dropSystemReadCache();
   const s = variablesState();
   s.form = null;
   s.list = { ...emptyVariablesState().list };
   const variable = data?.variable || null;
   const id = variable?.id || data?.variableId || form.variableId;
-  if (form.mode === "create") {
+  if (isSystemMode(form.mode)) {
+    s.notice = savedNotice(form.mode, data, form.variableLabel);
+  } else if (form.mode === "create") {
     s.notice = data?.readError ? "The variable was created, but it could not be read back. Open it from the list." : `The variable ${variable?.label || ""} was created.`;
   } else if (CHANGE_MODES.includes(form.mode)) {
     if (form.mode === "icon") {
@@ -621,4 +732,17 @@ async function saved(form, data, render) {
   }
   if (id) await loadVariable(id, render);
   else await loadVariables(render);
+}
+
+// The copy card says how many GPEXE field links the copy comes with (J15 8.2):
+// OptiMove's active mapping versions of this variable, counted from the
+// mappings read (system rows of the variable that have an active version). A
+// read that fails leaves the count out of the sentence; the copy itself is
+// decided by the server.
+async function loadLinkCount(form, render) {
+  const generation = variablesState().generation;
+  await ensureSystemMappings(form.variableId, render);
+  const m = variablesState().sys.mappings;
+  form.links = m.variableId === form.variableId && m.state === "ready" ? { state: "ready", count: m.rows.length } : { state: "error", count: null };
+  if (variablesState().generation === generation && variablesState().form === form) render();
 }

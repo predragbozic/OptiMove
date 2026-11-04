@@ -240,9 +240,37 @@ export function teamNameOf(teamId, s = mappingsState()) {
   return s.org.teams.find((t) => t.id === teamId)?.name || null;
 }
 
+// "Use for your teams" and "See the teams using it" on a variable of
+// OptiMove's (7i-B2, J15 8.2): the Variables screen asks for this mapping's
+// detail, and for its switch-on panel when a version is named; the section
+// switch then runs loadMappingsSection, which carries the request out.
+export function requestMappingsOpen({ mappingId, versionId = null, from = null }) {
+  const s = mappingsState();
+  if (!mappingId) return;
+  s.notice = "";
+  s.view = "detail";
+  s.detail = { ...emptyMappingsState().detail, id: mappingId };
+  s.teams = { ...emptyMappingsState().teams };
+  s.panel = null;
+  s.write = null;
+  s.pending = { versionId, from };
+}
+
 export function loadMappingsSection(render) {
   const s = mappingsState();
   if (!mappingsContext()) { render(); return Promise.resolve(); }
+  if (s.pending && s.detail.id) {
+    const { versionId, from } = s.pending;
+    s.pending = null;
+    const mappingId = s.detail.id;
+    return (async () => {
+      await Promise.all([loadRefs(render), loadMapping(mappingId, render)]);
+      if (versionId && s.detail.id === mappingId) {
+        await handleMappingsAction({ dataset: { action: "metric-mappings-switch-on-open", versionId } }, { render });
+        if (s.panel?.kind === "switchOn" && from) { s.panel.from = from; render(); }
+      }
+    })();
+  }
   if (s.view === "detail" && s.detail.id && !s.write) return Promise.all([loadRefs(render), loadMapping(s.detail.id, render)]);
   if (s.view === "flow") return loadRefs(render);
   if (!s.list.loaded && !s.list.loading) return Promise.all([loadMappings(render), loadRefs(render)]);
