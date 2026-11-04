@@ -259,6 +259,9 @@ router.get("/definitions", async (req, res, next) => {
     if (req.query.state !== undefined && !["active", "archived"].includes(req.query.state)) return res.status(400).json({ error: "Invalid state." });
     if (req.query.ownerScope !== undefined && !OWNER_SCOPES.has(req.query.ownerScope)) return res.status(400).json({ error: "Invalid ownerScope." });
     if (req.query.cursorId !== undefined && !validUuid(req.query.cursorId)) return res.status(400).json({ error: "Invalid cursorId." });
+    // v55 (O7): the list is shared by several screens. Only the dashboard series picker asks to be offered the variables
+    // of the active team workspace's club (purpose=dashboardSeries); every other caller gets what it got before.
+    if (req.query.purpose !== undefined && req.query.purpose !== "dashboardSeries") return res.status(400).json({ error: "Invalid purpose." });
     const cursor = req.query.cursorLabel && req.query.cursorId ? { label: req.query.cursorLabel, id: req.query.cursorId } : null;
     // v53 (J15 section 4.4): the club whose hides flag the system rows,
     // resolved once from the active workspace - a club workspace's club or a
@@ -269,6 +272,7 @@ router.get("/definitions", async (req, res, next) => {
     const hideClubId = workspace?.type === "club" ? workspace.scopeId ?? null : workspace?.type === "team" ? workspace.clubId ?? null : null;
     const { rows, nextCursor } = await listDefinitions(req, {
       search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
+      teamClubId: req.query.purpose === "dashboardSeries" && workspace?.type === "team" ? workspace.clubId ?? null : null,
     });
     res.json({ rows, nextCursor });
   } catch (error) {

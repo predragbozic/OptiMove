@@ -1541,7 +1541,8 @@ async function fetchAnalysisMetricDefinitions(picker, contextKey) {
     const rows = [];
     let cursor = null;
     for (let page = 0; page < 200; page += 1) {
-      const query = cursor ? `?limit=100&cursorLabel=${encodeURIComponent(cursor.label)}&cursorId=${encodeURIComponent(cursor.id)}` : "?limit=100";
+      // purpose=dashboardSeries: in a team's workspace the list also offers the team's club's variables (v55, O7).
+      const query = cursor ? `?limit=100&purpose=dashboardSeries&cursorLabel=${encodeURIComponent(cursor.label)}&cursorId=${encodeURIComponent(cursor.id)}` : "?limit=100&purpose=dashboardSeries";
       const data = await api(`/api/training-load/metrics/definitions${query}`);
       rows.push(...(data.rows || []));
       if (!data.nextCursor) break;
