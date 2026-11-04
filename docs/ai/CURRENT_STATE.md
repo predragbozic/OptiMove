@@ -3879,6 +3879,7 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
   suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
   was not recorded. Not fixed.
+- **Found while checking U1 (2026-11-04), reproduced identically on a clean main (frontend of `0022f579`); causes not investigated:** backend `gpexe-client.test.mjs` and `gpexe-rest-v1-adapter-reads.test.mjs`; frontend `builder-performance-fixes` (2 tests), `exercise-editor-thumbnail` (4), `exercise-media-thumbnail` (8), `exercise-ownership` (1), `exercise-personalization` (1) and, besides the X5a/X5b hang above, 2 tests of `training-load.actions`. Whether they depend on the Node version (22 in the cloud container) was not checked.
 - `backend/tests/activity-roster-5a2.test.mjs` — test "56. migration v26: applied by the runner
   on v25, the rollback returns the schema to v25 exactly…" fails on the digest of
   `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`

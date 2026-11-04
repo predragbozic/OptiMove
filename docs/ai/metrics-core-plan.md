@@ -1435,6 +1435,7 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
 - **Order:** U1 (the daily screen, the poll fix, 50 per confirmation) → U2 (the per-team switch with its conditions,
   the pair by the club admin, migration, ★★) → U3 (suggested pairs) → U4 (the five-step guide, "Use OptiMove
   variables") → U5 (correcting a wrong link in the app, migration, ★★). Later: sets, the nightly check, J18.
+- **Done:** U1, PR #364 (`76af5f52`, 2026-11-04; `docs/ai/gps-import-flow-contract.md` section 7). U2a: plan in `docs/ai/u2a-club-admin-pair-plan.md`.
 - The import switch stays off and no check or import runs until the owner orders the pilot. The legal gate before U3
   is closed by C123; a minor athlete would reopen it.
 
