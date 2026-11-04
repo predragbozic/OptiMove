@@ -5,6 +5,7 @@
 // the screen sends (exact bodies, one write at a time, one request key per
 // attempt) and what it shows (statuses, acts by state, every sentence, a lost
 // answer checked by the very same request) are proved.
+import { dropSystemReadCache } from "../system-variables-actions.js";
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -143,6 +144,7 @@ function serve(call) {
 }
 
 beforeEach(() => {
+  dropSystemReadCache();
   resetVariables();
   resetMappings();
   freshDb();
@@ -584,6 +586,52 @@ test("a copy no team of OptiMove's variable uses offers to hide OptiMove's varia
   await click('[data-action="metric-variables-hide-original"]');
   await settle();
   assert.match(text(), /Hide Total distance for my club/);
+});
+
+test("a failed lookup of the original on an ordinary club variable shows no error banner", async () => {
+  db.overrides.push({ match: (c) => c.method === "GET" && new URL(c.url, "http://x").searchParams.get("scope") === "system", answer: () => ({ status: 500, body: { error: "internal_error" } }) });
+  await openDetail(COPY);
+  await settle();
+  assert.ok(!/could not be read/.test(text()));
+});
+
+test("opening two variables reads the mappings once, not once per variable", async () => {
+  withTeamsOnOriginal();
+  await openDetail(COPY);
+  await openDetail(SYS);
+  const mappingReads = calls.filter((c) => c.method === "GET" && new URL(c.url, "http://x").pathname === `${BASE}/mappings`).length;
+  assert.equal(mappingReads, 1);
+});
+
+test("while a team's result is not confirmed a direct Move confirm sends nothing", async () => {
+  withTeamsOnOriginal();
+  await openDetail(COPY);
+  await click('[data-action="metric-variables-move-open"]');
+  const reason = $("[data-mv-move-reason]");
+  reason.value = "Moving.";
+  reason.dispatchEvent(new window.Event("input", { bubbles: true }));
+  db.write = (call, path) => (path.includes("/act-2/") ? { throwNetworkError: true } : { status: 409, body: { error: "not_a_copy_of_this_version" } });
+  await click('[data-action="metric-variables-move-confirm"]');
+  const before = posts().length;
+  await act({ action: "metric-variables-move-confirm" });
+  assert.equal(posts().length, before);
+});
+
+test("after a partial move the list before the review names only the teams not moved, and the review says what changes", async () => {
+  withTeamsOnOriginal();
+  await openDetail(COPY);
+  await click('[data-action="metric-variables-move-open"]');
+  assert.match(text(), /These teams stop getting OptiMove's Total distance and start getting this copy/);
+  const reason = $("[data-mv-move-reason]");
+  reason.value = "Moving.";
+  reason.dispatchEvent(new window.Event("input", { bubbles: true }));
+  db.write = (call, path) => (path.includes("/act-1/") ? { status: 200, body: { ended: {}, activation: {}, replayed: false } } : { status: 409, body: { error: "activation_exists" } });
+  await click('[data-action="metric-variables-move-confirm"]');
+  assert.match(text(), /Not moved yet: 1 team/);
+  assert.match(text(), /Try again for 1 team/);
+  await click('[data-action="metric-variables-move-back"]');
+  const listed = text().split("Teams that still use")[1] || "";
+  assert.ok(/Juniors/.test(listed) && !/First team/.test(listed));
 });
 
 test("a club's own variable that is not a copy shows nothing about moving", async () => {

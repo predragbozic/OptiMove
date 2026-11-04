@@ -78,11 +78,11 @@ export function renderSystemNotesHtml(item, actions, sys) {
     if (facts.usedByTeams && !actions.includes("hide")) {
       lines.push("Hide is off while teams use it. Switch it off for your teams first.");
       const rows = sys?.variableId === item.id && sys.state === "ready" ? sys.rows : [];
-      seeTeams = rows.map((row, _i, all) => `<button class="plain-button ghost" type="button" data-action="training-load-section" data-section="mappings" data-mm-open-mapping="${escapeAttr(row.mappingId)}">See the teams using it${all.length > 1 ? `: ${escapeHtml(row.fieldLabel || "data source")}` : ""}</button>`).join(" ");
+      seeTeams = rows.map((row, _i, all) => `<button class="plain-button ghost" type="button" data-action="training-load-section" data-section="mappings" data-mm-open-mapping="${escapeAttr(row.mappingId)}">See the teams using it${all.length > 1 ? `: ${escapeHtml(row.fieldLabel || "data source")}` : ""}</button>`).join("");
     }
   }
   if (facts.hidden && !facts.admin) lines.push("Your club's administrator has hidden this variable. It stays in recorded values and charts already made.");
-  return `${chips ? `<div class="metric-variables-status-line">${chips}</div>` : ""}${lines.map((l) => `<p class="muted">${escapeHtml(l)}</p>`).join("")}${seeTeams ? `<p>${seeTeams}</p>` : ""}`;
+  return `${chips ? `<div class="metric-variables-status-line">${chips}</div>` : ""}${lines.map((l) => `<p class="muted">${escapeHtml(l)}</p>`).join("")}${seeTeams ? `<div class="metric-variables-seeteams">${seeTeams}</div>` : ""}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,9 @@ const REQUIREMENT = { required: "Required", optional: "Optional" };
 const OUTCOME = { moved: "Moved", refused: "Not moved", unknown: "Result not confirmed" };
 
 function moveTeamsHtml(move, { withOutcome }) {
-  return `<ul class="metric-variables-move-teams">${move.teams.map((t) => `
+  // Without the outcomes (the list before the review) a team already moved is not "still" on OptiMove's variable.
+  const teams = withOutcome ? move.teams : move.teams.filter((t) => t.outcome !== "moved");
+  return `<ul class="metric-variables-move-teams">${teams.map((t) => `
     <li><strong>${escapeHtml(t.teamName)}</strong> <span class="muted">${escapeHtml(REQUIREMENT[t.requirement] || "")}${t.fieldLabel ? ` · ${escapeHtml(t.fieldLabel)}` : ""}</span>
       ${withOutcome && t.outcome ? `<span class="item-badge metric-variables-move-${t.outcome}">${escapeHtml(OUTCOME[t.outcome])}</span>` : ""}
       ${t.outcome === "refused" && t.note ? `<span class="metric-variables-field-note" role="alert">${escapeHtml(t.note)}</span>` : ""}
@@ -174,6 +176,8 @@ export function renderMoveHtml(move, item) {
   if (!move || move.copyId !== item.id || move.state === "none") return "";
   if (move.state === "loading") return `<p class="muted" role="status">Looking for the teams that still use OptiMove's variable...</p>`;
   if (move.state === "error") {
+    // Only on a variable known to be a copy: a failed lookup of the original says nothing on an ordinary variable.
+    if (!move.original) return "";
     return `<div class="error" role="alert"><p>The teams that use OptiMove's variable could not be read.</p><button class="plain-button" type="button" data-action="metric-variables-move-reload">Try again</button></div>`;
   }
   const original = escapeHtml(move.original.label);
@@ -198,8 +202,9 @@ export function renderMoveHtml(move, item) {
     </section>`;
   }
   return `<section class="metric-variables-move">${intro}
-    <h3>Move ${pending === 1 ? "1 team" : `${pending} teams`} to this copy</h3>
+    <h3>${move.teams.some((t) => t.outcome === "moved") ? `Not moved yet: ${pending === 1 ? "1 team" : `${pending} teams`}` : `Move ${pending === 1 ? "1 team" : `${pending} teams`} to this copy`}</h3>
     ${moveTeamsHtml(move, { withOutcome: true })}
+    <p>These teams stop getting OptiMove's ${original} and start getting this copy; new sessions fill the copy. There is a short gap while a team is switched over.</p>
     <p>Each team keeps its Required or Optional setting. Sessions already imported stay under OptiMove's ${original}.</p>
     <p>Your existing charts of ${original} get no new points after the move.</p>
     <label class="search-field"><span>Reason</span>
@@ -215,7 +220,7 @@ export function renderMoveHtml(move, item) {
         </div>
       </div>` : `
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="button" data-action="metric-variables-move-confirm" ${move.busy || !pending ? "disabled" : ""}>${move.busy ? "Moving..." : `Move ${pending === 1 ? "1 team" : `${pending} teams`}`}</button>
+        <button class="plain-button data-sources-primary" type="button" data-action="metric-variables-move-confirm" ${move.busy || !pending ? "disabled" : ""}>${move.busy ? "Moving..." : `${move.teams.some((t) => t.outcome === "moved") ? "Try again for" : "Move"} ${pending === 1 ? "1 team" : `${pending} teams`}`}</button>
         <button class="plain-button ghost" type="button" data-action="metric-variables-move-back" ${move.busy ? "disabled" : ""}>Back</button>
       </div>`}
   </section>`;

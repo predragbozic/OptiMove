@@ -18702,6 +18702,21 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   background: rgba(31, 111, 104, 0.12);
   color: var(--accent);
 }
+.metric-variables-move-unknown {
+  background: color-mix(in srgb, var(--tlc-warning, #8a5a00) 14%, transparent);
+  color: var(--tlc-warning, #8a5a00);
+}
+.metric-variables-seeteams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 760px) {
+  .metric-variables-move .data-sources-form-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+}
 .metric-variables-move-refused {
   background: rgba(162, 59, 59, 0.12);
   color: var(--danger);

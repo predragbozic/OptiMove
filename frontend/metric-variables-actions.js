@@ -21,7 +21,7 @@ import {
 import {
   SYSTEM_WRITES, buildSystemRequest, clubFacts, hiddenFilterValue, isSystemMode, openSystemForm, savedNotice, systemCheckSettles, systemCodeText,
 } from "./system-variables-data.js";
-import { ensureMove, ensureSystemMappings, moveNeedsAsk, sendMove } from "./system-variables-actions.js";
+import { dropSystemReadCache, ensureMove, ensureSystemMappings, moveNeedsAsk, sendMove } from "./system-variables-actions.js";
 import { ensureSourceFieldsList } from "./source-fields-actions.js";
 import { ensureMappingsList } from "./metric-mappings-actions.js";
 import { mappingsContext } from "./metric-mappings-data.js";
@@ -309,7 +309,7 @@ export async function handleVariablesAction(action, { render }) {
   if (type === "metric-variables-move-check") { await sendMove(render, { check: true }); return true; }
   if (type === "metric-variables-move-reload") {
     const copy = s.detail.variable;
-    if (copy) { s.sys.move = null; await ensureMove(copy, render); }
+    if (copy) { s.sys.move = null; dropSystemReadCache(); await ensureMove(copy, render); }
     return true;
   }
   if (type === "metric-variables-hide-original") {

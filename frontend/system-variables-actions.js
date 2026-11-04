@@ -29,7 +29,28 @@ async function allPages(fetchPage, pick) {
   // Never a partial list shown as complete.
   throw new Error("too many pages");
 }
-const allMappings = () => allPages((cursor) => fetchMappings(cursor), (d) => (Array.isArray(d?.mappings) ? d.mappings : []));
+// The whole mappings list and the whole system list are read once per short
+// window and generation, not once per opened variable (every club variable an
+// administrator opens looks for its original). A failed read is not kept, and
+// "Try again" starts a fresh one.
+const CACHE_MS = 15000;
+const cache = new Map();
+function cached(name, read, fresh = false) {
+  const generation = variablesState().generation;
+  const hit = cache.get(name);
+  if (!fresh && hit && hit.generation === generation && Date.now() - hit.at < CACHE_MS) return hit.promise;
+  const promise = read();
+  const entry = { generation, at: Date.now(), promise };
+  cache.set(name, entry);
+  promise.catch(() => { if (cache.get(name) === entry) cache.delete(name); });
+  return promise;
+}
+export const dropSystemReadCache = () => cache.clear();
+const allMappings = (fresh = false) => cached("mappings", () => allPages((cursor) => fetchMappings(cursor), (d) => (Array.isArray(d?.mappings) ? d.mappings : [])), fresh);
+const allSystemVariables = (fresh = false) => cached("system", () => allPages(
+  (cursor) => fetchVariables({ scope: "system", stateFilter: "all", hidden: "include", cursor }),
+  (d) => (Array.isArray(d?.variables) ? d.variables : []),
+), fresh);
 
 // ---------------------------------------------------------------------------
 // OptiMove's mappings of one system variable ("Use for your teams")
@@ -81,10 +102,10 @@ const MOVE_TEXT = {
   variable_taken_on_binding: "This team already has this variable at this level.",
   try_again: "The server was busy. This team was not moved. Try again.",
   internal_error: "The server could not move this team. It was not moved. Try again.",
-  request_key_reused: "An earlier move of this team may already be stored. Read the page again.",
+  request_key_reused: "An earlier move of this team may already be stored. Open this variable again to see where the team is now.",
   notFound: "It is not available in this workspace now.",
 };
-const moveText = (info) => MOVE_TEXT[info.code] || (info.status ? "It was not moved: the server refused it." : "No answer from the server.");
+const moveText = (info) => MOVE_TEXT[info.code] || "It was not moved: the server refused it.";
 
 // Settled by a check: the answers the server gives once it has read its
 // request record (every state refusal), not busy, a server error or no access.
@@ -103,21 +124,19 @@ export const emptyMove = (copyId) => ({
 // still on it, each with the copy's active version of the same field.
 export async function ensureMove(copy, render) {
   const s = variablesState();
+  const retry = s.sys.move?.copyId === copy.id && s.sys.move.state === "error";
   if (s.sys.move?.copyId === copy.id && s.sys.move.state !== "error") return;
   const generation = s.generation;
   const move = emptyMove(copy.id);
   s.sys.move = move;
   const stale = () => !live(generation) || s.sys.move !== move;
   try {
-    const system = await allPages(
-      (cursor) => fetchVariables({ scope: "system", stateFilter: "all", hidden: "include", cursor }),
-      (d) => (Array.isArray(d?.variables) ? d.variables : []),
-    );
+    const system = await allSystemVariables(retry);
     if (stale()) return;
     const original = system.find((row) => row?.club?.copyId === copy.id) || null;
     if (!original) { move.state = "none"; render(); return; }
     move.original = { id: original.id, label: original.label || "", state: original.state, actions: Array.isArray(original.actions) ? original.actions : [] };
-    const mappings = await allMappings();
+    const mappings = await allMappings(retry);
     if (stale()) return;
     const originalRows = mappings.filter((m) => m.ownerScope === "system" && m.metricDefinitionId === original.id && m.activeVersionId);
     const copyActive = new Map(mappings.filter((m) => m.ownerScope === "club" && m.metricDefinitionId === copy.id && m.activeVersionId).map((m) => [m.sourceMetric?.id, m.activeVersionId]));
@@ -173,6 +192,8 @@ export async function sendMove(render, { check = false } = {}) {
   const s = variablesState();
   const move = s.sys.move;
   if (!move || move.busy || move.state !== "ready") return;
+  // One command at a time: while a result is not confirmed only Check result is live.
+  if (!check && move.unconfirmed) return;
   const reason = oneLine(move.reason);
   const problem = reasonProblem(reason);
   if (problem) { move.reasonError = problem; render(); return; }

@@ -598,7 +598,9 @@ function renderMetricPickerHtml(nav, detail) {
   // The results keep every name (resultDefinitionList); the picker leaves out
   // what the club hides, unless it is checked (so it can still be unchecked).
   const all = resultDefinitionList(picker.definitions, detail);
-  const definitions = pickable(all, { chosen: [...selected] });
+  // Before the coach picks anything the few default columns (pickedMetricColumns) are shown, hidden ones included: they count as chosen.
+  const shownByDefault = picker.selectedIds === null && all.length <= 4 ? all.map((d) => d.id) : [];
+  const definitions = pickable(all, { chosen: [...selected, ...shownByDefault] });
   const groups = groupDefinitions(definitions, picker.search);
   return `
     <div class="builder-athlete-overlay tl-metric-picker-overlay">
