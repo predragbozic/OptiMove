@@ -165,6 +165,7 @@ const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02",
 // field to the client at all).
 const DEFAULT_CODE_FOR_STATUS = { 400: "invalidRequest", 403: "forbidden", 404: "notFound", 409: "conflict" };
 function respondToServiceError(res, next, error) {
+  if(['outcomeUnknown','cloneUnavailable'].includes(error?.code))return res.status(503).json({error:error.code});
   if (error?.code === 'P4P01') return res.status(409).json({ error: 'pagesClientRequired' });
   if (error?.httpStatus) {
     const code = error.code || DEFAULT_CODE_FOR_STATUS[error.httpStatus] || "requestFailed";

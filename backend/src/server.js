@@ -37,6 +37,8 @@ import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./
 import { createSimpleRuntime, SIMPLE_RUNTIME_PATH, PAGE_SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
 import { createPagesService } from './dashboardPages/service.js';
 import { createPagesRouter } from './dashboardPages/router.js';
+import { createPageAdvancedService } from './dashboardPages/advancedService.js';
+import { createPageAdvancedRouter } from './dashboardPages/advancedRouter.js';
 import { authorizePages, assertPageFilterVisible } from './dashboardPages/access.js';
 import { queryDashboard } from './trainingLoadDashboardQuery.js';
 import { realtimeRouter } from "./realtime.js";
@@ -70,6 +72,7 @@ app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
 if (simpleRuntime.router) app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
 if (simpleRuntime.router) app.use(PAGE_SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
+app.use('/api/training-load/dashboards/:dashboardId/pages/:pageId/advanced', authMiddleware, attachAuthorizationContext, requireAuth, createPageAdvancedRouter({ service: createPageAdvancedService({ pool, authorize: authorizePages, assertFilterVisible: assertPageFilterVisible }) }));
 app.use('/api/training-load/dashboards/:dashboardId/pages', authMiddleware, attachAuthorizationContext, requireAuth, createPagesRouter({ service: createPagesService({ pool, authorize: authorizePages, assertFilterVisible: assertPageFilterVisible, queryDashboard }) }));
 app.use(express.json());
 app.use(authMiddleware);
