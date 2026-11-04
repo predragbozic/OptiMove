@@ -2041,7 +2041,7 @@ test("67. a certain rollback says 'Nothing was saved'; an unknown outcome says i
 // ---------------------------------------------------------------------------
 // 68-71. External review of PR #123 (MEDIUM): archiving the parent club waits
 // for a decision in flight on every basis, and refuses after the archive.
-// Lock order of lock_activity_decider: team -> club -> role -> user.
+// Lock order of lock_activity_decider (v54): team -> club -> user -> role.
 // ---------------------------------------------------------------------------
 test("68. archiving the parent club waits for an in-flight decision of a team coach and of a platform admin", async () => {
   for (const basis of ["team_coach", "platform_admin"]) {

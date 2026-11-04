@@ -42,7 +42,7 @@ const uid = () => crypto.randomBytes(4).toString("hex");
 const one = async (c, sql, params = []) => (await c.query(sql, params)).rows[0];
 
 before(async () => {
-  const migrations = GPEXE_TEST_MIGRATIONS.filter((f) => f !== V54);
+  const migrations = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V54)); // the databases stop BEFORE v54 (a later migration is not applied under it)
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo2", migrations });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
@@ -177,18 +177,35 @@ test("1. today's bodies: the deadlock is reproduced or recorded as not reproduce
   before54 = await raceAll();
   const rows = Object.entries(before54).map(([id, r]) => `${r.deadlock ? "40P01 reproduced   " : "not reproduced    "}${id}`);
   console.log(`LO-2 race on the v53 bodies:\n  ${rows.join("\n  ")}`);
-  // Every first-rights-lock function (v23, v26, v49) locks the role row first today; its race must show the cycle.
-  for (const id of Object.keys(before54).filter((i) => /^v(23|26|49)/.test(i))) assert.equal(before54[id].deadlock, true, `${id}: 40P01 on the body in force`);
+  // Every function locks the role row first (or the users row last) today: the race shows the cycle in all of them.
+  for (const [id, r] of Object.entries(before54)) assert.equal(r.deadlock, true, `${id}: 40P01 on the body in force`);
+});
+
+test("1b. the preflight reads as expected on the v53 database (v53 last, v54 absent, the seven bodies are the old ones)", async () => {
+  const text = await fs.readFile(path.resolve(here, "../../docs/runbooks/rights-locks-users-first-v54-preflight.sql"), "utf8");
+  const blocks = text.split(/^-- \d\. /m).slice(1);
+  assert.equal(blocks.length, 4);
+  for (const [i, block] of blocks.entries()) {
+    const sql = block.split("\n").slice(1).join("\n").trim().replace(/;\s*$/, "");
+    const rows = (await k.query(sql)).rows;
+    assert.ok(rows.length >= 1, `block ${i + 1} returns rows`);
+    for (const row of rows) for (const [col, v] of Object.entries(row)) if (typeof v === "boolean" || /^(ok|no_idle_tx|no_lock_wait|v54_absent|usable_by_current_user)$/.test(col)) assert.equal(v, true, `preflight block ${i + 1}: ${col} in ${JSON.stringify(row)}`);
+  }
 });
 
 let md5V53;
 test("2. v54's md5 gate refuses a body that is not the one it replaces, and changes nothing", async () => {
   md5V53 = await bodiesMd5();
-  await k.query("begin");
-  await k.query(`create or replace function training_load.source_metric_actor_basis(p_actor uuid, p_owner_club uuid) returns text as $$ begin return null; end; $$ language plpgsql`);
-  await assert.rejects(k.query("savepoint s").then(() => k.query(v54Sql)), (e) => e.code === "23514" && /v54 refused: the body in force of training_load\.source_metric_actor_basis/.test(e.message));
-  await k.query("rollback");
-  assert.deepEqual(await bodiesMd5(), md5V53, "the refusal and the rollback leave the v53 bodies");
+  // Each of the seven bodies, replaced by a stub of the same signature, makes v54 refuse and change nothing.
+  for (const [schema, name] of FUNCTIONS) {
+    const sig = (await one(k, `select pg_get_function_identity_arguments(p.oid) as a, pg_get_function_result(p.oid) as r from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = $1 and p.proname = $2`, [schema, name]));
+    await k.query("begin");
+    const stub = sig.r.startsWith("TABLE") ? `create or replace function ${schema}.${name}(${sig.a}) returns ${sig.r} as $$ begin return; end; $$ language plpgsql` : `create or replace function ${schema}.${name}(${sig.a}) returns ${sig.r} as $$ begin ${sig.r === "void" ? "return" : "return null"}; end; $$ language plpgsql`;
+    await k.query(stub);
+    await assert.rejects(k.query(v54Sql), (e) => e.code === "23514" && new RegExp(`v54 refused: the body in force of ${schema}\\.${name} `).test(e.message), `${schema}.${name}`);
+    await k.query("rollback");
+    assert.deepEqual(await bodiesMd5(), md5V53, `${schema}.${name}: the refusal and the rollback leave the v53 bodies`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -271,6 +288,13 @@ test("6. the rollback restores the v53 bodies exactly, refuses what it must, and
   await assert.rejects(k.query(rollbackSql), (e) => /is not v54's/.test(e.message));
   await k.query("rollback");
   assert.deepEqual(await bodiesMd5(), keep);
+  // refusal: the migrator is running (its advisory lock, MIGRATION_LOCK_KEY of migrate.js)
+  const holder = await client();
+  await holder.query("select pg_advisory_lock(822026)");
+  await assert.rejects(k.query(rollbackSql), (e) => /the migrator is running/.test(e.message));
+  await k.query("rollback").catch(() => {});
+  await holder.query("select pg_advisory_unlock(822026)");
+  await holder.end();
   // refusal: v54 not recorded
   await k.query(`delete from public.schema_migrations where migration_name = $1`, [V54_RECORD]);
   await assert.rejects(k.query(rollbackSql), (e) => /v54 is not recorded/.test(e.message));
@@ -300,6 +324,6 @@ test("7. the post-check passes on the migrated database", async () => {
     const sql = block.split("\n").slice(1).join("\n").trim().replace(/;\s*$/, "");
     const rows = (await k.query(sql)).rows;
     assert.ok(rows.length >= 1, `block ${i + 1} returns rows`);
-    for (const row of rows) for (const [col, v] of Object.entries(row)) if (typeof v === "boolean") assert.equal(v, true, `block ${i + 1}: ${col} in ${JSON.stringify(row)}`);
+    for (const row of rows) for (const [col, v] of Object.entries(row)) if (typeof v === "boolean" || /^(ok|users_first|recorded_once|is_last|no_idle_tx|no_lock_wait|v54_absent)$/.test(col)) assert.equal(v, true, `block ${i + 1}: ${col} in ${JSON.stringify(row)}`);
   }
 });

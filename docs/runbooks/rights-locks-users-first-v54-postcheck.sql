@@ -38,4 +38,4 @@ select schema, name,
 
 -- 4. No lock wait and no idle-in-transaction session.
 select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx,
-       not exists (select 1 from pg_locks where not granted) as no_lock_wait;
+       not exists (select 1 from pg_locks where not granted and database = (select oid from pg_database where datname = current_database())) as no_lock_wait;

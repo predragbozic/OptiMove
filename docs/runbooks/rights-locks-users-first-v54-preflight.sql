@@ -24,10 +24,11 @@ select schema, name, expected_md5, actual_md5, actual_md5 = expected_md5 as ok
 
 -- 3. A quiet moment: no idle-in-transaction session and no lock wait on the rights tables.
 select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx,
-       not exists (select 1 from pg_locks where not granted) as no_lock_wait;
+       not exists (select 1 from pg_locks where not granted and database = (select oid from pg_database where datname = current_database())) as no_lock_wait;
 
--- 4. The role the migrator uses owns the seven functions (CREATE OR REPLACE needs it).
-select n.nspname as schema, p.proname as name, pg_get_userbyid(p.proowner) = current_user as owned_by_current_user
+-- 4. The role you run this as is, or is a member of, the owner of the seven functions. The migrator
+--    connects with the application's DATABASE_URL role; run this as that role (CREATE OR REPLACE needs ownership).
+select n.nspname as schema, p.proname as name, pg_has_role(current_user, p.proowner, 'USAGE') as usable_by_current_user
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where (n.nspname, p.proname) in (
    ('training_load', 'lock_gpexe_import_approver'),

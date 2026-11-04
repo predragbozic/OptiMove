@@ -23,10 +23,15 @@ unknown user reaches the same outcome as before (the suite compares return value
 combinations of user state and role state, before and after). Signatures and error codes are unchanged. One
 difference: the users row is now share-locked also when the role row does not exist.
 
+Wider locking, stated: each call now holds a `FOR SHARE` lock on the acting user's (active) `users` row until the end
+of the transaction; it conflicts only with an exclusive write of that same row (a revocation, which is intended, or a
+profile or password write). None of the services that call these functions updates that row in the same transaction
+(checked by grep).
+
 ## Evidence (disposable databases)
 
 - Before v54, on the v53 bodies: a revocation of the same user (users row, then role row) against each of the 15
-  function/basis cases ends in `40P01` in all 15, including v23 and v26, which LO-1 had not yet reproduced for the
+  function/basis cases ends in `40P01` in all 15 (the suite asserts all 15), including v23 and v26, which LO-1 had not yet reproduced for the
   functions themselves.
 - After v54: no `40P01` in any case; the revocation takes its role row and the function completes after it.
 - The md5 gate refuses a database whose body is not the one v54 replaces (`23514`) and changes nothing.
@@ -37,6 +42,9 @@ difference: the users row is now share-locked also when the role row does not ex
 
 ## Deploy
 
+0. Run the preflight and post-check as the role the migrator uses (the application's `DATABASE_URL` role), or a member of it:
+   block 4 of the preflight checks ownership of the seven functions with `pg_has_role`. The lock-wait blocks look at
+   this database only.
 1. Preflight (read-only): `rights-locks-users-first-v54-preflight.sql`, four blocks, every `ok` true: v53 is the last
    migration and v54 absent; the seven md5 values equal the bodies v54 replaces; a quiet moment; the migrator's role
    owns the seven functions.
