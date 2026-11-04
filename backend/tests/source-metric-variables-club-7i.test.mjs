@@ -29,7 +29,7 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see ba
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
-const V53 = "202611031200_training_load_v53_system_variables_club.sql";
+const V53 = "202611041000_training_load_v53_system_variables_club.sql";
 const V53_NAME = `migrations_v2/${V53}`;
 const V52_NAME = "migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql";
 const UP_TO_V52 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V53));

@@ -5,7 +5,7 @@
 -- rolled back (section 2, step 5). The owner may run the same blocks in the
 -- Supabase SQL Editor, as the application's DATABASE_URL role (the one the
 -- migrator uses).
--- Migration: migrations_v2/202611031200_training_load_v53_system_variables_club.sql;
+-- Migration: migrations_v2/202611041000_training_load_v53_system_variables_club.sql;
 -- contract docs/ai/phase7i-system-variables-club-contract.md (J15), section 7.
 --
 -- Run ONE numbered block at a time: the editor shows only the result of the
@@ -28,14 +28,16 @@ select current_setting('server_version_num')::int as server_version_num,
 --    recorded once with the repository's checksum; v53 absent and nothing
 --    recorded at or after its name (the migrator runs files in name order).
 --    Expected: v52_rows = 1, v52_checksum_ok = true, v53_rows = 0,
---    at_or_after_v53 = 0, and last_migration = migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql.
+--    at_or_after_v53 = 0, and last_migration sorts before v53's name (v52, or
+--    a later migration merged before v53; on 2026-11-04
+--    migrations_v2/202611031200_exercise_english_content.sql).
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql') as v52_rows,
   (select bool_and(checksum = 'b2648244871d6460e5803219bf8de16aa2d83eed5fc6de0f029843a27e180918') from public.schema_migrations
     where migration_name = 'migrations_v2/202611022200_training_load_v52_club_mapping_transitions.sql') as v52_checksum_ok,
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') as v53_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') as v53_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
-    and migration_name >= 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') as at_or_after_v53,
+    and migration_name >= 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') as at_or_after_v53,
   (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
 -- 3. The two bodies v53 replaces are the ones in force: v36's request insert

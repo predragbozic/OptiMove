@@ -5,7 +5,7 @@ recommended, C132–C140; R1–R13 decided by the *Rukovodilac*). This pull requ
 and the routes. **Until 7i-B2 (the screen) copy, hide, show and the move to the copy exist only as an API.** The pilot
 (O8) stays on form (a): the club uses OptiMove's variable as it is.
 
-- **v53** (`migrations_v2/202611031200_training_load_v53_system_variables_club.sql`):
+- **v53** (`migrations_v2/202611041000_training_load_v53_system_variables_club.sql`):
   - **A check before anything changes:** the two bodies v53 replaces are the ones in force (by md5: v36's
     `metric_variable_requests_insert_guard` `ae5bf5e22620546a83cf955b8b1d9a9d`, v48's
     `source_metric_activations_insert_guard` `e47f75d4a7a6c63659a19491db97d678`), and the request table's operation

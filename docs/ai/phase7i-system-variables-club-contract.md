@@ -1030,7 +1030,9 @@ variable as it is.
 databases). The migration is ★★: both GOs, the owner's order naming v53, the *Rukovodilac*'s preflight on the day of the
 merge, the owner's deploy and the *Rukovodilac*'s post-check.
 
-- **v53** (`migrations_v2/202611031200_training_load_v53_system_variables_club.sql`) is section 7 as written: the md5
+- **v53** (`migrations_v2/202611041000_training_load_v53_system_variables_club.sql`; first named `202611031200_…`,
+  renamed before the merge because main's PR #350 had taken the prefix `202611031200`, which the runner refuses to share
+  between two files — the content and its sha256 are unchanged) is section 7 as written: the md5
   preconditions on v36's request guard (`ae5bf5e2…`) and v48's T5 insert guard (`e47f75d4…`), computed from the
   migration files read as LF and confirmed as `md5(prosrc)` on a database migrated through v52; the request table's
   operation CHECK, `version_iff`, index and trigger checked by their exact definitions; the three tables of 7.1–7.3

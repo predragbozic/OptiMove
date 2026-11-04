@@ -1,6 +1,6 @@
 -- Rollback of migration v53 (a club copies or hides a system variable and
 -- moves a team to its copy; phase 7i, J15):
--- migrations_v2/202611031200_training_load_v53_system_variables_club.sql
+-- migrations_v2/202611041000_training_load_v53_system_variables_club.sql
 --
 -- Not a migration and never run automatically. Rehearsed on disposable
 -- databases (backend/tests/source-metric-variables-club-7i.test.mjs: apply ->
@@ -56,7 +56,7 @@ end $$;
 do $$
 begin
   if not exists (select 1 from public.schema_migrations
-                  where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') then
+                  where migration_name = 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') then
     raise exception 'v53 rollback refused: v53 is not recorded on this database';
   end if;
 end $$;
@@ -71,7 +71,7 @@ lock table training_load.metric_definition_club_hides in access exclusive mode;
 
 do $$
 declare
-  v53 constant text := 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql';
+  v53 constant text := 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql';
   reasons text[] := '{}';
 begin
   if exists (select 1 from public.schema_migrations
@@ -290,6 +290,6 @@ begin
 end $$;
 
 delete from public.schema_migrations
- where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql';
+ where migration_name = 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql';
 
 commit;

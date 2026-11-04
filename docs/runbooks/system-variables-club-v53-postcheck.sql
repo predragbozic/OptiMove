@@ -4,7 +4,7 @@
 -- copies or hides a system variable: each numbered block verbatim through the
 -- connector, in its own read-only transaction that is rolled back (section 2,
 -- step 5). The owner may run the same blocks in the Supabase SQL Editor.
--- Migration: migrations_v2/202611031200_training_load_v53_system_variables_club.sql;
+-- Migration: migrations_v2/202611041000_training_load_v53_system_variables_club.sql;
 -- contract docs/ai/phase7i-system-variables-club-contract.md (J15), section 7.
 --
 -- Run ONE numbered block at a time. Every block is a plain SELECT. Any value
@@ -15,11 +15,11 @@
 --    migrations_v2 migration.
 --    Expected: v53_rows = 1, v53_checksum_ok = true, later_migrations = 0.
 select
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') as v53_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') as v53_rows,
   (select bool_and(checksum = 'f6231766fe9a5f79dddf777892261e6204beba716164812ff2a178242547641c') from public.schema_migrations
-    where migration_name = 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') as v53_checksum_ok,
+    where migration_name = 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') as v53_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
-    and migration_name > 'migrations_v2/202611031200_training_load_v53_system_variables_club.sql') as later_migrations;
+    and migration_name > 'migrations_v2/202611041000_training_load_v53_system_variables_club.sql') as later_migrations;
 
 -- 2. The two bodies v53 replaced are v53's, and its eight new functions are
 --    there with v53's bodies (the rollback refuses unless the two are).
