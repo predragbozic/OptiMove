@@ -6,6 +6,7 @@
 import { state } from "./state.js";
 import {
   reloadGpexeCandidates,
+  refreshGpexeStatus,
   reloadGpexeSourceAthletes,
   approveGpexeCandidate,
   backFromTeamMappingConfirm,
@@ -92,6 +93,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       return true;
     }
     await selectGpexeTeam(action.value, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-refresh-status") {
+    // Reads the status again; never starts a search.
+    await refreshGpexeStatus(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-check") {
@@ -314,6 +320,15 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (gx.batch.sending) return true;
     clearBatchSelection();
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-import-ready") {
+    // J19 U1: "Import N ready" = select the clean Ready sessions (the date
+    // filter is not applied: this is the day's whole list) and open the one
+    // review and confirmation; nothing is sent before the confirmation.
+    if (gx.batch.sending) return true;
+    selectBatchVisible(batchSelectableList(gx));
+    if (openBatchReview()) renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-batch-review") {

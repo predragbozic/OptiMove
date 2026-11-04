@@ -2526,10 +2526,27 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
 // preview and COMMIT), run one after another on the request, so the
 // request lasts about the sum of its approvals. An unconfirmed COMMIT can
 // add COMMIT_ANSWER_TIMEOUT_MS + UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS once, and
-// then the batch stops. Ten is the owner's ceiling without stronger
-// evidence (decision 2026-09-24), and keeps a request well inside a minute
-// at the approval times measured in the tests; see the runbook.
-export const BATCH_APPROVE_MAX = 10;
+// then the batch stops. The ceiling was ten (owner, 2026-09-24) and is fifty
+// since the owner's decision D5 of 2026-11-04 (J19 U1), together with the time
+// budget below that keeps the request inside the client's and the proxy's bounds;
+// see the runbook.
+export const BATCH_APPROVE_MAX = 50;
+
+// J19 U1 (D5, R5): fifty approvals one after another take longer than ten, so
+// the batch has a time budget. It is checked before each candidate except the
+// first; when it is spent, the rest are returned as not_attempted with the code
+// batch_time_budget (nothing started, nothing written for them), and repeating
+// the request is safe: an imported candidate answers already_imported. The
+// budget (45 s) plus one approval's own COMMIT wait (15 s) stays below the
+// client's 90 s bound, which stays below the hosting proxy's 100 s. Lock waits
+// inside an approval are bounded separately (see the runbook); the failure mode
+// of an overrun is a lost answer, which the client shows as "Result not
+// confirmed" and which repeating resolves.
+export const BATCH_TIME_BUDGET_MS = 45_000;
+let batchTimeBudgetMs = BATCH_TIME_BUDGET_MS;
+export function setBatchTimeBudgetForTests(ms) {
+  batchTimeBudgetMs = ms ?? BATCH_TIME_BUDGET_MS;
+}
 
 const CANDIDATE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -2724,9 +2741,17 @@ export async function approveCandidates(teamId, candidates, { userId, expectedCl
   }
   const results = [];
   let stopped = false;
+  const batchStarted = Date.now();
+  let outOfTime = false;
   for (const candidate of candidates) {
     if (stopped) {
-      results.push(batchResult(candidate.candidateId, "not_attempted"));
+      results.push(batchResult(candidate.candidateId, "not_attempted", outOfTime ? "batch_time_budget" : null));
+      continue;
+    }
+    if (results.length > 0 && Date.now() - batchStarted >= batchTimeBudgetMs) {
+      results.push(batchResult(candidate.candidateId, "not_attempted", "batch_time_budget"));
+      stopped = true;
+      outOfTime = true;
       continue;
     }
     const result = await approveOneOfBatch(teamId, candidate, userId, expectedClubId);

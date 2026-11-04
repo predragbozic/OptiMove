@@ -648,15 +648,47 @@ test("check: leaving the tab mid-check and coming back resumes it, and a finishe
   assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
 });
 
-test("check: a failed poll does not leave Check now disabled", async () => {
+test("check (J19 U1): a failed poll keeps the running search on screen with a note, is tried again a bounded number of times, and then stops without clearing the search", async () => {
   resetState();
-  const running = { id: "chk-2", status: "running", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  const running = { id: "chk-2", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 4, candidatesNew: 1, candidatesChanged: 0, candidatesUnchanged: 3 };
+  let polls = 0;
   installFetchMock(gpexeServer({
-    checks: { start: () => ({ status: 202, body: { check: running } }), poll: () => ({ status: 500, body: { error: "serverError" } }) },
+    checks: { start: () => ({ status: 202, body: { check: running } }), poll: () => { polls += 1; return { status: 500, body: { error: "serverError" } }; } },
   }));
   await openImports();
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
-  assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()));
+  assert.equal(polls, 4, "the first failure and three retries, then polling stops");
+  const page = renderTrainingLoadCoachHtml();
+  assert.match(page, /Finding sessions/, "the running search is still shown");
+  assert.match(page, /4 sessions in GPEXE: 1 not seen by OptiMove before, 0 changed, 3 unchanged so far/);
+  assert.match(page, /role="progressbar"/);
+  assert.match(page, /Progress is no longer refreshing\. The search may still be running - do not start another one; use Refresh status\./);
+  assert.match(page, /data-action="training-load-gpexe-check"[^>]*disabled/, "Find new sessions stays off while the search is running");
+  assert.match(page, /data-action="training-load-gpexe-refresh-status"[^>]*>Refresh status</);
+  assert.equal(state.trainingLoad.gpexe.check?.id, "chk-2", "the check is not cleared");
+});
+
+test("check (J19 U1): a poll that recovers clears the note and the failure count", async () => {
+  resetState();
+  const running = { id: "chk-3", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  let polls = 0;
+  installFetchMock(gpexeServer({
+    checks: {
+      start: () => ({ status: 202, body: { check: running } }),
+      poll: () => {
+        polls += 1;
+        if (polls <= 2) return { status: 500, body: { error: "serverError" } };
+        return { status: 200, body: { check: { ...running, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 2, error: null } } };
+      },
+    },
+  }));
+  await openImports();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  assert.equal(polls, 3);
+  assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
+  assert.equal(state.trainingLoad.gpexe.pollFailures, 0);
+  assert.equal(state.trainingLoad.gpexe.pollNote, "");
+  assert.ok(!/Could not refresh|no longer refreshing/.test(renderTrainingLoadCoachHtml()));
 });
 
 test("approve: the dialog cannot be closed while the approval is running, so its answer is never lost", async () => {
@@ -1711,7 +1743,7 @@ test("Imports: while importing is off, or the viewer may not approve, the next s
   for (const [teamStatus, phrase] of [
     [{ enabled: false, canApprove: true }, /Next step: 1 session can be reviewed\. Importing waits until it is turned on in this environment\./],
     [{ enabled: true, canApprove: false }, /Next step: 1 session can be reviewed\. An approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
-    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - tick the ones to import, or open one to review it\./],
+    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - use Import ready above, tick specific ones below, or open one to review it\./],
   ]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
@@ -2252,7 +2284,7 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
   assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
   assert.match(html, /<strong>Ana Example<\/strong> <span class="muted">GPEXE athlete 101<\/span>/, "the links are listed");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - tick the ones to import, or open one to review it\./, "the next step is not about linking");
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - use Import ready above, tick specific ones below, or open one to review it\./, "the next step is not about linking");
   // 3: Link athletes is off, and the coach reads why - in the coach's words.
   assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
   assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions, the search and the links below still work\./);
@@ -2420,4 +2452,50 @@ test("Link athletes: a source-athletes answer for the old team never lands in th
   assert.equal(state.trainingLoad.gpexe.teamId, TEAM_A);
   assert.equal(state.trainingLoad.gpexe.sourceAthletesError, null, "team B's late failure never reaches team A");
   assert.equal(state.trainingLoad.gpexe.sourceAthletesRetrying, false);
+});
+
+test("check (J19 U1): Refresh status reads the status again, never starts a search, resumes polling while it runs and shows the finished state when it ended", async () => {
+  resetState();
+  const running = { id: "chk-4", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 1, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 1 };
+  const finished = { ...running, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 3, error: null };
+  let down = true;
+  let starts = 0;
+  const teamStatus = { [TEAM_A]: {} };
+  installFetchMock(gpexeServer({
+    teamStatus,
+    checks: { start: () => { starts += 1; return { status: 202, body: { check: running } }; }, poll: () => (down ? { status: 500, body: { error: "serverError" } } : { status: 200, body: { check: finished } }) },
+  }));
+  await openImports();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  assert.equal(starts, 1);
+  assert.equal(state.trainingLoad.gpexe.pollStopped, true);
+  teamStatus[TEAM_A] = { lastCheck: running };
+  down = false;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-refresh-status" }), { renderTrainingLoad: render });
+  assert.equal(starts, 1, "Refresh status never starts a search");
+  assert.equal(state.trainingLoad.gpexe.pollStopped, false);
+  assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
+  assert.ok(!/refresh-status/.test(renderTrainingLoadCoachHtml()));
+});
+
+test("check (J19 U1): when polling is started again after it gave up, it gets the full retry allowance and no stale note", async () => {
+  resetState();
+  const running = { id: "chk-5", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  let polls = 0;
+  installFetchMock(gpexeServer({
+    checks: {
+      start: () => ({ status: 202, body: { check: running } }),
+      poll: () => { polls += 1; return polls <= 4 || polls === 5 ? { status: 500, body: { error: "serverError" } } : { status: 200, body: { check: { ...running, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", error: null } } }; },
+    },
+  }));
+  await openImports();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  assert.equal(polls, 4);
+  assert.equal(state.trainingLoad.gpexe.pollStopped, true);
+  const { pollGpexeCheck } = await import("../gpexe-import-data.js");
+  state.trainingLoad.gpexe.polling = null;
+  await pollGpexeCheck(render);
+  assert.equal(polls, 6, "one failure was tolerated, then the poll succeeded");
+  assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
+  assert.equal(state.trainingLoad.gpexe.pollNote, "");
 });
