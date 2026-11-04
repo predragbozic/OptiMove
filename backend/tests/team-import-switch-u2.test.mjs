@@ -804,3 +804,54 @@ test("17. lowering the mode of a team that is already on needs no fresh backup; 
     await fresh.drop();
   }
 });
+
+// Follow-ups of the Nezavisni revizor's review of PR #369 (L1, I1).
+
+test("18. (L1) a club admin acting in a TEAM workspace cannot change the switch (403), and the row stays as it was", async () => {
+  const t = gateTeam; // mode team, on (test 3)
+  const before = await switchRow(t.teamId);
+  // A team workspace is valid for a user only with a role in that team: the club admin is also a coach of it here.
+  await admin.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [t.cadmin.id, t.teamId]);
+  await setWorkspace(t.cadmin.id, "team", t.teamId);
+  try {
+    const r = await putSwitch(t, t.cadmin, { enabled: false, reason: "from the team workspace" });
+    assert.equal(r.status, 403, r.text);
+    assert.deepEqual(await switchRow(t.teamId), before, "nothing was written");
+    // The read still works there (state and mode only for a non-manager view of the route).
+    assert.equal((await getSwitch(t, t.cadmin)).body.importSwitch.canManage, false);
+  } finally {
+    await setWorkspace(t.cadmin.id, "club", t.clubId);
+    await admin.query(`delete from public.user_team_roles where user_id = $1 and team_id = $2`, [t.cadmin.id, t.teamId]);
+  }
+});
+
+test("19. (I1) the approver sees the mode lowered to pilot between its unlocked peek and its FOR SHARE lock: the club admin's basis is refused with team_import_pilot_mode, nothing is written", async () => {
+  const o = await createGpexePilotOrg(admin, { athleteNames: [] });
+  o.cadmin = await clubAdminOf(o.clubId);
+  await enableTeamImportSwitch(admin, o.teamId, null, { mode: "team", enabled: true });
+  const holder = new pg.Client({ connectionString: db.url });
+  const caller = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  await caller.connect();
+  try {
+    // The mode change is held uncommitted: the committed row still says 'team' for the peek.
+    await holder.query("begin");
+    await holder.query(`select set_config('optimove.team_import_tx', txid_current()::text, true)`);
+    await holder.query(`update training_load.gpexe_team_import_switch set mode = 'pilot', change_reason = 'lowered' where owner_team_id = $1`, [o.teamId]);
+    await caller.query("begin");
+    await caller.query("set local lock_timeout = '10s'");
+    const call = caller.query(`select * from training_load.lock_gpexe_import_approver($1, $2)`, [o.cadmin.id, o.teamId]).then((r) => ({ rows: r.rows }), (e) => ({ error: e }));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await holder.query("commit");
+    const result = await call;
+    assert.ok(result.error, `refused, got ${JSON.stringify(result.rows)}`);
+    assert.equal(result.error.code, "55000");
+    assert.match(result.error.message, /team_import_pilot_mode/);
+    await caller.query("rollback");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await caller.query("rollback").catch(() => {});
+    await holder.end();
+    await caller.end();
+  }
+});
