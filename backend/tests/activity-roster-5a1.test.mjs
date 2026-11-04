@@ -28,6 +28,7 @@ import {
 } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes, TZ } from "./_gpexe-fixtures.mjs";
 import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, mappedBinding } from "./support/mapped-world.mjs";
 import { importGpexeBundle } from "../src/gpexeImportWriter.js";
 import {
@@ -953,6 +954,7 @@ async function approvalTeam(label) {
   assert.equal((await gx(`/teams/${team.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } })).status, 200);
   src.show(sourceTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: team.clubId, teamId: team.teamId, sourceTeamId });
+  await enableTeamImportSwitch(admin, team.teamId);
   await activateBinding(admin, bindingId);
   for (const g of ["101", "102", "103"]) {
     assert.equal((await gx(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId: g, athleteId: team.ids[g] } })).status, 201);

@@ -17,6 +17,7 @@ import { GpexeClientError } from "../src/gpexeClient.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, t6Rows } from "./support/mapped-world.mjs";
 
 // v33 (the drill-parameter guard): a session with two or more drills is
@@ -190,6 +191,7 @@ async function setupTeam({ gpexeTeamId = String(nextGpexeTeamId++), path = "bind
 async function bindTeam(team) {
   src.show(team.sourceTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: team.padmin.cookie, clubId: team.clubId, teamId: team.teamId, sourceTeamId: team.sourceTeamId });
+  await enableTeamImportSwitch(admin, team.teamId);
   ({ world } = await activateBinding(admin, bindingId));
   team.bindingId = bindingId;
   team.path = "binding";
@@ -643,7 +645,7 @@ test("approver grants: only a platform admin grants and revokes, only to an acti
   const { query } = await import("../src/db.js");
   assert.equal((await canApproveGpexeImport({ query }, team.coach.id, team.teamId)).canApprove, true);
   await admin.query(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [team.coach.id, team.teamId]);
-  assert.deepEqual(await canApproveGpexeImport({ query }, team.coach.id, team.teamId), { canApprove: false, basis: null });
+  assert.deepEqual(await canApproveGpexeImport({ query }, team.coach.id, team.teamId), { canApprove: false, basis: null, hasRight: false, switchOn: true, switchMode: "pilot" });
   const r = await admin.query(`select 1 from training_load.gpexe_import_approvers where id = $1 and revoked_at is null`, [grant.body.grant.id]);
   assert.equal(r.rowCount, 1, "the grant row itself is untouched");
   await admin.query(`update public.user_team_roles set is_active = true where user_id = $1 and team_id = $2`, [team.coach.id, team.teamId]);

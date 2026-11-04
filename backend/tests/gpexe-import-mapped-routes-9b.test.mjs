@@ -23,6 +23,7 @@ import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposabl
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, definitionDigest, t7Keys } from "./support/mapped-world.mjs";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { canonicalDecimal } from "../src/sourceMetricExtractors.js";
@@ -128,6 +129,7 @@ async function team({ only = null } = {}) {
   assert.equal((await api(`/gpexe/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } })).status, 200);
   src.show(sourceTeamId);
   const bound = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId });
+  await enableTeamImportSwitch(admin, org.teamId);
   const activated = only && only.length === 0 ? { started: {} } : await activateBinding(admin, bound.bindingId, { only });
   for (const n of [1, 2, 3]) {
     const r = await api(`/gpexe/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId: athleteId(n), athleteId: org.athleteIds[n - 1] } });

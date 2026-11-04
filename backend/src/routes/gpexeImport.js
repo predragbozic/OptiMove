@@ -10,6 +10,7 @@ import { previewHasClubVariable } from "../gpexeImportAudience.js";
 import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
+import * as teamSwitch from "../teamImportSwitchService.js";
 
 const router = Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -126,6 +127,8 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     lastCheck,
     // identityAdmin only when true: a coach's answer carries no trace of the
     // administrator-only identity load.
+    // U2 (v56): the team's own switch, shown to everyone who sees the team (no condition detail here).
+    teamImportSwitch: { enabled: approval.switchOn, mode: approval.switchMode ?? "pilot" },
     viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin, ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}) },
     approvalAvailable: true,
   });
@@ -144,6 +147,42 @@ router.put("/teams/:teamId/settings", handle(async (req, res) => {
   // service decides that under its own lock.
   const reason = typeof req.body?.reason === "string" ? req.body.reason : null;
   res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id, clubAdminClubId: clubAdmin ? access.clubId : null }) });
+}));
+
+// U2 (v56): who may turn a team's import on or off. An active platform admin, or the active admin of the
+// team's club acting in that club's own workspace; the database decides the right again (and a club admin
+// cannot change the mode). Everyone else sees the state only.
+function importSwitchManager(access, req) {
+  if (access.platformAdmin) return true;
+  return Boolean(access.workspace?.type === "club" && access.clubId
+    && String(access.workspace.scopeId) === String(access.clubId) && holdsClubAdminRole(req.authz, access.clubId));
+}
+
+router.get("/teams/:teamId/import-switch", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  const manager = importSwitchManager(access, req);
+  const state = await teamSwitch.readTeamImportSwitch(access.teamId, { detail: manager });
+  // The recorded dates and the history are an administrator's; a coach gets the switch and its mode.
+  res.json({ importSwitch: { ...state, canManage: manager, canChangeMode: access.platformAdmin, canRecordPrerequisites: access.platformAdmin } });
+}));
+
+router.put("/teams/:teamId/import-switch", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!importSwitchManager(access, req)) return res.status(403).json({ error: "forbidden", message: "Only a platform administrator or the club administrator can change this." });
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const result = await teamSwitch.setTeamImportSwitch(access.teamId, req.user.id, { enabled: body.enabled, mode: body.mode, reason: body.reason });
+  res.json({ importSwitch: result });
+}));
+
+// The two dated prerequisites and the two recorded facts are the platform's, not a club's: a platform admin
+// only, and to anyone else the routes do not exist.
+router.post("/import-prerequisites", handle(async (req, res) => {
+  const admin = await canApproveGpexeImport({ query }, req.user.id, null);
+  if (admin.basis !== "platform_admin") return notFound(res);
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  res.status(201).json({ record: await teamSwitch.recordImportPrerequisite(req.user.id, { kind: body.kind, recordedOn: body.recordedOn, note: body.note }) });
 }));
 
 // What the connection was before, and why it was changed. Read-only, and

@@ -29,6 +29,7 @@ import { undoImportedSession } from "../scripts/gpexe-undo-imported-session.mjs"
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, mappedBinding } from "./support/mapped-world.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -143,6 +144,7 @@ async function setupTeam() {
   assert.equal((await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId } })).status, 200);
   src.show(gpexeTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
+  await enableTeamImportSwitch(admin, org.teamId);
   await activateBinding(admin, bindingId);
   for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
     assert.equal((await api(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);

@@ -10,6 +10,7 @@ import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding } from "./support/mapped-world.mjs";
 
 // v33 (the drill-parameter guard): a session with two or more drills is
@@ -142,6 +143,7 @@ async function setupTeam() {
   assert.equal((await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } })).status, 200);
   src.show(sourceTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId });
+  await enableTeamImportSwitch(admin, org.teamId);
   await activateBinding(admin, bindingId);
   for (const [gpexeAthleteId, athleteId] of [["101", a], ["102", b], ["103", c], ["105", f]]) {
     assert.equal((await api(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);

@@ -25,6 +25,7 @@ import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, ensureMappedSystem } from "./support/mapped-world.mjs";
 import { BLOCK_MESSAGES } from "../src/gpexeImportPreview.js";
 import {
@@ -176,6 +177,7 @@ async function setupTeam({ bind = true, activate = true } = {}) {
   const settings = await api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: sourceTeamId } });
   assert.equal(settings.status, 200, settings.text);
   let bindingId = null;
+  await enableTeamImportSwitch(admin, org.teamId);
   if (bind) {
     src.show(sourceTeamId);
     ({ bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId }));

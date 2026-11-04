@@ -46,6 +46,11 @@ export function applyEnabled() {
   return process.env.GPEXE_IMPORT_APPLY_ENABLED === "true";
 }
 
+const TEAM_SWITCH_OFF_MESSAGE = "Imports are switched off for this team. Nothing was imported. A platform administrator or the club administrator can turn them on in Settings.";
+function teamSwitchRefusal() {
+  return refusal(409, "team_import_switch_off", TEAM_SWITCH_OFF_MESSAGE);
+}
+
 export function applySwitchInfo() {
   const enabled = applyEnabled();
   return {
@@ -1374,6 +1379,8 @@ function snapshotState(row) {
 function approvalBlockers(row, snapshot, preview) {
   const blockers = [];
   if (!applyEnabled()) blockers.push("import_switch_off");
+  // U2 (v56): the team's own switch; absent row = off.
+  if (row.team_switch_on !== true) blockers.push("team_import_switch_off");
   if (row.status === "superseded") blockers.push(row.superseded_by_check_id ? "not_confirmed_for_import" : "superseded_by_newer_data");
   if (row.status === "imported") blockers.push("already_imported");
   if (row.status === "blocked") blockers.push("blocked");
@@ -1434,6 +1441,7 @@ function candidateSummary(row, audience = "other") {
 const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_started_at, status, preview, preview_hash,
   first_seen_at, last_seen_at, imported_at, superseded_by_candidate_id, raw_expires_at, raw_purged_at,
   superseded_by_check_id, drill_parameter_effect,
+  coalesce((select s.enabled from training_load.gpexe_team_import_switch s where s.owner_team_id = gpexe_import_candidates.owner_team_id), false) as team_switch_on,
   (select k.status from training_load.gpexe_import_checks k
     where k.id = gpexe_import_candidates.last_seen_check_id and k.owner_team_id = gpexe_import_candidates.owner_team_id) as last_seen_check_status`;
 
@@ -2361,7 +2369,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // role, grant and user rows are locked only at step 6b, after every
     // registry row (R5).
     const unlocked = await canApproveGpexeImport({ query: (text, params) => client.query(text, params) }, userId, teamId);
-    if (!unlocked.canApprove) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    if (!unlocked.hasRight) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    if (!unlocked.switchOn) throw teamSwitchRefusal();
 
     // The candidate, FOR UPDATE, and the existing refusals.
     const row = (await client.query(
@@ -2450,6 +2459,11 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       )).rows[0];
     } catch (error) {
       if (error?.code === "42501") throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+      // U2 (v56): the team's switch, decided under its FOR SHARE lock.
+      if (error?.code === "55000" && /team_import_switch_off|team_import_pilot_mode/.test(String(error.message))) {
+        if (/team_import_pilot_mode/.test(String(error.message))) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+        throw teamSwitchRefusal();
+      }
       throw error;
     }
     // Steps 7-11: the plan, the classification and the import, inside the
@@ -2645,7 +2659,7 @@ export function parseBatchApproveBody(body) {
 // does notFound (R16: the team or its club archived or moved since the
 // route's check - it holds for every remaining candidate of the team); any
 // other refusal concerns its candidate only.
-const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error", "try_again", "notFound"]);
+const BATCH_STOP_CODES = new Set(["import_switch_off", "team_import_switch_off", "not_an_approver", "internal_error", "try_again", "notFound"]);
 
 function batchResult(candidateId, outcome, code = null, extra = {}) {
   return { candidateId, outcome, code, approvalId: null, ...extra };
@@ -2770,7 +2784,8 @@ export async function approveCandidates(teamId, candidates, { userId, expectedCl
   if (!applyEnabled()) throw refusal(409, "import_switch_off", applySwitchInfo().message);
   try {
     const right = await canApproveGpexeImport({ query }, userId, teamId);
-    if (!right.canApprove) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    if (!right.hasRight) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    if (!right.switchOn) throw teamSwitchRefusal();
     const owned = (await query(
       `select id from training_load.gpexe_import_candidates where owner_team_id = $2 and id = any($1::uuid[])`,
       [candidateIds, teamId],

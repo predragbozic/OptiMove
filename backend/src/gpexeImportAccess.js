@@ -35,7 +35,11 @@ export async function resolveGpexeTeamAccess(req, teamId, { query }) {
 }
 
 // Live read, never the cached req.authz: a revoked grant or role must stop
-// showing the button on the next request.
+// showing the button on the next request. U2 (v56): the person's RIGHT (basis)
+// is separate from the team's switch: `canApprove` needs both. The basis order
+// is the database's (lock_gpexe_import_approver): platform_admin, team_grant,
+// club_admin, team_coach; the last two only while the team's switch is on in
+// mode 'team'. `switchOn` / `switchMode` are what the screens show.
 export async function canApproveGpexeImport({ query }, userId, teamId) {
   const r = await query(
     `select
@@ -45,13 +49,28 @@ export async function canApproveGpexeImport({ query }, userId, teamId) {
                join public.user_team_roles tr on tr.user_id = a.user_id and tr.team_id = a.owner_team_id
                     and tr.role = 'team_coach' and tr.is_active = true
                join public.users u on u.id = a.user_id and u.is_active = true
-               where a.user_id = $1 and a.owner_team_id = $2 and a.revoked_at is null) as granted`,
+               where a.user_id = $1 and a.owner_team_id = $2 and a.revoked_at is null) as granted,
+       exists (select 1 from public.teams t
+               join public.user_club_roles cr on cr.club_id = t.club_id and cr.user_id = $1
+                    and cr.role = 'club_admin' and cr.is_active = true
+               join public.users u on u.id = cr.user_id and u.is_active = true
+               where t.id = $2) as club_admin,
+       exists (select 1 from public.user_team_roles tr
+               join public.users u on u.id = tr.user_id and u.is_active = true
+               where tr.user_id = $1 and tr.team_id = $2 and tr.role = 'team_coach' and tr.is_active = true) as team_coach,
+       (select s.enabled from training_load.gpexe_team_import_switch s where s.owner_team_id = $2) as switch_on,
+       (select s.mode from training_load.gpexe_team_import_switch s where s.owner_team_id = $2) as switch_mode`,
     [userId, teamId],
   );
   const row = r.rows[0];
-  if (row.platform_admin) return { canApprove: true, basis: "platform_admin" };
-  if (row.granted) return { canApprove: true, basis: "team_grant" };
-  return { canApprove: false, basis: null };
+  const switchOn = row.switch_on === true;
+  const switchMode = row.switch_mode || null;
+  let basis = null;
+  if (row.platform_admin) basis = "platform_admin";
+  else if (row.granted) basis = "team_grant";
+  else if (row.club_admin && switchMode === "team") basis = "club_admin";
+  else if (row.team_coach && switchMode === "team") basis = "team_coach";
+  return { canApprove: basis !== null && switchOn, basis, hasRight: basis !== null, switchOn, switchMode };
 }
 
 // J17 step 2a (R16), the approval only, after the team import lock: the team

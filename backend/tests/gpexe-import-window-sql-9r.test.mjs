@@ -25,6 +25,7 @@ import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { verifyRevisionRow } from "./support/source-revisions.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -391,6 +392,7 @@ test("1. step 11 on a world built like production's pilot: every block of the pr
   assert.equal((await api(`/gpexe/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId: SOURCE_TEAM } })).status, 200);
   src.show(SOURCE_TEAM);
   const bound = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: SOURCE_TEAM });
+  await enableTeamImportSwitch(admin, org.teamId);
   const system = await pilotSystem(padmin.id);
   await activate(system, { bindingId: bound.bindingId, platformAdminId: padmin.id });
   for (const n of [1, 2, 3]) {
