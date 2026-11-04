@@ -8,7 +8,7 @@ globalThis.document = dom.window.document;
 globalThis.window = dom.window;
 window.matchMedia = () => ({ matches: false });
 
-const { handleTrainingLoadAction, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadBeforeUnload } = await import('../training-load-actions.js');
+const { handleTrainingLoadAction, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadBeforeUnload, handleTrainingLoadAnalysisPointerDown } = await import('../training-load-actions.js');
 const { simpleEditor } = await import('../training-load-simple-actions.js');
 const { renderSimpleEditorHtml } = await import('../training-load-simple-view.js');
 const { analysisEditorDraftFromWidget } = await import('../training-load-analysis-data.js');
@@ -394,4 +394,49 @@ test('closing returns focus to the replacement opener matched by action and widg
   assert.equal(analysis().simpleEditor, null);
   assert.equal(confirmations.length, 1);
   assert.equal(calls.length, count);
+});
+
+test('inline editor does not trap Tab and guarded dashboard actions cannot discard the draft', async () => {
+  await readyNew();
+  const target = simpleEditor.model;
+  const draft = structuredClone(target.draft), count = calls.length;
+  control('save').focus();
+  const tab = new window.KeyboardEvent('keydown', {key:'Tab',bubbles:true,cancelable:true});
+  document.activeElement.dispatchEvent(tab);
+  assert.equal(tab.defaultPrevented,false);
+  await act('training-load-analysis-period-from',{},'2026-09-01');
+  await act('training-load-analysis-edit-widget',{'widgetId':'other-widget'});
+  assert.equal(simpleEditor.model,target);
+  assert.deepEqual(target.draft,draft);
+  assert.deepEqual(analysis().period,period);
+  assert.equal(calls.length,count);
+});
+
+test('opening Settings closes existing popovers and blocks layout pointer paths while the draft is open', async () => {
+  analysis().editMode=true;
+  analysis().menu=`widget:${widgetId}`;
+  analysis().picker.open=true;
+  await act('training-load-analysis-edit-widget',{widgetId});
+  assert.ok(simpleEditor.model);
+  assert.equal(analysis().menu,'');
+  assert.equal(analysis().picker.open,false);
+  assert.equal(analysis().layoutDraft,null);
+  for (const attributes of ['data-analysis-drag-handle="true"','data-analysis-resize-handle']) {
+    const article=document.createElement('article');article.dataset.analysisWidgetId=widgetId;
+    article.innerHTML=`<button ${attributes}></button>`;root.append(article);
+    const event={target:article.firstChild,button:0,pointerId:1,clientX:10,clientY:10,preventDefault(){throw new Error('Blocked layout must not capture pointer');}};
+    assert.equal(handleTrainingLoadAnalysisPointerDown(event,renderTrainingLoad),false);
+    assert.equal(analysis().layoutDraft,null);
+    article.remove();
+  }
+});
+
+test('repainting the same inline draft preserves expanded advanced options and focused controls', async () => {
+  await readyNew();
+  document.querySelector('.tl-simple-advanced').open=true;
+  const title=control('title');title.focus();title.value='New title';
+  await dispatch(title);
+  assert.equal(document.querySelector('.tl-simple-advanced').open,true);
+  assert.equal(document.activeElement,control('title'));
+  assert.equal(control('title').value,'New title');
 });

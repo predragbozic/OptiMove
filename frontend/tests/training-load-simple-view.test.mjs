@@ -47,7 +47,8 @@ test("metric cards escape labels, units, IDs and searches without selecting a de
   assert.match(html, /no unit specified/);
   assert.doesNotMatch(html, /aria-pressed="true"/);
   assert.match(control(html, "next"), /disabled/);
-  assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="tl-simple-heading"/);
+  assert.match(html, /role="region" aria-labelledby="tl-simple-heading"/);
+  assert.doesNotMatch(html, /aria-modal|role="dialog"/);
 });
 
 test("UUID and builtin selections stay distinct and metric selection enables Next", () => {

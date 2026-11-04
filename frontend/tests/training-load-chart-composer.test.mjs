@@ -28,6 +28,16 @@ test('dva sportista dele vremenski plot, vrednosti i identitet ostaju odvojeni, 
   assert.equal(plot.option.series[0].connectNulls,false);
 });
 
+test('različita imena su čitljiva bez tehničkih ID oznaka, a istoimeni sportisti ostaju razdvojeni',()=>{
+  const {model}=fixture([row('a','2026-10-06',1),row('b','2026-10-06',2)]);
+  const options={presentation,resolvedPeriod:period,queryId:'query-1',athletes:[{id:'a',name:'Ana'},{id:'b',name:'Bojan'}]};
+  const plot=composeDashboardCharts(model,()=> 'Distanca',()=>'',options).plots[0];
+  assert.deepEqual(plot.option.series.map(series=>series.name),['Ana','Bojan']);
+  assert.deepEqual(plot.rowsBySeries.map(rows=>rows[0].identity.athleteId),['a','b']);
+  const same=composeDashboardCharts(model,()=> 'Distanca',()=>'',{...options,athletes:[{id:'a',name:'Ana'},{id:'b',name:'Ana'}]}).plots[0];
+  assert.equal(new Set(same.option.series.map(series=>series.name)).size,2);
+});
+
 test('različite stvarne jedinice, prijavljeni izvori i DB serije ostaju posebni plotovi',()=>{
   const {output}=fixture([row('a','2026-10-06',1),row('b','2026-10-06',2),row('a','2026-10-06',3,{unit:'s'}),row('a','2026-10-06',4,{sourceConnectionId:'reported'})],{extraSeries:[{definition:{id:'other',metric_definition_id:'metric2'},result:{seriesId:'other',status:'ok',data:{current:[row('a','2026-10-06',7)]}}}]});
   assert.equal(output.plots.length,4);assert.equal(output.plots[0].option.series.length,2);

@@ -71,7 +71,10 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
     const buckets=time ? chartBuckets(phasePeriod,model.groupBy) : model.groupBy === 'athlete' && composed ? athleteIds : [...new Set(group.rows.map(row=>row.identity.bucketKey))];
     if (!buckets || group.rows.some(row => time && !buckets.includes(row.identity.bucketKey))) return {status:'invalidBuckets',plots:[]};
     const athleteName=id=>options.athletes?.find(athlete=>athlete.id===id)?.name || (id == null ? 'Cela grupa' : `Sportista ${id}`);
-    const uniqueLabel=id=>`${athleteName(id)}${id == null || !options.athletes?.some(athlete=>athlete.id===id) ? '' : ` (${id})`}`;
+    const names=athleteIds.map(athleteName);
+    const labels=athleteIds.map((id,index)=>names.filter(name=>name===names[index]).length>1 ? `${names[index]} (${id ?? 'grupa'})` : names[index]);
+    const labelCollision=new Set(labels).size!==labels.length;
+    const uniqueLabel=id=>labelCollision ? JSON.stringify([athleteName(id),id]) : labels[athleteIds.indexOf(id)];
     const name=labelForSeries(group.definition);
     const rowsBySeries=[];
     const definitions=[];
