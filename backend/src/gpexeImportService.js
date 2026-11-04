@@ -214,7 +214,33 @@ const GPEXE_TEAM_BOUND_MESSAGE = "This team is bound to its GPEXE team through a
 // The canonical GPEXE team id (no leading zeros), the comparison v30 makes.
 const canonicalGpexeId = (raw) => (typeof raw === "string" && /^[0-9]{1,12}$/.test(raw) ? raw.replace(/^0+(?=[0-9])/, "") : raw);
 
-export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
+// J19 U2a (owner decision D2, 2026-11-04): the active admin of the team's club may approve the
+// pair for a team of THEIR club. The right is checked again here, inside the transaction, after
+// the team import lock and before anything is read or written: the users row first and then the
+// role row FOR SHARE (the revocations' order), the club, the team (still active, still of that
+// club) and the club's verified GPEXE connection FOR SHARE. Anything missing is the same 404 as
+// a team that does not exist, except the connection, which is its own stable refusal. A club
+// admin sets a FIRST pair only: changing one stays with a platform admin.
+async function assertClubAdminMayApprovePair(client, { userId, clubId, teamId }) {
+  const right = await client.query(
+    `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id
+      where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of u, r`,
+    [userId, clubId],
+  );
+  const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);
+  const team = await client.query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true) for share`, [teamId, clubId]);
+  if (!right.rowCount || !club.rowCount || !team.rowCount) throw new GpexeImportServiceError(404, "notFound", "Not found.");
+  const connection = await client.query(
+    `select 1 from training_load.source_credential_connections
+      where owner_club_id = $1 and source_system = 'gpexe' and owner_scope = 'club' and state = 'verified' limit 1 for share`,
+    [clubId],
+  );
+  if (!connection.rowCount) {
+    throw new GpexeImportServiceError(409, "source_connection_required", "Your club has no verified GPEXE connection yet. Connect and test it under Settings > Source connections first. Nothing was changed.");
+  }
+}
+
+export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clubAdminClubId = null }) {
   if (typeof gpexeTeamId !== "string" || !/^[0-9]{1,12}$/.test(gpexeTeamId)) {
     throw new GpexeImportServiceError(400, "invalid_gpexe_team_id", "gpexeTeamId must be a numeric GPEXE team id.");
   }
@@ -224,6 +250,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     // A team whose import or check is running must not make this wait forever.
     await client.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
     await lockTeamForImport(client, teamId);
+    if (clubAdminClubId) await assertClubAdminMayApprovePair(client, { userId, clubId: clubAdminClubId, teamId });
     const current = (await client.query(
       `select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1 for update`,
       [teamId],
@@ -233,6 +260,9 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
       // Idempotent: nothing is written, so nothing is appended to the history.
       await client.query("commit");
       return getTeamSettings(teamId);
+    }
+    if (clubAdminClubId && current && canonicalGpexeId(current.gpexe_team_id) !== canonicalGpexeId(gpexeTeamId)) {
+      throw new GpexeImportServiceError(409, "pair_change_requires_platform_admin", "This team already has an approved GPEXE team. Changing it is done by a platform administrator (Settings > Data sources). Nothing was changed.");
     }
     // F3c2e (owner decision 2026-10-04): the settings row is the approved
     // pair a source binding is made of. While the team has an active gpexe

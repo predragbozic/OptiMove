@@ -277,22 +277,79 @@ test("4. Connect: the username and password travel in exactly one request (a dou
   assert.match(html(), /Test the connection to list the GPEXE teams/, "on return the card asks for a new Test instead of a stale list");
 });
 
-test("5. the club admin sees only the teams the server presented (the approved intersection) and no way to approve a pair; an empty intersection says to ask a platform admin", async () => {
-  const r = await openClub({
+const PAIR_URL = (team) => `/api/training-load/gpexe/teams/${team}/settings`;
+async function clubAdminWithList(pairWrite) {
+  const base = responder({
     list: [verified()],
-    writes: { [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test", { sourceTeams: [TEAMS[0]], sourceTeamCount: 1 }), connection: verified() } }) },
-  }, { who: asClubAdmin });
+    writes: { [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test", { sourceTeams: TEAMS.map((t) => ({ ...t })), sourceTeamCount: 8 }), connection: verified() } }) },
+  });
+  asClubAdmin();
+  installFetch((call) => (call.method === "PUT" && call.url.endsWith("/settings") ? pairWrite(call) : base.handler(call)));
+  await (await import("../source-connections-data.js")).loadSourceConnections(render);
   await act("source-connections-test", { connectionId: CONN });
-  assert.deepEqual(fetchCalls.at(-1), { method: "POST", url: `${BASE}/${CONN}/test`, body: {} });
+}
+
+test("5. (J19 U2a) the club admin sees the whole list the club's own account sees; a team without a pair offers Approve pair, a paired one Bind, and the platform admin's hop to Data sources is not offered", async () => {
+  await clubAdminWithList(() => ({ status: 200, body: { settings: {} } }));
+  const out = html();
+  assert.match(out, /Every team your club's own GPEXE account sees/);
+  assert.equal((out.match(/GPEXE team 98\d</g) || []).length, 2);
+  assert.match(out, /Youth/);
+  assert.match(out, /data-action="source-connections-pair-open"[^>]*data-source-team-id="981"/);
+  assert.match(out, /data-action="source-connections-bind-open"[^>]*data-source-team-id="980"/);
+  assert.doesNotMatch(out, /source-connections-open-pair/);
+  // The platform admin keeps the hop and gets no inline approval.
+  asPlatformAdmin();
+  const pa = responder({ list: [verified()], writes: { [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test", { sourceTeams: TEAMS.map((t) => ({ ...t })), sourceTeamCount: 8 }), connection: verified() } }) } });
+  installFetch(pa.handler);
+  await submit("club", { clubId: CLUB });
+  await act("source-connections-test", { connectionId: CONN });
+  assert.match(html(), /source-connections-open-pair/);
+  assert.doesNotMatch(html(), /source-connections-pair-open/);
+  assert.equal(await act("source-connections-pair-open", { connectionId: CONN, sourceTeamId: "981" }), true);
+  assert.equal(state.sourceConnections.pairReview, null, "a platform admin cannot open the club admin's approval");
+});
+
+test("5b. (J19 U2a) Approve pair: opening and choosing send nothing; only a team of the club without a pair is offered; one confirmation sends one PUT with the GPEXE team only; the row then offers Bind; refusals read as plain sentences and a lost answer says it can be sent again", async () => {
+  let puts = 0;
+  let answer = { status: 200, body: { settings: {} } };
+  await clubAdminWithList((call) => { puts += 1; return answer; });
+  const before = fetchCalls.length;
+  await act("source-connections-pair-open", { connectionId: CONN, sourceTeamId: "981", sourceTeamName: "Youth" });
+  assert.equal(fetchCalls.length, before, "opening sends nothing");
   let out = html();
-  assert.match(out, /Only the teams approved for one of your club's OptiMove teams are listed/);
-  assert.equal((out.match(/GPEXE team 98\d</g) || []).length, 1);
-  assert.doesNotMatch(out, /Youth|981|source-connections-open-pair/);
-  r.set([verified()]);
-  installFetch(responder({ list: [verified()], writes: { [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test", { sourceTeams: [], sourceTeamCount: 0 }), connection: verified() } }) } }).handler);
-  await act("source-connections-test", { connectionId: CONN });
+  assert.match(out, /Approve the pair/);
+  assert.match(out, /<option value="aaaaaaaa-0000-4000-8000-000000000002"[^>]*>U19</);
+  assert.doesNotMatch(out, /<option value="aaaaaaaa-0000-4000-8000-000000000001"/, "a team that already has a pair is not offered");
+  assert.match(out, /data-action="source-connections-pair-confirm"[^>]*disabled/, "nothing chosen yet");
+  await act("source-connections-pair-team", { }).catch(() => {});
+  await handleSourceConnectionsAction({ dataset: { action: "source-connections-pair-team" }, value: TEAM_2 }, { render });
+  assert.equal(fetchCalls.length, before, "choosing sends nothing");
+  assert.match(html(), /<strong>U19<\/strong> ↔ <strong>GPEXE team 981<\/strong>/);
+  // A refusal reads as a sentence and keeps the form.
+  answer = { status: 409, body: { error: "pair_change_requires_platform_admin", message: "x" } };
+  await act("source-connections-pair-confirm");
+  assert.match(html(), /Changing it is done by a platform administrator/);
+  answer = { status: 409, body: { error: "gpexe_team_taken" } };
+  await act("source-connections-pair-confirm");
+  assert.match(html(), /already connected to another OptiMove team/);
+  // A lost answer: said so, the same button sends the same approval again.
+  answer = new Error("network down");
+  await act("source-connections-pair-confirm");
+  assert.match(html(), /No answer arrived\. The same approval can be sent again safely\./);
+  // Success: exactly the GPEXE team in the body; the row learns its pair; Bind is offered.
+  answer = { status: 200, body: { settings: { gpexeTeamId: "981" } } };
+  puts = 0;
+  const putsBefore = fetchCalls.filter((c) => c.method === "PUT").length;
+  await Promise.all([act("source-connections-pair-confirm"), act("source-connections-pair-confirm")]);
+  assert.equal(puts, 1, "a double click sends one request");
+  const put = fetchCalls.filter((c) => c.method === "PUT").at(-1);
+  assert.deepEqual([put.url, put.body], [PAIR_URL(TEAM_2), { gpexeTeamId: "981" }]);
+  assert.ok(fetchCalls.filter((c) => c.method === "PUT").length > putsBefore);
   out = html();
-  assert.match(out, /None of the teams this account sees is approved for your club yet/);
+  assert.match(out, /U19 is now approved for GPEXE team 981/);
+  assert.match(out, /data-action="source-connections-bind-open"[^>]*data-source-team-id="981"/);
+  assert.doesNotMatch(out, /Approve the pair/);
 });
 
 test("6. Test: a refused credential moves the badge to Needs reconnect with the sentence to reconnect; a throttle, a running change and a 403 read as plain sentences; the token and the source's answer appear nowhere", async () => {

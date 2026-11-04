@@ -1476,3 +1476,11 @@ waiting (each is caught and logged; a purge runs again on its schedule).
   or an estimate. This comes after F1–F3.
 - Periodic checks and notifications. They can later feed the same candidate
   queue.
+
+## Approving the pair as a club admin (J19 U2a)
+
+- **Who:** an active platform admin (as before), or the active admin of the team's club acting in that club's own workspace, for a team of that club that has no approved GPEXE team yet. Everyone else is refused as before (a coach 403, anyone outside the club 404).
+- **Conditions the server checks inside the write:** the user and the club-admin role, the club, the team (active and of that club) and a `verified` GPEXE connection of the club (`409 source_connection_required` otherwise; nothing is written). Changing an existing pair is `409 pair_change_requires_platform_admin`: a platform admin does it (Settings > Data sources, with a reason).
+- **What it does not do:** no request to GPEXE, no binding, no import. The bind that follows verifies the team through the club's own credential.
+- **Condition for a second club (owner/*Rukovodilac* decision 2026-11-04):** the club first connects its OWN GPEXE account. With one shared account every club admin would see the same teams and the first to approve a GPEXE team blocks the others (`gpexe_team_taken`). The code does not detect a shared account; a platform admin can remove a wrong pair through the F3b path.
+- **Record:** the settings history row (`configured_by_user_id`, reason). No new column.

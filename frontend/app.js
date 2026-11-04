@@ -1374,6 +1374,12 @@ async function handleContentChange(event) {
   // Exercise media (FE-2): the editor's hidden file input chose a file.
   if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;
   if (await handleTestsContentChange(event)) return;
+  // J19 U2a: choosing the OptiMove team of a pair sends nothing; the choice is kept for the confirmation.
+  const pairTeamSelect = event.target.closest("[data-action='source-connections-pair-team']");
+  if (pairTeamSelect) {
+    void handleSourceConnectionsAction(pairTeamSelect, { render: renderDataSourcesSurface });
+    return;
+  }
   const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
     void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });

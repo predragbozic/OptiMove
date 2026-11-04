@@ -12,7 +12,9 @@ import {
   UNBIND_REASON_MAX,
   acknowledgeQuestion,
   acknowledgeUncertainty,
+  approvePair,
   bindTeam,
+  pairableTeams,
   canAcknowledgeUncertainty,
   checkUnconfirmed,
   connectionById,
@@ -90,6 +92,27 @@ export async function handleSourceConnectionsAction(action, { render, openDataSo
     clearNotice(d);
     d.bindReview = { connectionId, teamId, teamName: action.dataset.teamName || "the OptiMove team", sourceTeamId, sourceTeamName: action.dataset.sourceTeamName || "" };
     render();
+    return true;
+  }
+  if (type === "source-connections-pair-open") {
+    // Club admin only (the server decides again): approve a pair for a GPEXE team the club's own account sees.
+    if (writeInFlight() || !connectionById(connectionId) || sourceConnectionsAdminContext()?.basis !== "club_admin") return true;
+    const sourceTeamId = action.dataset.sourceTeamId || "";
+    if (!sourceTeamId) return true;
+    resetSourceConnectionsForms();
+    clearNotice(d);
+    d.pairReview = { connectionId, sourceTeamId, sourceTeamName: action.dataset.sourceTeamName || "", teamId: "" };
+    render();
+    return true;
+  }
+  if (type === "source-connections-pair-team") {
+    // Choosing a team sends nothing.
+    if (d.pairReview && !d.pairBusy) d.pairReview = { ...d.pairReview, teamId: action.value || "" };
+    render();
+    return true;
+  }
+  if (type === "source-connections-pair-confirm") {
+    await approvePair(render);
     return true;
   }
   if (type === "source-connections-bind-confirm") {
