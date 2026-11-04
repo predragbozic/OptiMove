@@ -526,6 +526,7 @@ function renderWidgetHtml(widget, position) {
   const layout = layoutFor(widget);
   const results = resultByWidgetId(widget.id);
   const layoutMode = state.trainingLoad.analysis.editMode && canEdit();
+  const settingsBlocked = state.trainingLoad.analysis.saving || Boolean(layoutMode && state.trainingLoad.analysis.layoutDraft);
   return `
     <article class="panel tl-analysis-widget tl-analysis-widget-${escapeAttr(widget.widget_type)}" data-analysis-widget-id="${escapeAttr(widget.id)}" style="--tl-x:${Number(layout.x || 0)};--tl-y:${Number(layout.y || 0)};--tl-w:${Number(layout.width || 4)};--tl-h:${Number(layout.height || 4)};--tl-mobile:${Number(layout.mobileOrder || 0)}">
       ${layoutMode ? `<button type="button" class="tl-analysis-widget-move" data-analysis-drag-handle="true" aria-label="Move widget" title="Move widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M8 7l4-4 4 4M16 17l-4 4-4-4M7 8l-4 4 4 4M17 16l4-4-4-4"/></svg></button>` : ""}
@@ -535,6 +536,7 @@ function renderWidgetHtml(widget, position) {
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
+        ${canEdit() && !state.trainingLoad.analysis.editMode ? `<button type="button" class="plain-button compact-button tl-widget-settings" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="${escapeAttr(`Podesi ${widget.title}`)}" ${settingsBlocked ? 'disabled' : ''}>Podesi</button>` : ''}
       </header>
       <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
@@ -893,17 +895,19 @@ function renderEditorHtml() {
 
 export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
+  const editing = Boolean(a.simpleEditor?.open);
+  const dashboardControls = (html, label) => editing ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
   return `
     <div class="tl-analysis">
-      ${renderTopBarHtml()}
+      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filteri</summary>${dashboardControls(renderTopBarHtml(), 'Filteri dashboarda tokom podešavanja')}</details>` : renderTopBarHtml()}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
-      ${renderGridHtml()}
+      ${renderSimpleEditorHtml(a.simpleEditor)}
+      ${dashboardControls(renderGridHtml(), 'Sačuvani dashboard tokom podešavanja')}
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
-      ${renderSimpleEditorHtml(a.simpleEditor)}
     </div>
   `;
 }

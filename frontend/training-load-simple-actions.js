@@ -16,8 +16,13 @@ function paint(model) {
   const id = active?.dataset?.id;
   const value = active?.value, choice = ['radio', 'checkbox'].includes(active?.type);
   const start = active?.selectionStart, end = active?.selectionEnd;
+  const advancedOpen = model === previousModel && globalThis.document?.querySelector('.tl-simple-advanced')?.open;
   if (model && model !== previousModel) returnFocus = active;
   render();
+  if (advancedOpen) {
+    const advanced = globalThis.document?.querySelector('.tl-simple-advanced');
+    if (advanced) advanced.open = true;
+  }
   if (action?.startsWith('training-load-simple-')) {
     const candidates = globalThis.document?.querySelectorAll?.(`[data-action="${action}"]`) ?? [];
     const next = [...candidates].find(item => (!id || item.dataset.id === id) && (!choice || item.value === value));
@@ -51,6 +56,8 @@ export const simpleEditor = createSimpleEditorController({ request: api, paint,
 
 export async function openSimpleEditor(widget, onRender) {
   render = onRender;
+  analysis().menu = '';
+  analysis().picker.open = false;
   await simpleEditor.open(widget);
   if (simpleEditor.model?.unavailable) { simpleEditor.close(); return false; }
   const target = simpleEditor.model;
@@ -64,16 +71,6 @@ export async function openSimpleEditor(widget, onRender) {
   }
   return true;
 }
-
-globalThis.document?.addEventListener?.('keydown', event => {
-  if (event.key !== 'Tab' || !simpleEditor.model) return;
-  const dialog = document.querySelector('.tl-simple-editor');
-  const items = [...(dialog?.querySelectorAll('button, input, select, textarea, [tabindex="0"]') ?? [])].filter(item => !item.disabled && !item.closest('fieldset[disabled]'));
-  if (!items.length) { event.preventDefault(); dialog?.focus(); return; }
-  const index = items.indexOf(document.activeElement);
-  if (event.shiftKey && index <= 0) { event.preventDefault(); items.at(-1).focus(); }
-  else if (!event.shiftKey && (index === items.length - 1 || index < 0)) { event.preventDefault(); items[0].focus(); }
-});
 
 export function leaveSimpleEditor({ discard = true, confirm = message => window.confirm(message) } = {}) {
   const model = simpleEditor.model;

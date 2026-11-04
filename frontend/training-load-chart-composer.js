@@ -6,7 +6,7 @@ export function chartIdentityKey(value) {
 export const isChartDate = value => typeof value === 'string' && /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
 const shift = (date, days) => new Date(Date.parse(date + 'T00:00:00Z') + days * 86400000).toISOString().slice(0,10);
 const monday = date => shift(date, -(new Date(date + 'T00:00:00Z').getUTCDay() + 6) % 7);
-const palette = ['#002d9c','#a2191f','#006d5b','#6929c4','#8a3800','#005d5d','#9f1853'];
+const palette = ['#157b70','#427eb5','#8560b0','#9b641e','#a54343','#246778','#725b42'];
 const color = id => { let hash = 0; for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) >>> 0; return palette[hash % palette.length]; };
 const only = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 
@@ -71,7 +71,10 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
     const buckets=time ? chartBuckets(phasePeriod,model.groupBy) : model.groupBy === 'athlete' && composed ? athleteIds : [...new Set(group.rows.map(row=>row.identity.bucketKey))];
     if (!buckets || group.rows.some(row => time && !buckets.includes(row.identity.bucketKey))) return {status:'invalidBuckets',plots:[]};
     const athleteName=id=>options.athletes?.find(athlete=>athlete.id===id)?.name || (id == null ? 'Cela grupa' : `Sportista ${id}`);
-    const uniqueLabel=id=>`${athleteName(id)}${id == null || !options.athletes?.some(athlete=>athlete.id===id) ? '' : ` (${id})`}`;
+    const names=athleteIds.map(athleteName);
+    const labels=athleteIds.map((id,index)=>names.filter(name=>name===names[index]).length>1 ? `${names[index]} (${id ?? 'grupa'})` : names[index]);
+    const labelCollision=new Set(labels).size!==labels.length;
+    const uniqueLabel=id=>labelCollision ? JSON.stringify([athleteName(id),id]) : labels[athleteIds.indexOf(id)];
     const name=labelForSeries(group.definition);
     const rowsBySeries=[];
     const definitions=[];
@@ -85,7 +88,7 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
       });
       rowsBySeries.push(points);
       const label=model.groupBy === 'athlete' && composed ? name : uniqueLabel(id);
-      definitions.push({id:chartIdentityKey([group.key,id]),name:label,type:model.widgetType==='bar_chart'?'bar':'line',connectNulls:false,showSymbol:true,symbolSize:7,barMaxWidth:48,itemStyle:{color:color(id)},lineStyle:{color:color(id)},label:{show:model.config.effective.valueLabels.visible,position:'top'},data:points.map(point=>point?.chartStatus==='value'?{value:point.value}:null)});
+      definitions.push({id:chartIdentityKey([group.key,id]),name:label,type:model.widgetType==='bar_chart'?'bar':'line',connectNulls:false,showSymbol:true,symbolSize:7,barMaxWidth:26,itemStyle:{color:color(id)},lineStyle:{color:color(id),width:2.5},label:{show:model.config.effective.valueLabels.visible,position:'top'},data:points.map(point=>point?.chartStatus==='value'?{value:point.value}:null)});
     }
     const fixed=settings.axis.mode==='fixed';
     const units=new Set([...groups.values()].filter(other=>other.definition.id===group.definition.id && other.phase===group.phase).map(other=>other.identity.unit));

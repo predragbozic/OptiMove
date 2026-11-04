@@ -408,7 +408,7 @@ export function syncDataAnalysisSharedWeek(newWeekStart, movedSide) {
 
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
-  return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
+  return state.trainingLoad.section === "analysis" && !simpleEditor.model && !a.simpleEditor?.open && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
 }
 
 function analysisLayoutMetrics() {

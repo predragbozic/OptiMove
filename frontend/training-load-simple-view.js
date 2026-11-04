@@ -120,7 +120,7 @@ function displayChoices(model, locked) {
   const custom = model.draft?.metricRef?.kind === "metric";
   const scopes = metric.scope_capabilities?.length ? metric.scope_capabilities.map((scope) => typeof scope === "string" ? scope : scope.scope_level) : ["day", "session", "component"];
   return `<label class="tl-simple-field">Title<input type="text" ${action("title")} maxlength="200" value="${escapeAttr(model.draft?.title ?? "")}"${disabled(locked)}></label>
-    <fieldset${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
+    <fieldset class="tl-simple-view-options"${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
       const supported = types.some((type) => (typeof type === "string" ? type : type.key) === value && type.is_active !== false);
       return `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${label}${!supported ? " (unavailable)" : ""}</label>`;
     }).join("")}</fieldset>
@@ -188,16 +188,17 @@ export function renderSimpleEditorHtml(model = {}) {
   const locked = ["unknown", "saving", "recorded"].includes(model.saveState);
   const supported = model.capabilities?.capabilities ?? {};
   const advanced = Boolean(model.advancedRequired || model.preview?.status === "advancedRequired");
-  return `<div class="tl-simple-backdrop"><section class="tl-simple-editor" role="dialog" aria-modal="true" aria-labelledby="tl-simple-heading" aria-describedby="tl-simple-step" tabindex="-1">
+  return `<div class="tl-simple-panel"><section class="tl-simple-editor" role="region" aria-labelledby="tl-simple-heading" aria-describedby="tl-simple-step tl-simple-context-help" tabindex="-1">
     <header><h2 id="tl-simple-heading">${model.widgetId ? "Edit widget" : "Add widget"}</h2>${button("close", "Close editor", ["saving", "unknown"].includes(model.saveState))}</header>
     <p id="tl-simple-step">Step ${step} of 3: ${["Metric", "Athletes and period", "Display"][step - 1]}</p>
+    <p id="tl-simple-context-help" class="tl-simple-context-help">Podešavanja su nacrt. Dashboard ostaje vidljiv; sačuvaj ili zatvori podešavanja pre promene njegovih filtera i kartica.</p>
     <ol class="tl-simple-steps" aria-label="Editor steps">${["Metric", "Athletes and period", "Display"].map((label, index) => `<li${index + 1 === step ? ' aria-current="step"' : ""}>${label}</li>`).join("")}</ol>
     ${saveFeedback(model)}
     ${model.error ? message(model.error, "alert") : ""}
     ${advanced ? message("These settings require the advanced editor. Opening advanced will ask before discarding these unsaved changes.") : ""}
     <div class="tl-simple-content"><fieldset class="tl-simple-editable"${disabled(locked)}><legend class="tl-simple-sr-only">Step ${step} settings</legend>${step === 1 ? metricCards(model, locked) : step === 2 ? athletesAndPeriod(model, locked) : displayChoices(model, locked)}</fieldset>
-    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}">${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model)}</section>` : ""}</div>
-    <footer>${button("advanced", "Open advanced editor", locked, 'aria-describedby="tl-simple-advanced-help"')}<p id="tl-simple-advanced-help">Opening advanced will ask before discarding these unsaved changes.</p>
+    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}"><h3>Pregled rezultata</h3>${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model)}</section>` : ""}</div>
+    <footer><details class="tl-simple-advanced"><summary>Napredne opcije</summary>${button("advanced", "Open advanced editor", locked, 'aria-describedby="tl-simple-advanced-help"')}<p id="tl-simple-advanced-help">Opening advanced will ask before discarding these unsaved changes.</p></details>
     <div class="tl-simple-navigation">${step > 1 ? button("back", "Back", locked) : ""}${step < 3 ? button("next", "Next", locked || (step === 1 && !model.draft?.metricRef) || advanced) : button("save", "Save", locked || !model.canSave || !supported.atomicSave || advanced || model.previewLoading)}${step === 3 && !supported.atomicSave ? message("Saving is temporarily unavailable.") : ""}</div></footer>
   </section></div>`;
 }
