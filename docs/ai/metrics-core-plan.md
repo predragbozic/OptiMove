@@ -1426,6 +1426,18 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
 - **Place:** after phase 9, before the first regular production import, together with condition 4 of the import
   switch (a safe undo procedure). Triggers 1, 3 and 4.
 
+### Phase 13 ★★: the GPS import flow (J19, parts U1–U5), the owner's plan of 2026-11-04
+- **Contract:** `docs/ai/gps-import-flow-contract.md` (J19), proposed on 2026-11-04 on the *Rukovodilac*'s order. No code
+  before the *Rukovodilac*'s GO on it.
+- **Owner, 2026-11-04** (relayed by the *Rukovodilac*): „Slažemo se sa planom u1-u5. Admin kluba bi trebao da odobrava
+  par „OptiMove tim ↔ GPEXE tim" za timove koje vidi njegov klub. Posle pilota uvoz radi i admin kluba ali i trener
+  tima jer trener tima će raditi sa tim sportistima. 5. može po preporuci. 6. Po preporuci".
+- **Order:** U1 (the daily screen, the poll fix, 50 per confirmation) → U2 (the per-team switch with its conditions,
+  the pair by the club admin, migration, ★★) → U3 (suggested pairs) → U4 (the five-step guide, "Use OptiMove
+  variables") → U5 (correcting a wrong link in the app, migration, ★★). Later: sets, the nightly check, J18.
+- The import switch stays off and no check or import runs until the owner orders the pilot. The legal gate before U3
+  is closed by C123; a minor athlete would reopen it.
+
 ## 6. Small separate tasks
 
 Each one is a plan change, so the owner schedules it:
