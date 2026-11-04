@@ -1435,7 +1435,7 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
 - **Order:** U1 (the daily screen, the poll fix, 50 per confirmation) → U2 (the per-team switch with its conditions,
   the pair by the club admin, migration, ★★) → U3 (suggested pairs) → U4 (the five-step guide, "Use OptiMove
   variables") → U5 (correcting a wrong link in the app, migration, ★★). Later: sets, the nightly check, J18.
-- **Done:** U1, PR #364 (`76af5f52`, 2026-11-04; `docs/ai/gps-import-flow-contract.md` section 7). U2a: plan in `docs/ai/u2a-club-admin-pair-plan.md`.
+- **Done:** U1, PR #364 (`76af5f52`, 2026-11-04; `docs/ai/gps-import-flow-contract.md` section 7). U2a, PR #366 (`db7ebd55`, merged; goes out with the owner's deploy of #361 - the owner accepted points 3 and 4 for the pilot on 2026-11-04, with three conditions before a second club: the club admin sees only their own club's teams again, one GPEXE account = one club, the pair only for visible ids by a migration; plan in `docs/ai/u2a-club-admin-pair-plan.md`). Next: U2 (the per-team switch, ★★, migration).
 - The import switch stays off and no check or import runs until the owner orders the pilot. The legal gate before U3
   is closed by C123; a minor athlete would reopen it.
 
