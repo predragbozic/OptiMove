@@ -293,8 +293,8 @@ test("5. (J19 U2a) the club admin sees the whole list the club's own account see
   await clubAdminWithList(() => ({ status: 200, body: { settings: {} } }));
   const out = html();
   assert.match(out, /Every team your club's own GPEXE account sees/);
-  assert.equal((out.match(/GPEXE team 98\d</g) || []).length, 2);
-  assert.match(out, /Youth/);
+  assert.equal((out.match(/GPEXE team number 98\d</g) || []).length, 2);
+  assert.match(out, /<strong>Youth<\/strong>/, "the name is the main text for the club admin");
   assert.match(out, /data-action="source-connections-pair-open"[^>]*data-source-team-id="981"/);
   assert.match(out, /data-action="source-connections-bind-open"[^>]*data-source-team-id="980"/);
   assert.doesNotMatch(out, /source-connections-open-pair/);
@@ -325,7 +325,8 @@ test("5b. (J19 U2a) Approve pair: opening and choosing send nothing; only a team
   await act("source-connections-pair-team", { }).catch(() => {});
   await handleSourceConnectionsAction({ dataset: { action: "source-connections-pair-team" }, value: TEAM_2 }, { render });
   assert.equal(fetchCalls.length, before, "choosing sends nothing");
-  assert.match(html(), /<strong>U19<\/strong> ↔ <strong>GPEXE team 981<\/strong>/);
+  assert.match(html(), /<strong>U19<\/strong> ↔ <strong>Youth<\/strong> <span class="muted">GPEXE team number 981<\/span>/);
+  assert.match(html(), /Check the name: you cannot undo this yourself/);
   // A refusal reads as a sentence and keeps the form.
   answer = { status: 409, body: { error: "pair_change_requires_platform_admin", message: "x" } };
   await act("source-connections-pair-confirm");
@@ -347,7 +348,7 @@ test("5b. (J19 U2a) Approve pair: opening and choosing send nothing; only a team
   assert.deepEqual([put.url, put.body], [PAIR_URL(TEAM_2), { gpexeTeamId: "981" }]);
   assert.ok(fetchCalls.filter((c) => c.method === "PUT").length > putsBefore);
   out = html();
-  assert.match(out, /U19 is now approved for GPEXE team 981/);
+  assert.match(out, /U19 is now approved for GPEXE team Youth \(number 981\)/);
   assert.match(out, /data-action="source-connections-bind-open"[^>]*data-source-team-id="981"/);
   assert.doesNotMatch(out, /Approve the pair/);
 });
@@ -1137,4 +1138,21 @@ test("13. the coach's Imports screen: a check refused or failed through the team
   const admin = renderCheckSummaryHtml({ id: "c3", status: "failed", startedAt: "2026-10-05T10:00:00.000Z", window: {}, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: { code: "binding_ended", message: "x" } });
   assert.match(admin, /an administrator acts under Settings &gt; Source connections|an administrator acts under Settings > Source connections/);
   assert.doesNotMatch(admin, /Try again in a moment/);
+});
+
+test("5c. (J19 U2a) an unnamed GPEXE team cannot be approved by the club admin: the form says it has no name and Approve pair stays off; nothing is sent", async () => {
+  let puts = 0;
+  const base = responder({ list: [verified()], writes: { [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test", { sourceTeams: [{ sourceTeamId: "982", name: null, approvedTeamId: null, approvedTeamName: null }], sourceTeamCount: 8 }), connection: verified() } }) } });
+  asClubAdmin();
+  installFetch((call) => { if (call.method === "PUT") { puts += 1; return { status: 200, body: {} }; } return base.handler(call); });
+  await (await import("../source-connections-data.js")).loadSourceConnections(render);
+  await act("source-connections-test", { connectionId: CONN });
+  assert.match(html(), /Unnamed GPEXE team<\/strong> <span class="muted">GPEXE team number 982/);
+  await act("source-connections-pair-open", { connectionId: CONN, sourceTeamId: "982", sourceTeamName: "" });
+  await handleSourceConnectionsAction({ dataset: { action: "source-connections-pair-team" }, value: TEAM_2 }, { render });
+  const out = html();
+  assert.match(out, /has no name, so you cannot check what you are approving/);
+  assert.match(out, /data-action="source-connections-pair-confirm"[^>]*disabled/);
+  await act("source-connections-pair-confirm");
+  assert.equal(puts, 0, "nothing is sent for an unnamed team");
 });

@@ -410,7 +410,7 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
           <p class="data-sources-form-title">${escapeHtml(SOURCE_NAME)} teams this account can see${typeof result.sourceTeamCount === "number" ? ` (${result.sourceTeamCount})` : ""}${result.sourceTeamsTruncated ? " - first page only" : ""}</p>
           <p class="muted">${ctx.basis === "platform_admin"
             ? "Every team the account sees, with the approved OptiMove team where a pair exists under Data sources. Nothing is preselected; a team is bound only from here, after a review."
-            : "Every team your club's own GPEXE account sees. Choose the OptiMove team a GPEXE team belongs to (Approve pair), then bind it. Nothing is preselected."}</p>
+            : "Every team your club's own GPEXE account sees. Match each GPEXE team to the OptiMove team it belongs to (Approve pair), then press Bind. Nothing is preselected."}</p>
           ${teams.length ? `
             <ul class="source-connections-team-list">
               ${teams.map((team) => {
@@ -419,8 +419,9 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
                 return `
                   <li>
                     <div>
-                      <strong>${escapeHtml(SOURCE_NAME)} team ${escapeHtml(sourceTeamId)}</strong>
-                      ${team.name ? `<span class="muted">${escapeHtml(team.name)}</span>` : ""}
+                      ${ctx.basis === "club_admin"
+                        ? `<strong>${team.name ? escapeHtml(team.name) : `Unnamed ${escapeHtml(SOURCE_NAME)} team`}</strong> <span class="muted">${escapeHtml(SOURCE_NAME)} team number ${escapeHtml(sourceTeamId)}</span>`
+                        : `<strong>${escapeHtml(SOURCE_NAME)} team ${escapeHtml(sourceTeamId)}</strong>${team.name ? ` <span class="muted">${escapeHtml(team.name)}</span>` : ""}`}
                       <span class="muted">${team.approvedTeamId ? `Approved for ${escapeHtml(team.approvedTeamName || "an OptiMove team")}` : "No approved OptiMove team yet"}</span>
                     </div>
                     ${boundRow
@@ -436,8 +437,8 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
                 `;
               }).join("")}
             </ul>
-          ` : `<p class="muted">${ctx.basis === "platform_admin" ? "The account sees no team." : "The account sees no team."}</p>`}
-          <p class="muted">After a pair is set or changed under Data sources, run Test connection again to refresh this list.</p>
+          ` : `<p class="muted">${ctx.basis === "platform_admin" ? "The account sees no team." : "This GPEXE account sees no team. Check with GPEXE that the account has access to your teams, then run Test connection again."}</p>`}
+          <p class="muted">${ctx.basis === "club_admin" ? "If the list looks out of date, run Test connection again." : "After a pair is set or changed under Data sources, run Test connection again to refresh this list."}</p>
         </div>
       ` : ""}
       ${result.sourceTeamsUnavailable ? `<p class="data-sources-warn">The ${escapeHtml(SOURCE_NAME)} team list is withheld right now: the approved pairs under Data sources name the same ${escapeHtml(SOURCE_NAME)} team twice. A platform admin has to settle that first.</p>` : ""}
@@ -447,8 +448,8 @@ function renderAttemptHtml(d, ctx, connection, attempt, busy) {
 
 // J19 U2a: the club admin names the OptiMove team a GPEXE team belongs to; one confirmation, both sides named.
 const PAIR_ERRORS = {
-  pair_change_requires_platform_admin: "This team already has an approved GPEXE team. Changing it is done by a platform administrator under Settings > Data sources.",
-  gpexe_team_taken: "This GPEXE team is already connected to another OptiMove team. A platform administrator can look into it under Settings > Data sources.",
+  pair_change_requires_platform_admin: "This team already has an approved GPEXE team. Changing it is done by a platform administrator under Settings > Data sources. Nothing was changed.",
+  gpexe_team_taken: "This GPEXE team is already connected to another OptiMove team. A platform administrator can look into it under Settings > Data sources. Nothing was changed.",
   source_connection_required: "Your club has no verified GPEXE connection. Connect and test it first. Nothing was changed.",
   gpexe_team_bound: "This team is bound to its GPEXE team; end the binding first. Nothing was changed.",
   notFound: "That team is not available any more. Reload the page. Nothing was changed.",
@@ -458,6 +459,8 @@ function renderPairReviewHtml(d, connection, clubName) {
   const teams = pairableTeams(connection);
   const chosen = teams.find((t) => String(t.id) === String(review.teamId));
   const info = d.pairError;
+  const named = Boolean(review.sourceTeamName);
+  const sourceLabel = named ? `${review.sourceTeamName}` : `unnamed ${SOURCE_NAME} team`;
   return `
     <div class="data-sources-confirm">
       <p class="data-sources-form-title">Approve the pair</p>
@@ -467,12 +470,13 @@ function renderPairReviewHtml(d, connection, clubName) {
           ${teams.map((t) => `<option value="${escapeAttr(String(t.id))}" ${String(t.id) === String(review.teamId) ? "selected" : ""}>${escapeHtml(t.name || "Team")}</option>`).join("")}
         </select>
       </label>
-      ${teams.length ? "" : `<p class="muted">Every active team of ${escapeHtml(clubName || "your club")} already has an approved GPEXE team.</p>`}
-      <p class="data-sources-confirm-line"><strong>${escapeHtml(chosen?.name || "OptiMove team")}</strong> ↔ <strong>${escapeHtml(SOURCE_NAME)} team ${escapeHtml(review.sourceTeamId)}</strong>${review.sourceTeamName ? ` <span class="muted">${escapeHtml(review.sourceTeamName)}</span>` : ""}</p>
-      <p>This says which ${escapeHtml(SOURCE_NAME)} team belongs to which OptiMove team of ${escapeHtml(clubName || "your club")}. It does not import anything and binds nothing yet; you bind the pair next. Only a platform administrator can change it afterwards.</p>
+      ${teams.length ? "" : `<p class="data-sources-warn">Every active team of ${escapeHtml(clubName || "your club")} already has an approved GPEXE team, so this GPEXE team cannot be paired here. Create the team first, or ask a platform administrator.</p>`}
+      <p class="data-sources-confirm-line"><strong>${escapeHtml(chosen?.name || "OptiMove team")}</strong> ↔ <strong>${escapeHtml(sourceLabel)}</strong> <span class="muted">${escapeHtml(SOURCE_NAME)} team number ${escapeHtml(review.sourceTeamId)}</span></p>
+      ${named ? "" : `<p class="data-sources-warn">This GPEXE team has no name, so you cannot check what you are approving. Ask your GPEXE administrator to name it, then run Test connection again.</p>`}
+      <p>This says which ${escapeHtml(SOURCE_NAME)} team belongs to which OptiMove team of ${escapeHtml(clubName || "your club")}. It does not import anything and binds nothing yet; you bind the pair next. <strong>Check the name: you cannot undo this yourself</strong> - only a platform administrator can change it afterwards.</p>
       ${info ? `<p class="data-sources-warn" role="alert">${escapeHtml(PAIR_ERRORS[info.code] || (info.code === "no_answer" ? "No answer arrived. The same approval can be sent again safely." : "The pair could not be approved. Nothing was changed."))}</p>` : ""}
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="button" data-action="source-connections-pair-confirm" ${d.pairBusy || !chosen ? "disabled" : ""}>${d.pairBusy ? "Approving..." : "Approve pair"}</button>
+        <button class="plain-button data-sources-primary" type="button" data-action="source-connections-pair-confirm" ${d.pairBusy || !chosen || !named ? "disabled" : ""}>${d.pairBusy ? "Approving..." : "Approve pair"}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.pairBusy ? "disabled" : ""}>Cancel</button>
       </div>
     </div>

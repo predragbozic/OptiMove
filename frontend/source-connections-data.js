@@ -512,7 +512,8 @@ export function pairableTeams(connection) {
 export async function approvePair(render) {
   const d = sc();
   const review = d.pairReview;
-  if (!review || d.pairBusy || !review.teamId) return;
+  // An unnamed GPEXE team cannot be checked by the admin, so it is never approved from here.
+  if (!review || d.pairBusy || !review.teamId || !review.sourceTeamName) return;
   const generation = d.generation;
   const id = String(review.connectionId);
   d.pairBusy = true;
@@ -530,7 +531,7 @@ export async function approvePair(render) {
     }
     resetSourceConnectionsForms();
     d.noticeFor = id;
-    d.notice = `${teamName || "The team"} is now approved for ${SOURCE_NAME} team ${review.sourceTeamId}. Bind it below when you are ready.`;
+    d.notice = `${teamName || "The team"} is now approved for ${SOURCE_NAME} team ${review.sourceTeamName ? `${review.sourceTeamName} (number ${review.sourceTeamId})` : review.sourceTeamId}. Bind it below when you are ready.`;
   } catch (error) {
     if (generation !== d.generation) return;
     d.pairError = errorInfo(error);
