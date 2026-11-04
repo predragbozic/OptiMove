@@ -4,7 +4,7 @@ Osnova je S4a Draft #368, HEAD `d78de79dc1d5e6092bebef48660161b42852d479`. S1.1 
 
 ## Isporučeno
 
-- Migracija `202611041500_training_load_v56_dashboard_pages.sql`: početna stranica za postojeće i nove dashboarde, stvarni Page FK widgeta, Page-scoped redosled/mobile/overlap, nezavisne sadržajne/defaults/layout/list revizije, trajni Page request ledger i sanctioned mutator.
+- Migracija `202611041500_training_load_v57_dashboard_pages.sql`: početna stranica za postojeće i nove dashboarde, stvarni Page FK widgeta, Page-scoped redosled/mobile/overlap, nezavisne sadržajne/defaults/layout/list revizije, trajni Page request ledger i sanctioned mutator.
 - Postojeći widget/series ID-evi, konfiguracije, filteri i koordinate ostaju isti. Backfill ne izmišlja period. Početna stranica ima `legacyRuntime/null`; filter-only izmena ga zadržava, a samo eksplicitni periodConfig uvodi sačuvani period.
 - Kreiranje, preimenovanje, defaults, kompletan reorder, duplicate i delete idu kroz jednu bounded transakciju i SQL funkciju. Actor/aktivni workspace/prava proveravaju se ponovo; telo zahteva ne određuje vlasnika. Poslednja stranica i limit32 proveravaju se pod dashboard lock-om.
 - Duplicate pravi nezavisne widget/series ID-eve i zadržava konfiguraciju; nepoznati presentation sadržaj čuva se tačno. Brisanje neprazne stranice traži eksplicitni deleteWidgets. Ledger ostaje i kada je cilj obrisan, radi istog receipt-a umesto ponavljanja operacije.
@@ -41,7 +41,7 @@ Engine harness je u `backend/tests/support/dashboard-pages-db-checks.mjs`: ne ot
 
 Provere obuhvataju: očuvanje backfill-a, parent/workspace/actor revokaciju, odvojene revizije, period prelaz, duplikat/opaque sadržaj, potvrdu brisanja/poslednju stranicu, durable replay, legacy guard-e, paralelni create/reorder/delete i limit32. HTTP proverava odgovarajuće javne odgovore i stvarni Page query. Regresija sa paralelnim duplicateP→Q i deleteP potvrđuje da legacy reader vraća konzistentni sadržaj P, umesto praznog rezultata koji nikad nije bio single-page stanje.
 
-Pri početku rada main je bio `db7ebd557f0bbfcf3ec91f03a8e9bca051d78181` kroz v54. Tokom završne provere pojavio se `0ac2d2626da964e4026a98bfce4ec040f6ee10eb` sa v55 za club variables na team dashboardima. Naš slot zato je v56. Rehearsal uključuje te main migracije zajedno sa S2c i ovim Pages SQL-om; to nije tvrdnja da je ceo main aplikacioni stack već merge-ovan u ovu granu.
+Pri početku rada main je bio `db7ebd557f0bbfcf3ec91f03a8e9bca051d78181` kroz v54. Tokom završne provere pojavio se `0ac2d2626da964e4026a98bfce4ec040f6ee10eb` sa v55 za club variables na team dashboardima. Slot je potom usklađen na v57 jer je main 73193fe273b7c9bc79fbd5898de85571dab9c0c8 zauzeo v56 za team import switch. Raniji dokaz važi za isto SQL telo pre promene imena; nastavak Simple porta proverava kompoziciju i sa main v56. Rehearsal uključuje te main migracije zajedno sa S2c i ovim Pages SQL-om; to nije tvrdnja da je ceo main aplikacioni stack već merge-ovan u ovu granu.
 
 Jedan zaseban nezavisni revizor našao je P2 snapshot trku, zatvorenu RR transakcijom i ciljano ponovo pregledanu. SQL izvršilac je zasebna uloga i ne računa se kao nezavisna revizija. Rezultati stvarnog rehearsal-a, cleanup i tačan head/tree beleže se u Draft PR-u i lokalnom statusu. Ovo nije ljudsko odobrenje za merge/deploy.
 
