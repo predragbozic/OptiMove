@@ -239,6 +239,7 @@ export async function startGpexeCheck({ from, to }, render) {
   gx.checkError = null;
   gx.pollFailures = 0;
   gx.pollNote = "";
+  gx.pollStopped = false;
   gx.checkStarting = true;
   render();
   try {
@@ -259,6 +260,34 @@ export async function startGpexeCheck({ from, to }, render) {
       render();
     }
   }
+  if (generation === gx.generation && gx.check?.status === "running") await pollGpexeCheck(render);
+}
+
+// "Refresh status" (J19 U1): after polling gave up, read the team's status once more. It never
+// starts a search; if the search is still running, polling starts again, and if it ended the
+// finished state and the sessions are read.
+export async function refreshGpexeStatus(render) {
+  const gx = g();
+  const generation = gx.generation;
+  try {
+    const status = await api(teamPath(gx.teamId, "/status"));
+    if (generation !== gx.generation) return;
+    gx.status = status;
+    gx.pollFailures = 0;
+    gx.pollNote = "";
+    gx.pollStopped = false;
+    gx.check = status.lastCheck || null;
+    if (gx.check && gx.check.status !== "running") {
+      render();
+      await reloadGpexeCandidates(render);
+      return;
+    }
+  } catch {
+    if (generation !== gx.generation) return;
+    gx.pollNote = "Progress is no longer refreshing. The search may still be running - do not start another one; use Refresh status.";
+    gx.pollStopped = true;
+  }
+  render();
   if (generation === gx.generation && gx.check?.status === "running") await pollGpexeCheck(render);
 }
 
@@ -291,7 +320,8 @@ export async function pollGpexeCheck(render) {
         // reads the real state from the server).
         gx.pollFailures = (gx.pollFailures || 0) + 1;
         if (gx.pollFailures > CHECK_POLL_RETRIES) {
-          gx.pollNote = "Progress is no longer refreshing. The search may still be running - reload the page to see where it is.";
+          gx.pollNote = "Progress is no longer refreshing. The search may still be running - do not start another one; use Refresh status.";
+          gx.pollStopped = true;
           render();
           return;
         }
@@ -301,6 +331,7 @@ export async function pollGpexeCheck(render) {
       }
       gx.pollFailures = 0;
       gx.pollNote = "";
+      gx.pollStopped = false;
       render();
     }
     if (generation === gx.generation && gx.check && gx.check.status !== "running") {
@@ -935,6 +966,7 @@ export function inboxBucket(c, gx = g()) {
 
 // The server's own ceiling (BATCH_APPROVE_MAX in gpexeImportService.js).
 export const BATCH_MAX = 50;
+export const BATCH_REQUEST_BOUND_MS = 90_000;
 const PREVIEW_HASH = /^[0-9a-f]{64}$/;
 
 // Whether this coach may import at all right now: the switch is on and
@@ -1094,7 +1126,11 @@ export async function sendBatch(render) {
   gx.batch.unknown = null;
   render();
   try {
-    const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }) });
+    // J19 U1 (R5): the server's batch time budget is 60 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
+    // before this 90 s client bound, which is below the hosting proxy's 100 s. An aborted request is a lost answer ("Result not
+    // confirmed" - Check again), never "nothing was imported".
+    const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(BATCH_REQUEST_BOUND_MS) : undefined;
+    const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }), ...(signal ? { signal } : {}) });
     if (generation !== gx.generation) return;
     const results = Array.isArray(answer?.results) ? answer.results : [];
     gx.batch.results = results;

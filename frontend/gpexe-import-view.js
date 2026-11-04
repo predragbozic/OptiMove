@@ -562,7 +562,8 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
     const gx = state.trainingLoad.gpexe;
     // J19 U1: the total is not known before the end, so the bar is indeterminate;
     // what is known is shown beside it: the sessions read so far and the time.
-    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far${check.startedAt ? ` · ${escapeHtml(elapsedText(check.startedAt))}` : ""}.</p><div class="gpexe-progress-bar" role="progressbar" aria-label="Finding sessions" aria-busy="true"><span></span></div>${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}</div>`;
+    const stopped = Boolean(gx?.pollStopped);
+    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far${check.startedAt && !stopped ? ` · ${escapeHtml(elapsedText(check.startedAt))}` : ""}.</p><div class="gpexe-progress-bar${stopped ? " is-stopped" : ""}" role="progressbar" aria-label="Finding sessions" aria-busy="${stopped ? "false" : "true"}"><span></span></div>${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}${gx?.pollStopped ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-refresh-status">Refresh status</button>` : ""}</div>`;
   }
   // A finished search is rendered by renderFoundHtml.
   // A failed search through the team's source connection is not "try again":
@@ -649,7 +650,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (attention && ready.length) text = `Next step: ${plural(attention, "item needs", "items need")} attention · ${readyText}.`;
   else if (attention) text = `Next step: ${plural(attention, "item needs", "items need")} attention - see below.`;
   else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
-  else if (ready.length) text = `Next step: ${readyText} - tick the ones to import, or open one to review it.`;
+  else if (ready.length) text = `Next step: ${readyText} - use Import ready above, tick specific ones below, or open one to review it.`;
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   // A failed search is not "nothing found": its reason is in the box above.
   else if (!list.length && check?.status === "failed") text = "The last search did not finish - its reason is in the box above.";
@@ -689,7 +690,7 @@ function renderBucketsHtml(gx, status) {
   // there needs a server-side count; recorded under Separate tasks).
   const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
   return `
-    ${renderDailyStripHtml(gx, all.filter((c) => inboxBucket(c, gx) === "ready"), all.filter((c) => inboxBucket(c, gx) === "attention"))}
+    ${renderDailyStripHtml(gx, all.filter((c) => inboxBucket(c, gx) === "ready"), all.filter((c) => inboxBucket(c, gx) === "attention"), status)}
     ${attention.length ? `
       <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
         <div class="gpexe-panel-head"><h3>Needs attention (${attention.length})</h3></div>
@@ -786,16 +787,21 @@ function renderSessionRowHtml(c, status, kind, pick = false) {
 // the list's order decides which, never a hidden one.
 // J19 U1: the daily line - what is ready, what needs the coach, and one button
 // for the ready ones (the existing review and confirmation, up to BATCH_MAX).
-function renderDailyStripHtml(gx, ready, attention) {
+function renderDailyStripHtml(gx, ready, attention, status = gx.status) {
   if (!ready.length && !attention.length) return "";
-  const pickable = batchAllowed(gx) ? ready.filter((c) => batchSelectable(c, gx)) : [];
+  const allowed = batchAllowed(gx);
+  const pickable = allowed ? ready.filter((c) => batchSelectable(c, gx)) : [];
+  const allDates = gx.calendar?.day ? ` <span class="muted">(all dates)</span>` : "";
+  const reviewOnly = !allowed && ready.length ? reviewOnlyText(status) : "";
   const n = Math.min(pickable.length, BATCH_MAX);
   const label = pickable.length > BATCH_MAX ? `Import first ${BATCH_MAX} ready` : `Import ${n} ready`;
   return `
-    <div class="imports-daily" role="group" aria-label="Today">
-      <p class="imports-daily-counts"><strong>Ready ${ready.length}</strong> · <strong>Needs you ${attention.length}</strong></p>
+    <div class="imports-daily" role="group" aria-label="Import summary">
+      <p class="imports-daily-counts"><strong>Ready ${ready.length}</strong> · <strong>Needs you ${attention.length}</strong>${allDates}</p>
       ${n ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(label)}</button>` : ""}
       ${pickable.length > BATCH_MAX ? `<p class="muted">${plural(pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.</p>` : ""}
+      ${allowed && pickable.length < ready.length ? `<p class="muted">${plural(ready.length - pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - pickable.length === 1 ? "its" : "their"} own.</p>` : ""}
+      ${reviewOnly ? `<p class="muted">${escapeHtml(reviewOnly)}</p>` : ""}
     </div>
   `;
 }
@@ -832,7 +838,7 @@ function batchOutcomeText(r) {
   if (o === "imported") return { cls: "is-imported", text: r.commitConfirmation === "verified_after_commit_error" ? "Imported (the confirmation arrived late, but the import is in OptiMove)." : "Imported." };
   if (o === "already_imported") return { cls: "is-imported", text: "Already imported, nothing more was written." };
   if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
-  if (o === "not_attempted" && r.code === "batch_time_budget") return { cls: "is-skipped", text: "Not tried: the batch ran out of time. Nothing was written for it - import it in the next batch." };
+  if (o === "not_attempted" && r.code === "batch_time_budget") return { cls: "is-skipped", text: "Not tried: time ran out. Nothing was saved for this session - import it again from the Ready list." };
   if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
   const code = r.code;
   if (code === "preview_changed") return { cls: "is-refused", text: "Session changed - review it again.", open: r.reviewAgain?.candidateId || r.candidateId, openLabel: "Review again" };

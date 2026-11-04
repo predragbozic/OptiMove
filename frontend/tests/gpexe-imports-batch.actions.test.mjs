@@ -933,5 +933,30 @@ test("J19 U1: a batch result with batch_time_budget says it ran out of time and 
   await openImports();
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
-  assert.match(html(), /Not tried: the batch ran out of time\. Nothing was written for it - import it in the next batch\./);
+  assert.match(html(), /Not tried: time ran out\. Nothing was saved for this session - import it again from the Ready list\./);
+});
+
+test("J19 U1: while a day filter is active the daily line says its counts are for all dates; the button still imports the whole list", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(14), ready(7)] }));
+  await openImports();
+  await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
+  const page = html();
+  assert.match(page, /<strong>Ready 3<\/strong> · <strong>Needs you 0<\/strong> <span class="muted">\(all dates\)<\/span>/);
+  assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
+  await act("training-load-gpexe-import-ready");
+  assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");
+});
+
+test("J19 U1: a ready session that cannot be chosen is named under the button; review-only shows its reason under the counts", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2, { previewHash: null })] }));
+  await openImports();
+  assert.match(html(), /1 ready session has to be opened and reviewed on its own\./);
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } }, candidates: [ready(1)] }));
+  await openImports();
+  const page = html();
+  assert.ok(!/training-load-gpexe-import-ready/.test(page));
+  assert.match(page.slice(page.indexOf("imports-daily"), page.indexOf("imports-daily") + 900), /Review only/);
 });

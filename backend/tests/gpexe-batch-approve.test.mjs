@@ -256,6 +256,15 @@ test("batch: two clean Ready sessions are both imported, in the order asked, eac
   });
 });
 
+test("batch (J19 U1, R5): the time budget plus one approval's own bound stays below the client's bound, which stays below the hosting proxy's 100 s", async () => {
+  const fs = await import("node:fs");
+  const client = fs.readFileSync(new URL("../../frontend/gpexe-import-data.js", import.meta.url), "utf8");
+  const clientBound = Number(client.match(/BATCH_REQUEST_BOUND_MS = ([0-9_]+)/)[1].replaceAll("_", ""));
+  assert.equal(service.BATCH_TIME_BUDGET_MS, 60_000);
+  assert.ok(service.BATCH_TIME_BUDGET_MS + service.COMMIT_ANSWER_TIMEOUT_MS < clientBound, "the answer arrives before the client gives up");
+  assert.ok(clientBound < 100_000, "and the client gives up before the proxy does");
+});
+
 test("batch (J19 U1, R5): when the time budget is spent the rest are not_attempted with batch_time_budget, nothing is written for them, and repeating the request imports them", async () => {
   const team = await setupTeam();
   await checkNow(team, [cleanBundle({ sessionId: 8201, hour: 8 }), cleanBundle({ sessionId: 8202, hour: 10 }), cleanBundle({ sessionId: 8203, hour: 12 })]);

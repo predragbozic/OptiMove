@@ -22467,3 +22467,21 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 100%;
   }
 }
+
+.imports-daily > .muted {
+  flex-basis: 100%;
+  margin: 0;
+}
+.gpexe-progress-bar.is-stopped > span {
+  animation: none;
+  width: 100%;
+  opacity: 0.3;
+}
+@media (forced-colors: active) {
+  .gpexe-progress-bar {
+    border: 1px solid CanvasText;
+  }
+  .gpexe-progress-bar > span {
+    background: Highlight;
+  }
+}

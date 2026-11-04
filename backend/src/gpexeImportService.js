@@ -2538,9 +2538,10 @@ export const BATCH_APPROVE_MAX = 50;
 // the request is safe: an imported candidate answers already_imported. The
 // budget stays below the 100 s of the hosting proxy together with one
 // approval's own bounds (15 s COMMIT wait).
-let batchTimeBudgetMs = 60_000;
+export const BATCH_TIME_BUDGET_MS = 60_000;
+let batchTimeBudgetMs = BATCH_TIME_BUDGET_MS;
 export function setBatchTimeBudgetForTests(ms) {
-  batchTimeBudgetMs = ms ?? 60_000;
+  batchTimeBudgetMs = ms ?? BATCH_TIME_BUDGET_MS;
 }
 
 const CANDIDATE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

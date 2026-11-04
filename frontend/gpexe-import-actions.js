@@ -6,6 +6,7 @@
 import { state } from "./state.js";
 import {
   reloadGpexeCandidates,
+  refreshGpexeStatus,
   reloadGpexeSourceAthletes,
   approveGpexeCandidate,
   backFromTeamMappingConfirm,
@@ -92,6 +93,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       return true;
     }
     await selectGpexeTeam(action.value, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-refresh-status") {
+    // Reads the status again; never starts a search.
+    await refreshGpexeStatus(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-check") {
