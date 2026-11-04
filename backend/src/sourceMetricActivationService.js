@@ -28,7 +28,7 @@ import { adminWriteKit, classifyDatabaseError } from "./sourceMetricMappingServi
 import { mayManageActivations, activationInScope, bindingClubHolds } from "./sourceMetricAccess.js";
 import {
   ACTIVATION_MESSAGES, ACTIVATION_SELECT, activationVisible, assertListedBindingsInScope, bindingList, checkListedStarts,
-  insertStarts, lockListedBindings, operationStarts, publicActivation, startAuditRows,
+  endAuditRows, insertStarts, lockListedBindings, lockStartHides, operationStarts, publicActivation, startAuditRows,
 } from "./sourceMetricActivationSteps.js";
 import { boundedText } from "./metricTextRules.js";
 
@@ -46,8 +46,10 @@ const STATES = new Set(["open", "ended", "all"]);
 
 // Test seam (never set by the application): runs inside a write's transaction
 // after every lock is taken and every check passed, right before the first row
-// is written, with the client and the operation ("activation_start" or
-// "activation_end").
+// is written, with the client and the operation ("activation_start",
+// "activation_end" or "activation_switch"). v53 (J15 section 10): also
+// "activation_start_before_hide" - S1 after its last row lock and before its
+// hide locks (every existing hold filters on the operation's name).
 let writeHold = null;
 export function setActivationWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // Test seam (never set by the application): "skip_first_start" leaves out the
@@ -118,6 +120,11 @@ export async function startActivations({ ctx, body }) {
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
       for (const clubId of clubIds) if (!activationInScope(ctx, { mappingOwnerKey: v.owner_key, bindingClubId: clubId })) throw NOT_FOUND();
+      // v53 (J15 section 5): the hide locks of a system version, one per
+      // listed club, ascending - after the last row lock (the clubs above),
+      // before the states and the first write; a club version takes none.
+      if (writeHold) await writeHold(client, "activation_start_before_hide");
+      await lockStartHides(client, v, clubIds);
       // Step 6: the states, answered only now.
       if (version.status !== "active") throw refusal(409, "version_not_active", ACTIVATION_MESSAGES.version_not_active, { current: { status: version.status } });
       if (!field || field.state !== "active") throw refusal(409, "field_retired", ACTIVATION_MESSAGES.field_retired);
@@ -209,6 +216,127 @@ export async function endActivation({ ctx, activationId, body }) {
 }
 
 // ---------------------------------------------------------------------------
+// The switch to a copy (J15 sections 2.4, 4.3 and 5; v53): POST
+// /activations/:activationId/switch-to-copy - in one transaction, end a team's
+// open activation of a system version (admin_ended) and start, on the same
+// binding with the same requirement, the active club version linked to it as
+// its copy (source_metric_mapping_version_copies). No window opens in which a
+// check would find the field without an activation.
+// ---------------------------------------------------------------------------
+// The club scope only: the platform workspace is the identical 404 (J15
+// section 4.3), although activationInScope admits it for system mappings.
+export function maySwitchToCopy(ctx) {
+  return mayManageActivations(ctx) && ctx?.owner?.scope === "club" && typeof ctx.owner.clubId === "string";
+}
+
+export async function switchToCopy({ ctx, activationId, body }) {
+  if (!maySwitchToCopy(ctx)) throw NOT_FOUND();
+  if (typeof activationId !== "string" || !UUID.test(activationId)) throw NOT_FOUND();
+  const id = activationId.toLowerCase();
+  const keys = ["requestKey", "expectedState", "toVersionId", "reason"];
+  plainObject(body, keys, keys);
+  const requestKey = uuidField(body.requestKey);
+  if (body.expectedState !== "open") throw refusal(400, "invalid_body", "expectedState is open: the state of the activation this request ends.");
+  const toVersionId = uuidField(body.toVersionId);
+  const reason = reasonOf(body.reason);
+  // J15 section 4: the hash carries the workspace's club, so the same key and
+  // body in another club is request_key_reused.
+  const requestHash = hashOf({ op: "activation_switch_to_copy", clubId: ctx.owner.clubId, activationId: id, expectedState: "open", toVersionId, reason });
+  return runWrite({
+    ctx, where: "activation_switch", requestKey, requestHash, action: "activation_start",
+    idsOf: () => ({ activationId: id }),
+    reread: async (executor, record) => {
+      const ended = await endedActivation(executor, ctx, record.operation_id);
+      const started = await operationStarts(executor, ctx, record.operation_id);
+      return ended && started && started.length === 1 ? { ended, activation: started[0] } : null;
+    },
+    body: async (client, operationId) => {
+      // The answers in J15 section 4.3's order, on plain reads first: the
+      // activation in S2's scope, then the target only among the workspace
+      // club's own mapping versions (owner_key from the club workspace itself,
+      // never ownerKeyOf) - an unknown id, another club's version or a system
+      // version is the identical 404.
+      const old = (await client.query(`${ACTIVATION_SELECT} where a.id = $1`, [id])).rows[0];
+      if (!old || !activationVisible(ctx, old)) throw NOT_FOUND();
+      const oldVersion = (await client.query(
+        `select source_metric_definition_id, source_metric_version_id from training_load.source_metric_mapping_versions where id = $1`,
+        [old.mapping_version_id],
+      )).rows[0];
+      const to = (await client.query(
+        `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
+                v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family
+           from training_load.source_metric_mapping_versions v
+           join training_load.source_metric_mappings m on m.id = v.mapping_id
+           join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
+          where v.id = $1 and m.owner_key = $2`,
+        [toVersionId, ctx.owner.clubId],
+      )).rows[0];
+      if (!to || !oldVersion) throw NOT_FOUND();
+      // D's order (J15 section 5): T2a and T2b, T3 and T4 of both versions
+      // ascending, the old T5 row FOR NO KEY UPDATE, the binding and its team
+      // FOR SHARE, then the rights, then the binding's club. A club version
+      // takes no hide lock.
+      const ascending = (values) => [...new Set(values)].sort();
+      const fields = (await client.query(
+        `select id, state from training_load.source_metric_definitions where id = any($1::uuid[]) order by id for share`,
+        [ascending([oldVersion.source_metric_definition_id, to.source_metric_definition_id])],
+      )).rows;
+      await client.query(
+        `select 1 from training_load.source_metric_definition_versions where id = any($1::uuid[]) order by id for share`,
+        [ascending([oldVersion.source_metric_version_id, to.source_metric_version_id])],
+      );
+      await client.query(
+        `select 1 from training_load.source_metric_mappings where id = any($1::uuid[]) order by id for share`,
+        [ascending([old.mapping_id, to.mapping_id])],
+      );
+      const versions = new Map((await client.query(
+        `select id, status from training_load.source_metric_mapping_versions where id = any($1::uuid[]) order by id for share`,
+        [ascending([old.mapping_version_id, to.id])],
+      )).rows.map((r) => [r.id, r.status]));
+      const row = (await client.query(
+        `select id, ended_at from training_load.source_metric_mapping_activations where id = $1 for no key update`, [id],
+      )).rows[0];
+      const listed = [{ bindingId: old.source_team_binding_id, requirement: old.requirement }];
+      const locked = await lockListedBindings(client, listed);
+      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await bindingClubHolds(client, [old.club_id]))) throw NOT_FOUND();
+      if (!activationInScope(ctx, { mappingOwnerKey: old.owner_key, bindingClubId: old.club_id })
+          || !activationInScope(ctx, { mappingOwnerKey: to.owner_key, bindingClubId: old.club_id })) throw NOT_FOUND();
+      // The states, answered only now (after the right), in section 4.3's order.
+      const linked = await client.query(
+        `select 1 from training_load.source_metric_mapping_version_copies where club_version_id = $1 and system_version_id = $2`,
+        [to.id, old.mapping_version_id],
+      );
+      if (linked.rowCount === 0) throw refusal(409, "not_a_copy_of_this_version", ACTIVATION_MESSAGES.not_a_copy_of_this_version);
+      if (row.ended_at !== null) {
+        const current = (await client.query(`${ACTIVATION_SELECT} where a.id = $1`, [id])).rows[0];
+        throw refusal(409, "activation_not_open", ACTIVATION_MESSAGES.activation_not_open, { current: publicActivation(current) });
+      }
+      const status = versions.get(to.id);
+      if (status !== "active") throw refusal(409, "version_not_active", ACTIVATION_MESSAGES.version_not_active, { current: { status } });
+      if (fields.some((f) => f.state !== "active")) throw refusal(409, "field_retired", ACTIVATION_MESSAGES.field_retired);
+      await databaseTextAgrees(client, reason);
+      if (writeHold) await writeHold(client, "activation_switch");
+      // The writes: the end first (the copy has the system version's
+      // fingerprint, so the field's open row must be gone before the start's
+      // checks and insert), then the start with the same requirement, then the
+      // end's audit row (unkeyed) and the start's keyed row last.
+      await client.query(
+        `update training_load.source_metric_mapping_activations
+            set ended_at = now(), ended_by_user_id = $2, ended_basis = $3, end_reason = 'admin_ended'
+          where id = $1`,
+        [id, ctx.userId, ctx.basis],
+      );
+      await checkListedStarts(client, to, listed, locked);
+      const starts = await insertStarts(client, ctx, to, listed, locked, reason);
+      await endAuditRows(client, ctx, [{ id, mapping_version_id: old.mapping_version_id, team_id: old.team_id }], reason, operationId);
+      await startAuditRows(client, ctx, starts, reason, operationId, { requestKey, requestHash });
+      return { mapping_id: to.mapping_id, mapping_version_id: to.id, operation_id: operationId };
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // S3: GET /activations - by bindingId and/or versionId (at least one), state
 // open (default), ended or all; pages of 100 by an opaque cursor that carries
 // a position only (the last row's id). Every page applies the caller's current
@@ -283,7 +411,23 @@ export async function listActivations({ ctx, query }) {
     )).rows.filter((a) => activationVisible(ctx, a));
     const page = rows.slice(0, ACTIVATION_PAGE_SIZE);
     const nextCursor = rows.length > ACTIVATION_PAGE_SIZE ? encodeCursor({ v: 1, k: "activations", i: page[page.length - 1].id }) : null;
-    return { activations: page.map(publicActivation), nextCursor };
+    // v53 (J15 section 4.4): in club X's workspace a system mapping's row says
+    // whether club X hides its target variable; nothing in the platform
+    // workspace (S1, S2 and A1's answers keep their shape).
+    if (ctx.owner.scope !== "club") return { activations: page.map(publicActivation), nextCursor };
+    const systemIds = page.filter((a) => a.owner_key === "system").map((a) => a.id);
+    const hidden = systemIds.length === 0 ? new Set() : new Set((await client.query(
+      `select a.id::text as id
+         from training_load.source_metric_mapping_activations a
+         join training_load.metric_definition_club_hides h
+           on h.club_id = $1 and h.metric_definition_id = a.metric_definition_id and h.shown_at is null
+        where a.id = any($2::uuid[])`,
+      [ctx.owner.clubId, systemIds],
+    )).rows.map((r) => r.id));
+    return {
+      activations: page.map((a) => (a.owner_key === "system" ? { ...publicActivation(a), targetHiddenInClub: hidden.has(String(a.id)) } : publicActivation(a))),
+      nextCursor,
+    };
   });
 }
 

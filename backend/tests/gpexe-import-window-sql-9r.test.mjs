@@ -104,6 +104,8 @@ const COLUMNS = {
 let db;
 let admin;
 let ro;
+let db51;
+let rec;
 let server;
 let apiBase;
 let service;
@@ -117,14 +119,27 @@ const S = {};
 // Both files are pinned to v51 as written (their headers): the first window ran
 // them on production at v51, and its record names their sha256. A later
 // migration on main makes them stale for the NEXT window, which re-issues them
-// before its step 11; the files as written are checked on the world they were
-// pinned to, so the world is built through v51 only.
+// before its step 11. Their block 1 (the migration record) is therefore checked
+// on a database through v51, the record they were pinned to. The world itself
+// is built through every test migration: the application code that builds it
+// reads what later migrations add (v53's request record and club hides), so a
+// world stopped at v51 can no longer run it; on that world block 1 of both
+// files shows the stop the next window's re-issue answers (later migrations
+// recorded), and every other block its expected value.
 const THROUGH_V51 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(path.basename(V51)) + 1);
+const AFTER_V51 = GPEXE_TEST_MIGRATIONS.slice(THROUGH_V51.length);
 
 before(async () => {
   assert.equal(THROUGH_V51.at(-1), path.basename(V51), "the test migrations carry v51");
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "window_sql_9r", migrations: THROUGH_V51 });
-  assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: not a disposable database");
+  assert.ok(AFTER_V51.length > 0, "a later migration is a test migration");
+  [db, db51] = await Promise.all([
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "window_sql_9r" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "window_sql_9r_v51", migrations: THROUGH_V51 }),
+  ]);
+  for (const d of [db, db51]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: not a disposable database");
+  rec = new pg.Client({ connectionString: db51.url }); // the record v51 left
+  await rec.connect();
+  assert.equal((await rec.query("select current_database() as db")).rows[0].db, db51.name, "SAFETY: unexpected database");
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   ro = new pg.Client({ connectionString: db.url }); // the connector's session
@@ -176,7 +191,9 @@ after(async () => {
   }
   await ro?.end().catch(() => {});
   await admin?.end().catch(() => {});
+  await rec?.end().catch(() => {});
   if (db) await db.drop();
+  if (db51) await db51.drop();
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   if (ORIGINAL_SWITCH === undefined) delete process.env.GPEXE_IMPORT_APPLY_ENABLED; else process.env.GPEXE_IMPORT_APPLY_ENABLED = ORIGINAL_SWITCH;
   if (ORIGINAL_KEYS === undefined) delete process.env.SOURCE_CREDENTIAL_KEYS; else process.env.SOURCE_CREDENTIAL_KEYS = ORIGINAL_KEYS;
@@ -224,13 +241,13 @@ async function blocksIn(client, file, numbers) {
   for (const { n, part } of blocks) if (numbers.includes(n)) out[n] = (await client.query(part)).rows;
   return out;
 }
-async function planted(fn) {
-  await admin.query("begin");
+async function planted(fn, client = admin) {
+  await client.query("begin");
   try {
-    await admin.query("set local session_replication_role = replica");
+    await client.query("set local session_replication_role = replica");
     return await fn();
   } finally {
-    await admin.query("rollback");
+    await client.query("rollback");
   }
 }
 
@@ -400,7 +417,16 @@ test("1. step 11 on a world built like production's pilot: every block of the pr
 
   const pre = await readOnlyBlocks(ro, PREFLIGHT);
   S.pre = pre;
-  assert.deepEqual(pre[1], [{ v51_rows: "1", v51_checksum_ok: true, later_rows: "0", last_migration: V51, v2_rows: (await q(`select count(*)::text as n from public.schema_migrations where migration_name like 'migrations_v2/%'`))[0].n }]);
+  // Block 1 on the world: v51 as recorded, and the later migrations the next
+  // window's re-issue answers.
+  assert.deepEqual(pre[1], [{ v51_rows: "1", v51_checksum_ok: true, later_rows: String(AFTER_V51.length), last_migration: `migrations_v2/${AFTER_V51.at(-1)}`,
+    v2_rows: (await q(`select count(*)::text as n from public.schema_migrations where migration_name like 'migrations_v2/%'`))[0].n }]);
+  // Block 1 of both files on the record they were pinned to: its expected value.
+  const v2Rows51 = (await rec.query(`select count(*)::text as n from public.schema_migrations where migration_name like 'migrations_v2/%'`)).rows[0].n;
+  for (const file of [PREFLIGHT, POSTCHECK]) {
+    assert.deepEqual((await readOnlyBlocks(rec, file, [1]))[1], [{ v51_rows: "1", v51_checksum_ok: true, later_rows: "0", last_migration: V51, v2_rows: v2Rows51 }],
+      `${path.basename(file)} block 1 on the v51 record`);
+  }
   assert.deepEqual(pre[2], [{ running_checks: "0", running_identity_loads: "0", staged_observations: "0" }]);
   assert.equal(pre[3][0].idle_in_transaction, "0");
   assert.equal(pre[3][0].import_table_write_locks, "0");
@@ -639,25 +665,26 @@ test("3a. the preflight stops on what it must stop on: a second binding with an 
   });
   assert.ok(!rights[11].some((r) => r.user_id === t.padmin.id), "an inactive user is not an active platform admin");
 
-  // The migrations: a later migration recorded, v51's checksum changed, v51 missing (both files' block 1).
+  // The migrations, on the v51 record: a later migration recorded, v51's
+  // checksum changed, v51 missing (both files' block 1).
   const later = await planted(async () => {
-    await admin.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611021000_later.sql', repeat('a', 64), '9-R test')`);
-    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
-  });
+    await rec.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611021000_later.sql', repeat('a', 64), '9-R test')`);
+    return { pre: await blocksIn(rec, PREFLIGHT, [1]), post: await blocksIn(rec, POSTCHECK, [1]) };
+  }, rec);
   for (const r of [later.pre[1][0], later.post[1][0]]) {
     assert.equal(r.later_rows, "1");
     assert.equal(r.last_migration, "migrations_v2/202611021000_later.sql");
     assert.equal(r.v51_checksum_ok, true);
   }
   const checksum = await planted(async () => {
-    await admin.query(`update public.schema_migrations set checksum = repeat('b', 64) where migration_name = $1`, [V51]);
-    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
-  });
+    await rec.query(`update public.schema_migrations set checksum = repeat('b', 64) where migration_name = $1`, [V51]);
+    return { pre: await blocksIn(rec, PREFLIGHT, [1]), post: await blocksIn(rec, POSTCHECK, [1]) };
+  }, rec);
   for (const r of [checksum.pre[1][0], checksum.post[1][0]]) assert.equal(r.v51_checksum_ok, false);
   const missing = await planted(async () => {
-    await admin.query(`delete from public.schema_migrations where migration_name = $1`, [V51]);
-    return { pre: await blocksIn(admin, PREFLIGHT, [1]), post: await blocksIn(admin, POSTCHECK, [1]) };
-  });
+    await rec.query(`delete from public.schema_migrations where migration_name = $1`, [V51]);
+    return { pre: await blocksIn(rec, PREFLIGHT, [1]), post: await blocksIn(rec, POSTCHECK, [1]) };
+  }, rec);
   for (const r of [missing.pre[1][0], missing.post[1][0]]) {
     assert.equal(r.v51_rows, "0");
     assert.equal(r.v51_checksum_ok, null);

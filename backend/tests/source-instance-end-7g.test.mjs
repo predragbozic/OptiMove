@@ -5,7 +5,7 @@
 // (never OPTIMOVE, never a real GPEXE team or connection): one migrated through
 // v49 that rehearses v50 (the preflight, the runner, the post-check, every refusal
 // of the rollback, the rollback back to v49's exact catalog, and v50 again), and
-// one migrated through v50 for the behaviour. Every team, binding, connection and
+// one migrated through every test migration for the behaviour. Every team, binding, connection and
 // instance here is a test row of this file (a credential connection's parts are
 // random bytes of the right lengths: nothing is ever decrypted or sent). Since
 // 9-B the importer's mapping context keys the team's instance (T7) on its first
@@ -35,9 +35,11 @@ const V50 = "202610311200_training_load_v50_source_instance_end.sql";
 const V50_NAME = `migrations_v2/${V50}`;
 const V49_NAME = "migrations_v2/202610311000_calendar_v49_events.sql";
 const UP_TO_V49 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V50));
-// The suite's database stops at v50 (a later migration, v51 of K2b-1a, is
-// another part's): v50 is the last migration this suite's checks see.
-const UP_TO_V50 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V50) + 1);
+// The behaviour database is migrated through every test migration: the
+// application code under test reads what later migrations add (v53's club
+// hides in S1, J15 section 5), so a world stopped at v50 can no longer run it.
+// The checks of v50's own files (preflight, post-check, rollback, the bodies)
+// run on the rehearsal database, which stops at v49 and then applies v50.
 const V50_FILE = path.resolve(ROOT, "migrations_v2", V50);
 const RUNBOOKS = path.resolve(ROOT, "docs/runbooks");
 const ROLLBACK = path.join(RUNBOOKS, "source-instance-end-v50-rollback.sql");
@@ -86,11 +88,10 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V50), "v50 is a test migration");
-  assert.equal(UP_TO_V50.at(-1), V50, "the suite's database ends with v50");
   assert.equal(`migrations_v2/${UP_TO_V49.at(-1)}`, V49_NAME, "the rehearsal stops at v49");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50rb", migrations: UP_TO_V49 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50", migrations: UP_TO_V50 }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v50", migrations: GPEXE_TEST_MIGRATIONS }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });
@@ -640,7 +641,7 @@ test("5. the rollback returns v49's catalog exactly (comments included; v48's bo
 });
 
 // ---------------------------------------------------------------------------
-// The behaviour database (through v50).
+// The behaviour database (through every test migration).
 // ---------------------------------------------------------------------------
 test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or club-owned connection, keys, an owner change or a source-system change in the ending statement, an active binding of the owner team, an open activation on its ended binding, a held team lock, a missing audit row at COMMIT - each refused; an ended instance is final; `set state = state` passes; an INSERT is untouched", async () => {
   const pa = W.pa.id;

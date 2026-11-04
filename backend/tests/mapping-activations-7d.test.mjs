@@ -759,16 +759,26 @@ test("6. S1: one binding and several (answered in ascending binding id, the requ
   assert.equal(await t5Count(), count + 3, "only the three starts of this block wrote");
   // The two unique indexes, when a start passed its pre-read while another
   // start of the same binding was not yet committed: the first one held after
-  // its checks, the second one committed meanwhile.
-  for (const [makeSecond, code] of [[(ver) => ver, "activation_exists"], [async (ver) => sysVersion({ target: ver.target }), "variable_taken_on_binding"]]) {
-    const ver = await sysVersion();
+  // its checks, the second one committed meanwhile. Since v53 (phase 7i, J15
+  // section 5) a start of a system version takes the hide lock of its
+  // (club, variable) before its checks, so two starts of one system variable
+  // in one club no longer overlap there; the backstop is reached with club
+  // versions, which take no hide lock: the same club version twice
+  // (activation_exists), then two club mappings of one club variable
+  // (variable_taken_on_binding).
+  for (const [makeSecond, code] of [[(ver) => ver, "activation_exists"], [async (ver) => {
+    const v2 = await version(await field(), { owner: W.caA, target: ver.target });
+    ok(await activate(v2, W.paA.cookie));
+    return v2;
+  }, "variable_taken_on_binding"]]) {
+    const ver = await clubVersion(W.caA, W.paA);
     const second = await makeSecond(ver);
     const b = await binding(W.clubA);
     const held = holdActivation("activation_start");
-    const first = start(W.pa, ver, [b]);
+    const first = start(W.caA, ver, [b]);
     await until(() => held.state.entered, "the first start is held after its checks");
     activations.setActivationWriteHoldForTests(null);
-    ok(await start(W.pa2, second, [b]), 201);
+    ok(await start(W.paA, second, [b]), 201);
     held.g.open();
     assert.deepEqual(refused(await first, 409, code).current, { bindingId: b.bindingId });
   }

@@ -1017,3 +1017,194 @@ describes the system as it runs. The Variables screen's row is code, changed by 
     order, with no `40P01`, and the mutation that removes the service's ascending order of the hide locks, killed by it;
   - **L2:** the Serbian runbook says that after a code rollback, while hide rows exist, the old S1 on a hidden variable
     answers a sanitized 500: this is expected, and nothing is deleted.
+
+## 17. 7i-B1 as built (C132–C140)
+
+The pull request 7i-B1 (branch `feature/7i-b1-club-variables`, base `355ae868`, the merge of PR #346) builds sections
+2–7 and 10 with migration v53, on the plan the *Rukovodilac* accepted (event `96ada971`): **7i-B1 is the migration, the
+backend and the routes; 7i-B2, the screen, follows after 7i-B1's deploy and 7h-F's merge.** Until 7i-B2, copy, hide,
+show and the move to the copy exist **only as an API**. The pilot (O8) stays on form (a), the club using OptiMove's
+variable as it is.
+
+**Not merged, not deployed; v53 is applied to no persistent database** (only to disposable `optimove_tests_gpexe_*`
+databases). The migration is ★★: both GOs, the owner's order naming v53, the *Rukovodilac*'s preflight on the day of the
+merge, the owner's deploy and the *Rukovodilac*'s post-check.
+
+- **v53** (`migrations_v2/202611041000_training_load_v53_system_variables_club.sql`; first named `202611031200_…`,
+  renamed before the merge because main's PR #350 had taken the prefix `202611031200`, which the runner refuses to share
+  between two files — the content and its sha256 are unchanged) is section 7 as written: the md5
+  preconditions on v36's request guard (`ae5bf5e2…`) and v48's T5 insert guard (`e47f75d4…`), computed from the
+  migration files read as LF and confirmed as `md5(prosrc)` on a database migrated through v52; the request table's
+  operation CHECK, `version_iff`, index and trigger checked by their exact definitions; the three tables of 7.1–7.3
+  with their guards, append-only triggers and deferred links; 7.4 and 7.5. Rollback, preflight and post-check:
+  `docs/runbooks/system-variables-club-v53-{rollback,preflight,postcheck}.sql`; runbook
+  `docs/runbooks/system-variables-club-v53.md`, with the Serbian sections on a deploy that fails on its locks and on
+  L2 (a code rollback while hide rows exist: the old S1 on a hidden variable answers a sanitized 500, expected, nothing
+  deleted). The SQL files get `.gitattributes` `eol=lf`.
+- **The routes** (section 4): `POST /variables/:variableId/copy` (201), `…/hide` and `…/show` (200) and
+  `POST /activations/:activationId/switch-to-copy` (200), each behind a gate that answers the identical 404 before the
+  body is read, for everyone but club X's admins and a platform admin in club X's workspace. Every request hash carries
+  the workspace's club.
+- **The reads** (section 4.4): the club block and the acts on system rows (`club: { hidden }` only in a team workspace,
+  `?hidden=exclude|include|only` on the system scope, bound into the cursor); `targetHiddenInClub` on `/mappings`,
+  `/mappings/:id` and `/activations`; `hiddenInClub` and `ownerScope` on the older
+  `GET /api/training-load/metrics/definitions` for the active workspace's club; the template resolver's per-hint rule
+  after the hint's filters, still at most three statements.
+
+**Decisions taken while building.** D1–D5 were sent to the *Rukovodilac*, with the recommendation implemented. The
+*Rukovodilac* answered on 2026-11-03: D1–D4 accepted, D2 with a runbook addition, and D5 corrected. D6 comes from the
+internal security review.
+- **D1.** A copy and A1 or A2 of a copied system mapping meet at T3 (the copy `FOR SHARE`, A1 / A2 `FOR NO KEY
+  UPDATE`). The copy reads the active system versions plainly, locks them in D's order, and reads the set again under
+  its T3 locks; a set that changed in between answers `409 try_again` with nothing written. **Section 6's first row
+  holds here in its "or refuses" branch:** the copy never copies a version it did not read before its locks. A new
+  active version (another mapping's, or the copied one replaced) answers `409 try_again`, and the copy is not
+  completed with the new version. Test 16 drives A1 holding T3. Test 16c, which the *Rukovodilac* ordered, activates
+  the new version at a seam between the copy's plain read and its T3 locks (`variable_copy_before_locks`), and checks
+  that the copy wrote no copy row, link, `variable_copy` request record or club definition. Mutation M15 (no second
+  read) is killed by both.
+- **D2.** The defaults of a copy (section 2.2): a system key that the create rules refuse answers `400 key_required`
+  (the body names a key), a label they refuse `400 label_required`; a legacy icon URL becomes no icon; a system variable
+  with no level is `copy_source_unsupported` (`no_levels`); decimals are copied as stored. The runbook names every case
+  the copy refuses, next to the preflight's count (block 9), in "Which copies are refused".
+- **D3.** Both team-workspace cases are tested: a club's admin who coaches a team of the club, in that team's
+  workspace, reads the reduced view with `club: { hidden }` and no acts; a club's admin who chose a team workspace
+  without a team role there gets the resolver's fallback (`workspace.js`, `pickFallbackWorkspace`): the club's own
+  workspace, stored, and its admin view.
+- **D4.** `not_a_copy_of_this_version` is answered after the rights (a state, as the others of section 4.3).
+- **D5, as corrected by the *Rukovodilac*.** Only the request record's exact text "metric variable request: the basis
+  is not the acting user's own" (a stronger role granted mid-request) answers `409 try_again`. The match is on the exact
+  text and code, as `classifyChangeError` does it (`basisChangedError`). Every other `42501` stays as it was:
+  `ACTOR_REFUSALS` gives the identical 404, and anything else a sanitized 500. That covers the copy and hide guards' own
+  texts ("may not copy into this club", "may not hide for this club"), which also cover a missing right, and the same
+  words behind another prefix (v35's "source metric mapping: …"). So a real refusal never becomes an endless retry.
+  Only the copy writes a request record, so only the copy's classifier maps that text; the hide and the show have no
+  `try_again` for a `42501` at all.
+  - Test 2c checks the predicate against each text.
+  - Through the routes, test 2c grants a club admin the platform admin role while the copy or the hide is held. A test
+    seam (`setVariableClassifyObserverForTests`) records the raw error each classifier receives, so every case names
+    the exact guard text that refused it. Before the copy's request row: the request record's text, `try_again`, and
+    the same copy then succeeds. Before its copied mappings: v35's "source metric mapping: the basis is not the acting
+    user's own", a sanitized 500 with nothing written, and the same request (the same key) then succeeds. Before its
+    writes: "metric variable copy: the acting user may not copy into this club", a sanitized 500. Before the hide row:
+    "metric variable hide: the acting user may not hide for this club", a sanitized 500.
+  - Mutations M30 (the copy guard's text mapped again), M32 (the hide guard's text mapped again) and M31 (a match on
+    the words, not the exact text) are killed.
+- **D6** (from the internal security review). The copy's and the hide's state refusal for a variable that is not a
+  system one (`copy_source_not_system`, `hide_not_system`) comes after the right is checked again under its locks, as
+  section 4's order says: a caller whose right is gone meanwhile gets the identical 404. The same holds for the copy
+  that loses a race (round 2 of that review): before its answer names the winning copy, its read checks the right again
+  `FOR SHARE`, and a lost right answers the identical 404.
+
+**Changes to existing tests, each a consequence of the contract:**
+- `mapping-activations-7d.test.mjs` test 6: the unique-index backstop of two starts of one system variable on one
+  binding is no longer reachable, because a start of a system version now takes the hide lock of its (club, variable)
+  before its checks (section 5), so the two starts serialize. The backstop is now exercised with club versions, which
+  take no hide lock.
+- `canonical-variables-r2.test.mjs` test 4: a system row read in a team workspace of the club carries
+  `club: { hidden }` (section 4.4).
+- `source-metric-mapping-club-admin-7h.test.mjs`: v52 is no longer the last test migration.
+- `training-load-dashboard.test.mjs`, `training-load-metrics.test.mjs` and `training-activity.test.mjs`: their schemas
+  are fixed, older lists of migrations, and the template resolver and the older definitions list now read v53's club
+  hides. Each suite creates that table empty after its migrations, through one helper
+  (`backend/tests/support/v53-club-hides-stand-in.mjs`), with only the columns the readers use; no club hides anything
+  there. v53 itself, and the readers' rules over real hides, are tested in the 7i suite (tests 8, 9 and 23).
+- `source-instance-end-7g.test.mjs`: the behaviour database is migrated through every test migration, because S1 now
+  reads v53's hides. v50's own files (the preflight, the post-check, the rollback and the bodies) are still checked on
+  the rehearsal database, which stops at v49 and then applies v50.
+- `gpexe-import-window-sql-9r.test.mjs`: the world is built through every test migration, because the code that builds
+  it writes v53's request record. Block 1 of both window files (the migration record) is checked on a second database
+  through v51, where the files were pinned, together with its planted stops. On the world, block 1 shows the stop that
+  the next window's re-issue answers (later migrations recorded); every other block shows its expected value.
+- `gpexe-import-mapped-concurrency-9b.test.mjs`: test 12, the switch to the copy against the real approval (below).
+
+**Smaller things as built:**
+- A copy that loses a race to another admin's meets the winner's uncommitted rows at the club key's unique index
+  first; once the winner is there, the loser answers `already_copied` naming the winner, not `key_taken`.
+- A copy row written inside a savepoint is refused first by the request record's guard, and a link without its
+  version's audit row first by v35's T4 link; the v53 checks of the same facts stay as second lines.
+- A test seam after each hide lock (`setHideLockHoldForTests`, `sourceMetricActivationSteps.js`) drives the races of
+  L1.
+
+**Tests** (`backend/tests/source-metric-variables-club-7i.test.mjs`, 34 tests, disposable databases):
+- the copy: its writes, its answer's `copiedMappings` equal to the links of its operation, its refusals in order (each
+  sent with its own key, nothing written and no request record holding the key afterwards), its replay and the club in
+  the hash;
+- a right lost during a copy or a hide before its state refusal, and before a losing copy names the winner (D6);
+- a role changed under a copy or a hide: `try_again` only for the request record's exact text (D5, test 2c);
+- a lost COMMIT answer through the copy, the hide, the show and the switch: each verified through its own request record
+  (`verified_after_commit_error`, then the same key replays), and an unverifiable one (rejected, or never answered
+  within its bound) answers `503 outcome_unknown` with nothing written, after which the same key writes once;
+- hide and show, the no-op key, the cross-act key and `variable_in_use`; S1 and A1 refused on a hidden variable;
+- the switch, its answers, and its refusals combined in section 4.3's order;
+- the matrix of section 10 (an invalid body included), the reads and the template cases, among them another club's
+  hide, which never changes club A's template (a same-key copy in club A stays `ambiguous` while club B hides the
+  original; the *Nezavisni revizor*'s L1 on `cddec20c`, test 9);
+- direct SQL against every v53 guard and the T5 guard's lock;
+- the SQL order of the copy, the hide, the show, S1 with the hide lock, A1 with listed starts (one that replaces a
+  version with an open activation included: the hide lock comes before its first end), and the switch (the rule of PR
+  #346);
+- the races, route against route:
+  - L1: two S1s and two A1s in opposite order;
+  - a hide against S1, both orders; two copies;
+  - the copy against A1, and against a new system version, an archive and A2, each in both orders;
+  - a new system version activated between the copy's plain read and its T3 locks (D1, test 16c);
+  - the switch against S2;
+  - the three-way hide / S1 / revocation, and the same with a show; the three-way switch / Unbind / revocation;
+  - a hide against A1: once the hide's guard has run, `pgrowlocks` shows the hide holding the variable's row only `Key
+    Share`, beside the waiting A1's `Share`;
+  - a revocation during a copy;
+- the md5 preconditions;
+- the rehearsal on v52: the preflight with planted rows, `NOWAIT`, the exact catalog delta, the post-check, every
+  rollback refusal, the rollback to v52's catalog exactly, a failed last statement, v53 again, LF;
+- the writers' architecture.
+
+The switch against a real import approval is test 12 of `gpexe-import-mapped-concurrency-9b.test.mjs`, both orders. An
+approval held after step 5 (its T5 rows `FOR SHARE`) makes the switch wait at the activation's row; it imports through
+the system activation, and the switch then commits. A switch holding its locks first makes the approval wait; the
+switch commits, and the approval answers `409 preview_changed` with nothing imported. No `40P01` either way.
+
+**The race of section 10 that is not built route against route:** "a start and J18's board (and the same with A1)
+ending a T5 row on the same binding and field". J18's board is not built. The A1 variant cannot arise. A1 ends only the
+open rows of the version it replaces, which is the same system mapping and target. Such a row on club X's binding was
+started by an S1 or an A1 of a system version, which takes the same hide lock first, so it serializes before the held
+S1, or it existed before the S1's checks, so the S1 answers `activation_exists` there. The position of A1's hide lock
+(before its first end) is pinned by test 12's SQL order for a replacing A1, and by mutation M28.
+
+**Mutations** (33, each applied alone and its named tests run; `q7ib1/mutations-summary.txt` in the review packet):
+every one killed.
+- Four end in a real `40P01`, seen as `deadlock detected` in the PostgreSQL server log during their run: the L1
+  mutation (the hide locks not sorted); the hide lock before the rights in the hide; the switch's binding after its
+  rights; and a `FOR NO KEY UPDATE` on the variable in the hide guard.
+- A1 or S1 without a hide lock, and A1's hide lock moved after its first end, are killed by the SQL order (S1's also by
+  the hide against S1).
+- A `FOR SHARE` on the variable in the hide guard is killed by test 20's lock-mode assertion. That lock does not
+  conflict with the A1's `FOR SHARE`, so no deadlock can show it.
+- The hide request lookup broken, and the copy's replay without its copied drafts, are killed by the lost-COMMIT test.
+- The losing copy's race read without its right check is killed by test 15b.
+- The copy guard's and the hide guard's texts each mapped to `try_again` again, and a match on the words instead of
+  the exact text, are killed by test 2c.
+- The template resolver reading any club's hide instead of the data workspace's club is killed by test 9 (the
+  *Nezavisni revizor*'s mutation H7, which survived the 32 tests of `cddec20c`).
+- The service's hide check removed is killed only by the answer's `current.bindingId`. The T5 guard still refuses, and
+  the classifier still answers `409 variable_hidden`, without naming the binding.
+
+**Internal review notes kept as they are** (the database review found no BLOCKER, HIGH or MEDIUM):
+- v53 takes `NOWAIT` locks on the request table and T5 only. The foreign-key targets of its new tables (`clubs`,
+  `users`, the definitions, their versions, T4) are locked implicitly by the `CREATE TABLE`s, within the runner's 30 s.
+  This is the risk v34, v36 and v48 accepted (section 7.6). The preflight's quiet-moment block is the mitigation, and
+  the Serbian runbook section covers a deploy that fails on its locks. Locking the targets `NOWAIT` as well would make a
+  deploy fail at once whenever any session writes `users`.
+- The new tables have no index of their own on `metric_definition_copies.system_definition_id`, `copied_by_user_id` and
+  `metric_definition_club_hides.metric_definition_id`. Their parents are `on delete restrict` and never deleted, and the
+  tables are small.
+- The rollback's `drop column operation_id` leaves a dropped-column gap in the attribute numbers. The catalog
+  comparison is by name and definition.
+- The post-check names the migration's sha256 and the bodies' md5s. Any later change to the v53 file means
+  regenerating it.
+- Fixed in this PR: the rollback now checks the md5 of both restored bodies against v36's and v48's before it removes
+  v53's record, and its header names the lock waits on the foreign-key targets.
+
+**Not in 7i-B1:** the screen (7i-B2); J18's gate and its tests (J18 is not built; the migration order of section 7.6
+applies when it is); the history test of section 10, which stays inferred (the importer's `needs_review` after a
+switch is unchanged code).
