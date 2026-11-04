@@ -3879,6 +3879,8 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
   suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
   was not recorded. Not fixed.
+- **U2 — the import switch per team (open pull request, migration v56, ★★; not merged, not deployed, v56 applied nowhere persistent).** A team's own switch (absent = off, mode `pilot` / `team`), conditions read inside the database (backup ≤ 2 days, restore probe ≤ 35 days; for team mode also two attestations), the bases `club_admin` and `team_coach` in team mode, and a switch-off that takes effect at once. See `docs/ai/gps-import-flow-contract.md` section 7 and `docs/runbooks/team-import-switch-v56.md`. Merge only on the owner's order naming v56 and the *Rukovodilac*'s preflight (`docs/runbooks/team-import-switch-v56-preflight.sql`).
+
 - **Eight failing test files found while checking U1 (2026-11-04), reproduced on a tree whose backend and frontend code is identical to `main` `0022f579` (the J19 docs merge), Node 22 in the cloud container; the causes are not investigated:**
   - backend `gpexe-client.test.mjs` - 2 of 19 tests fail;
   - backend `gpexe-rest-v1-adapter-reads.test.mjs` - 82 of 96 fail;

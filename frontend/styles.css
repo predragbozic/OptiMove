@@ -17436,6 +17436,21 @@ p.muted.gpexe-approve-note {
 .imports-dates[open] > summary::after {
   content: "\25BE";
 }
+/* U2 (v56): the "Imports for this team" panel. Inputs and buttons reuse the 16 px / 44 px gpexe controls. */
+.imports-conditions,
+.imports-switch-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.imports-condition.is-met { color: var(--text); }
+.imports-condition.is-unmet { color: var(--text-muted, var(--text)); }
+.imports-team-switch .gpexe-date { min-width: 0; }
+.imports-team-switch .gpexe-date input { width: 100%; box-sizing: border-box; }
+
 .imports-dates-fields {
   display: flex;
   flex-wrap: wrap;
