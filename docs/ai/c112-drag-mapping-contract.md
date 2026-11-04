@@ -10,6 +10,8 @@ This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-
 | Owner decisions | Section 11.1 (Q1–Q14). Q1–Q11, Q13 and Q14 become C113–C123, C124 and C125 once decided; Q12 stays O16. They are written into section C of the discovery document before any code (the plan's rule A3, `metrics-core-plan.md:458-460`). |
 | Decides | The owner decides Q1–Q14. The *Rukovodilac* decides R1–R9 (section 11.2). The *Nezavisni revizor* reviews this contract and every ★★ slice. |
 
+**Decided 2026-11-04 (C113–C125):** the owner answered Q1–Q14. Q2 is softened by C114 (zones and thresholds are no longer document only), Q9 gets a delta (the admin may change a mapping while no value is written under it), Q11 is closed by C123. See the discovery document, section C. The status line below is amended when J18's code is scheduled.
+
 **Renumbered by J14 (C126, accepted 2026-11-02):** phase 7h is migration v52, not v51, so J18's own migration and its
 runbook names are ≥ v53 wherever this document says v52 for them (lines at `565fe097`: `:46`, `:182-183`, `:479`, `:548`, `:550`, `:608`,
 `:636`, `:690`, `:692`, `:701`, `:834`, `:947`, `:979`, `:1166`, `:1172`), and its "v51" for 7h reads v52 (`:46`,

@@ -1286,9 +1286,44 @@ transcript; J11 section 0.1 holds the table):
       order (status Proposed, documentation only). Not accepted and nothing built; until it is accepted, this entry
       and C91–C97, M2b and J16 stand as written.
 
-*C113–C125 stay reserved for J18's Q1–Q14 (C112's contract) and are recorded when J18 is decided. J15's acceptance
-answers J18's Q14 with option one (the copy link of J15 section 7.2); C125 itself is written with J18's other
-decisions.*
+113. **J18's Q1–Q14 answered by the owner (2026-11-04); C113–C125**
+    - **The owner's words** (relayed by the *Rukovodilac* on 2026-11-04 with the answers below; quoted where the owner's
+      wording matters): Q6 „nije bitno… bitno je da je povezano ono što je povezano”; Q11 „nemamo maloletnih i ne brini o
+      dozvolama”. The status of J18 stays Proposed in its header until the *Rukovodilac* amends it; its code goes after
+      the U parts of J19 (`docs/ai/gps-import-flow-contract.md`) unless the owner says otherwise.
+    - **C113 (Q1):** J18 is accepted as the contract of C112, with the effects of its section 8.6.
+    - **C114 (Q2), by the owner, softening recommendation a2:**
+      - global and system fields and system sets are confirmed by the platform, without a document: a note on the board
+        "this column is column X on the GPEXE screen". Zones and thresholds the same, with an optional upload of a
+        GPEXE-screen image as evidence, not required;
+      - a club takes responsibility for its own mappings and thresholds, with an in-app instruction that warns what to
+        check.
+      - **Amends C97 for zones and thresholds:** they are no longer "document only". C97's text and the evidence
+        documents stand until a pull request amends them; the unit and meaning evidence of the seeded fields (P1, P2) is
+        unchanged.
+    - **C115 (Q3):** b1, a club's confirmation is valid for that club only; no b3.
+    - **C116 (Q4):** a global confirmation from an observation needs two sessions with two athletes each.
+    - **C117 (Q5):** as recommended: one stored session, two athletes, the same pair for all rows, chosen by the server,
+      values non-zero and different.
+    - **C118 (Q6):** as recommended: d1, values removed after 90 days by a scheduled purge with no actor, erasure by a
+      platform admin with a fixed reason code; backups follow their own retention and the removal runs before a restored
+      copy is used.
+    - **C119 (Q7) and C120 (Q8):** as recommended (Q7: the two-athlete values as a scoped exception to C28, J11's OD2/OD3
+      and J16 sections 7 and 9; Q8: a visible per-row requirement toggle prefilled *Required*, explicit in every saved row).
+    - **C121 (Q9):** as recommended: pre-placed and switched on by the same click, off until clicked, never switched
+      back on by itself. **New from the owner, a delta to J18:** the admin makes the mapping and may **change** it while no
+      value is written under it (no T6 row); after the first value the rule is replacement (disable, then place again).
+      Versions are immutable (v34 T4), so "change" means a new version with no gap and no written value under the old
+      one. What it needs from v34/T4, v43's replacement chain and the gate is checked in a proposal that goes to the
+      *Rukovodilac* before any code.
+    - **C122 (Q10):** yes, J18 starts, ★★.
+    - **C123 (Q11):** no legal basis is needed for the stored confirmation values, nor for names and dates of birth in
+      J19's U3; the gate before U3 is closed. **Condition:** if a minor athlete is ever added, the question opens again. The owner repeated it the same day: „ne treba pravni osnov, oni su članovi kluba i već se znaju njihovi podaci, a trenutno mi nikoga maloletnog nemamo”; on that basis the team coach sees the date of birth in U3 (J19 R2).
+    - **Q12:** a team coach sees a club variable's name and unit (already C127).
+    - **C124 (Q13):** option one: a club admin activates a club version of a field without parameters only through the
+      board; a replacement is "disable in Mappings, then place again". "Ordinary columns" are fields without parameters
+      (time, distance, max speed), as opposed to zones and thresholds.
+    - **C125 (Q14):** option one, as already built in v53 (the copy link of J15 section 7.2).
 
 126. **J14 accepted; O1: a club's admin activates, replaces and disables its club's mapping versions (phase 7h)**
     - **The contract:** J14, `docs/ai/phase7h-club-admin-mappings-contract.md`, merged as PR #333 (`f0578a72`) exactly
@@ -4286,6 +4321,8 @@ administrators, a stored two-athlete confirmation as the evidence, and the switc
 questions (a)–(d) answered as recommendations; owner questions Q1–Q14 (decisions C113–C125 once decided; Q12 is
 J17's O16) and *Rukovodilac* items R1–R9. Nothing it proposes is recorded in this document as decided until the owner accepts it.
 J19 is proposed for C111.
+
+**Answered 2026-11-04:** Q1–Q14 are decided as C113–C125 above; the status line of the contract is amended by its next change. The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
 
 ## K. Open, but not blocking M1
 
