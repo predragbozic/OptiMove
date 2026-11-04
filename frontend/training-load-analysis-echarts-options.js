@@ -56,7 +56,7 @@ export function renderDashboardChartPlots(model, labelForSeries, rowContext, opt
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">
         <div class="tl-analysis-echarts" aria-hidden="true"></div>
         <p class="muted tl-analysis-chart-failure" role="status" hidden>Chart unavailable. The values below are still available.</p>
-        ${plot.enhanced ? `<div class="tl-chart-controls" aria-label="Kontrole grafikona"></div><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Detalji izabrane tačke</summary><pre></pre></details>` : ''}
+        ${plot.enhanced ? `<details class="tl-chart-tools"><summary>Kontrole grafikona</summary><div class="tl-chart-controls" aria-label="Kontrole grafikona"></div></details><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Detalji izabrane tačke</summary><pre></pre></details>` : ''}
       </optimove-dashboard-chart>
     </figure>
   `).join("");

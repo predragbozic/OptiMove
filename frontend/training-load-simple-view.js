@@ -120,7 +120,7 @@ function displayChoices(model, locked) {
   const custom = model.draft?.metricRef?.kind === "metric";
   const scopes = metric.scope_capabilities?.length ? metric.scope_capabilities.map((scope) => typeof scope === "string" ? scope : scope.scope_level) : ["day", "session", "component"];
   return `<label class="tl-simple-field">Title<input type="text" ${action("title")} maxlength="200" value="${escapeAttr(model.draft?.title ?? "")}"${disabled(locked)}></label>
-    <fieldset${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
+    <fieldset class="tl-simple-view-options"${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
       const supported = types.some((type) => (typeof type === "string" ? type : type.key) === value && type.is_active !== false);
       return `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${label}${!supported ? " (unavailable)" : ""}</label>`;
     }).join("")}</fieldset>
