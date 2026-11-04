@@ -3,6 +3,7 @@ import { state } from './state.js';
 import { currentUserWorkspaceContextParts } from './access.js';
 import { analysisRuntimeFilterPayload, loadDashboardDetail, queryAnalysisDashboard, openAnalysisWidgetEditor } from './training-load-analysis-data.js';
 import { createSimpleEditorController } from './training-load-simple-controller.js';
+import { interactiveChartPresentation } from './training-load-chart-composer.js';
 import { loadTrainingLoadOrgPickerData } from './training-load-data.js';
 
 let render = () => {};
@@ -106,8 +107,9 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'search') simpleEditor.search(action.value ?? '');
   else if (type === 'more' || type === 'reload') await simpleEditor.metrics(type === 'more');
   else if (type === 'title') simpleEditor.change(draft => { draft.title = action.value ?? ''; });
-  else if (type === 'view') simpleEditor.change(draft => { draft.view.type = action.value || action.dataset.value; });
-  else if (type === 'group') simpleEditor.change(draft => { draft.view.groupBy = action.value; });
+  else if (type === 'view') simpleEditor.change(draft => { draft.view.type = action.value || action.dataset.value; if(model.canUpgradeChart && !['line_chart','bar_chart'].includes(draft.view.type))draft.presentation={mode:'preserve'}; });
+  else if (type === 'group') simpleEditor.change(draft => { draft.view.groupBy = action.value; if(model.canUpgradeChart && draft.presentation?.mode==='replace')draft.presentation=interactiveChartPresentation(draft.view.groupBy); });
+  else if (type === 'chart-enhanced' && model.canUpgradeChart) simpleEditor.change(draft=>{draft.presentation=action.checked?interactiveChartPresentation(draft.view.groupBy):{mode:'preserve'};});
   else if (type === 'scope') simpleEditor.change(draft => { if (action.value) draft.view.dataScopeLevel = action.value; else delete draft.view.dataScopeLevel; });
   else if (type === 'aggregation') simpleEditor.change(draft => { if (action.value) draft.view.analyticalAggregation = action.value; else delete draft.view.analyticalAggregation; });
   else if (type === 'athlete-mode') simpleEditor.change(draft => { draft.athleteSelection = action.value === 'selected' ? { mode: 'selected', athleteIds: [] } : { mode: action.value }; });

@@ -1,4 +1,6 @@
 import { escapeHtml, escapeAttr } from "./utils.js";
+import { buildDashboardWidgetDisplayModel } from './training-load-analysis-display-model.js';
+import { renderDashboardChartPlots } from './training-load-analysis-echarts-options.js';
 
 const action = (name) => `data-action="training-load-simple-${name}"`;
 const disabled = (value) => value ? " disabled" : "";
@@ -125,7 +127,8 @@ function displayChoices(model, locked) {
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
     ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowed_aggregations ?? []).map((value) => [value, ({ sum: "Total (sum)", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values (no aggregation)" })[value] ?? value]), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
     ${custom && scopes.length > 1 ? selectField("scope", "Use measurements from", scopes.map((value) => [value, ({ day: "Day", session: "Session", component: "Component" })[value] ?? value]), view.dataScopeLevel, locked, "Choose which measurements to use") : ""}
-    <p>The preview lists all returned data. Saved charts use the current dashboard display.</p>`;
+    ${model.canUpgradeChart && ['line_chart','bar_chart'].includes(view.type) ? `<label class="tl-simple-choice"><input type="checkbox" ${action('chart-enhanced')}${model.draft.presentation?.mode==='replace'?' checked':''}${disabled(locked)}>Interaktivni prikaz za ovaj grafikon (novi pregled pre čuvanja)</label>` : ''}
+    <p>Pregled prikazuje sve vraćene podatke. Postojeći grafikon se ne menja bez potvrđenog izbora.</p>`;
 }
 
 function resultTable(rows, caption, athletes) {
@@ -147,6 +150,9 @@ function previewHtml(model) {
   const preview = model.preview;
   if (!preview) return message(model.previewLoading ? "Loading preview…" : "Preview your choices before saving.");
   const result = preview.widgetResult;
+  const widget=preview.normalizedWidget;
+  const chart=preview.status==='valid' && widget && ['line_chart','bar_chart'].includes(widget.widget_type)
+    ? renderDashboardChartPlots(buildDashboardWidgetDisplayModel(widget,result,{period:preview.resolvedPeriod}),series=>series.display_label || model.selectedMetric?.label || model.draft?.title || 'Metrika',row=>row.identity.athleteId ?? '',{presentation:widget.presentation_config,queryId:preview.queryId,resolvedPeriod:preview.resolvedPeriod,contextId:`preview:${model.draft?.draftId}:${model.draft?.draftVersion}`,allowApplyPeriod:false,athletes:model.athletes}) : '';
   const tables = [];
   function visit(value, path) {
     if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? []));
@@ -164,7 +170,7 @@ function previewHtml(model) {
     ${preview.resolvedPeriod ? message(`Resolved period: ${preview.resolvedPeriod.dateFrom ?? "not specified"} to ${preview.resolvedPeriod.dateTo ?? "not specified"}${preview.resolvedPeriod.timeZone ? ` (${preview.resolvedPeriod.timeZone})` : ""}`) : ""}
     ${(preview.issues ?? []).map((issue) => message(issueText(issue), "alert")).join("")}
     ${(preview.warnings ?? []).map((warning) => message(issueText(warning))).join("")}
-    ${tables.join("")}
+    ${chart}${tables.join("")}
     ${!result ? message("No preview results returned.") : ""}
     <details class="tl-simple-raw"><summary>Complete preview result and problem details</summary><pre>${escapeHtml(JSON.stringify(preview, null, 2))}</pre></details>`;
 }

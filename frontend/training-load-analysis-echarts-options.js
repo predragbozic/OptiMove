@@ -1,6 +1,8 @@
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { composeDashboardCharts } from './training-load-chart-composer.js';
 
-export function dashboardChartPlots(model, labelForSeries, rowContext) {
+export function dashboardChartPlots(model, labelForSeries, rowContext, options = {}) {
+  if (options.presentation != null) return composeDashboardCharts(model,labelForSeries,rowContext,options).plots;
   if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
   const plots = [];
   const precision = model.config.effective.numberFormat.maximumFractionDigits;
@@ -44,13 +46,17 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
   return plots;
 }
 
-export function renderDashboardChartPlots(model, labelForSeries, rowContext) {
-  return dashboardChartPlots(model, labelForSeries, rowContext).map(plot => `
+export function renderDashboardChartPlots(model, labelForSeries, rowContext, options = {}) {
+  const composition = options.presentation == null ? null : composeDashboardCharts(model,labelForSeries,rowContext,options);
+  const plots = composition?.plots ?? dashboardChartPlots(model,labelForSeries,rowContext);
+  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Izaberite najviše 20 sportista ili tabelu. Nijedan sportista nije izostavljen.' : 'Podešavanja grafikona ili period nisu dostupni. Sve vraćene vrednosti ostaju u tabeli.')}</p>` : '';
+  return notice + plots.map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">
         <div class="tl-analysis-echarts" aria-hidden="true"></div>
         <p class="muted tl-analysis-chart-failure" role="status" hidden>Chart unavailable. The values below are still available.</p>
+        ${plot.enhanced ? `<div class="tl-chart-controls" aria-label="Kontrole grafikona"></div><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Detalji izabrane tačke</summary><pre></pre></details>` : ''}
       </optimove-dashboard-chart>
     </figure>
   `).join("");

@@ -1,5 +1,6 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
+import { clearDashboardChartStates } from './training-load-chart-interactions.js';
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
 import {
   clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
@@ -2727,6 +2728,7 @@ async function submitRpeForm(renderTrainingLoad) {
 // function's own comment in training-load-data.js).
 // ------------------------------------------------------------
 export function resetTrainingLoadForWorkspaceChange() {
+  clearDashboardChartStates();
   simpleEditor.close();
   // Bumping the generation counter makes an in-flight response for the OLD
   // workspace bail out via its own early-return before it ever reaches the

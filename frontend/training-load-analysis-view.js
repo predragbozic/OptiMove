@@ -3,6 +3,7 @@ import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
+import { dashboardChartContext } from './training-load-chart-actions.js';
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
 
@@ -495,11 +496,11 @@ function renderTableHtml(model) {
   `;
 }
 
-function renderChartHtml(model) {
+function renderChartHtml(model, widget) {
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
   const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext, {presentation:widget.presentation_config,queryId:state.trainingLoad.analysis.queryResult?.queryId,resolvedPeriod:state.trainingLoad.analysis.queryResult?.resolvedPeriod,contextId:dashboardChartContext(),widgetRevision:widget.revision,athletes:state.trainingLoad.orgPickerData?.athletes})}
     ${diagnostics.join("")}
     <details class="tl-analysis-chart-values" open>
       <summary>Values and status</summary>
@@ -518,7 +519,7 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
   if (widget.widget_type === "kpi") return renderKpiHtml(model);
   if (widget.widget_type === "table") return renderTableHtml(model);
-  return renderChartHtml(model);
+  return renderChartHtml(model, widget);
 }
 
 function renderWidgetHtml(widget, position) {

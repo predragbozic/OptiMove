@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { applyDashboardChartPeriod } from './training-load-chart-actions.js';
 import { openExerciseClassification } from "./exercise-classification.js";
 import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
 import {
@@ -460,6 +461,7 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  els.content.addEventListener('optimove-chart-period', event => { void applyDashboardChartPeriod(event.detail,renderActiveTrainingLoadSurface); });
   // Builder section editor on phones: a name cut to two lines unfolds on tap.
   els.content.addEventListener("click", (event) => { toggleClampedTitle(event.target); });
   // A click anywhere on the page folds an open exercise card "⋯" menu. iOS

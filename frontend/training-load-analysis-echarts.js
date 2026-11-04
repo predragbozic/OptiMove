@@ -1,3 +1,5 @@
+import { bindDashboardChartInteractions, chartPointText } from './training-load-chart-interactions.js';
+
 let libraryPromise;
 
 function loadLibrary() {
@@ -29,8 +31,13 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
             if (chart) chart.resize();
             else {
               chart = this.chart = library.init(container, null, { renderer: "svg" });
-              plot.option.tooltip.valueFormatter = value => typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
+              plot.option.tooltip.valueFormatter = value => plot.enhanced && plot.settings.tooltip === 'exact' ? String(value) : typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
+              if(plot.enhanced) {
+                plot.option.tooltip.formatter = event => chartPointText(plot.rowsBySeries[event.seriesIndex]?.[event.dataIndex],plot.precision,plot.settings.tooltip==='formatted');
+                for(const series of plot.option.series)series.label.formatter=event=>typeof event.value==='number' ? Number.isInteger(event.value)?String(event.value):event.value.toFixed(plot.precision) : '';
+              }
               chart.setOption(plot.option, { notMerge: true });
+              if(plot.enhanced)this.interactions = bindDashboardChartInteractions(this,chart,plot,scope);
             }
           } catch {
             this.showFailure();
@@ -58,6 +65,8 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
     }
 
     release() {
+      this.interactions?.();
+      this.interactions = null;
       this.observer?.disconnect();
       this.observer = null;
       if (this.resize) scope.removeEventListener("resize", this.resize);

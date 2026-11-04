@@ -1,4 +1,16 @@
 import { api } from "./api.js";
+
+let chartRosterLoad;
+function loadChartRoster(onPainted) {
+  if(state.trainingLoad.orgPickerData)return;
+  const key=JSON.stringify(currentUserWorkspaceContextParts());
+  const analysis=state.trainingLoad.analysis;
+  if(chartRosterLoad?.key===key && chartRosterLoad.analysis===analysis)return;
+  const pending={key,analysis};chartRosterLoad=pending;
+  pending.promise=api('/api/organization').then(data=>{
+    if(chartRosterLoad===pending && state.trainingLoad.analysis===analysis && JSON.stringify(currentUserWorkspaceContextParts())===key){state.trainingLoad.orgPickerData=data;onPainted?.();}
+  }).catch(()=>{}).finally(()=>{if(chartRosterLoad===pending)chartRosterLoad=null;});
+}
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
 import { localDateIsoInTimeZone } from "./utils.js";
@@ -267,6 +279,7 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
     applyData: (data) => {
       if (generation !== detailGeneration || state.trainingLoad.analysis.selectedDashboardId !== dashboardId) return;
       applyDashboardDetail(data);
+      if((analysis.widgets || []).some(widget=>widget.presentation_config?.schemaVersion===1 && (widget.presentation_config.chartComposition==='athletes-v1' || widget.presentation_config.chartInteractions)))loadChartRoster(onPainted);
       onPainted?.();
       // Series bound to a catalog metric are labelled with that metric's
       // name, which lives in the catalog. It is fetched once per workspace

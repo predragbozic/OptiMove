@@ -88,6 +88,17 @@ after(() => {
   Object.assign(globalThis, originalGlobals);
 });
 
+test('postojeći grafikon bez sidecara dobija interakcije samo eksplicitnim izborom i novim preview-om',async()=>{
+  analysis().widgets=[widget({widget_type:'line_chart',presentation_config:null})];
+  await act('training-load-analysis-edit-widget',{widgetId});await simple('next');await simple('next');await simple('preview');
+  assert.deepEqual(simpleEditor.model.draft.presentation,{mode:'preserve'});
+  const toggle=document.querySelector('[data-action="training-load-simple-chart-enhanced"]');assert.ok(toggle);assert.equal(toggle.checked,false);
+  toggle.checked=true;await dispatch(toggle);assert.equal(simpleEditor.model.preview,null);assert.equal(simpleEditor.model.canSave,false);
+  assert.equal(simpleEditor.model.draft.presentation.value.chartComposition,'athletes-v1');
+  await simple('preview');assert.equal(simpleEditor.model.canSave,true);
+  await simple('view',{},'table');assert.deepEqual(simpleEditor.model.draft.presentation,{mode:'preserve'});
+});
+
 async function openNew() {
   assert.equal(await act('training-load-analysis-add-widget'), true);
   assert.ok(simpleEditor.model);
