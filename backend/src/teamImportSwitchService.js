@@ -12,6 +12,10 @@ import { GpexeImportServiceError } from "./gpexeImportService.js";
 
 const KINDS = ["backup", "restore_probe", "wrong_link_procedure", "archived_team_check_stop"];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+function isRealDay(text) {
+  const d = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === text;
+}
 const BACKUP_MAX_AGE_DAYS = 2;
 const PROBE_MAX_AGE_DAYS = 35;
 
@@ -119,7 +123,9 @@ export async function setTeamImportSwitch(teamId, userId, { enabled, mode, reaso
 
 export async function recordImportPrerequisite(userId, { kind, recordedOn, note }) {
   if (!KINDS.includes(kind)) throw refusal(400, "invalid_request", "Unknown kind.");
-  if (typeof recordedOn !== "string" || !DATE.test(recordedOn)) throw refusal(400, "invalid_request", "recordedOn must be YYYY-MM-DD.");
+  if (typeof recordedOn !== "string" || !DATE.test(recordedOn) || !isRealDay(recordedOn)) {
+    throw refusal(400, "invalid_request", "recordedOn must be a real date, YYYY-MM-DD.");
+  }
   if (note !== undefined && note !== null && typeof note !== "string") throw refusal(400, "invalid_request", "note must be text.");
   try {
     return await inBoundedTransaction(async (client) => {
