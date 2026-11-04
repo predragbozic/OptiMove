@@ -1318,7 +1318,7 @@ transcript; J11 section 0.1 holds the table):
       *Rukovodilac* before any code.
     - **C122 (Q10):** yes, J18 starts, ★★.
     - **C123 (Q11):** no legal basis is needed for the stored confirmation values, nor for names and dates of birth in
-      J19's U3; the gate before U3 is closed. **Condition:** if a minor athlete is ever added, the question opens again.
+      J19's U3; the gate before U3 is closed. **Condition:** if a minor athlete is ever added, the question opens again. The owner repeated it the same day: „ne treba pravni osnov, oni su članovi kluba i već se znaju njihovi podaci, a trenutno mi nikoga maloletnog nemamo”; on that basis the team coach sees the date of birth in U3 (J19 R2).
     - **Q12:** a team coach sees a club variable's name and unit (already C127).
     - **C124 (Q13):** option one: a club admin activates a club version of a field without parameters only through the
       board; a replacement is "disable in Mappings, then place again". "Ordinary columns" are fields without parameters

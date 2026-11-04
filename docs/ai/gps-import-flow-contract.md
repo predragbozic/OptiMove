@@ -85,7 +85,7 @@ The words were relayed by the *Rukovodilac* and are recorded here as written.
 | Lock order | Team import lock → team row → club row FOR SHARE, as in the approval (J17 step 2a, R16); the switch write takes the team lock; no new order. Written out in U2's plan before code. |
 | Tests | Role matrix (platform admin, club admin of the club, of another club, coach, athlete, revoked role, archived team/club) for the pair, the switch and the approval; cross-club info-hiding; the conditions list refuses with the right condition; a run stopped by an archive; mutations on every guard. |
 
-### U3 — suggested athlete pairs, "Confirm all" (★★ if a coach gets the data, no migration)
+### U3 — suggested athlete pairs, "Confirm all" (★★, no migration)
 
 **Goal.** Link athletes proposes pairs by name and date of birth and links them in one confirmation.
 
@@ -93,7 +93,7 @@ The words were relayed by the *Rukovodilac* and are recorded here as written.
 |---|---|
 | Existing routes | `source-athletes`, `athlete-identities` (GET and the explicit load), `athlete-links` (GET, POST, unlink). |
 | New | The server computes the suggestions: an unlinked GPEXE athlete with a stored identity and one OptiMove team athlete with the same normalized name and the same date of birth (both present, a single match). A duplicate name or a date conflict is shown, never auto-linked. *Confirm all* sends the pairs through the existing link route one by one under one confirmation with one result per pair (the Phase 3b pattern); nothing is preselected for an unclear pair. |
-| Who sees the data | Today identity data is for the platform admin and the club admin. After the pilot a coach works with these athletes (D3). Recommendation (R2): the coach sees the **pair** (OptiMove athlete and GPEXE name) but not the date of birth; the explicit identity load stays an administrator's act. |
+| Who sees the data | Today identity data is for the platform admin and the club admin. After the pilot a coach works with these athletes (D3). Decided (R2, amended by the owner on 2026-11-04, see section 5): the coach sees the **pair, the GPEXE name and the date of birth**, because the date helps pairing; the explicit identity load stays an administrator's act. The v32 audience for the load and the 14-day snapshot are unchanged; U3 adds a read of the stored snapshot for the coach of the team, which makes it ★★ (trigger 2). |
 | Migration | No (v32 is reused). |
 | Reviewers | `code-reviewer`; `security-reviewer` (identity audience, trigger 2/3); `ux-design-reviewer`. |
 | Gate | Closed by C123 (section 5). |
@@ -132,7 +132,7 @@ The words were relayed by the *Rukovodilac* and are recorded here as written.
 | **U1** | ★ (★★ if it changes the batch transaction) | no | The *Rukovodilac*'s GO on this contract |
 | **U2a** (pair by the club admin) | ★★ | no | U1 may run in parallel; security review |
 | **U2** | ★★ | yes | The owner's order naming the migration at merge; R1, R3 decided |
-| **U3** | ★ / ★★ | no | R2 decided |
+| **U3** | ★★ (trigger 2: a coach reads the identity snapshot) | no | R2 decided (done) |
 | **U4** | ★ | no | U2 deployed (the switch must be settable) |
 | **U5** | ★★ | yes | J19-U5 accepted |
 
@@ -144,7 +144,7 @@ The standing orders apply: a PR without a migration is merged after the *Rukovod
 
 C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in section C of `docs/ai/gpexe-metric-variable-mapping-discovery.md`. Two of them touch J19:
 
-- **C123:** names, dates of birth and the evidence values need no legal basis, minors are not in the product, and the gate before U3 is closed. The condition is recorded: adding a minor athlete reopens it.
+- **C123:** names, dates of birth and the evidence values need no legal basis, minors are not in the product, and the gate before U3 is closed. The condition is recorded: adding a minor athlete reopens it. The owner repeated it on 2026-11-04: „ne treba pravni osnov, oni su članovi kluba i već se znaju njihovi podaci, a trenutno mi nikoga maloletnog nemamo”.
 - **C121 and the new request:** the admin makes the mapping and may change it while no value is written under it (the J18 delta in the discovery document). It is J18's, not J19's, and is decided before J18 code.
 
 ---
@@ -152,7 +152,7 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
 ## 6. For the *Rukovodilac*
 
 - **R1.** D3 as read in section 1: the per-team switch is turned on by the club admin (the platform admin during the pilot) and the coach approves sessions. If the owner means the coach also turns the switch on, U2's rights change.
-- **R2.** The coach sees a suggested pair and the GPEXE name but not the date of birth; the identity load stays an administrator's act.
+- **R2 (amended 2026-11-04).** The coach of the team sees a suggested pair, the GPEXE name **and the date of birth**; the identity load stays an administrator's act.
 - **R3.** D6's evidence. The app cannot read the Supabase backup, so "shown as a date" means an administrator records the date of the last daily backup and the date of the last restore probe, with who recorded it, in an append-only table; the switch refuses when the backup date is older than N days (recommendation: 2) or the restore probe is older than 35 days. N is a decision.
 - **R4.** U5's shape (section 3): undo and re-import, through its own sub-contract.
 - **R5.** D5's 50: confirm a response that returns the sessions done so far when the time bound is reached, instead of a hard failure.
