@@ -1087,7 +1087,9 @@ order covers is merged under it; a migration PR that the standing order for migr
   - 7i-B1 (migration v53, the backend and the routes) was merged as PR #352 (`26b6c8b`) and deployed on 2026-11-04;
     v53 (`202611041000_training_load_v53_system_variables_club.sql`) is directly confirmed on production by the
     *Rukovodilac*'s read-only post-check (J15 section 17). Copy, hide, show and the move to a copy exist only as the API.
-  - Next comes 7i-B2, the screen.
+  - 7i-B2 (the screen, frontend only) was merged as PR #357 (`4e06304a`) and deployed on 2026-11-04 (J15 section 18).
+    A team on another version gets "Not moved" per team (approved deviation from J15 section 8.2). The backend
+    `club.copiedFrom` field is a follow-up.
 - **Proposal after 7i-B2: system reference sets** (the owner's proposal, 2026-11-04, written up by the *Rukovodilac*
   in its messages of 07:56–07:59 UTC; a note only, **not a contract and not code**). The goal: a coach with no
   experience in setting up variables takes over a ready system, prepared by a reference expert, that works right after
