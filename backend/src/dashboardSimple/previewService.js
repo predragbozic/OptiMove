@@ -6,6 +6,7 @@ import { createSimpleCapabilityReader } from './capabilities.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
 import { authorizePreviewTarget, loadPreviewContext, loadPreviewExisting } from './previewContext.js';
 import { previewError, withPreviewTransaction } from './previewTransaction.js';
+import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
 
 const responseLimit = 2 * 1024 * 1024;
 const issueResult = (status, code, path) => ({ status, issues: [{ code, path, severity: 'error' }] });
@@ -33,6 +34,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
     if (kind === 'preview') lease = await admission.tryAcquire({ userId: req.user.id });
     return withPreviewTransaction({ ...transactionOptions, pool: lease?.queryPool ?? pool, signal, onReleased: () => lease?.release() }, async queryRunner => {
       const target = await authorizePreviewTarget(queryRunner, req, dashboardId);
+      await requireLegacySinglePage(queryRunner, target.dashboard);
       if (kind === 'metrics') {
         const options = parseMetricsQuery(query);
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });

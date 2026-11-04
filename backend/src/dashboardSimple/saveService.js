@@ -8,6 +8,7 @@ import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDash
 import { withPreviewTransaction, previewError } from './previewTransaction.js';
 import { runSimpleSaveTransaction } from './saveTransaction.js';
 import { validateSimpleSaveRequest, simpleSavePayloadHash, SIMPLE_REQUEST_WINDOW_MS } from './saveRequest.js';
+import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
 
 async function lockActor(queryRunner, req) {
   const userId = req.user.id;
@@ -36,6 +37,7 @@ async function lockCatalog(queryRunner, envelope, existing) {
 }
 
 function stableSaveError(error) {
+  if (error?.code === 'P4P01') return previewError('pagesClientRequired', 409);
   const codes = { S2C01: ['idempotencyConflict', 409], S2C02: ['invalidDraft', 400], S2C03: ['advancedRequired', 409], S2C04: ['advancedRequired', 409], S2C05: ['invalidRequest', 400], S2C06: ['requestExpired', 409], S2C07: ['notFound', 404], '40001': ['staleRevision', 409], '40002': ['dashboardArchived', 409], '23514': ['catalogChanged', 409], '23503': ['catalogChanged', 409] };
   return codes[error?.code] ? previewError(...codes[error.code]) : error;
 }
@@ -68,6 +70,7 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
       const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
       if (!body || Object.keys(body).length !== 1 || !isUuid(body.requestId)) throw previewError('invalidRequest', 400);
       const receipt = await recorded(queryRunner, target, body.requestId);
+      if (!receipt) await requireLegacySinglePage(queryRunner, target.dashboard);
       return receipt ? { status: 'recorded', requestId: body.requestId, receipt } : { status: 'notRecorded', requestId: body.requestId, retrySameRequest: true };
     });
   }
@@ -96,6 +99,7 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         payloadHash = simpleSavePayloadHash({ userId: req.user.id, dashboardId, body });
         const receipt = await recorded(queryRunner, target, body.requestId, payloadHash);
         if (receipt) return { receipt, replayed: true };
+        await requireLegacySinglePage(queryRunner, target.dashboard);
         if (activation.atomicSaveVerified !== true) throw previewError('saveUnavailable');
         if (target.dashboard.status !== 'active') throw previewError('dashboardArchived', 409);
         if (target.dashboard.is_template) throw previewError('templateRequiresClone', 409);
