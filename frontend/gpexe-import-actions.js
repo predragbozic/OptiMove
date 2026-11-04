@@ -4,6 +4,7 @@
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
 import { state } from "./state.js";
+import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
   reloadGpexeCandidates,
   refreshGpexeStatus,
@@ -77,6 +78,7 @@ function fieldValue(selector) {
 export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   const type = action.dataset.action;
   const gx = state.trainingLoad.gpexe;
+  if (type.startsWith("training-load-gpexe-switch-")) return handleTeamImportSwitchAction(action, { renderTrainingLoad });
 
   if (type === "training-load-gpexe-team") {
     // A team change resets the batch state: not while an import is running

@@ -14,6 +14,7 @@
 // imported"). Main messages are written for the coach; the API's codes are
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
+import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import {
   BATCH_MAX,
@@ -57,6 +58,8 @@ export { candidateGroup, inboxBucket };
 // and expired sessions explain themselves above the approve area).
 const BLOCKER_TEXT = {
   import_switch_off: "Importing is switched off in this environment, so it can't be approved here.",
+  // U2 (v56): the team's own switch.
+  team_import_switch_off: "Imports are switched off for this team, so it can't be approved here.",
   superseded_by_newer_data: "GPEXE has newer data for this session. Open the newer version.",
   // v33: the coach's sentence; an administrator reads notConfirmedText.
   not_confirmed_for_import: "Not confirmed for import yet. Find new sessions again, then review it.",
@@ -186,6 +189,7 @@ const GPS_TEXT = {
 // here is a refusal BEFORE anything was written (the server says so).
 const REFUSAL_TEXT = {
   import_switch_off: "Not imported: importing is switched off in this environment.",
+  team_import_switch_off: "Not imported: imports are switched off for this team. A platform administrator or the club administrator can turn them on.",
   not_an_approver: "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right.",
   superseded_by_newer_data: "Not imported: GPEXE has newer data for this session. Open the newer version.",
   blocked: "Not imported: this session must be fixed first. See what to fix above.",
@@ -394,6 +398,7 @@ export function renderGpexeImportsHtml() {
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load the imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
       ${status ? renderSourceCardHtml(IMPORT_SOURCES[0], gx, status) : ""}
+      ${status ? renderTeamSwitchPanelHtml(gx) : ""}
       ${status ? renderNextStepHtml(gx, status, IMPORT_SOURCES[0]) : ""}
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
@@ -460,6 +465,7 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
+      ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage))}
       ${techHtml([
         ["Source", source.key],
         [`${source.name} team id`, status.settings?.gpexeTeamId],
@@ -629,7 +635,11 @@ function reviewOnlyText(status) {
   const sw = status.importSwitch || {};
   const viewer = status.viewer || {};
   if (!sw.enabled) return "Review only - importing waits until it is turned on in this environment.";
-  if (!viewer.canApprove) return "Review only - an approver imports these (a platform admin, or a coach with approval rights for this team).";
+  // U2 (v56): the team's own switch comes before the person's right.
+  if (status.teamImportSwitch && status.teamImportSwitch.enabled !== true) return "Review only - imports are switched off for this team.";
+  if (!viewer.canApprove) return status.teamImportSwitch?.mode === "team"
+    ? "Review only - an approver imports these (the club administrator, a coach of this team, or a platform admin)."
+    : "Review only - an approver imports these (a platform admin, or a coach with approval rights for this team).";
   return "";
 }
 
@@ -850,6 +860,7 @@ function batchOutcomeText(r) {
   if (code === "snapshot_expired_check_again") return { cls: "is-refused", text: "Not imported: the GPEXE data is too old. Find new sessions, then import it." };
   if (code === "nothing_to_import") return { cls: "is-refused", text: "Nothing to import: GPEXE has nothing new for this session." };
   if (code === "import_switch_off") return { cls: "is-refused", text: "Not imported: importing was switched off in this environment." };
+  if (code === "team_import_switch_off") return { cls: "is-refused", text: "Not imported: imports were switched off for this team. A platform administrator or the club administrator can turn them on." };
   if (code === "not_an_approver") return { cls: "is-refused", text: "Not imported: you may not approve imports for this team any more. Ask a platform admin." };
   if (code === "internal_error") return { cls: "is-refused", text: "Not imported: the server failed before writing anything. Try again later." };
   if (code === "try_again") return { cls: "is-refused", text: "Not imported: another check, import or change of this team was running, or the server was busy. Try again in a moment." };
@@ -861,6 +872,7 @@ function batchOutcomeText(r) {
 function batchRefusalText(error) {
   const code = error?.code;
   if (code === "import_switch_off") return "Not imported: importing is switched off in this environment.";
+  if (code === "team_import_switch_off") return "Not imported: imports are switched off for this team. A platform administrator or the club administrator can turn them on.";
   if (code === "not_an_approver") return "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right.";
   if (error?.status === 404) return "Not imported: one of the sessions is not available in this team any more. Find new sessions, then choose again.";
   if (code === "internal_error") return "Not imported: the server failed before writing anything. Try again later.";
