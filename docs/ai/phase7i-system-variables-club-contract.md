@@ -1235,3 +1235,36 @@ every one killed.
 **Not in 7i-B1:** the screen (7i-B2); J18's gate and its tests (J18 is not built; the migration order of section 7.6
 applies when it is); the history test of section 10, which stays inferred (the importer's `needs_review` after a
 switch is unchanged code).
+
+## 18. 7i-B2 as built (the screen)
+
+The pull request 7i-B2 (PR #357, base `26b6c8bc`) builds section 8.2 on the 7i-B1 API. **Frontend only: no migration, no
+backend change.** Merged as `4e06304a` (parents `06ef1ba8` and `c0f9d61a`) on 2026-11-04, exactly from `c0f9d61a`, after
+the *Rukovodilac*'s GO on that head; deployed by the *Rukovodilac* the same day (`/api/health` served `4e06304a` three
+times in a row; without a login `/variables` and `/mappings` answered 401).
+
+**Built**
+- Variables > From OptiMove: one status chip per row, the Available / Hidden by your club / All filter (sends `hidden`
+  only for the system scope), one primary action per row, and a sentence for every act that is not offered.
+- Use for your teams (one button per data source, opening the Mappings switch-on panel with a way back), Copy to my club
+  (name and key, key under Advanced; an untouched card sends only the key and the version), Hide for my club, Show again.
+  What is offered is the server's `actions`; the screen derives no right from a role.
+- Move your teams to this copy: the original is found in the system list (`club.copyId`), its open activations are
+  listed by team name, the review says what changes, one `switch-to-copy` call per team, one at a time, each with its own
+  request key. A refused team is "Not moved" with its sentence; a lost answer is "Result not confirmed", and *Check
+  result* sends the same request again (never a read). While a result is not confirmed only *Check result* is live.
+- Pickers of the analysis and the calendar leave out what the club hides unless it is already chosen; the shown-by-
+  default columns count as chosen. The system list and the mappings are read once per 15 seconds (and again after a
+  system write or on re-entering the section).
+
+**Deviation from section 8.2, approved by the *Rukovodilac*:** a team that uses another OptiMove version than the one
+the copy was made from is not set aside before sending. It gets "Not moved" with the sentence for
+`not_a_copy_of_this_version`, per team. The reason: the frontend has no field that says which version a copy came from.
+
+**Follow-up, not built:** a backend `club.copiedFrom` field (the copy's source variable and version), which would let
+the screen tell such a team before sending and drop the system-list lookup.
+
+**Reviews:** `code-reviewer` (full pass and one narrow re-review; its MEDIUM about a stale read cache and its LOW about
+the calendar picker default were fixed and tested), `ux-design-reviewer` (READY; the move step's wording was changed:
+before and after, a retry heading after a partial result, the lost-answer texts), `mobile-qa` (no MEDIUM; four LOW
+notes applied). The sentence that a move can be undone was left out on purpose: the contract does not promise it.

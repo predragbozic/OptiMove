@@ -27,6 +27,12 @@ Runner: `backend/src/migrate.js`. Verified against current code — see
   it's been applied anywhere (including your own local dev DB) breaks the next run
   against that database — change a NEW migration instead, once the old one has been
   applied anywhere real.
+- **The 12-digit prefix must be unique across `migrations_v2/`** (`listFlatMigrationFiles()` in
+  `backend/src/migrate.js` refuses a shared prefix, and `npm start` then stops on the deploy). Two branches can add
+  different files with the same prefix, and `git merge-tree` shows no conflict. Before a migration PR is merged, run
+  `git ls-tree --name-only <merge tree> migrations_v2/ | sed 's#.*/##' | grep -E '^[0-9]{12}_' | cut -c1-12 | sort | uniq -d`
+  on the merge tree (`<merge tree>` is the output of `git merge-tree --write-tree origin/main <PR head>`); it must
+  print nothing. v53 was renamed once for this (J15 section 17).
 - On an unpublished feature branch, before merge, a migration that hasn't been applied
   anywhere yet can still be edited freely — the immutability rule is about "already
   applied," not "already committed."

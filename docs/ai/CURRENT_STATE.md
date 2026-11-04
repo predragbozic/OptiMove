@@ -173,7 +173,33 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     No copy, link, hide or `variable_copy` request row exists.
   - Until 7i-B2, copy, hide, show and the move to a copy exist only as the API. No import, check or switch change.
 
-  **Next: 7i-B2, the screen**, from `main`. Reviews: code, ux and mobile, then the *Rukovodilac*'s GO.
+  **7i-B2, the screen, is done** (J15 section 18; frontend only, no migration, no backend change):
+  - **Merged** as PR #357 (`4e06304a`, parents `06ef1ba8` and `c0f9d61a`) on 2026-11-04 at about 10:08 UTC, exactly from
+    `c0f9d61a`, after the *Rukovodilac*'s GO on that head (10:06 UTC). The *Nezavisni revizor* was not needed: the
+    frontend decides nothing and the server keeps the request records (the *Rukovodilac*'s review covers trigger 4).
+    The first merge call answered 502 and GitHub then said "Merge already in progress" for a few minutes; the third
+    call merged. No double merge.
+  - **Deployed** by the *Rukovodilac* (Render API, commit `4e06304a`). `/api/health` served `4e06304a` with `ok: true`
+    three times in a row (10:11:54–10:11:55 UTC). Without a login, `/api/auth/me` answered 200 and `/variables` and
+    `/mappings` answered 401. The served bundle carries "From OptiMove".
+  - **Built:** Variables > From OptiMove with status chips and the Available / Hidden by your club / All filter; Use,
+    Copy, Hide and Show forms (what is offered is the server's `actions`); *Move your teams to this copy* (one team at a
+    time, its own request key, *Check result* sends the same request again); hidden variables left out of the analysis
+    and calendar pickers unless already chosen.
+  - **Deviation from J15 section 8.2, approved by the *Rukovodilac*:** a team on another OptiMove version is not set
+    aside before sending; it gets "Not moved" with the sentence, per team.
+  - **Follow-up, not built:** a backend `club.copiedFrom` field. Today the move finds the original through the system
+    list (`club.copyId`).
+  - **Tests:** the new suite `system-variables-7i.actions.test.mjs`, the neighbouring suites and the build were run on
+    the head; browser QA (72 checks at 360, 375, 390 and 1280 px) ran before the review fixes. The full frontend run
+    shows the same failing files as a clean `origin/main` (builder-create-form-fixes, builder-performance-fixes,
+    exercise-media-thumbnail, exercise-ownership, exercise-personalization, training-load.actions);
+    exercise-editor-thumbnail passes alone. `production-build.test.mjs` failed in a clean-`main` worktree run and passed
+    on the branch; it was not reproduced, and the likely cause (a worktree without a built `frontend/dist`) is
+    unverified.
+  - No import, check or switch change.
+
+  **Next:** on the *Rukovodilac*'s orders (the system reference sets note in `docs/ai/metrics-core-plan.md`).
 
   The owner's proposal of **system reference sets** (2026-11-04) is recorded as a note after 7i-B2 in
   `docs/ai/metrics-core-plan.md`; its contract is prepared when new clubs are brought on.
