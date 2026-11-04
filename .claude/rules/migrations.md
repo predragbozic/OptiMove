@@ -60,7 +60,9 @@ same order, or it's a deadlock risk against the existing functions. See
   That is the order the revocations in `backend/src/routes/organization.js` lock in (`for update of u, r` /
   `u, g`), and the order these queries lock in was reproduced by `lock-order-lo1.test.mjs`. Proof:
   `backend/tests/lock-order-lo1.test.mjs` runs the real revocation against the real write and sees no `40P01`.
-  Database functions that still lock the role row first are listed under LO-2 in `docs/ai/CURRENT_STATE.md`.
+  The database's own rights-lock functions take the users row first since v54 (LO-2; proof:
+  `backend/tests/rights-locks-users-first-lo2.test.mjs`); a new one follows the same order. A known theoretical gap (a user
+  reactivated between two statements of one function) is recorded in `docs/ai/CURRENT_STATE.md`.
 - A transaction whose contract says it takes every lock before its first write has a test that records the SQL it
   sends and asserts that order: no lock that is not allowed before the first expected lock, and no locking clause
   between the first write and the COMMIT. A surviving mutation argued "equivalent today" is not that proof. Proof:

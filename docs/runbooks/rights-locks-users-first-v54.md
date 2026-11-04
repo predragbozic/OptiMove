@@ -56,6 +56,14 @@ profile or password write). None of the services that call these functions updat
 `rights-locks-users-first-v54-rollback.sql` (not a migration, never automatic). Only with a fresh restore-verified
 backup, after the deployed commit no longer contains the v54 file, and with the owner's approval for that database.
 
+## Known limitation (L1, the *Nezavisni revizor*, LOW)
+
+The users lock carries `is_active = true`, so an inactive user's row stays unlocked. A user reactivated between the two
+statements of one function is seen as active by the role query while the users row is not locked, and a later
+deactivation does not wait for the write in flight. Theoretical, not reproduced; microseconds and a double change of
+state. Cleaner fix for later (the *Rukovodilac*): lock the users row without the `is_active` filter and read the
+activity from the column.
+
 ## Recorded, not changed
 
 - LO-1's DB-2 (an import approval locks its rights rows first and reads T4 later; A1 holds T4 and takes its rights

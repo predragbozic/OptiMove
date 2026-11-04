@@ -1090,6 +1090,18 @@ order covers is merged under it; a migration PR that the standing order for migr
   - 7i-B2 (the screen, frontend only) was merged as PR #357 (`4e06304a`) and deployed on 2026-11-04 (J15 section 18).
     A team on another version gets "Not moved" per team (approved deviation from J15 section 8.2). The backend
     `club.copiedFrom` field is a follow-up.
+- **LO-2 (v54) is done:** migration v54 (the database's own rights-lock functions take the users row first) was merged as
+  PR #359 (`d67cc7b0`) and deployed on 2026-11-04; directly confirmed on production by the *Rukovodilac*'s post-check
+  (`docs/ai/CURRENT_STATE.md`, `docs/runbooks/rights-locks-users-first-v54.md`). Known limitation L1 is recorded there.
+- **Accepted direction: GPS import flow** (not a contract; the owner, 2026-11-04: „GPS import: predlog toka izgleda dobar",
+  relayed by the *Rukovodilac*; sketch `https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7`). The *Rukovodilac* writes the
+  contract after v54:
+  - **(A)** connecting a club as a five-step guide: connect and test; choose the team by name; the OptiMove GPEXE set or
+    a J18 board; proposed athlete pairs by name and date of birth, with one confirmation of all; a green list of
+    conditions.
+  - **(B)** the daily import with one button: a progress bar, the result "Ready / Needs you", one sentence and one button
+    per problem, and "Import N ready".
+  - **(C)** import is switched on per team in the app, instead of the global switch on Render and the SQL window.
 - **Proposal after 7i-B2: system reference sets** (the owner's proposal, 2026-11-04, written up by the *Rukovodilac*
   in its messages of 07:56–07:59 UTC; a note only, **not a contract and not code**). The goal: a coach with no
   experience in setting up variables takes over a ready system, prepared by a reference expert, that works right after
