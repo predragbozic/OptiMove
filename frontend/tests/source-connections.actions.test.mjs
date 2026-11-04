@@ -337,7 +337,16 @@ test("5b. (J19 U2a) Approve pair: opening and choosing send nothing; only a team
   // A lost answer: said so, the same button sends the same approval again.
   answer = new Error("network down");
   await act("source-connections-pair-confirm");
-  assert.match(html(), /No answer arrived\. The same approval can be sent again safely\./);
+  assert.match(html(), /No confirmed answer\. The pair may have been saved\. Send the same approval again; it is safe\./);
+  assert.doesNotMatch(html(), /Nothing was changed/, "a lost answer never claims that nothing changed");
+  answer = { status: 502, body: {} };
+  await act("source-connections-pair-confirm");
+  assert.match(html(), /may have been saved/);
+  answer = { status: 500, body: { error: "internal_error" } };
+  await act("source-connections-pair-confirm");
+  assert.match(html(), /may have been saved/);
+  assert.doesNotMatch(html(), /Nothing was changed/);
+  answer = new Error("network down");
   // Success: exactly the GPEXE team in the body; the row learns its pair; Bind is offered.
   answer = { status: 200, body: { settings: { gpexeTeamId: "981" } } };
   puts = 0;

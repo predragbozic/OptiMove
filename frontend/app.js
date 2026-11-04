@@ -2982,6 +2982,9 @@ async function handleContentClick(event) {
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
+  // The team <select> of "Approve pair" acts on its change event only: a click that opens the native list
+  // must not repaint the control it is opening.
+  if (action.dataset.action === "source-connections-pair-team") return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleCalendarSettingsAction(action, { render: renderCalendarSettingsSurface })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;

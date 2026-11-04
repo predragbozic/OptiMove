@@ -902,8 +902,9 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     // decision 2026-10-04): every visible team is matched against the
     // approved pairs of the owning club (the gpexe_team_settings rows of its
     // active teams). A platform admin gets the bounded list with the match
-    // per row (support, setting the allowlist); a club admin gets ONLY the
-    // intersection — no name, id, count or other fact of a team outside it.
+    // per row (support, setting the allowlist); since J19 U2a (owner decision D2,
+    // 2026-11-04) a club admin gets the whole list of THEIR club's own credential too,
+    // annotated with the owning club's own pairs only - never another club's.
     // The truncation of the source list is reported to both.
     let presented = null;
     if (read.ok && !bindBody && Array.isArray(read.sourceTeams)) {

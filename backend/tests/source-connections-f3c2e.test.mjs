@@ -1443,6 +1443,30 @@ test("31. U2a: the right is checked again INSIDE the write - a role revoked, a c
   assert.equal((await settingsOf(o.team)).length, 1);
 });
 
+test("32. U2a: a club admin gets a NEUTRAL refusal for a GPEXE team that is paired anywhere (no probing of other clubs' ids: the same answer whether the id is taken or not is not given - taken is pair_not_available, free is 200), a platform admin keeps gpexe_team_taken, and a canonically equal spelling over an existing pair is idempotent and keeps who approved it", async () => {
+  const o = await org({ approve: false });
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(o.club);
+  await verified(ca, o.club);
+  const pa = await platformAdmin();
+  approvedTeams.push(o.team, o.team2, other.team);
+  assert.equal((await pairApi(other.team, pa.cookie, { gpexeTeamId: "985" })).status, 200);
+  const taken = await pairApi(o.team, ca.cookie, { gpexeTeamId: "985" });
+  assert.deepEqual([taken.status, taken.body.error], [409, "pair_not_available"], taken.text);
+  assert.ok(!/taken|another OptiMove team|connected/i.test(taken.text), "says nothing about why");
+  const taken0 = await pairApi(o.team, ca.cookie, { gpexeTeamId: "0985" });
+  assert.deepEqual([taken0.status, taken0.body.error], [409, "pair_not_available"], "the canonical spelling too");
+  const forPa = await pairApi(o.team, pa.cookie, { gpexeTeamId: "985" });
+  assert.deepEqual([forPa.status, forPa.body.error], [409, "gpexe_team_taken"], "a platform admin keeps the specific code");
+  assert.deepEqual(await settingsOf(o.team), [], "nothing written by any refusal");
+  // The platform admin's pair is not overwritten by a club admin repeating it in another spelling.
+  assert.equal((await pairApi(o.team2, pa.cookie, { gpexeTeamId: "986" })).status, 200);
+  const rewrite = await pairApi(o.team2, ca.cookie, { gpexeTeamId: "0986", reason: "mine" });
+  assert.equal(rewrite.status, 200, rewrite.text);
+  assert.deepEqual((await settingsOf(o.team2)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["986", pa.id]], "still the platform admin's row");
+  assert.equal((await historyOf(o.team2)).length, 1);
+});
+
 test("20. no console line of the whole suite carries a secret marker, a source sentence or a source team name", () => {
   assert.ok(logLines.length >= 0);
   for (const line of logLines) noSecret(line, "a console line");

@@ -451,9 +451,18 @@ const PAIR_ERRORS = {
   pair_change_requires_platform_admin: "This team already has an approved GPEXE team. Changing it is done by a platform administrator under Settings > Data sources. Nothing was changed.",
   gpexe_team_taken: "This GPEXE team is already connected to another OptiMove team. A platform administrator can look into it under Settings > Data sources. Nothing was changed.",
   source_connection_required: "Your club has no verified GPEXE connection. Connect and test it first. Nothing was changed.",
+  pair_not_available: "This pair could not be approved. Ask a platform administrator. Nothing was changed.",
   gpexe_team_bound: "This team is bound to its GPEXE team; end the binding first. Nothing was changed.",
   notFound: "That team is not available any more. Reload the page. Nothing was changed.",
 };
+// Only a coded 4xx refusal says "nothing was changed"; no answer, an uncoded 5xx or the service's own 500 say
+// nothing about whether the write landed, and the same approval is safe to send again (the PUT is idempotent).
+function pairErrorText(info) {
+  if (PAIR_ERRORS[info.code]) return PAIR_ERRORS[info.code];
+  const refused = info.status >= 400 && info.status < 500;
+  if (refused) return "The pair could not be approved. Nothing was changed.";
+  return "No confirmed answer. The pair may have been saved. Send the same approval again; it is safe.";
+}
 function renderPairReviewHtml(d, connection, clubName) {
   const review = d.pairReview;
   const teams = pairableTeams(connection);
@@ -474,7 +483,7 @@ function renderPairReviewHtml(d, connection, clubName) {
       <p class="data-sources-confirm-line"><strong>${escapeHtml(chosen?.name || "OptiMove team")}</strong> ↔ <strong>${escapeHtml(sourceLabel)}</strong> <span class="muted">${escapeHtml(SOURCE_NAME)} team number ${escapeHtml(review.sourceTeamId)}</span></p>
       ${named ? "" : `<p class="data-sources-warn">This GPEXE team has no name, so you cannot check what you are approving. Ask your GPEXE administrator to name it, then run Test connection again.</p>`}
       <p>This says which ${escapeHtml(SOURCE_NAME)} team belongs to which OptiMove team of ${escapeHtml(clubName || "your club")}. It does not import anything and binds nothing yet; you bind the pair next. <strong>Check the name: you cannot undo this yourself</strong> - only a platform administrator can change it afterwards.</p>
-      ${info ? `<p class="data-sources-warn" role="alert">${escapeHtml(PAIR_ERRORS[info.code] || (info.code === "no_answer" ? "No answer arrived. The same approval can be sent again safely." : "The pair could not be approved. Nothing was changed."))}</p>` : ""}
+      ${info ? `<p class="data-sources-warn" role="alert">${escapeHtml(pairErrorText(info))}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="source-connections-pair-confirm" ${d.pairBusy || !chosen || !named ? "disabled" : ""}>${d.pairBusy ? "Approving..." : "Approve pair"}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.pairBusy ? "disabled" : ""}>Cancel</button>
