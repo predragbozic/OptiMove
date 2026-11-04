@@ -3879,6 +3879,17 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
   suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
   was not recorded. Not fixed.
+- **Eight failing test files found while checking U1 (2026-11-04), reproduced on a tree whose backend and frontend code is identical to `main` `0022f579` (the J19 docs merge), Node 22 in the cloud container; the causes are not investigated:**
+  - backend `gpexe-client.test.mjs` - 2 of 19 tests fail;
+  - backend `gpexe-rest-v1-adapter-reads.test.mjs` - 82 of 96 fail;
+  - frontend `builder-performance-fixes.test.mjs` - 2 of 8 fail;
+  - frontend `exercise-editor-thumbnail.test.mjs` - 4 of 15 fail;
+  - frontend `exercise-media-thumbnail.test.mjs` - 8 of 10 fail;
+  - frontend `exercise-ownership.test.mjs` - 1 of 9 fails;
+  - frontend `exercise-personalization.test.mjs` - 1 of 8 fails;
+  - frontend `training-load.actions.test.mjs` - 2 of 117 fail (the X5a/X5b hang above, now seen as 2 failures).
+
+  The `exercise-*` and `builder-performance-fixes` failures probably come from the exercise-library work of PR #350 / #354 (the *Rukovodilac*'s reading, not verified). The same failures appeared on the U1 branch with identical counts, so U1 did not cause them. Fixing them is a separate task (see "Fix the known failing test files" under Separate tasks).
 - `backend/tests/activity-roster-5a2.test.mjs` — test "56. migration v26: applied by the runner
   on v25, the rollback returns the schema to v25 exactly…" fails on the digest of
   `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`
@@ -4631,7 +4642,7 @@ pre-existing; pass/fail counts don't belong in this file
   holds staged changes, and its search field is 42px tall on phones (below the 44px
   touch-target rule).
 
-- **Fix the known failing tests above** so a full suite run can be green again and a new
+- **Fix the known failing test files** (owner's *Rukovodilac*, 2026-11-04, a separate task: eight files are listed above; only `training-load.actions` was listed before 2026-11-04) so a full suite run can be green again and a new
   regression can't hide among known failures: the backend worker timing test, a way to run
   or skip the edit-draft suite without `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL`, and the
   Tests-module drag-selection tests.

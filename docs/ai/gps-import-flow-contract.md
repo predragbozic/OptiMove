@@ -156,3 +156,16 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
 - **R3.** D6's evidence. The app cannot read the Supabase backup, so "shown as a date" means an administrator records the date of the last daily backup and the date of the last restore probe, with who recorded it, in an append-only table; the switch refuses when the backup date is older than N days (recommendation: 2) or the restore probe is older than 35 days. N is a decision.
 - **R4.** U5's shape (section 3): undo and re-import, through its own sub-contract.
 - **R5.** D5's 50: confirm a response that returns the sessions done so far when the time bound is reached, instead of a hard failure.
+
+---
+
+## 7. As built
+
+### U1 — the daily screen (PR #364, merge `76af5f52`, 2026-11-04, deployed by the *Rukovodilac*; no migration, the import switch untouched)
+
+- As designed in section 3, with these decisions on the way: the bar is indeterminate (the check row carries only counts; the total is unknown until the end); a failed poll retries 3 more times, then stops without clearing the check, shows a note and a **Refresh status** button that reads the status again and never starts a search; the retry allowance is reset on every start of the poll loop; the daily line counts the whole list and says "(all dates)" under a day filter; a ready session that cannot be chosen is named under the button; review-only shows its reason under the counts.
+- **D5 / R5 numbers:** `BATCH_APPROVE_MAX` 50; server time budget **45 s** (checked before each candidate except the first; the rest are `not_attempted` with code `batch_time_budget`); one approval's COMMIT wait 15 s; client bound **90 s** (new `AbortSignal` on the batch POST; an abort is "Result not confirmed"); hosting proxy 100 s. A test asserts 45 + 15 < 90 < 100. A real 50-session batch was **not** timed.
+- Reviews: `code-reviewer` READY WITH NON-BLOCKING NOTES, `ux-design-reviewer` READY, `mobile-qa` no finding above LOW. Not done: "Needs you" as a link.
+- Tests on the PR: backend `gpexe-batch-approve` 17/17; frontend `gpexe-import.actions` 80, `gpexe-imports-batch.actions` 30, `gpexe-imports-id-masking.actions` 17, `gpexe-imports-v33.actions` 11, `source-connections.actions` 26; frontend build; `gpexe` preset 52 of 54 files.
+- Baseline failures seen in the same runs, reproduced identically on a clean main (frontend code of `0022f579`): `gpexe-client` and `gpexe-rest-v1-adapter-reads` (backend) and, in the frontend `frontend-fast` preset, `builder-performance-fixes` (2), `exercise-editor-thumbnail` (4), `exercise-media-thumbnail` (8), `exercise-ownership` (1), `exercise-personalization` (1), `training-load.actions` (2, the known X5a/X5b hang), with the counts and the commit in `CURRENT_STATE.md`. Recorded in `CURRENT_STATE.md`, "Known baseline/environment test issues".
+- Deploy (the *Rukovodilac*, Render API, commit `76af5f52`, HTTP 201): `/api/health` briefly served the old commit during the swap, then `76af5f52` with `ok: true` four times in a row (to 13:07:59 UTC); without a login `/api/auth/me` 200 and the GPEXE team status (zero UUID) 401.
