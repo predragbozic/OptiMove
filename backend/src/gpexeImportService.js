@@ -2529,7 +2529,19 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
 // then the batch stops. Ten is the owner's ceiling without stronger
 // evidence (decision 2026-09-24), and keeps a request well inside a minute
 // at the approval times measured in the tests; see the runbook.
-export const BATCH_APPROVE_MAX = 10;
+export const BATCH_APPROVE_MAX = 50;
+
+// J19 U1 (D5, R5): fifty approvals one after another take longer than ten, so
+// the batch has a time budget. It is checked before each candidate except the
+// first; when it is spent, the rest are returned as not_attempted with the code
+// batch_time_budget (nothing started, nothing written for them), and repeating
+// the request is safe: an imported candidate answers already_imported. The
+// budget stays below the 100 s of the hosting proxy together with one
+// approval's own bounds (15 s COMMIT wait).
+let batchTimeBudgetMs = 60_000;
+export function setBatchTimeBudgetForTests(ms) {
+  batchTimeBudgetMs = ms ?? 60_000;
+}
 
 const CANDIDATE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -2724,9 +2736,17 @@ export async function approveCandidates(teamId, candidates, { userId, expectedCl
   }
   const results = [];
   let stopped = false;
+  const batchStarted = Date.now();
+  let outOfTime = false;
   for (const candidate of candidates) {
     if (stopped) {
-      results.push(batchResult(candidate.candidateId, "not_attempted"));
+      results.push(batchResult(candidate.candidateId, "not_attempted", outOfTime ? "batch_time_budget" : null));
+      continue;
+    }
+    if (results.length > 0 && Date.now() - batchStarted >= batchTimeBudgetMs) {
+      results.push(batchResult(candidate.candidateId, "not_attempted", "batch_time_budget"));
+      stopped = true;
+      outOfTime = true;
       continue;
     }
     const result = await approveOneOfBatch(teamId, candidate, userId, expectedClubId);

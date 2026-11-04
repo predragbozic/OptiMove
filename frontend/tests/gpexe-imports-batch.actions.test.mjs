@@ -144,7 +144,7 @@ test("1. nothing is chosen before the coach chooses: every Ready checkbox is emp
   await openImports();
   const boxes = checkboxes();
   assert.deepEqual(boxes.map((b) => [b.id, b.checked]), [["cand-1", false], ["cand-2", false], ["cand-3", false]]);
-  assert.match(html(), /<strong>0 selected<\/strong> · maximum 10/);
+  assert.match(html(), /<strong>0 selected<\/strong> · maximum 50/);
   assert.match(html(), /data-action="training-load-gpexe-batch-review" disabled >Review sessions</);
   assert.deepEqual(gx().batch.selected, {});
 });
@@ -196,22 +196,22 @@ test("2. only a clean Ready session with a valid previewHash can be chosen; not 
   assert.match(html(), /Review only - importing waits until it is turned on/);
 });
 
-test("3. Select all / Select first 10 / Clear selection follow the list's order, stop at 10, and say how many stay for the next batch", async () => {
+test("3. Select all / Select first 50 / Clear selection follow the list's order, stop at 50, and say how many stay for the next batch", async () => {
   resetState();
-  const twelve = Array.from({ length: 12 }, (_, i) => ready(i + 1));
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: twelve }));
+  const many = Array.from({ length: 52 }, (_, i) => ready(i + 1));
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: many }));
   await openImports();
-  assert.match(html(), /data-action="training-load-gpexe-batch-select"  >Select first 10</);
+  assert.match(html(), /data-action="training-load-gpexe-batch-select"  >Select first 50</);
   assert.match(html(), /2 more sessions stay for the next batch\./);
   await act("training-load-gpexe-batch-select");
-  assert.deepEqual(Object.keys(gx().batch.selected), twelve.slice(0, 10).map((c) => c.id), "the first ten in the list's order");
-  assert.match(html(), /<strong>10 selected<\/strong> · maximum 10 · maximum reached, import these first/);
+  assert.deepEqual(Object.keys(gx().batch.selected), many.slice(0, 50).map((c) => c.id), "the first fifty in the list's order");
+  assert.match(html(), /<strong>50 selected<\/strong> · maximum 50 · maximum reached, import these first/);
   const boxes = checkboxes();
-  assert.deepEqual(boxes.filter((b) => !b.checked).map((b) => [b.id, b.disabled]), [["cand-11", true], ["cand-12", true]], "the rest cannot be ticked");
+  assert.deepEqual(boxes.filter((b) => !b.checked).map((b) => [b.id, b.disabled]), [["cand-51", true], ["cand-52", true]], "the rest cannot be ticked");
   assert.match(html(), /data-action="training-load-gpexe-batch-select" disabled >Select all</, "never 'Select first 0'");
-  // An eleventh pick is refused.
-  await pick("cand-11");
-  assert.equal(Object.keys(gx().batch.selected).length, 10);
+  // A fifty-first pick is refused.
+  await pick("cand-51");
+  assert.equal(Object.keys(gx().batch.selected).length, 50);
   await act("training-load-gpexe-batch-clear");
   assert.deepEqual(gx().batch.selected, {});
   assert.match(html(), /data-action="training-load-gpexe-batch-clear" disabled >Clear selection</);
@@ -780,11 +780,11 @@ test("18. a selection hidden by the date filter is still counted and named; Sele
   await pick("cand-14");
   await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
   let page = html();
-  assert.match(page, /<strong>1 selected<\/strong> · maximum 10 · 1 selected session is hidden by the date filter/);
+  assert.match(page, /<strong>1 selected<\/strong> · maximum 50 · 1 selected session is hidden by the date filter/);
   await act("training-load-gpexe-batch-select");
   assert.deepEqual(Object.keys(gx().batch.selected).sort(), ["cand-14", "cand-21"], "only the visible session was added");
   page = html();
-  assert.match(page, /<strong>2 selected<\/strong> · maximum 10 · 1 selected session is hidden by the date filter/);
+  assert.match(page, /<strong>2 selected<\/strong> · maximum 50 · 1 selected session is hidden by the date filter/);
   await act("training-load-gpexe-batch-review");
   const d = dialog();
   assert.match(d, /aria-label="Import 2 sessions"/);
@@ -887,4 +887,51 @@ test("10f. a 'nothing new' session reviewed before a link change is a Needs-atte
   assert.match(imported, /data-candidate-id="cand-2"[\s\S]*?nothing new/);
   assert.ok(!imported.includes('data-candidate-id="cand-1"'), "the stale one is not shown as done");
   assert.equal(checkboxes(page).length, 0, "neither is a batch candidate");
+});
+
+test("J19 U1: the daily line shows Ready and Needs you, and Import N ready selects the clean Ready sessions and opens the one confirmation without sending anything", async () => {
+  resetState();
+  let sent = 0;
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), ready(3)], onImports: () => { sent += 1; return result({ imported: 0 }, []); } }));
+  await openImports();
+  assert.match(html(), /<strong>Ready 3<\/strong> · <strong>Needs you 0<\/strong>/);
+  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
+  await act("training-load-gpexe-import-ready");
+  assert.deepEqual(Object.keys(gx().batch.selected), ["cand-1", "cand-2", "cand-3"]);
+  assert.ok(gx().batch.confirming, "the one confirmation is open");
+  assert.equal(sent, 0, "nothing is sent before the confirmation");
+});
+
+test("J19 U1: with more than fifty ready sessions the button says Import first 50 ready and names how many stay", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: Array.from({ length: 53 }, (_, i) => ready(i + 1)) }));
+  await openImports();
+  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import first 50 ready</);
+  assert.match(html(), /3 more sessions stay for the next batch\./);
+  await act("training-load-gpexe-import-ready");
+  assert.equal(Object.keys(gx().batch.selected).length, 50);
+});
+
+test("J19 U1: when the coach may not approve there is no Import N ready button, only the counts", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } }, candidates: [ready(1)] }));
+  await openImports();
+  assert.match(html(), /<strong>Ready 1<\/strong>/);
+  assert.ok(!/training-load-gpexe-import-ready/.test(html()));
+});
+
+test("J19 U1: a batch result with batch_time_budget says it ran out of time and that nothing was written for those sessions", async () => {
+  const mod = await import("../gpexe-import-view.js");
+  void mod;
+  resetState();
+  const list = [ready(1), ready(2)];
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: list,
+    onImports: () => result({ imported: 1, notAttempted: 1 }, [{ candidateId: "cand-1", outcome: "imported", code: null, approvalId: "appr-1", commitConfirmation: "confirmed" }, { candidateId: "cand-2", outcome: "not_attempted", code: "batch_time_budget", approvalId: null }]),
+  }));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.match(html(), /Not tried: the batch ran out of time\. Nothing was written for it - import it in the next batch\./);
 });

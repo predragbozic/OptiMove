@@ -256,6 +256,31 @@ test("batch: two clean Ready sessions are both imported, in the order asked, eac
   });
 });
 
+test("batch (J19 U1, R5): when the time budget is spent the rest are not_attempted with batch_time_budget, nothing is written for them, and repeating the request imports them", async () => {
+  const team = await setupTeam();
+  await checkNow(team, [cleanBundle({ sessionId: 8201, hour: 8 }), cleanBundle({ sessionId: 8202, hour: 10 }), cleanBundle({ sessionId: 8203, hour: 12 })]);
+  const ids = await candidateIds(team);
+  const asked = [ids["8201"], ids["8202"], ids["8203"]];
+  await withSwitchOn(async () => {
+    service.setBatchTimeBudgetForTests(0);
+    try {
+      const first = await batch(team, asked);
+      assert.equal(first.status, 200, JSON.stringify(first.body));
+      assert.deepEqual(outcomes(first), [[asked[0], "imported", null], [asked[1], "not_attempted", "batch_time_budget"], [asked[2], "not_attempted", "batch_time_budget"]], "the first candidate is always attempted");
+      assert.deepEqual(first.body.summary, { requested: 3, imported: 1, alreadyImported: 0, refused: 0, unknown: 0, notAttempted: 2 });
+      assert.equal(await candidateStatus(asked[1]), "pending");
+      assert.equal(await candidateStatus(asked[2]), "pending");
+      assert.equal(await eventsOf(team.teamId), 1);
+    } finally {
+      service.setBatchTimeBudgetForTests(null);
+    }
+    const again = await batch(team, asked);
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.deepEqual(outcomes(again), [[asked[0], "already_imported", "already_imported"], [asked[1], "imported", null], [asked[2], "imported", null]]);
+    assert.equal(await eventsOf(team.teamId), 3, "nothing was written twice");
+  });
+});
+
 test("batch: a refused candidate does not stop the next one - replaced by newer data, not ready (an unlinked athlete), changes that need acceptance, and a preview that changed under the lock (with reviewAgain); none of them is imported, an imported one is already_imported", async () => {
   const team = await setupTeam();
   // 8201: 101 only, imported first so that a resend changes it; 8205 stays
@@ -551,7 +576,7 @@ test("batch: a malformed, empty, duplicate, over-limit or wrongly typed candidat
       assert.deepEqual([r.status, r.body.error], [400, code], JSON.stringify(body).slice(0, 80));
       if (code === "invalid_body") assert.match(r.body.message, /previewHashes/, "the message names the whole body");
     }
-    assert.equal(service.BATCH_APPROVE_MAX, 10);
+    assert.equal(service.BATCH_APPROVE_MAX, 50);
     assert.equal(ran, false);
     assert.deepEqual(await allRowCounts(), before, "nothing written by any refused body");
     assert.equal(await candidateStatus(id), "pending");

@@ -316,6 +316,15 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-gpexe-import-ready") {
+    // J19 U1: "Import N ready" = select the clean Ready sessions (the date
+    // filter is not applied: this is the day's whole list) and open the one
+    // review and confirmation; nothing is sent before the confirmation.
+    if (gx.batch.sending) return true;
+    selectBatchVisible(batchSelectableList(gx));
+    if (openBatchReview()) renderTrainingLoad();
+    return true;
+  }
   if (type === "training-load-gpexe-batch-review") {
     if (openBatchReview()) renderTrainingLoad();
     return true;

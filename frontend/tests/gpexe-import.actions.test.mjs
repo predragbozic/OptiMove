@@ -648,15 +648,45 @@ test("check: leaving the tab mid-check and coming back resumes it, and a finishe
   assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
 });
 
-test("check: a failed poll does not leave Check now disabled", async () => {
+test("check (J19 U1): a failed poll keeps the running search on screen with a note, is tried again a bounded number of times, and then stops without clearing the search", async () => {
   resetState();
-  const running = { id: "chk-2", status: "running", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  const running = { id: "chk-2", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 4, candidatesNew: 1, candidatesChanged: 0, candidatesUnchanged: 3 };
+  let polls = 0;
   installFetchMock(gpexeServer({
-    checks: { start: () => ({ status: 202, body: { check: running } }), poll: () => ({ status: 500, body: { error: "serverError" } }) },
+    checks: { start: () => ({ status: 202, body: { check: running } }), poll: () => { polls += 1; return { status: 500, body: { error: "serverError" } }; } },
   }));
   await openImports();
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
-  assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()));
+  assert.equal(polls, 4, "the first failure and three retries, then polling stops");
+  const page = renderTrainingLoadCoachHtml();
+  assert.match(page, /Finding sessions/, "the running search is still shown");
+  assert.match(page, /4 sessions in GPEXE: 1 not seen by OptiMove before, 0 changed, 3 unchanged so far/);
+  assert.match(page, /role="progressbar"/);
+  assert.match(page, /Progress is no longer refreshing\. The search may still be running - reload the page/);
+  assert.equal(state.trainingLoad.gpexe.check?.id, "chk-2", "the check is not cleared");
+});
+
+test("check (J19 U1): a poll that recovers clears the note and the failure count", async () => {
+  resetState();
+  const running = { id: "chk-3", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  let polls = 0;
+  installFetchMock(gpexeServer({
+    checks: {
+      start: () => ({ status: 202, body: { check: running } }),
+      poll: () => {
+        polls += 1;
+        if (polls <= 2) return { status: 500, body: { error: "serverError" } };
+        return { status: 200, body: { check: { ...running, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 2, error: null } } };
+      },
+    },
+  }));
+  await openImports();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  assert.equal(polls, 3);
+  assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
+  assert.equal(state.trainingLoad.gpexe.pollFailures, 0);
+  assert.equal(state.trainingLoad.gpexe.pollNote, "");
+  assert.ok(!/Could not refresh|no longer refreshing/.test(renderTrainingLoadCoachHtml()));
 });
 
 test("approve: the dialog cannot be closed while the approval is running, so its answer is never lost", async () => {

@@ -12,6 +12,8 @@ import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
 export const CHECK_POLL_MS = 2_000;
+// J19 U1: failed polls tolerated in a row before polling stops (the check is never cleared).
+export const CHECK_POLL_RETRIES = 3;
 
 function g() {
   return state.trainingLoad.gpexe;
@@ -235,6 +237,8 @@ export async function startGpexeCheck({ from, to }, render) {
   const gx = g();
   const generation = gx.generation;
   gx.checkError = null;
+  gx.pollFailures = 0;
+  gx.pollNote = "";
   gx.checkStarting = true;
   render();
   try {
@@ -280,14 +284,23 @@ export async function pollGpexeCheck(render) {
         gx.check = check;
       } catch (error) {
         if (generation !== gx.generation) return;
-        gx.checkError = errorInfo(error);
-        // Not known any more: nothing is shown as running (which would keep
-        // the check button disabled); the next load takes the state from the server.
-        gx.check = null;
-        if (gx.status) gx.status.lastCheck = null;
+        // J19 U1: one failed poll does not make the screen forget a search that
+        // may still be running. The last known state stays, the failure is
+        // shown as a note, the poll is tried again a bounded number of times,
+        // and after that polling stops WITHOUT clearing the check (a reload
+        // reads the real state from the server).
+        gx.pollFailures = (gx.pollFailures || 0) + 1;
+        if (gx.pollFailures > CHECK_POLL_RETRIES) {
+          gx.pollNote = "Progress is no longer refreshing. The search may still be running - reload the page to see where it is.";
+          render();
+          return;
+        }
+        gx.pollNote = "Could not refresh the progress. Trying again...";
         render();
-        return;
+        continue;
       }
+      gx.pollFailures = 0;
+      gx.pollNote = "";
       render();
     }
     if (generation === gx.generation && gx.check && gx.check.status !== "running") {
@@ -921,7 +934,7 @@ export function inboxBucket(c, gx = g()) {
 // ---------------------------------------------------------------------------
 
 // The server's own ceiling (BATCH_APPROVE_MAX in gpexeImportService.js).
-export const BATCH_MAX = 10;
+export const BATCH_MAX = 50;
 const PREVIEW_HASH = /^[0-9a-f]{64}$/;
 
 // Whether this coach may import at all right now: the switch is on and

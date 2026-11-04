@@ -22413,3 +22413,57 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 100%;
   }
 }
+
+/* J19 U1: the daily line of Imports and the indeterminate progress bar of a running search. */
+.imports-daily {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-daily-counts {
+  margin: 0;
+  flex: 1 1 auto;
+}
+.imports-daily .gpexe-button {
+  min-height: 44px;
+}
+.gpexe-check-progress {
+  display: grid;
+  gap: 6px;
+}
+.gpexe-progress-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+.gpexe-progress-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 3px;
+  background: var(--accent, currentColor);
+  animation: gpexe-progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes gpexe-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gpexe-progress-bar > span {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}
+@media (max-width: 760px) {
+  .imports-daily .primary-button {
+    width: 100%;
+  }
+}
