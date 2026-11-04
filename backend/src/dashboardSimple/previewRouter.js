@@ -31,10 +31,10 @@ export function createSimplePreviewRouter({ service }) {
       req.once('aborted', abort);
       res.once('close', abort);
       try {
-        const result = await service[action]({ req, dashboardId: req.params.dashboardId, envelope: req.body, ...(action === 'metrics' ? { query: req.query } : {}), signal: controller.signal });
+        const result = await service[action]({ req, dashboardId: req.params.dashboardId, pageId: req.params.pageId ?? null, envelope: req.body, ...(action === 'metrics' ? { query: req.query } : {}), signal: controller.signal });
         if (!res.destroyed) res.json(result);
       } catch (error) {
-        const code = ['invalidRequest', 'notFound', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'pagesClientRequired', 'catalogChanged', 'previewUnavailable', 'previewBusy', 'previewTimeout', 'previewTooLarge', 'previewQueryFailed', 'previewAborted', 'previewReadOnlyViolation', 'previewCleanupFailed'].includes(error?.code) ? error.code : 'previewFailed';
+        const code = ['invalidRequest', 'notFound', 'workspaceSelectionRequired', 'dashboardArchived', 'templateRequiresClone', 'staleRevision', 'pagesClientRequired', 'pagesUnavailable', 'pagePeriodRequired', 'invalidPageDefaults', 'catalogChanged', 'previewUnavailable', 'previewBusy', 'previewTimeout', 'previewTooLarge', 'previewQueryFailed', 'previewAborted', 'previewReadOnlyViolation', 'previewCleanupFailed'].includes(error?.code) ? error.code : 'previewFailed';
         if (!res.destroyed) {
           if (code === 'previewBusy') res.set('Retry-After', '1');
           res.status(code === 'previewFailed' ? 503 : error.status ?? 503).json({ error: code });

@@ -34,7 +34,7 @@ import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
-import { createSimpleRuntime, SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
+import { createSimpleRuntime, SIMPLE_RUNTIME_PATH, PAGE_SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
 import { createPagesService } from './dashboardPages/service.js';
 import { createPagesRouter } from './dashboardPages/router.js';
 import { authorizePages, assertPageFilterVisible } from './dashboardPages/access.js';
@@ -69,6 +69,7 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
 if (simpleRuntime.router) app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
+if (simpleRuntime.router) app.use(PAGE_SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
 app.use('/api/training-load/dashboards/:dashboardId/pages', authMiddleware, attachAuthorizationContext, requireAuth, createPagesRouter({ service: createPagesService({ pool, authorize: authorizePages, assertFilterVisible: assertPageFilterVisible, queryDashboard }) }));
 app.use(express.json());
 app.use(authMiddleware);
