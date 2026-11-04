@@ -508,7 +508,7 @@ test("Move N teams sends one call per team, one at a time, each with its own key
   await click('[data-action="metric-variables-move-open"]');
   assert.match(text(), /Move 2 teams to this copy/);
   assert.match(text(), /Each team keeps its Required or Optional setting\. Sessions already imported stay under OptiMove's Total distance\./);
-  assert.match(text(), /Your existing charts of Total distance get no new points after the move\./);
+  assert.match(text(), /Charts that use OptiMove's Total distance stay on it and get no new points\. Add Total distance to a chart to follow the new values\./);
   // The reason is required.
   await click('[data-action="metric-variables-move-confirm"]');
   assert.match(text(), /Required\./);

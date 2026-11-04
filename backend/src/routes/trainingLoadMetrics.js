@@ -269,6 +269,7 @@ router.get("/definitions", async (req, res, next) => {
     const hideClubId = workspace?.type === "club" ? workspace.scopeId ?? null : workspace?.type === "team" ? workspace.clubId ?? null : null;
     const { rows, nextCursor } = await listDefinitions(req, {
       search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
+      teamClubId: workspace?.type === "team" ? workspace.clubId ?? null : null,
     });
     res.json({ rows, nextCursor });
   } catch (error) {
