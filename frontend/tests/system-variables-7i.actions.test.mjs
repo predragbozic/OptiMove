@@ -595,6 +595,19 @@ test("a failed lookup of the original on an ordinary club variable shows no erro
   assert.ok(!/could not be read/.test(text()));
 });
 
+test("a copy made within the cache window still finds its original (a system write drops the read cache)", async () => {
+  db.system = [sys()];
+  await openDetail(COPY); // primes the system list: no copy yet
+  await openDetail(SYS);
+  await click('[data-action="metric-variables-copy-open"]');
+  await settle();
+  db.system = [sys({ clubFacts: { usedByTeams: true, copyId: COPY }, actions: ["hide"] })];
+  copyWrites(() => ({ status: 201, body: { variable: copyRow(), copiedMappings: [], replayed: false } }));
+  await submit();
+  await settle();
+  assert.match(text(), /Copied from OptiMove's Total distance/);
+});
+
 test("opening two variables reads the mappings once, not once per variable", async () => {
   withTeamsOnOriginal();
   await openDetail(COPY);

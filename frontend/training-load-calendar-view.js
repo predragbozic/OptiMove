@@ -599,7 +599,9 @@ function renderMetricPickerHtml(nav, detail) {
   // what the club hides, unless it is checked (so it can still be unchecked).
   const all = resultDefinitionList(picker.definitions, detail);
   // Before the coach picks anything the few default columns (pickedMetricColumns) are shown, hidden ones included: they count as chosen.
-  const shownByDefault = picker.selectedIds === null && all.length <= 4 ? all.map((d) => d.id) : [];
+  const shownIds = new Set();
+  if (picker.selectedIds === null && detail) for (const f of detail.facts || []) if (f.factKind === "metric_value") shownIds.add(f.detail.metricDefinitionId);
+  const shownByDefault = shownIds.size <= 4 ? [...shownIds] : [];
   const definitions = pickable(all, { chosen: [...selected, ...shownByDefault] });
   const groups = groupDefinitions(definitions, picker.search);
   return `

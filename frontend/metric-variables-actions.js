@@ -133,6 +133,7 @@ export function loadDataConfigHome(render) {
 // Entering the screen: the list is read when it is not there yet.
 export function loadVariablesSection(render) {
   const s = variablesState();
+  dropSystemReadCache(); // coming back from another screen: what a copy or a link was is read again
   if (!variablesContext()) { render(); return Promise.resolve(); }
   if (s.view === "home" && !s.form) return loadDataConfigHome(render);
   if (s.view === "domains" && !s.form) return loadClassification(render);
@@ -707,6 +708,7 @@ const SYSTEM_CLOSES = new Set(["already_copied", "source_version_changed", "sour
 const CLOSES_CHANGE = new Set(["variable_changed", "variable_not_active", "variable_active", "variable_pinned", "restore_by_admin"]);
 
 async function saved(form, data, render) {
+  if (isSystemMode(form.mode)) dropSystemReadCache();
   const s = variablesState();
   s.form = null;
   s.list = { ...emptyVariablesState().list };
