@@ -1076,12 +1076,45 @@ order covers is merged under it; a migration PR that the standing order for migr
   - 7h-V was merged as PR #337 (`d3dcb64`) and deployed on 2026-11-02 (J14 section 16).
   - 7h-B was merged as PR #339 (`0334ddb`) and deployed on 2026-11-03; v52 is directly confirmed on production by
     the *Rukovodilac*'s read-only post-check (J14 section 17).
-  - Next come 7h-F and the lock-order pull request.
+  - 7h-F was merged as PR #345 (`ee85875`) and the lock-order pull request (LO-1) as PR #344 (`ad0e0d6`); both are
+    deployed (`CURRENT_STATE.md`).
 - **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
   (the copied mappings are the club's drafts, approved under OD6), before more clubs are brought on. A copy is a club variable with the system
   variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
   contract (J15) is written on the *Rukovodilac*'s order.
   **Accepted on 2026-11-02 (J15, C132–C140).** 7i-B comes after the lock-order pull request (J15 R13).
+  **Done so far:**
+  - 7i-B1 (migration v53, the backend and the routes) was merged as PR #352 (`26b6c8b`) and deployed on 2026-11-04;
+    v53 (`202611041000_training_load_v53_system_variables_club.sql`) is directly confirmed on production by the
+    *Rukovodilac*'s read-only post-check (J15 section 17). Copy, hide, show and the move to a copy exist only as the API.
+  - Next comes 7i-B2, the screen.
+- **Proposal after 7i-B2: system reference sets** (the owner's proposal, 2026-11-04, written up by the *Rukovodilac*
+  in its messages of 07:56–07:59 UTC; a note only, **not a contract and not code**). The goal: a coach with no
+  experience in setting up variables takes over a ready system, prepared by a reference expert, that works right after
+  it is taken over.
+  1. **A system set of variables per source** (for example a GPEXE basic package): variables whose system mappings to
+     the source's fields are already connected. A club takes them over one at a time or as a whole set in one step.
+  2. **One system variable may have mappings to several sources** (for example HMLD → a GPEXE field, HMLD → a Catapult
+     field); a club chooses by its own system.
+  3. **A club works with its own variables**, and may move to the system setup or switch it on to be computed alongside.
+  4. **Longer term, the application's science team** (science department) may propose system sets and calculations:
+     scientifically confirmed sets of variables and formulas, with their source (literature), version and review
+     status; a club sees who proposed a set and what it rests on.
+
+  Set versions are named by source and number (for example the system GPEXE set V1, V2). A club on V1 stays on V1 until
+  it moves to V2 itself, and the move holds from the day of the move.
+
+  All of this is an option, not an obligation. A user may also take over a single system variable with its mapping
+  (instead of making the same one), and build the club's own set from taken-over and its own variables.
+
+  **Open questions for the contract** (the owner's decisions later; the contract is prepared when new clubs are
+  brought on):
+  - computing alongside as two separate values, each with its own provenance, never merged (ADR-007);
+  - a move holds from the day of the move, and history is not rewritten (a separate approved operation if wanted);
+  - computing alongside only when the club switches it on (recommended), or always;
+  - how a club variable and a system variable are shown side by side;
+  - for point 4: the role and right of such an author, the review before publication, and what happens to a taken-over
+    set when a new version comes out (the club chooses to move; nothing changes by itself).
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
   its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
   approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script
