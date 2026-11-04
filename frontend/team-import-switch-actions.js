@@ -53,7 +53,7 @@ export async function handleTeamImportSwitchAction(action, { renderTrainingLoad 
   if (type === "training-load-gpexe-switch-mode-pilot") {
     const reason = needReason(gx, renderTrainingLoad);
     if (!reason) return true;
-    if (!globalThis.window?.confirm?.(`Move ${teamName(gx)} back to pilot mode? Only a platform administrator can then approve imports.`)) return true;
+    if (!globalThis.window?.confirm?.(`Move ${teamName(gx)} back to pilot mode? Only a platform administrator, or a coach given the right to approve, can then approve imports.`)) return true;
     await changeTeamImportSwitch({ enabled: ts.data?.enabled === true, mode: "pilot", reason }, renderTrainingLoad);
     return true;
   }

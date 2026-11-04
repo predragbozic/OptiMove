@@ -743,3 +743,64 @@ test("14. a club admin's right is verified again against the team's club once th
     await admin.query(`update public.teams set club_id = $1 where id = $2`, [a.clubId, a.teamId]);
   }
 });
+
+test("15. the first write of a team is serialized: a club admin racing a platform admin's first (team-mode) write cannot leave the mode at pilot", async () => {
+  const a = await createGpexePilotOrg(admin, { athleteNames: [] });
+  a.cadmin = await clubAdminOf(a.clubId);
+  const platformUser = gateTeam.padmin;
+  const c1 = new pg.Client({ connectionString: db.url });
+  const c2 = new pg.Client({ connectionString: db.url });
+  await c1.connect();
+  await c2.connect();
+  try {
+    await c1.query("begin");
+    await c1.query(`select * from training_load.set_team_import_switch($1, $2, true, 'team', 'first write')`, [platformUser.id, a.teamId]);
+    await c2.query("begin");
+    await c2.query("set local lock_timeout = '10s'");
+    const second = c2.query(`select * from training_load.set_team_import_switch($1, $2, false, null, 'club races')`, [a.cadmin.id, a.teamId]).then(() => null, (e) => e);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await c1.query("commit");
+    const error = await second;
+    await c2.query(error ? "rollback" : "commit");
+    assert.equal((await switchRow(a.teamId)).mode, "team", `the mode stays team (second call: ${error ? error.code : "ok"})`);
+  } finally {
+    await c1.query("rollback").catch(() => {});
+    await c2.query("rollback").catch(() => {});
+    await c1.end();
+    await c2.end();
+  }
+});
+
+test("16. a COMMIT that gets no answer in time is an unknown outcome (503 outcome_unknown), never \"nothing was changed\"; the connection is dropped", async () => {
+  const sw = await import("../src/teamImportSwitchService.js");
+  const t = gateTeam;
+  sw.setCommitBoundForTests(200, () => new Promise(() => {}));
+  try {
+    const r = await putSwitch(t, t.padmin, { enabled: true, reason: "commit never answers" });
+    assert.deepEqual([r.status, r.body.error], [503, "outcome_unknown"]);
+    assert.doesNotMatch(r.body.message, /Nothing was changed/);
+  } finally {
+    sw.setCommitBoundForTests(null, null);
+  }
+});
+
+test("17. lowering the mode of a team that is already on needs no fresh backup; turning a team on, or moving it to team mode, still does", async () => {
+  const fresh = await createDb2({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u2cond", migrations: GPEXE_TEST_MIGRATIONS });
+  const k = new pg.Client({ connectionString: fresh.url });
+  await k.connect();
+  try {
+    const o = await createGpexePilotOrg(k, { athleteNames: [] });
+    const pid = (await k.query(`insert into public.users (email, full_name, display_name) values ('pa@test.local','pa','pa') returning id`)).rows[0].id;
+    await k.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [pid]);
+    await enableTeamImportSwitch(k, o.teamId, pid, { mode: "team", enabled: true });
+    // No backup record exists at all.
+    const lower = await k.query(`select * from training_load.set_team_import_switch($1, $2, true, 'pilot', 'back to pilot')`, [pid, o.teamId]);
+    assert.equal(lower.rows[0].mode, "pilot");
+    await assert.rejects(k.query(`select * from training_load.set_team_import_switch($1, $2, true, 'team', 'to team')`, [pid, o.teamId]), (e) => e.code === "55000" && /condition:backup/.test(e.message));
+    await k.query(`select * from training_load.set_team_import_switch($1, $2, false, null, 'off')`, [pid, o.teamId]);
+    await assert.rejects(k.query(`select * from training_load.set_team_import_switch($1, $2, true, null, 'on')`, [pid, o.teamId]), (e) => e.code === "55000");
+  } finally {
+    await k.end();
+    await fresh.drop();
+  }
+});

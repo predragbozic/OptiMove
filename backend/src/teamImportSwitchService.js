@@ -64,22 +64,47 @@ export async function readTeamImportSwitch(teamId, { detail, platform = false })
   return { ...base, changedAt: sw?.changed_at ?? null, ...(platform ? { reason: sw?.change_reason ?? null } : {}), conditions, history };
 }
 
+const COMMIT_BOUND_MS = 15_000;
+let commitBoundMs = COMMIT_BOUND_MS;
+let commitFault = null;
+export function setCommitBoundForTests(ms, fault = null) {
+  commitBoundMs = ms ?? COMMIT_BOUND_MS;
+  commitFault = fault;
+}
+
 async function inBoundedTransaction(fn) {
   const client = await pool.connect();
   let released = false;
-  client.on("error", () => {});
+  const onError = () => {};
+  client.on("error", onError);
   try {
     await client.query("begin isolation level read committed");
     await client.query("set local lock_timeout = '3s'");
     await client.query("set local statement_timeout = '10s'");
     await client.query("set local idle_in_transaction_session_timeout = '15s'");
     const result = await fn(client);
-    await client.query("commit");
+    // The COMMIT is awaited at most commitBoundMs. Once it is sent the answer never says "nothing was changed": no answer in
+    // time is an unknown outcome (the connection is dropped; the screen reads the state again).
+    let timer;
+    const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("commit_unanswered"), { commitUnanswered: true })), commitBoundMs); });
+    try {
+      await Promise.race([commitFault ? commitFault(client) : client.query("commit"), bound]);
+    } catch (error) {
+      if (error?.commitUnanswered) {
+        client.release(true);
+        released = true;
+        throw refusal(503, "outcome_unknown", "The result is not confirmed: the server did not answer in time. Check the current state before trying again.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     return result;
   } catch (error) {
-    try { await client.query("rollback"); } catch { client.release(true); released = true; }
+    if (!released) { try { await client.query("rollback"); } catch { client.release(true); released = true; } }
     throw error;
   } finally {
+    client.off("error", onError);
     if (!released) client.release();
   }
 }

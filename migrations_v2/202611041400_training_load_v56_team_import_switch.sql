@@ -173,6 +173,9 @@ begin
       raise exception 'team % is not available', p_team using errcode = '42501';
     end if;
   end if;
+  -- A team with no switch row yet has nothing to lock: serialize the first write per team, so the decision below (the previous
+  -- mode, 'pilot' when absent) is never taken against a first row that another writer has not committed.
+  perform pg_advisory_xact_lock(hashtextextended('team_import_switch:' || p_team::text, 0));
   select s.owner_team_id, s.enabled as is_on, s.mode as cur_mode into v_cur
     from training_load.gpexe_team_import_switch s where s.owner_team_id = p_team for update;
   v_prev_mode := coalesce(v_cur.cur_mode, 'pilot');
@@ -187,7 +190,9 @@ begin
       raise exception 'team_import_pilot_platform_admin_only' using errcode = '42501';
     end if;
   end if;
-  if p_enabled then
+  -- The conditions guard TURNING ON (a team that is off, or a move to team mode); lowering the mode of a team that is
+  -- already on, or repeating the same state, needs none.
+  if p_enabled and (not coalesce(v_cur.is_on, false) or (v_mode = 'team' and v_prev_mode <> 'team')) then
     -- The conditions, read here, inside the database, at this moment.
     if not exists (select 1 from training_load.gpexe_import_prerequisite_records r
                     where r.kind = 'backup' and r.recorded_on between current_date - 2 and current_date) then

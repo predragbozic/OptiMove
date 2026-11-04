@@ -129,7 +129,7 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     // administrator-only identity load.
     // U2 (v56): the team's own switch, shown to everyone who sees the team (no condition detail here).
     teamImportSwitch: { enabled: approval.switchOn, mode: approval.switchMode ?? "pilot" },
-    viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin, ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}) },
+    viewer: { canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin, ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}) },
     approvalAvailable: true,
   });
 }));

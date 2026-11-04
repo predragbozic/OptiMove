@@ -85,11 +85,12 @@ function server({ sw, put, post } = {}) {
     const rest = m[2];
     if (rest === "/status") {
       const s = current.importSwitch;
-      return { status: 200, body: { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "" }, lastCheck: null, teamImportSwitch: { enabled: s.enabled, mode: s.mode }, viewer: { canApprove: s.enabled, approvalBasis: s.enabled ? "platform_admin" : null, isPlatformAdmin: false }, approvalAvailable: true } };
+      return { status: 200, body: { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "" }, lastCheck: null, teamImportSwitch: { enabled: s.enabled, mode: s.mode }, viewer: { canApprove: s.enabled, hasApprovalRight: s.canManage === true, approvalBasis: s.enabled ? "platform_admin" : null, isPlatformAdmin: false }, approvalAvailable: true } };
     }
     if (rest === "/source-athletes") return { status: 200, body: { athletes: [], units: {}, lastSeenRule: "" } };
     if (rest === "/athlete-links") return { status: 200, body: { links: [] } };
     if (rest === "/candidates") return { status: 200, body: { candidates: [READY] } };
+    if (rest === "/candidates/cand-1") return { status: 200, body: { candidate: { ...READY, athletes: {}, approval: null, preview: { version: 3, status: "ready", blocked: null, counts: { created: 4, changesToImported: 0 }, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [] } } } };
     if (rest === "/import-switch" && call.method === "GET") return { status: 200, body: current };
     if (rest === "/import-switch" && call.method === "PUT") {
       const r = await put(call);
@@ -261,4 +262,19 @@ test("8. a refused approval for the team's switch reads as one sentence naming w
   const src = (await import("node:fs")).readFileSync(new URL("../gpexe-import-view.js", import.meta.url), "utf8");
   assert.match(src, /team_import_switch_off: "Imports are switched off for this team, so it can't be approved here\."/);
   assert.match(src, /team_import_switch_off: "Not imported: imports are switched off for this team\. A platform administrator can turn them on \(the club administrator too, in team mode\)\."/);
+});
+
+test("9. a platform administrator who holds the approval right but whose team is switched off is told so in the review - not that approving needs a platform admin", async () => {
+  resetState();
+  READY.approvalBlockers = ["team_import_switch_off"];
+  try {
+    responder = server({ sw: switchBody({ enabled: false }) });
+    await openImports();
+    await act("training-load-gpexe-open", { candidateId: "cand-1" });
+    const page = html();
+    assert.match(page, /Imports are switched off for this team, so it can(?:'|&#039;)t be approved here\./);
+    assert.doesNotMatch(page, /Approving needs a platform admin/);
+  } finally {
+    READY.approvalBlockers = [];
+  }
 });

@@ -1959,6 +1959,8 @@ function renderApproveHtml(c, detail, status) {
   }
   const viewer = status?.viewer || {};
   const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");
+  // U2: the person may hold the right while the team's switch is off - say that, not "needs an approver".
+  if (!viewer.canApprove && viewer.hasApprovalRight === true && status?.teamImportSwitch?.enabled !== true) return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.team_import_switch_off)}</p>`;
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">Approving needs a platform admin or an explicit approver grant for this team.</p>`;
   if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;

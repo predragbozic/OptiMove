@@ -10,7 +10,8 @@
 //     retention status: an active platform admin only.
 //   * Approve an import (F2): an active platform admin, or a coach holding an
 //     active, explicit approver grant for that team while still actively
-//     coaching it. canApproveGpexeImport() below is what the F1 screens show;
+//     coaching it; since U2 (v56) also the club admin and the team's coaches
+//     while the team's switch is on in mode 'team'. canApproveGpexeImport() below is what the F1 screens show;
 //     the approval itself re-checks it in the database, in its transaction.
 import { canManageTeamById, holdsClubAdminRole, isPlatformAdministrator } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
