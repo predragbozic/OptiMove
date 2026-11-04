@@ -1026,9 +1026,36 @@ backend and the routes; 7i-B2, the screen, follows after 7i-B1's deploy and 7h-F
 show and the move to the copy exist **only as an API**. The pilot (O8) stays on form (a), the club using OptiMove's
 variable as it is.
 
-**Not merged, not deployed; v53 is applied to no persistent database** (only to disposable `optimove_tests_gpexe_*`
-databases). The migration is ★★: both GOs, the owner's order naming v53, the *Rukovodilac*'s preflight on the day of the
-merge, the owner's deploy and the *Rukovodilac*'s post-check.
+**Merged, deployed and post-checked on 2026-11-04; v53 is directly confirmed on production.**
+- **The GOs.** Both ★★ reviews gave GOs on `9fd91f30` (2026-11-03). That head could not be merged (see the rename
+  below). The narrow GOs on the renamed head `34ecf142` came from the *Nezavisni revizor* (08:20:48 UTC) and the
+  *Rukovodilac* (08:50:18 UTC).
+- **The owner's order.** „Odobravam merge i deploy PR #352 sa migracijom v53” (07:48:31 UTC). For the renamed file:
+  „prebaci na novo ime ako hoces” (08:14:11 UTC). Both are turns in the *Rukovodilac*'s chat, checked by the executing
+  session there.
+- **The preflight.** Blocks 1–9 passed. Blocks 2 and 8 were run again under the new name before the merge and passed.
+- **The rename.** The trial merge with `main` (`23b4cebd`) showed that `listFlatMigrationFiles`
+  (`backend/src/migrate.js`) would refuse the file list. Main's PR #350 had added
+  `202611031200_exercise_english_content.sql` with v53's first prefix, and the runner's "ambiguous order" check would
+  have stopped `npm start` (`node src/migrate.js &&` the server) on the deploy. `git merge-tree` had shown no conflict,
+  because the two files have different names. v53 was renamed in `34ecf142`; its content and sha256 are unchanged.
+  That trial merge passed 16 suites, 440/0.
+- **Merged** as PR #352: `26b6c8bc`, parents `23b4cebd` and `34ecf142`, at 08:51:02 UTC, exactly from `34ecf142`. Its
+  tree is the tested trial-merge tree.
+- **Deployed** by the owner after the *Rukovodilac*'s block 8 was run again.
+  - `/api/health` served `26b6c8bc` with `ok: true` three times in a row (08:58:56–08:58:57 UTC).
+  - Without a login, `/api/auth/me` answered 200, and the metrics API's `/variables`, `/mappings` and `/fields` answered
+    401.
+- **The *Rukovodilac*'s read-only post-check** (all seven blocks) passed:
+  - v53 recorded once, with its checksum, and no later migration;
+  - 2 replaced and 8 new function bodies;
+  - the request table's operation CHECK, `version_iff`, `operation_id_iff`, index and trigger are as built;
+  - 3 tables, 13 triggers (3 deferred, none disabled) and 8 indexes;
+  - no copy, link, hide or `variable_copy` request row;
+  - no actor default and no session actor;
+  - no idle transaction and no waiting lock.
+- **Since the deploy,** a club's admin can copy, hide and show a system variable and move an activation to the copy
+  through the API only; the screen is 7i-B2. No copy, hide or move has been made. No import, check or switch change.
 
 - **v53** (`migrations_v2/202611041000_training_load_v53_system_variables_club.sql`; first named `202611031200_…`,
   renamed before the merge because main's PR #350 had taken the prefix `202611031200`, which the runner refuses to share

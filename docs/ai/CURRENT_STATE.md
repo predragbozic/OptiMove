@@ -57,11 +57,13 @@ and its decisions 1–5 were added on 2026-11-03 at `0334ddbd` (merge of PR #339
 LO-1, the lock-order pull request (PR #344, no migration), its deploy and the *Rukovodilac*'s decisions 2–4 at its GO
 were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-derived then. Phase 7h-F (PR #345) and
 its deploy, the lock-order rule (PR #346) and the *Rukovodilac*'s acceptance of the 7i-B plan were added on 2026-11-03
-at `355ae868` (merge of PR #346); nothing else was re-derived then.
+at `355ae868` (merge of PR #346); nothing else was re-derived then. Phase 7i-B1 (PR #352, migration v53), its rename
+before the merge, its deploy and the *Rukovodilac*'s v53 post-check were added on 2026-11-04 at `26b6c8bc` (merge of PR
+#352); nothing else was re-derived then.
 
 ## Active phase
 
-**Metrics Core phases 7h and 7i: contracts accepted (2026-11-02), not built.** The owner accepted both in one turn:
+**Metrics Core phases 7h and 7i: contracts accepted (2026-11-02); 7h and 7i-B1 merged and deployed, 7i-B2 next.** The owner accepted both in one turn:
 „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (turn `95c006f2` in the *Rukovodilac*'s chat, 20:16:10
 UTC, relayed by its order `011e7d13`). J14 (`docs/ai/phase7h-club-admin-mappings-contract.md`, PR #333, `f0578a7`)
 lets a club's active admin activate, replace and disable its club's mapping versions, with migration v52; J15
@@ -151,7 +153,30 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     and A1 with listed starts are mandatory.
   - `test:backend:shared` per R11 (J14 R9's evidence), with the grep at the head in the packet.
 
-  7i-B1 is in progress on `feature/7i-b1-club-variables`, from `355ae868`.
+  **7i-B1 is done** (J15 section 17):
+  - **Built:** v53 with its runbook, preflight, post-check and rollback; copy, hide, show and the move to a copy as
+    routes; the reads of J15 section 4.4.
+  - **Renamed before the merge:** v53 is `migrations_v2/202611041000_training_load_v53_system_variables_club.sql`.
+    Its first name, `202611031200_…`, shared a prefix with `202611031200_exercise_english_content.sql` (main's PR
+    #350). The runner refuses a shared prefix, so `npm start` would have stopped on the deploy. `git merge-tree` showed
+    no conflict. The content and sha256 are unchanged.
+  - **Merged** as PR #352 (`26b6c8bc`, parents `23b4cebd` and `34ecf142`) on 2026-11-04 at 08:51:02 UTC, exactly from
+    `34ecf142`:
+    - both ★★ narrow GOs on that head: the *Nezavisni revizor* (08:20:48 UTC) and the *Rukovodilac* (08:50:18 UTC);
+    - the owner's order „Odobravam merge i deploy PR #352 sa migracijom v53” (07:48:31 UTC) and, for the new name,
+      „prebaci na novo ime ako hoces” (08:14:11 UTC), both turns in the *Rukovodilac*'s chat;
+    - the *Rukovodilac*'s preflight, blocks 1–9, with blocks 2 and 8 run again under the new name.
+  - **Deployed** by the owner after block 8 was run again. `/api/health` served `26b6c8bc` with `ok: true` three times
+    in a row (08:58:56–08:58:57 UTC). Without a login, `/api/auth/me` answered 200, and the metrics API's
+    `/variables`, `/mappings` and `/fields` answered 401.
+  - **The *Rukovodilac*'s read-only post-check** (seven blocks) passed. **v53 is directly confirmed on production.**
+    No copy, link, hide or `variable_copy` request row exists.
+  - Until 7i-B2, copy, hide, show and the move to a copy exist only as the API. No import, check or switch change.
+
+  **Next: 7i-B2, the screen**, from `main`. Reviews: code, ux and mobile, then the *Rukovodilac*'s GO.
+
+  The owner's proposal of **system reference sets** (2026-11-04) is recorded as a note after 7i-B2 in
+  `docs/ai/metrics-core-plan.md`; its contract is prepared when new clubs are brought on.
 
 No import, check or switch change until the end of this track (the owner, 2026-11-02).
 
