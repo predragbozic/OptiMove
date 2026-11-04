@@ -4642,6 +4642,7 @@ pre-existing; pass/fail counts don't belong in this file
   holds staged changes, and its search field is 42px tall on phones (below the 44px
   touch-target rule).
 
+- **U2a follow-ups (2026-11-04):** the L1 test (a club admin in a team or another club's workspace gets 403 on the settings PUT); before a second club uses U2a: its own GPEXE account and the migration that stores the visible GPEXE team ids of the last Test so a pair can only name one of them (`docs/ai/gps-import-flow-contract.md` section 7, `docs/ai/u2a-club-admin-pair-plan.md` section 8).
 - **Fix the known failing test files** (owner's *Rukovodilac*, 2026-11-04, a separate task: eight files are listed above; only `training-load.actions` was listed before 2026-11-04) so a full suite run can be green again and a new
   regression can't hide among known failures: the backend worker timing test, a way to run
   or skip the edit-draft suite without `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL`, and the
