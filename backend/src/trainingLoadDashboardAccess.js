@@ -268,8 +268,8 @@ export function canViewDashboardRow(req, row, dataWorkspace) {
 // path (a raw SQL statement, a future caller) — this is a pre-check, not
 // a replacement.
 // ------------------------------------------------------------
-export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId) {
-  const r = await query(
+export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId, queryRunner = query) {
+  const r = await queryRunner(
     `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_definitions where id = $1`,
     [metricDefinitionId],
   );
@@ -282,8 +282,8 @@ export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionI
   return { visible: false, def };
 }
 
-export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId) {
-  const r = await query(
+export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId, queryRunner = query) {
+  const r = await queryRunner(
     `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_source_connections where id = $1`,
     [sourceConnectionId],
   );

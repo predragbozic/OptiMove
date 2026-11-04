@@ -18,9 +18,13 @@ import {
   resolveDashboardCreateContext,
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
-import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
+import { isSourceConnectionVisibleToDashboard,isMetricVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 import { requireLegacySinglePage } from './dashboardPages/legacyGuard.js';
 import { withPreviewTransaction } from './dashboardSimple/previewTransaction.js';
+import { authorizePages } from './dashboardPages/access.js';
+import { copyDashboardPages,enterClonePage } from './dashboardPages/clonePages.js';
+import { runDashboardCloneTransaction } from './dashboardPages/cloneTransaction.js';
+import { canonicalKey } from './dashboardSimple/compiler.js';
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -273,13 +277,10 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
 // operation is one transaction: either every widget/series lands, or
 // none do.
 //
-// Merge-readiness corrective round — the transaction now opens FIRST and
-// takes an explicit `FOR SHARE` lock on the template row as its OWN first
-// statement, before reading anything else: the template's existence,
-// visibility, is_template, and status are all checked against THAT
-// locked, transaction-consistent snapshot, never a separate pre-BEGIN
-// pooled read that a concurrent template-flip/archive could invalidate
-// out from under it (finding #5). An archived template cannot be cloned
+// The bounded transaction first locks fresh actor/organization authority,
+// then takes FOR SHARE on the source before reading its Page/widget graph.
+// Concurrent hierarchy writers take the dashboard FOR UPDATE and must wait.
+// An archived source cannot be cloned
 // (finding #1). default_filter is copied along with name/description/
 // widgets/series (previously silently dropped). A pinned source
 // connection (source_policy='source_connection') that is not active and
@@ -288,15 +289,24 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
 // or a substituted connection (finding #6).
 // ------------------------------------------------------------
 export async function cloneDashboard(req, dataWorkspace, templateId, body) {
-  const c = await pool.connect();
-  try {
-    await c.query("begin");
+  const originalReq=req;
+  let completed;
+  const scope = workspace => Object.fromEntries(['type','dataWorkspaceType','dataWorkspaceScopeId','dataWorkspaceUserId','athleteWorkspaceAthleteId'].map(key=>[key,workspace[key]??null]));
+  return runDashboardCloneTransaction({pool,write:async queryRunner=>{
+    const c={query:queryRunner};
+    let fresh=await authorizePages(queryRunner,originalReq,templateId,{mode:'read',lock:true,requirePages:false,lockOrganizations:false});
+    const teamIds=[...new Set([fresh.workspace.type==='team'?fresh.workspace.dataWorkspaceScopeId:null,fresh.dashboard.owner_team_id,body?.ownerTeamId].filter(Boolean))].sort();
+    const clubIds=[...new Set([fresh.workspace.type==='club'?fresh.workspace.dataWorkspaceScopeId:null,fresh.dashboard.owner_club_id,body?.ownerClubId].filter(Boolean))].sort();
+    for(const[table,ids]of [['teams',teamIds],['clubs',clubIds]])if(ids.length){const rows=(await queryRunner(`select id from public.${table} where id=any($1::uuid[]) and coalesce(is_active,true) order by id for share`,[ids])).rows;if(rows.length!==ids.length)throw httpError(404,'Dashboard not found.');}
+    fresh=await authorizePages(queryRunner,originalReq,templateId,{mode:'read',requirePages:false});
+    if(canonicalKey(scope(fresh.workspace))!==canonicalKey(scope(dataWorkspace)))throw httpError(404,'Dashboard not found.');
+    req=fresh.req;
     const templateResult = await c.query(`select * from training_load.dashboards where id = $1 for share`, [templateId]);
     const templateRow = templateResult.rows[0];
     if (!templateRow) throw httpError(404, "Template not found.");
-    if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
+    if (!templateRow.is_template && templateRow.pages_revision===undefined) throw httpError(400, "That dashboard is not a template.");
+    if (!templateRow.is_template && !canManageDashboardRow(req,templateRow)) throw httpError(404, "Dashboard not found.");
     if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
-    await requireLegacySinglePage((sql, params) => c.query(sql, params), templateRow);
     if (templateRow.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
 
     // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once)
@@ -305,7 +315,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     // called exactly once per request (finding #3). A workspace-preference
     // change racing mid-request can therefore never hand this one request
     // two disagreeing snapshots.
-    const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, dataWorkspace);
+    const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, fresh.workspace);
     if (ctx.error) throw httpError(ctx.status, ctx.error);
     const name = body?.name || `${templateRow.name} (copy)`;
     if (typeof name !== "string" || name.trim().length < 1 || name.length > 200) {
@@ -328,36 +338,59 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     const dash = await c.query(
       `insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, default_filter, created_by_user_id, cloned_from_dashboard_id)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
-      [name.trim(), templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, templateRow.default_filter, req.user.id, templateId],
+      [name.trim(), templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, templateRow.default_filter, req.user.id, templateRow.is_template?templateId:null],
     );
     const newDashboard = dash.rows[0];
+    const pageMap=await copyDashboardPages(queryRunner,templateRow,newDashboard);
 
-    const widgets = await c.query(`select * from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`, [templateId]);
+    const widgets = await c.query(`select * from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order,id limit 6401`, [templateId]);
+    if(widgets.rows.length>6400)throw httpError(409,'Dashboard is too large to clone.','dashboardTooLarge');
+    if(pageMap){const counts=new Map();for(const w of widgets.rows){counts.set(w.page_id,(counts.get(w.page_id)??0)+1);if(counts.get(w.page_id)>200)throw httpError(409,'Page is too large to clone.','pageTooLarge');}}
     const widgetIdMap = new Map();
+    const seriesIdMap = {};
+    const pageByWidget = new Map();
     for (const w of widgets.rows) {
+      const pageId=pageMap?.get(w.page_id);
+      if(pageMap && !pageId)throw httpError(404,'Page not found.');
+      await enterClonePage(queryRunner,newDashboard.id,pageId);
       const nw = await c.query(
-        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, presentation_config)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,null) returning id`,
-        [newDashboard.id, w.widget_type, w.title, w.widget_order, w.x, w.y, w.width, w.height, w.mobile_order, w.group_by, w.state, w.display_config, w.local_filter_override],
+        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, presentation_config${pageMap?',page_id':''})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,null${pageMap?',$14':''}) returning id`,
+        [newDashboard.id, w.widget_type, w.title, w.widget_order, w.x, w.y, w.width, w.height, w.mobile_order, w.group_by, w.state, w.display_config, w.local_filter_override,...(pageMap?[pageId]:[])],
       );
       widgetIdMap.set(w.id, nw.rows[0].id);
+      pageByWidget.set(w.id,pageId);
     }
 
     const series = await c.query(`select * from training_load.dashboard_widget_series where widget_id = any($1::uuid[]) order by series_order`, [widgets.rows.map((w) => w.id)]);
+    if(pageMap){
+      const metricIds=[...new Set(series.rows.map(s=>s.metric_definition_id).filter(Boolean))].sort();
+      if(metricIds.length)await queryRunner('select id from training_load.metric_definitions where id=any($1::uuid[]) order by id for share',[metricIds]);
+      const metadata=metricIds.length?(await queryRunner('select d.id,d.key,v.value_type,v.unit from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id where d.id=any($1::uuid[]) order by d.id',[metricIds])).rows:[];
+      for(const s of series.rows){
+        if(!s.metric_definition_id || s.template_metric_key_hints)continue;
+        const binding=await isMetricVisibleToDashboard(newDashboard,s.metric_definition_id,queryRunner);
+        if(!templateRow.is_template && binding.visible && binding.def?.state==='active')continue;
+        const metric=metadata.find(m=>m.id===s.metric_definition_id);
+        if(!metric)throw httpError(404,'Metric not found.');
+        s.template_metric_key_hints=[{key:metric.key,valueType:metric.value_type,unit:metric.unit,scopeLevel:s.data_scope_level}];
+      }
+    }
 
     // ONE batch resolution call for EVERY hint-bearing series in this
     // clone — not one call (and its own 1-2 internal SQL statements) PER
     // series (finding #6). resolveTemplateSeriesBatchForWorkspace() itself
-    // issues at most 2 SQL statements total for the WHOLE batch, however
+    // issues at most 3 set-based statements with the clone definition lock, however
     // many series/hints it holds.
     const hintBearingSpecs = series.rows.filter((s) => s.template_metric_key_hints).map((s) => ({ sourceSeriesId: s.id, hints: s.template_metric_key_hints }));
     const batchResolved = hintBearingSpecs.length
-      ? await resolveTemplateSeriesBatchForWorkspace(c, hintBearingSpecs, { dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId })
+      ? await resolveTemplateSeriesBatchForWorkspace(c, hintBearingSpecs, { dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId, lockCatalog:true })
       : new Map();
 
     const cloneReport = [];
     for (const s of series.rows) {
       const newWidgetId = widgetIdMap.get(s.widget_id);
+      await enterClonePage(queryRunner,newDashboard.id,pageByWidget.get(s.widget_id));
 
       // Portable source-connection contract (finding #6) — applies to
       // EVERY non-built-in series path below. A pinned connection is
@@ -368,18 +401,20 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       // scope/owner_user_id/data_workspace_*, so it can stand in directly
       // for a "dashboard row" argument to isSourceConnectionVisibleToDashboard.
       if (s.source_policy === "source_connection" && s.source_connection_id) {
-        const connCheck = await isSourceConnectionVisibleToDashboard(newDashboard, s.source_connection_id);
+        await c.query('select id from training_load.metric_source_connections where id=$1 for share',[s.source_connection_id]);
+        const connCheck = await isSourceConnectionVisibleToDashboard(newDashboard, s.source_connection_id,queryRunner);
         if (!connCheck.visible || !connCheck.conn || connCheck.conn.state !== "active") {
           throw httpError(409, "A pinned source connection could not be resolved (active and visible) in the target workspace.", "sourceConnectionResolutionRequired");
         }
       }
 
       if (s.built_in_series_key) {
-        await c.query(
+        const inserted=await c.query(
           `insert into training_load.dashboard_widget_series (widget_id, series_order, built_in_series_key, resolution_status, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)
-           values ($1,$2,$3,'resolved',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+           values ($1,$2,$3,'resolved',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
           [newWidgetId, s.series_order, s.built_in_series_key, s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period, req.user.id],
         );
+        seriesIdMap[s.id]=inserted.rows[0].id;
         cloneReport.push({ sourceSeriesId: s.id, resolution: "built_in" });
         continue;
       }
@@ -393,9 +428,9 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
         // hint-only unresolved/ambiguous ones. `resolved` came from the
         // ONE batch call above, not a per-series resolution.
         const resolved = batchResolved.get(s.id);
-        await c.query(
+        const inserted=await c.query(
           `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, template_metric_key_hints, resolution_status, template_resolution_candidates, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning id`,
           [
             newWidgetId, s.series_order,
             resolved.status === "resolved" ? resolved.candidateIds[0] : null,
@@ -410,6 +445,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
             s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period, req.user.id,
           ],
         );
+        seriesIdMap[s.id]=inserted.rows[0].id;
         cloneReport.push({ sourceSeriesId: s.id, resolution: resolved.status });
         continue;
       }
@@ -418,30 +454,36 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       // added through addSeries() to a template now always carries
       // hints). The metric-visibility/active-state/type-compat triggers
       // still re-validate it live against the NEW dashboard.
-      await c.query(
+      const inserted=await c.query(
         `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, resolution_status, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)
-         values ($1,$2,$3,'resolved',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         values ($1,$2,$3,'resolved',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
         [newWidgetId, s.series_order, s.metric_definition_id, s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period, req.user.id],
       );
+      seriesIdMap[s.id]=inserted.rows[0].id;
       cloneReport.push({ sourceSeriesId: s.id, resolution: "copied" });
     }
     for (const sourceWidget of widgets.rows) {
+      await enterClonePage(queryRunner,newDashboard.id,pageByWidget.get(sourceWidget.id));
       await c.query(
         `update training_load.dashboard_widgets as cloned_widget
-         set presentation_config = source_widget.presentation_config
+         set presentation_config = ${pageMap?'training_load.dashboard_page_remap_presentation(source_widget.presentation_config,$3::jsonb)':'source_widget.presentation_config'}
          from training_load.dashboard_widgets as source_widget
          where cloned_widget.id = $1 and source_widget.id = $2`,
-        [widgetIdMap.get(sourceWidget.id), sourceWidget.id],
+        [widgetIdMap.get(sourceWidget.id), sourceWidget.id,...(pageMap?[JSON.stringify(seriesIdMap)]:[])],
       );
     }
-    await c.query("commit");
-    return { dashboard: newDashboard, cloneReport };
-  } catch (error) {
-    await c.query("rollback").catch(() => {});
-    throw error;
-  } finally {
-    c.release();
-  }
+    if(pageMap)await queryRunner("select set_config('training_load.page_mutation','',true)");
+    const current=(await queryRunner('select * from training_load.dashboards where id=$1',[newDashboard.id])).rows[0];
+    completed={dashboard:current,cloneReport,...(pageMap?{pageIdMapping:Object.fromEntries(pageMap)}:{}),...(!templateRow.is_template?{copiedFromDashboardId:templateId}:{})};return completed;
+  },verify:async()=>{
+    if(!completed)return null;
+    return withPreviewTransaction({pool},async q=>{
+      const fresh=await authorizePages(q,originalReq,templateId,{mode:'read',requirePages:false});
+      if(canonicalKey(scope(fresh.workspace))!==canonicalKey(scope(dataWorkspace)))throw httpError(404,'Dashboard not found.');
+      const row=(await q('select * from training_load.dashboards where id=$1 and cloned_from_dashboard_id is not distinct from $2::uuid',[completed.dashboard.id,completed.dashboard.cloned_from_dashboard_id])).rows[0];
+      return row && canManageDashboardRow(fresh.req,row)?{...completed,dashboard:row}:null;
+    });
+  }});
 }
 
 // ------------------------------------------------------------

@@ -74,7 +74,8 @@ async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionI
 // resolution participates in the clone's own atomic transaction).
 //
 // `seriesSpecs` — an array of `{ sourceSeriesId, hints }`, one entry per
-// hint-bearing series being cloned. Exactly TWO set-based SQL statements
+// hint-bearing series being cloned. Two set-based SQL statements (three
+// with the optional clone definition lock before reading current versions)
 // resolve the WHOLE batch, regardless of how many series or hints it
 // holds: one candidate-definitions query covering every DISTINCT key any
 // hint in the batch names, and one scope-capabilities query covering
@@ -86,7 +87,7 @@ async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionI
 // the first query — never a wider set than the equivalent per-series
 // resolution would have produced.
 // ------------------------------------------------------------
-export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpecs, { dataWorkspaceType, dataWorkspaceScopeId, ownerUserId }) {
+export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpecs, { dataWorkspaceType, dataWorkspaceScopeId, ownerUserId, lockCatalog = false }) {
   const q = runQuery.query ? runQuery.query.bind(runQuery) : runQuery;
   const results = new Map();
   const allKeys = new Set();
@@ -102,6 +103,15 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
 
   // Statement 1/2: every candidate definition for every distinct key this
   // batch could possibly need, already filtered by workspace visibility.
+  // Lock definitions without a version JOIN first. After a lock wait a fresh
+  // statement must read current_version_id (avoids an EvalPlanQual lost row).
+  let lockedIds;
+  if(lockCatalog){
+    lockedIds=(await q(`select d.id from training_load.metric_definitions d where d.key=any($1::text[]) and (
+      d.owner_scope='system' or d.owner_scope='club' and $2='club' and d.owner_club_id=$3
+      or d.owner_scope='team' and $2='team' and d.owner_team_id=$3
+      or d.owner_scope='user' and d.owner_user_id=$4) order by d.id for share of d`,[[...allKeys],dataWorkspaceType,dataWorkspaceScopeId,ownerUserId])).rows.map(row=>row.id);
+  }
   const candidateRows = await q(
     `select d.id, d.key, mdv.value_type, mdv.unit
      from training_load.metric_definitions d
@@ -112,8 +122,8 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
          or (d.owner_scope = 'club' and $2 = 'club' and d.owner_club_id = $3)
          or (d.owner_scope = 'team' and $2 = 'team' and d.owner_team_id = $3)
          or (d.owner_scope = 'user' and d.owner_user_id = $4)
-       )`,
-    [[...allKeys], dataWorkspaceType, dataWorkspaceScopeId, ownerUserId],
+       )${lockCatalog ? ' and d.id=any($5::uuid[])' : ''}`,
+    [[...allKeys], dataWorkspaceType, dataWorkspaceScopeId, ownerUserId,...(lockCatalog?[lockedIds]:[])],
   );
   const candidatesByKey = new Map();
   for (const row of candidateRows.rows) {
