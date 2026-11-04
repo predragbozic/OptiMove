@@ -51,6 +51,7 @@ import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposabl
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, ensureMappedSystem, mappedBinding, platformAdmin as worldPlatformAdmin, t7Keys } from "./support/mapped-world.mjs";
 import { SPEC_REGISTRY } from "./support/gpexe-legacy-specs.mjs";
 
@@ -390,6 +391,7 @@ async function setupTeam({ coach = false, only = null } = {}) {
   assert.equal(settings.status, 200, settings.text);
   src.show(gpexeTeamId);
   const { bindingId, connectionId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
+  await enableTeamImportSwitch(admin, org.teamId);
   const { started } = await activateBinding(admin, bindingId, { only });
   for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
     const r = await gpexe(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } });
@@ -1399,6 +1401,7 @@ async function clubRouteTeam() {
   assert.equal((await gpexe(`/teams/${org.teamId}/settings`, { method: "PUT", cookie: padmin.cookie, body: { gpexeTeamId } })).status, 200);
   src.show(gpexeTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: padmin.cookie, clubId: org.clubId, teamId: org.teamId, sourceTeamId: gpexeTeamId });
+  await enableTeamImportSwitch(admin, org.teamId);
   const club = await clubMapped(org.clubId, bindingId);
   for (const [gpexeAthleteId, athleteId] of [["101", org.athleteIds[0]], ["102", org.athleteIds[1]], ["103", org.athleteIds[2]]]) {
     const r = await gpexe(`/teams/${org.teamId}/athlete-links`, { method: "POST", cookie: padmin.cookie, body: { gpexeAthleteId, athleteId } });

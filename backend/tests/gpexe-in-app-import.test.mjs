@@ -17,6 +17,7 @@ import { GpexeClientError } from "../src/gpexeClient.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { asSourceTeam, bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding, t6Rows } from "./support/mapped-world.mjs";
 
 // v33 (the drill-parameter guard): a session with two or more drills is
@@ -190,6 +191,7 @@ async function setupTeam({ gpexeTeamId = String(nextGpexeTeamId++), path = "bind
 async function bindTeam(team) {
   src.show(team.sourceTeamId);
   const { bindingId } = await bindThroughRoutes({ apiBase, cookie: team.padmin.cookie, clubId: team.clubId, teamId: team.teamId, sourceTeamId: team.sourceTeamId });
+  await enableTeamImportSwitch(admin, team.teamId);
   ({ world } = await activateBinding(admin, bindingId));
   team.bindingId = bindingId;
   team.path = "binding";
@@ -622,7 +624,7 @@ test("settings history: a platform admin reads every earlier value with its reas
 test("approver grants: only a platform admin grants and revokes, only to an active coach of the team, and the right follows the role", async () => {
   const team = await setupTeam();
   const status = async (who) => (await api(`/teams/${team.teamId}/status`, { cookie: who.cookie })).body.viewer;
-  assert.deepEqual(await status(team.coach), { canApprove: false, approvalBasis: null, isPlatformAdmin: false }, "the coach role alone gives no right");
+  assert.deepEqual(await status(team.coach), { canApprove: false, approvalBasis: null, hasApprovalRight: false, isPlatformAdmin: false }, "the coach role alone gives no right");
 
   const selfGrant = await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.coach.cookie, body: { userId: team.coach.id, reason: "me" } });
   // Refused by the route itself (the database would refuse it too, see below).
@@ -636,14 +638,14 @@ test("approver grants: only a platform admin grants and revokes, only to an acti
   const grant = await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "approves GPEXE imports for this team" } });
   assert.equal(grant.status, 201);
   assert.equal((await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "again" } })).status, 409);
-  assert.deepEqual(await status(team.coach), { canApprove: true, approvalBasis: "team_grant", isPlatformAdmin: false });
+  assert.deepEqual(await status(team.coach), { canApprove: true, approvalBasis: "team_grant", hasApprovalRight: true, isPlatformAdmin: false });
 
   // Losing the coach role ends the right without touching the grant.
   const { canApproveGpexeImport } = await import("../src/gpexeImportAccess.js");
   const { query } = await import("../src/db.js");
   assert.equal((await canApproveGpexeImport({ query }, team.coach.id, team.teamId)).canApprove, true);
   await admin.query(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [team.coach.id, team.teamId]);
-  assert.deepEqual(await canApproveGpexeImport({ query }, team.coach.id, team.teamId), { canApprove: false, basis: null });
+  assert.deepEqual(await canApproveGpexeImport({ query }, team.coach.id, team.teamId), { canApprove: false, basis: null, hasRight: false, switchOn: true, switchMode: "pilot" });
   const r = await admin.query(`select 1 from training_load.gpexe_import_approvers where id = $1 and revoked_at is null`, [grant.body.grant.id]);
   assert.equal(r.rowCount, 1, "the grant row itself is untouched");
   await admin.query(`update public.user_team_roles set is_active = true where user_id = $1 and team_id = $2`, [team.coach.id, team.teamId]);
@@ -658,7 +660,7 @@ test("approver grants: only a platform admin grants and revokes, only to an acti
   const history = (await api(`/teams/${team.teamId}/approvers`, { cookie: team.coach.cookie })).body.approvers;
   assert.deepEqual(history.map((h) => [h.active, h.grantReason, h.revokeReason]), [[false, "approves GPEXE imports for this team", "left the staff"]]);
   // identityAdmin (the administrator-only identity load, v32) is present for a platform admin only when true.
-  assert.deepEqual(await status(team.padmin), { canApprove: true, approvalBasis: "platform_admin", isPlatformAdmin: true, identityAdmin: true });
+  assert.deepEqual(await status(team.padmin), { canApprove: true, approvalBasis: "platform_admin", hasApprovalRight: true, isPlatformAdmin: true, identityAdmin: true });
   assert.equal("identityAdmin" in (await status(team.coach)), false, "a coach's viewer carries no identity trace");
 });
 

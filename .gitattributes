@@ -37,6 +37,7 @@ docs/runbooks/source-instance-end-v50*.sql text eol=lf
 docs/runbooks/calendar-settings-v51*.sql text eol=lf
 docs/runbooks/rights-locks-users-first-v54*.sql text eol=lf
 docs/runbooks/team-dashboards-club-variables-v55*.sql text eol=lf
+docs/runbooks/team-import-switch-v56*.sql text eol=lf
 # 9-R (J17 section 10.4): the import window's preflight and post-check are named by the sha256 of the
 # whole file, so a CRLF checkout must not change them; new files only, same reason.
 docs/runbooks/gpexe-import-window-*.sql text eol=lf

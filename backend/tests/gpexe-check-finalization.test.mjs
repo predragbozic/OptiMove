@@ -11,6 +11,7 @@
 // in one transaction (finalizeCheck) that also supersedes what the check
 // replaced, withdraws what a complete read no longer confirms in its exact
 // window, and restores a candidate the check saw again.
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -169,6 +170,7 @@ async function org() {
     const r = await api(`/gpexe/teams/${o.teamId}/athlete-links`, { method: "POST", cookie: coach.cookie, body: { gpexeAthleteId, athleteId } });
     assert.equal(r.status, 201, JSON.stringify(r.body));
   }
+  await enableTeamImportSwitch(admin, o.teamId);
   return { ...o, sourceTeamId, padmin, coach, cadmin };
 }
 

@@ -9,6 +9,7 @@
 import { api } from "./api.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
+import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
 export const CHECK_POLL_MS = 2_000;
@@ -116,6 +117,7 @@ function resetGpexeTeamState(teamId) {
   identityEpoch += 1;
   gx.identity = emptyGpexeIdentityState();
   gx.extraOrdinals = {};
+  gx.teamSwitch = emptyTeamSwitchState();
 }
 
 function emptyMapping() {
@@ -167,6 +169,8 @@ export async function loadGpexeTeam(render) {
       restorePendingIdentityLoad(gx);
     }
     finishLoad(gx, status, render);
+    // U2 (v56): the team's switch panel (administrators); the status line needs no extra read.
+    void loadTeamImportSwitch(render);
     // An administrator's Imports view also holds the stored GPEXE names (no
     // GPEXE request): every screen of it names athletes without their id.
     if (identityViewer(gx)) void loadGpexeIdentities(render);

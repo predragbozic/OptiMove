@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding } from "./support/mapped-world.mjs";
 import * as cryptoMod from "../src/sourceCredentialCrypto.js";
 
@@ -1611,6 +1612,7 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
   const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
   const counts = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
   const o = await org();
+  await enableTeamImportSwitch(admin, o.teamId); // U2: the team's switch is on, so the refusal under test is the candidate's own
   useSource();
   const { binding } = await bound(o);
   // 9-B: the binding's activations, so the current candidate is refused by the switch alone.
