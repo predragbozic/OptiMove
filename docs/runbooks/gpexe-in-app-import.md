@@ -754,7 +754,7 @@ only known safe details, never a server message:
 | `refused` | `superseded_by_newer_data`, `blocked`, `snapshot_expired_check_again`, `nothing_to_import`, `not_ready`, `changes_need_acceptance`, `preview_changed` | Not imported, for certain; the batch goes on with the next candidate. `preview_changed` also when the preview is not the one the approver saw. | `reviewAgain`, `changesToImported`, `reasons`, `blockedCode` |
 | `refused` | `import_switch_off`, `not_an_approver`, `internal_error`, `try_again`, `notFound` | Not imported, for certain; the switch was turned off, the right was lost, the server failed **before** a COMMIT, a wait before the COMMIT reached its bound, or (since 9-B) the team or its club was archived or the team moved — **the batch stops**. | — |
 | `import_outcome_unknown` | `import_outcome_unknown` | The COMMIT was sent but not confirmed and the import could not be found yet. **It may or may not be imported. The batch stops.** | `approvalId`, `verify` (as in the 503 above) |
-| `not_attempted` | `null` | The batch stopped before this candidate. Nothing was tried. | — |
+| `not_attempted` | `null` or `batch_time_budget` | The batch stopped before this candidate (`null`), or its time budget of 45 s was spent before it started (`batch_time_budget`). Nothing was tried; repeating the request imports the rest (an imported candidate answers `already_imported`). | — |
 
 `summary.refused` counts both kinds of refusal; whether the batch stopped is read from
 the stopping `code` and the `not_attempted` results after it.
@@ -765,8 +765,12 @@ under the candidate lock), never a second import; the rest are approved normally
 an `import_outcome_unknown`, follow "When the outcome is uncertain" for that candidate,
 or simply send the same request again.
 
-**Limit: 10 candidates per request** (owner's ceiling without stronger evidence,
-2026-09-24). Without lock contention the request lasts about the sum of its approvals;
+**Limit: 50 candidates per request** (owner's decision D5, 2026-11-04, J19 U1; it was 10
+since 2026-09-24), with a time budget of 45 s: the budget is checked before each candidate
+except the first, and the candidates after it are returned as `not_attempted` /
+`batch_time_budget`. The client gives up after 90 s, below the hosting proxy's 100 s; 45 s plus
+one approval's 15 s COMMIT wait stays below the client's bound (asserted in
+`gpexe-batch-approve.test.mjs`). Lock waits inside one approval are bounded separately (below). Without lock contention the request lasts about the sum of its approvals;
 an unconfirmed COMMIT can add 15 s + 5 s once, after which the batch stops. In the tests
 two small approvals took well under half a second in total; a real session has more
 athletes and drills. Since 9-0 every single wait before a COMMIT is bounded (5 s per lock

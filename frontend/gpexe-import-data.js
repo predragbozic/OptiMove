@@ -303,6 +303,10 @@ export async function pollGpexeCheck(render) {
   const checkId = gx.check?.id;
   if (!checkId || gx.polling === checkId) return;
   gx.polling = checkId;
+  // Every (re)start of the loop begins with the full retry allowance and no stale note.
+  gx.pollFailures = 0;
+  gx.pollNote = "";
+  gx.pollStopped = false;
   try {
     while (generation === gx.generation && gx.check?.id === checkId && gx.check.status === "running") {
       await pollDelay(CHECK_POLL_MS);
@@ -1126,7 +1130,7 @@ export async function sendBatch(render) {
   gx.batch.unknown = null;
   render();
   try {
-    // J19 U1 (R5): the server's batch time budget is 60 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
+    // J19 U1 (R5): the server's batch time budget is 45 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
     // before this 90 s client bound, which is below the hosting proxy's 100 s. An aborted request is a lost answer ("Result not
     // confirmed" - Check again), never "nothing was imported".
     const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(BATCH_REQUEST_BOUND_MS) : undefined;

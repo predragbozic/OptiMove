@@ -2477,3 +2477,25 @@ test("check (J19 U1): Refresh status reads the status again, never starts a sear
   assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
   assert.ok(!/refresh-status/.test(renderTrainingLoadCoachHtml()));
 });
+
+test("check (J19 U1): when polling is started again after it gave up, it gets the full retry allowance and no stale note", async () => {
+  resetState();
+  const running = { id: "chk-5", status: "running", startedAt: "2026-09-18T09:58:00Z", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 };
+  let polls = 0;
+  installFetchMock(gpexeServer({
+    checks: {
+      start: () => ({ status: 202, body: { check: running } }),
+      poll: () => { polls += 1; return polls <= 4 || polls === 5 ? { status: 500, body: { error: "serverError" } } : { status: 200, body: { check: { ...running, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", error: null } } }; },
+    },
+  }));
+  await openImports();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  assert.equal(polls, 4);
+  assert.equal(state.trainingLoad.gpexe.pollStopped, true);
+  const { pollGpexeCheck } = await import("../gpexe-import-data.js");
+  state.trainingLoad.gpexe.polling = null;
+  await pollGpexeCheck(render);
+  assert.equal(polls, 6, "one failure was tolerated, then the poll succeeded");
+  assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
+  assert.equal(state.trainingLoad.gpexe.pollNote, "");
+});

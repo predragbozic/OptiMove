@@ -260,7 +260,7 @@ test("batch (J19 U1, R5): the time budget plus one approval's own bound stays be
   const fs = await import("node:fs");
   const client = fs.readFileSync(new URL("../../frontend/gpexe-import-data.js", import.meta.url), "utf8");
   const clientBound = Number(client.match(/BATCH_REQUEST_BOUND_MS = ([0-9_]+)/)[1].replaceAll("_", ""));
-  assert.equal(service.BATCH_TIME_BUDGET_MS, 60_000);
+  assert.equal(service.BATCH_TIME_BUDGET_MS, 45_000);
   assert.ok(service.BATCH_TIME_BUDGET_MS + service.COMMIT_ANSWER_TIMEOUT_MS < clientBound, "the answer arrives before the client gives up");
   assert.ok(clientBound < 100_000, "and the client gives up before the proxy does");
 });
