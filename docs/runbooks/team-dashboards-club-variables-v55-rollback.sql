@@ -21,6 +21,10 @@ begin
   end if;
 end $$;
 
+-- No series is written while this script decides and restores: a series insert would otherwise slip in between the
+-- refusal check below and the CREATE OR REPLACE (the lock_timeout above bounds the wait).
+lock table training_load.dashboard_widget_series in share row exclusive mode;
+
 do $$
 declare
   v55 constant text := 'migrations_v2/202611041300_training_load_v55_team_dashboards_club_variables.sql';

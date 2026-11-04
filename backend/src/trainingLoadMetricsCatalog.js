@@ -169,12 +169,13 @@ function validateVersionInput(body) {
 export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null } = {}) {
   const params = [];
   let visSql = catalogVisibilitySql(req, "d", params);
-  // v55 (O7): in a team's workspace the picker also offers the variables of the team's own club - the club the
-  // route resolved from the ACTIVE team workspace (never from the caller's roles). Only a read of the list; the
-  // dashboard write is checked again by isMetricVisibleToDashboard and the database trigger.
+  // v55 (O7): for the dashboard series picker in a team's workspace the list also offers the variables of the team's
+  // own, active club - the club the route resolved from the ACTIVE team workspace (never from the caller's roles).
+  // Only a read of the list; the dashboard write is checked again by isMetricVisibleToDashboard and the trigger.
   if (teamClubId) {
     params.push(teamClubId);
-    visSql = `(${visSql} or (d.owner_scope = 'club' and d.owner_club_id = $${params.length}::uuid))`;
+    visSql = `(${visSql} or (d.owner_scope = 'club' and d.owner_club_id = $${params.length}::uuid
+      and exists (select 1 from public.clubs tc where tc.id = d.owner_club_id and coalesce(tc.is_active, true))))`;
   }
   // §6 fix: hideDefinitionForUser() wrote a real row to
   // metric_definition_hidden, but this default listing never read it back

@@ -159,9 +159,9 @@ async function fixtures() {
 let dashSeq = 0;
 async function dashboard(kind, scopeId, ownerUser = F.pa.id) {
   // kind: club | team | user (the owner of a user dashboard bound to a club data workspace)
-  const base = { club: ["club", "club", scopeId, null, null], team: ["team", "team", null, scopeId, null], user: ["user", "club", null, null, ownerUser] }[kind];
+  const base = { club: ["club", "club", scopeId, null, null], team: ["team", "team", null, scopeId, null], user: ["user", "club", null, null, ownerUser], userTeam: ["user", "team", null, null, ownerUser] }[kind];
   const [ownerScope, dwType, ownerClub, ownerTeam, ownerUserId] = base;
-  const dwScope = kind === "club" ? scopeId : kind === "team" ? scopeId : scopeId;
+  const dwScope = scopeId;
   dashSeq += 1;
   const d = await one(k, `insert into training_load.dashboards (name, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, created_by_user_id)
         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`, [`O7 dash ${dashSeq}`, ownerScope, ownerUserId, ownerClub, ownerTeam, dwType, dwScope, F.pa.id]);
@@ -197,6 +197,7 @@ async function matrix() {
     "team A dashboard": await dashboard("team", F.teamA),
     "team B dashboard": await dashboard("team", F.teamB),
     "private dashboard in club A": await dashboard("user", F.clubA, F.pa.id),
+    "private dashboard in team A": await dashboard("userTeam", F.teamA, F.pa.id),
   };
   const teamDef = (await one(k, `select id from training_load.metric_definitions where id = $1`, [F.varA])).id;
   const defs = { "system": F.sysVar, "club A": F.varA, "club B": F.varB };
@@ -241,10 +242,14 @@ test("3. after v55: every old cell is unchanged; the one new cell is allowed; th
   assert.notEqual(md5V55, md5V16);
   after55 = await matrix();
   for (const [cell, was] of Object.entries(before55)) {
-    if (cell === "team A dashboard x club A variable" || cell === "team B dashboard x club B variable") continue;
+    if (cell === "team A dashboard x club A variable" || cell === "team B dashboard x club B variable" || cell === "private dashboard in team A x club A variable") continue;
     assert.deepEqual(after55[cell], was, `${cell}: unchanged`);
   }
   assert.equal(after55["team A dashboard x club A variable"].ok, true, "a team's dashboard charts its own club's variable");
+  assert.equal(before55["private dashboard in team A x club A variable"].ok, false);
+  assert.equal(after55["private dashboard in team A x club A variable"].ok, true, "a coach's private dashboard in the team workspace too");
+  assert.equal(after55["private dashboard in team A x club B variable"].ok, false, "...but not another club's variable");
+  assert.equal(after55["private dashboard in team A x club B variable"].code, "P0001");
   assert.equal(after55["team B dashboard x club A variable"].ok, false, "another club's variable");
   assert.deepEqual(after55["team B dashboard x club B variable"].ok, true);
   assert.deepEqual(after55["team A dashboard x club B variable"], before55["team A dashboard x club B variable"], "another club's variable: the very same exception");
@@ -278,7 +283,7 @@ test("3b. an archived team or an archived club is refused with the same exceptio
 async function client() {
   const c = new pg.Client({ connectionString: db.url });
   await c.connect();
-  await c.query("set lock_timeout = '8s'");
+  await c.query("set lock_timeout = '20s'");
   return c;
 }
 async function waitBlocked(pid, ms = 5000) {
@@ -344,23 +349,32 @@ test("5a. isMetricVisibleToDashboard: the same rule; another club, an archived t
   assert.equal((await access.isMetricVisibleToDashboard(await rowOf(F.teamA), F.sysVar)).visible, true);
   const missing = await access.isMetricVisibleToDashboard(await rowOf(F.teamA), crypto.randomUUID());
   assert.deepEqual([missing.visible, missing.def], [false, null]);
-  await k.query(`update public.teams set is_active = false where id = $1`, [F.teamA2]);
-  assert.equal((await access.isMetricVisibleToDashboard(await rowOf(F.teamA2), F.varA)).visible, false, "archived team");
-  await k.query(`update public.teams set is_active = true where id = $1`, [F.teamA2]);
-  await k.query(`update public.clubs set is_active = false where id = $1`, [F.clubA]);
-  assert.equal((await access.isMetricVisibleToDashboard(await rowOf(F.teamA), F.varA)).visible, false, "archived club");
-  await k.query(`update public.clubs set is_active = true where id = $1`, [F.clubA]);
+  try {
+    await k.query(`update public.teams set is_active = false where id = $1`, [F.teamA2]);
+    assert.equal((await access.isMetricVisibleToDashboard(await rowOf(F.teamA2), F.varA)).visible, false, "archived team");
+  } finally {
+    await k.query(`update public.teams set is_active = true where id = $1`, [F.teamA2]);
+  }
+  try {
+    await k.query(`update public.clubs set is_active = false where id = $1`, [F.clubA]);
+    assert.equal((await access.isMetricVisibleToDashboard(await rowOf(F.teamA), F.varA)).visible, false, "archived club");
+  } finally {
+    await k.query(`update public.clubs set is_active = true where id = $1`, [F.clubA]);
+  }
 });
 
 test("5b. the picker: a team's workspace is offered its club's variables, never another club's; other workspaces are unchanged", async () => {
-  const names = async (cookie, q = "") => (await api(`${CATALOG}/definitions?limit=100${q}`, { cookie })).body.rows.map((r) => r.id);
+  const names = async (cookie, q = "&purpose=dashboardSeries") => (await api(`${CATALOG}/definitions?limit=100${q}`, { cookie })).body.rows.map((r) => r.id);
+  // Opt-in: no purpose, no change (the calendar's result columns and every other caller keep what they had).
+  assert.ok(!(await names(F.coachA.cookie, "")).includes(F.varA), "without purpose=dashboardSeries the list is unchanged");
+  assert.equal((await api(`${CATALOG}/definitions?limit=100&purpose=other`, { cookie: F.coachA.cookie })).status, 400);
   const coachA = await names(F.coachA.cookie);
   assert.ok(coachA.includes(F.varA) && coachA.includes(F.varA2), "own club's variables");
   assert.ok(!coachA.includes(F.varB), "another club's variable");
   assert.ok(coachA.includes(F.sysVar), "OptiMove's variable");
   const coachB = await names(F.coachB.cookie);
   assert.ok(coachB.includes(F.varB) && !coachB.includes(F.varA));
-  const owned = (await api(`${CATALOG}/definitions?limit=100&ownerScope=club`, { cookie: F.coachA.cookie })).body.rows;
+  const owned = (await api(`${CATALOG}/definitions?limit=100&purpose=dashboardSeries&ownerScope=club`, { cookie: F.coachA.cookie })).body.rows;
   assert.ok(owned.every((r) => r.ownerScope === "club") && owned.some((r) => r.id === F.varA));
   // The club admin and the platform admin see what they saw before.
   assert.ok((await names(F.adminA.cookie)).includes(F.varA));
@@ -369,6 +383,23 @@ test("5b. the picker: a team's workspace is offered its club's variables, never 
   const loner = await user("loner");
   await workspace(loner, "private_coach", null);
   assert.ok(!(await names(await cookieFor(loner))).includes(F.varA));
+  // The club comes from the ACTIVE workspace, never from the caller's roles: a coach of a team in club A and a team
+  // in club B sees one club's variables - the active workspace's.
+  const both = await user("both");
+  for (const t of [F.teamA, F.teamB]) await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [both, t]);
+  await workspace(both, "team", F.teamA);
+  const asA = await names(await cookieFor(both));
+  assert.ok(asA.includes(F.varA) && !asA.includes(F.varB), "active workspace team A: club A only");
+  await workspace(both, "team", F.teamB);
+  const asB = await names(await cookieFor(both));
+  assert.ok(asB.includes(F.varB) && !asB.includes(F.varA), "active workspace team B: club B only");
+  // An archived club's variables are not offered (the write is refused for it as well).
+  await k.query(`update public.clubs set is_active = false where id = $1`, [F.clubA]);
+  try {
+    assert.ok(!(await names(F.coachA.cookie)).includes(F.varA), "archived club: not offered");
+  } finally {
+    await k.query(`update public.clubs set is_active = true where id = $1`, [F.clubA]);
+  }
 });
 
 test("5c. a variable the club archives is not offered; a hidden OptiMove variable stays flagged; a series already there stays valid", async () => {
@@ -381,6 +412,16 @@ test("5c. a variable the club archives is not offered; a hidden OptiMove variabl
   assert.ok(!offered.includes(F.varA2), "archived: not offered");
   const stays = await k.query(`update training_load.dashboard_widget_series set analytical_aggregation = 'avg' where id = $1`, [seriesId]);
   assert.equal(stays.rowCount, 1, "the series is still valid and editable");
+  // The limit, stated: an UPDATE that NAMES metric_definition_id fires the rule again (as resolve_series_binding does),
+  // against the CURRENT team and club - so once the club is archived such a re-bind is refused.
+  await k.query(`update public.clubs set is_active = false where id = $1`, [F.clubA]);
+  try {
+    await k.query("begin");
+    await assert.rejects(k.query(`update training_load.dashboard_widget_series set metric_definition_id = metric_definition_id where id = $1`, [seriesId]), (e) => e.code === "P0001");
+    await k.query("rollback");
+  } finally {
+    await k.query(`update public.clubs set is_active = true where id = $1`, [F.clubA]);
+  }
   // A club hides OptiMove's variable: the rows still list it, flagged for the picker.
   const hide = await api(`${METRICS}/variables/${F.sysVar}/hide`, { method: "POST", cookie: F.adminA.cookie, body: { requestKey: crypto.randomUUID() } });
   assert.ok([200, 201].includes(hide.status), hide.text);
@@ -411,12 +452,27 @@ test("6a. the post-check passes on the migrated database", async () => {
 });
 
 test("6b. the rollback refuses while a team dashboard uses a club variable, then restores v16's body exactly, and v55 applies again", async () => {
-  // A series of a club variable on a team dashboard exists (test 5c's A2 series): refused.
-  assert.ok((await one(k, `select count(*)::int as n from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id = s.widget_id join training_load.dashboards d on d.id = w.dashboard_id join training_load.metric_definitions md on md.id = s.metric_definition_id where d.data_workspace_type = 'team' and md.owner_scope = 'club'`)).n >= 1);
+  // A series of a club variable on a team dashboard (its own, not left over from another test): refused.
+  const own = await dashboard("team", F.teamA);
+  assert.equal((await addSeries(own.widgetId, F.varA)).ok, true);
   await assert.rejects(k.query(rollbackSql), (e) => /a team dashboard series already uses a club variable/.test(e.message));
   await k.query("rollback").catch(() => {});
   await k.query(`delete from training_load.dashboard_widget_series s using training_load.dashboard_widgets w, training_load.dashboards d, training_load.metric_definitions md
                   where w.id = s.widget_id and d.id = w.dashboard_id and md.id = s.metric_definition_id and d.data_workspace_type = 'team' and md.owner_scope = 'club'`);
+  // The rollback holds the series table while it decides: a writer that is mid-insert makes it wait (and, with its 5 s
+  // lock timeout, fail) instead of racing the check - the lock is the script's, not a hope.
+  const writer = await client();
+  try {
+    await writer.query("begin");
+    const w2 = await dashboard("team", F.teamA2);
+    await writer.query(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, resolution_status) values ($1, 1, $2, 'resolved')`, [w2.widgetId, F.sysVar]);
+    await assert.rejects(k.query(rollbackSql), (e) => e.code === "55P03");
+    await k.query("rollback").catch(() => {});
+  } finally {
+    await writer.query("rollback").catch(() => {});
+    await writer.end().catch(() => {});
+  }
+  assert.match(rollbackSql, /lock table training_load\.dashboard_widget_series in share row exclusive mode;[\s\S]*raise exception 'v55 rollback refused: a team dashboard series already uses a club variable'/, "locked before the check");
   // other refusals
   await k.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/202699999999_later.sql', repeat('0', 64), 0, 'test')`);
   await assert.rejects(k.query(rollbackSql), (e) => /later migrations are applied/.test(e.message));

@@ -16,9 +16,11 @@ other branch and the final exception (errcode and message) are byte for byte v16
 The application follows the same rule:
 - `isMetricVisibleToDashboard()` (`backend/src/trainingLoadDashboardAccess.js`): the same branch; anything else answers
   as before, so a foreign, archived or missing variable is the same 404 on the routes.
-- `listDefinitions()` (`backend/src/trainingLoadMetricsCatalog.js`), the picker's list: in a **team** workspace it also
-  returns the variables of the club the route resolved from the active team workspace (never from the caller's roles).
-  The club admin, the platform admin and every other workspace see what they saw before.
+- `listDefinitions()` (`backend/src/trainingLoadMetricsCatalog.js`), the picker's list: **only** when the request carries
+  `purpose=dashboardSeries` (the dashboard series picker sends it; any other value is a 400), in a **team** workspace it
+  also returns the variables of the active club that the route resolved from the active team workspace (never from the
+  caller's roles). Without the purpose, and for the club admin, the platform admin and every other workspace, the list is
+  what it was before.
 - The move card (Variables, a copy): "Charts that use OptiMove's X stay on it and get no new points. Add <copy> to a
   chart to follow the new values." Nothing is written to a dashboard automatically: the coach adds the copy to a chart
   by hand in the picker (the *Rukovodilac*, decision (a)).
@@ -57,15 +59,22 @@ the insert, proving both were taken before the club).
 
 `team-dashboards-club-variables-v55-rollback.sql` (not a migration, never automatic). Only with a fresh restore-verified
 backup, after the deployed commit no longer contains the v55 file, and with the owner's approval for that database. It
-refuses once a team dashboard series uses a club variable: the way forward is then a new migration.
+locks the series table (share row exclusive) and refuses once a team dashboard series uses a club variable: the way forward is then a new migration.
 
 ## Known limitations
 
-- **No retroactive check** (the *Rukovodilac*, decision (c)). The rule is checked when a series is inserted or its
-  metric or widget changes (the trigger's `BEFORE INSERT OR UPDATE OF metric_definition_id, widget_id`), as in v16. A
-  series that already names a club variable keeps working after its team moves to another club or the variable is
-  archived; an unrelated edit of the series is not refused. A team moved to another club keeps seeing charts built on
-  its old club's variables.
+- **No retroactive check** (the *Rukovodilac*, decision (c)). The rule is checked when a series is inserted or an UPDATE
+  names `metric_definition_id` or `widget_id` (the trigger's `BEFORE INSERT OR UPDATE OF ...`), as in v16, against the
+  CURRENT team and club. A series that already names a club variable keeps working after its team moves to another club
+  or the club is archived; an unrelated edit of it is not refused, but a re-bind (an UPDATE naming the column, as
+  `resolve_series_binding` does, or moving or cloning the widget) is checked again and refused if the rule no longer
+  holds. A team moved to another club keeps seeing charts built on its old club's variables.
+- **A clone lands on a stale OptiMove variable.** A dashboard cloned into a team workspace keeps its OptiMove variable
+  (template hints resolve there); the coach adds the club's copy by hand.
+- **List and GET differ in one case.** The picker lists club variables only for `purpose=dashboardSeries`; the single
+  definition GET is unchanged.
+- **`created_by_user_id` is disclosed.** A club variable offered to a team's coach carries the list's usual fields,
+  including the creator's user id (accepted, as for the club admin's own list).
 - **Hiding is not an access boundary.** A club hides only OptiMove's variables (`hide_not_system`); the club archives its
   own. An archived club variable is not offered by the picker (the list returns active definitions) and cannot be newly
   bound (the active-state trigger), while a series already on it stays valid. A hidden OptiMove variable is still listed

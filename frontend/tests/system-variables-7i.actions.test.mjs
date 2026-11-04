@@ -90,7 +90,7 @@ const sys = ({ id = SYS, label = "Total distance", key = "total_distance", clubF
   actions, labelsToken: "a".repeat(64), club: club(clubFacts), ...over,
 });
 const copyRow = (over = {}) => ({
-  id: COPY, key: "total_distance", label: "Total distance", shortLabel: null, description: null, ownerScope: "club", state: "active", editable: true, levels: ["session"],
+  id: COPY, key: "total_distance", label: "Total distance (club)", shortLabel: null, description: null, ownerScope: "club", state: "active", editable: true, levels: ["session"],
   currentVersion: ver({ id: "bbbbbbbb-1111-4000-8000-000000000009" }), mappingTarget: { ready: true, notReadyCode: null },
   createdAt: "2026-11-04T08:00:00.000Z", updatedAt: "2026-11-04T08:00:00.000Z", truncated: false, actions: ["rename", "archive", "newVersion"], labelsToken: "b".repeat(64), ...over,
 });
@@ -508,7 +508,7 @@ test("Move N teams sends one call per team, one at a time, each with its own key
   await click('[data-action="metric-variables-move-open"]');
   assert.match(text(), /Move 2 teams to this copy/);
   assert.match(text(), /Each team keeps its Required or Optional setting\. Sessions already imported stay under OptiMove's Total distance\./);
-  assert.match(text(), /Charts that use OptiMove's Total distance stay on it and get no new points\. Add Total distance to a chart to follow the new values\./);
+  assert.match(text(), /Charts that use OptiMove's Total distance stay on it and get no new points\. Add Total distance \(club\) to a chart to follow the new values\./);
   // The reason is required.
   await click('[data-action="metric-variables-move-confirm"]');
   assert.match(text(), /Required\./);
