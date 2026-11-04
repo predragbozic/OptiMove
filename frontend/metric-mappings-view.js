@@ -570,7 +570,8 @@ function panelHtml(s, mapping, ctx) {
          ${s.write?.unconfirmed ? "" : `<div class="data-sources-form-actions">
            <button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-confirm" ${locked || !bindings.length ? "disabled" : ""}>${p.refusedTeam ? `Switch on for the other ${bindings.length}` : `Switch on for ${bindings.length === 1 ? "1 team" : `${bindings.length} teams`}`}</button>
            <button class="plain-button ghost" type="button" data-action="metric-mappings-review-back" ${locked ? "disabled" : ""}>Back</button>${close}</div>`}`
-      : `<h4>Switch on for teams</h4>${chooserHtml(s, p, ctx, version)}${reasonHtml(p, "Reason", locked)}
+      : `${p.from ? `<button class="plain-button ghost" type="button" data-action="training-load-section" data-section="variables" ${locked ? "disabled" : ""}>← ${escapeHtml(p.from.label)}</button>` : ""}
+         <h4>${p.from ? `Use ${escapeHtml(p.from.label)} for your teams` : "Switch on for teams"}</h4>${chooserHtml(s, p, ctx, version)}${reasonHtml(p, "Reason", locked)}
          <div class="data-sources-form-actions"><button class="plain-button data-sources-primary" type="button" data-action="metric-mappings-review" ${locked ? "disabled" : ""}>Review</button>${close}</div>`;
   } else if (p.kind === "activate") {
     const bindings = p.withTeams ? chosenBindings(p.chooser) : [];

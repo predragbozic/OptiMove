@@ -172,7 +172,7 @@ test("platform: the system variables are listed with their facts; New variable i
   assert.equal(content.querySelectorAll(".metric-variables-item .item-badge").length, 1, "the archived one is marked");
 });
 
-test("club: This club and System (reference); the reference cannot be created in, and an empty list says why", async () => {
+test("club: This club and From OptiMove; the reference cannot be created in, and an empty list says why", async () => {
   asClub();
   respond = (call) => (call.url.includes("scope=own") ? { status: 200, body: { variables: [variable({ ownerScope: "club" })], nextCursor: null } } : { status: 200, body: { variables: [], nextCursor: null } });
   const { loadVariablesSection } = await import("../metric-variables-actions.js");
@@ -181,10 +181,10 @@ test("club: This club and System (reference); the reference cannot be created in
   assert.ok($('[data-action="metric-variables-create-open"]'));
   assert.equal($('[data-scope="own"]').getAttribute("aria-pressed"), "true");
   await click('[data-scope="system"]');
-  assert.deepEqual(gets(), [`${BASE}?scope=own&state=active`, `${BASE}?scope=system&state=active`]);
+  assert.deepEqual(gets(), [`${BASE}?scope=own&state=active`, `${BASE}?scope=system&state=active&hidden=exclude`]);
   assert.ok(!$('[data-action="metric-variables-create-open"]'), "no New variable in the system reference");
-  assert.match(text(), /managed in the platform workspace; this club's own mappings cannot target them/);
-  assert.match(text(), /There are no system variables yet\./);
+  assert.match(text(), /OptiMove's ready-made variables\. Use one as it is if it measures what you need\. Copy it only if your club wants its own name/);
+  assert.match(text(), /There are no OptiMove variables here yet\./);
   await click('[data-scope="system"]');
   assert.equal(gets().length, 2, "the same scope again reads nothing");
 });

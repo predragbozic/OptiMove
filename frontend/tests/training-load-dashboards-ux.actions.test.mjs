@@ -451,6 +451,31 @@ test("Save for a NEW metric: POST widget (title/type/per + 12-col placement belo
   assert.equal(a.widgets.length, 2);
 });
 
+test("7i-B2: the guided panel offers no variable the club hides, marks OptiMove's row beside a same-named club variable, and does not pick a hidden one", async () => {
+  resetState();
+  loadedDashboard();
+  const row = (id, label, ownerScope, hiddenInClub = false) => ({ id, key: id, label, short_label: null, unit: "m", value_type: "number", scope_capabilities: ["session"], owner_scope: ownerScope, ownerScope, hiddenInClub });
+  installFetchMock(responder({
+    extra: (call) => (call.url.startsWith("/api/training-load/metrics/definitions")
+      ? { status: 200, body: { rows: [row("m-hidden", "Total distance", "system", true), row("m-copy", "Total distance", "club"), row("m-sys", "Top speed", "system"), row("m-sys-same", "Sprints", "system"), row("m-club-same", "Sprints", "club")], nextCursor: null } }
+      : null),
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-widget" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.equal(a.metricPicker.definitions.length, 5, "the loader keeps every row, so results keep their names");
+  assert.equal(a.metricPicker.definitions.find((d) => d.id === "m-hidden").hiddenInClub, true);
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /data-metric-id="m-hidden"/, "a hidden variable is not offered");
+  assert.match(html, /data-metric-id="m-copy"/);
+  assert.match(html, /data-metric-id="m-sys"/);
+  assert.match(html, /Sprints \(OptiMove\)/, "OptiMove's row is marked while the club holds a same-named one");
+  assert.doesNotMatch(html, /Top speed \(OptiMove\)/);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-metric", metricId: "m-hidden" }), { renderTrainingLoad });
+  assert.ok(!a.metricPanel.metric, "a hidden variable is not chosen");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-metric", metricId: "m-copy" }), { renderTrainingLoad });
+  assert.equal(a.metricPanel.metric.id, "m-copy");
+});
+
 test("Save reads the title straight off the input when the click beats the change event", async () => {
   resetState();
   loadedDashboard();

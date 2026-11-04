@@ -55,7 +55,7 @@ export function renderFilterNoteHtml(s, ctx) {
   const how = s.filter.kind === "domain" ? `in the domain ${name}, directly or through one of its categories` : `in the category ${name}`;
   const what = ctx.owner !== "club" ? `Showing the variables ${how}.`
     : s.scope === "system" ? `Showing the system variables ${how}.`
-    : `Showing this club's variables ${how}. System variables placed there are under System (reference).`;
+    : `Showing this club's variables ${how}. OptiMove's ready-made variables are under From OptiMove.`;
   return `<p class="muted metric-classification-filter-note"><span class="metric-classification-filter-text">${what}</span> <button class="plain-button ghost compact-button" type="button" data-action="metric-classification-filter-clear">Show all</button></p>`;
 }
 
@@ -128,7 +128,7 @@ function trayHtml(tray, targets, locked, ctx, status) {
   else if (tray.error) body = `<div class="error" role="alert"><p>${escapeHtml(tray.error)}</p><button class="plain-button" type="button" data-action="metric-classification-tray-reload">Try again</button></div>`;
   else if (!tray.items.length) {
     body = `<p class="muted">${club
-      ? "This club has no variables of its own yet. To add a system variable to a category, open it under Variables, in System (reference), and choose Add to a category."
+      ? "This club has no variables of its own yet. To add a system variable to a category, open it under Variables, in From OptiMove, and choose Add to a category."
       : "There are no active variables here yet. Create one under Variables."}</p>`;
   }
   else {
@@ -142,7 +142,7 @@ function trayHtml(tray, targets, locked, ctx, status) {
     ? "Drag a variable onto a category to add it there. Adding never moves it: it stays in any category it is already in."
     : "Create a category first, then drag variables onto it.";
   const other = club
-    ? "System variables are not listed here: to add one, open it under Variables, in System (reference), and choose Add to a category. Without a mouse, open any variable under Variables and choose Add to a category."
+    ? "System variables are not listed here: to add one, open it under Variables, in From OptiMove, and choose Add to a category. Without a mouse, open any variable under Variables and choose Add to a category."
     : "Without a mouse: under Variables, open a variable and choose Add to a category.";
   return `
     <aside class="dc-tray" aria-labelledby="dc-tray-title">

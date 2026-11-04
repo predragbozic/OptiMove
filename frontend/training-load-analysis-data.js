@@ -1572,6 +1572,10 @@ async function fetchAnalysisMetricDefinitions(picker, contextKey) {
       iconUrl: d.icon_url,
       valueType: d.value_type,
       scopeCapabilities: d.scope_capabilities || [],
+      // Kept for the picker's own render and selection (7i-B2): a variable
+      // the club hides is not offered, but results still carry its name.
+      ownerScope: d.ownerScope || d.owner_scope || null,
+      hiddenInClub: d.hiddenInClub === true,
       ...(structureByDefId.get(d.id) || {}),
     }));
     metricDefinitionsWorkspaceKey = contextKey;

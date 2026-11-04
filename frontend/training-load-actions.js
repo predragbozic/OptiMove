@@ -7,7 +7,7 @@ import { resetActivityRoster } from "./activity-roster-data.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
 import { emptyVariablesState } from "./metric-variables-data.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
-import { dropMappingsForms, loadMappingsSection, mappingsMayBeLeft, mappingsUnloadShouldWarn, resetMappings } from "./metric-mappings-actions.js";
+import { dropMappingsForms, loadMappingsSection, mappingsMayBeLeft, mappingsUnloadShouldWarn, requestMappingsOpen, resetMappings } from "./metric-mappings-actions.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -82,6 +82,7 @@ import {
   loadTrainingLoadCalendarMonth,
   loadTrainingLoadCalendarWeek,
 } from "./training-load-calendar-data.js";
+import { isHiddenInClub } from "./metric-picker-visibility.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
@@ -954,6 +955,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       state.trainingLoad.variables.view = "variables";
       state.trainingLoad.variables.node = null;
     }
+    // 7i-B2: "Use for your teams" and "See the teams using it" on one of
+    // OptiMove's variables open a given mapping (and its switch-on panel).
+    if (action.dataset.section === "mappings" && action.dataset.mmOpenMapping) {
+      requestMappingsOpen({
+        mappingId: action.dataset.mmOpenMapping,
+        versionId: action.dataset.mmOpenVersion || null,
+        from: action.dataset.mmFromLabel ? { label: action.dataset.mmFromLabel } : null,
+      });
+    }
     setTrainingLoadSection(action.dataset.section);
     // perf: the tab strip itself (and whatever this section's own
     // nav.data already holds - real data from an earlier visit this
@@ -1281,7 +1291,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       if (builtIn) setMetricPanelMetric(panel, { kind: "builtin", key: builtIn.key, label: builtIn.label, unit: builtIn.unit || "" });
     } else {
       const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === action.dataset.metricId);
-      if (def) setMetricPanelMetric(panel, { kind: "metric", id: def.id, label: def.label, unit: def.unit || "" });
+      // A variable the club hides is not chosen (7i-B2), unless it is the one already chosen.
+      if (def && (!isHiddenInClub(def) || panel.metric?.id === def.id)) setMetricPanelMetric(panel, { kind: "metric", id: def.id, label: def.label, unit: def.unit || "" });
     }
     renderTrainingLoad();
     return true;
@@ -1485,7 +1496,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (type.endsWith("builtin")) {
       if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey });
     } else if (action.dataset.metricId) {
-      setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId });
+      const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === action.dataset.metricId);
+      // A variable the club hides is not chosen (7i-B2), unless it is the one already on the series.
+      if (!isHiddenInClub(def) || (entry.metric?.kind === "metric" && entry.metric.id === def.id)) setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId });
     }
     renderTrainingLoad();
     return true;
@@ -1902,7 +1915,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     }
     const idx = picker.selectedIds.indexOf(metricId);
     if (idx >= 0) picker.selectedIds.splice(idx, 1);
-    else picker.selectedIds.push(metricId);
+    // A variable the club hides is not added (7i-B2); one already shown can still be removed.
+    else if (!isHiddenInClub((picker.definitions || []).find((d) => d.id === metricId))) picker.selectedIds.push(metricId);
     renderTrainingLoad();
     return true;
   }

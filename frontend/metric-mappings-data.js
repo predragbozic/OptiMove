@@ -60,6 +60,10 @@ export function emptyMappingsState() {
     // step lists, the version its draft made, and whether a step had to be
     // checked (then it stops; the Rukovodilac's F2).
     chain: null,
+    // 7i-B2: a request from the Variables screen to open this mapping, and
+    // its switch-on panel when `versionId` is set, as soon as the Mappings
+    // section is entered ({ versionId, from: { id, label } }).
+    pending: null,
     notice: "",
     noticeKind: "",
   };

@@ -320,6 +320,24 @@ test("H3: at the cap (a KPI's single series) the previous series is DELETEd firs
   assert.match(renderTrainingLoadAnalysisHtml(), /data-action="training-load-analysis-close-editor" >Close</, "something was written: Cancel reads Close");
 });
 
+test("7i-B2: a series is not bound to a variable the club hides, unless it is the one already on it", async () => {
+  const { draft } = await openEditor(widget());
+  state.trainingLoad.analysis.metricPicker.definitions = [
+    { id: metricId, label: "Hidden one", ownerScope: "system", hiddenInClub: true },
+    { id: "def-shown", label: "Shown one", ownerScope: "system", hiddenInClub: false },
+  ];
+  const key = entryAt(draft(), 0).key;
+  const before = JSON.stringify(entryAt(draft(), 0).metric);
+  await act("series-bind-metric", { seriesKey: key, metricId });
+  assert.equal(JSON.stringify(entryAt(draft(), 0).metric), before, "a hidden variable is not bound");
+  await act("series-bind-metric", { seriesKey: key, metricId: "def-shown" });
+  assert.deepEqual(entryAt(draft(), 0).metric, { kind: "metric", id: "def-shown" });
+  // The one already on the series can be bound again (it is chosen, not new).
+  state.trainingLoad.analysis.metricPicker.definitions[1].hiddenInClub = true;
+  await act("series-bind-metric", { seriesKey: key, metricId: "def-shown" });
+  assert.deepEqual(entryAt(draft(), 0).metric, { kind: "metric", id: "def-shown" });
+});
+
 test("H3: an add whose response is LOST is recognised after the reload - Save again never posts a second copy", async () => {
   let lose = true;
   const { server, editor, draft } = await openEditor(widget(), {

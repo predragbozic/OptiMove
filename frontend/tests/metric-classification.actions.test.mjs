@@ -769,12 +769,12 @@ test("club: the filter note and an empty filtered list say which scope is shown 
   select.value = `d:${D1}`;
   select.dispatchEvent(new window.Event("change", { bubbles: true }));
   await settle();
-  assert.match(text(), /Showing this club's variables in the domain Endurance, directly or through one of its categories\. System variables placed there are under System \(reference\)\./);
-  assert.match(text(), /No variables of this club here\. System variables placed here are under System \(reference\)\./);
+  assert.match(text(), /Showing this club's variables in the domain Endurance, directly or through one of its categories\. OptiMove's ready-made variables are under From OptiMove\./);
+  assert.match(text(), /No variables of this club here\. OptiMove's ready-made variables are under From OptiMove\./);
   await click('[data-scope="system"]');
-  assert.equal(gets().at(-1), `${VB}?scope=system&state=active&domainId=${D1}`, "the filter stays with the scope");
+  assert.equal(gets().at(-1), `${VB}?scope=system&state=active&hidden=exclude&domainId=${D1}`, "the filter stays with the scope");
   assert.match(text(), /Showing the system variables in the domain Endurance/);
-  assert.match(text(), /No system variables here\./);
+  assert.match(text(), /No OptiMove variables here\./);
 });
 
 test("an admin's variable says what to do when there is nothing to add it to, or when the tree could not be read", async () => {
