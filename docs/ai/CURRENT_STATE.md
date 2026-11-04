@@ -199,7 +199,48 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     unverified.
   - No import, check or switch change.
 
-  **Next:** on the *Rukovodilac*'s orders (the system reference sets note in `docs/ai/metrics-core-plan.md`).
+  **LO-2, migration v54, is done** (`docs/runbooks/rights-locks-users-first-v54.md`; ★★):
+  - **What it is:** seven function bodies, `CREATE OR REPLACE` only, no table, column, trigger, index or row. The acting
+    user's row is locked `FOR SHARE` in a statement of its own before the role row(s): `lock_gpexe_import_approver`
+    (v23), `lock_activity_decider` (v26), `calendar.lock_event_writer` (v49, where the users row was locked last),
+    `source_metric_require_platform_admin` / `_require_club_admin` (v34), `source_metric_actor_basis` (v35),
+    `metric_variable_change_basis` (v38). The role queries keep the active-user join, so outcomes are unchanged.
+  - **Evidence (disposable databases):** `rights-locks-users-first-lo2.test.mjs` 8/8. A revocation of the same user
+    against each of the 15 function/basis cases ended in `40P01` in all 15 on the v53 bodies (v23 and v26 were
+    reproduced for the functions themselves for the first time) and in none after v54; the outcome (return value,
+    SQLSTATE, message) is identical over 135 user x role states; the md5 gate refuses each of the seven bodies; the
+    rollback restores the v53 bodies by md5 and v54 applies again; three mutations are killed. The v53 suite now builds
+    its databases up to v53 (it asserted v53 is the last migration).
+  - **Merged** as PR #359 (`d67cc7b0`, parents `632cae51` and `eb86f757`) on 2026-11-04, exactly from `eb86f757`:
+    - the internal reviews (`db-reviewer` READY, `security-reviewer` READY, `code-reviewer` READY WITH NON-BLOCKING NOTES,
+      all applied in `eb86f757`);
+    - both ★★ GOs on that head: the *Rukovodilac* and the *Nezavisni revizor*, who repeated the runner, rollback and
+      preflight / post-check checks on its own cluster;
+    - the owner's order „Odobravam merge i deploy PR #359 sa migracijom v54" (11:19:45 UTC, a turn in the *Rukovodilac*'s
+      chat, verified) and the *Rukovodilac*'s preflight (all blocks as expected).
+  - **Deployed** by the owner. `/api/health` served `d67cc7b0` with `ok: true` three times in a row (12:07:45-12:07:46
+    UTC); without a login `/api/auth/me` answered 200, and `/variables` and `/api/calendar/events` answered 401.
+  - **The *Rukovodilac*'s read-only post-check** (four blocks) passed: v54 recorded once with its checksum (it starts
+    `7a0c5684e09e3b39`, the file's sha256) and the last migration; the md5 of the seven new bodies; users before the role
+    row in all seven; no idle transaction and no lock wait. **v54 is directly confirmed on production.**
+  - **Known limitation (L1, the *Nezavisni revizor*, LOW, theoretical, not reproduced):** the users lock carries
+    `is_active = true`, so an inactive user's row is not locked. If a user is reactivated between the two statements of
+    one function, the role query sees an active user while the users row is not locked, and a later deactivation does not
+    wait for the write in flight (the v53 bodies held that row). The window is microseconds and needs a double change of
+    state. The *Rukovodilac*'s cleaner fix, for later: lock the users row without the `is_active` filter and read the
+    activity from the column.
+  - **Wider locking, stated:** each call share-locks the acting user's active row until the end of its transaction; it
+    conflicts only with an exclusive write of that row. No caller updates that row in the same transaction (grep).
+  - **Failures that predate v54 and stay:** `gpexe-client` and `gpexe-rest-v1-adapter-reads` (unit suites on Node 22) and
+    `central-calendar-k2b-settings` tests 1a / 1b (the v51 post-check expects v51 to be the last migration) fail
+    identically on a clean `main`.
+
+  **GPS import: the flow proposal is an accepted direction, not a contract** (the owner, 2026-11-04: „GPS import:
+  predlog toka izgleda dobar", relayed by the *Rukovodilac* with the sketch `https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7`).
+  Recorded in `docs/ai/metrics-core-plan.md`. The *Rukovodilac* writes its contract, with its parts and their order,
+  after v54.
+
+  **Next:** on the *Rukovodilac*'s orders (the GPS import flow contract; the system reference sets note in `docs/ai/metrics-core-plan.md`).
 
   The owner's proposal of **system reference sets** (2026-11-04) is recorded as a note after 7i-B2 in
   `docs/ai/metrics-core-plan.md`; its contract is prepared when new clubs are brought on.
@@ -3929,7 +3970,8 @@ pre-existing; pass/fail counts don't belong in this file
   `gpexeAthleteIdentityService.js` and `routes/exerciseCollections.js`), and A1 takes D's order (its listed bindings
   and teams before its rights, the clubs right after them, every lock before its first end), with route-against-route
   tests (`lock-order-lo1.test.mjs`).
-- **LO-2: the database's own rights locks users first (the *Rukovodilac*'s L0 (a), 2026-11-03; ★★ with a migration,
+- **LO-2 is done: migration v54 is merged, deployed and post-checked (2026-11-04); see the active phase.** What follows is
+  the record that led to it. **LO-2: the database's own rights locks users first (the *Rukovodilac*'s L0 (a), 2026-11-03; ★★ with a migration,
   the owner's order naming it; before more clubs are brought on; 7i-B does not wait for it). Scope confirmed by the
   *Rukovodilac* at LO-1's GO (decision 3, event `ccd3081e`): v23, v26 and v49's `calendar.lock_event_writer` (each the
   first rights lock of its transaction), and v34, v35 and v38 for one rule; md5 preconditions, a rollback, a preflight
@@ -3956,8 +3998,8 @@ pre-existing; pass/fail counts don't belong in this file
   Also recorded (LO-1's db review, DB-2, LOW): an import approval locks its rights rows first and reads T4 later
   (v23). A1 holds T4 and takes its rights after it. A platform revocation locks every platform admin in user id order.
   So two platform admins acting at once could close a three-way wait. Users-first fixes the inversion, not this
-  difference in position. Nothing is written (`40P01` / `try_again`). LO-2 decides whether a test or a reordering is
-  worth it.
+  difference in position. Nothing is written (`40P01` / `try_again`). Decision (the *Rukovodilac*, 2026-11-04): a
+  documenting test only, no reordering; that test was not written and stays open here.
 - **Before the next import window: re-issue both 9-R window files (mandatory; the *Rukovodilac*'s decision 3 at 7h-B's
   GO, event `ea8fc169`, on the *Nezavisni revizor*'s proposal, event `45cee1c4`).**
   - `docs/runbooks/gpexe-import-window-preflight.sql` and `-postcheck.sql` are pinned to v51. They are the record of
