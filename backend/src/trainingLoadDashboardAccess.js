@@ -279,6 +279,16 @@ export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionI
   if (dashboardRow.owner_scope === "user" && def.owner_scope === "user" && String(def.owner_user_id) === String(dashboardRow.owner_user_id)) return { visible: true, def };
   if (def.owner_scope === "club" && dashboardRow.data_workspace_type === "club" && String(def.owner_club_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, def };
   if (def.owner_scope === "team" && dashboardRow.data_workspace_type === "team" && String(def.owner_team_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, def };
+  // v55 (O7): a team's dashboards may use the variables of the team's own club - an active team of an active club.
+  // The same rule as the trigger, which stays the authoritative backstop; anything else answers like a foreign definition.
+  if (def.owner_scope === "club" && dashboardRow.data_workspace_type === "team") {
+    const own = await query(
+      `select 1 from public.teams t join public.clubs c on c.id = t.club_id
+        where t.id = $1 and t.club_id = $2 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
+      [dashboardRow.data_workspace_scope_id, def.owner_club_id],
+    );
+    if (own.rowCount) return { visible: true, def };
+  }
   return { visible: false, def };
 }
 

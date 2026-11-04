@@ -206,7 +206,7 @@ export function renderMoveHtml(move, item) {
     ${moveTeamsHtml(move, { withOutcome: true })}
     <p>These teams stop getting OptiMove's ${original} and start getting this copy; new sessions fill the copy. There is a short gap while a team is switched over.</p>
     <p>Each team keeps its Required or Optional setting. Sessions already imported stay under OptiMove's ${original}.</p>
-    <p>Your existing charts of ${original} get no new points after the move.</p>
+    <p>Charts that use OptiMove's ${original} stay on it and get no new points. Add ${escapeHtml(item.label || "this copy")} to a chart to follow the new values.</p>
     <label class="search-field"><span>Reason</span>
       <textarea data-mv-move-reason maxlength="500" rows="2" ${locked ? "disabled" : ""}${move.reasonError ? ` aria-invalid="true" aria-describedby="mv-err-move-reason"` : ""}>${escapeHtml(move.reason)}</textarea>
       <span class="muted">For example: moving to the club's own copy. Do not enter athlete names, ids, dates of birth or measured values.</span>

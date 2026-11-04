@@ -307,7 +307,7 @@ test("8. the roster names only the team's own club's variables, for every basis:
   }
 });
 
-test("9. a team dashboard cannot hold a club variable (the v16 rule), so there is nothing to name: binding club A's variable on A1's dashboard is the identical 404, even for a platform admin who coaches A1", async () => {
+test("9. a team dashboard holds its own club's variable (v55, O7) and never another club's: club A's variable binds on A1's dashboard, club B's is the identical 404, even for a platform admin who coaches A1", async () => {
   const D = "/api/training-load/dashboards";
   for (const who of [W.coachA1, W.paCoachA1]) {
     const dashboard = await call(D, { method: "POST", cookie: who.cookie, body: { name: `7h-V ${uid()}` } });
@@ -315,12 +315,15 @@ test("9. a team dashboard cannot hold a club variable (the v16 rule), so there i
     const d = dashboard.body.dashboard;
     const widget = await call(`${D}/${d.id}/widgets`, { method: "POST", cookie: who.cookie, body: { expectedDashboardRevision: d.revision, widgetType: "table", title: "W", widgetOrder: 1, x: 0, y: 0, width: 6, height: 4, mobileOrder: 1 } });
     assert.ok(widget.status < 400, widget.text);
-    const series = await call(`${D}/${d.id}/widgets/${widget.body.widgetId}/series`, {
+    const bind = (variable, rev) => call(`${D}/${d.id}/widgets/${widget.body.widgetId}/series`, {
       method: "POST", cookie: who.cookie,
-      body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId: W.clubVarA.id, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+      body: { expectedWidgetRevision: rev, seriesOrder: 1, metricDefinitionId: variable.id, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
     });
-    assert.equal(series.status, 404, series.text);
-    assert.equal(series.body.message, "Metric not found.");
+    const foreign = await bind(W.clubVarB, 1);
+    assert.equal(foreign.status, 404, foreign.text);
+    assert.equal(foreign.body.message, "Metric not found.");
+    const own = await bind(W.clubVarA, 1);
+    assert.ok(own.status < 400, own.text);
   }
 });
 
