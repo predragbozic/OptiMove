@@ -53,6 +53,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
+import { cancelVariablesConfirm, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
 // made when the list could not be read again); a generic question otherwise.
@@ -224,6 +225,37 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
     // U3: the suggested pairs - for the team's coach and the identity administrators alike (the server decides).
     await loadPairSuggestions(renderTrainingLoad);
+    return true;
+  }
+  // U4: the setup guide. Every button here is an existing action or the one "Use OptiMove variables" write.
+  if (type === "training-load-gpexe-guide-toggle") {
+    setGuideOpen(gx.guide?.open === true ? false : true);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-vars-open") {
+    if (openVariablesConfirm()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-vars-cancel") {
+    if (cancelVariablesConfirm()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-vars-close") {
+    if (!gx.guide.write?.sending && !gx.guide.write?.unknown) {
+      gx.guide = { ...gx.guide, confirm: false, write: null };
+      renderTrainingLoad();
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-vars-send") {
+    if (!gx.guide.confirm || gx.guide.write?.sending || gx.guide.write?.unknown) return true;
+    await sendVariables(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-vars-check") {
+    if (!gx.guide.write?.unknown || gx.guide.write?.sending) return true;
+    await sendVariables(renderTrainingLoad, { resume: true });
     return true;
   }
   // U3: stage the exact suggested pairs into the ordinary review (one confirmation, then the existing link route, one pair at a time).
