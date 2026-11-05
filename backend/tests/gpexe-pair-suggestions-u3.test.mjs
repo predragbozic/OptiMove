@@ -522,3 +522,21 @@ test("7. a link made between the suggestion and the confirmation: the existing l
   const after = await sug(o, o.coach.cookie);
   assert.deepEqual([after.body.exact.length, after.body.ambiguous.length, after.body.dateConflicts.length], [0, 0, 0]);
 });
+
+test("8. an athlete whose team membership is not active is offered in none of the three lists (exact, ambiguous, date conflict)", async () => {
+  const { o } = await ready(3, 3601);
+  await scriptG(3601, "Gone", "Zqexact", "2005-01-02");
+  await scriptG(3602, "Gone", "Zqamb", null);
+  await scriptG(3603, "Gone", "Zqdiff", "2005-01-02");
+  await setAthlete(o.athleteIds[0], "Gone Zqexact", "2005-01-02");
+  await setAthlete(o.athleteIds[1], "Gone Zqamb", "2005-01-02");
+  await setAthlete(o.athleteIds[2], "Gone Zqdiff", "2006-06-06");
+  await load(o);
+  const before = await sug(o, o.coach.cookie);
+  assert.deepEqual([before.body.exact.length, before.body.ambiguous.length, before.body.dateConflicts.length], [1, 1, 1], "all three kinds are offered while the memberships are active");
+  await q(`update public.athlete_memberships set status = 'archived' where team_id = $1`, [o.teamId]);
+  const after = await sug(o, o.coach.cookie);
+  assert.equal(after.status, 200);
+  assert.deepEqual([after.body.exact, after.body.ambiguous, after.body.dateConflicts], [[], [], []]);
+  assert.ok(!after.text.includes("Gone"), "no name of a former member");
+});
