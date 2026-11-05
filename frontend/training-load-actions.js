@@ -248,8 +248,14 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
 
 function importsBatchMayBeLeft(nextTab) {
   const batch = state.trainingLoad.gpexe?.batch;
+  const guideWrite = state.trainingLoad.gpexe?.guide?.write;
+  const askNow = (question) => Boolean(globalThis.window?.confirm?.(question));
+  // U4: "Use OptiMove variables" running or not confirmed - the same protection as an import.
+  if ((guideWrite?.sending || guideWrite?.unknown) && nextTab !== "training-load" && !askNow(guideWrite.sending
+    ? "OptiMove variables are being switched on. If you leave now, the result is not shown. Leave anyway?"
+    : "The result of switching on an OptiMove variable is not confirmed. If you leave now, Check result is lost. Leave anyway?")) return false;
   if (!batch) return true;
-  const ask = (question) => Boolean(globalThis.window?.confirm?.(question));
+  const ask = askNow;
   // A workspace switch or a notification (nextTab null) resets Training
   // Load: that exit loses the result; a move inside the app keeps it.
   if (batch.sending) {

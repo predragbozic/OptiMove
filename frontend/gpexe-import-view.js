@@ -14,6 +14,7 @@
 // imported"). Main messages are written for the coach; the API's codes are
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
+import { renderGuideHtml } from "./gpexe-guide-view.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import {
@@ -400,6 +401,7 @@ export function renderGpexeImportsHtml() {
       ${renderTeamRowHtml(teams, gx.teamId)}
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load the imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
+      ${status ? renderGuideHtml(gx, status) : ""}
       ${status ? renderSourceCardHtml(IMPORT_SOURCES[0], gx, status) : ""}
       ${status ? renderTeamSwitchPanelHtml(gx) : ""}
       ${status ? renderNextStepHtml(gx, status, IMPORT_SOURCES[0]) : ""}
@@ -423,7 +425,7 @@ function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   return `
     <label class="gpexe-team-row">
       <span class="gpexe-team-label">Team</span>
-      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team" ${gx.batch?.sending ? "disabled" : ""}>
+      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team" ${gx.batch?.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown ? "disabled" : ""}>
         ${teams.map((team) => renderOption(team.id, team.club_name ? `${team.name} (${team.club_name})` : team.name, teamId)).join("")}
       </select>
     </label>

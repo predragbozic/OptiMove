@@ -10,6 +10,7 @@ import { api } from "./api.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
+import { emptyGuideState, loadGuide } from "./gpexe-guide-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
 export const CHECK_POLL_MS = 2_000;
@@ -119,6 +120,7 @@ function resetGpexeTeamState(teamId) {
   clearPairSuggestions();
   gx.extraOrdinals = {};
   gx.teamSwitch = emptyTeamSwitchState();
+  gx.guide = { ...emptyGuideState(), open: gx.guide?.open ?? null };
 }
 
 function emptyMapping() {
@@ -172,6 +174,8 @@ export async function loadGpexeTeam(render) {
     finishLoad(gx, status, render);
     // U2 (v56): the team's switch panel (administrators); the status line needs no extra read.
     void loadTeamImportSwitch(render);
+    // U4: the setup guide's two administrator reads (the connections and the variables).
+    void loadGuide(render);
     // An administrator's Imports view also holds the stored GPEXE names (no
     // GPEXE request): every screen of it names athletes without their id.
     if (identityViewer(gx)) void loadGpexeIdentities(render);
@@ -1297,6 +1301,8 @@ export function importsUnloadShouldWarn(gx = g()) {
   // are deliberate and already done on the server: never asked about.
   if (state.deliberateNavigation) return false;
   if (gx?.batch?.sending || gx?.batch?.unknown) return true;
+  // U4: "Use OptiMove variables" in flight, or its last answer not confirmed.
+  if (gx?.guide?.write?.sending || gx?.guide?.write?.unknown) return true;
   // A mark counts while its session is listed and still unresolved; a mark
   // whose session the list no longer shows (replaced by newer data, hidden)
   // cannot be resolved on this screen and must not block leaving forever.

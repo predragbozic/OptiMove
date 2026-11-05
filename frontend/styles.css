@@ -16964,6 +16964,74 @@ p.muted.gpexe-approve-note {
   margin: 0 0 8px;
   font-weight: 600;
 }
+/* U4: the five-step setup guide on Imports */
+.gpexe-guide {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.gpexe-guide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.gpexe-guide-head h3 {
+  margin: 0;
+}
+.gpexe-guide-folded {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gpexe-guide-folded p {
+  margin: 0;
+}
+.gpexe-guide-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.gpexe-guide-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  overflow-wrap: anywhere;
+}
+.gpexe-guide-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.gpexe-guide-done .gpexe-guide-num {
+  background: var(--surface-soft, var(--surface));
+}
+.gpexe-guide-body p {
+  margin: 2px 0 6px;
+}
+.gpexe-guide-body .gpexe-button {
+  min-height: 44px;
+}
+.gpexe-guide-body .gpexe-link-confirm p {
+  margin: 0;
+}
+.gpexe-guide-vars {
+  margin: 6px 0;
+  padding-left: 18px;
+}
 /* U3: suggested athlete pairs on Link athletes */
 .gpexe-suggest {
   margin-top: 12px;

@@ -785,6 +785,8 @@ export const emptyGpexeImportState = () => ({
   identity: emptyGpexeIdentityState(),
   // U3: suggested athlete pairs for the open Link athletes screen (in memory only; dropped with the screen).
   suggestions: { status: "idle", data: null },
+  // U4: the five-step setup guide (reads and the variables write; in memory only).
+  guide: { teamId: null, conn: { status: "idle", connected: false, reconnect: false, bound: false, bindingId: null, hostLabel: "", clubId: null }, vars: { status: "idle", items: [], total: 0, onCount: 0 }, skipped: [], open: null, confirm: false, write: null },
   // U2 (v56): the team's import switch, its conditions and the administrator's panel.
   teamSwitch: { data: null, loading: false, busy: false, error: null, notice: "", draft: "" },
   // In-memory positions of GPEXE athletes the source-athletes list does not
