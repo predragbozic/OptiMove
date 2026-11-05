@@ -1259,7 +1259,7 @@ async function recordCandidate(checkId, { teamId, userId, bundle, drillParameter
   const stagingStarted = meter.start();
   try {
     const existing = (await query(
-      `select bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2`,
+      `select bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2 and import_undone_at is null`,
       [teamId, sessionId],
     )).rows;
     const kind = existing.some((c) => c.bundle_hash === bundleHash) ? "unchanged" : existing.length ? "changed" : "new";
@@ -1382,7 +1382,7 @@ function approvalBlockers(row, snapshot, preview) {
   // U2 (v56): the team's own switch; absent row = off.
   if (row.team_switch_on !== true) blockers.push("team_import_switch_off");
   if (row.status === "superseded") blockers.push(row.superseded_by_check_id ? "not_confirmed_for_import" : "superseded_by_newer_data");
-  if (row.status === "imported") blockers.push("already_imported");
+  if (row.status === "imported") blockers.push(row.import_undone_at ? "import_undone" : "already_imported");
   if (row.status === "blocked") blockers.push("blocked");
   if (!snapshot.available) blockers.push("snapshot_expired_check_again");
   if (preview && preview.status === "no_changes") blockers.push("nothing_to_import");
@@ -1426,6 +1426,8 @@ function candidateSummary(row, audience = "other") {
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
     importedAt: row.imported_at,
+    // U5 (v57): an imported session whose import was undone is history, never "Imported" and never approvable.
+    importUndoneAt: row.import_undone_at ?? null,
     supersededByCandidateId: row.superseded_by_candidate_id,
     // v33: superseded by a complete, successful check that no longer confirmed it.
     supersededByCheckId: row.superseded_by_check_id ?? null,
@@ -1440,7 +1442,7 @@ function candidateSummary(row, audience = "other") {
 
 const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_started_at, status, preview, preview_hash,
   first_seen_at, last_seen_at, imported_at, superseded_by_candidate_id, raw_expires_at, raw_purged_at,
-  superseded_by_check_id, drill_parameter_effect,
+  superseded_by_check_id, drill_parameter_effect, import_undone_at,
   coalesce((select s.enabled from training_load.gpexe_team_import_switch s where s.owner_team_id = gpexe_import_candidates.owner_team_id), false) as team_switch_on,
   (select k.status from training_load.gpexe_import_checks k
     where k.id = gpexe_import_candidates.last_seen_check_id and k.owner_team_id = gpexe_import_candidates.owner_team_id) as last_seen_check_status`;
@@ -1448,7 +1450,7 @@ const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_sta
 export async function listCandidates(teamId, { includeSuperseded = false, audience } = {}) {
   const rows = (await query(
     `select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates
-     where owner_team_id = $1 and ($2 or status <> 'superseded')
+     where owner_team_id = $1 and ($2 or (status <> 'superseded' and import_undone_at is null))
      order by session_started_at desc nulls last, first_seen_at desc limit 200`,
     [teamId, includeSuperseded],
   )).rows;
@@ -2219,7 +2221,7 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
          from training_load.gpexe_import_check_observations o
         where o.check_id = $2 and o.owner_team_id = $1
           and c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash
-          and c.status = 'imported'`,
+          and c.status = 'imported' and c.import_undone_at is null`,
       [teamId, checkId],
     );
     // Pending, blocked or superseded: refreshed and (re)published - the
@@ -2248,7 +2250,8 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
          from training_load.gpexe_import_check_observations o
         where o.check_id = $2 and o.owner_team_id = $1
           and not exists (select 1 from training_load.gpexe_import_candidates c
-                           where c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash)
+                           where c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash
+                             and c.import_undone_at is null)
        returning id`,
       [teamId, checkId, RAW_RETENTION_UNAPPROVED_DAYS],
     )).rows;
@@ -2375,11 +2378,12 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // The candidate, FOR UPDATE, and the existing refusals.
     const row = (await client.query(
       `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
-              superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect
+              superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect, import_undone_at
          from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2 for update`,
       [candidateId, teamId],
     )).rows[0];
     if (!row) throw refusal(404, "notFound", "Not found.");
+    if (row.status === "imported" && row.import_undone_at) throw refusal(409, "import_undone", "The import of this session was undone; find new sessions again to review it.");
     if (row.status === "imported") throw refusal(409, "already_imported", "This candidate has already been imported.");
     if (row.status === "superseded" && !row.superseded_by_candidate_id) {
       throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
@@ -2685,6 +2689,7 @@ function refusedResult(candidateId, code, details = {}) {
 // entry test; approveCandidate checks everything again under its locks,
 // against the same hash.
 function batchIneligibility(teamId, candidateId, row, previewHash) {
+  if (row.status === "imported" && row.import_undone_at) return refusedResult(candidateId, "import_undone");
   if (row.status === "imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: row.approval_id ?? null });
   if (row.status === "superseded" && !row.superseded_by_candidate_id) return refusedResult(candidateId, "candidate_not_actionable");
   if (row.status === "superseded") return refusedResult(candidateId, "superseded_by_newer_data", { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
@@ -2725,7 +2730,7 @@ async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId, e
   try {
     const row = (await query(
       `select c.status, c.preview, c.preview_hash, c.raw_expires_at, c.raw_purged_at, c.superseded_by_candidate_id,
-              c.drill_parameter_effect,
+              c.drill_parameter_effect, c.import_undone_at,
               (select k.status from training_load.gpexe_import_checks k where k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id) as last_seen_check_status,
               (select a.id from training_load.gpexe_import_approvals a where a.candidate_id = c.id) as approval_id
          from training_load.gpexe_import_candidates c where c.id = $1 and c.owner_team_id = $2`,
