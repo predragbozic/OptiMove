@@ -994,12 +994,12 @@ export function analysisEditorDraftFromWidget(widget) {
   };
 }
 
-export function openAnalysisWidgetEditor(widget, { combinedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.combinedCharts === true } = {}) {
+export function openAnalysisWidgetEditor(widget, { combinedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.combinedCharts === true, scatterAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.scatterCharts === true } = {}) {
   const draft = analysisEditorDraftFromWidget(widget);
   // `base` is the widget as the coach first saw it: after a stale-revision
   // reload, only what the coach actually changed stays theirs (see
   // rebaseAnalysisEditorDraft).
-  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, combinedAvailable, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
+  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, combinedAvailable, scatterAvailable, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
 }
 
 // Preserve opaque sidecars unless the coach explicitly chooses a supported mode.
@@ -1010,21 +1010,27 @@ export function editorIsCombined(draft) {
   const value = editorPresentation(draft);
   return value?.chartVariant === 'combined' && chartPresentation(value).mode === 'enhanced';
 }
+export function editorIsScatter(draft) {
+  const value = editorPresentation(draft);
+  return value?.chartVariant === 'scatter' && chartPresentation(value).mode === 'enhanced';
+}
 export function editorPresentationKnown(value) {
   return value == null || chartPresentation(value).mode === 'enhanced' && (value.chartVariant !== 'combined' || value.chartInteractions?.yAxis?.mode === 'auto');
 }
 export function setEditorDisplayMode(draft, mode, available = false) {
   const value = editorPresentation(draft);
   if (!editorPresentationKnown(value)) return 'Saved presentation settings are not supported here and will be preserved.';
-  if (mode === 'combined') {
-    if (editorIsCombined(draft)) return '';
-    if (!available) return 'Bar + line is not available on this dashboard yet.';
+  if (['combined', 'scatter'].includes(mode)) {
+    const scatter = mode === 'scatter', label = scatter ? 'Scatter' : 'Bar + line';
+    if (scatter ? editorIsScatter(draft) : editorIsCombined(draft)) return '';
+    if (!available) return `${label} is not available on this dashboard yet.`;
     if (!['line_chart', 'bar_chart'].includes(draft.widgetType) || !['day', 'week'].includes(draft.groupBy) || draft.series.length < 1 || draft.series.length > 2) return 'Choose a line or bar chart, day or week, and one or two numeric metrics first.';
-    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose resolved numeric metrics for Bar + line.';
-    const next = structuredClone(value ?? interactiveChartPresentation(draft.groupBy, 'combined').value);
-    next.chartVariant = 'combined'; next.chartComposition = 'metrics-v1';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return `Choose resolved numeric metrics for ${label}.`;
+    const next = structuredClone(value ?? interactiveChartPresentation(draft.groupBy, mode).value);
+    next.chartVariant = mode; next.chartComposition = scatter ? 'pairs-v1' : 'metrics-v1';
     next.chartInteractions ??= interactiveChartPresentation(draft.groupBy).value.chartInteractions;
     next.chartInteractions.yAxis = { mode: 'auto' };
+    next.chartInteractions.zoom = interactiveChartPresentation(draft.groupBy, mode).value.chartInteractions.zoom;
     draft.widgetType = 'line_chart';
     // Apply the target display before adding its second series; Heatmap caps at one.
     draft.presentation = { mode: 'replace', value: next };
@@ -1052,7 +1058,7 @@ export function editorSeriesEntry(draft, key) {
 }
 
 export function addEditorSeries(draft) {
-  if (editorIsCombined(draft) && draft.series.length >= 2) return "";
+  if ((editorIsCombined(draft) || editorIsScatter(draft)) && draft.series.length >= 2) return "";
   const presentation = editorPresentation(draft);
   if (presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
   const key = `new-${draft.nextKey}`;
@@ -1068,7 +1074,7 @@ export function addEditorSeries(draft) {
 
 // Returns the key to select next (the neighbour), or "".
 export function removeEditorSeries(draft, key) {
-  if (editorIsCombined(draft) && draft.series.length <= 2) return key;
+  if ((editorIsCombined(draft) || editorIsScatter(draft)) && draft.series.length <= 2) return key;
   const index = draft.series.findIndex((entry) => entry.key === key);
   if (index < 0) return "";
   const [entry] = draft.series.splice(index, 1);
@@ -1136,7 +1142,7 @@ export function analysisEditorProblem(draft) {
   if (presentation && !editorPresentationKnown(presentation) && draft.presentation?.mode !== 'preserve') return 'Unsupported presentation settings must be preserved.';
   if (presentation) {
     const known = editorPresentationKnown(presentation);
-    const requiredType = known ? { combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[presentation.chartVariant] : null;
+    const requiredType = known ? { scatter: 'line_chart', combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[presentation.chartVariant] : null;
     const incompatible = known
       ? !['line_chart', 'bar_chart'].includes(draft.widgetType) || requiredType && requiredType !== draft.widgetType
       : draft.widgetType !== draft.savedWidgetType;
@@ -1147,6 +1153,14 @@ export function analysisEditorProblem(draft) {
     if (draft.series.length !== 1) return 'Heatmap requires exactly one numeric metric.';
     if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose a resolved numeric metric for Heatmap.';
     if (chartPresentation(presentation).axis.mode !== 'auto') return 'Heatmap requires automatic axes.';
+  }
+  if (editorIsScatter(draft)) {
+    if (!['day', 'week'].includes(draft.groupBy)) return 'Scatter supports day or week only.';
+    if (draft.series.length !== 2) return 'Scatter requires exactly two numeric metrics.';
+    if (draft.series.filter(entry => entry.fields.axis === 'primary').length !== 1 || draft.series.filter(entry => entry.fields.axis === 'secondary').length !== 1) return 'Scatter requires one metric per axis: primary X, secondary Y.';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose resolved numeric metrics for Scatter.';
+    const settings = chartPresentation(presentation);
+    if (presentation.chartComposition !== 'pairs-v1' || settings.axis.mode !== 'auto' || settings.zoom !== 'disabled' || settings.applyPeriod) return 'Scatter requires pairs-v1 composition, automatic axes and disabled zoom.';
   }
   if (editorIsCombined(draft)) {
     if (!['day', 'week'].includes(draft.groupBy)) return 'Bar + line supports day or week only.';
@@ -1197,7 +1211,7 @@ export function analysisEditorPlan(widget, draft) {
 
   if (widgetBody.widgetType && draft.presentation?.mode === 'replace' && widget.presentation_config != null) {
     const variant = widget.presentation_config.chartVariant;
-    const requiredType = { area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[variant];
+    const requiredType = { scatter: 'line_chart', area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[variant];
     if (requiredType && requiredType !== draft.widgetType) widgetBody.presentation = { mode: 'clear' };
   }
 
@@ -1264,8 +1278,8 @@ export function analysisEditorPlan(widget, draft) {
     const next = editorPresentation(draft);
     if (JSON.stringify(next) !== JSON.stringify(widget.presentation_config ?? null)) {
       const presentationOp = { type: 'patchWidget', body: { presentation: structuredClone(draft.presentation) } };
-      // Clear an incompatible sidecar before changing type; enable combined only after all series exist.
-      if (next === null && widgetBody.widgetType) ops.unshift(presentationOp); else ops.push(presentationOp);
+      // Clear with the type patch atomically; apply the target presentation after all series exist.
+      if (next === null && widgetBody.widgetType) widgetBody.presentation = { mode: 'clear' }; else ops.push(presentationOp);
     }
   }
   return ops;
@@ -1390,6 +1404,9 @@ export async function saveAnalysisWidgetEditor(onPainted) {
   }
   if (editorIsCombined(draft) && !editorIsCombined(analysisEditorDraftFromWidget(widget)) && (!editor.combinedAvailable || a.pagesMode && a.pageCapabilities?.combinedCharts !== true)) {
     editor.error = 'Bar + line is not available on this dashboard yet.'; onPainted?.(); return false;
+  }
+  if (editorIsScatter(draft) && !editorIsScatter(analysisEditorDraftFromWidget(widget)) && (!editor.scatterAvailable || !a.pagesMode || a.pageCapabilities?.scatterCharts !== true)) {
+    editor.error = 'Scatter is not available on this dashboard yet.'; onPainted?.(); return false;
   }
   const plan = analysisEditorPlan(widget, draft);
   if (!plan.length) {

@@ -51,9 +51,9 @@ export function createPagesService({ pool, authorize, queryDashboard, assertFilt
         const target = await authorize(q, req, dashboardId, { mode: 'read' });
         const rows = (await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id limit $2', [dashboardId, MAX_DASHBOARD_PAGES + 1])).rows;
         if (rows.length > MAX_DASHBOARD_PAGES) throw previewError('pageLimitReached', 409);
-        const support=(await q("select to_regprocedure('training_load.mutate_dashboard_page_advanced(uuid,uuid,text,uuid,uuid,uuid,uuid,text,jsonb,jsonb)') is not null and to_regprocedure('training_load.save_simple_page_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,uuid,integer,jsonb)') is not null as ready, to_regprocedure('training_load.dashboard_combined_chart_v1()') is not null as combined_ready")).rows[0];
+        const support=(await q("select to_regprocedure('training_load.mutate_dashboard_page_advanced(uuid,uuid,text,uuid,uuid,uuid,uuid,text,jsonb,jsonb)') is not null and to_regprocedure('training_load.save_simple_page_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,uuid,integer,jsonb)') is not null as ready, to_regprocedure('training_load.dashboard_combined_chart_v1()') is not null as combined_ready, to_regprocedure('training_load.dashboard_scatter_v1()') is not null as scatter_ready")).rows[0];
         const ready=support?.ready===true;
-        return { dashboardId, dashboard:target.dashboard, pagesRevision: target.dashboard.pages_revision, pages: rows.map(pageDto), capabilities: { pageManagement: ready && target.canManage === true && target.canQuery === true, pageQuery: target.canQuery === true, ...(target.canQuery === true ? { metricPairing: 'athlete-bucket-v1' } : {}), pageWidgetEditing: ready && target.canManage === true && target.canQuery === true, pages: ready, combinedCharts: ready && support?.combined_ready===true && target.canManage===true && target.canQuery===true }, limits: { pages: MAX_DASHBOARD_PAGES, responseBytes: responseLimit } };
+        return { dashboardId, dashboard:target.dashboard, pagesRevision: target.dashboard.pages_revision, pages: rows.map(pageDto), capabilities: { pageManagement: ready && target.canManage === true && target.canQuery === true, pageQuery: target.canQuery === true, ...(target.canQuery === true ? { metricPairing: 'athlete-bucket-v1' } : {}), pageWidgetEditing: ready && target.canManage === true && target.canQuery === true, pages: ready, combinedCharts: ready && support?.combined_ready===true && target.canManage===true && target.canQuery===true, scatterCharts: ready && support?.scatter_ready===true && target.canManage===true && target.canQuery===true }, limits: { pages: MAX_DASHBOARD_PAGES, responseBytes: responseLimit } };
       });
     },
     async detail({ req, dashboardId, pageId }) {
@@ -89,7 +89,15 @@ export function createPagesService({ pool, authorize, queryDashboard, assertFilt
         const presentations = new Map(widgets.map(widget => [widget.id, widget.presentation_config]));
         const queryId = randomUUID();
         const metricPairs = pairRequest ? buildMetricPairs({ widget: pairWidget, result: results.find(result => result.widgetId.toLowerCase() === pairWidget.id.toLowerCase()), request: pairRequest, period, queryId }) : undefined;
-        return { queryId, evaluatedAt, dashboardRevision: target.dashboard.revision, pageId, pageRevision: data.page.revision, defaultsRevision: data.page.defaultsRevision, layoutRevision: data.page.layoutRevision, resolvedPeriod: period, widgets: results.map(widget => ({ ...widget, presentation_config: presentations.get(widget.widgetId) ?? null })), ...(pairRequest ? { metricPairs } : {}) };
+        const output = results.map(result => {
+          const widget = widgets.find(widget => widget.id === result.widgetId);
+          const presentation = presentations.get(result.widgetId) ?? null;
+          if (presentation?.schemaVersion !== 1 || presentation.chartVariant !== 'scatter') return { ...result, presentation_config: presentation };
+          const x = widget.series.filter(series => series.axis === 'primary'), y = widget.series.filter(series => series.axis === 'secondary');
+          const request = { schemaVersion: 1, widgetId: widget.id, xSeriesId: widget.series.length === 2 && x.length === 1 ? x[0].id : null, ySeriesId: widget.series.length === 2 && y.length === 1 ? y[0].id : null };
+          return { ...result, presentation_config: presentation, metricPairs: buildMetricPairs({ widget, result, request, period, queryId }) };
+        });
+        return { queryId, evaluatedAt, dashboardRevision: target.dashboard.revision, pageId, pageRevision: data.page.revision, defaultsRevision: data.page.defaultsRevision, layoutRevision: data.page.layoutRevision, resolvedPeriod: period, widgets: output, ...(pairRequest ? { metricPairs } : {}) };
       });
     },
     async status({ req, dashboardId, requestId }) {

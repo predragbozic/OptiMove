@@ -9,7 +9,7 @@ import { chartPresentation } from '../training-load-chart-composer.js';
 const model = () => ({ draft: { view: { type: 'table', groupBy: 'day' } }, selectedMetric: { value_type: 'numeric' }, capabilities: { widgetTypes: ['table','kpi','line_chart','bar_chart'], capabilities: { chartVariants: ['area','horizontal-bar'] } } });
 const documentFor = html => new JSDOM(html).window.document;
 
-test('eight native radio cards have distinct accessible names, descriptions and decorative original SVGs', () => {
+test('nine native radio cards have distinct accessible names, descriptions and decorative original SVGs', () => {
   const m = model(), before = structuredClone(m), doc = documentFor(renderChartGallery(m));
   assert.equal(doc.querySelector('legend').textContent, 'Display');
   const radios = [...doc.querySelectorAll('input[type="radio"]')];
@@ -18,7 +18,7 @@ test('eight native radio cards have distinct accessible names, descriptions and 
   for (const [index, input] of radios.entries()) {
     assert.equal(doc.getElementById(input.getAttribute('aria-labelledby')).textContent, chartGalleryChoices[index].name);
     assert.ok(doc.getElementById(input.getAttribute('aria-describedby').split(' ')[0]).textContent.length > 25);
-    assert.equal(input.disabled, ['combined', 'heatmap'].includes(input.value));
+    assert.equal(input.disabled, ['combined', 'heatmap', 'scatter'].includes(input.value));
     const svg = input.closest('label').querySelector('svg');
     assert.equal(svg.getAttribute('aria-hidden'), 'true');
     assert.equal(svg.getAttribute('focusable'), 'false');
@@ -34,9 +34,9 @@ test('absent and partial capability disable only unadvertised variants and assoc
     const doc = documentFor(renderChartGallery(m));
     for (const input of doc.querySelectorAll('input')) {
       const variant = ['area','horizontal-bar','heatmap'].includes(input.value);
-      const blocked = input.value === 'combined' || variant && !advertised?.includes(input.value);
+      const blocked = ['combined', 'scatter'].includes(input.value) || variant && !advertised?.includes(input.value);
       assert.equal(input.disabled, Boolean(blocked));
-      if (blocked && input.value !== 'combined') {
+      if (blocked && !['combined', 'scatter'].includes(input.value)) {
         const reasonId = input.getAttribute('aria-describedby').split(' ').at(-1);
         assert.match(doc.getElementById(reasonId).textContent, /not available on this dashboard yet/);
       }

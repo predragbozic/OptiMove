@@ -9,6 +9,7 @@ function remember(key, value) {
 }
 export function chartPointText(point, precision, formatted = false) {
   if (!point) return 'No data';
+  if(point.pairedPoint)return `X:\n${chartPointText({...point,pairedPoint:null},precision,formatted)}\n\nY:\n${chartPointText(point.pairedPoint,precision,formatted)}`;
   if (!point.identity) return 'Duplicate observations. See the values table.';
   const value=point.chartStatus === 'value' ? formatted ? Number(point.value).toFixed(precision) : String(point.value) : `${point.chartStatus}: ${String(point.rawValue)}`;
   return [point.metricLabel ?? point.identity.builtInSeriesKey ?? point.identity.metricDefinitionId,point.athleteName,point.identity.bucketKey,`${value} ${point.identity.unit ?? '(unit not specified)'}`,
@@ -41,7 +42,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     if (!plot.queryId || !selected?.identity || selected.queryId!==plot.queryId) return;
     let summary=details.querySelector('.tl-chart-point-summary');if(!summary){summary=document.createElement('p');summary.className='tl-chart-point-summary';details.insertBefore(summary,details.querySelector('pre'));}
     summary.textContent=chartPointText(selected,plot.precision);
-    details.querySelector('pre').textContent=JSON.stringify({queryId:selected.queryId,phase:selected.phase,rowIndex:selected.rowIndex,identityKey:selected.identityKey,identity:selected.identity,status:selected.status,value:selected.rawValue,raw:selected.raw},null,2);
+    details.querySelector('pre').textContent=JSON.stringify({queryId:selected.queryId,phase:selected.phase,rowIndex:selected.rowIndex,identityKey:selected.identityKey,identity:selected.identity,status:selected.status,value:selected.rawValue,raw:selected.raw,...(selected.pairedPoint?{y:{rowIndex:selected.pairedPoint.rowIndex,identityKey:selected.pairedPoint.identityKey,identity:selected.pairedPoint.identity,value:selected.pairedPoint.rawValue,raw:selected.pairedPoint.raw}}:{})},null,2);
     details.open=true;
   };
   const updateStatus=()=>{
@@ -97,7 +98,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     const pointControls=group('Values and details');
     const label=document.createElement('label');label.textContent='Point preview';const select=document.createElement('select');select.setAttribute('aria-label','Point preview');
     const empty=document.createElement('option');empty.value='';empty.textContent='Select a point';select.append(empty);
-    for(const [series,rows] of plot.rowsBySeries.entries()) for(const [index,row] of rows.entries())if(row?.identity){const option=document.createElement('option');option.value=`${series}:${index}`;option.textContent=`${row.metricLabel ?? ''} · ${row.athleteName} · ${row.identity.bucketKey} · ${row.chartStatus==='value'?String(row.value):row.chartStatus} ${row.identity.unit ?? ''}`;select.append(option);}
+    for(const [series,rows] of plot.rowsBySeries.entries()) for(const [index,row] of rows.entries())if(row?.identity){const option=document.createElement('option');option.value=`${series}:${index}`;option.textContent=`${row.metricLabel ?? ''} · ${row.athleteName} · ${row.identity.bucketKey} · ${row.chartStatus==='value'?String(row.value):row.chartStatus} ${row.identity.unit ?? ''}${row.pairedPoint?` / ${row.pairedPoint.metricLabel}: ${row.pairedPoint.value} ${row.pairedPoint.identity.unit ?? ''}`:''}`;select.append(option);}
     select.addEventListener('change',()=>{if(select.value){const [series,index]=select.value.split(':').map(Number);showPoint(series,index);}});label.append(select);pointControls.append(label);
     on('click',event=>{if(event.componentType==='series' && Number.isInteger(event.seriesIndex) && Number.isInteger(event.dataIndex))showPoint(event.seriesIndex,event.dataIndex);});
   }

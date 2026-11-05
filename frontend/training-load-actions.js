@@ -1463,7 +1463,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-widget-display-mode") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.error = setEditorDisplayMode(editor.draft, action.value, editor.combinedAvailable);
+    editor.error = setEditorDisplayMode(editor.draft, action.value, action.value === 'scatter' ? editor.scatterAvailable : editor.combinedAvailable);
     renderTrainingLoad(); return true;
   }
   if (type === "training-load-analysis-widget-title" || type === "training-load-analysis-widget-type" || type === "training-load-analysis-widget-group") {
