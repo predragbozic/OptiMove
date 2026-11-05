@@ -14,7 +14,7 @@ function fixture(options={}) {
   const widget={id:widgetId,page_id:pageId,widget_type:'table',presentation_config:{schemaVersion:1}};
   const client=Object.assign(new EventEmitter(),{release:destroy=>state.releases.push(destroy),query:async(sql,params=[])=>{
     state.queries.push({sql,params});
-    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true}]};
+    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true}]};
     if(sql==='commit'&&state.commitLost){state.commitLost=false;throw new Error('connection lost');}
     if(sql.includes('mutate_dashboard_page')){state.mutations.push(params);const receipt={requestId:params[1],dashboardId,pageId,operation:params[5],pagesRevision:2};state.ledger={request_id:params[1],payload_hash:params[2],workspace:target.workspace,receipt};return{rows:[{receipt}]};}
     if(sql.includes('dashboard_page_requests'))return{rows:state.ledger?.request_id===params[2]?[state.ledger]:[]};
@@ -33,6 +33,12 @@ test('Page UI readiness requires both sanctioned ports and returns authorized pa
   assert.equal(result.dashboard.id,dashboardId);assert.equal(result.capabilities.pages,true);assert.equal(result.capabilities.pageWidgetEditing,true);
   assert.equal(f.state.mutations.length,0);
   const legacy=fixture();assert.equal((await legacy.service.list({req,dashboardId})).capabilities.pages,false);
+});
+test('combined editing requires its migration marker, Page ports and both management/query rights',async()=>{
+ for(const [portsReady,combinedReady,canManage,canQuery,expected] of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
+  const f=fixture({portsReady,combinedReady});Object.assign(f.target,{canManage,canQuery});
+  assert.equal((await f.service.list({req,dashboardId})).capabilities.combinedCharts,expected);
+ }
 });
 
 test('read snapshot vraća samo članove stranice i završava rollback-om bez upisa',async()=>{

@@ -13,3 +13,10 @@ for(const [variant,type]of [['area','line_chart'],['horizontal-bar','bar_chart']
 test('gallery sidecars reject unknown variants, callbacks, missing interactions and table mixtures',()=>{
  for(const value of [{schemaVersion:1,chartVariant:'scatter',chartInteractions:{}},{schemaVersion:1,chartVariant:'area'},{schemaVersion:1,chartVariant:'area',chartInteractions:{},callback:'x'},{schemaVersion:1,chartVariant:'area',chartInteractions:{},tableFormatting:{evaluationVersion:1,rules:[]}}])assert.equal(validateContract('presentationV1',value).valid,false);
 });
+test('combined is a valid Advanced presentation and explicitly requires the multi-series editor',()=>{
+ const value={schemaVersion:1,chartVariant:'combined',chartComposition:'metrics-v1',chartInteractions:{yAxis:{mode:'auto'}}};
+ assert.equal(validateContract('presentationV1',value).valid,true);
+ const d=draft();d.view.type='line_chart';d.presentation={mode:'replace',value};
+ assert.equal(compileSimpleDraft(d,snapshot(),context()).status,'advancedRequired');
+ for(const invalid of [{...value,chartComposition:'athletes-v1'},{...value,chartVariant:'area'},{...value,chartInteractions:{yAxis:{mode:'fixed',min:0,max:10}}}])assert.equal(validateContract('presentationV1',invalid).valid,false);
+});

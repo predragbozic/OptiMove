@@ -65,6 +65,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     for (const [label,isFrom] of [['Zoom from',true],['Zoom to',false]]) {
       const wrapper=document.createElement('label');wrapper.textContent=label;
       const select=document.createElement('select');
+      select.setAttribute('aria-label',label);
       for (const [index,bucket] of plot.buckets.entries()) {const option=document.createElement('option');option.value=String(index);option.textContent=bucket;select.append(option);}
       select.value=String(isFrom?state.first:state.last);
       select.addEventListener('change',()=>{const index=Number(select.value);setRange(isFrom?Math.min(index,state.last):state.first,isFrom?state.last:Math.max(index,state.first));});
@@ -94,9 +95,9 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
   }
   if(plot.settings.pointDetails && plot.queryId) {
     const pointControls=group('Values and details');
-    const label=document.createElement('label');label.textContent='Point preview';const select=document.createElement('select');
+    const label=document.createElement('label');label.textContent='Point preview';const select=document.createElement('select');select.setAttribute('aria-label','Point preview');
     const empty=document.createElement('option');empty.value='';empty.textContent='Select a point';select.append(empty);
-    for(const [series,rows] of plot.rowsBySeries.entries()) for(const [index,row] of rows.entries())if(row?.identity){const option=document.createElement('option');option.value=`${series}:${index}`;option.textContent=`${row.athleteName} · ${row.identity.bucketKey} · ${row.chartStatus==='value'?String(row.value):row.chartStatus}`;select.append(option);}
+    for(const [series,rows] of plot.rowsBySeries.entries()) for(const [index,row] of rows.entries())if(row?.identity){const option=document.createElement('option');option.value=`${series}:${index}`;option.textContent=`${row.metricLabel ?? ''} · ${row.athleteName} · ${row.identity.bucketKey} · ${row.chartStatus==='value'?String(row.value):row.chartStatus} ${row.identity.unit ?? ''}`;select.append(option);}
     select.addEventListener('change',()=>{if(select.value){const [series,index]=select.value.split(':').map(Number);showPoint(series,index);}});label.append(select);pointControls.append(label);
     on('click',event=>{if(event.componentType==='series' && Number.isInteger(event.seriesIndex) && Number.isInteger(event.dataIndex))showPoint(event.seriesIndex,event.dataIndex);});
   }

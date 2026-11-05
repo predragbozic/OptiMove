@@ -1,4 +1,4 @@
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, editorIsCombined, editorPresentation, editorPresentationKnown, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { renderPagesHtml,renderPagePendingHtml } from './training-load-pages-view.js';
 import { state } from "./state.js";
@@ -793,7 +793,8 @@ function renderEditorHtml() {
   const rowsById = new Map((widget.series || []).map((row) => [row.id, row]));
   const dirty = analysisEditorPlan(widget, draft).length > 0;
   const problem = dirty ? analysisEditorProblem(draft) : "";
-  const cap = analysisSeriesLimit(draft.widgetType);
+  const combined = editorIsCombined(draft);
+  const cap = combined ? 2 : analysisSeriesLimit(draft.widgetType);
   const saving = Boolean(editor.saving);
   const off = saving ? "disabled" : "";
   const override = draft.localFilterOverride || {};
@@ -806,11 +807,13 @@ function renderEditorHtml() {
     ? ["not_applicable"]
     : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
   const status = (item) => {
-    if (!item.id || !rowsById.has(item.id)) return "New - not saved yet";
+    const axis = combined ? (item.fields.axis === "secondary" ? "Secondary: line, right axis" : "Primary: bars, left axis") : `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    const suffix = combined ? ` / ${axis}` : '';
+    if (!item.id || !rowsById.has(item.id)) return `New - not saved yet${suffix}`;
     const row = rowsById.get(item.id);
-    if (row.resolution_status === "unresolved") return "Choose a metric";
-    if (row.resolution_status === "ambiguous") return "Ambiguous metric";
-    return `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    if (row.resolution_status === "unresolved") return `Choose a metric${suffix}`;
+    if (row.resolution_status === "ambiguous") return `Ambiguous metric${suffix}`;
+    return axis;
   };
   return `
     <div class="builder-athlete-overlay">
@@ -823,7 +826,13 @@ function renderEditorHtml() {
         <div class="tl-analysis-editor-grid">
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
           <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
-          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
+          <label>Display mode<select data-action="training-load-analysis-widget-display-mode" ${saving || !editorPresentationKnown(editorPresentation(draft)) ? 'disabled' : ''}>
+            ${!combined && editorPresentation(draft) != null ? '<option value="preserve" selected>Saved presentation</option>' : ''}
+            ${optionHtml('separate', 'Separate plots', combined ? 'combined' : editorPresentation(draft) != null ? 'preserve' : 'separate')}
+            <option value="combined" ${combined ? 'selected' : ''} ${!editor.combinedAvailable && !combined ? 'disabled' : ''}>Bar + line (two axes)</option>
+          </select></label>
+          <p class="muted">${combined ? 'Primary: bars on the left axis. Secondary: line on the right axis. Each metric keeps its own unit, source and coverage. Two numeric metrics, day or week, automatic axes only.' : !editorPresentationKnown(editorPresentation(draft)) ? 'Saved presentation settings are preserved; this display mode is not supported here.' : !editor.combinedAvailable ? 'Bar + line is not available on this dashboard yet.' : 'Bar + line uses primary bars on the left axis and a secondary line on the right axis.'}</p>
+          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${(combined ? GROUP_BY.filter(g => ["day", "week", draft.groupBy].includes(g)) : GROUP_BY).map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
             ${override.activityId
@@ -868,7 +877,7 @@ function renderEditorHtml() {
             <div class="tl-analysis-series-actions">
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" ${key} ${saving || entryIndex >= entries.length - 1 ? "disabled" : ""}>Move down</button>
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove series</button>
+              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${saving || combined && entries.length <= 2 ? "disabled" : ""}>Remove series</button>
             </div>
             ${renderMetricPickerHtml(entry)}
           ` : ""}
