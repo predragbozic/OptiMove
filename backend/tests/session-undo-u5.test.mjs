@@ -240,7 +240,7 @@ test("1. a platform admin undoes an imported session: everything it wrote is gon
   assert.equal(u.replayed, false);
   assert.equal(u.eventId, s.eventId);
   assert.equal(u.offeredAgain, true);
-  assert.equal(u.previewRefreshed, true);
+  assert.equal(u.previewReady, true);
   assert.ok(u.removedTotal > 0 && u.removedCounts.metric_events === 1 && u.removedCounts.metric_values === before.values);
 
   const after = await counts(team.teamId);
@@ -847,12 +847,15 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
     await assert.rejects(c.query(rollback), /later migrations are applied/);
     await c.query("rollback").catch(() => {});
     await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611051100_later.sql'`);
-    // 3. a body replaced
+    // 3. a body replaced - inside a transaction that is rolled back, so the shared database keeps v57's functions
+    await c.query("begin");
     await c.query(`create or replace function training_load.session_undo_marker_ok() returns boolean as 'select true' language sql`);
     assert.notDeepEqual(await catalogOf(c), before);
     await c.query(`create or replace function training_load.session_undo_scope(p_event uuid) returns jsonb as 'select null::jsonb' language sql`);
+    await c.query("savepoint s");
     await assert.rejects(c.query(rollback), /body in force of training_load\.session_undo_scope is not v57's/);
-    await c.query("rollback").catch(() => {});
+    await c.query("rollback");
+    assert.deepEqual((await catalogOf(c)).functions, (await catalogOf(admin)).functions, "the replaced bodies were rolled back");
   } finally { await c.end(); }
 });
 
@@ -879,4 +882,135 @@ test("22. the md5 gate: the migration refuses to run when an original body it co
     await client.end();
     await rb.drop();
   }
+});
+
+// ---------------------------------------------------------------------------
+// The function's own rights and the CLI's refusals, proven on the function
+// ---------------------------------------------------------------------------
+test("23. called directly, the function checks the right itself: an inactive user, a club admin, an unknown user and a platform admin of nothing are refused (42501) and nothing is written", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9131);
+  const inactive = await platformAdmin();
+  await admin.query(`update public.users set is_active = false where id = $1`, [inactive.id]);
+  const rowsBefore = await allRowCounts();
+  const c = await newClient();
+  try {
+    for (const [name, actor] of [["inactive user with an active platform role", inactive.id], ["club admin only", team.cadmin.id], ["coach", team.coach.id], ["unknown user", crypto.randomUUID()]]) {
+      await assert.rejects(
+        c.query(`select * from training_load.undo_imported_session($1, $2, $3, $4, 'direct', null)`, [actor, team.teamId, s.candidateId, key()]),
+        (e) => e.code === "42501", name);
+    }
+    await assert.rejects(c.query(`select * from training_load.undo_imported_session(null, $1, $2, $3, 'direct', null)`, [team.teamId, s.candidateId, key()]), (e) => e.code === "22023");
+    await assert.rejects(c.query(`select * from training_load.undo_imported_session($1, $2, $3, $4, '  ', null)`, [team.padmin.id, team.teamId, s.candidateId, key()]), /session_undo:invalid_reason/);
+    // A candidate of another team through this team's id is not found, whoever asks.
+    const other = await setupTeam();
+    await assert.rejects(c.query(`select * from training_load.undo_imported_session($1, $2, $3, $4, 'x', null)`, [team.padmin.id, other.teamId, s.candidateId, key()]), /session_undo:candidate_not_found/);
+  } finally { await c.end(); }
+  const rowsAfter = await allRowCounts();
+  // setupTeam of `other` added rows of its own; the imported session itself is untouched.
+  assert.equal(rowsAfter["training_load.metric_events"], rowsBefore["training_load.metric_events"]);
+  assert.equal(rowsAfter["training_load.import_deletion_log"], rowsBefore["training_load.import_deletion_log"]);
+  assert.equal(rowsAfter["training_load.gpexe_session_undo_requests"], rowsBefore["training_load.gpexe_session_undo_requests"]);
+});
+
+test("24. the CLI's refusals hold in the function: another event's link, a reparented activity, two events for one session, a manual correction", async () => {
+  const team = await setupTeam();
+  const refused = async (s, code, who = team) => {
+    const rowsBefore = await allRowCounts();
+    const r = await undo(who, s);
+    assert.deepEqual([r.status, r.body.error], [409, code], r.text);
+    assert.deepEqual(await allRowCounts(), rowsBefore, `${code}: nothing changed`);
+  };
+  const otherEventRow = async (name) => (await admin.query(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, event_timezone_snapshot)
+     values ($1,'2026-09-14','2026-09-14T18:08:12Z','session','team',$2,'Europe/Sarajevo') returning id`, [name, team.teamId])).rows[0].id;
+
+  // another event is linked to the activity (no participant link)
+  const a = await importSession(team, 9132);
+  const foreign = await otherEventRow("another event");
+  await admin.query(
+    `insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+     values ($1,$2,'manual','confirmed',$3,now(),$3)`, [a.activityId, foreign, team.padmin.id]);
+  await refused(a, "other_event_link");
+
+  // a reparented activity
+  const b = await importSession(team, 9133, { hour: 10 });
+  const target = (await admin.query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, timezone_snapshot, started_at, origin, owner_scope, owner_team_id, created_by_user_id)
+     values ('training_session','coach plan','2026-09-14','Europe/Sarajevo','2026-09-14T18:08:12Z','manual','team',$1,$2) returning id`, [team.teamId, team.padmin.id])).rows[0].id;
+  const participantId = (await admin.query(`select id from training.activity_participants where activity_id = $1 order by id limit 1`, [b.activityId])).rows[0].id;
+  await admin.query(
+    `insert into training.activity_participant_reparent_log (activity_participant_id, from_activity_id, to_activity_id, component_strategy, reason, performed_by_user_id)
+     values ($1,$2,$3,'keep','coach moved it',$4)`, [participantId, b.activityId, target, team.padmin.id]);
+  await refused(b, "entangled_activity");
+
+  // two events carry the same GPEXE session (v20 allows it once the first connection is no longer active; the fixture is a
+  // state no route builds, so the v50 triggers are off for that one statement, in its own transaction)
+  const t2 = await setupTeam();
+  const c = await importSession(t2, 9134, { hour: 12 });
+  await admin.query("begin");
+  await admin.query("set local session_replication_role = replica");
+  await admin.query(`update training_load.metric_source_connections set state = 'inactive' where owner_team_id = $1 and source_system = 'gpexe'`, [t2.teamId]);
+  await admin.query("commit");
+  const second = (await admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`, [t2.teamId])).rows[0].id;
+  await admin.query(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('re-imported','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,'team_session:9134','Europe/Sarajevo')`, [t2.teamId, second]);
+  await refused(c, "two_events_for_session", t2);
+
+  // a hand-corrected value
+  const d = await importSession(team, 9135, { hour: 14 });
+  const identity = (await admin.query(
+    `select si.id, si.current_occasion_id from training_load.metric_source_identities si
+       join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and si.source_external_id like 'athlete_session:%:full' order by si.id limit 1`, [d.eventId])).rows[0];
+  const values = (await admin.query(
+    `select metric_definition_id, metric_definition_version_id, value_numeric::float8 as value from training_load.metric_values where occasion_id = $1`, [identity.current_occasion_id]))
+    .rows.map((v) => ({ metricDefinitionId: v.metric_definition_id, metricDefinitionVersionId: v.metric_definition_version_id, value: v.value }));
+  const { correctImportedOccasionManually } = await import("../src/trainingLoadMetricsMeasurements.js");
+  const req = { user: { id: team.coach.id }, authz: { platformRoles: [], clubRoles: [], teamRoles: [{ role: "team_coach", teamId: team.teamId }], managedTeamIds: [] } };
+  const scopeCtx = { type: "team", teamId: team.teamId, ownerContext: { ownerScope: "team", ownerTeamId: team.teamId, ownerClubId: null, ownerUserId: null } };
+  const manual = await correctImportedOccasionManually(req, scopeCtx, { requestKey: `undo-${key()}`, sourceIdentityId: identity.id, expectedCurrentOccasionId: identity.current_occasion_id, values });
+  assert.equal(manual.error, undefined, JSON.stringify(manual));
+  await refused(d, "manual_occasion");
+});
+
+test("25. a candidate whose last sighting is not a succeeded check is not offered again", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9136);
+  // A state no route builds (a finished check's status is final): the user triggers are off for this one statement.
+  await admin.query("begin");
+  await admin.query("set local session_replication_role = replica");
+  await admin.query(`update training_load.gpexe_import_checks set status = 'failed', error_code = 'source_unavailable' where id = (select last_seen_check_id from training_load.gpexe_import_candidates where id = $1)`, [s.candidateId]);
+  await admin.query("commit");
+  const r = await undo(team, s);
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.body.undo.offeredAgain, r.body.undo.newCandidateId], [false, null]);
+  assert.deepEqual((await listFor(team)).filter((c) => c.gpexeTeamSessionId === "9136"), []);
+});
+
+test("26. lock order (the rule of .claude/rules/migrations.md): inside the function the users row precedes the role row, which precedes the team lock, the request read, the candidate, the event and the activities, and no lock is taken after the first write", async () => {
+  const body = (await admin.query(`select prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname = 'undo_imported_session'`)).rows[0].prosrc;
+  const at = (needle) => {
+    const i = body.indexOf(needle);
+    assert.ok(i >= 0, `the function takes: ${needle}`);
+    return i;
+  };
+  const order = [
+    "from public.users u where u.id = p_actor and u.is_active = true for share",
+    "from public.user_global_roles r where r.user_id = p_actor",
+    "pg_advisory_xact_lock(hashtextextended('gpexe-import-team:'",
+    "from training_load.gpexe_session_undo_requests q",
+    "from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team for update",
+    "from training_load.metric_events e where e.id = v_event_id for update",
+    "perform 1 from training.activities a where a.id = any(v_act) order by a.id for update",
+  ].map(at);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "the locks are taken in the documented order");
+  const firstWrite = at("perform set_config('optimove.session_undo_tx'");
+  assert.ok(order.every((i) => i < firstWrite), "every lock is taken before the first write");
+  const afterFirstWrite = body.slice(firstWrite);
+  assert.doesNotMatch(afterFirstWrite, /\bfor (update|share|no key update)\b|pg_advisory|\block table\b/i, "no locking clause after the first write");
+  // The rights rows are read one statement at a time, users first: no statement locks both.
+  assert.doesNotMatch(body, /for share of u, r|for update of u, r/i);
 });

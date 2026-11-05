@@ -74,6 +74,8 @@ function mapDatabaseError(error) {
       const work = parseDetail(error.detail);
       if (work) details.rosterWork = work;
     }
+    // The constraint that stopped the removal is for the server log only (an administrator's support trail), never the answer.
+    if (code === "referenced_elsewhere") console.error(`[gpexe] undo refused: referenced elsewhere (${String(error.detail || "unknown").slice(0, 120)})`);
     if (code === "calendar_link_exists" && error.detail && /^\d+$/.test(error.detail)) details.calendarLinks = Number(error.detail);
     return refusal(known[0], known[0] === 404 ? "notFound" : code, known[1], Object.keys(details).length ? details : undefined);
   }
@@ -216,7 +218,14 @@ export async function undoImport(teamId, candidateId, { userId, requestKey, reas
     if (mapped) throw mapped;
     throw error;
   }
-  const result = { ...shapeResult(row), replayed: row.replayed === true, offeredAgain: Boolean(row.new_candidate_id), previewRefreshed: false };
-  if (row.new_candidate_id) result.previewRefreshed = await refreshOfferedPreview(teamId, row.new_candidate_id, userId);
+  const result = { ...shapeResult(row), replayed: row.replayed === true, offeredAgain: Boolean(row.new_candidate_id), previewReady: false };
+  if (row.new_candidate_id) {
+    // Also on a replay: a first call whose recomputation failed gets another try, and the answer says whether the
+    // offered candidate has its preview now (without one it cannot be approved; the next search recomputes it).
+    await refreshOfferedPreview(teamId, row.new_candidate_id, userId);
+    try {
+      result.previewReady = (await pool.query(`select preview_hash is not null as ready from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [row.new_candidate_id, teamId])).rows[0]?.ready === true;
+    } catch { result.previewReady = false; }
+  }
   return result;
 }

@@ -14,8 +14,8 @@ select p.proname as function, md5(p.prosrc) as actual_md5,
          when 'source_metric_append_only_unless_session_undo' then 'f607bfcf8f618b5d394513f066d79d0b'
          when 'protect_activity_source_observation_v57' then 'ea21a2a49f320dc7d6be45becc7743f5'
          when 'protect_gpexe_import_candidate_v57' then '311d7f35e2e2ad4d56afa1f7760f78e0'
-         when 'undo_imported_session' then '12da77daf860218ca498523f7f574f27'
-         when 'session_undo_scope' then 'db65672ac1590d6a7e0b2e6f35fa367c' end as ok
+         when 'undo_imported_session' then 'd16fda9662e38c8374c1e818506a4e3d'
+         when 'session_undo_scope' then 'f605cb502a36a4d8e372373fe1e2207a' end as ok
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname in ('training_load', 'training')
    and p.proname in ('forbid_update_delete_unless_session_undo', 'forbid_event_source_binding_delete_unless_session_undo',

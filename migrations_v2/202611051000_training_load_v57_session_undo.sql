@@ -386,7 +386,9 @@ begin
     'rosterWork', jsonb_build_object('decisions', v_work.decisions, 'requests', v_work.requests,
                                      'completions', v_work.completions, 'completionLog', v_work.completion_log));
 end;
-$$ language plpgsql stable;
+-- Volatile on purpose: every statement of the body takes its own snapshot, so the second look (after the activities are
+-- locked) sees a link committed while the lock was waited for.
+$$ language plpgsql;
 
 -- ---------------------------------------------------------------------------
 -- 6. The sanctioned undo
@@ -423,6 +425,7 @@ declare
   v_req_id uuid := gen_random_uuid();
   v_new uuid;
   v_last_status text;
+  v_constraint text;
 begin
   if p_actor is null or p_team is null or p_candidate is null or p_request_key is null then
     raise exception 'undo_imported_session: actor, team, candidate and request key are required' using errcode = '22023';
@@ -606,7 +609,8 @@ begin
       v_removed := training_load.session_undo_add(v_removed, 'metric_import_batches', v_n);
     end if;
   exception when foreign_key_violation then
-    perform training_load.session_undo_refuse('referenced_elsewhere');
+    get stacked diagnostics v_constraint = constraint_name;
+    perform training_load.session_undo_refuse('referenced_elsewhere', v_constraint);
   end;
   select coalesce(sum(value::int), 0)::int into v_total from jsonb_each_text(v_removed);
 

@@ -41,8 +41,8 @@ declare
     ['training_load', 'source_metric_append_only_unless_session_undo', 'f607bfcf8f618b5d394513f066d79d0b'],
     ['training', 'protect_activity_source_observation_v57', 'ea21a2a49f320dc7d6be45becc7743f5'],
     ['training_load', 'protect_gpexe_import_candidate_v57', '311d7f35e2e2ad4d56afa1f7760f78e0'],
-    ['training_load', 'undo_imported_session', '12da77daf860218ca498523f7f574f27'],
-    ['training_load', 'session_undo_scope', 'db65672ac1590d6a7e0b2e6f35fa367c']];
+    ['training_load', 'undo_imported_session', 'd16fda9662e38c8374c1e818506a4e3d'],
+    ['training_load', 'session_undo_scope', 'f605cb502a36a4d8e372373fe1e2207a']];
   i int;
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v57) then
