@@ -57,3 +57,18 @@ Migration v57 (functions, the three trigger exceptions, the request table, the l
 - **Q4:** a session with coach roster decisions: refuse (as today), or let the function also remove them with the same log row (the coach's decisions on a wrongly attributed session are lost; recommended: refuse first, add the clearing as a second step after the first release)?
 - **Q5:** scope - one session at a time (recommended) or all sessions of one athlete link?
 - **Q6:** is the owner-run first production undo acceptable as the release gate, with the maintenance procedure of the runbook as the fallback?
+
+## 9. The owner's decisions (2026-11-05, relayed by the *Rukovodilac*; status: Accepted)
+
+The owner's words: "Može po preporuci mogu sva pitanja, a promene radi sve onaj koji ima mogućnost da pravi konekcije između sportista u finalnom izgledu. Mada čisto da znaš mi ćemo svakako malo urediti uloge korisnika i dodele ko šta može. Mi ćemo imati posebne uloge ali i mogućnost da admin platforme ili admin kluba nekom korisniku posebno štiklira dodatne mogućnosti šta sme da radi do nivoa koji on može da dodeli (znači do maksimalno nivoa šta on sme da radi)."
+
+- **Q1:** the first version works for an active **platform admin** only (as recommended). The **final state**: whoever may make athlete links may undo an import (the same circle of rights as the link route). Widening to that circle is a second step, after the first production undo; it is its own order.
+- **Q2:** option A, the sanctioned database function (B stays rejected by ADR-007; C is not chosen).
+- **Q3:** after an undo the candidate comes back as a fresh pending candidate of the same content; the approval row stays as history.
+- **Q4:** a session with coach roster decisions is refused first; clearing them is a second step after the first release.
+- **Q5:** one session at a time.
+- **Q6:** the first production undo is owner-run and is the release gate; the runbook's maintenance procedure stays the fallback.
+
+Next: the code of U5 (migration v57, ★★ by triggers 1, 3 and 4), reviewed on a frozen head; the owner's order naming the migration and the *Rukovodilac*'s preflight come before its merge.
+
+**Recorded as a future task (no code, its own contract later):** a roles and delegated permissions system. Special roles, plus the platform admin or a club admin may tick extra abilities for a user, only up to the level the granting admin holds. Q1's final state (who may undo) will follow that system.
