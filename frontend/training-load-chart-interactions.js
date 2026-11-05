@@ -22,6 +22,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
   const details=host.querySelector('.tl-chart-point-details');
   if (!controls || !status || !details || typeof chart.on!=='function') return () => {};
   const key=JSON.stringify([plot.key,plot.contextId]);
+  const valueAxis=plot.valueAxis==='xAxis'?'xAxis':'yAxis';
   const epoch=stateEpoch;
   const previous=states.get(key);
   const state=plot.queryId && previous?.fingerprint===plot.fingerprint ? structuredClone(previous) : {fingerprint:plot.fingerprint,selected:{},first:0,last:plot.buckets.length-1,yAuto:false};
@@ -103,12 +104,12 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
   button('Reset view',()=>{
     clearPeriodConfirmation();
     state.selected={};for(const series of plot.option.series)chart.dispatchAction?.({type:'legendSelect',name:series.name});
-    state.yAuto=false;if(plot.settings.axis.mode==='fixed')chart.setOption({yAxis:{min:plot.settings.axis.min,max:plot.settings.axis.max}});
+    state.yAuto=false;if(plot.settings.axis.mode==='fixed')chart.setOption({[valueAxis]:{min:plot.settings.axis.min,max:plot.settings.axis.max}});
     if(zoom)setRange(0,plot.buckets.length-1);rememberState();details.open=false;updateStatus();
   },viewControls);
-  if(plot.settings.axis.mode==='fixed')button('Automatic Y range',()=>{state.yAuto=true;rememberState();chart.setOption({yAxis:{min:null,max:null}});updateStatus();},viewControls);
+  if(plot.settings.axis.mode==='fixed')button('Automatic value range',()=>{state.yAuto=true;rememberState();chart.setOption({[valueAxis]:{min:null,max:null}});updateStatus();},viewControls);
   chart.setOption({legend:{selected:Object.fromEntries(plot.option.series.filter(series=>Object.hasOwn(state.selected,series.id)).map(series=>[series.name,state.selected[series.id]]))}});
-  if(state.yAuto)chart.setOption({yAxis:{min:null,max:null}});
+  if(state.yAuto)chart.setOption({[valueAxis]:{min:null,max:null}});
   if(zoom)setRange(state.first,state.last);
   updateStatus();
   return cleanup;

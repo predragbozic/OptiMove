@@ -4,9 +4,25 @@ import {JSDOM} from 'jsdom';
 import {buildDashboardWidgetDisplayModel} from '../training-load-analysis-display-model.js';
 import {composeDashboardCharts,chartZoomPeriod,chartPresentation,chartIdentityKey} from '../training-load-chart-composer.js';
 import {bindDashboardChartInteractions,chartPointText,clearDashboardChartStates} from '../training-load-chart-interactions.js';
+import {interactiveChartPresentation} from '../training-load-chart-composer.js';
 
 const period={dateFrom:'2026-10-06',dateTo:'2026-10-12'};
 const presentation={schemaVersion:1,chartComposition:'athletes-v1',chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:'local',applyPeriodAction:true},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}};
+test('gallery variants retain raw values, gaps and point identities on the appropriate axes',()=>{
+  for(const variant of ['area','horizontal-bar']){
+    const sidecar=interactiveChartPresentation('day',variant).value;
+    const {model}=fixture([row('a','2026-10-06',0),row('a','2026-10-08',-12.34567)]);
+    model.widgetType=variant==='area'?'line_chart':'bar_chart';const before=structuredClone(model);
+    const output=composeDashboardCharts(model,()=> 'Distance',()=>'',{presentation:sidecar,resolvedPeriod:period,queryId:'q'});
+    assert.equal(output.status,'ready');const plot=output.plots[0];
+    assert.deepEqual(plot.option.series[0].data.slice(0,3),[{value:0},null,{value:-12.34567}]);
+    assert.equal(plot.rowsBySeries[0][2].identity.athleteId,'a');assert.equal(plot.option.series[0].connectNulls,false);
+    if(variant==='area'){assert.equal(plot.option.series[0].areaStyle.opacity,0.18);assert.equal(plot.option.yAxis.type,'value');}
+    else {assert.equal(plot.valueAxis,'xAxis');assert.equal(plot.option.xAxis.type,'value');assert.equal(plot.option.yAxis.type,'category');assert.equal(plot.option.dataZoom[0].yAxisIndex,0);}
+    assert.deepEqual(model,before);
+    model.widgetType=variant==='area'?'bar_chart':'line_chart';assert.equal(composeDashboardCharts(model,()=>'',()=>'',{presentation:sidecar}).status,'unsupported');
+  }
+});
 const row=(athleteId,bucketKey,value,extra={})=>({athleteId,bucketKey,value,unit:'m',...extra});
 function fixture(rows,{groupBy='day',sidecar=presentation,range=period,queryId='query-1',extraSeries=[]}={}){
   const widget={id:'w',title:'Distanca',widget_type:'line_chart',group_by:groupBy,series:[{id:'s',metric_definition_id:'metric',source_policy:'all_with_conflicts'},...extraSeries.map(entry=>entry.definition)]};
@@ -112,6 +128,16 @@ test('zoom je lokalni; eksplicitno dugme emituje jedan datum opseg, repaint čuv
   const next=fixture([row('a','2026-10-06',1)],{queryId:'query-2'}).output.plots[0];f=runtime(next);assert.deepEqual(f.options[0].legend.selected,{});assert.equal(f.host.querySelectorAll('select')[1].value,'6');f.release();f.window.close();
 });
 
+test('horizontal bars reset and auto-scale the value X axis, preserving the category Y axis',()=>{
+  const sidecar={...presentation,chartVariant:'horizontal-bar',chartInteractions:{...presentation.chartInteractions,yAxis:{mode:'fixed',min:0,max:5}}};
+  const {model}=fixture([row('a','2026-10-06',9)]);model.widgetType='bar_chart';
+  const plot=composeDashboardCharts(model,()=> 'Distance',()=>'',{presentation:sidecar,resolvedPeriod:period,queryId:'horizontal-axis-q'}).plots[0];
+  const f=runtime(plot);[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Automatic value range').click();
+  assert.deepEqual(f.options.at(-1),{xAxis:{min:null,max:null}});
+  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Reset view').click();assert.deepEqual(f.options.at(-1),{xAxis:{min:0,max:5}});
+  assert.equal(plot.option.yAxis.type,'category');f.release();f.window.close();
+});
+
 test('athlete poređenje nema lažne per-athlete legend kontrole i preveliki HTML ostaje običan tekst',()=>{
   const plot=fixture([row('<img onerror=x>','all',1)],{groupBy:'athlete'}).output.plots[0];const f=runtime(plot);
   assert.equal([...f.host.querySelectorAll('button')].some(b=>b.textContent.startsWith('Show/hide')),false);assert.equal(f.host.querySelector('img'),null);f.release();f.window.close();
@@ -125,8 +151,8 @@ test('bez queryId nema obnavljanja prethodnog zoom-a ili detalja sa null identit
 
 test('Auto Y opstaje tokom repaint-a, a Reset vraća fiksne granice i odgovarajuće upozorenje',()=>{
   clearDashboardChartStates();const fixed={...presentation,chartInteractions:{...presentation.chartInteractions,yAxis:{mode:'fixed',min:0,max:5}}};const plot=fixture([row('a','2026-10-06',12)],{sidecar:fixed}).output.plots[0];let f=runtime(plot);
-  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Automatic Y range').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:null,max:null}});assert.equal(f.host.querySelector('.tl-chart-interaction-status').textContent,'');f.release();f.window.close();
-  f=runtime(plot);assert.ok(f.options.some(option=>option.yAxis?.min===null));[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Reset view').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:0,max:5}});assert.match(f.host.querySelector('.tl-chart-interaction-status').textContent,/izvan Y/);f.release();f.window.close();
+  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Automatic value range').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:null,max:null}});assert.equal(f.host.querySelector('.tl-chart-interaction-status').textContent,'');f.release();f.window.close();
+  f=runtime(plot);assert.ok(f.options.some(option=>option.yAxis?.min===null));[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Reset view').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:0,max:5}});assert.match(f.host.querySelector('.tl-chart-interaction-status').textContent,/outside the value axis/);f.release();f.window.close();
 });
 
 test('greška setOption čisti delimične handlere i svaku aktivnu kontrolu',()=>{

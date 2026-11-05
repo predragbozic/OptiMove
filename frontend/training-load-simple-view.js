@@ -1,3 +1,4 @@
+import { renderChartGallery, galleryVariant } from './training-load-chart-gallery.js';
 import { escapeHtml, escapeAttr } from "./utils.js";
 import { buildDashboardWidgetDisplayModel } from './training-load-analysis-display-model.js';
 import { renderDashboardChartPlots } from './training-load-analysis-echarts-options.js';
@@ -115,19 +116,15 @@ function selectField(name, label, choices, selected, locked, placeholder = "Choo
 function displayChoices(model, locked) {
   const view = model.draft?.view ?? {};
   const metric = model.selectedMetric ?? {};
-  const types = model.capabilities?.widgetTypes ?? [];
-  const views = [["table", "Table"], ["line_chart", "Line chart"], ["bar_chart", "Bar chart"], ["kpi", "KPI"]];
   const custom = model.draft?.metricRef?.kind === "metric";
   const scopes = metric.scope_capabilities?.length ? metric.scope_capabilities.map((scope) => typeof scope === "string" ? scope : scope.scope_level) : ["day", "session", "component"];
   return `<label class="tl-simple-field">Title<input type="text" ${action("title")} maxlength="200" value="${escapeAttr(model.draft?.title ?? "")}"${disabled(locked)}></label>
-    <fieldset class="tl-simple-view-options"${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
-      const supported = types.some((type) => (typeof type === "string" ? type : type.key) === value && type.is_active !== false);
-      return `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${label}${!supported ? " (unavailable)" : ""}</label>`;
-    }).join("")}</fieldset>
+    ${renderChartGallery(model, locked)}
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
     ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowed_aggregations ?? []).map((value) => [value, ({ sum: "Total (sum)", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values (no aggregation)" })[value] ?? value]), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
     ${custom && scopes.length > 1 ? selectField("scope", "Use measurements from", scopes.map((value) => [value, ({ day: "Day", session: "Session", component: "Component" })[value] ?? value]), view.dataScopeLevel, locked, "Choose which measurements to use") : ""}
-    ${model.canUpgradeChart && ['line_chart','bar_chart'].includes(view.type) ? `<label class="tl-simple-choice"><input type="checkbox" ${action('chart-enhanced')}${model.draft.presentation?.mode==='replace'?' checked':''}${disabled(locked)}>Enable interactive display for this chart (preview again before saving)</label>` : ''}
+    ${model.canUpgradeChart && ['line_chart','bar_chart'].includes(view.type) ? `<label class="tl-simple-choice"><input type="checkbox" ${action('chart-enhanced')}${model.draft.presentation?.mode==='replace'?' checked':''}${disabled(locked || Boolean(galleryVariant(model)))}>Enable interactive display for this chart (preview again before saving)</label>` : ''}
+    ${galleryVariant(model) ? '<p>Area and horizontal bar require interactive display. Choose a standard Line chart or Vertical bar card before turning it off.</p>' : ''}
     <p>The preview shows all returned data. The existing chart stays unchanged unless you choose to update it.</p>`;
 }
 

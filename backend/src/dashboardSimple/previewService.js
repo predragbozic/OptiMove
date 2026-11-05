@@ -45,9 +45,10 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         return reader.listMetrics({ req: target.req, dataWorkspace: target.workspace, dashboardId, ...options });
       }
       if (kind === 'capabilities') {
+        const chartVariantsReady = (await queryRunner("select to_regprocedure('training_load.dashboard_chart_variants_v1()') is not null as ready")).rows[0]?.ready === true;
         const widgetTypes = (await queryRunner('select * from training_load.dashboard_widget_types where is_active=true order by key')).rows;
         const builtins = (await queryRunner('select * from training_load.dashboard_builtin_series where is_active=true order by key')).rows.map(row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'], source_policy: 'not_applicable' }));
-        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: Boolean(target.page), presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
+        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: Boolean(target.page), chartVariants: chartVariantsReady ? ['area','horizontal-bar'] : [], presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
       }
       let existing = null;
       if (envelope?.editTarget != null) {
@@ -59,6 +60,9 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (existing && existing.revision !== envelope.editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
       const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
       const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: envelope.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
+      const selectedPresentation = envelope.draft.presentation?.mode === 'replace' ? envelope.draft.presentation.value : envelope.draft.presentation?.mode === 'clear' ? null : existing?.presentation_config;
+      const variant = selectedPresentation?.schemaVersion === 1 ? selectedPresentation.chartVariant : null;
+      if (variant && (await queryRunner("select to_regprocedure('training_load.dashboard_chart_variants_v1()') is not null as ready")).rows[0]?.ready !== true) return issueResult('invalid', 'unsupportedCapability', '$.draft.presentation.chartVariant');
       if (target.page) snapshot.capabilities = { ...snapshot.capabilities, pageDefaultsSave: true };
       const evaluatedAt = new Date(now()).toISOString();
       const context = await loadPreviewContext(queryRunner, target, envelope, existing, evaluatedAt);

@@ -1,9 +1,10 @@
+import { applyGalleryChoice, galleryPresentation, galleryVariant } from './training-load-chart-gallery.js';
 import { api } from './api.js';
 import { state } from './state.js';
 import { currentUserWorkspaceContextParts } from './access.js';
 import { analysisRuntimeFilterPayload, loadDashboardDetail, queryAnalysisDashboard, openAnalysisWidgetEditor } from './training-load-analysis-data.js';
 import { createSimpleEditorController } from './training-load-simple-controller.js';
-import { interactiveChartPresentation } from './training-load-chart-composer.js';
+import { chartPresentation, interactiveChartPresentation } from './training-load-chart-composer.js';
 import { loadTrainingLoadOrgPickerData } from './training-load-data.js';
 
 let render = () => {};
@@ -124,9 +125,25 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'search') simpleEditor.search(action.value ?? '');
   else if (type === 'more' || type === 'reload') await simpleEditor.metrics(type === 'more');
   else if (type === 'title') simpleEditor.change(draft => { draft.title = action.value ?? ''; });
-  else if (type === 'view') simpleEditor.change(draft => { draft.view.type = action.value || action.dataset.value; if(model.canUpgradeChart && !['line_chart','bar_chart'].includes(draft.view.type))draft.presentation={mode:'preserve'}; });
-  else if (type === 'group') simpleEditor.change(draft => { draft.view.groupBy = action.value; if(model.canUpgradeChart && draft.presentation?.mode==='replace')draft.presentation=interactiveChartPresentation(draft.view.groupBy); });
-  else if (type === 'chart-enhanced' && model.canUpgradeChart) simpleEditor.change(draft=>{draft.presentation=action.checked?interactiveChartPresentation(draft.view.groupBy):{mode:'preserve'};});
+  else if (type === 'view') simpleEditor.change(draft => applyGalleryChoice(draft, model, action.value || action.dataset.value));
+  else if (type === 'group') simpleEditor.change(draft => {
+    if (draft.view.groupBy === action.value) return;
+    draft.view.groupBy = action.value;
+    const presentation = galleryPresentation(model);
+    const knownChart = chartPresentation(presentation).mode === 'enhanced';
+    if (draft.presentation?.mode === 'preserve' && knownChart && ['area', 'horizontal-bar'].includes(presentation.chartVariant)) {
+      draft.presentation = { mode: 'replace', value: structuredClone(presentation) };
+    }
+    if (draft.presentation?.mode === 'replace' && knownChart) {
+      const generated = interactiveChartPresentation(draft.view.groupBy, galleryVariant(model)).value;
+      if (generated.chartComposition) draft.presentation.value.chartComposition = generated.chartComposition;
+      else delete draft.presentation.value.chartComposition;
+      if (draft.presentation.value.chartInteractions) draft.presentation.value.chartInteractions.zoom = generated.chartInteractions.zoom;
+    }
+  });
+  else if (type === 'chart-enhanced' && model.canUpgradeChart && !galleryVariant(model)) simpleEditor.change(draft => {
+    draft.presentation = action.checked ? interactiveChartPresentation(draft.view.groupBy) : { mode: 'preserve' };
+  });
   else if (type === 'scope') simpleEditor.change(draft => { if (action.value) draft.view.dataScopeLevel = action.value; else delete draft.view.dataScopeLevel; });
   else if (type === 'aggregation') simpleEditor.change(draft => { if (action.value) draft.view.analyticalAggregation = action.value; else delete draft.view.analyticalAggregation; });
   else if (type === 'athlete-mode') simpleEditor.change(draft => { draft.athleteSelection = action.value === 'selected' ? { mode: 'selected', athleteIds: [] } : { mode: action.value }; });

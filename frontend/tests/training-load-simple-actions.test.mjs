@@ -564,3 +564,180 @@ test('repainting the same inline draft preserves expanded advanced options and f
   assert.equal(document.activeElement,control('title'));
   assert.equal(control('title').value,'New title');
 });
+
+
+for (const [id, type, variant] of [['table','table'], ['kpi','kpi'], ['line_chart','line_chart'], ['bar_chart','bar_chart'], ['area','line_chart','area'], ['horizontal-bar','bar_chart','horizontal-bar']]) {
+  test(`gallery ${id} updates only the draft and requires a fresh preview after a change`, async () => {
+    await readyNew();
+    const m = simpleEditor.model;
+    m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+    const count = calls.length, version = m.draft.draftVersion;
+    const unchanged = id === 'table';
+    await simple('view', {}, id);
+    assert.equal(m.draft.view.type, type);
+    assert.equal(m.draft.presentation?.value?.chartVariant, variant);
+    assert.equal(calls.length, count);
+    assert.equal(m.draft.draftVersion, version + (unchanged ? 0 : 1));
+    if (!unchanged) { assert.equal(m.preview, null); assert.equal(m.canSave, false); }
+    await simple('preview');
+    assert.equal(calls.at(-1).url, `${base}/simple/preview`);
+    assert.equal(calls.at(-1).body.draft.view.type, type);
+    assert.equal(calls.at(-1).body.draft.presentation?.value?.chartVariant, variant);
+    assert.equal(calls.filter(call => /simple\/widgets/.test(call.url)).length, 0);
+  });
+}
+
+test('gallery blocks unavailable variants and nonnumeric displays even through a forwarded action', async () => {
+  await readyNew();
+  const m = simpleEditor.model, before = structuredClone(m.draft), preview = m.preview;
+  for (const id of ['area','horizontal-bar']) await simple('view', {}, id);
+  assert.deepEqual(m.draft, before);
+  assert.equal(m.preview, preview);
+  m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+  m.selectedMetric = { value_type: 'text' };
+  for (const id of ['kpi','line_chart','bar_chart','area','horizontal-bar']) await simple('view', {}, id);
+  assert.deepEqual(m.draft, before);
+  m.selectedMetric = { value_type: 'numeric' };
+  m.capabilities.widgetTypes = ['table'];
+  await simple('view', {}, 'line_chart');
+  assert.deepEqual(m.draft, before);
+});
+
+for (const [variant, type] of [['area','line_chart'], ['horizontal-bar','bar_chart']]) {
+  test(`saved ${variant} restores selection, preserves same selection and survives grouping`, async () => {
+    const presentation = { schemaVersion: 1, chartVariant: variant, chartComposition: 'athletes-v1', chartInteractions: { tooltip: { mode: 'formatted' }, yAxis: { mode: 'fixed', min: 0, max: 100 } } };
+    analysis().widgets = [widget({ widget_type: type, presentation_config: presentation })];
+    await act('training-load-analysis-edit-widget', { widgetId });
+    simpleEditor.model.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+    await simple('next'); await simple('next'); await simple('preview');
+    assert.equal(control('view', variant).checked, true);
+    const m = simpleEditor.model, version = m.draft.draftVersion, preview = m.preview;
+    await simple('view', {}, variant);
+    assert.equal(m.draft.draftVersion, version);
+    assert.equal(m.preview, preview);
+    assert.deepEqual(m.draft.presentation, { mode: 'preserve' });
+    await simple('group', {}, 'athlete');
+    assert.deepEqual(m.draft.presentation, { mode: 'replace', value: { ...presentation, chartInteractions: { ...presentation.chartInteractions, zoom: { mode: 'disabled', applyPeriodAction: false } } } });
+    assert.equal(control('view', variant).checked, true);
+    await simple('view', {}, type);
+    assert.equal(m.draft.presentation.mode, 'replace');
+    assert.equal(m.draft.presentation.value.chartVariant, undefined);
+    assert.deepEqual(m.draft.presentation.value.chartInteractions, { ...presentation.chartInteractions, zoom: { mode: 'disabled', applyPeriodAction: false } });
+    assert.equal(m.preview, null);
+  });
+}
+
+test('opaque presentation requires Advanced for a changed display and retains the preserve emitter', async () => {
+  await act('training-load-analysis-edit-widget', { widgetId });
+  await simple('next'); await simple('next'); await simple('preview');
+  const m = simpleEditor.model, draft = structuredClone(m.draft), preview = m.preview;
+  m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+  for (const id of ['line_chart','bar_chart','area','horizontal-bar','kpi']) await simple('view', {}, id);
+  assert.deepEqual(m.draft, draft);
+  assert.equal(m.preview, preview);
+  assert.match(root.textContent, /Advanced editor to change/);
+  assert.deepEqual(m.savedPresentation, { annotations: [{ text: 'Keep' }] });
+});
+
+test('variant grouping keeps custom settings and interactive toggle cannot silently remove Area', async () => {
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  await simple('next'); await simple('next');
+  const m = simpleEditor.model;
+  m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+  await simple('view', {}, 'area');
+  m.draft.presentation.value.chartInteractions.tooltip.mode = 'formatted';
+  await simple('group', {}, 'athlete');
+  assert.equal(m.draft.presentation.value.chartVariant, 'area');
+  assert.equal(m.draft.presentation.value.chartInteractions.tooltip.mode, 'formatted');
+  assert.equal(m.draft.presentation.value.chartInteractions.zoom.mode, 'disabled');
+  const toggle = control('chart-enhanced');
+  assert.equal(toggle.checked, true); assert.equal(toggle.disabled, true);
+  toggle.checked = false; await dispatch(toggle);
+  assert.equal(m.draft.presentation.value.chartVariant, 'area');
+  await simple('view', {}, 'line_chart');
+  assert.equal(control('chart-enhanced').disabled, false);
+  const off = control('chart-enhanced'); off.checked = false; await dispatch(off);
+  assert.deepEqual(m.draft.presentation, { mode: 'preserve' });
+});
+
+test('selecting another metric removes draft-only chart variant without changing saved presentation', async () => {
+  await readyNew();
+  const m = simpleEditor.model;
+  m.capabilities.capabilities.chartVariants = ['area'];
+  await simple('view', {}, 'area');
+  await simple('metric', { kind: 'builtin', id: 'other' });
+  assert.equal(m.draft.view.type, 'table');
+  assert.equal(m.draft.presentation, undefined);
+});
+
+
+for (const [variant, type] of [['area','line_chart'], ['horizontal-bar','bar_chart']]) {
+  test(`reopened ${variant} adapts preserve day to athlete to week without losing other settings`, async () => {
+    const presentation = {
+      schemaVersion: 1, chartVariant: variant, chartComposition: 'athletes-v1',
+      chartInteractions: { tooltip: { mode: 'formatted' }, legend: { toggle: false },
+        zoom: { mode: 'local', applyPeriodAction: true }, pointSelection: { mode: 'details' },
+        yAxis: { mode: 'fixed', min: -20, max: 100 } },
+    };
+    const savedWidget = widget({ widget_type: type, group_by: 'day', presentation_config: presentation });
+    analysis().widgets = [savedWidget];
+    await act('training-load-analysis-edit-widget', { widgetId });
+    const m = simpleEditor.model;
+    m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
+    await simple('next'); await simple('next'); await simple('preview');
+    assert.deepEqual(m.draft.presentation, { mode: 'preserve' });
+    const originalPreview = m.preview, originalVersion = m.draft.draftVersion;
+    await simple('group', {}, 'day');
+    assert.equal(m.preview, originalPreview);
+    assert.equal(m.draft.draftVersion, originalVersion);
+    assert.deepEqual(m.draft.presentation, { mode: 'preserve' });
+    for (const [group, zoom] of [['athlete', { mode: 'disabled', applyPeriodAction: false }], ['week', { mode: 'local', applyPeriodAction: true }]]) {
+      const version = m.draft.draftVersion, count = calls.length;
+      await simple('group', {}, group);
+      assert.equal(calls.length, count);
+      assert.equal(m.draft.draftVersion, version + 1);
+      assert.equal(m.preview, null);
+      assert.equal(m.previewInput, null);
+      assert.equal(m.canSave, false);
+      assert.equal(control('save').disabled, true);
+      const expected = { ...presentation, chartInteractions: { ...presentation.chartInteractions, zoom } };
+      assert.deepEqual(m.draft.presentation, { mode: 'replace', value: expected });
+      assert.notEqual(m.draft.presentation.value, m.savedPresentation);
+      assert.notEqual(m.draft.presentation.value.chartInteractions, m.savedPresentation.chartInteractions);
+      assert.deepEqual(m.savedPresentation, presentation);
+      assert.deepEqual(savedWidget.presentation_config, presentation);
+      assert.equal(control('view', variant).checked, true);
+      await simple('save');
+      assert.equal(calls.length, count);
+      await simple('preview');
+      assert.equal(m.canSave, true);
+      const input = calls.at(-1).body.draft;
+      assert.equal(input.view.groupBy, group);
+      assert.deepEqual(input.presentation, { mode: 'replace', value: expected });
+    }
+    assert.equal(calls.filter(call => /simple\/widgets/.test(call.url)).length, 0);
+  });
+}
+
+test('reopened opaque schema99 with a variant never gets cloned or rewritten by grouping', async () => {
+  const presentation = { schemaVersion: 99, chartVariant: 'area', chartComposition: 'opaque', chartInteractions: { zoom: { mode: 'custom' } }, other: ['keep'] };
+  const savedWidget = widget({ widget_type: 'line_chart', group_by: 'day', presentation_config: presentation });
+  analysis().widgets = [savedWidget];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model;
+  await simple('next'); await simple('next'); await simple('preview');
+  const originalPreview = m.preview, version = m.draft.draftVersion;
+  await simple('group', {}, 'day');
+  assert.equal(m.draft.draftVersion, version);
+  assert.equal(m.preview, originalPreview);
+  for (const group of ['athlete','week']) {
+    await simple('group', {}, group);
+    assert.deepEqual(m.draft.presentation, { mode: 'preserve' });
+    assert.deepEqual(m.savedPresentation, presentation);
+    assert.deepEqual(savedWidget.presentation_config, presentation);
+    assert.match(root.textContent, /Open the Advanced editor to change the display/);
+    await simple('preview');
+    assert.deepEqual(calls.at(-1).body.draft.presentation, { mode: 'preserve' });
+  }
+});
