@@ -4,9 +4,10 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import pg from "pg";
-import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
+import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -761,4 +762,121 @@ test("19. a failure after the removal (here: the request insert) rolls the whole
     await c.query("rollback");
   } finally { await c.end(); }
   assert.deepEqual(await allRowCounts(), rowsBefore);
+});
+
+// ---------------------------------------------------------------------------
+// Migration: preflight, post-check, rollback rehearsal, the md5 gate
+// ---------------------------------------------------------------------------
+const RUNBOOK = (name) => new URL(`../../docs/runbooks/${name}`, import.meta.url);
+const V57 = "migrations_v2/202611051000_training_load_v57_session_undo.sql";
+
+async function booleansOf(client, sql) {
+  const results = [].concat(await client.query(sql));
+  const out = [];
+  for (const res of results) for (const row of res.rows) for (const [k, v] of Object.entries(row)) if (typeof v === "boolean") out.push([k, v]);
+  return out;
+}
+
+// The catalog facts the rollback must restore exactly.
+async function catalogOf(client) {
+  const triggers = (await client.query(
+    `select c.relname || '.' || t.tgname || ' :: ' || pg_get_triggerdef(t.oid) as d from pg_trigger t join pg_class c on c.oid = t.tgrelid
+      where c.relname in ('gpexe_import_candidates', 'metric_values', 'metric_event_source_bindings', 'metric_value_source_provenance', 'activity_source_observations')
+        and not t.tgisinternal order by 1`)).rows.map((r) => r.d);
+  const constraints = (await client.query(
+    `select conname || ' :: ' || pg_get_constraintdef(oid) as d from pg_constraint where conrelid = 'training_load.gpexe_import_candidates'::regclass order by 1`)).rows.map((r) => r.d);
+  const columns = (await client.query(
+    `select column_name || ' ' || data_type as d from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_import_candidates' order by ordinal_position`)).rows.map((r) => r.d);
+  const indexes = (await client.query(`select indexdef as d from pg_indexes where schemaname = 'training_load' and tablename = 'gpexe_import_candidates' order by 1`)).rows.map((r) => r.d);
+  const functions = (await client.query(
+    `select n.nspname || '.' || p.proname || ' ' || md5(p.prosrc) as d from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname in ('training_load', 'training') order by 1`)).rows.map((r) => r.d);
+  return { triggers, constraints, columns, indexes, functions };
+}
+
+test("20. migration v57: the preflight passes on v56, the post-check on v57, the rollback restores v56 exactly (catalog identical) and refuses once an undo exists, and the migration applies again", async () => {
+  const withoutV57 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u5rb", migrations: withoutV57 });
+  const client = new pg.Client({ connectionString: rb.url });
+  await client.connect();
+  let v56Catalog;
+  try {
+    const pre = await booleansOf(client, fs.readFileSync(RUNBOOK("session-undo-v57-preflight.sql"), "utf8"));
+    assert.ok(pre.length >= 18, `the preflight returned its booleans (${pre.length})`);
+    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok on a v56 database");
+    v56Catalog = await catalogOf(client);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    const post = await booleansOf(client, fs.readFileSync(RUNBOOK("session-undo-v57-postcheck.sql"), "utf8"));
+    assert.ok(post.length >= 18, `the post-check returned its booleans (${post.length})`);
+    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok on a v57 database");
+    // The post-check and the rollback name the bodies in force.
+    const bodies = (await client.query(`select md5(p.prosrc) m from pg_proc p where p.proname in ('undo_imported_session', 'session_undo_scope', 'protect_gpexe_import_candidate_v57')`)).rows.map((r) => r.m);
+    for (const m of bodies) {
+      assert.match(fs.readFileSync(RUNBOOK("session-undo-v57-postcheck.sql"), "utf8"), new RegExp(m));
+      assert.match(fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8"), new RegExp(m));
+    }
+    assert.notDeepEqual(await catalogOf(client), v56Catalog);
+    // A clean rollback restores the v56 catalog exactly, and the migration applies again to the same result.
+    const v57Catalog = await catalogOf(client);
+    await client.query(fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8"));
+    assert.deepEqual(await catalogOf(client), v56Catalog, "the rollback restores the v56 catalog exactly");
+    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 0);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    assert.deepEqual(await catalogOf(client), v57Catalog, "re-applied: the same catalog");
+  } finally {
+    await client.end();
+    await rb.drop();
+  }
+});
+
+test("21. the rollback refuses, changing nothing, once an undo exists, under a later migration, or when a body was replaced; the migration refuses to run over a changed original body", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9130);
+  const rollback = fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8");
+  const before = await catalogOf(admin);
+  const c = await newClient();
+  try {
+    // 1. an undo exists
+    const u = await undo(team, s);
+    assert.equal(u.status, 200, u.text);
+    await assert.rejects(c.query(rollback), /v57 rollback refused: an undo was made/);
+    await c.query("rollback").catch(() => {});
+    assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 1);
+    // 2. a later migration is recorded
+    await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) select 'migrations_v2/202611051100_later.sql', checksum, runner_version from public.schema_migrations limit 1`);
+    await assert.rejects(c.query(rollback), /later migrations are applied/);
+    await c.query("rollback").catch(() => {});
+    await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611051100_later.sql'`);
+    // 3. a body replaced
+    await c.query(`create or replace function training_load.session_undo_marker_ok() returns boolean as 'select true' language sql`);
+    assert.notDeepEqual(await catalogOf(c), before);
+    await c.query(`create or replace function training_load.session_undo_scope(p_event uuid) returns jsonb as 'select null::jsonb' language sql`);
+    await assert.rejects(c.query(rollback), /body in force of training_load\.session_undo_scope is not v57's/);
+    await c.query("rollback").catch(() => {});
+  } finally { await c.end(); }
+});
+
+test("22. the md5 gate: the migration refuses to run when an original body it copies has changed", async () => {
+  const withoutV57 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u5gate", migrations: withoutV57 });
+  const client = new pg.Client({ connectionString: rb.url });
+  await client.connect();
+  try {
+    for (const [fn, replacement] of [
+      ["training_load.protect_gpexe_import_candidate", `create or replace function training_load.protect_gpexe_import_candidate() returns trigger as 'begin return new; end' language plpgsql`],
+      ["training_load.forbid_update_delete", `create or replace function training_load.forbid_update_delete() returns trigger as 'begin return old; end' language plpgsql`],
+    ]) {
+      const original = (await client.query(`select pg_get_functiondef(to_regproc($1)) d`, [fn])).rows[0].d;
+      await client.query(replacement);
+      await assert.rejects(client.query(fs.readFileSync(new URL(`../../${V57}`, import.meta.url), "utf8")), /v57 refused: the body in force of/);
+      assert.equal((await client.query(`select to_regclass('training_load.gpexe_session_undo_requests') t`)).rows[0].t, null, "a refused run changes nothing");
+      await client.query(original);
+    }
+    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 0);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 1);
+  } finally {
+    await client.end();
+    await rb.drop();
+  }
 });
