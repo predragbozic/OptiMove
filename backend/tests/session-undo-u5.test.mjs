@@ -114,7 +114,7 @@ async function clubAdminOf(clubId) {
   return { id, cookie: `optimove_session=${await createSession(id)}` };
 }
 
-function cleanBundle({ sessionId, hour = 8, ids = [101, 102], updatedOn = "2026-09-14T20:18:09.337" }) {
+function cleanBundle({ sessionId, hour = 8, ids = [101, 102], updatedOn = "2026-09-14T20:18:09.337", distance101 = null }) {
   const byId = Object.fromEntries(standardAthletes().map((a) => [a.id, a]));
   const athletes = ids.map((id, i) => {
     const a = structuredClone(byId[id]);
@@ -122,6 +122,7 @@ function cleanBundle({ sessionId, hour = 8, ids = [101, 102], updatedOn = "2026-
     for (const part of a.parts) delete part.track;
     return a;
   });
+  if (distance101 !== null) athletes.find((a) => a.id === 101)?.parts.forEach((p) => { if (p.drill === null) p.distance = distance101; });
   return makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-14T${String(hour).padStart(2, "0")}:08:12`, updatedOn, athletes });
 }
 
@@ -239,6 +240,7 @@ test("1. a platform admin undoes an imported session: everything it wrote is gon
   const u = r.body.undo;
   assert.equal(u.replayed, false);
   assert.equal(u.eventId, s.eventId);
+  assert.deepEqual(u.undoneCandidateIds, [s.candidateId]);
   assert.equal(u.offeredAgain, true);
   assert.equal(u.previewReady, true);
   assert.ok(u.removedTotal > 0 && u.removedCounts.metric_events === 1 && u.removedCounts.metric_values === before.values);
@@ -1033,7 +1035,7 @@ test("26. lock order (the rule of .claude/rules/migrations.md): inside the funct
     "from public.user_global_roles r where r.user_id = p_actor",
     "pg_advisory_xact_lock(hashtextextended('gpexe-import-team:'",
     "from training_load.gpexe_session_undo_requests q",
-    "from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team for update",
+    "order by c.id for update",
     "from training_load.metric_events e where e.id = v_event_id for update",
     "perform 1 from training.activities a where a.id = any(v_act) order by a.id for update",
   ].map(at);
@@ -1101,4 +1103,54 @@ test("29. newer content for the session already published: the old snapshot is n
   assert.deepEqual([r.body.undo.offeredAgain, r.body.undo.newCandidateId], [false, null]);
   const after = (await listFor(team)).filter((c) => c.gpexeTeamSessionId === "9141");
   assert.deepEqual(after.map((c) => c.id), [live[0].id], "exactly one live candidate remains: the newer one");
+});
+
+// A session changed in GPEXE and approved again (acceptChanges) writes into the SAME event (one event per session, v20).
+async function importTwoVersions(team, sessionId) {
+  const a = await importSession(team, sessionId);
+  await checkNow(team, [cleanBundle({ sessionId, distance101: 3500, updatedOn: "2026-09-14T21:30:00.000" })]);
+  const b = (await listFor(team)).find((c) => c.gpexeTeamSessionId === String(sessionId) && c.status === "pending");
+  assert.ok(b, "the changed content is a pending candidate");
+  const approved = await withSwitchOn(() => api(`/teams/${team.teamId}/candidates/${b.id}/approve`, {
+    method: "POST", cookie: team.padmin.cookie, body: { previewHash: b.previewHash, acceptChanges: true },
+  }));
+  assert.equal(approved.status, 200, approved.text);
+  const eventB = (await admin.query(`select metric_event_id from training_load.gpexe_import_approvals where candidate_id = $1`, [b.id])).rows[0].metric_event_id;
+  assert.equal(eventB, a.eventId, "both approvals wrote into one event");
+  return { a, b: { candidateId: b.id, previewHash: b.previewHash } };
+}
+
+test("30. two approved versions of one session share an event: undoing either undoes both, ends in the same state, and offers only the newest content", async () => {
+  for (const which of ["older", "newer"]) {
+    const team = await setupTeam();
+    const { a, b } = await importTwoVersions(team, which === "older" ? 9150 : 9151);
+    const hashOf = async (id) => (await admin.query(`select bundle_hash from training_load.gpexe_import_candidates where id = $1`, [id])).rows[0].bundle_hash;
+    const preview = await api(previewPath(team, which === "older" ? a.candidateId : b.candidateId), { cookie: team.padmin.cookie });
+    assert.equal(preview.status, 200, preview.text);
+    assert.deepEqual([...preview.body.undoPreview.undoneCandidateIds].sort(), [a.candidateId, b.candidateId].sort(), "the scope names both candidates");
+    const target = which === "older" ? a : { ...b, eventId: a.eventId };
+    const requestKey = key();
+    const r = await undo(team, target, { requestKey });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual([...r.body.undo.undoneCandidateIds].sort(), [a.candidateId, b.candidateId].sort());
+    assert.equal((await counts(team.teamId)).events, 0);
+    const rows = (await admin.query(`select id, status, import_undone_at is not null as undone from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2 order by id`, [team.teamId, which === "older" ? "9150" : "9151"])).rows;
+    const undone = rows.filter((x) => x.undone).map((x) => x.id).sort();
+    assert.deepEqual(undone, [a.candidateId, b.candidateId].sort(), `${which}: both are marked undone`);
+    const live = rows.filter((x) => !x.undone);
+    assert.deepEqual(live.map((x) => x.status), ["pending"], `${which}: exactly one pending candidate remains`);
+    assert.equal(live[0].id, r.body.undo.newCandidateId);
+    assert.equal(await hashOf(live[0].id), await hashOf(b.candidateId), `${which}: it carries the NEWER content`);
+    // The other candidate is not undoable again; a replay of the same request answers; the key with another reason is reused.
+    const other = which === "older" ? b : a;
+    const again = await undo(team, { candidateId: other.candidateId, eventId: a.eventId }, { requestKey: key() });
+    assert.deepEqual([again.status, again.body.error], [409, "already_undone"]);
+    const replay = await undo(team, target, { requestKey });
+    assert.deepEqual([replay.status, replay.body.undo?.replayed, replay.body.undo?.undoneCandidateIds?.length], [200, true, 2]);
+    const reused = await undo(team, target, { requestKey, reason: "something else" });
+    assert.deepEqual([reused.status, reused.body.error], [409, "request_key_reused"]);
+    // The history keeps one log row for the event and one request row naming both candidates.
+    const c = await counts(team.teamId);
+    assert.deepEqual([c.log, c.requests], [1, 1]);
+  }
 });

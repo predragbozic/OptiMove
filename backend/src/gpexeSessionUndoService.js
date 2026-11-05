@@ -142,6 +142,8 @@ function shapeResult(row) {
     removedTotal: row.removed_total,
     deletionLogId: row.deletion_log_id,
     newCandidateId: row.new_candidate_id ?? null,
+    // Every candidate the undo marked undone: the requested one and any other approved version of the session (one event).
+    undoneCandidateIds: row.undone_candidate_ids ?? [],
   };
 }
 

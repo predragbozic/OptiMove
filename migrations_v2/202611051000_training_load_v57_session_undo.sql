@@ -76,6 +76,9 @@ create table training_load.gpexe_session_undo_requests (
   request_hash text not null check (request_hash ~ '^[0-9a-f]{64}$'),
   owner_team_id uuid not null references public.teams(id) on delete restrict,
   candidate_id uuid not null unique references training_load.gpexe_import_candidates(id) on delete restrict,
+  -- Every candidate this undo marked undone: the requested one and any other approved version of the same session whose
+  -- approval wrote into the same event (the event is removed whole).
+  undone_candidate_ids uuid[] not null check (cardinality(undone_candidate_ids) >= 1),
   -- The removed event is gone, so it is referenced by value only (as in the deletion log).
   event_id uuid not null,
   deletion_log_id uuid not null unique references training_load.import_deletion_log(id) on delete restrict,
@@ -400,13 +403,16 @@ $$ language sql immutable;
 create function training_load.undo_imported_session(
   p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid default null
 ) returns table (
-  replayed boolean, event_id uuid, deletion_log_id uuid, removed_counts jsonb, removed_total integer, new_candidate_id uuid
+  replayed boolean, event_id uuid, deletion_log_id uuid, removed_counts jsonb, removed_total integer, new_candidate_id uuid,
+  undone_candidate_ids uuid[]
 ) as $$
 declare
   v_reason text := btrim(coalesce(p_reason, ''));
   v_hash text;
   v_req record;
   v_cand record;
+  v_offer record;
+  v_ids uuid[];
   v_event_id uuid;
   v_event record;
   v_scope jsonb;
@@ -450,9 +456,10 @@ begin
 
   -- 1b. An unlocked look at the candidate BEFORE the team lock. The approval locks a candidate row and only then waits for
   --     the team lock, the undo the other way round; an undo aimed at a candidate that is not imported (an approval may hold
-  --     it) is therefore refused here, before it can wait for that row while holding the team lock. An imported row is only
-  --     ever locked by an approval that refuses it before it waits for the team lock, so the later FOR UPDATE cannot
-  --     deadlock. An undone row passes on purpose: its replay is answered below.
+  --     it) is therefore refused here, before it can wait for that row while holding the team lock. An imported row can be
+  --     locked by an approval that refuses it before waiting for the team lock, and by a check's finalization, which then
+  --     only TRY-locks the team (never waits), so the later FOR UPDATE cannot close a cycle. An undone row passes on
+  --     purpose: its replay is answered below.
   select c.status into v_status from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team;
   if not found then
     perform training_load.session_undo_refuse('candidate_not_found');
@@ -471,12 +478,22 @@ begin
     if v_req.request_hash <> v_hash then
       perform training_load.session_undo_refuse('request_key_reused');
     end if;
-    return query select true, v_req.event_id, v_req.deletion_log_id, v_req.removed_counts, v_req.removed_total, v_req.new_candidate_id;
+    return query select true, v_req.event_id, v_req.deletion_log_id, v_req.removed_counts, v_req.removed_total, v_req.new_candidate_id, v_req.undone_candidate_ids;
     return;
   end if;
 
-  -- 4. The candidate.
-  select * into v_cand from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team for update;
+  -- 4. The event the requested candidate's approval wrote, and every approved version of the session that wrote into it. A
+  --    session changed in GPEXE and approved again (acceptChanges) goes into the SAME event (one event per session, v20), so
+  --    removing the event undoes all of them: they are locked by id, and the undo marks every one of them.
+  select a.metric_event_id into v_event_id from training_load.gpexe_import_approvals a where a.candidate_id = p_candidate;
+  if not found then
+    perform training_load.session_undo_refuse('approval_missing');
+  end if;
+  perform 1 from training_load.gpexe_import_candidates c
+   where c.owner_team_id = p_team
+     and c.id in (select a.candidate_id from training_load.gpexe_import_approvals a where a.metric_event_id = v_event_id)
+   order by c.id for update;
+  select * into v_cand from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team;
   if not found then
     perform training_load.session_undo_refuse('candidate_not_found');
   end if;
@@ -486,12 +503,13 @@ begin
   if v_cand.import_undone_at is not null then
     perform training_load.session_undo_refuse('already_undone');
   end if;
+  v_ids := coalesce(array(
+    select c.id from training_load.gpexe_import_candidates c
+      join training_load.gpexe_import_approvals a on a.candidate_id = c.id
+     where a.metric_event_id = v_event_id and c.owner_team_id = p_team and c.status = 'imported' and c.import_undone_at is null
+     order by c.id), '{}');
 
-  -- 5. The event the approval wrote, locked, and the identity of what is about to be removed.
-  select a.metric_event_id into v_event_id from training_load.gpexe_import_approvals a where a.candidate_id = p_candidate;
-  if not found then
-    perform training_load.session_undo_refuse('approval_missing');
-  end if;
+  -- 5. The event, locked, and the identity of what is about to be removed.
   if p_expected_event is not null and p_expected_event <> v_event_id then
     perform training_load.session_undo_refuse('event_mismatch');
   end if;
@@ -648,39 +666,45 @@ begin
           v_scope ->> 'referenceSetExternalId', v_removed, v_total)
   returning id into v_log;
 
-  -- 9. The candidate is marked undone (its request is checked at the end of this call), then, when its snapshot is still
-  --    available and the check that last saw it succeeded, a fresh pending candidate of the same content is written.
+  -- 9. Every candidate of the event is marked undone (their request is checked at the end of this call). Then, for the NEWEST
+  --    approved content among them, when its raw snapshot is still available, the check that last saw it succeeded and the
+  --    team has no live candidate of the session with other content, a fresh pending candidate of that content is written.
   update training_load.gpexe_import_candidates
      set import_undone_at = clock_timestamp(), import_undone_request_id = v_req_id
-   where id = p_candidate;
+   where id = any(v_ids);
+  select c.* into v_offer
+    from training_load.gpexe_import_candidates c
+    join training_load.gpexe_import_approvals a on a.candidate_id = c.id
+   where c.id = any(v_ids)
+   order by a.approved_at desc, c.id desc limit 1;
   select k.status into v_last_status from training_load.gpexe_import_checks k
-   where k.id = v_cand.last_seen_check_id and k.owner_team_id = p_team;
-  if v_cand.raw_bundle is not null and v_cand.raw_purged_at is null and v_cand.raw_expires_at > now()
+   where k.id = v_offer.last_seen_check_id and k.owner_team_id = p_team;
+  if v_offer.raw_bundle is not null and v_offer.raw_purged_at is null and v_offer.raw_expires_at > now()
      and v_last_status = 'succeeded'
      -- Never offer content older than what the team already has: a live candidate of the same session with other content
      -- (newer data a search published) means the old snapshot would be approvable over it.
      and not exists (select 1 from training_load.gpexe_import_candidates o
-                      where o.owner_team_id = p_team and o.gpexe_team_session_id = v_cand.gpexe_team_session_id
-                        and o.id <> p_candidate and o.import_undone_at is null and o.bundle_hash <> v_cand.bundle_hash
+                      where o.owner_team_id = p_team and o.gpexe_team_session_id = v_offer.gpexe_team_session_id
+                        and o.import_undone_at is null and o.bundle_hash <> v_offer.bundle_hash
                         and o.status in ('pending', 'blocked', 'imported')) then
     v_new := gen_random_uuid();
     insert into training_load.gpexe_import_candidates
       (id, owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, raw_expires_at,
        status, first_seen_check_id, last_seen_check_id, first_seen_at, last_seen_at, drill_parameter_effect)
-    values (v_new, p_team, v_cand.gpexe_team_session_id, v_cand.session_started_at, v_cand.session_label, v_cand.bundle_hash,
-            v_cand.raw_bundle, least(v_cand.raw_expires_at, now() + interval '30 days'), 'pending',
-            v_cand.first_seen_check_id, v_cand.last_seen_check_id, v_cand.first_seen_at, now(), v_cand.drill_parameter_effect);
+    values (v_new, p_team, v_offer.gpexe_team_session_id, v_offer.session_started_at, v_offer.session_label, v_offer.bundle_hash,
+            v_offer.raw_bundle, least(v_offer.raw_expires_at, now() + interval '30 days'), 'pending',
+            v_offer.first_seen_check_id, v_offer.last_seen_check_id, v_offer.first_seen_at, now(), v_offer.drill_parameter_effect);
   end if;
 
   -- 10. The request record, then the deferred link is checked here, not at the COMMIT.
   insert into training_load.gpexe_session_undo_requests
-    (id, requested_by_user_id, request_key, request_hash, owner_team_id, candidate_id, event_id, deletion_log_id, reason,
-     removed_counts, removed_total, new_candidate_id)
-  values (v_req_id, p_actor, p_request_key, v_hash, p_team, p_candidate, v_event_id, v_log, v_reason, v_removed, v_total, v_new);
+    (id, requested_by_user_id, request_key, request_hash, owner_team_id, candidate_id, undone_candidate_ids, event_id,
+     deletion_log_id, reason, removed_counts, removed_total, new_candidate_id)
+  values (v_req_id, p_actor, p_request_key, v_hash, p_team, p_candidate, v_ids, v_event_id, v_log, v_reason, v_removed, v_total, v_new);
   set constraints training_load.gpexe_import_candidates_import_undone_request_fkey immediate;
   -- The marker covers this call only.
   perform set_config('optimove.session_undo_tx', '', true);
-  return query select false, v_event_id, v_log, v_removed, v_total, v_new;
+  return query select false, v_event_id, v_log, v_removed, v_total, v_new, v_ids;
 end;
 $$ language plpgsql;
 

@@ -14,7 +14,7 @@ select count(*) over () = 7 as all_seven_present, p.proname as function, md5(p.p
          when 'source_metric_append_only_unless_session_undo' then 'f607bfcf8f618b5d394513f066d79d0b'
          when 'protect_activity_source_observation_v57' then 'ea21a2a49f320dc7d6be45becc7743f5'
          when 'protect_gpexe_import_candidate_v57' then '311d7f35e2e2ad4d56afa1f7760f78e0'
-         when 'undo_imported_session' then 'f1c72b3ecfbf55dcadc8aec05247c15c'
+         when 'undo_imported_session' then 'ae5aa129708a03a602b9cdc596e1e11a'
          when 'session_undo_scope' then 'f605cb502a36a4d8e372373fe1e2207a' end as ok
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname in ('training_load', 'training')

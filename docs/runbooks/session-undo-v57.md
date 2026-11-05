@@ -42,6 +42,10 @@ the request record (a replay answers here) -> the candidate (`FOR UPDATE`) -> th
 3. The first real undo is **owner-run**: read the preview, then undo with a reason, then the post-check, then confirm the session
    comes back as Ready (or, when the snapshot had expired, after the next *Find new sessions*).
 
+## One event, several versions
+
+A session changed in GPEXE and approved again writes into the same event (one event per session). The undo therefore removes the event whole and marks **every** approved version of it undone in one call (`undone_candidate_ids` in the answer and in the request row); only the newest content is offered again. `undo-preview` names all of them. The preview takes the same locks as the undo (the team's import lock for up to the service's bounds): do not run it during a check you want to finish.
+
 ## Known limits
 
 * The marker proves the call came through the function; like v35 / v56 it is no defence against code that runs SQL as the
