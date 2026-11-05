@@ -35,11 +35,14 @@ export const emptyGuideState = () => ({
 function g() {
   return state.trainingLoad.gpexe;
 }
-const info = (error) => ({ status: error?.status ?? 0, code: error?.data?.error || error?.message || "error", message: error?.data?.message || "" });
+const info = (error) => ({ status: error?.status ?? 0, code: error?.data?.error || error?.message || "error", message: error?.data?.message || "", hasCode: Boolean(error?.data?.error) });
+// A refusal the server will repeat, as opposed to a busy moment (never remembered as refused).
+const TRANSIENT_CODES = new Set(["try_again", "database_busy", "rate_limited"]);
 
 // Only a clear refusal of the server means "nothing was changed".
 export function isClearRefusal(i) {
-  return i.status >= 400 && i.status < 500 && i.code !== "error" && i.code !== "outcome_unknown";
+  // Only an answer with the server's own error code counts: a gateway's 4xx without one is not a statement about this write.
+  return i.status >= 400 && i.status < 500 && i.hasCode && i.code !== "outcome_unknown";
 }
 
 export function guideAdmin(gx = g()) {
@@ -95,7 +98,9 @@ export async function loadGuide(render) {
     return;
   }
   if (stale()) return;
-  gx.guide = { ...gx.guide, conn };
+  // A refusal belongs to one binding: another binding starts with a clean list.
+  const skipped = conn.bindingId && conn.bindingId === gx.guide.conn.bindingId ? gx.guide.skipped : [];
+  gx.guide = { ...gx.guide, conn, skipped };
   render();
   if (conn.bound) await loadGuideVariables(render);
 }
@@ -208,7 +213,8 @@ export async function sendVariables(render, { resume = false } = {}) {
       if (isClearRefusal(i)) {
         // A 404 can follow a committed write (the right is read again after COMMIT): then the sentence says it may have been made.
         const refused = { label: item.label, code: i.code, message: i.message, possible: i.status === 404 };
-        const skipped = (gx.guide.skipped || []).some((x) => x.mappingId === item.mappingId) ? gx.guide.skipped : [...(gx.guide.skipped || []), { mappingId: item.mappingId, label: item.label, message: i.message }];
+        const remember = !TRANSIENT_CODES.has(i.code);
+        const skipped = !remember ? (gx.guide.skipped || []) : (gx.guide.skipped || []).some((x) => x.mappingId === item.mappingId) ? gx.guide.skipped : [...(gx.guide.skipped || []), { mappingId: item.mappingId, label: item.label, message: i.message }];
         gx.guide = { ...gx.guide, skipped, write: { sending: false, items, results, unknown: null, refused } };
       }
       else gx.guide = { ...gx.guide, write: { sending: false, items, results, refused: null, unknown: { label: item.label, requestKey } } };

@@ -69,7 +69,7 @@ export function renderGuideHtml(gx, status) {
   const { steps, variables, allDone } = guideSteps(facts);
   const g = gx.guide;
   const busy = Boolean(g.write?.sending || g.write?.unknown);
-  const folded = allDone && g.open !== true && !g.confirm && !busy;
+  const folded = allDone && g.open !== true && !g.confirm && !g.write && !busy;
   if (folded) {
     return `<section class="gpexe-guide gpexe-guide-folded" aria-label="GPEXE setup"><p><strong>GPEXE setup is complete.</strong></p><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-guide-toggle">Show setup</button></section>`;
   }
@@ -80,7 +80,7 @@ export function renderGuideHtml(gx, status) {
     const text = variables.state === "done" ? "OptiMove variables are switched on for this team."
       : variables.state === "none" ? "No OptiMove variables are available to switch on yet."
         : variables.state === "unknown" ? "Could not be checked."
-          : variables.state === "waiting" ? "Checking..."
+          : variables.state === "waiting" ? (g.vars.status === "loading" ? "Checking..." : "Waiting for steps 1 and 2.")
             : variables.state === "attention" ? "No other variable is left to switch on."
               : `${plural(variables.total, "OptiMove variable is", "OptiMove variables are")} not switched on for this team yet.`;
     const skippedLine = variables.skipped.length ? `<p class="muted">${escapeHtml(plural(variables.skipped.length, "variable was", "variables were"))} not accepted: ${escapeHtml(names)}. Switch ${variables.skipped.length === 1 ? "it" : "them"} on in Training Load > Data configuration > Mappings.</p>` : "";

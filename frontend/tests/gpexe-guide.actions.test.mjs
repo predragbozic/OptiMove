@@ -337,3 +337,46 @@ test("17. guideSteps edge cases: a bound connection that needs reconnect, an emp
   assert.equal(failed.variables.state, "unknown");
   assert.equal(failed.steps[0].action.kind, "retry");
 });
+
+test("18. a busy refusal (try_again) is not remembered as refused; a gateway 4xx without a server code is an unconfirmed result", async () => {
+  reset({ onActivate: (call) => (call.body.mappingId === MAPPINGS[1].id ? { status: 409, body: { error: "try_again", message: "Busy." } } : { status: 201, body: { activations: [{}] } }) });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.deepEqual(state.trainingLoad.gpexe.guide.skipped, []);
+  await act("training-load-gpexe-guide-vars-close");
+  assert.ok(state.trainingLoad.gpexe.guide.vars.items.some((i) => i.mappingId === MAPPINGS[1].id), "still offered");
+  assert.ok(!/not accepted/.test(guideHtml()));
+  reset({ onActivate: () => ({ status: 429, body: "<html>too many</html>" }) });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.ok(state.trainingLoad.gpexe.guide.write.unknown, "Result not confirmed");
+  assert.deepEqual(state.trainingLoad.gpexe.guide.skipped, []);
+});
+
+test("19. an unbound team shows Waiting for steps 1 and 2 on the variables row; a new binding starts with no refused variables; the success card is not folded away", async () => {
+  reset({ connections: () => ({ status: 200, body: { connections: [{ id: "c", state: "verified", boundTeams: [] }] } }) });
+  await open();
+  assert.ok(!/Use OptiMove variables<\/strong>[\s\S]*?Checking\.\.\./.test(guideHtml()));
+  assert.match(guideHtml(), /Waiting for steps 1 and 2\./);
+  // binding change
+  reset();
+  await open();
+  state.trainingLoad.gpexe.guide.skipped = [{ mappingId: MAPPINGS[1].id, label: "x", message: "m" }];
+  state.trainingLoad.gpexe.guide.conn.bindingId = "dddddddd-0000-4000-8000-00000000000d";
+  const { loadGuide } = await import("../gpexe-guide-data.js");
+  await loadGuide(render);
+  assert.deepEqual(state.trainingLoad.gpexe.guide.skipped, [], "another binding: clean list");
+  // done card stays while the setup is otherwise complete
+  reset({
+    lastCheck: { id: "c", status: "succeeded" }, activations: [],
+    athletes: [{ gpexeAthleteId: "9", status: "linked", link: { id: "l", athleteId: "a", athleteName: "A", linkedAt: "2026-09-10T10:00:00Z" }, lastSeen: null, values: {} }],
+    candidates: [{ id: "c1", status: "imported", gpexeTeamSessionId: "1", sessionStartedAt: "2026-09-14T16:08:12Z", sessionLabel: "S", candidateStatus: "imported" }],
+    mappings: [mapping(1)],
+  });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.match(guideHtml(), /1 OptiMove variable is switched on\./);
+});
