@@ -42,3 +42,9 @@ Asked by the owner (2026-11-05, via the *Rukovodilac*): which parts of the impor
 - **Q1:** generalise the import tables (one migration, one pipeline) or keep GPEXE as it is and build a second pipeline beside it? Recommendation: decide after the first controlled GPEXE import (the pipeline is still unproven in production), and only for a concrete second source.
 - **Q2:** which source first, and does it expose athletes by an id, by name, or both (this decides the link key and whether U3-style matching is needed)?
 - **Q3:** is the import switch per team (as U2) or per team and source?
+
+## 5. The owner's decisions (2026-11-05, relayed by the *Rukovodilac*)
+
+- **Q1 (answered):** a second source gets its **own parallel import flow**, with the same scheme per source card on Imports. The owner: "verovatno napraviti drugi tok uvoza podataka… kada dođe novi izvor onda bi trebalo razmišljati o kreiranju novog povezivanja sa njegovim serverom i verovatno bi po sličnom principu se to uvozilo. Mi bi kliknuli na izvor pa uvezli podatke sa tog izvora, nakon toga bi verovatno kliknuli na drugi izvor i uvozili sa drugog izvora." So the import layer is not generalised now: a second pipeline is built beside GPEXE when a concrete source arrives, behind a new connection to that source's server.
+- **Q3 (the *Rukovodilac*'s recommendation, to be confirmed when a second source arrives):** the import switch becomes per team and source.
+- **Q2 (open):** which source comes second, and whether it exposes athletes by id, by name or both.
