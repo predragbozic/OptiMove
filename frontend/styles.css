@@ -16964,6 +16964,48 @@ p.muted.gpexe-approve-note {
   margin: 0 0 8px;
   font-weight: 600;
 }
+/* U3: suggested athlete pairs on Link athletes */
+.gpexe-suggest {
+  margin-top: 12px;
+}
+.gpexe-suggest h4 {
+  margin: 12px 0 4px;
+}
+.gpexe-suggest-note {
+  margin: 8px 0;
+}
+.gpexe-suggest-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.gpexe-suggest-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.gpexe-suggest-why {
+  grid-column: 1 / -1;
+}
+.gpexe-suggest .gpexe-button {
+  min-height: 44px;
+}
+@media (max-width: 520px) {
+  .gpexe-suggest-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gpexe-suggest-arrow {
+    justify-self: start;
+  }
+}
 .gpexe-map-group {
   margin-top: 12px;
 }

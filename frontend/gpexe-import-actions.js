@@ -48,6 +48,8 @@ import {
   identityBusy,
   identityViewer,
   loadGpexeIdentities,
+  loadPairSuggestions,
+  reviewSuggestedPairs,
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
@@ -220,6 +222,15 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // An administrator also sees the GPEXE names and dates of birth already
     // stored (no GPEXE request); a coach's screen never asks.
     if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
+    // U3: the suggested pairs - for the team's coach and the identity administrators alike (the server decides).
+    await loadPairSuggestions(renderTrainingLoad);
+    return true;
+  }
+  // U3: stage the exact suggested pairs into the ordinary review (one confirmation, then the existing link route, one pair at a time).
+  if (type === "training-load-gpexe-map-suggest-all") {
+    if (gx.mapping.sending || gx.mapping.confirming || gx.sourceAthletesError || identityBusy(gx) || gx.identity.confirming) return true;
+    reviewSuggestedPairs();
+    renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-sources-retry") {
@@ -283,6 +294,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-identity-send") {
     if (gx.identity.sending || !gx.identity.confirming) return true;
     await sendIdentityLoad(renderTrainingLoad);
+    await loadPairSuggestions(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-identity-reload") {
@@ -293,11 +305,13 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-identity-check") {
     if (gx.identity.sending || !gx.identity.unconfirmed) return true;
     await checkIdentityLoad(renderTrainingLoad);
+    await loadPairSuggestions(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-map-done") {
     finishTeamMappingResults();
     renderTrainingLoad();
+    await loadPairSuggestions(renderTrainingLoad);
     return true;
   }
   // Batch import (phase 4b). A checkbox fires click, input and change with

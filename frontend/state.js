@@ -783,6 +783,8 @@ export const emptyGpexeImportState = () => ({
   sourceAthletesRetrying: false,
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
   identity: emptyGpexeIdentityState(),
+  // U3: suggested athlete pairs for the open Link athletes screen (in memory only; dropped with the screen).
+  suggestions: { status: "idle", data: null },
   // U2 (v56): the team's import switch, its conditions and the administrator's panel.
   teamSwitch: { data: null, loading: false, busy: false, error: null, notice: "", draft: "" },
   // In-memory positions of GPEXE athletes the source-athletes list does not

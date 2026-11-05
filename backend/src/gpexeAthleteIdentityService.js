@@ -36,7 +36,8 @@
 //   * no name, date or athlete id in a log line, an audit row, an error, a
 //     URL or the load's answer (counts only).
 import { isPoolCheckoutTimeout, pool } from "./db.js";
-import { holdsClubAdminRole } from "./authz.js";
+import { holdsClubAdminRole, holdsTeamCoachRole } from "./authz.js";
+import { computePairSuggestions } from "./gpexePairMatching.js";
 import {
   IMPORT_SOURCE_SYSTEM, PATH_SOURCE_CONNECTION, SourceAdapterError, SourceImportResolveError,
   assertImportSourceStillUsable, autoInvalidateImportSource, boundImportSideEffect as withinBound,
@@ -153,8 +154,16 @@ export function identityAdminBasis(req, access) {
 // team's club; and the club itself active. Locked users row first, the
 // revocations' order (`for update of u, g` / `u, r`; the lock-order pull
 // request).
-async function rightHolds(executor, ctx, clubId, { lock = false } = {}) {
+async function rightHolds(executor, ctx, clubId, { lock = false, teamId = null } = {}) {
   const share = lock ? " for share of u, r" : "";
+  // U3: the team's own coach (suggestions read only); the users row is locked
+  // first like the other bases.
+  if (ctx.basis === "team_coach") {
+    if (!teamId) return false;
+    const coach = await executor.query(`select 1 from public.user_team_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true${share}`, [ctx.userId, teamId]);
+    const clubOk = await executor.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)${lock ? " for share" : ""}`, [clubId]);
+    return coach.rowCount > 0 && clubOk.rowCount > 0;
+  }
   const right = ctx.basis === "platform_admin"
     ? await executor.query(`select 1 from public.user_global_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId])
     : await executor.query(`select 1 from public.user_club_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId, clubId]);
@@ -325,6 +334,119 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
     }
     if (error?.code === "55P03" || error?.code === "40P01" || error?.code === "57014") throw refusal("try_again");
     console.error(`[gpexe-identity] a read failed: ${error?.code ?? error?.name ?? ""}`);
+    throw refusal("internal_error");
+  }
+
+  async function closeNull() {
+    released = true;
+    let dead = false;
+    await withinBound(client.query("rollback"), 5_000).catch(() => { dead = true; });
+    release(dead);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// U3: suggested athlete pairs
+// ---------------------------------------------------------------------------
+// The audience of the suggestions read: the identity administrators (as above)
+// and, new, the team's own coach acting in that TEAM's workspace. Everyone else
+// - a coach of another team, a coach in the club or platform workspace - gets
+// the router's identical 404.
+export function pairSuggestionBasis(req, access) {
+  const admin = identityAdminBasis(req, access);
+  if (admin) return admin;
+  if (!access || !access.clubId) return null;
+  const ws = access.workspace || {};
+  if (ws.type === "team" && String(ws.scopeId) === String(access.teamId) && holdsTeamCoachRole(req.authz, access.teamId)) return "team_coach";
+  return null;
+}
+
+// Same lock discipline and order as listIdentities (connection, binding, team,
+// the caller's users + role rows, the club), then three lists only: exact
+// pairs, ambiguous names and date conflicts for the team's UNLINKED GPEXE
+// athletes and UNLINKED active athletes. Never the whole snapshot, never an
+// identity of a linked athlete, never OptiMove's date of birth.
+export async function listPairSuggestions(teamId, ctx, { expectedClubId = null } = {}) {
+  if (listHold) await listHold("before");
+  await purgeExpiredIdentities().catch((error) => console.error(`[gpexe-identity] purge before a read failed: ${error?.code ?? ""}`));
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let released = false;
+  try {
+    await client.query("begin isolation level read committed");
+    await client.query(`set local statement_timeout = '${t("statementTimeout", IDENTITY_STATEMENT_TIMEOUT_MS)}ms'`);
+    await client.query(`set local lock_timeout = '${IDENTITY_ROW_LOCK_TIMEOUT_MS}ms'`);
+    await client.query(`set local idle_in_transaction_session_timeout = '${IDENTITY_STATEMENT_TIMEOUT_MS * 3}ms'`);
+    const pre = (await client.query(
+      `select id, connection_id from training_load.source_team_bindings where team_id = $1 and source_system = $2 and state = 'active'`,
+      [teamId, IMPORT_SOURCE_SYSTEM],
+    )).rows[0];
+    if (!pre) return closeNull();
+    const conn = (await client.query(`select id, owner_club_id from training_load.source_credential_connections where id = $1 for share`, [pre.connection_id])).rows[0];
+    const binding = (await client.query(`select id, team_id, state, source_system from training_load.source_team_bindings where id = $1 for share`, [pre.id])).rows[0];
+    const team = (await client.query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 for share`, [teamId])).rows[0];
+    if (!conn || !binding || binding.state !== "active" || binding.source_system !== IMPORT_SOURCE_SYSTEM || String(binding.team_id) !== String(teamId)
+      || !team || team.active !== true || !team.club_id || String(conn.owner_club_id) !== String(team.club_id)
+      || (expectedClubId && String(team.club_id) !== String(expectedClubId))) return closeNull();
+    if (!(await rightHolds(client, ctx, team.club_id, { lock: true, teamId }))) return closeNull();
+    if (listHold) await listHold("locked", client);
+    const snapshot = (await client.query(
+      `select i.gpexe_athlete_id, i.display_name, to_char(i.birth_date, 'YYYY-MM-DD') as birth_date, i.expires_at
+         from training_load.gpexe_athlete_identities i
+        where i.binding_id = $1 and i.owner_team_id = $2 and i.expires_at > now()
+          and not exists (select 1 from training_load.gpexe_athlete_links l
+                           where l.owner_team_id = i.owner_team_id and l.unlinked_at is null and l.gpexe_athlete_id = i.gpexe_athlete_id)
+        order by length(i.gpexe_athlete_id), i.gpexe_athlete_id`,
+      [binding.id, teamId],
+    )).rows;
+    const all = (await client.query(
+      `select count(*)::int as n, min(expires_at) as oldest from training_load.gpexe_athlete_identities
+        where binding_id = $1 and owner_team_id = $2 and expires_at > now()`,
+      [binding.id, teamId],
+    )).rows[0];
+    let answer;
+    if (all.n === 0) {
+      answer = { state: "no_identities_loaded", snapshotCount: 0, expiresAt: null, exact: [], ambiguous: [], dateConflicts: [] };
+    } else {
+      const athletes = (await client.query(
+        `select a.id as athlete_id, coalesce(nullif(a.display_name, ''), a.full_name) as name, to_char(a.birth_date, 'YYYY-MM-DD') as birth_date
+           from public.athlete_memberships m
+           join public.athletes a on a.id = m.athlete_id
+          where m.team_id = $1 and m.membership_type = 'team' and m.status = 'active'
+            and not exists (select 1 from training_load.gpexe_athlete_links l
+                             where l.owner_team_id = m.team_id and l.unlinked_at is null and l.athlete_id = a.id)
+          order by 2, a.id`,
+        [teamId],
+      )).rows;
+      const result = computePairSuggestions(
+        snapshot.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name, birthDate: r.birth_date })),
+        athletes.map((r) => ({ athleteId: String(r.athlete_id), name: r.name, birthDate: r.birth_date })),
+      );
+      const g = (x) => ({ gpexeAthleteId: x.gpexeAthleteId, gpexeName: x.name, birthDate: x.birthDate });
+      answer = {
+        state: "ok",
+        snapshotCount: all.n,
+        expiresAt: all.oldest,
+        exact: result.exact.map((p) => ({ ...g(p.gpexe), athleteId: p.athlete.athleteId, athleteName: p.athlete.name })),
+        ambiguous: result.ambiguous.map((p) => ({ ...g(p.gpexe), candidates: p.candidates.map((c) => ({ athleteId: c.athleteId, athleteName: c.name })) })),
+        // A flag pair only: OptiMove's date of birth is never returned here.
+        dateConflicts: result.dateConflicts.map((p) => ({ ...g(p.gpexe), athleteId: p.athlete.athleteId, athleteName: p.athlete.name })),
+      };
+    }
+    await client.query("commit");
+    released = true;
+    release();
+    return answer;
+  } catch (error) {
+    if (!released) {
+      let dead = false;
+      await withinBound(client.query("rollback"), 5_000).catch(() => { dead = true; });
+      released = true;
+      release(dead);
+    }
+    if (error?.code === "55P03" || error?.code === "40P01" || error?.code === "57014") throw refusal("try_again");
+    console.error(`[gpexe-identity] a suggestions read failed: ${error?.code ?? error?.name ?? ""}`);
     throw refusal("internal_error");
   }
 

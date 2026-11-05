@@ -352,6 +352,29 @@ router.post("/teams/:teamId/athlete-identities/loads", identityHandle(async (req
   res.json(await identity.loadIdentities(access.teamId, { ctx, body: req.body }));
 }));
 
+// U3: suggested pairs. Audience: the identity administrators and the team's
+// own coach in that team's workspace (pairSuggestionBasis); the three lists
+// only. Identical 404s and no-store as the identity routes.
+router.get("/teams/:teamId/athlete-pair-suggestions", async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const access = await teamAccess(req, res);
+    if (!access) return;
+    const basis = identity.pairSuggestionBasis(req, access);
+    if (!basis) return notFound(res);
+    const answer = await identity.listPairSuggestions(access.teamId, { userId: String(req.user.id), basis }, { expectedClubId: access.clubId });
+    if (!answer) return notFound(res);
+    res.json(answer);
+  } catch (error) {
+    if (isPoolCheckoutTimeout(error) && !res.headersSent) return poolBusy(req, res);
+    if (error instanceof identity.GpexeIdentityError) {
+      if (error.status === 404) return notFound(res);
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    next(error);
+  }
+});
+
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
