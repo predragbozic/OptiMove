@@ -49,12 +49,12 @@ export function dashboardChartPlots(model, labelForSeries, rowContext, options =
 export function renderDashboardChartPlots(model, labelForSeries, rowContext, options = {}) {
   const composition = options.presentation == null ? null : composeDashboardCharts(model,labelForSeries,rowContext,options);
   const plots = composition?.plots ?? dashboardChartPlots(model,labelForSeries,rowContext);
-  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Select up to 20 athletes or use a table. No athletes have been omitted.' : composition.status === 'combinedConfigurationRequired' ? 'Bar + line needs two metrics, one per axis, grouped by day or week. Open Advanced settings. All returned values remain in the table.' : 'Chart settings or the period are unavailable. All returned values remain in the table.')}</p>` : '';
+  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Select up to 20 athletes or use a table. No athletes have been omitted.' : composition.status === 'combinedConfigurationRequired' ? 'Bar + line needs two metrics, one per axis, grouped by day or week. Open Advanced settings. All returned values remain in the table.' : composition.status === 'heatmapConfigurationRequired' ? 'Heatmap needs one numeric metric grouped by day or week. All returned values remain in the table.' : 'Chart settings or the period are unavailable. All returned values remain in the table.')}</p>` : '';
   return notice + plots.map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">
-        <div class="tl-analysis-echarts" aria-hidden="true"></div>
+        <div class="tl-analysis-echarts" aria-hidden="true"${Number.isSafeInteger(plot.renderHeight) && plot.renderHeight >= 320 && plot.renderHeight <= 800 ? ` style="height:${plot.renderHeight}px"` : ''}></div>
         <p class="muted tl-analysis-chart-failure" role="status" hidden>Chart unavailable. The values below are still available.</p>
         ${plot.enhanced ? `<details class="tl-chart-tools"><summary>Chart controls</summary><div class="tl-chart-controls" aria-label="Chart controls"></div></details><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Selected point details</summary><pre></pre></details>` : ''}
       </optimove-dashboard-chart>

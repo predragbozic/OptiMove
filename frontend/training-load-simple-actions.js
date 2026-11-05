@@ -142,12 +142,16 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'more' || type === 'reload') await simpleEditor.metrics(type === 'more');
   else if (type === 'title') simpleEditor.change(draft => { draft.title = action.value ?? ''; });
   else if (type === 'view') simpleEditor.change(draft => applyGalleryChoice(draft, model, action.value || action.dataset.value));
+  else if (type === 'group' && galleryVariant(model) === 'heatmap' && chartPresentation(galleryPresentation(model)).mode === 'enhanced' && !['day', 'week'].includes(action.value)) {
+    model.error = 'Heatmap supports day or week only. Switch the display before grouping by athlete or session.';
+    paint(model);
+  }
   else if (type === 'group') simpleEditor.change(draft => {
     if (draft.view.groupBy === action.value) return;
     draft.view.groupBy = action.value;
     const presentation = galleryPresentation(model);
     const knownChart = chartPresentation(presentation).mode === 'enhanced';
-    if (draft.presentation?.mode === 'preserve' && knownChart && ['area', 'horizontal-bar'].includes(presentation.chartVariant)) {
+    if (draft.presentation?.mode === 'preserve' && knownChart && ['area', 'horizontal-bar', 'heatmap'].includes(presentation.chartVariant)) {
       draft.presentation = { mode: 'replace', value: structuredClone(presentation) };
     }
     if (draft.presentation?.mode === 'replace' && knownChart) {

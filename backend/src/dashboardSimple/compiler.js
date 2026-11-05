@@ -114,14 +114,15 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   const supportedPresentation = presentation?.schemaVersion === 1;
   if (supportedPresentation && !validateContract('presentationV1', presentation).valid) return { status: 'advancedRequired', issues: [{ code: 'invalidStoredPresentation', path: '$.presentation' }] };
   if (supportedPresentation && presentation.chartVariant === 'combined') return {status:'advancedRequired',issues:[{code:'combinedRequiresAdvanced',path:'$.presentation.chartVariant'}]};
-  if (supportedPresentation && presentation.chartVariant && view.type !== ({area:'line_chart','horizontal-bar':'bar_chart'}[presentation.chartVariant])) issue('incompatiblePresentation', '$.presentation.chartVariant');
+  if (supportedPresentation && presentation.chartVariant && view.type !== ({area:'line_chart','horizontal-bar':'bar_chart',heatmap:'bar_chart'}[presentation.chartVariant])) issue('incompatiblePresentation', '$.presentation.chartVariant');
+  if (supportedPresentation && presentation.chartVariant === 'heatmap' && !['day','week'].includes(view.groupBy)) issue('incompatiblePresentation', '$.presentation.chartVariant');
   const semanticChanged = existing && (existing.widget_type !== view.type || existing.group_by !== view.groupBy || previous.metric_definition_id !== (builtin ? null : m.id) || previous.built_in_series_key !== (builtin ? m.key : null) || previous.data_scope_level !== view.dataScopeLevel || previous.analytical_aggregation !== view.analyticalAggregation || canonicalKey(existing.local_filter_override ?? {}) !== canonicalKey(localFilter));
   if (draft.presentation?.mode === 'preserve' && presentation && (presentation.schemaVersion !== 1 || presentation.tableFormatting?.rules?.length) && semanticChanged) return { status: 'advancedRequired', issues: [{ code: 'presentationRevalidationRequired', path: '$.presentation' }] };
   if (supportedPresentation && presentation?.chartComposition && !composed.has(view.groupBy)) issue('unsupportedComposition', '$.presentation.chartComposition');
   if (supportedPresentation && presentation?.chartComposition && (!charts.has(view.type) || !snapshot.capabilities.chartComposition.includes(presentation.chartComposition))) issue('unsupportedCapability', '$.presentation.chartComposition');
   if (supportedPresentation && (presentation?.chartInteractions && !charts.has(view.type) || presentation?.tableFormatting && view.type !== 'table')) issue('incompatiblePresentation', '$.presentation');
   if (supportedPresentation && !['day', 'week'].includes(view.groupBy) && (presentation?.chartInteractions?.zoom?.mode === 'local' || presentation?.chartInteractions?.zoom?.applyPeriodAction)) issue('temporalZoomRequired', '$.presentation.chartInteractions.zoom');
-  if (supportedPresentation && presentation?.chartComposition === 'athletes-v1' && effectiveFilter.athleteIds.length > 20) choices.push({ code: 'requiresChoice', path: '$.athleteSelection', reason: 'maxChartAthletes', limit: 20 });
+  if (supportedPresentation && ['athletes-v1','matrix-v1'].includes(presentation?.chartComposition) && effectiveFilter.athleteIds.length > 20) choices.push({ code: 'requiresChoice', path: '$.athleteSelection', reason: 'maxChartAthletes', limit: 20 });
   for (const [index, rule] of (supportedPresentation ? presentation?.tableFormatting?.rules ?? [] : []).entries()) {
     const path = `$.presentation.tableFormatting.rules[${index}]`;
     if (m.value_type !== 'numeric') issue('numericRuleRequired', path);

@@ -34,7 +34,10 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
               plot.option.tooltip.valueFormatter = value => plot.enhanced && plot.settings.tooltip === 'exact' ? String(value) : typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
               if(plot.enhanced) {
                 plot.option.tooltip.formatter = event => chartPointText(plot.rowsBySeries[event.seriesIndex]?.[event.dataIndex],plot.precision,plot.settings.tooltip==='formatted');
-                for(const series of plot.option.series)series.label.formatter=event=>typeof event.value==='number' ? Number.isInteger(event.value)?String(event.value):event.value.toFixed(plot.precision) : '';
+                for(const series of plot.option.series)series.label.formatter=event=>{
+                  const value=series.type==='heatmap'?event.value?.[2]:event.value;
+                  return typeof value==='number' ? Number.isInteger(value)?String(value):value.toFixed(plot.precision) : '';
+                };
               }
               chart.setOption(plot.option, { notMerge: true });
               if(plot.enhanced)this.interactions = bindDashboardChartInteractions(this,chart,plot,scope);
