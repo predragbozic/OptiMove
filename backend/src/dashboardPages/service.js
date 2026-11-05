@@ -50,8 +50,9 @@ export function createPagesService({ pool, authorize, queryDashboard, assertFilt
         const target = await authorize(q, req, dashboardId, { mode: 'read' });
         const rows = (await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id limit $2', [dashboardId, MAX_DASHBOARD_PAGES + 1])).rows;
         if (rows.length > MAX_DASHBOARD_PAGES) throw previewError('pageLimitReached', 409);
-        const ready=(await q("select to_regprocedure('training_load.mutate_dashboard_page_advanced(uuid,uuid,text,uuid,uuid,uuid,uuid,text,jsonb,jsonb)') is not null and to_regprocedure('training_load.save_simple_page_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,uuid,integer,jsonb)') is not null as ready")).rows[0]?.ready===true;
-        return { dashboardId, dashboard:target.dashboard, pagesRevision: target.dashboard.pages_revision, pages: rows.map(pageDto), capabilities: { pageManagement: ready && target.canManage === true && target.canQuery === true, pageQuery: target.canQuery === true, pageWidgetEditing: ready && target.canManage === true && target.canQuery === true, pages: ready }, limits: { pages: MAX_DASHBOARD_PAGES, responseBytes: responseLimit } };
+        const support=(await q("select to_regprocedure('training_load.mutate_dashboard_page_advanced(uuid,uuid,text,uuid,uuid,uuid,uuid,text,jsonb,jsonb)') is not null and to_regprocedure('training_load.save_simple_page_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,uuid,integer,jsonb)') is not null as ready, to_regprocedure('training_load.dashboard_combined_chart_v1()') is not null as combined_ready")).rows[0];
+        const ready=support?.ready===true;
+        return { dashboardId, dashboard:target.dashboard, pagesRevision: target.dashboard.pages_revision, pages: rows.map(pageDto), capabilities: { pageManagement: ready && target.canManage === true && target.canQuery === true, pageQuery: target.canQuery === true, pageWidgetEditing: ready && target.canManage === true && target.canQuery === true, pages: ready, combinedCharts: ready && support?.combined_ready===true && target.canManage===true && target.canQuery===true }, limits: { pages: MAX_DASHBOARD_PAGES, responseBytes: responseLimit } };
       });
     },
     async detail({ req, dashboardId, pageId }) {

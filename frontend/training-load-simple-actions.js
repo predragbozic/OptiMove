@@ -1,8 +1,8 @@
-import { applyGalleryChoice, galleryPresentation, galleryVariant } from './training-load-chart-gallery.js';
+import { applyGalleryChoice, galleryPresentation, galleryVariant, galleryUnavailable, chartGalleryChoices } from './training-load-chart-gallery.js';
 import { api } from './api.js';
 import { state } from './state.js';
 import { currentUserWorkspaceContextParts } from './access.js';
-import { analysisRuntimeFilterPayload, loadDashboardDetail, queryAnalysisDashboard, openAnalysisWidgetEditor } from './training-load-analysis-data.js';
+import { analysisRuntimeFilterPayload, loadDashboardDetail, queryAnalysisDashboard, openAnalysisWidgetEditor, setEditorDisplayMode, loadAnalysisMetricDefinitions } from './training-load-analysis-data.js';
 import { createSimpleEditorController } from './training-load-simple-controller.js';
 import { chartPresentation, interactiveChartPresentation } from './training-load-chart-composer.js';
 import { loadTrainingLoadOrgPickerData } from './training-load-data.js';
@@ -82,6 +82,7 @@ export async function openSimpleEditor(widget, onRender) {
   await simpleEditor.open(widget);
   if (simpleEditor.model?.unavailable) { simpleEditor.close(); return false; }
   const target = simpleEditor.model;
+  if (target) { target.savedWidgetType = widget?.widget_type; target.pageCombinedAvailable = !analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true; }
   if (target?.draft && !target.error) {
     target.rosterLoading = true; paint(target);
     try {
@@ -110,9 +111,24 @@ export async function handleSimpleEditorAction(action, onRender) {
   if (type === 'retry') { await simpleEditor.save(true); return true; }
   if (type === 'status') { await simpleEditor.status(); return true; }
   if (simpleEditor.pending || model.saveState === 'recorded') return true;
+  const combinedChoice = type === 'view' && (action.value || action.dataset.value) === 'combined';
+  if (combinedChoice) {
+    const widget = analysis().widgets.find(row => row.id === model.widgetId);
+    const choice = chartGalleryChoices.find(row => row.id === 'combined');
+    const available = model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true);
+    if (!widget || model.stale || !isActiveTarget(model) || !available || galleryUnavailable(model, choice) || !['line_chart', 'bar_chart'].includes(widget.widget_type) || !['day', 'week'].includes(widget.group_by)) return true;
+    if (!leaveSimpleEditor()) return true;
+    openAnalysisWidgetEditor(widget, { combinedAvailable: available });
+    const editor = analysis().editor;
+    // Catalog metadata is needed before accepting two numeric series.
+    await loadAnalysisMetricDefinitions();
+    if (analysis().editor !== editor || !isActiveTarget(model)) return true;
+    editor.error = setEditorDisplayMode(editor.draft, 'combined', available);
+    render(); return true;
+  }
   if (type === 'advanced') {
     const widget = analysis().widgets.find(row => row.id === model.widgetId);
-    if (model.widgetId && leaveSimpleEditor()) { openAnalysisWidgetEditor(widget); render(); }
+    if (model.widgetId && widget && isActiveTarget(model) && leaveSimpleEditor()) { openAnalysisWidgetEditor(widget, { combinedAvailable: model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true) }); render(); void loadAnalysisMetricDefinitions().then(render); }
     else if (!model.widgetId && leaveSimpleEditor()) {
       analysis().simpleAdvancedCreate = true;
       return false;

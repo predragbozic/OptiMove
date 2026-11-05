@@ -70,6 +70,8 @@ import {
   setActiveAnalysisDashboard,
   setEditorSeriesMetric,
   setEditorWidgetType,
+  setEditorDisplayMode,
+  loadAnalysisEditorCombinedCapability,
   setMetricPanelMetric,
   updateAnalysisDashboardMetadata,
   updateAnalysisLayoutDraft,
@@ -1360,6 +1362,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     openAnalysisWidgetEditor(widget);
     renderTrainingLoad();
     void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    await loadAnalysisEditorCombinedCapability(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-save-layout") {
@@ -1456,6 +1459,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     await saveAnalysisWidgetEditor(renderTrainingLoad);
     renderTrainingLoad();
     return true;
+  }
+  if (type === "training-load-analysis-widget-display-mode") {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.error = setEditorDisplayMode(editor.draft, action.value, editor.combinedAvailable);
+    renderTrainingLoad(); return true;
   }
   if (type === "training-load-analysis-widget-title" || type === "training-load-analysis-widget-type" || type === "training-load-analysis-widget-group") {
     const editor = state.trainingLoad.analysis.editor;

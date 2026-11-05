@@ -49,7 +49,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext, options =
 export function renderDashboardChartPlots(model, labelForSeries, rowContext, options = {}) {
   const composition = options.presentation == null ? null : composeDashboardCharts(model,labelForSeries,rowContext,options);
   const plots = composition?.plots ?? dashboardChartPlots(model,labelForSeries,rowContext);
-  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Select up to 20 athletes or use a table. No athletes have been omitted.' : 'Chart settings or the period are unavailable. All returned values remain in the table.')}</p>` : '';
+  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Select up to 20 athletes or use a table. No athletes have been omitted.' : composition.status === 'combinedConfigurationRequired' ? 'Bar + line needs two metrics, one per axis, grouped by day or week. Open Advanced settings. All returned values remain in the table.' : 'Chart settings or the period are unavailable. All returned values remain in the table.')}</p>` : '';
   return notice + plots.map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>

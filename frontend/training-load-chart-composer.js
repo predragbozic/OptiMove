@@ -12,13 +12,14 @@ const only = (value, keys) => value !== null && typeof value === 'object' && !Ar
 
 export function interactiveChartPresentation(groupBy, variant) {
   const time=['day','week'].includes(groupBy);
-  return {mode:'replace',value:{schemaVersion:1,...(variant?{chartVariant:variant}:{}),...(time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
+  return {mode:'replace',value:{schemaVersion:1,...(variant?{chartVariant:variant}:{}),...(variant==='combined'?{chartComposition:'metrics-v1'}:time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
 }
 
 export function chartPresentation(presentation) {
   if (presentation == null) return { mode:'legacy' };
-  if (!only(presentation,['schemaVersion','chartVariant','chartComposition','chartInteractions']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && presentation.chartComposition !== 'athletes-v1') return { mode:'unsupported' };
-  if (Object.hasOwn(presentation,'chartVariant') && (!['area','horizontal-bar'].includes(presentation.chartVariant) || !Object.hasOwn(presentation,'chartInteractions'))) return {mode:'unsupported'};
+  if (!only(presentation,['schemaVersion','chartVariant','chartComposition','chartInteractions']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && !['athletes-v1','metrics-v1'].includes(presentation.chartComposition)) return { mode:'unsupported' };
+  if (Object.hasOwn(presentation,'chartVariant') && (!['area','horizontal-bar','combined'].includes(presentation.chartVariant) || !Object.hasOwn(presentation,'chartInteractions'))) return {mode:'unsupported'};
+  if ((presentation.chartVariant==='combined') !== (presentation.chartComposition==='metrics-v1')) return {mode:'unsupported'};
   if(Object.hasOwn(presentation,'chartInteractions') && !only(presentation.chartInteractions,['tooltip','legend','zoom','pointSelection','yAxis']))return {mode:'unsupported'};
   const input = presentation.chartInteractions ?? {};
   if (!only(input,['tooltip','legend','zoom','pointSelection','yAxis'])) return { mode:'unsupported' };
@@ -26,6 +27,7 @@ export function chartPresentation(presentation) {
   if(Object.hasOwn(input,'yAxis') && !only(input.yAxis,['mode','min','max']))return {mode:'unsupported'};
   const axis=input.yAxis ?? {mode:'auto'};
   if (!only(axis,axis.mode === 'fixed' ? ['mode','min','max'] : ['mode']) || !['auto','fixed'].includes(axis.mode) || axis.mode === 'fixed' && (!Number.isFinite(axis.min) || !Number.isFinite(axis.max) || axis.min >= axis.max)) return {mode:'unsupported'};
+  if(presentation.chartVariant==='combined' && axis.mode!=='auto')return {mode:'unsupported'};
   return {mode:'enhanced',variant:presentation.chartVariant,composition:presentation.chartComposition === 'athletes-v1',tooltip:input.tooltip?.mode ?? 'exact',legend:input.legend?.toggle ?? true,zoom:input.zoom?.mode ?? 'disabled',applyPeriod:input.zoom?.applyPeriodAction === true,pointDetails:input.pointSelection?.mode === 'details',axis};
 }
 
@@ -47,7 +49,8 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
   const settings = chartPresentation(options.presentation);
   if (settings.mode !== 'enhanced') return {status:settings.mode,plots:[]};
   if (model.status !== 'ready' || !['line_chart','bar_chart'].includes(model.widgetType)) return {status:'notReady',plots:[]};
-  if (settings.variant && model.widgetType!==({area:'line_chart','horizontal-bar':'bar_chart'}[settings.variant])) return {status:'unsupported',plots:[]};
+  if (settings.variant && model.widgetType!==({area:'line_chart','horizontal-bar':'bar_chart',combined:'line_chart'}[settings.variant])) return {status:'unsupported',plots:[]};
+  if(settings.variant==='combined')return composeCombinedCharts(model,labelForSeries,options,settings);
   const time = ['day','week'].includes(model.groupBy);
   const composed = settings.composition && (time || model.groupBy === 'athlete');
   const period = options.resolvedPeriod ?? model.period;
@@ -112,5 +115,47 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
     plot.fingerprint=chartIdentityKey([options.contextId,options.queryId,options.widgetRevision,phasePeriod,options.presentation,model.config.effective]);
     plots.push(plot);
   }
+  return {status:'ready',plots};
+}
+
+// Two metric axes are composed per athlete; values never cross athlete or unit boundaries.
+function composeCombinedCharts(model, labelForSeries, options, settings) {
+  const refuse=status=>({status,plots:[]});
+  if(!['day','week'].includes(model.groupBy) || model.series.length!==2) return refuse('combinedConfigurationRequired');
+  const series=['primary','secondary'].map(axis=>model.series.filter(item=>item.definition.axis===axis));
+  if(series.some(items=>items.length!==1))return refuse('combinedConfigurationRequired');
+  const ordered=series.map(items=>items[0]);
+  if(ordered.some(item=>item.status!=='ready' || item.definition.comparison_period || item.comparison.length || item.comparisonRange || item.reasons.length))return refuse('notReady');
+  const period=options.resolvedPeriod ?? model.period;
+  const buckets=chartBuckets(period,model.groupBy);
+  if(!buckets)return refuse('periodRequired');
+  const units=ordered.map(item=>[...new Set(item.current.map(row=>row.identity.unit))]);
+  if(units.some(values=>values.length>1))return refuse('ambiguousAxisUnit');
+  if(ordered.some(item=>item.current.some(row=>!buckets.includes(row.identity.bucketKey))))return refuse('invalidBuckets');
+  if(ordered.some(item=>item.current.some(row=>row.chartStatus==='unsupported')))return refuse('notReady');
+  const athletes=[...new Set(ordered.flatMap(item=>item.current.map(row=>row.identity.athleteId)))].sort((a,b)=>String(a).localeCompare(String(b)));
+  if(athletes.length>20)return refuse('requiresChoice');
+  const names=athletes.map(id=>options.athletes?.find(item=>item.id===id)?.name || (id==null?'Whole group':`Athlete ${id}`));
+  const zoom=settings.zoom==='local';
+  const plots=athletes.map((athleteId,index)=>{
+    const athleteName=names.filter(name=>name===names[index]).length>1?`${names[index]} (${athleteId ?? 'group'})`:names[index];
+    const labels=ordered.map((item,i)=>`${labelForSeries(item.definition)} · ${units[i][0] ?? 'Unit not specified'} · ${i===0?'Left / bar':'Right / line'}`);
+    const rowsBySeries=ordered.map(item=>buckets.map(bucket=>{
+      const candidates=item.current.filter(row=>row.identity.athleteId===athleteId && row.identity.bucketKey===bucket);
+      if(candidates.length!==1)return candidates.length?{status:'duplicate',value:null,rows:structuredClone(candidates)}:null;
+      const row=candidates[0];
+      return {...structuredClone(row),identityKey:chartIdentityKey(row.identity),phase:'current',queryId:options.queryId ?? null,athleteName,metricLabel:labelForSeries(item.definition)};
+    }));
+    const key=chartIdentityKey([model.widgetId,'combined',athleteId,ordered.map(item=>item.id)]);
+    return {enhanced:true,key,widgetId:model.widgetId,queryId:options.queryId ?? null,contextId:options.contextId ?? null,groupBy:model.groupBy,buckets,resolvedPeriod:structuredClone(period),rowsBySeries,
+      settings:{...settings,applyPeriod:settings.applyPeriod && options.allowApplyPeriod!==false && Boolean(options.queryId)},warnings:[],precision:model.config.effective.numberFormat.maximumFractionDigits,
+      caption:`${athleteName} · ${labels.join(' / ')}`,valueAxis:'yAxis',
+      fingerprint:chartIdentityKey([options.contextId,options.queryId,options.widgetRevision,period,options.presentation,model.config.effective]),
+      option:{animation:false,grid:{left:12,right:20,top:64,bottom:zoom?70:16,containLabel:true},legend:{show:model.config.effective.legend.visible,selectedMode:settings.legend,type:'scroll',left:12,right:12,top:4},tooltip:{trigger:'item',renderMode:'richText',confine:true},
+        xAxis:{type:'category',data:buckets,axisLabel:{hideOverlap:true}},
+        yAxis:units.map((values,i)=>({type:'value',position:i===0?'left':'right',name:values[0] ?? '',scale:false,splitLine:{show:i===0}})),
+        series:ordered.map((item,i)=>({id:chartIdentityKey([key,item.id]),name:labels[i],type:i===0?'bar':'line',yAxisIndex:i,connectNulls:false,showSymbol:true,symbolSize:7,barMaxWidth:26,itemStyle:{color:i===0?'#157b70':'#b56b20'},lineStyle:{color:'#b56b20',width:2.5},label:{show:model.config.effective.valueLabels.visible,position:'top'},data:rowsBySeries[i].map(point=>point?.chartStatus==='value'?{value:point.value}:null)})),
+        ...(zoom?{dataZoom:[{type:'slider',filterMode:'none',start:0,end:100},{type:'inside',filterMode:'none',zoomOnMouseWheel:false,moveOnMouseWheel:false,start:0,end:100}]}:{})}};
+  });
   return {status:'ready',plots};
 }

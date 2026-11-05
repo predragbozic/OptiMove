@@ -329,7 +329,7 @@ test('missing Simple API preserves the existing-widget fallback and explicit Adv
   assert.equal(analysis().editor.open, true);
   assert.deepEqual(analysis().editor.draft, analysisEditorDraftFromWidget(source));
   assert.equal(analysis().metricPanel, null);
-  assert.equal(calls.length, count);
+  assert.ok(calls.slice(count).every(call => call.method === 'GET'), 'Advanced may read metadata and readiness, but never writes');
   assert.deepEqual(analysis().widgets[0], source);
 });
 
@@ -395,7 +395,7 @@ test('existing-widget Advanced bridge preserves a rejected draft then opens the 
   assert.equal(analysis().editor.widgetId, widgetId);
   assert.deepEqual(analysis().editor.draft, analysisEditorDraftFromWidget(source));
   assert.deepEqual(analysis().widgets[0], source);
-  assert.equal(calls.length, count);
+  assert.ok(calls.slice(count).every(call => call.method === 'GET'), 'Advanced may read metadata and readiness, but never writes');
 });
 
 test('multi-series Advanced bridge preserves every existing series and setting', async () => {
@@ -411,7 +411,7 @@ test('multi-series Advanced bridge preserves every existing series and setting',
   assert.deepEqual(analysis().editor.draft, analysisEditorDraftFromWidget(source));
   assert.deepEqual(analysis().editor.draft.series.map(entry => entry.id), ['series-1', 'series-2']);
   assert.deepEqual(analysis().widgets[0], source);
-  assert.equal(calls.length, count);
+  assert.ok(calls.slice(count).every(call => call.method === 'GET'), 'Advanced may read metadata and readiness, but never writes');
 });
 
 test('new-widget Advanced fallback asks before discarding and does not reopen Simple', async () => {
@@ -740,4 +740,53 @@ test('reopened opaque schema99 with a variant never gets cloned or rewritten by 
     await simple('preview');
     assert.deepEqual(calls.at(-1).body.draft.presentation, { mode: 'preserve' });
   }
+});
+
+
+test('combined gallery confirms discard and opens only a two-series Advanced draft', async () => {
+  analysis().widgets = [widget({ widget_type: 'bar_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  simpleEditor.model.capabilities.capabilities.combinedCharts = true;
+  const source = structuredClone(analysis().widgets[0]);
+  confirmAnswer = false;
+  await simple('view', {}, 'combined');
+  assert.equal(analysis().editor.open, false); assert.ok(simpleEditor.model);
+  confirmAnswer = true; const count = calls.length;
+  await simple('view', {}, 'combined');
+  assert.equal(simpleEditor.model, null);
+  const draft = analysis().editor.draft;
+  assert.equal(draft.widgetType, 'line_chart'); assert.equal(draft.series.length, 2);
+  assert.deepEqual(draft.series.map(entry => entry.fields.axis), ['primary', 'secondary']);
+  assert.equal(draft.presentation.value.chartVariant, 'combined');
+  assert.deepEqual(analysis().widgets[0], source);
+  assert.ok(calls.slice(count).every(call => call.method === 'GET'));
+});
+
+for (const gate of ['capability', 'page', 'identity', 'dashboard', 'stale', 'new']) test(`combined handoff blocks ${gate} without writes`, async () => {
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const model = simpleEditor.model; model.capabilities.capabilities.combinedCharts = true;
+  if (gate === 'capability') delete model.capabilities.capabilities.combinedCharts;
+  if (gate === 'page') { analysis().pagesMode = true; analysis().pageCapabilities = {}; }
+  if (gate === 'identity') state.currentUser.id = 'other';
+  if (gate === 'dashboard') analysis().selectedDashboardId = 'other';
+  if (gate === 'stale') model.stale = true;
+  if (gate === 'new') model.widgetId = null;
+  const count = calls.length;
+  await simple('view', {}, 'combined');
+  assert.equal(analysis().editor.open, false); assert.equal(simpleEditor.model, model);
+  assert.equal(calls.length, count); assert.equal(confirmations.length, 0);
+});
+
+
+test('saved combined retains two series and preserve intent through the existing Advanced fallback', async () => {
+  const config = { schemaVersion: 1, chartVariant: 'combined', chartComposition: 'metrics-v1', chartInteractions: { yAxis: { mode: 'auto' } } };
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: config, series: [series(), series({ id: 'series-2', series_order: 2, built_in_series_key: 'srpe', axis: 'secondary' })] })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  assert.equal(simpleEditor.model.advancedRequired, true);
+  const count = calls.length; await simple('advanced');
+  assert.deepEqual(analysis().editor.draft.presentation, { mode: 'preserve' });
+  assert.deepEqual(analysis().editor.draft.savedPresentation, config);
+  assert.equal(analysis().editor.draft.series.length, 2);
+  assert.ok(calls.slice(count).every(call => call.method === 'GET'));
 });

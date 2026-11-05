@@ -28,7 +28,7 @@ const target = obj({ series: { const: 'main' }, phase: { const: 'current' }, cel
 const style = obj({ tone: en('neutral', 'positive', 'caution', 'negative'), marker: en('none', 'up', 'down', 'check', 'alert', 'star1', 'star2', 'star3'), label: str(120) });
 const baseRule = { id: str(64), priority: integer, enabled: bool, name: str(200), target, operand: en('value', 'referenceDifference', 'referencePercent'), operator: en('gt', 'gte', 'lt', 'lte', 'between', 'outside'), threshold: obj({ value: num, unit }), range: obj({ lower: num, upper: num, lowerInclusive: bool, upperInclusive: bool, unit }), reference: referenceSchema, formulaVersion: { const: 'signed-relative-abs-v1' }, style };
 export const ruleSchema = obj(baseRule, ['id', 'priority', 'enabled', 'name', 'target', 'operand', 'operator', 'style']);
-export const presentationV1Schema = obj({ schemaVersion: { const: 1 }, chartVariant: en('area', 'horizontal-bar'), chartComposition: { const: 'athletes-v1' }, chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
+export const presentationV1Schema = obj({ schemaVersion: { const: 1 }, chartVariant: en('area', 'horizontal-bar', 'combined'), chartComposition: en('athletes-v1', 'metrics-v1'), chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
 export const displayModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'replace', { value: displayV2Schema }));
 export const presentationModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'clear'), tagged('mode', 'replace', { value: presentationV1Schema }));
 export const editorDraftSchema = obj({ contractVersion: { const: 1 }, draftId: uuid, draftVersion: integer, title: str(200), metricRef: metricRefSchema, athleteSelection: athleteSelectionSchema, advancedFilter: obj({ activity: filterSelectionSchema, component: filterSelectionSchema }, []), periodIntent: periodIntentSchema, view: viewSchema, display: displayModeSchema, presentation: presentationModeSchema }, ['contractVersion', 'draftId', 'draftVersion', 'title', 'metricRef', 'athleteSelection', 'periodIntent', 'view']);
@@ -104,6 +104,8 @@ export function validateContract(name, value) {
     if (axis?.mode === 'fixed' && axis.min >= axis.max) add('axisBounds', '$.yAxis');
     if ((pres?.chartInteractions || pres?.chartComposition || pres?.chartVariant) && pres.tableFormatting) add('incompatiblePresentation', '$');
     if (pres?.chartVariant && !pres.chartInteractions) add('chartInteractionsRequired', '$.chartVariant');
+    if (pres && ((pres.chartVariant === 'combined') !== (pres.chartComposition === 'metrics-v1'))) add('incompatibleComposition', '$.chartComposition');
+    if (pres?.chartVariant === 'combined' && pres.chartInteractions?.yAxis?.mode === 'fixed') add('combinedAutoAxesRequired', '$.chartInteractions.yAxis');
     const rules = name === 'rule' ? [value] : pres?.tableFormatting?.rules ?? [];
     const priorities = new Set(), ruleIds = new Set();
     rules.forEach((r, i) => {

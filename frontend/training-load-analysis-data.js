@@ -1,3 +1,4 @@
+import { chartPresentation, interactiveChartPresentation } from './training-load-chart-composer.js';
 import { api } from "./api.js";
 import { loadPagesDashboard,clearPagesState,pageAdvancedApi,rememberPageRuntime } from './training-load-pages-data.js';
 
@@ -967,7 +968,7 @@ function seriesFieldsOf(row) {
 }
 
 function editorEntryFor(row) {
-  return { key: row.id, id: row.id, metric: analysisEditorMetricOf(row), fields: seriesFieldsOf(row), sourceConnectionId: row.source_connection_id || null, pendingAdd: null };
+  return { key: row.id, id: row.id, metric: analysisEditorMetricOf(row), fields: seriesFieldsOf(row), sourceConnectionId: row.source_connection_id || null, resolutionStatus: row.resolution_status, pendingAdd: null };
 }
 
 function normalizedFilterOverride(override) {
@@ -982,6 +983,9 @@ export function analysisEditorDraftFromWidget(widget) {
     title: widget.title || "",
     widgetType: widget.widget_type,
     groupBy: widget.group_by || "day",
+    presentation: { mode: "preserve" },
+    savedPresentation: structuredClone(widget.presentation_config ?? null),
+    savedWidgetType: widget.widget_type,
     localFilterOverride: normalizedFilterOverride(widget.local_filter_override),
     series: sortedWidgetSeries(widget).map(editorEntryFor),
     removedIds: [],
@@ -990,12 +994,56 @@ export function analysisEditorDraftFromWidget(widget) {
   };
 }
 
-export function openAnalysisWidgetEditor(widget) {
+export function openAnalysisWidgetEditor(widget, { combinedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.combinedCharts === true } = {}) {
   const draft = analysisEditorDraftFromWidget(widget);
   // `base` is the widget as the coach first saw it: after a stale-revision
   // reload, only what the coach actually changed stays theirs (see
   // rebaseAnalysisEditorDraft).
-  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
+  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, combinedAvailable, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
+}
+
+// Preserve opaque sidecars unless the coach explicitly chooses a supported mode.
+export function editorPresentation(draft) {
+  return draft.presentation?.mode === 'replace' ? draft.presentation.value : draft.presentation?.mode === 'clear' ? null : draft.savedPresentation ?? null;
+}
+export function editorIsCombined(draft) {
+  const value = editorPresentation(draft);
+  return value?.chartVariant === 'combined' && chartPresentation(value).mode === 'enhanced';
+}
+export function editorPresentationKnown(value) {
+  return value == null || chartPresentation(value).mode === 'enhanced' && (value.chartVariant !== 'combined' || value.chartInteractions?.yAxis?.mode === 'auto');
+}
+export function setEditorDisplayMode(draft, mode, available = false) {
+  const value = editorPresentation(draft);
+  if (!editorPresentationKnown(value)) return 'Saved presentation settings are not supported here and will be preserved.';
+  if (mode === 'combined') {
+    if (editorIsCombined(draft)) return '';
+    if (!available) return 'Bar + line is not available on this dashboard yet.';
+    if (!['line_chart', 'bar_chart'].includes(draft.widgetType) || !['day', 'week'].includes(draft.groupBy) || draft.series.length < 1 || draft.series.length > 2) return 'Choose a line or bar chart, day or week, and one or two numeric metrics first.';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose resolved numeric metrics for Bar + line.';
+    draft.widgetType = 'line_chart';
+    if (draft.series.length === 1) addEditorSeries(draft);
+    const axesReady = draft.series.filter(entry => entry.fields.axis === 'primary').length === 1 && draft.series.filter(entry => entry.fields.axis === 'secondary').length === 1;
+    draft.series.forEach((entry, index) => { if (!axesReady) entry.fields.axis = index === 0 ? 'primary' : 'secondary'; entry.fields.comparisonPeriod = null; });
+    const next = structuredClone(value ?? interactiveChartPresentation(draft.groupBy, 'combined').value);
+    next.chartVariant = 'combined'; next.chartComposition = 'metrics-v1';
+    next.chartInteractions ??= interactiveChartPresentation(draft.groupBy).value.chartInteractions;
+    next.chartInteractions.yAxis = { mode: 'auto' };
+    draft.presentation = { mode: 'replace', value: next };
+  } else if (mode === 'separate' && value != null) draft.presentation = { mode: 'clear' };
+  return '';
+}
+
+export async function loadAnalysisEditorCombinedCapability(onPainted) {
+  const a = state.trainingLoad.analysis, editor = a.editor;
+  if (a.pagesMode || !editor?.open || !a.dashboard) return;
+  const identity = JSON.stringify(currentUserWorkspaceContextParts()), dashboardId = a.dashboard.id;
+  try {
+    const result = await api(`/api/training-load/dashboards/${encodeURIComponent(dashboardId)}/simple/capabilities`);
+    if (state.trainingLoad.analysis === a && a.editor === editor && a.dashboard?.id === dashboardId && a.selectedDashboardId === dashboardId && JSON.stringify(currentUserWorkspaceContextParts()) === identity) {
+      editor.combinedAvailable = result.capabilities?.combinedCharts === true; onPainted?.();
+    }
+  } catch { /* Missing readiness never enables conversion. */ }
 }
 
 export function editorSeriesEntry(draft, key) {
@@ -1003,6 +1051,7 @@ export function editorSeriesEntry(draft, key) {
 }
 
 export function addEditorSeries(draft) {
+  if (editorIsCombined(draft) && draft.series.length >= 2) return "";
   const key = `new-${draft.nextKey}`;
   draft.nextKey += 1;
   const entry = {
@@ -1016,6 +1065,7 @@ export function addEditorSeries(draft) {
 
 // Returns the key to select next (the neighbour), or "".
 export function removeEditorSeries(draft, key) {
+  if (editorIsCombined(draft) && draft.series.length <= 2) return key;
   const index = draft.series.findIndex((entry) => entry.key === key);
   if (index < 0) return "";
   const [entry] = draft.series.splice(index, 1);
@@ -1035,6 +1085,7 @@ export function moveEditorSeries(draft, key, direction) {
 // its catalog-fixed data level; a catalog metric never 'not_applicable'.
 export function setEditorSeriesMetric(entry, metric) {
   entry.metric = metric;
+  entry.resolutionStatus = ["builtin", "metric"].includes(metric.kind) ? "resolved" : "unresolved";
   if (metric.kind === "builtin") {
     entry.fields.sourcePolicy = "not_applicable";
     entry.sourceConnectionId = null;
@@ -1056,11 +1107,11 @@ export function setEditorSeriesMetric(entry, metric) {
 // known client-side), whether it is text/boolean, and its allowed data levels.
 function editorMetricFacts(metric) {
   if (metric?.kind === "builtin") {
-    return { unit: BUILT_IN_SERIES_UNITS[metric.key], known: metric.key in BUILT_IN_SERIES_UNITS, textual: BUILT_IN_VALUE_TYPES[metric.key] === "text", scopes: [], label: BUILT_IN_SERIES.find((b) => b.key === metric.key)?.label || metric.key };
+    return { unit: BUILT_IN_SERIES_UNITS[metric.key], known: metric.key in BUILT_IN_SERIES_UNITS, numeric: BUILT_IN_VALUE_TYPES[metric.key] === 'numeric', textual: BUILT_IN_VALUE_TYPES[metric.key] === "text", scopes: [], label: BUILT_IN_SERIES.find((b) => b.key === metric.key)?.label || metric.key };
   }
   if (metric?.kind === "metric") {
     const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === metric.id);
-    return { unit: def ? (def.unit || null) : undefined, known: Boolean(def), textual: ["text", "boolean"].includes(def?.valueType), scopes: def?.scopeCapabilities || [], label: def?.label || "This metric" };
+    return { unit: def ? (def.unit || null) : undefined, known: Boolean(def), numeric: ["numeric", "number"].includes(def?.valueType), textual: ["text", "boolean"].includes(def?.valueType), scopes: def?.scopeCapabilities || [], label: def?.label || "This metric" };
   }
   return { unit: undefined, known: false, textual: false, scopes: [], label: "This series" };
 }
@@ -1078,6 +1129,23 @@ export function analysisEditorProblem(draft) {
   const title = draft.title.trim();
   if (!title) return "Give the widget a title.";
   if (title.length > 200) return "The title can be at most 200 characters.";
+  const presentation = editorPresentation(draft);
+  if (presentation && !editorPresentationKnown(presentation) && draft.presentation?.mode !== 'preserve') return 'Unsupported presentation settings must be preserved.';
+  if (presentation) {
+    const known = editorPresentationKnown(presentation);
+    const requiredType = known ? { combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart' }[presentation.chartVariant] : null;
+    const incompatible = known
+      ? !['line_chart', 'bar_chart'].includes(draft.widgetType) || requiredType && requiredType !== draft.widgetType
+      : draft.widgetType !== draft.savedWidgetType;
+    if (incompatible) return 'Choose a compatible chart type or explicitly change the display mode before saving.';
+  }
+  if (editorIsCombined(draft)) {
+    if (!['day', 'week'].includes(draft.groupBy)) return 'Bar + line supports day or week only.';
+    if (draft.series.length !== 2) return 'Bar + line requires exactly two numeric metrics.';
+    if (draft.series.filter(entry => entry.fields.axis === 'primary').length !== 1 || draft.series.filter(entry => entry.fields.axis === 'secondary').length !== 1) return 'Bar + line requires one metric per axis: primary bars on the left, secondary line on the right.';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose resolved numeric metrics for Bar + line.';
+    if (presentation.chartComposition !== 'metrics-v1' || presentation.chartInteractions?.yAxis?.mode !== 'auto') return 'Bar + line requires metrics-v1 composition and automatic axes.';
+  }
   const cap = analysisSeriesLimit(draft.widgetType);
   if (draft.series.length > cap) {
     return `A ${ANALYSIS_WIDGET_TYPE_LABELS[draft.widgetType] || draft.widgetType} widget holds at most ${cap} series - remove ${draft.series.length - cap} or choose another type.`;
@@ -1118,6 +1186,12 @@ export function analysisEditorPlan(widget, draft) {
   const override = normalizedFilterOverride(draft.localFilterOverride);
   if (JSON.stringify(override) !== JSON.stringify(normalizedFilterOverride(widget.local_filter_override))) widgetBody.localFilterOverride = override;
 
+  if (widgetBody.widgetType && draft.presentation?.mode === 'replace' && widget.presentation_config != null) {
+    const variant = widget.presentation_config.chartVariant;
+    const requiredType = { area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart' }[variant];
+    if (requiredType && requiredType !== draft.widgetType) widgetBody.presentation = { mode: 'clear' };
+  }
+
   const metricOps = [];
   const patches = [];
   const comparisonOn = [];
@@ -1128,7 +1202,7 @@ export function analysisEditorPlan(widget, draft) {
       adds.push({ type: "addSeries", key: entry.key });
       continue;
     }
-    if (!sameEditorMetric(entry.metric, analysisEditorMetricOf(row))) {
+    if (!sameEditorMetric(entry.metric, analysisEditorMetricOf(row)) || row.resolution_status !== "resolved" && entry.metric?.kind === "metric" && entry.resolutionStatus === "resolved") {
       if (row.resolution_status !== "resolved" && entry.metric?.kind === "metric") {
         metricOps.push({ type: "resolveSeries", key: entry.key, seriesId: row.id, metricDefinitionId: entry.metric.id });
       } else {
@@ -1177,6 +1251,14 @@ export function analysisEditorPlan(widget, draft) {
   const keptInServerOrder = rows.map((row) => row.id).filter((id) => keptInDraftOrder.includes(id));
   const orderChanged = keptInDraftOrder.join(",") !== keptInServerOrder.join(",");
   if (draft.series.length > 1 && (orderChanged || adds.length || metricOps.some((op) => op.type === "replaceSeries"))) ops.push({ type: "reorder" });
+  if (draft.presentation?.mode && draft.presentation.mode !== 'preserve') {
+    const next = editorPresentation(draft);
+    if (JSON.stringify(next) !== JSON.stringify(widget.presentation_config ?? null)) {
+      const presentationOp = { type: 'patchWidget', body: { presentation: structuredClone(draft.presentation) } };
+      // Clear an incompatible sidecar before changing type; enable combined only after all series exist.
+      if (next === null && widgetBody.widgetType) ops.unshift(presentationOp); else ops.push(presentationOp);
+    }
+  }
   return ops;
 }
 
@@ -1232,6 +1314,11 @@ export function rebaseAnalysisEditorDraft(widget, draft, base = null) {
   if (base) {
     for (const key of ["title", "widgetType", "groupBy"]) if (draft[key] === base[key]) draft[key] = serverDraft[key];
     if (JSON.stringify(draft.localFilterOverride) === JSON.stringify(base.localFilterOverride)) draft.localFilterOverride = serverDraft.localFilterOverride;
+    draft.savedWidgetType = serverDraft.savedWidgetType;
+    if (JSON.stringify(draft.presentation) === JSON.stringify(base.presentation)) {
+      draft.presentation = serverDraft.presentation;
+      draft.savedPresentation = serverDraft.savedPresentation;
+    }
     const baseById = new Map(base.series.map((entry) => [entry.id, entry]));
     const serverById = new Map(serverDraft.series.map((entry) => [entry.id, entry]));
     const untouched = (entry, was) => sameEditorMetric(entry.metric, was.metric) && Object.keys(was.fields).every((key) => entry.fields[key] === was.fields[key]);
@@ -1244,7 +1331,10 @@ export function rebaseAnalysisEditorDraft(widget, draft, base = null) {
       const was = entry.id ? baseById.get(entry.id) : null;
       const now = entry.id ? serverById.get(entry.id) : null;
       if (!was || !now) continue;
-      if (sameEditorMetric(entry.metric, was.metric)) entry.metric = now.metric;
+      if (sameEditorMetric(entry.metric, was.metric)) {
+        entry.metric = now.metric;
+        entry.resolutionStatus = now.resolutionStatus;
+      } else if (sameEditorMetric(entry.metric, now.metric)) entry.resolutionStatus = now.resolutionStatus;
       for (const key of Object.keys(was.fields)) if (entry.fields[key] === was.fields[key]) entry.fields[key] = now.fields[key];
       if (entry.sourceConnectionId === was.sourceConnectionId) entry.sourceConnectionId = now.sourceConnectionId;
     }
@@ -1288,6 +1378,9 @@ export async function saveAnalysisWidgetEditor(onPainted) {
     editor.error = problem;
     onPainted?.();
     return false;
+  }
+  if (editorIsCombined(draft) && !editorIsCombined(analysisEditorDraftFromWidget(widget)) && (!editor.combinedAvailable || a.pagesMode && a.pageCapabilities?.combinedCharts !== true)) {
+    editor.error = 'Bar + line is not available on this dashboard yet.'; onPainted?.(); return false;
   }
   const plan = analysisEditorPlan(widget, draft);
   if (!plan.length) {
