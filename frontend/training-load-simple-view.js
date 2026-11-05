@@ -127,8 +127,8 @@ function displayChoices(model, locked) {
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
     ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowed_aggregations ?? []).map((value) => [value, ({ sum: "Total (sum)", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values (no aggregation)" })[value] ?? value]), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
     ${custom && scopes.length > 1 ? selectField("scope", "Use measurements from", scopes.map((value) => [value, ({ day: "Day", session: "Session", component: "Component" })[value] ?? value]), view.dataScopeLevel, locked, "Choose which measurements to use") : ""}
-    ${model.canUpgradeChart && ['line_chart','bar_chart'].includes(view.type) ? `<label class="tl-simple-choice"><input type="checkbox" ${action('chart-enhanced')}${model.draft.presentation?.mode==='replace'?' checked':''}${disabled(locked)}>Interaktivni prikaz za ovaj grafikon (novi pregled pre čuvanja)</label>` : ''}
-    <p>Pregled prikazuje sve vraćene podatke. Postojeći grafikon se ne menja bez potvrđenog izbora.</p>`;
+    ${model.canUpgradeChart && ['line_chart','bar_chart'].includes(view.type) ? `<label class="tl-simple-choice"><input type="checkbox" ${action('chart-enhanced')}${model.draft.presentation?.mode==='replace'?' checked':''}${disabled(locked)}>Enable interactive display for this chart (preview again before saving)</label>` : ''}
+    <p>The preview shows all returned data. The existing chart stays unchanged unless you choose to update it.</p>`;
 }
 
 function resultTable(rows, caption, athletes) {
@@ -191,14 +191,14 @@ export function renderSimpleEditorHtml(model = {}) {
   return `<div class="tl-simple-panel"><section class="tl-simple-editor" role="region" aria-labelledby="tl-simple-heading" aria-describedby="tl-simple-step tl-simple-context-help" tabindex="-1">
     <header><h2 id="tl-simple-heading">${model.widgetId ? "Edit widget" : "Add widget"}</h2>${button("close", "Close editor", ["saving", "unknown"].includes(model.saveState))}</header>
     <p id="tl-simple-step">Step ${step} of 3: ${["Metric", "Athletes and period", "Display"][step - 1]}</p>
-    <p id="tl-simple-context-help" class="tl-simple-context-help">Podešavanja su nacrt. Dashboard ostaje vidljiv; sačuvaj ili zatvori podešavanja pre promene njegovih filtera i kartica.</p>
+    <p id="tl-simple-context-help" class="tl-simple-context-help">These settings are a draft. The dashboard stays visible; save or close settings before changing its filters or tabs.</p>
     <ol class="tl-simple-steps" aria-label="Editor steps">${["Metric", "Athletes and period", "Display"].map((label, index) => `<li${index + 1 === step ? ' aria-current="step"' : ""}>${label}</li>`).join("")}</ol>
     ${saveFeedback(model)}
     ${model.error ? message(model.error, "alert") : ""}
     ${advanced ? message("These settings require the advanced editor. Opening advanced will ask before discarding these unsaved changes.") : ""}
     <div class="tl-simple-content"><fieldset class="tl-simple-editable"${disabled(locked)}><legend class="tl-simple-sr-only">Step ${step} settings</legend>${step === 1 ? metricCards(model, locked) : step === 2 ? athletesAndPeriod(model, locked) : displayChoices(model, locked)}</fieldset>
-    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}"><h3>Pregled rezultata</h3>${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model)}</section>` : ""}</div>
-    <footer><details class="tl-simple-advanced"><summary>Napredne opcije</summary>${button("advanced", "Open advanced editor", locked, 'aria-describedby="tl-simple-advanced-help"')}<p id="tl-simple-advanced-help">Opening advanced will ask before discarding these unsaved changes.</p></details>
+    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}"><h3>Result preview</h3>${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model)}</section>` : ""}</div>
+    <footer><details class="tl-simple-advanced"><summary>Advanced options</summary>${button("advanced", "Open advanced editor", locked, 'aria-describedby="tl-simple-advanced-help"')}<p id="tl-simple-advanced-help">Opening advanced will ask before discarding these unsaved changes.</p></details>
     <div class="tl-simple-navigation">${step > 1 ? button("back", "Back", locked) : ""}${step < 3 ? button("next", "Next", locked || (step === 1 && !model.draft?.metricRef) || advanced) : button("save", "Save", locked || !model.canSave || !supported.atomicSave || advanced || model.previewLoading)}${step === 3 && !supported.atomicSave ? message("Saving is temporarily unavailable.") : ""}</div></footer>
   </section></div>`;
 }

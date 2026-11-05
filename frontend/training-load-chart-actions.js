@@ -5,7 +5,7 @@ import { isChartDate } from './training-load-chart-composer.js';
 
 export function dashboardChartContext() {
   const a=state.trainingLoad.analysis;
-  return JSON.stringify([currentUserWorkspaceContextParts(),a.selectedDashboardId,a.period,a.runtimeFilter]);
+  return JSON.stringify([currentUserWorkspaceContextParts(),a.selectedDashboardId,...(a.pagesMode?[a.selectedPageId]:[]),a.period,a.runtimeFilter]);
 }
 
 export async function applyDashboardChartPeriod(detail, render) {
@@ -15,6 +15,7 @@ export async function applyDashboardChartPeriod(detail, render) {
   if(detail.dateFrom===a.period.dateFrom && detail.dateTo===a.period.dateTo)return false;
   resetAnalysisDashboardQuery();
   a.period={...a.period,dateFrom:detail.dateFrom,dateTo:detail.dateTo};
+  if(a.pagesMode)a.pageRuntimeUsesDefaults=false;
   await queryAnalysisDashboard(render,{force:true});
   render?.();
   return true;

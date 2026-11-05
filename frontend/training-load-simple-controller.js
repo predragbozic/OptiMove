@@ -21,15 +21,15 @@ export function simpleDraftFromWidget(widget, uuid) {
 
 export function createSimpleEditorController({ request, getContext, paint = () => {}, saved = async () => {}, uuid = () => crypto.randomUUID(), schedule = setTimeout, cancel = clearTimeout }) {
   let model = null, generation = 0, timer, previewInFlight = false, queuedPreview = false, searchGeneration = 0;
-  const contextKey = context => JSON.stringify([context.identity, context.dashboardId, context.period, context.runtimeFilter]);
-  const identityKey = context => JSON.stringify([context.identity, context.dashboardId]);
+  const contextKey = context => JSON.stringify([context.identity, context.dashboardId, context.pageId ?? null, context.pageDefaultsRevision, context.pageDefaultFilter, context.period, context.runtimeFilter]);
+  const identityKey = context => JSON.stringify([context.identity, context.dashboardId, context.pageId ?? null]);
   const currentTarget = (target, run) => model === target && generation === run && identityKey(getContext()) === identityKey(target.context);
   const current = (target, run) => currentTarget(target, run) && contextKey(getContext()) === target.contextKey;
-  const base = target => `/api/training-load/dashboards/${encodeURIComponent(target.context.dashboardId)}/simple`;
+  const base = target => `/api/training-load/dashboards/${encodeURIComponent(target.context.dashboardId)}${target.context.pageId ? `/pages/${encodeURIComponent(target.context.pageId)}` : ''}/simple`;
   const redraw = () => { if (model) model.canSave = Boolean(contextKey(getContext()) === model.contextKey && model.saveState === 'idle' && !model.stale && model.preview?.status === 'valid' && model.preview.previewToken && model.capabilities?.capabilities?.atomicSave && !model.previewLoading && !locked(model)); paint(model); };
   const fail = error => ({ staleRevision: 'This widget changed. Reopen it before saving.', catalogChanged: 'The metric changed. Select it again and preview.', previewRequired: 'Preview again before saving.', previewBusy: 'Another preview is running. Try again shortly.', notFound: 'This dashboard or metric is no longer available.', previewTooLarge: 'Choose fewer athletes or a shorter period.', saveUnavailable: 'Saving is temporarily unavailable.' }[error?.data?.error ?? error?.message] ?? 'The request could not be completed. Please try again.');
   function input(target) {
-    return { contractVersion: 1, context: { kind: 'legacyDashboard', period: copy(target.context.period), runtimeFilter: copy(target.context.runtimeFilter ?? {}) },
+    return { contractVersion: 1, context: { ...(target.context.pageId ? { kind: 'page', pageId: target.context.pageId } : { kind: 'legacyDashboard' }), period: copy(target.context.period), runtimeFilter: copy(target.context.runtimeFilter ?? {}) },
       draftRef: { draftId: target.draft.draftId, draftVersion: target.draft.draftVersion }, draft: copy(target.draft),
       editTarget: target.widgetId ? { widgetId: target.widgetId, expectedWidgetRevision: target.widgetRevision } : null };
   }

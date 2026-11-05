@@ -8,11 +8,11 @@ function remember(key, value) {
   while (states.size>64) states.delete(states.keys().next().value);
 }
 export function chartPointText(point, precision, formatted = false) {
-  if (!point) return 'Nema podataka';
-  if (!point.identity) return 'Duplirana merenja. Pogledajte tabelu vrednosti.';
+  if (!point) return 'No data';
+  if (!point.identity) return 'Duplicate observations. See the values table.';
   const value=point.chartStatus === 'value' ? formatted ? Number(point.value).toFixed(precision) : String(point.value) : `${point.chartStatus}: ${String(point.rawValue)}`;
-  return [point.metricLabel ?? point.identity.builtInSeriesKey ?? point.identity.metricDefinitionId,point.athleteName,point.identity.bucketKey,`${value} ${point.identity.unit ?? '(jedinica nije navedena)'}`,
-    `Politika izvora: ${point.identity.source.policy ?? 'nije prijavljeno'}`,`Podešeni izvor: ${point.identity.source.configuredConnectionId ?? 'nije prijavljeno'}`,`Prijavljeni izvor: ${Object.keys(point.identity.source.reported).length?JSON.stringify(point.identity.source.reported):'nije prijavljeno'}`].join('\n');
+  return [point.metricLabel ?? point.identity.builtInSeriesKey ?? point.identity.metricDefinitionId,point.athleteName,point.identity.bucketKey,`${value} ${point.identity.unit ?? '(unit not specified)'}`,
+    `Source policy: ${point.identity.source.policy ?? 'not reported'}`,`Configured source: ${point.identity.source.configuredConnectionId ?? 'not reported'}`,`Reported source: ${Object.keys(point.identity.source.reported).length?JSON.stringify(point.identity.source.reported):'not reported'}`].join('\n');
 }
 
 export function bindDashboardChartInteractions(host, chart, plot, scope = globalThis) {
@@ -47,7 +47,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     const ids=plot.option.series.map(series=>series.id);
     const hidden=ids.length && ids.every(id=>state.selected[id]===false);
     for(const [id,element] of legendButtons)element.setAttribute('aria-pressed',String(state.selected[id]!==false));
-    status.textContent=[hidden?'Sve serije su skrivene. Vratite početni prikaz da ih ponovo prikažete.':'',...(state.yAuto?[]:plot.warnings)].filter(Boolean).join(' ');
+    status.textContent=[hidden?'All series are hidden. Reset the view to show them again.':'',...(state.yAuto?[]:plot.warnings)].filter(Boolean).join(' ');
   };
   const setRange=(first,last,dispatch=true)=>{
     if (!Number.isInteger(first)||!Number.isInteger(last)||first<0||last<first||last>=plot.buckets.length) return;
@@ -59,9 +59,9 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
   let from,to,clearPeriodConfirmation=()=>{};
   const zoom=plot.option.dataZoom?.length>0;
   if (zoom) {
-    const rangeControls=group('Prikazani period');
-    const hint=document.createElement('p');hint.className='tl-chart-control-hint';hint.textContent='Uvećanje menja samo ovaj grafikon. Period celog dashboarda menja se tek nakon potvrde.';rangeControls.append(hint);
-    for (const [label,isFrom] of [['Uvećanje od',true],['Uvećanje do',false]]) {
+    const rangeControls=group('Displayed period');
+    const hint=document.createElement('p');hint.className='tl-chart-control-hint';hint.textContent='Zoom affects only this chart. The dashboard period changes only after confirmation.';rangeControls.append(hint);
+    for (const [label,isFrom] of [['Zoom from',true],['Zoom to',false]]) {
       const wrapper=document.createElement('label');wrapper.textContent=label;
       const select=document.createElement('select');
       for (const [index,bucket] of plot.buckets.entries()) {const option=document.createElement('option');option.value=String(index);option.textContent=bucket;select.append(option);}
@@ -75,38 +75,38 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
       else if(Number.isInteger(range.startValue)&&Number.isInteger(range.endValue))setRange(range.startValue,range.endValue,false);
     });
     if(plot.settings.applyPeriod) {
-      const confirmation=document.createElement('div');confirmation.className='tl-chart-period-confirmation';confirmation.hidden=true;confirmation.setAttribute('role','group');confirmation.setAttribute('aria-label','Potvrda promene perioda');
+      const confirmation=document.createElement('div');confirmation.className='tl-chart-period-confirmation';confirmation.hidden=true;confirmation.setAttribute('role','group');confirmation.setAttribute('aria-label','Confirm period change');
       const explanation=document.createElement('p');confirmation.append(explanation);let proposedPeriod;
-      const apply=button('Primeni period na dashboard',()=>{
+      const apply=button('Apply period to dashboard',()=>{
         proposedPeriod=chartZoomPeriod(plot,state.first,state.last);
-        if(proposedPeriod){explanation.textContent=`Period ${proposedPeriod.dateFrom} – ${proposedPeriod.dateTo} biće primenjen na ceo dashboard. Sačuvani početni filteri se ne menjaju.`;confirmation.hidden=false;accept.focus();}
+        if(proposedPeriod){explanation.textContent=`The period ${proposedPeriod.dateFrom} – ${proposedPeriod.dateTo} will apply to the dashboard. Saved default filters will stay unchanged.`;confirmation.hidden=false;accept.focus();}
       },rangeControls);
-      const accept=button('Potvrdi period',()=>{if(proposedPeriod){confirmation.hidden=true;host.dispatchEvent(new scope.CustomEvent('optimove-chart-period',{bubbles:true,detail:{...proposedPeriod,confirmed:true,queryId:plot.queryId,widgetId:plot.widgetId,contextId:plot.contextId}}));proposedPeriod=null;}},confirmation);
-      button('Odustani',()=>{confirmation.hidden=true;proposedPeriod=null;apply.focus();},confirmation);rangeControls.append(confirmation);
+      const accept=button('Confirm period',()=>{if(proposedPeriod){confirmation.hidden=true;host.dispatchEvent(new scope.CustomEvent('optimove-chart-period',{bubbles:true,detail:{...proposedPeriod,confirmed:true,queryId:plot.queryId,widgetId:plot.widgetId,contextId:plot.contextId}}));proposedPeriod=null;}},confirmation);
+      button('Cancel',()=>{confirmation.hidden=true;proposedPeriod=null;apply.focus();},confirmation);rangeControls.append(confirmation);
       clearPeriodConfirmation=()=>{confirmation.hidden=true;proposedPeriod=null;};
     }
   }
   if(plot.settings.legend && plot.groupBy!=='athlete') {
-    const seriesControls=group('Vidljive serije');
-    for(const series of plot.option.series)legendButtons.set(series.id,button(`Prikaži/sakrij ${series.name}`,()=>chart.dispatchAction?.({type:'legendToggleSelect',name:series.name}),seriesControls));
+    const seriesControls=group('Visible series');
+    for(const series of plot.option.series)legendButtons.set(series.id,button(`Show/hide ${series.name}`,()=>chart.dispatchAction?.({type:'legendToggleSelect',name:series.name}),seriesControls));
     on('legendselectchanged',event=>{state.selected=Object.fromEntries(plot.option.series.map(series=>[series.id,event.selected?.[series.name]!==false]));rememberState();updateStatus();});
   }
   if(plot.settings.pointDetails && plot.queryId) {
-    const pointControls=group('Vrednosti i detalji');
-    const label=document.createElement('label');label.textContent='Pregled tačke';const select=document.createElement('select');
-    const empty=document.createElement('option');empty.value='';empty.textContent='Izaberite tačku';select.append(empty);
+    const pointControls=group('Values and details');
+    const label=document.createElement('label');label.textContent='Point preview';const select=document.createElement('select');
+    const empty=document.createElement('option');empty.value='';empty.textContent='Select a point';select.append(empty);
     for(const [series,rows] of plot.rowsBySeries.entries()) for(const [index,row] of rows.entries())if(row?.identity){const option=document.createElement('option');option.value=`${series}:${index}`;option.textContent=`${row.athleteName} · ${row.identity.bucketKey} · ${row.chartStatus==='value'?String(row.value):row.chartStatus}`;select.append(option);}
     select.addEventListener('change',()=>{if(select.value){const [series,index]=select.value.split(':').map(Number);showPoint(series,index);}});label.append(select);pointControls.append(label);
     on('click',event=>{if(event.componentType==='series' && Number.isInteger(event.seriesIndex) && Number.isInteger(event.dataIndex))showPoint(event.seriesIndex,event.dataIndex);});
   }
-  const viewControls=group('Podešavanja prikaza');
-  button('Vrati početni prikaz',()=>{
+  const viewControls=group('Display settings');
+  button('Reset view',()=>{
     clearPeriodConfirmation();
     state.selected={};for(const series of plot.option.series)chart.dispatchAction?.({type:'legendSelect',name:series.name});
     state.yAuto=false;if(plot.settings.axis.mode==='fixed')chart.setOption({yAxis:{min:plot.settings.axis.min,max:plot.settings.axis.max}});
     if(zoom)setRange(0,plot.buckets.length-1);rememberState();details.open=false;updateStatus();
   },viewControls);
-  if(plot.settings.axis.mode==='fixed')button('Automatski Y opseg',()=>{state.yAuto=true;rememberState();chart.setOption({yAxis:{min:null,max:null}});updateStatus();},viewControls);
+  if(plot.settings.axis.mode==='fixed')button('Automatic Y range',()=>{state.yAuto=true;rememberState();chart.setOption({yAxis:{min:null,max:null}});updateStatus();},viewControls);
   chart.setOption({legend:{selected:Object.fromEntries(plot.option.series.filter(series=>Object.hasOwn(state.selected,series.id)).map(series=>[series.name,state.selected[series.id]]))}});
   if(state.yAuto)chart.setOption({yAxis:{min:null,max:null}});
   if(zoom)setRange(state.first,state.last);

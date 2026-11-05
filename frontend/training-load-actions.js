@@ -2,6 +2,8 @@ import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImpor
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { clearDashboardChartStates } from './training-load-chart-interactions.js';
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
+import { handlePageAction, handlePageTabKeydown } from './training-load-pages-actions.js';
+import { pageWriteIsPending } from './training-load-pages-data.js';
 import {
   clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
@@ -58,6 +60,7 @@ import {
   nudgeAnalysisWidget,
   openAnalysisWidgetEditor,
   queryAnalysisDashboard,
+  reconcileConfirmedPageWrite,
   resetAnalysisDashboardQuery,
   removeEditorSeries,
   resizeAnalysisWidget,
@@ -170,6 +173,7 @@ function releaseAnalysisEditorDraft() {
 // a request (workspace switch, a notification's mark-read) asks first and
 // discards only once that request went through.
 function analysisEditorMayBeDiscarded() {
+  if(pageWriteIsPending())return false;
   if (!leaveSimpleEditor({ discard: false })) return false;
   const a = state.trainingLoad.analysis;
   if (!a.editor?.open) return true;
@@ -218,6 +222,8 @@ function discardAnalysisLayoutDraft() {
 // it navigates; a successful workspace switch resets Training Load anyway
 // (resetTrainingLoadForWorkspaceChange) or reloads the page.
 export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
+  if(pageWriteIsPending())return false;
+  if(state.trainingLoad.analysis.pageForm && !window.confirm('Discard your unsaved page changes?'))return false;
   if (state.activeTab !== "training-load") return leaveSimpleEditor({ discard });
   // Imports (phase 4b): an import of several sessions that is still running
   // must not be lost unseen, and a selection made but not imported is asked
@@ -269,7 +275,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!simpleEditor.model && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
+  if (!pageWriteIsPending() && !simpleEditor.model && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -298,8 +304,10 @@ function analysisWidgetActionsBlocked() {
 // while its save is in flight). Returns whether anything closed so the
 // caller knows to re-render.
 export function closeTrainingLoadAnalysisOverlay() {
+  if(pageWriteIsPending())return false;
   if (simpleEditor.model) return leaveSimpleEditor();
   const a = state.trainingLoad.analysis;
+  if(a.pageForm && !a.pageForm.submitting){a.pageForm=null;return true;}
   if (closeAnalysisPopovers()) return true;
   if (a.dashboardForm && !a.dashboardForm.submitting) { a.dashboardForm = null; return true; }
   if (a.metricPanel && !a.metricPanel.saving) { a.metricPanel = null; return true; }
@@ -611,6 +619,10 @@ function analysisIsInteractiveTarget(target) {
 }
 
 export function bindTrainingLoadAnalysisLayoutInteractions(root = document, renderTrainingLoad) {
+  root.querySelectorAll?.('.tl-pages-tabs').forEach(tabs => {
+    tabs.removeEventListener('keydown', handlePageTabKeydown);
+    tabs.addEventListener('keydown', handlePageTabKeydown);
+  });
   const widgets = root.querySelectorAll?.("[data-analysis-widget-id]") || [];
   widgets.forEach((widget) => {
     const dragHandle = widget.querySelector("[data-analysis-drag-handle='true']");
@@ -649,6 +661,22 @@ export function bindTrainingLoadAnalysisLayoutInteractions(root = document, rend
 export async function handleTrainingLoadAction(action, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate }) {
   const type = action.dataset.action;
   if (!type?.startsWith("training-load-")) return false;
+  if(type.startsWith('training-load-analysis-page-'))return handlePageAction(action,{
+    render:renderTrainingLoad,
+    mayLeave:()=>{
+      const a=state.trainingLoad.analysis;
+      if(a.saving || a.editor?.saving || a.metricPanel?.saving || !analysisEditorMayBeDiscarded() || !analysisLayoutMayBeDiscarded())return false;
+      if(a.metricPanel && !window.confirm('Discard your unsaved metric settings?'))return false;
+      discardAnalysisEditorDraft();discardAnalysisLayoutDraft();a.metricPanel=null;return true;
+    },
+    refresh:async preferredPageId=>{
+      const a=state.trainingLoad.analysis;invalidateTrainingLoadAnalysis();
+      await loadDashboardDetail(a.selectedDashboardId,renderTrainingLoad,{force:true,preferredPageId});
+      if(!a.detailError)await queryAnalysisDashboard(renderTrainingLoad,{force:true});
+    },reconcile:reconcileConfirmedPageWrite,
+  });
+  if(pageWriteIsPending())return true;
+  if(state.trainingLoad.analysis.pageForm){if(!window.confirm('Discard your unsaved page changes?'))return true;state.trainingLoad.analysis.pageForm=null;}
   if (type.startsWith('training-load-simple-')) {
     const handled = await handleSimpleEditorAction(action, renderTrainingLoad);
     if (!handled && state.trainingLoad.analysis.simpleAdvancedCreate) {
@@ -1178,6 +1206,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
     const a = state.trainingLoad.analysis;
+    if(a.pagesMode)a.pageRuntimeUsesDefaults=false;
     if (type.endsWith("from")) a.period.dateFrom = action.value || a.period.dateFrom;
     else a.period.dateTo = action.value || a.period.dateTo;
     renderTrainingLoad();
@@ -1220,6 +1249,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     a.runtimeFilter.componentId = "";
     a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };
     a.componentOptions = (detail.components || []).map((c) => ({ id: c.id, name: c.name }));
+    if(!a.pagesMode)a.pageHandoff={runtimeFilter:structuredClone(a.runtimeFilter),selectedActivity:structuredClone(a.selectedActivity),componentOptions:structuredClone(a.componentOptions)};
     a.pickingActivity = false;
     setTrainingLoadSection("analysis");
     renderTrainingLoad();

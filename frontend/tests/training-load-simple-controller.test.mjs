@@ -9,6 +9,7 @@ const custom = { id: 'metric-1', label: 'Distance', unit: 'm', scope_capabilitie
 const capabilities = { capabilities: { preview: true, atomicSave: true }, builtins: [builtin] };
 const validPreview = (overrides = {}) => ({ status: 'valid', previewToken: 'preview-token', requestIssuedAt: '2026-11-03T12:00:00.000Z', resolvedPeriod: clone(period), ...overrides });
 const receipt = { widgetId: 'widget-1', widgetRevision: 8, requestId: 'id-2' };
+const pageContext = (h, pageId = 'page/1') => { h.context = { ...h.context, pageId, pageDefaultsRevision: 3, pageDefaultFilter: { athleteIds: ['athlete-page'] } }; };
 const apiError = (status, error) => Object.assign(new Error(error), { status, data: { error } });
 
 function deferred() {
@@ -88,6 +89,89 @@ async function uncertain(h) {
 function widget(overrides = {}) {
   return { id: 'widget/1', revision: 7, title: 'Original', widget_type: 'line_chart', group_by: 'week', local_filter_override: { athleteIds: ['athlete-1'], activityId: null, componentId: 'component-1' }, series: [{ resolution_status: 'resolved', metric_definition_id: custom.id, data_scope_level: 'session', analytical_aggregation: 'avg' }], display_config: { decimals: 3, nested: { color: 'red' } }, presentation_config: { annotations: [{ text: 'Keep me' }] }, ...overrides };
 }
+
+test('Page rute i envelope koriste stvarni ID; običan save ne upisuje shared defaults', async () => {
+  const h = harness(); pageContext(h);
+  await ready(h, widget());
+  h.reply('save', () => receipt);
+  await h.controller.save();
+  assert.ok(h.calls.every(call => call.url.startsWith('/api/training-load/dashboards/dashboard%2F1/pages/page%2F1/simple/')));
+  assert.deepEqual(h.of('preview')[0].body.context, { kind: 'page', pageId: 'page/1', period, runtimeFilter: h.context.runtimeFilter });
+  assert.equal(Object.hasOwn(h.of('save')[0].body.input.context, 'expectedPageDefaultsRevision'), false);
+  assert.equal(h.of('save')[0].url.endsWith('/widgets/widget%2F1'), true);
+  assert.equal(h.of('save')[0].options.method, 'PUT');
+});
+
+for (const route of ['capabilities', 'metrics', 'preview', 'save']) {
+  test(`spor ${route} odgovor sa druge Page ne menja aktivni editor`, async () => {
+    const h = harness(), pending = deferred(); pageContext(h);
+    let operation;
+    if (route === 'capabilities') { h.reply(route, () => pending.promise); operation = h.controller.open(); }
+    else {
+      await ready(h);
+      h.reply(route, () => pending.promise);
+      operation = route === 'metrics' ? h.controller.metrics() : route === 'preview' ? h.controller.preview() : h.controller.save();
+    }
+    pageContext(h, 'page/2');
+    pending.resolve(route === 'capabilities' ? capabilities : route === 'metrics' ? { metrics: [{ ...custom, label: 'Wrong page' }] } : route === 'preview' ? validPreview({ previewToken: 'wrong-page-token' }) : receipt);
+    await operation;
+    assert.equal(h.saved.length, 0);
+    assert.equal(h.controller.model.receipt, undefined);
+    assert.notEqual(h.controller.model.preview?.previewToken, 'wrong-page-token');
+    assert.notEqual(h.controller.model.metrics[0]?.label, 'Wrong page');
+    if (route === 'capabilities') assert.equal(h.controller.model.capabilities, undefined);
+  });
+}
+
+test('isti draft ne prenosi preview token između Page ID-jeva', async () => {
+  const h = harness(); pageContext(h); await ready(h);
+  const draft = clone(h.controller.model.draft), ids = h.uuidCount;
+  pageContext(h, 'page/2');
+  await h.controller.save();
+  assert.deepEqual(h.controller.model.draft, draft);
+  assert.equal(h.of('save').length, 0);
+  assert.equal(h.uuidCount, ids);
+  assert.equal(h.controller.model.canSave, false);
+});
+
+for (const key of ['pageDefaultsRevision', 'pageDefaultFilter']) {
+  test(`${key} poništava preview čak i kada runtime maskira defaults`, async () => {
+    const h = harness(); pageContext(h); await ready(h);
+    h.context[key] = key === 'pageDefaultsRevision' ? 4 : { athleteIds: ['changed'] };
+    await h.controller.save();
+    assert.equal(h.of('save').length, 0);
+    assert.equal(h.controller.model.canSave, false);
+  });
+}
+
+test('unknown retry i status ostaju na originalnoj Page i telu posle promene defaults revizije', async () => {
+  const h = harness(); pageContext(h); await uncertain(h);
+  const original = h.of('save')[0], target = h.controller.model;
+  h.context.pageDefaultsRevision++;
+  h.context.period.dateTo = '2026-10-30';
+  assert.equal(h.controller.close(), false);
+  await h.controller.open();
+  assert.equal(h.controller.model, target);
+  pageContext(h, 'page/2');
+  await h.controller.save(true);
+  assert.equal(h.of('save').length, 1);
+  h.reply('status', () => ({ status: 'notRecorded' }));
+  await h.controller.status();
+  assert.equal(h.of('status')[0].url, original.url.replace('/widgets', '/requests/status'));
+  assert.equal(h.controller.model.saveState, 'unknown');
+  pageContext(h);
+  h.reply('save', () => receipt);
+  await h.controller.save(true);
+  assert.equal(h.of('save')[1].url, original.url);
+  assert.equal(h.of('save')[1].options.body, original.options.body);
+  assert.equal(h.controller.model.saveState, 'recorded');
+});
+
+test('legacy kontekst zadržava postojeću rutu i envelope', async () => {
+  const h = harness(); await ready(h);
+  assert.equal(h.of('preview')[0].url, '/api/training-load/dashboards/dashboard%2F1/simple/preview');
+  assert.deepEqual(h.of('preview')[0].body.context, { kind: 'legacyDashboard', period, runtimeFilter: h.context.runtimeFilter });
+});
 
 test('opening a new draft selects no default metric and cannot advance, preview, or save', async () => {
   const h = harness(), c = h.controller;

@@ -1,5 +1,6 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
+import { renderPagesHtml,renderPagePendingHtml } from './training-load-pages-view.js';
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
@@ -78,7 +79,7 @@ function layoutFor(widget) {
 
 function canEdit() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && (!state.trainingLoad.analysis.pagesMode || state.trainingLoad.analysis.pageCapabilities.pageWidgetEditing===true);
 }
 
 // Permanent delete is offered for any open dashboard except a system
@@ -232,7 +233,6 @@ function renderDashboardMenuHtml() {
             ${isActive
               ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
               : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
-            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
             ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
           ` : ""}
           ${canDeleteDashboard() ? `
@@ -289,7 +289,7 @@ function renderTopBarHtml() {
 }
 
 // ---------------- Dashboards UX H2: layout editing bar ----------------
-// Layout editing is its own mode (dashboard or widget "⋯" -> Edit layout).
+// Layout editing has one visible entry in the active Page header.
 // While it is on, this bar is the one place to leave it: Cancel drops the
 // local draft and exits; the primary button saves the draft (atomic
 // PUT /layout) and exits, or reads "Done" while nothing has been moved.
@@ -301,17 +301,17 @@ function renderLayoutBarHtml() {
   if (!a.editMode || !canEdit()) return "";
   const dirty = Boolean(a.layoutDraft);
   return `
-    <div class="tl-layout-bar" role="region" aria-label="Layout editing">
+    <div class="tl-layout-bar" role="region" aria-label="Editing layout">
       <div class="tl-layout-bar-text">
         <strong>Editing layout</strong>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget or use its arrows; drag the corner or use − / + to resize.</span>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up / Move down to set the order on phones.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget title to move it, or its bottom-right corner to resize. You can also use the arrows.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up and Move down to set the order on phones.</span>
         <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Unsaved changes" : "No changes yet"}</span>
       </div>
       <div class="tl-layout-bar-actions">
         <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Cancel</button>
         ${dirty
-          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving..." : "Save layout"}</button>`
+          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving…" : "Save layout"}</button>`
           : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Done</button>`}
       </div>
     </div>
@@ -332,8 +332,8 @@ function renderEmptyHtml() {
   `;
 }
 
-// H2: layout-only controls, shown in layout mode (Settings/Delete moved to
-// the widget "⋯" menu). A button that would be a no-op at the current
+// Layout-only controls. Settings lives on the card; deletion stays in its
+// menu. A button that would be a no-op at the current
 // position is disabled - clampAnalysisLayoutEntry would undo it anyway.
 // Desktop gets the 12-column nudges and width -/+; phones only Move up/
 // Move down, because the phone layout reads nothing but the order
@@ -371,11 +371,8 @@ function renderWidgetToolbarHtml(widget, layout, position) {
   `;
 }
 
-// H2: the widget "⋯" menu - on every widget of an editable dashboard, in
-// and out of layout mode (before H2 a widget's Settings were only reachable
-// from inside layout mode). While a layout draft is unsaved, Settings/
-// Advanced/Delete are disabled: each of them reloads the dashboard on
-// success, which would silently drop the draft.
+// The card owns its Settings entry and the Page header owns layout editing.
+// This menu keeps deletion, blocked while a layout draft is unsaved.
 function renderWidgetMenuHtml(widget) {
   const a = state.trainingLoad.analysis;
   if (!canEdit()) return "";
@@ -390,10 +387,6 @@ function renderWidgetMenuHtml(widget) {
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
           ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
-          ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
-          ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
-          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout" })}
-          <div class="tl-menu-separator" role="separator"></div>
           ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
         </div>
       ` : ""}
@@ -536,7 +529,7 @@ function renderWidgetHtml(widget, position) {
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
-        ${canEdit() && !state.trainingLoad.analysis.editMode ? `<button type="button" class="plain-button compact-button tl-widget-settings" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="${escapeAttr(`Podesi ${widget.title}`)}" ${settingsBlocked ? 'disabled' : ''}>Podesi</button>` : ''}
+        ${canEdit() && !state.trainingLoad.analysis.editMode ? `<button type="button" class="plain-button compact-button tl-widget-settings" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="${escapeAttr(`Settings for ${widget.title}`)}" ${settingsBlocked ? 'disabled' : ''}>Settings</button>` : ''}
       </header>
       <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
@@ -555,11 +548,12 @@ function renderGridHtml() {
     <section class="tl-analysis-dashboard-head">
       <div>
         <p class="eyebrow">${a.dashboard.is_template ? "Template" : a.dashboard.status === "archived" ? "Archived" : "Dashboard"}</p>
-        <h3>${escapeHtml(a.dashboard.name)}</h3>
+        <h3>${escapeHtml(a.pagesMode?a.page?.name??a.dashboard.name:a.dashboard.name)}</h3>
         ${a.dashboard.description ? `<p class="muted">${escapeHtml(a.dashboard.description)}</p>` : ""}
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
+          ${widgets.length ? `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-toggle-edit" ${a.saving ? "disabled" : ""}>Edit layout</button>` : ''}
           <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
         </div>
       ` : ""}
@@ -574,9 +568,9 @@ function renderGridHtml() {
     ${widgets.length
       ? `<div class="tl-analysis-grid">${widgets.map((w, index) => renderWidgetHtml(w, { index, total: widgets.length })).join("")}</div>`
       : `<section class="panel tl-analysis-empty">
-          <h3>No metrics yet</h3>
+          <h3>${a.pagesMode?'This page is empty':'No metrics yet'}</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
-          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">Add your first metric</button></div>` : ""}
+          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">${a.pagesMode?'Add your first metric':'Add your first metric'}</button></div>` : ""}
         </section>`}
   `;
 }
@@ -719,6 +713,7 @@ function renderMetricPanelHtml() {
             ${renderPanelPreviewHtml(panel)}
           </section>
         </div>
+        ${renderPagePendingHtml(a.pageWritePending)}
         ${panel.error ? `<p class="builder-error" role="alert">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.serverChanged ? `<p class="muted tl-metric-panel-server-note">Closing keeps what is already saved on the dashboard.</p>` : ""}
         <div class="tl-analysis-modal-actions tl-metric-panel-actions">
@@ -879,6 +874,7 @@ function renderEditorHtml() {
           ` : ""}
         </div>
         <div class="tl-analysis-modal-actions tl-editor-footer">
+          ${renderPagePendingHtml(a.pageWritePending)}
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
           ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}
           <div class="tl-editor-footer-row">
@@ -896,15 +892,16 @@ function renderEditorHtml() {
 export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
   const editing = Boolean(a.simpleEditor?.open);
-  const dashboardControls = (html, label) => editing ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
+  const dashboardControls = (html, label) => editing || a.pageWritePending || a.pagesMode&&a.detailLoading ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
   return `
     <div class="tl-analysis">
-      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filteri</summary>${dashboardControls(renderTopBarHtml(), 'Filteri dashboarda tokom podešavanja')}</details>` : renderTopBarHtml()}
+      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filters</summary>${dashboardControls(renderTopBarHtml(), 'Dashboard filters while editing')}</details>` : dashboardControls(renderTopBarHtml(), 'Dashboard controls while saving')}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
+      ${renderPagesHtml(a)}
       ${renderSimpleEditorHtml(a.simpleEditor)}
-      ${dashboardControls(renderGridHtml(), 'Sačuvani dashboard tokom podešavanja')}
+      <div ${a.pagesMode?'id="tl-page-panel" role="tabpanel" aria-label="Active page content"':''}>${dashboardControls(renderGridHtml(), 'Saved dashboard while editing')}</div>
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}

@@ -47,7 +47,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (kind === 'capabilities') {
         const widgetTypes = (await queryRunner('select * from training_load.dashboard_widget_types where is_active=true order by key')).rows;
         const builtins = (await queryRunner('select * from training_load.dashboard_builtin_series where is_active=true order by key')).rows.map(row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'], source_policy: 'not_applicable' }));
-        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
+        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: Boolean(target.page), presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
       }
       let existing = null;
       if (envelope?.editTarget != null) {
@@ -75,7 +75,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         effectiveFilterSummary: compiled.effectiveFilter, dashboardRevision: target.dashboard.revision,
         ...(target.page ? { pageId: target.page.id, pageDefaultsRevision: target.page.defaults_revision } : {}),
         ...(existing ? { widgetRevision: existing.revision } : {}), normalizedWidget: compiled.widget,
-        capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false },
+        capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: Boolean(target.page), presentationAnnotations: false, backendReference: false, referencePercent: false },
         suggestion: { type: compiled.widget.widget_type, confidence: 'configurationOnly', reasonCode: 'resultProofRequired' },
       };
       if (kind === 'validate') return common;

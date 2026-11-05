@@ -54,7 +54,7 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
   const r = await query(
     `select d.id, d.name, d.description, d.owner_scope, d.owner_user_id, d.owner_club_id, d.owner_team_id,
             d.data_workspace_type, d.data_workspace_scope_id, d.is_template, d.status, d.cloned_from_dashboard_id,
-            d.revision, d.created_by_user_id, d.created_at, d.updated_at
+            d.revision, d.created_by_user_id, d.created_at, d.updated_at, to_jsonb(d)->'pages_revision' as pages_revision
      from training_load.dashboards d
      where (${visSql}) and (${statusSql}) ${includeTemplates ? "" : "and d.is_template = false"}
      order by d.updated_at desc`,

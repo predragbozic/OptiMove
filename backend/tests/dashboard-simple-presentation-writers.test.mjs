@@ -33,12 +33,19 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     dashboardManageBasis: () => "owner",
     dashboardVisibilitySql: () => "true",
     dataWorkspaceMatches: () => true,
+    dataWorkspaceForActiveWorkspace: () => workspace,
     resolveDashboardCreateContext: async (request, body, suppliedWorkspace) => {
       assert.equal(suppliedWorkspace, workspace);
       return { ownerScope: "user", ownerUserId: ownerId, ownerClubId: null, ownerTeamId: null, dataWorkspaceType: "private_coach", dataWorkspaceScopeId: null, isTemplate: body.isTemplate === true };
     },
     isMetricVisibleToDashboard: async () => ({ visible: true, def: { state: "active" } }),
     isSourceConnectionVisibleToDashboard: async () => ({ visible: true, conn: { state: "active" } }),
+  } });
+  // This suite isolates legacy presentation ports; Page authorization has its
+  // own integration coverage and must not turn these mocks into DB clients.
+  mock.module("../src/dashboardPages/access.js", { namedExports: {
+    authorizePages: async (query, req) => ({ req, workspace, dashboard }),
+    assertPageFilterVisible: async () => {},
   } });
   mock.module("../src/trainingLoadDashboardQuery.js", { namedExports: {
     queryDashboard: async (...args) => batchQueryHandler(...args),
@@ -207,6 +214,14 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   });
 
   function readFixture() {
+    connectHandler = () => ({
+      query: async (sql, parameters) => {
+        if (/^(begin|rollback|set local)/i.test(sql)) return { rows: [] };
+        queryCalls.push({ sql, parameters });
+        return queryHandler(sql, parameters);
+      },
+      release() {},
+    });
     const rows = [chartPresentation, opaquePresentation, null].map((presentation_config, index) => ({ id: `20000000-0000-4000-8000-00000000000${index + 1}`, widget_type: "line_chart", presentation_config, revision: 3 }));
     queryHandler = async sql => {
       if (sql.includes("from training_load.dashboards")) return { rows: [dashboard] };
@@ -262,7 +277,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     connectHandler = () => ({
       query: async (sql, parameters) => {
         statements.push({ sql, parameters });
-        if (["begin", "commit", "rollback"].includes(sql)) return { rows: [] };
+        if (["begin", "commit", "rollback"].includes(sql) || /^set local (statement_timeout|lock_timeout)=/.test(sql)) return { rows: [] };
         if (sql.includes("from training_load.dashboards")) return { rows: [{ ...dashboard, is_template: true }] };
         if (sql.startsWith("insert into training_load.dashboards")) return { rows: [{ ...dashboard, id: "cloned-dashboard" }] };
         if (sql.startsWith("select * from training_load.dashboard_widgets")) return { rows: sourceWidgets };
@@ -270,7 +285,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
         if (sql.startsWith("select * from training_load.dashboard_widget_series")) return { rows: sourceSeries };
         if (sql.includes("from training_load.metric_definitions d")) return { rows: [{ id: "resolved-metric", key: "distance", value_type: "numeric", unit: "m" }] };
         if (sql.includes("from training_load.metric_definition_scope_capabilities")) return { rows: [{ metric_definition_id: "resolved-metric", scope_level: "session" }] };
-        if (sql.startsWith("insert into training_load.dashboard_widget_series")) return { rows: [] };
+        if (sql.startsWith("insert into training_load.dashboard_widget_series")) return { rows: [{ id: `series-${parameters[0]}` }] };
         if (sql.startsWith("update training_load.dashboard_widgets as cloned_widget")) {
           if (failCopy) throw Object.assign(new Error("Guard refused incompatible target"), { code: "23514" });
           return { rowCount: 1, rows: [] };
@@ -311,7 +326,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     assert.deepEqual(resolvedInsert.parameters.slice(6, 9), ["primary", "#123456", "Original label"]);
     assert.equal(fixture.released, true);
     assert.equal(queryCalls.length, 0);
-    assert.ok(statements.every(call => !/set_config|set local/i.test(call.sql)));
+    assert.ok(statements.every(call => !/set_config/i.test(call.sql) && (!/set local/i.test(call.sql) || /^set local (statement_timeout|lock_timeout)=/.test(call.sql))));
   });
 
   test("a DB compatibility rejection during final clone copy rolls back every widget and series", async () => {
