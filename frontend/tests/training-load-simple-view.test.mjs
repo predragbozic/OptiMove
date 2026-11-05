@@ -128,7 +128,7 @@ test("builtin fixed metadata does not expose custom analytical controls; backend
   const html = renderSimpleEditorHtml(input);
   assert.doesNotMatch(html, /training-load-simple-aggregation|training-load-simple-scope/);
   assert.match(html, /value="line_chart" disabled/);
-  assert.match(html, /Line chart \(unavailable\)/);
+  assert.match(html, /This display type is currently unavailable/);
 });
 
 test("preview is lossless for every current and comparison row, including problems, arrays, zero and negatives", () => {
@@ -150,7 +150,8 @@ test("preview is lossless for every current and comparison row, including proble
   assert.match(html, /Conflicting observations were returned/);
   assert.match(html, /Incomplete coverage/);
   assert.match(html, /&lt;svg onload=&quot;bad&quot;&gt;/);
-  assert.doesNotMatch(html, /<svg|<canvas/);
+  assert.doesNotMatch(html, /<canvas|<svg onload/);
+  assert.equal((html.match(/<svg /g) ?? []).length, 6);
   assert.match(html, /<caption>Series 1 \/ Current period<\/caption>/);
   assert.match(html, /Complete preview result and problem details/);
 });

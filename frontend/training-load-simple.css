@@ -63,10 +63,16 @@
 .tl-simple-steps li::before { counter-increment:editor-step; content:counter(editor-step); display:grid; place-items:center; flex:0 0 1.75rem; width:1.75rem; height:1.75rem; border-radius:50%; background:#edf0f4; font-weight:700; }
 .tl-simple-steps [aria-current="step"] { font-weight:700; border-color:#157b70; background:#e5f3ef; }
 .tl-simple-steps [aria-current="step"]::before { background:#157b70; color:#fff; }
-.tl-simple-view-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(10rem,100%),1fr)); gap:.65rem; }
-.tl-simple-view-options .tl-simple-choice { padding:.75rem; border:1px solid #dbe5e6; border-radius:.5rem; box-sizing:border-box; cursor:pointer; }
-.tl-simple-view-options .tl-simple-choice:has(input:checked) { border:2px solid #157b70; background:#e5f3ef; }
-.tl-simple-view-options .tl-simple-choice:has(input:disabled) { cursor:default; }
+.tl-simple-view-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(12rem,100%),1fr)); gap:.75rem; }
+.tl-simple-chart-card { display:flex; align-items:flex-start; gap:.6rem; padding:.85rem; border:2px solid #dbe5e6; border-radius:.6rem; cursor:pointer; min-width:0; }
+.tl-simple-chart-card > input { flex-shrink:0; margin-top:.35rem; width:1.15rem; height:1.15rem; }
+.tl-simple-chart-card-body { display:flex; flex-direction:column; gap:.45rem; min-width:0; font-size:.9rem; }
+.tl-simple-chart-card-body strong { font-size:1rem; }
+.tl-simple-chart-card svg { width:100%; max-width:10rem; height:4.5rem; color:#157b70; }
+.tl-simple-chart-card:has(input:checked) { border-color:#157b70; background:#e5f3ef; }
+.tl-simple-chart-card:has(input:focus-visible) { outline:3px solid #157b70; outline-offset:3px; }
+.tl-simple-chart-card:has(input:disabled) { cursor:default; background:#f4f6f8; }
+.tl-simple-chart-reason { color:#52606d; font-size:.85rem; }
 .tl-simple-message { white-space: pre-wrap; }
 .tl-simple-message[role="alert"] { border-left: .25rem solid #a53023; padding: .75rem; background: #fff1ef; color: #78271f; }
 .tl-simple-preview { padding-top: 1rem; border-top: 1px solid #b8c2d1; }

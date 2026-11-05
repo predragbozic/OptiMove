@@ -10,14 +10,15 @@ const palette = ['#157b70','#427eb5','#8560b0','#9b641e','#a54343','#246778','#7
 const color = id => { let hash = 0; for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) >>> 0; return palette[hash % palette.length]; };
 const only = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 
-export function interactiveChartPresentation(groupBy) {
+export function interactiveChartPresentation(groupBy, variant) {
   const time=['day','week'].includes(groupBy);
-  return {mode:'replace',value:{schemaVersion:1,...(time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
+  return {mode:'replace',value:{schemaVersion:1,...(variant?{chartVariant:variant}:{}),...(time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
 }
 
 export function chartPresentation(presentation) {
   if (presentation == null) return { mode:'legacy' };
-  if (!only(presentation,['schemaVersion','chartComposition','chartInteractions']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && presentation.chartComposition !== 'athletes-v1') return { mode:'unsupported' };
+  if (!only(presentation,['schemaVersion','chartVariant','chartComposition','chartInteractions']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && presentation.chartComposition !== 'athletes-v1') return { mode:'unsupported' };
+  if (Object.hasOwn(presentation,'chartVariant') && (!['area','horizontal-bar'].includes(presentation.chartVariant) || !Object.hasOwn(presentation,'chartInteractions'))) return {mode:'unsupported'};
   if(Object.hasOwn(presentation,'chartInteractions') && !only(presentation.chartInteractions,['tooltip','legend','zoom','pointSelection','yAxis']))return {mode:'unsupported'};
   const input = presentation.chartInteractions ?? {};
   if (!only(input,['tooltip','legend','zoom','pointSelection','yAxis'])) return { mode:'unsupported' };
@@ -25,7 +26,7 @@ export function chartPresentation(presentation) {
   if(Object.hasOwn(input,'yAxis') && !only(input.yAxis,['mode','min','max']))return {mode:'unsupported'};
   const axis=input.yAxis ?? {mode:'auto'};
   if (!only(axis,axis.mode === 'fixed' ? ['mode','min','max'] : ['mode']) || !['auto','fixed'].includes(axis.mode) || axis.mode === 'fixed' && (!Number.isFinite(axis.min) || !Number.isFinite(axis.max) || axis.min >= axis.max)) return {mode:'unsupported'};
-  return {mode:'enhanced',composition:presentation.chartComposition === 'athletes-v1',tooltip:input.tooltip?.mode ?? 'exact',legend:input.legend?.toggle ?? true,zoom:input.zoom?.mode ?? 'disabled',applyPeriod:input.zoom?.applyPeriodAction === true,pointDetails:input.pointSelection?.mode === 'details',axis};
+  return {mode:'enhanced',variant:presentation.chartVariant,composition:presentation.chartComposition === 'athletes-v1',tooltip:input.tooltip?.mode ?? 'exact',legend:input.legend?.toggle ?? true,zoom:input.zoom?.mode ?? 'disabled',applyPeriod:input.zoom?.applyPeriodAction === true,pointDetails:input.pointSelection?.mode === 'details',axis};
 }
 
 export function chartBuckets(period, groupBy) {
@@ -46,6 +47,7 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
   const settings = chartPresentation(options.presentation);
   if (settings.mode !== 'enhanced') return {status:settings.mode,plots:[]};
   if (model.status !== 'ready' || !['line_chart','bar_chart'].includes(model.widgetType)) return {status:'notReady',plots:[]};
+  if (settings.variant && model.widgetType!==({area:'line_chart','horizontal-bar':'bar_chart'}[settings.variant])) return {status:'unsupported',plots:[]};
   const time = ['day','week'].includes(model.groupBy);
   const composed = settings.composition && (time || model.groupBy === 'athlete');
   const period = options.resolvedPeriod ?? model.period;
@@ -70,9 +72,9 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
     const phasePeriod=group.phase === 'comparison' ? group.comparisonPeriod : period;
     const buckets=time ? chartBuckets(phasePeriod,model.groupBy) : model.groupBy === 'athlete' && composed ? athleteIds : [...new Set(group.rows.map(row=>row.identity.bucketKey))];
     if (!buckets || group.rows.some(row => time && !buckets.includes(row.identity.bucketKey))) return {status:'invalidBuckets',plots:[]};
-    const athleteName=id=>options.athletes?.find(athlete=>athlete.id===id)?.name || (id == null ? 'Cela grupa' : `Sportista ${id}`);
+    const athleteName=id=>options.athletes?.find(athlete=>athlete.id===id)?.name || (id == null ? 'Whole group' : `Athlete ${id}`);
     const names=athleteIds.map(athleteName);
-    const labels=athleteIds.map((id,index)=>names.filter(name=>name===names[index]).length>1 ? `${names[index]} (${id ?? 'grupa'})` : names[index]);
+    const labels=athleteIds.map((id,index)=>names.filter(name=>name===names[index]).length>1 ? `${names[index]} (${id ?? 'group'})` : names[index]);
     const labelCollision=new Set(labels).size!==labels.length;
     const uniqueLabel=id=>labelCollision ? JSON.stringify([athleteName(id),id]) : labels[athleteIds.indexOf(id)];
     const name=labelForSeries(group.definition);
@@ -95,10 +97,18 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
     if (fixed && units.size>1) return {status:'ambiguousAxisUnit',plots:[]};
     const zoom=time && settings.zoom==='local';
     const warnings=[];
-    if (fixed && group.rows.some(row=>row.chartStatus==='value' && (row.value<settings.axis.min || row.value>settings.axis.max))) warnings.push('Neke vrednosti su izvan Y opsega. Izvorne vrednosti ostaju u tabeli.');
+    if (fixed && group.rows.some(row=>row.chartStatus==='value' && (row.value<settings.axis.min || row.value>settings.axis.max))) warnings.push('Some values are outside the value axis range. Original values remain in the table.');
     const plot={enhanced:true,key:group.key,widgetId:model.widgetId,queryId:options.queryId ?? null,contextId:options.contextId ?? null,groupBy:model.groupBy,buckets,resolvedPeriod:structuredClone(phasePeriod),rowsBySeries,settings:{...settings,applyPeriod:settings.applyPeriod && options.allowApplyPeriod!==false && group.phase==='current' && Boolean(options.queryId)},warnings,precision:model.config.effective.numberFormat.maximumFractionDigits,
       caption:[name,group.phase==='comparison'?'Comparison':'Current period',group.identity.unit ?? 'Unit not specified'].join(' · '),
       option:{animation:false,grid:{left:12,right:20,top:48,bottom:zoom?70:16,containLabel:true},legend:{show:model.config.effective.legend.visible,selectedMode:settings.legend,type:'scroll',left:12,right:12,top:4},tooltip:{trigger:'item',renderMode:'richText',confine:true},xAxis:{type:'category',data:model.groupBy==='athlete' && composed?buckets.map(uniqueLabel):buckets,axisLabel:{hideOverlap:true}},yAxis:{type:'value',name:group.identity.unit ?? '',...(fixed?{min:settings.axis.min,max:settings.axis.max}:{}),scale:false},series:definitions,...(zoom?{dataZoom:[{type:'slider',filterMode:'none',start:0,end:100},{type:'inside',filterMode:'none',zoomOnMouseWheel:false,moveOnMouseWheel:false,start:0,end:100}]}:{})}};
+    plot.valueAxis=settings.variant==='horizontal-bar'?'xAxis':'yAxis';
+    if(settings.variant==='area')for(const series of definitions)series.areaStyle={opacity:0.18};
+    if(settings.variant==='horizontal-bar'){
+      const category=plot.option.xAxis,value=plot.option.yAxis;
+      plot.option.xAxis=value;plot.option.yAxis={...category,inverse:true};
+      for(const series of definitions)series.label.position='right';
+      if(zoom){plot.option.grid.right=58;for(const control of plot.option.dataZoom){control.yAxisIndex=0;control.orient='vertical';if(control.type==='slider'){control.right=4;control.top=60;control.bottom=20;}}}
+    }
     plot.fingerprint=chartIdentityKey([options.contextId,options.queryId,options.widgetRevision,phasePeriod,options.presentation,model.config.effective]);
     plots.push(plot);
   }

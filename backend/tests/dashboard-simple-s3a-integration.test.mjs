@@ -29,6 +29,7 @@ if (!process.execArgv.includes('--experimental-test-module-mocks')) {
       const client = new EventEmitter();
       client.query = async (sql, params) => {
         calls.push({ sql, params });
+        if (sql.includes('dashboard_chart_variants_v1')) return {rows:[{ready:options.variantsReady===true}]};
         if (sql.includes('from public.schema_migrations')) return { rows: [{ migration_name: SIMPLE_MIGRATION_NAME, checksum: SIMPLE_MIGRATION_SHA256 }] };
         if (sql.includes('information_schema.columns')) return { rows: [{ presentation: true, receipts: true, writer: true }] };
         if (sql.includes('from public.users')) return { rows: options.inactiveUser ? [] : [{ id: id(3), is_active: true }] };
@@ -55,6 +56,12 @@ if (!process.execArgv.includes('--experimental-test-module-mocks')) {
     return { pool, calls, releases, get checkouts() { return checkouts; } };
   }
   const serviceFor = (f, extra = {}) => createSimplePreviewService({ pool: f.pool, queryDashboard: async () => assert.fail('Metrics must not query measurements'), ...extra });
+  test('gallery variants are advertised only when the database backstop is installed',async()=>{
+    for(const ready of [false,true]){
+      const f=fixture({variantsReady:ready});const result=await serviceFor(f).capabilities({req,dashboardId:dashboard.id});
+      assert.deepEqual(result.capabilities.chartVariants,ready?['area','horizontal-bar']:[]);
+    }
+  });
   async function serve(t, router, authenticated = true) {
     const app = express();
     app.use((request, response, next) => { if (authenticated) request.user = req.user; next(); });
