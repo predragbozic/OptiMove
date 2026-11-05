@@ -663,6 +663,7 @@ export function clearGpexeIdentities({ keepOutcome = true } = {}) {
   identityEpoch += 1;
   const gx = g();
   if (gx) gx.identity = { ...emptyGpexeIdentityState(), ...(keepOutcome ? identityOutcome(gx.identity) : {}) };
+  clearPairSuggestions();
 }
 
 // Returns true when the screen had staged choices (the caller asked first).
@@ -1314,6 +1315,7 @@ export function importsUnloadShouldWarn(gx = g()) {
 // ---------------------------------------------------------------------------
 export const SUGGESTION_MAX_PAIRS = 60;
 let suggestionEpoch = 0;
+let suggestionSeq = 0;
 
 export function clearPairSuggestions() {
   suggestionEpoch += 1;
@@ -1338,14 +1340,15 @@ export async function loadPairSuggestions(render) {
   if (!gx.teamId || !gx.mapping?.open) return;
   const generation = gx.generation;
   const epoch = suggestionEpoch;
+  const seq = ++suggestionSeq;
   gx.suggestions = { status: "loading", data: null };
   render();
   try {
     const answer = await identityRequest(teamPath(gx.teamId, "/athlete-pair-suggestions"));
-    if (generation !== gx.generation || epoch !== suggestionEpoch) return;
+    if (generation !== gx.generation || epoch !== suggestionEpoch || seq !== suggestionSeq) return;
     gx.suggestions = { status: "ready", data: suggestionData(answer) };
   } catch (error) {
-    if (generation !== gx.generation || epoch !== suggestionEpoch) return;
+    if (generation !== gx.generation || epoch !== suggestionEpoch || seq !== suggestionSeq) return;
     gx.suggestions = { status: errorInfo(error).status === 404 ? "unavailable" : "error", data: null };
   }
   render();
@@ -1359,6 +1362,15 @@ export function stageableSuggestedPairs(gx = g()) {
   const unlinked = new Set((gx.sourceAthletes || []).filter((a) => a.status === "unlinked").map((a) => a.gpexeAthleteId));
   const linkable = new Set(teamAthleteChoices(gx).filter((c) => !c.duplicate).map((c) => c.id));
   return data.exact.filter((p) => unlinked.has(p.gpexeAthleteId) && linkable.has(p.athleteId));
+}
+
+// The name and date of birth that justified a staged pair, for the review step
+// of a viewer who has no identity list (the team's coach): only the exact pair
+// the server suggested, never another athlete's.
+export function suggestedIdentity(gpexeAthleteId, athleteId, gx = g()) {
+  const data = gx.suggestions?.status === "ready" ? gx.suggestions.data : null;
+  const p = data?.exact.find((x) => x.gpexeAthleteId === String(gpexeAthleteId) && x.athleteId === String(athleteId));
+  return p ? { name: p.gpexeName, birthDate: p.birthDate } : null;
 }
 
 // Stages the ticked exact pairs (at most 60) and opens the ordinary review.

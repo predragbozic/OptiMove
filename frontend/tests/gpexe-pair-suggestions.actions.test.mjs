@@ -160,11 +160,11 @@ test("4. the states: no loaded names (a coach is told to ask an administrator, a
   fixture(2);
   reset("coach", { suggestions: { state: "no_identities_loaded", snapshotCount: 0, expiresAt: null, exact: [], ambiguous: [], dateConflicts: [] } });
   await openMapping();
-  assert.match(pageHtml(), /Ask an administrator to load them/);
+  assert.match(pageHtml(), /Ask an administrator to load the GPEXE names/);
   assert.ok(!/training-load-gpexe-map-suggest-all/.test(pageHtml()));
   reset("club admin", { suggestions: { state: "no_identities_loaded", snapshotCount: 0, expiresAt: null, exact: [], ambiguous: [], dateConflicts: [] } });
   await openMapping();
-  assert.match(pageHtml(), /Load the GPEXE names and dates of birth below/);
+  assert.match(pageHtml(), /Load the GPEXE names and dates of birth above/);
   reset("coach", { suggestions: () => ({ status: 404, body: { error: "notFound" } }) });
   await openMapping();
   assert.ok(!/Suggested pairs|suggested pairs|administrator to load/.test(pageHtml()), "a 404 shows nothing");
@@ -208,4 +208,54 @@ test("6. closing the screen drops the suggestions; Review all is off while a wri
   await act("training-load-gpexe-map-close");
   assert.deepEqual(state.trainingLoad.gpexe.suggestions, { status: "idle", data: null });
   assert.ok(!/Suggested pairs/.test(pageHtml()));
+});
+
+test("7. the coach's review of staged suggestions names the GPEXE name and date of birth (not only a raw id)", async () => {
+  fixture(2);
+  reset("coach", { suggestions: OK({ exact: [pair(0, { gpexeName: "Ana Marić", birthDate: "2008-03-04" })] }) });
+  await openMapping();
+  await act("training-load-gpexe-map-suggest-all");
+  const review = pageHtml().match(/<section class="gpexe-link-confirm[\s\S]*?<\/section>/)?.[0] || "";
+  assert.match(review, /<strong>Ana Marić<\/strong>/);
+  assert.match(review, /Born 04\.03\.2008/);
+  assert.match(review, /Athlete 1/);
+});
+
+test("8. leaving Imports drops the suggestions, and an answer still in flight never brings them back", async () => {
+  fixture(2);
+  reset("coach", { suggestions: OK({ exact: [pair(0)] }) });
+  await openMapping();
+  assert.equal(state.trainingLoad.gpexe.suggestions.status, "ready");
+  await act("training-load-section", { section: "overview" });
+  assert.deepEqual(state.trainingLoad.gpexe.suggestions, { status: "idle", data: null });
+  // In flight while leaving.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  reset("coach", { suggestions: async () => { await gate; return { status: 200, body: OK({ exact: [pair(0)] }) }; } });
+  await act("training-load-section", { section: "imports" });
+  const opening = act("training-load-gpexe-map-open");
+  await new Promise((r) => setTimeout(r, 20));
+  await act("training-load-section", { section: "overview" });
+  release();
+  await opening;
+  assert.notEqual(state.trainingLoad.gpexe.suggestions.status, "ready");
+  assert.equal(state.trainingLoad.gpexe.suggestions.data, null);
+});
+
+test("9. overlapping reads: the newest call wins whatever the order of the answers", async () => {
+  fixture(2);
+  const gates = [];
+  let n = 0;
+  reset("coach", { suggestions: () => new Promise((resolve) => { const i = n++; gates[i] = (body) => resolve({ status: 200, body }); }) });
+  await act("training-load-section", { section: "imports" });
+  const first = act("training-load-gpexe-map-open");
+  await new Promise((r) => setTimeout(r, 20));
+  const { loadPairSuggestions } = await import("../gpexe-import-data.js");
+  const second = loadPairSuggestions(render);
+  await new Promise((r) => setTimeout(r, 20));
+  gates[1](OK({ exact: [pair(0, { gpexeName: "Newest" })] }));
+  await second;
+  gates[0](OK({ exact: [pair(0, { gpexeName: "Oldest" })] }));
+  await first;
+  assert.equal(state.trainingLoad.gpexe.suggestions.data.exact[0].gpexeName, "Newest");
 });

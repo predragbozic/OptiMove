@@ -400,13 +400,8 @@ export async function listPairSuggestions(teamId, ctx, { expectedClubId = null }
         order by length(i.gpexe_athlete_id), i.gpexe_athlete_id`,
       [binding.id, teamId],
     )).rows;
-    const all = (await client.query(
-      `select count(*)::int as n, min(expires_at) as oldest from training_load.gpexe_athlete_identities
-        where binding_id = $1 and owner_team_id = $2 and expires_at > now()`,
-      [binding.id, teamId],
-    )).rows[0];
     let answer;
-    if (all.n === 0) {
+    if (snapshot.length === 0) {
       answer = { state: "no_identities_loaded", snapshotCount: 0, expiresAt: null, exact: [], ambiguous: [], dateConflicts: [] };
     } else {
       const athletes = (await client.query(
@@ -426,8 +421,8 @@ export async function listPairSuggestions(teamId, ctx, { expectedClubId = null }
       const g = (x) => ({ gpexeAthleteId: x.gpexeAthleteId, gpexeName: x.name, birthDate: x.birthDate });
       answer = {
         state: "ok",
-        snapshotCount: all.n,
-        expiresAt: all.oldest,
+        snapshotCount: snapshot.length,
+        expiresAt: snapshot.reduce((m, r) => (m === null || r.expires_at < m ? r.expires_at : m), null),
         exact: result.exact.map((p) => ({ ...g(p.gpexe), athleteId: p.athlete.athleteId, athleteName: p.athlete.name })),
         ambiguous: result.ambiguous.map((p) => ({ ...g(p.gpexe), candidates: p.candidates.map((c) => ({ athleteId: c.athleteId, athleteName: c.name })) })),
         // A flag pair only: OptiMove's date of birth is never returned here.

@@ -16992,6 +16992,10 @@ p.muted.gpexe-approve-note {
   background: var(--surface);
   overflow-wrap: anywhere;
 }
+.gpexe-suggest-tag {
+  display: block;
+  font-size: 12px;
+}
 .gpexe-suggest-why {
   grid-column: 1 / -1;
 }
