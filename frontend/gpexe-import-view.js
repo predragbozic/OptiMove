@@ -425,7 +425,7 @@ function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   return `
     <label class="gpexe-team-row">
       <span class="gpexe-team-label">Team</span>
-      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team" ${gx.batch?.sending ? "disabled" : ""}>
+      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team" ${gx.batch?.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown ? "disabled" : ""}>
         ${teams.map((team) => renderOption(team.id, team.club_name ? `${team.name} (${team.club_name})` : team.name, teamId)).join("")}
       </select>
     </label>

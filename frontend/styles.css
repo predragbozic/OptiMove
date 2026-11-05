@@ -17000,7 +17000,7 @@ p.muted.gpexe-approve-note {
 }
 .gpexe-guide-step {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
   overflow-wrap: anywhere;
@@ -17009,8 +17009,8 @@ p.muted.gpexe-approve-note {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
+  min-width: 32px;
+  height: 32px;
   border: 1px solid var(--line);
   border-radius: 999px;
   font-size: 12px;
@@ -17024,6 +17024,9 @@ p.muted.gpexe-approve-note {
 }
 .gpexe-guide-body .gpexe-button {
   min-height: 44px;
+}
+.gpexe-guide-body .gpexe-link-confirm p {
+  margin: 0;
 }
 .gpexe-guide-vars {
   margin: 6px 0;

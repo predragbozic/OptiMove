@@ -15,12 +15,15 @@ export const GUIDE_API_FAMILY = "rest_v1";
 export const GUIDE_REQUIREMENT = "required"; // plan Q2: the server has no default (C23)
 export const GUIDE_REASON = "Switched on from the setup guide";
 const PAGE_LIMIT = 10;
+let varsSeq = 0;
 const WRITE_BOUND_MS = 45_000;
 
 export const emptyGuideState = () => ({
   teamId: null,
   conn: { status: "idle", connected: false, reconnect: false, bound: false, bindingId: null, hostLabel: "", clubId: null },
   vars: { status: "idle", items: [], total: 0, onCount: 0 },
+  // Variables the server clearly refused in this session (memory only): never offered again, listed instead.
+  skipped: [],
   // null = automatic (folded when all is done), true / false = the person's choice.
   open: null,
   // The review card of "Use OptiMove variables".
@@ -81,8 +84,8 @@ export async function loadGuide(render) {
     }
     conn = {
       status: "ready", clubId,
-      connected: list.some((c) => c.state === "verified"),
-      reconnect: list.some((c) => c.state === "needs_reconnect") && !list.some((c) => c.state === "verified"),
+      connected: bound ? bound.state === "verified" : list.some((c) => c.state === "verified"),
+      reconnect: bound ? bound.state !== "verified" : list.some((c) => c.state === "needs_reconnect") && !list.some((c) => c.state === "verified"),
       bound: Boolean(bound && bound.state === "verified"), bindingId: bound ? String(bound.bindingId) : null, hostLabel: bound?.hostLabel || "",
     };
   } catch (error) {
@@ -120,6 +123,7 @@ export async function loadGuideVariables(render) {
   if (!bindingId) return;
   const generation = gx.generation;
   const teamId = String(gx.teamId);
+  const seq = ++varsSeq;
   gx.guide = { ...gx.guide, vars: { ...gx.guide.vars, status: "loading" } };
   render();
   try {
@@ -127,18 +131,22 @@ export async function loadGuideVariables(render) {
       pages(() => api(`${METRICS}/mappings`), (c) => api(withCursor(`${METRICS}/mappings`, c)), "mappings"),
       pages(() => api(`${METRICS}/activations?bindingId=${encodeURIComponent(bindingId)}&state=open`), (c) => api(withCursor(`${METRICS}/activations?bindingId=${encodeURIComponent(bindingId)}&state=open`, c)), "activations"),
     ]);
-    if (generation !== gx.generation || String(gx.teamId) !== teamId) return;
+    if (generation !== gx.generation || String(gx.teamId) !== teamId || seq !== varsSeq) return;
     // An incomplete read could hide an activation that is already on: never offer from it.
     if (!maps.complete || !acts.complete) throw Object.assign(new Error("incomplete"), { status: 0 });
-    const on = new Set(acts.items.map((a) => String(a.versionId)));
+    // On = any open activation of the same mapping (any version), so a replaced or copied variable is not offered again.
+    const onVersions = new Set(acts.items.map((a) => String(a.versionId)));
+    const onMappings = new Set(acts.items.map((a) => String(a.mappingId)));
+    const refused = new Set((gx.guide.skipped || []).map((x) => x.mappingId));
     const candidates = maps.items
       .filter((m) => m.ownerScope === "system" && m.sourceMetric?.apiFamily === GUIDE_API_FAMILY && m.activeVersionId && m.targetHiddenInClub !== true)
       .sort((a, b) => (a.id < b.id ? -1 : 1));
-    const items = candidates.filter((m) => !on.has(String(m.activeVersionId)))
+    const isOn = (m) => onVersions.has(String(m.activeVersionId)) || onMappings.has(String(m.id));
+    const items = candidates.filter((m) => !isOn(m) && !refused.has(String(m.id)))
       .map((m) => ({ mappingId: String(m.id), versionId: String(m.activeVersionId), label: variableLabel(m) }));
-    gx.guide = { ...gx.guide, vars: { status: "ready", items, total: items.length, onCount: candidates.length - items.length } };
+    gx.guide = { ...gx.guide, vars: { status: "ready", items, total: items.length, onCount: candidates.filter(isOn).length } };
   } catch (error) {
-    if (generation !== gx.generation || String(gx.teamId) !== teamId) return;
+    if (generation !== gx.generation || String(gx.teamId) !== teamId || seq !== varsSeq) return;
     gx.guide = { ...gx.guide, vars: { status: "error", items: [], total: 0, onCount: 0 } };
   }
   render();
@@ -174,6 +182,7 @@ export async function sendVariables(render, { resume = false } = {}) {
   const teamId = String(gx.teamId);
   const generation = gx.generation;
   if (!bindingId) return;
+  if (!resume && !guide.vars.items.length) return;
   const items = resume && guide.write?.items ? guide.write.items : guide.vars.items.slice();
   const results = resume && guide.write?.results ? guide.write.results.filter((r) => r.outcome === "on") : [];
   let index = results.length;
@@ -196,7 +205,12 @@ export async function sendVariables(render, { resume = false } = {}) {
     } catch (error) {
       if (stale()) return;
       const i = info(error);
-      if (isClearRefusal(i)) gx.guide = { ...gx.guide, write: { sending: false, items, results, unknown: null, refused: { label: item.label, code: i.code, message: i.message } } };
+      if (isClearRefusal(i)) {
+        // A 404 can follow a committed write (the right is read again after COMMIT): then the sentence says it may have been made.
+        const refused = { label: item.label, code: i.code, message: i.message, possible: i.status === 404 };
+        const skipped = (gx.guide.skipped || []).some((x) => x.mappingId === item.mappingId) ? gx.guide.skipped : [...(gx.guide.skipped || []), { mappingId: item.mappingId, label: item.label, message: i.message }];
+        gx.guide = { ...gx.guide, skipped, write: { sending: false, items, results, unknown: null, refused } };
+      }
       else gx.guide = { ...gx.guide, write: { sending: false, items, results, refused: null, unknown: { label: item.label, requestKey } } };
       await loadGuideVariables(render);
       gx.guide = { ...gx.guide, write: gx.guide.write };
@@ -210,10 +224,12 @@ export async function sendVariables(render, { resume = false } = {}) {
   render();
 }
 
-export function refusalSentence(refused) {
+export function refusalSentence(refused, before = 0) {
   if (!refused) return "";
   const text = refused.message ? `${refused.message}` : "The server did not accept it.";
-  return `${refused.label}: ${text} Nothing was changed for this one; the variables before it are on.`;
+  const done = before ? `${before} ${before === 1 ? "variable before it is" : "variables before it are"} on.` : "Nothing was switched on.";
+  const tail = refused.possible ? "This one may have been switched on: check the Mappings screen." : "The rest were not tried.";
+  return `${refused.label}: ${text} ${done} ${tail}`;
 }
 
 export function setGuideOpen(value) {

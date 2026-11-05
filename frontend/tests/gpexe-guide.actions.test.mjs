@@ -156,8 +156,8 @@ test("5. it stops at the first refusal with the server's sentence; later variabl
   assert.equal(posts().length, 2, "the third was not sent");
   const g = guideHtml();
   assert.match(g, /Stopped/);
-  assert.match(g, /Variable 2 from Source 2: This team already gets this field\./);
-  assert.match(g, /1 variable is on/);
+  assert.match(g, /Variable 2 from Source 2: This team already gets this field\. 1 variable before it is on\. The rest were not tried\./);
+  assert.ok(!/1 variable is on/.test(g), "the count is said once");
 });
 
 test("6. a lost answer is Result not confirmed; Check result repeats the SAME key once, then goes on; nothing is resent by itself; leaving is guarded", async () => {
@@ -198,7 +198,7 @@ test("7. an incomplete or failed read offers nothing; a connection that is not b
 
 test("8. the guide folds when everything is done and Show setup reopens it; a variable name is escaped", async () => {
   reset({
-    mappings: [], activations: [], lastCheck: { id: "chk", status: "succeeded" },
+    mappings: [mapping(1)], activations: [{ id: "a1", mappingId: mapping(1).id, versionId: mapping(1).activeVersionId, bindingId: BINDING }], lastCheck: { id: "chk", status: "succeeded" },
     athletes: [{ gpexeAthleteId: "9", status: "linked", link: { id: "l", athleteId: "a", athleteName: "A", linkedAt: "2026-09-10T10:00:00Z" }, lastSeen: null, values: {} }],
     candidates: [{ id: "c1", status: "imported", gpexeTeamSessionId: "1", sessionStartedAt: "2026-09-14T16:08:12Z", sessionLabel: "S", candidateStatus: "imported" }],
   });
@@ -235,4 +235,105 @@ test("10. the review cannot be opened again while a write is unconfirmed", async
   const before = JSON.stringify(state.trainingLoad.gpexe.guide.write);
   await act("training-load-gpexe-guide-vars-open");
   assert.equal(JSON.stringify(state.trainingLoad.gpexe.guide.write), before, "the unconfirmed result is kept");
+});
+
+test("11. after a fully successful run the card says so and offers Close - never the review again", async () => {
+  reset();
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  const g = guideHtml();
+  assert.match(g, /3 OptiMove variables are switched on\./);
+  assert.ok(!/guide-vars-send/.test(g) && !/Switch on \d+ (OptiMove )?variables\?/.test(g), "no review card, no send button");
+  assert.match(g, /guide-vars-close/);
+  await act("training-load-gpexe-guide-vars-close");
+  assert.ok(!/switched on\.<\/strong>/.test(guideHtml()));
+});
+
+test("12. a refused variable is not offered again; the others go on; it is listed with where to switch it on", async () => {
+  reset({ onActivate: (call) => (call.body.mappingId === MAPPINGS[1].id ? { status: 409, body: { error: "variable_hidden", message: "The club hides this variable." } } : { status: 201, body: { activations: [{}] } }) });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.equal(posts().length, 2);
+  await act("training-load-gpexe-guide-vars-close");
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  const ids = posts().map((c) => c.body.mappingId);
+  assert.equal(ids.filter((id) => id === MAPPINGS[1].id).length, 1, "the refused one is never sent again");
+  assert.ok(ids.includes(MAPPINGS[2].id), "the one after it is sent");
+  assert.match(guideHtml(), /Variable 2 from Source 2/);
+  assert.match(guideHtml(), /Data configuration > Mappings/);
+});
+
+test("13. a variable already on through another version of the same mapping is not offered", async () => {
+  reset({ activations: [{ id: "x", mappingId: MAPPINGS[2].id, versionId: "99999999-0000-4000-8000-000000000009", bindingId: BINDING }, ...ACTIVATIONS] });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  assert.match(guideHtml(), /Switch on 2 OptiMove variables\?/);
+  assert.ok(!guideHtml().includes("Variable 3 "));
+});
+
+test("14. a double click on Switch on sends each variable once; an empty offer sends nothing", async () => {
+  reset();
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  const a = act("training-load-gpexe-guide-vars-send");
+  const b = act("training-load-gpexe-guide-vars-send");
+  await Promise.all([a, b]);
+  assert.equal(posts().length, 3);
+  reset({ mappings: [], activations: [] });
+  await open();
+  await act("training-load-gpexe-guide-vars-send");
+  assert.equal(posts().length, 0);
+});
+
+test("15. the team cannot be changed while the switch-on runs or is unconfirmed (the marker survives)", async () => {
+  reset({ onActivate: () => ({ status: 502, body: "<html>" }) });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.ok(state.trainingLoad.gpexe.guide.write.unknown);
+  assert.match(html(), /aria-label="Team"[^>]*disabled|disabled[^>]*aria-label="Team"|gpexe-team-row/);
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-team" }, value: "other-team" }, { renderTrainingLoad: render });
+  assert.ok(state.trainingLoad.gpexe.guide.write.unknown, "the unconfirmed marker is still there");
+  assert.equal(String(state.trainingLoad.gpexe.teamId), TEAM);
+});
+
+test("16. a refusal that may follow a committed write (404) says so; an older read never overwrites a newer one", async () => {
+  reset({ onActivate: () => ({ status: 404, body: { error: "notFound", message: "Not found." } }) });
+  await open();
+  await act("training-load-gpexe-guide-vars-open");
+  await act("training-load-gpexe-guide-vars-send");
+  assert.match(guideHtml(), /may have been switched on: check the Mappings screen/);
+  const { loadGuideVariables } = await import("../gpexe-guide-data.js");
+  reset();
+  await open();
+  const base = responder;
+  const gates = [];
+  responder = (call) => (call.url.startsWith("/api/training-load/sources/metrics/mappings")
+    ? new Promise((resolve) => gates.push((mappings) => resolve({ status: 200, body: { mappings, nextCursor: null } })))
+    : base(call));
+  const first = loadGuideVariables(render);
+  const second = loadGuideVariables(render);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(gates.length, 2);
+  gates[1]([MAPPINGS[0]]);
+  await second;
+  gates[0](MAPPINGS.slice(0, 3));
+  await first;
+  assert.equal(state.trainingLoad.gpexe.guide.vars.items.length, 1, "the newest read wins");
+});
+
+test("17. guideSteps edge cases: a bound connection that needs reconnect, an empty athlete list, nothing to switch on", () => {
+  const base = { admin: true, check: { status: "succeeded" }, candidates: [], sourceAthletes: [], teamSwitch: { enabled: true } };
+  const st = (f) => guideSteps(f).steps.map((s) => `${s.id}:${s.state}`).join(" ");
+  assert.match(st({ ...base, conn: { status: "ready", connected: false, bound: false, reconnect: true }, vars: { status: "ready", total: 0, onCount: 0 } }), /^1:next 2:waiting/);
+  assert.match(st({ ...base, conn: { status: "ready", connected: true, bound: true }, vars: { status: "ready", total: 0, onCount: 0 } }), /4:waiting/);
+  const none = guideSteps({ ...base, conn: { status: "ready", connected: true, bound: true }, vars: { status: "ready", total: 0, onCount: 0 } });
+  assert.equal(none.variables.state, "none");
+  assert.equal(none.allDone, false);
+  const failed = guideSteps({ ...base, conn: { status: "error" }, vars: { status: "idle" } });
+  assert.equal(failed.variables.state, "unknown");
+  assert.equal(failed.steps[0].action.kind, "retry");
 });

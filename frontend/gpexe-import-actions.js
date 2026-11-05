@@ -53,7 +53,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { cancelVariablesConfirm, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
+import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
 // made when the list could not be read again); a generic question otherwise.
@@ -88,7 +88,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // (the select is disabled; this guards a stale change), and only after
     // a question while sessions are chosen but not imported.
     if (String(action.value) === gx.teamId) return true;
-    if (gx.batch.sending) {
+    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown) {
       renderTrainingLoad();
       return true;
     }
@@ -231,6 +231,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-guide-toggle") {
     setGuideOpen(gx.guide?.open === true ? false : true);
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-guide-reload") {
+    if (gx.guide?.conn?.status !== "loading") await loadGuide(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-guide-vars-open") {

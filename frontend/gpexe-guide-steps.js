@@ -34,12 +34,14 @@ export function guideSteps(f) {
       s2 = conn.bound ? "done" : s1 === "done" ? "next" : "waiting";
     }
     const unreadable = conn.status === "error" || conn.status === "unavailable" || conn.status === "idle" || conn.status === "loading";
-    add(1, s1, unreadable ? (conn.status === "loading" || conn.status === "idle" ? "Checking..." : "Could not be checked.")
+    const failed = conn.status === "error" || conn.status === "unavailable";
+    add(1, s1, unreadable ? (failed ? "Could not be checked." : "Checking...")
       : s1 === "done" ? "The GPEXE account is connected."
         : conn.reconnect ? "The GPEXE account needs to be connected again (Settings > Source connections > Reconnect)."
-          : "Connect the club's GPEXE account (Settings > Source connections > Connect account).");
-    add(2, s2, unreadable ? "" : s2 === "done" ? "This team is bound to its GPEXE team."
-      : s2 === "next" ? "Test the connection, then approve and bind this team (Settings > Source connections). A platform administrator first approves the pair in Settings > Data sources."
+          : "Connect the club's GPEXE account (Settings > Source connections > Connect account).",
+    failed ? { kind: "retry", label: "Try again" } : null);
+    add(2, s2, unreadable ? (failed ? "Could not be checked - see step 1." : "") : s2 === "done" ? "This team is bound to its GPEXE team."
+      : s2 === "next" ? "A platform administrator approves this team's GPEXE team in Settings > Data sources. Then test the connection and bind the team in Settings > Source connections."
         : "Waiting for step 1.");
   } else {
     const evidence = checkDone || running || Boolean(list && list.length);
@@ -62,8 +64,10 @@ export function guideSteps(f) {
   let s4;
   if (f.sourceAthletesError || unlinked === null) s4 = s3 === "done" ? "unknown" : "waiting";
   else if (unlinked === 0 && linked > 0) s4 = "done";
+  else if (unlinked === 0) s4 = "waiting";
   else s4 = s3 === "done" ? "next" : "waiting";
   add(4, s4, s4 === "done" ? "Every GPEXE athlete is linked." : s4 === "unknown" ? "Could not be checked."
+    : unlinked === 0 ? "No GPEXE athlete has been seen yet. Find sessions first."
     : s4 === "next" ? `${unlinked} GPEXE ${unlinked === 1 ? "athlete is" : "athletes are"} not linked yet.` : "Waiting for step 3.",
   s4 === "next" ? { kind: "link", label: "Link athletes" } : null);
 
@@ -76,14 +80,21 @@ export function guideSteps(f) {
   add(5, s5, s5 === "done" ? "At least one session has been imported."
     : s5 === "unknown" ? "Could not be checked."
       : s5 === "next" ? (off ? "Importing is switched off for this team. An administrator switches it on first." : "Review the sessions below and import them.")
-        : "Waiting for step 4.");
+        : "Link athletes first for the sessions that need it. Sessions that are already ready can be imported below.");
 
   // The variables line (administrators): done when every system variable of the list is on.
   let variables = null;
-  if (f.admin && f.vars) {
-    const v = f.vars;
-    const state = v.status === "error" ? "unknown" : v.status !== "ready" ? "waiting" : v.total === 0 ? "done" : "next";
-    variables = { state, total: v.total ?? 0, onCount: v.onCount ?? 0, canSwitchOn: v.status === "ready" && v.total > 0 && s2 === "done" };
+  if (f.admin) {
+    const v = f.vars || { status: "idle", total: 0, onCount: 0 };
+    const skipped = Array.isArray(f.skipped) ? f.skipped : [];
+    let state;
+    if (conn.status === "error" || conn.status === "unavailable" || v.status === "error") state = "unknown";
+    else if (v.status !== "ready") state = "waiting";
+    else if (v.total > 0) state = "next";
+    else if (skipped.length) state = "attention";
+    else if (v.onCount > 0) state = "done";
+    else state = "none";
+    variables = { state, total: v.total ?? 0, onCount: v.onCount ?? 0, skipped, canSwitchOn: v.status === "ready" && v.total > 0 && s2 === "done" };
   }
   const allDone = steps.every((s) => s.state === "done") && (!variables || variables.state === "done");
   return { steps, variables, allDone };
