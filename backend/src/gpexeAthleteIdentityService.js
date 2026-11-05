@@ -155,20 +155,25 @@ export function identityAdminBasis(req, access) {
 // revocations' order (`for update of u, g` / `u, r`; the lock-order pull
 // request).
 async function rightHolds(executor, ctx, clubId, { lock = false, teamId = null } = {}) {
-  const share = lock ? " for share of u, r" : "";
-  // U3: the team's own coach (suggestions read only); the users row is locked
-  // first like the other bases.
+  const share = lock ? " for share" : "";
+  // The users row first, in its own statement, then the role row (the
+  // revocations' order, `.claude/rules/migrations.md`): never one statement
+  // locking both, whose order PostgreSQL does not fix.
+  const user = await executor.query(`select 1 from public.users where id = $1 and is_active = true${share}`, [ctx.userId]);
+  if (user.rowCount === 0) return false;
+  let right;
   if (ctx.basis === "team_coach") {
+    // U3: the team's own coach (suggestions read only).
     if (!teamId) return false;
-    const coach = await executor.query(`select 1 from public.user_team_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true${share}`, [ctx.userId, teamId]);
-    const clubOk = await executor.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)${lock ? " for share" : ""}`, [clubId]);
-    return coach.rowCount > 0 && clubOk.rowCount > 0;
+    right = await executor.query(`select 1 from public.user_team_roles where user_id = $1 and team_id = $2 and role = 'team_coach' and is_active = true${share}`, [ctx.userId, teamId]);
+  } else if (ctx.basis === "platform_admin") {
+    right = await executor.query(`select 1 from public.user_global_roles where user_id = $1 and role = 'platform_admin' and is_active = true${share}`, [ctx.userId]);
+  } else {
+    right = await executor.query(`select 1 from public.user_club_roles where user_id = $1 and club_id = $2 and role = 'club_admin' and is_active = true${share}`, [ctx.userId, clubId]);
   }
-  const right = ctx.basis === "platform_admin"
-    ? await executor.query(`select 1 from public.user_global_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId])
-    : await executor.query(`select 1 from public.user_club_roles r join public.users u on u.id = r.user_id where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true${share}`, [ctx.userId, clubId]);
-  const club = await executor.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)${lock ? " for share" : ""}`, [clubId]);
-  return right.rowCount > 0 && club.rowCount > 0;
+  if (right.rowCount === 0) return false;
+  const club = await executor.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)${share}`, [clubId]);
+  return club.rowCount > 0;
 }
 
 // The team's active gpexe binding with an active team and club, or null.
