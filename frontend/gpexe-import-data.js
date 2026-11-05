@@ -116,6 +116,7 @@ function resetGpexeTeamState(teamId) {
   gx.mapping = emptyMapping();
   identityEpoch += 1;
   gx.identity = emptyGpexeIdentityState();
+  clearPairSuggestions();
   gx.extraOrdinals = {};
   gx.teamSwitch = emptyTeamSwitchState();
 }
@@ -634,6 +635,7 @@ export function teamAthleteChoices(gx = g()) {
 export function openTeamMapping() {
   const gx = g();
   gx.mapping = { ...emptyMapping(), open: true };
+  clearPairSuggestions();
   gx.linkError = null;
   gx.identity = keepIdentityList(gx.identity);
 }
@@ -661,6 +663,7 @@ export function clearGpexeIdentities({ keepOutcome = true } = {}) {
   identityEpoch += 1;
   const gx = g();
   if (gx) gx.identity = { ...emptyGpexeIdentityState(), ...(keepOutcome ? identityOutcome(gx.identity) : {}) };
+  clearPairSuggestions();
 }
 
 // Returns true when the screen had staged choices (the caller asked first).
@@ -669,6 +672,7 @@ export function closeTeamMapping() {
   const gx = g();
   const had = Object.keys(gx.mapping.choices).length > 0;
   gx.mapping = emptyMapping();
+  clearPairSuggestions();
   gx.identity = keepIdentityList(gx.identity);
   return had;
 }
@@ -1299,6 +1303,86 @@ export function importsUnloadShouldWarn(gx = g()) {
   const marked = Object.keys(gx?.uncertain || {});
   if (!marked.length) return false;
   return (gx.candidates || []).some((c) => marked.includes(c.id) && c.status !== "imported" && c.status !== "superseded");
+}
+
+// ---------------------------------------------------------------------------
+// U3: suggested athlete pairs (J19). The team's coach and the two identity
+// administrators read three lists from the server - exact pairs (same name,
+// same date of birth, one athlete on each side), names that need a choice and
+// date-of-birth conflicts. "Review all" only STAGES the exact pairs into the
+// ordinary Link athletes review; the links are made by the existing route, one
+// pair at a time, after the one confirmation. Nothing is stored in the browser.
+// ---------------------------------------------------------------------------
+export const SUGGESTION_MAX_PAIRS = 60;
+let suggestionEpoch = 0;
+let suggestionSeq = 0;
+
+export function clearPairSuggestions() {
+  suggestionEpoch += 1;
+  const gx = g();
+  if (gx) gx.suggestions = { status: "idle", data: null };
+}
+
+const str = (v) => (typeof v === "string" ? v : null);
+function suggestionData(answer) {
+  const person = (x) => ({ gpexeAthleteId: str(x?.gpexeAthleteId) || "", gpexeName: str(x?.gpexeName), birthDate: str(x?.birthDate) });
+  return {
+    state: answer?.state === "ok" ? "ok" : "no_identities_loaded",
+    exact: (Array.isArray(answer?.exact) ? answer.exact : []).map((x) => ({ ...person(x), athleteId: str(x?.athleteId) || "", athleteName: str(x?.athleteName) || "" })).filter((x) => x.gpexeAthleteId && x.athleteId),
+    ambiguous: (Array.isArray(answer?.ambiguous) ? answer.ambiguous : []).map((x) => ({ ...person(x), candidates: (Array.isArray(x?.candidates) ? x.candidates : []).map((c) => ({ athleteId: str(c?.athleteId) || "", athleteName: str(c?.athleteName) || "" })) })).filter((x) => x.gpexeAthleteId),
+    dateConflicts: (Array.isArray(answer?.dateConflicts) ? answer.dateConflicts : []).map((x) => ({ ...person(x), athleteId: str(x?.athleteId) || "", athleteName: str(x?.athleteName) || "" })).filter((x) => x.gpexeAthleteId),
+  };
+}
+
+// 404: not available here (no binding, no right) - the screen shows nothing of it.
+export async function loadPairSuggestions(render) {
+  const gx = g();
+  if (!gx.teamId || !gx.mapping?.open) return;
+  const generation = gx.generation;
+  const epoch = suggestionEpoch;
+  const seq = ++suggestionSeq;
+  gx.suggestions = { status: "loading", data: null };
+  render();
+  try {
+    const answer = await identityRequest(teamPath(gx.teamId, "/athlete-pair-suggestions"));
+    if (generation !== gx.generation || epoch !== suggestionEpoch || seq !== suggestionSeq) return;
+    gx.suggestions = { status: "ready", data: suggestionData(answer) };
+  } catch (error) {
+    if (generation !== gx.generation || epoch !== suggestionEpoch || seq !== suggestionSeq) return;
+    gx.suggestions = { status: errorInfo(error).status === 404 ? "unavailable" : "error", data: null };
+  }
+  render();
+}
+
+// The exact pairs the screen can still stage: the GPEXE athlete is unlinked in
+// the list the screen holds and the athlete is linkable now. Nothing else.
+export function stageableSuggestedPairs(gx = g()) {
+  const data = gx.suggestions?.data;
+  if (gx.suggestions?.status !== "ready" || !data) return [];
+  const unlinked = new Set((gx.sourceAthletes || []).filter((a) => a.status === "unlinked").map((a) => a.gpexeAthleteId));
+  const linkable = new Set(teamAthleteChoices(gx).filter((c) => !c.duplicate).map((c) => c.id));
+  return data.exact.filter((p) => unlinked.has(p.gpexeAthleteId) && linkable.has(p.athleteId));
+}
+
+// The name and date of birth that justified a staged pair, for the review step
+// of a viewer who has no identity list (the team's coach): only the exact pair
+// the server suggested, never another athlete's.
+export function suggestedIdentity(gpexeAthleteId, athleteId, gx = g()) {
+  const data = gx.suggestions?.status === "ready" ? gx.suggestions.data : null;
+  const p = data?.exact.find((x) => x.gpexeAthleteId === String(gpexeAthleteId) && x.athleteId === String(athleteId));
+  return p ? { name: p.gpexeName, birthDate: p.birthDate } : null;
+}
+
+// Stages the ticked exact pairs (at most 60) and opens the ordinary review.
+export function reviewSuggestedPairs() {
+  const gx = g();
+  if (sourceListStale(gx) || identityBusy(gx)) return false;
+  const pairs = stageableSuggestedPairs(gx).slice(0, SUGGESTION_MAX_PAIRS);
+  if (!pairs.length) return false;
+  const choices = { ...gx.mapping.choices };
+  for (const p of pairs) choices[p.gpexeAthleteId] = p.athleteId;
+  gx.mapping = { ...gx.mapping, choices, error: null, results: null };
+  return confirmTeamMapping();
 }
 
 // ---------------------------------------------------------------------------

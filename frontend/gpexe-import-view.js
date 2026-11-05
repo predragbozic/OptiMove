@@ -48,6 +48,9 @@ import {
   withdrawnByCheck,
   isHiddenVersion,
   identityViewer,
+  stageableSuggestedPairs,
+  suggestedIdentity,
+  SUGGESTION_MAX_PAIRS,
 } from "./gpexe-import-data.js";
 
 // The bucket rules live in the data module (the batch selection needs them
@@ -1344,9 +1347,58 @@ function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
+  const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = maskGpexeIds(gx) && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+}
+
+// U3: suggested pairs on the Link athletes screen (the team's coach and the
+// administrators; the server decides who reads). Only EXACT pairs (same name,
+// same date of birth, one on each side) can be staged, all together, into the
+// ordinary review; everything else is listed as "Needs your choice" and is
+// never staged. Every name is escaped; the GPEXE id is never shown.
+export function renderSuggestionsHtml(gx, off) {
+  const sg = gx.suggestions;
+  if (!sg || sg.status === "idle" || sg.status === "unavailable") return "";
+  if (sg.status === "loading") return `<p class="muted gpexe-suggest-note" role="status">Looking for suggested pairs...</p>`;
+  if (sg.status === "error") return `<p class="muted gpexe-suggest-note" role="status">Suggested pairs could not be read. You can still choose athletes below.</p>`;
+  const d = sg.data;
+  if (!d) return "";
+  if (d.state !== "ok") {
+    return `<p class="muted gpexe-suggest-note" role="status">${identityViewer(gx)
+      ? "Load the GPEXE names and dates of birth above to get suggested pairs."
+      : "Suggested pairs need the GPEXE names and dates of birth. Ask an administrator to load the GPEXE names and dates of birth."}</p>`;
+  }
+  const stageable = stageableSuggestedPairs(gx);
+  const shown = stageable.slice(0, SUGGESTION_MAX_PAIRS);
+  const name = (n) => escapeHtml(n || "Name not provided");
+  const exactRows = shown.map((p) => `<li class="gpexe-suggest-row"><span class="gpexe-suggest-gpexe"><span class="gpexe-suggest-tag muted">In GPEXE</span><strong>${name(p.gpexeName)}</strong> <span class="muted">${escapeHtml(bornText(p.birthDate))}</span></span><span class="gpexe-suggest-arrow"><span aria-hidden="true">&rarr;</span><span class="visually-hidden"> will be linked to </span></span><span class="gpexe-suggest-athlete"><span class="gpexe-suggest-tag muted">In your team</span>${name(p.athleteName)}</span></li>`).join("");
+  const names = (cs) => cs.map((c) => c.athleteName || "Athlete").join(" and ");
+  const choice = [
+    ...d.ambiguous.map((p) => ({ p, text: p.candidates.length > 1
+      ? `The name matches ${names(p.candidates)}, so it is not clear which one it is.`
+      : `The name matches ${names(p.candidates)}, but a date of birth is missing or the name is shared, so we can't be sure.` })),
+    ...d.dateConflicts.map((p) => ({ p, text: `The name matches ${p.athleteName || "an athlete"}, but the dates of birth differ.` })),
+  ];
+  const choiceRows = choice.map(({ p, text }) => `<li class="gpexe-suggest-row"><span class="gpexe-suggest-gpexe"><span class="gpexe-suggest-tag muted">In GPEXE</span><strong>${name(p.gpexeName)}</strong> <span class="muted">${escapeHtml(bornText(p.birthDate))}</span></span><span class="gpexe-suggest-why muted">${escapeHtml(text)}</span></li>`).join("");
+  if (!shown.length && !choice.length) return `<p class="muted gpexe-suggest-note" role="status">No suggested pairs. Choose athletes below.</p>`;
+  return `
+    <section class="gpexe-suggest" aria-label="Suggested pairs">
+      ${shown.length ? `
+        <h4>Suggested pairs (${shown.length})</h4>
+        <p class="muted">GPEXE athlete (name, date of birth) &rarr; athlete in your team: same name and same date of birth. Nothing is linked yet - the button below only opens a summary that you confirm.</p>
+        <ul class="gpexe-suggest-list">${exactRows}</ul>
+        ${stageable.length > shown.length ? `<p class="muted">The first ${SUGGESTION_MAX_PAIRS} are listed; the rest appear after these are linked.</p>` : ""}
+        <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-suggest-all" ${off ? "disabled" : ""}>Review all ${shown.length} suggested ${shown.length === 1 ? "pair" : "pairs"}</button></div>
+      ` : ""}
+      ${choice.length ? `
+        <h4>Needs your choice (${choice.length})</h4>
+        <p class="muted">These are never selected for you. Choose the athlete below if you are sure.</p>
+        <ul class="gpexe-suggest-list">${choiceRows}</ul>
+      ` : ""}
+    </section>
+  `;
 }
 
 function renderTeamMappingHtml(gx, teams) {
@@ -1409,6 +1461,7 @@ function renderTeamMappingHtml(gx, teams) {
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}
+      ${renderSuggestionsHtml(gx, off)}
       ${staleHtml}
       ${m.error ? `<p class="gpexe-error" role="alert">${escapeHtml(m.error)}</p>` : ""}
       ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
