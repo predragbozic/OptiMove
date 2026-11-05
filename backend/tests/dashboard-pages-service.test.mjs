@@ -15,7 +15,7 @@ function fixture(options={}) {
   const widgets=options.widgets ?? [widget], series=options.series ?? [{id:'series',widget_id:widgetId}];
   const client=Object.assign(new EventEmitter(),{release:destroy=>state.releases.push(destroy),query:async(sql,params=[])=>{
     state.queries.push({sql,params});
-    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true}]};
+    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true,scatter_ready:options.scatterReady===true}]};
     if(sql==='commit'&&state.commitLost){state.commitLost=false;throw new Error('connection lost');}
     if(sql.includes('mutate_dashboard_page')){state.mutations.push(params);const receipt={requestId:params[1],dashboardId,pageId,operation:params[5],pagesRevision:2};state.ledger={request_id:params[1],payload_hash:params[2],workspace:target.workspace,receipt};return{rows:[{receipt}]};}
     if(sql.includes('dashboard_page_requests'))return{rows:state.ledger?.request_id===params[2]?[state.ledger]:[]};
@@ -248,4 +248,22 @@ test('metric pairing capability requires query permission only, independent of m
     assert.equal(result.capabilities.metricPairing,canQuery?'athlete-bucket-v1':undefined);
     assert.equal(Object.hasOwn(result.capabilities,'metricPairing'),canQuery);assertReadOnly(f);
   }
+});
+test('saved v1 Scatter widgets receive independent automatic server pairs in the ordinary Page query',async()=>{
+ const f=pairingFixture();f.widget.presentation_config={schemaVersion:1,chartVariant:'scatter',chartComposition:'pairs-v1',chartInteractions:{}};f.series[0].axis='secondary';f.series[1].axis='primary';
+ const result=await f.service.query({req,dashboardId,pageId,body:{period}});
+ assert.equal(Object.hasOwn(result,'metricPairs'),false);
+ const pair=result.widgets[0].metricPairs;assert.equal(pair.status,'ready');assert.equal(pair.queryId,result.queryId);assert.equal(pair.xSeriesId,ySeriesId);assert.equal(pair.ySeriesId,xSeriesId);assert.equal(pair.pairs[0].x.value,0);
+ assert.equal(f.state.batches.length,1);assertReadOnly(f);
+ f.widget.presentation_config.schemaVersion=99;
+ const opaque=await f.service.query({req,dashboardId,pageId,body:{period}});assert.equal(Object.hasOwn(opaque.widgets[0],'metricPairs'),false);
+});
+test('incomplete Scatter axes never select a first series or emit trusted pairs',async()=>{
+ const f=pairingFixture();f.widget.presentation_config={schemaVersion:1,chartVariant:'scatter',chartComposition:'pairs-v1',chartInteractions:{}};f.series.forEach(s=>s.axis='primary');
+ const result=await f.service.query({req,dashboardId,pageId,body:{period}});assert.equal(result.widgets[0].metricPairs.status,'unavailable');assert.deepEqual(result.widgets[0].metricPairs.pairs,[]);
+});
+test('Scatter editing requires marker, Page ports, query and management rights',async()=>{
+ for(const [portsReady,scatterReady,canManage,canQuery,expected]of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
+  const f=fixture({portsReady,scatterReady});Object.assign(f.target,{canManage,canQuery});assert.equal((await f.service.list({req,dashboardId})).capabilities.scatterCharts,expected);
+ }
 });

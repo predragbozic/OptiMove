@@ -17,9 +17,9 @@ test('heatmap is the eighth original accessible card and requires the advertised
   const m = model(), dom = new JSDOM(renderChartGallery(m));
   try {
     const cards = [...dom.window.document.querySelectorAll('input')];
-    assert.equal(cards.length, 8); assert.equal(cards.at(-1).value, 'heatmap');
-    const card = cards.at(-1).closest('label');
-    assert.equal(cards.at(-1).disabled, false);
+    assert.equal(cards.length, 9); assert.equal(cards[7].value, 'heatmap');
+    const card = cards[7].closest('label');
+    assert.equal(cards[7].disabled, false);
     assert.match(card.textContent, /Color shows magnitude only/);
     assert.equal(card.querySelector('svg').getAttribute('aria-hidden'), 'true');
     assert.equal(card.querySelectorAll('svg rect, svg path').length > 1, true);

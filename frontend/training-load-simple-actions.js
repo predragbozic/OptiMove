@@ -82,7 +82,7 @@ export async function openSimpleEditor(widget, onRender) {
   await simpleEditor.open(widget);
   if (simpleEditor.model?.unavailable) { simpleEditor.close(); return false; }
   const target = simpleEditor.model;
-  if (target) { target.savedWidgetType = widget?.widget_type; target.pageCombinedAvailable = !analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true; }
+  if (target) { target.savedGroupBy = widget?.group_by; target.pageScatterAvailable = analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true; target.savedWidgetType = widget?.widget_type; target.pageCombinedAvailable = !analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true; }
   if (target?.draft && !target.error) {
     target.rosterLoading = true; paint(target);
     try {
@@ -111,19 +111,20 @@ export async function handleSimpleEditorAction(action, onRender) {
   if (type === 'retry') { await simpleEditor.save(true); return true; }
   if (type === 'status') { await simpleEditor.status(); return true; }
   if (simpleEditor.pending || model.saveState === 'recorded') return true;
-  const combinedChoice = type === 'view' && (action.value || action.dataset.value) === 'combined';
-  if (combinedChoice) {
+  const displayMode = action.value || action.dataset.value;
+  const pairedChoice = type === 'view' && ['combined', 'scatter'].includes(displayMode);
+  if (pairedChoice) {
     const widget = analysis().widgets.find(row => row.id === model.widgetId);
-    const choice = chartGalleryChoices.find(row => row.id === 'combined');
-    const available = model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true);
+    const choice = chartGalleryChoices.find(row => row.id === displayMode);
+    const available = displayMode === 'scatter' ? model.capabilities?.capabilities?.scatterCharts === true && analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true : model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true);
     if (!widget || model.stale || !isActiveTarget(model) || !available || galleryUnavailable(model, choice) || !['line_chart', 'bar_chart'].includes(widget.widget_type) || !['day', 'week'].includes(widget.group_by)) return true;
     if (!leaveSimpleEditor()) return true;
-    openAnalysisWidgetEditor(widget, { combinedAvailable: available });
+    openAnalysisWidgetEditor(widget, { ...(displayMode === 'scatter' ? { scatterAvailable: available } : { combinedAvailable: available }) });
     const editor = analysis().editor;
     // Catalog metadata is needed before accepting two numeric series.
     await loadAnalysisMetricDefinitions();
     if (analysis().editor !== editor || !isActiveTarget(model)) return true;
-    editor.error = setEditorDisplayMode(editor.draft, 'combined', available);
+    editor.error = setEditorDisplayMode(editor.draft, displayMode, available);
     render(); return true;
   }
   if (type === 'advanced') {
@@ -142,6 +143,9 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'more' || type === 'reload') await simpleEditor.metrics(type === 'more');
   else if (type === 'title') simpleEditor.change(draft => { draft.title = action.value ?? ''; });
   else if (type === 'view') simpleEditor.change(draft => applyGalleryChoice(draft, model, action.value || action.dataset.value));
+  else if (type === 'group' && galleryVariant(model) === 'scatter' && chartPresentation(galleryPresentation(model)).mode === 'enhanced') {
+    model.error = 'Open the Advanced editor to change Scatter settings.'; paint(model);
+  }
   else if (type === 'group' && galleryVariant(model) === 'heatmap' && chartPresentation(galleryPresentation(model)).mode === 'enhanced' && !['day', 'week'].includes(action.value)) {
     model.error = 'Heatmap supports day or week only. Switch the display before grouping by athlete or session.';
     paint(model);

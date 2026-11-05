@@ -35,7 +35,7 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
               if(plot.enhanced) {
                 plot.option.tooltip.formatter = event => chartPointText(plot.rowsBySeries[event.seriesIndex]?.[event.dataIndex],plot.precision,plot.settings.tooltip==='formatted');
                 for(const series of plot.option.series)series.label.formatter=event=>{
-                  const value=series.type==='heatmap'?event.value?.[2]:event.value;
+                  const value=series.type==='heatmap'?event.value?.[2]:series.type==='scatter'?event.value?.[1]:event.value;
                   return typeof value==='number' ? Number.isInteger(value)?String(value):value.toFixed(plot.precision) : '';
                 };
               }

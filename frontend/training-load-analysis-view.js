@@ -1,4 +1,4 @@
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, editorIsCombined, editorPresentation, editorPresentationKnown, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, editorIsCombined, editorIsScatter, editorPresentation, editorPresentationKnown, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { renderPagesHtml,renderPagePendingHtml } from './training-load-pages-view.js';
 import { state } from "./state.js";
@@ -493,7 +493,7 @@ function renderChartHtml(model, widget) {
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
   const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext, {presentation:widget.presentation_config,queryId:state.trainingLoad.analysis.queryResult?.queryId,resolvedPeriod:state.trainingLoad.analysis.queryResult?.resolvedPeriod,contextId:dashboardChartContext(),widgetRevision:widget.revision,athletes:state.trainingLoad.orgPickerData?.athletes})}
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext, {metricPairs:state.trainingLoad.analysis.queryResult?.widgets?.find(result => result.widgetId === widget.id)?.metricPairs,presentation:widget.presentation_config,queryId:state.trainingLoad.analysis.queryResult?.queryId,resolvedPeriod:state.trainingLoad.analysis.queryResult?.resolvedPeriod,contextId:dashboardChartContext(),widgetRevision:widget.revision,athletes:state.trainingLoad.orgPickerData?.athletes})}
     ${diagnostics.join("")}
     <details class="tl-analysis-chart-values" open>
       <summary>Values and status</summary>
@@ -793,8 +793,8 @@ function renderEditorHtml() {
   const rowsById = new Map((widget.series || []).map((row) => [row.id, row]));
   const dirty = analysisEditorPlan(widget, draft).length > 0;
   const problem = dirty ? analysisEditorProblem(draft) : "";
-  const combined = editorIsCombined(draft);
-  const cap = combined ? 2 : analysisSeriesLimit(draft.widgetType);
+  const combined = editorIsCombined(draft), scatter = editorIsScatter(draft), paired = combined || scatter;
+  const cap = paired ? 2 : analysisSeriesLimit(draft.widgetType);
   const saving = Boolean(editor.saving);
   const off = saving ? "disabled" : "";
   const override = draft.localFilterOverride || {};
@@ -807,8 +807,8 @@ function renderEditorHtml() {
     ? ["not_applicable"]
     : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
   const status = (item) => {
-    const axis = combined ? (item.fields.axis === "secondary" ? "Secondary: line, right axis" : "Primary: bars, left axis") : `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
-    const suffix = combined ? ` / ${axis}` : '';
+    const axis = scatter ? (item.fields.axis === "secondary" ? "Y axis" : "X axis") : combined ? (item.fields.axis === "secondary" ? "Secondary: line, right axis" : "Primary: bars, left axis") : `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    const suffix = paired ? ` / ${axis}` : '';
     if (!item.id || !rowsById.has(item.id)) return `New - not saved yet${suffix}`;
     const row = rowsById.get(item.id);
     if (row.resolution_status === "unresolved") return `Choose a metric${suffix}`;
@@ -827,12 +827,13 @@ function renderEditorHtml() {
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
           <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
           <label>Display mode<select data-action="training-load-analysis-widget-display-mode" ${saving || !editorPresentationKnown(editorPresentation(draft)) ? 'disabled' : ''}>
-            ${!combined && editorPresentation(draft) != null ? '<option value="preserve" selected>Saved presentation</option>' : ''}
-            ${optionHtml('separate', 'Separate plots', combined ? 'combined' : editorPresentation(draft) != null ? 'preserve' : 'separate')}
+            ${!paired && editorPresentation(draft) != null ? '<option value="preserve" selected>Saved presentation</option>' : ''}
+            ${optionHtml('separate', 'Separate plots', scatter ? 'scatter' : combined ? 'combined' : editorPresentation(draft) != null ? 'preserve' : 'separate')}
             <option value="combined" ${combined ? 'selected' : ''} ${!editor.combinedAvailable && !combined ? 'disabled' : ''}>Bar + line (two axes)</option>
+            <option value="scatter" ${scatter ? 'selected' : ''} ${!editor.scatterAvailable && !scatter ? 'disabled' : ''}>Scatter</option>
           </select></label>
-          <p class="muted">${combined ? 'Primary: bars on the left axis. Secondary: line on the right axis. Each metric keeps its own unit, source and coverage. Two numeric metrics, day or week, automatic axes only.' : !editorPresentationKnown(editorPresentation(draft)) ? 'Saved presentation settings are preserved; this display mode is not supported here.' : !editor.combinedAvailable ? 'Bar + line is not available on this dashboard yet.' : 'Bar + line uses primary bars on the left axis and a secondary line on the right axis.'}</p>
-          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${(combined ? GROUP_BY.filter(g => ["day", "week", draft.groupBy].includes(g)) : GROUP_BY).map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
+          <p class="muted">${scatter ? 'Primary: X axis. Secondary: Y axis. Two numeric metrics, day or week, automatic axes and disabled zoom.' : combined ? 'Primary: bars on the left axis. Secondary: line on the right axis. Each metric keeps its own unit, source and coverage. Two numeric metrics, day or week, automatic axes only.' : !editorPresentationKnown(editorPresentation(draft)) ? 'Saved presentation settings are preserved; this display mode is not supported here.' : !editor.combinedAvailable ? 'Bar + line is not available on this dashboard yet.' : 'Bar + line uses primary bars on the left axis and a secondary line on the right axis.'}</p>
+          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${(paired ? GROUP_BY.filter(g => ["day", "week", draft.groupBy].includes(g)) : GROUP_BY).map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
             ${override.activityId
@@ -862,7 +863,7 @@ function renderEditorHtml() {
           ${entry ? `
             <div class="tl-analysis-editor-grid">
               <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
-              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
+              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, scatter ? (v === "primary" ? "X axis" : "Y axis") : AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
               <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
               ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
               <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
@@ -877,7 +878,7 @@ function renderEditorHtml() {
             <div class="tl-analysis-series-actions">
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" ${key} ${saving || entryIndex >= entries.length - 1 ? "disabled" : ""}>Move down</button>
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${saving || combined && entries.length <= 2 ? "disabled" : ""}>Remove series</button>
+              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${saving || paired && entries.length <= 2 ? "disabled" : ""}>Remove series</button>
             </div>
             ${renderMetricPickerHtml(entry)}
           ` : ""}

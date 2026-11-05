@@ -30,3 +30,8 @@ test('heatmap compiles one numeric series only for bar/day-week with paired matr
  for(const [type,groupBy]of [['line_chart','day'],['bar_chart','athlete']]){const d=draft();d.view={...d.view,type,groupBy};d.presentation={mode:'replace',value};assert.ok(compileSimpleDraft(d,snapshot(),context()).issues.some(i=>i.code==='incompatiblePresentation'));}
  for(const invalid of [{...value,chartComposition:'athletes-v1'},{...value,chartVariant:'area'},{...value,chartInteractions:{yAxis:{mode:'fixed',min:0,max:10}}}])assert.equal(validateContract('presentationV1',invalid).valid,false);
 });
+test('Scatter requires the multi-series editor and strict pairs-v1 with automatic numeric axes, no time zoom',()=>{
+ const value={schemaVersion:1,chartVariant:'scatter',chartComposition:'pairs-v1',chartInteractions:{}};
+ assert.equal(validateContract('presentationV1',value).valid,true);const d=draft();d.presentation={mode:'replace',value};assert.equal(compileSimpleDraft(d,snapshot(),context()).status,'advancedRequired');
+ for(const invalid of [{...value,chartComposition:'metrics-v1'},{...value,chartVariant:'combined'},{...value,chartInteractions:{yAxis:{mode:'fixed',min:0,max:10}}},{...value,chartInteractions:{zoom:{mode:'local',applyPeriodAction:false}}},{...value,chartInteractions:{zoom:{mode:'disabled',applyPeriodAction:true}}}])assert.equal(validateContract('presentationV1',invalid).valid,false);
+});

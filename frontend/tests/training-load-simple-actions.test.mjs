@@ -832,3 +832,76 @@ test('saved combined retains two series and preserve intent through the existing
   assert.equal(analysis().editor.draft.series.length, 2);
   assert.ok(calls.slice(count).every(call => call.method === 'GET'));
 });
+
+
+test('Scatter gallery opens an Advanced draft on Page capability only, confirms discard, and performs GETs only', async () => {
+  analysis().widgets = [widget({ widget_type: 'bar_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model; m.capabilities.capabilities.scatterCharts = true;
+  const source = structuredClone(analysis().widgets[0]), count = calls.length;
+  await simple('view', {}, 'scatter'); assert.equal(analysis().editor.open, false); assert.equal(calls.length, count);
+  analysis().pagesMode = true; analysis().pageCapabilities = { scatterCharts: true, pageWidgetEditing: true }; m.pageScatterAvailable = true;
+  confirmAnswer = false; await simple('view', {}, 'scatter'); assert.equal(analysis().editor.open, false); assert.equal(simpleEditor.model, m);
+  confirmAnswer = true; await simple('view', {}, 'scatter');
+  assert.equal(simpleEditor.model, null); const draft = analysis().editor.draft;
+  assert.equal(draft.widgetType, 'line_chart'); assert.equal(draft.series.length, 2); assert.equal(draft.presentation.value.chartComposition, 'pairs-v1');
+  assert.deepEqual(draft.presentation.value.chartInteractions.zoom, { mode: 'disabled', applyPeriodAction: false });
+  assert.deepEqual(analysis().widgets[0], source); assert.ok(calls.slice(count).every(call => call.method === 'GET'));
+});
+
+for (const gate of ['capability', 'page', 'identity', 'dashboard', 'stale', 'new']) test(`Scatter handoff blocks ${gate} without writes`, async () => {
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model; m.capabilities.capabilities.scatterCharts = true; m.pageScatterAvailable = true;
+  analysis().pagesMode = true; analysis().pageCapabilities = { scatterCharts: true };
+  if (gate === 'capability') delete m.capabilities.capabilities.scatterCharts;
+  if (gate === 'page') analysis().pageCapabilities = {};
+  if (gate === 'identity') state.currentUser.id = 'other';
+  if (gate === 'dashboard') analysis().selectedDashboardId = 'other';
+  if (gate === 'stale') m.stale = true;
+  if (gate === 'new') m.widgetId = null;
+  const count = calls.length; await simple('view', {}, 'scatter');
+  assert.equal(analysis().editor.open, false); assert.equal(simpleEditor.model, m); assert.equal(calls.length, count); assert.equal(confirmations.length, 0);
+});
+
+
+test('Scatter handoff preserves two existing numeric series and their metadata', async () => {
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: null, series: [series(), series({ id: 'series-2', built_in_series_key: 'srpe', series_order: 2, axis: 'secondary' })] })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model; assert.equal(m.advancedRequired, true); m.capabilities.capabilities.scatterCharts = true; m.pageScatterAvailable = true;
+  analysis().pagesMode = true; analysis().pageCapabilities = { scatterCharts: true };
+  const source = structuredClone(analysis().widgets[0]), fields = analysisEditorDraftFromWidget(source).series.map(entry => entry.fields), count = calls.length;
+  await simple('view', {}, 'scatter');
+  assert.equal(simpleEditor.model, null); assert.equal(analysis().editor.draft.series.length, 2); assert.equal(analysis().editor.draft.presentation.value.chartVariant, 'scatter');
+  assert.deepEqual(analysis().editor.draft.series.map(entry => entry.fields), fields); assert.deepEqual(analysis().widgets[0], source); assert.ok(calls.slice(count).every(call => call.method === 'GET'));
+});
+
+test('partial known Scatter grouping and regular gallery choices never rewrite its presentation', async () => {
+  const presentation = interactiveChartPresentation('day', 'scatter').value;
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: presentation })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model, before = structuredClone(m.draft), count = calls.length;
+  for (const value of ['table', 'bar_chart', 'area', 'horizontal-bar', 'heatmap', 'combined']) await simple('view', {}, value);
+  for (const group of ['day', 'week', 'athlete', 'session']) await simple('group', {}, group);
+  assert.deepEqual(m.draft, before); assert.deepEqual(m.savedPresentation, presentation); assert.equal(calls.length, count);
+});
+
+
+for (const switchContext of [false, true]) test(`Scatter waits for numeric catalog metadata and guards a late response (${switchContext ? 'changed context' : 'same context'})`, async () => {
+  analysis().widgets = [widget({ widget_type: 'line_chart', presentation_config: null })];
+  await act('training-load-analysis-edit-widget', { widgetId });
+  const m = simpleEditor.model; m.capabilities.capabilities.scatterCharts = true; m.pageScatterAvailable = true;
+  analysis().pagesMode = true; analysis().pageCapabilities = { scatterCharts: true };
+  const previousFetch = globalThis.fetch; let release;
+  globalThis.fetch = (url, options) => String(url).startsWith('/api/training-load/metrics/definitions') ? new Promise(resolve => { release = () => resolve({ ok: true, status: 200, json: async () => ({ rows: [] }) }); }) : previousFetch(url, options);
+  try {
+    const pending = simple('view', {}, 'scatter');
+    assert.equal(typeof release, 'function'); const editor = analysis().editor;
+    assert.equal(editor.draft.series.length, 1); assert.deepEqual(editor.draft.presentation, { mode: 'preserve' });
+    if (switchContext) state.currentUser.id = 'other';
+    release(); await pending;
+    assert.equal(editor.draft.series.length, switchContext ? 1 : 2);
+    assert.equal(editor.draft.presentation.mode, switchContext ? 'preserve' : 'replace');
+    assert.ok(calls.every(call => call.method === 'GET'));
+  } finally { globalThis.fetch = previousFetch; }
+});
