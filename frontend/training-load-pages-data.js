@@ -47,7 +47,7 @@ export async function loadPagesDashboard(dashboardId,onPainted,{preferredPageId,
     if(!current())return true;
     a.detailLoading=false;
     if(['pagesUnavailable','notFound'].includes(error.data?.error) && !a.pagesMode){clearPagesState(a);return false;}
-    a.widgets=[];a.queryResult=null;a.detailError=error.status===404?'Stranica više nije dostupna. Osvežite dashboard.':'Stranice trenutno ne mogu da se učitaju. Pokušajte ponovo.';onPainted?.();return true;
+    a.widgets=[];a.queryResult=null;a.detailError=error.status===404?'This page is no longer available. Refresh the dashboard.':'Pages could not be loaded. Please try again.';onPainted?.();return true;
   }
 }
 
@@ -58,7 +58,7 @@ export async function selectPageData(pageId,onPainted){
   await loadPagesDashboard(a.selectedDashboardId,onPainted,{preferredPageId:pageId,force:true});return true;
 }
 
-function unknownError(){return Object.assign(new Error('Ishod čuvanja nije potvrđen. Proverite ishod ili ponovite isti zahtev.'),{pageOutcomeUnknown:true,data:{error:'outcomeUnknown'}});}
+function unknownError(){return Object.assign(new Error('The save outcome is unknown. Check the status or retry the same request.'),{pageOutcomeUnknown:true,data:{error:'outcomeUnknown'}});}
 async function sendPending(a,pending){
   const receipt=await api(pending.url,{method:pending.method,body:pending.body});
   if(a.pageWritePending===pending)a.pageWritePending=null;
@@ -91,8 +91,8 @@ export async function resolvePageWrite({retry=false}={}){
     if(retry){const receipt=await sendPending(a,pending);return pendingIsCurrent(a,pending)?{receipt,pending}:null;}
     const result=await api(pending.statusUrl);
     if(result.status==='recorded' && pendingIsCurrent(a,pending)){if(a.pageWritePending===pending)a.pageWritePending=null;return {receipt:result.receipt,pending};}
-    pending.status='unknown';pending.error='Zapis još nije pronađen. To ne potvrđuje poništenje. Ponovite isti zahtev ili proverite ponovo.';return null;
-  }catch{pending.status='unknown';pending.error='Ishod još nije potvrđen. Zadržite ekran i pokušajte ponovo.';return null;}
+    pending.status='unknown';pending.error='No record has been found yet. This does not confirm cancellation. Retry the same request or check again.';return null;
+  }catch{pending.status='unknown';pending.error='The outcome is still unknown. Stay on this screen and try again.';return null;}
 }
 
 // Adapter keeps the existing staged Advanced plans, but each individual write
@@ -100,7 +100,7 @@ export async function resolvePageWrite({retry=false}={}){
 export async function pageAdvancedApi(url,options){
   const a=state.trainingLoad.analysis;
   if(!a.pagesMode)return api(url,options);
-  if(!a.page || !a.pageCapabilities.pageWidgetEditing)throw Object.assign(new Error('Stranica je samo za pregled.'),{status:409});
+  if(!a.page || !a.pageCapabilities.pageWidgetEditing)throw Object.assign(new Error('This page is read-only.'),{status:409});
   const prefix=root(a.dashboard.id),tail=url.slice(prefix.length),body=JSON.parse(options.body||'{}');
   if(!url.startsWith(prefix+'/'))throw new Error('Invalid Advanced parent');
   if(Object.hasOwn(body,'expectedDashboardRevision')){delete body.expectedDashboardRevision;body.expectedPageRevision=a.page.revision;}

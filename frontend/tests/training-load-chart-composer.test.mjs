@@ -106,15 +106,15 @@ test('zoom je lokalni; eksplicitno dugme emituje jedan datum opseg, repaint čuv
   clearDashboardChartStates();const plot=fixture([row('a','2026-10-06',1)]).output.plots[0];let f=runtime(plot),events=[];
   f.host.addEventListener('optimove-chart-period',event=>events.push(event.detail));
   f.listeners.get('datazoom')({start:0,end:50});assert.equal(events.length,0);
-  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Primeni period na dashboard').click();assert.equal(events.length,0);[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Potvrdi period').click();assert.equal(events.length,1);assert.equal(events[0].dateTo,'2026-10-09');assert.equal(events[0].confirmed,true);
-  f.listeners.get('legendselectchanged')({selected:{[plot.option.series[0].name]:false}});assert.match(f.host.querySelector('[role=status]')?.textContent??f.host.querySelector('.tl-chart-interaction-status').textContent,/skrivene/);
+  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Apply period to dashboard').click();assert.equal(events.length,0);[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Confirm period').click();assert.equal(events.length,1);assert.equal(events[0].dateTo,'2026-10-09');assert.equal(events[0].confirmed,true);
+  f.listeners.get('legendselectchanged')({selected:{[plot.option.series[0].name]:false}});assert.match(f.host.querySelector('[role=status]')?.textContent??f.host.querySelector('.tl-chart-interaction-status').textContent,/hidden/);
   f.release();f.window.close();f=runtime(plot);assert.equal(f.options[0].legend.selected[plot.option.series[0].name],false);assert.equal(f.host.querySelectorAll('select')[1].value,'3');f.release();f.window.close();
   const next=fixture([row('a','2026-10-06',1)],{queryId:'query-2'}).output.plots[0];f=runtime(next);assert.deepEqual(f.options[0].legend.selected,{});assert.equal(f.host.querySelectorAll('select')[1].value,'6');f.release();f.window.close();
 });
 
 test('athlete poređenje nema lažne per-athlete legend kontrole i preveliki HTML ostaje običan tekst',()=>{
   const plot=fixture([row('<img onerror=x>','all',1)],{groupBy:'athlete'}).output.plots[0];const f=runtime(plot);
-  assert.equal([...f.host.querySelectorAll('button')].some(b=>b.textContent.startsWith('Prikaži/sakrij')),false);assert.equal(f.host.querySelector('img'),null);f.release();f.window.close();
+  assert.equal([...f.host.querySelectorAll('button')].some(b=>b.textContent.startsWith('Show/hide')),false);assert.equal(f.host.querySelector('img'),null);f.release();f.window.close();
 });
 
 test('bez queryId nema obnavljanja prethodnog zoom-a ili detalja sa null identitetom',()=>{
@@ -125,8 +125,8 @@ test('bez queryId nema obnavljanja prethodnog zoom-a ili detalja sa null identit
 
 test('Auto Y opstaje tokom repaint-a, a Reset vraća fiksne granice i odgovarajuće upozorenje',()=>{
   clearDashboardChartStates();const fixed={...presentation,chartInteractions:{...presentation.chartInteractions,yAxis:{mode:'fixed',min:0,max:5}}};const plot=fixture([row('a','2026-10-06',12)],{sidecar:fixed}).output.plots[0];let f=runtime(plot);
-  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Automatski Y opseg').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:null,max:null}});assert.equal(f.host.querySelector('.tl-chart-interaction-status').textContent,'');f.release();f.window.close();
-  f=runtime(plot);assert.ok(f.options.some(option=>option.yAxis?.min===null));[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Vrati početni prikaz').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:0,max:5}});assert.match(f.host.querySelector('.tl-chart-interaction-status').textContent,/izvan Y/);f.release();f.window.close();
+  [...f.host.querySelectorAll('button')].find(b=>b.textContent==='Automatic Y range').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:null,max:null}});assert.equal(f.host.querySelector('.tl-chart-interaction-status').textContent,'');f.release();f.window.close();
+  f=runtime(plot);assert.ok(f.options.some(option=>option.yAxis?.min===null));[...f.host.querySelectorAll('button')].find(b=>b.textContent==='Reset view').click();assert.deepEqual(f.options.at(-1),{yAxis:{min:0,max:5}});assert.match(f.host.querySelector('.tl-chart-interaction-status').textContent,/izvan Y/);f.release();f.window.close();
 });
 
 test('greška setOption čisti delimične handlere i svaku aktivnu kontrolu',()=>{
@@ -144,8 +144,8 @@ test('promena imena sportiste ne menja skrivenost iste stabilne serije',()=>{
   const renamed=structuredClone(plot);renamed.option.series[0].name='Novo ime';f=runtime(renamed);assert.equal(f.options[0].legend.selected['Novo ime'],false);f.release();f.window.close();
 });
 
-test('Odustani i naknadni zoom poništavaju nepotvrđenu primenu perioda',()=>{
+test('Cancel i naknadni zoom poništavaju nepotvrđenu primenu perioda',()=>{
   const plot=fixture([row('a','2026-10-06',1)]).output.plots[0];const f=runtime(plot);let events=0;f.host.addEventListener('optimove-chart-period',()=>events++);const click=text=>[...f.host.querySelectorAll('button')].find(button=>button.textContent===text).click();
-  click('Primeni period na dashboard');click('Odustani');click('Potvrdi period');assert.equal(events,0);
-  click('Primeni period na dashboard');f.listeners.get('datazoom')({start:30,end:50});click('Potvrdi period');assert.equal(events,0);f.release();f.window.close();
+  click('Apply period to dashboard');click('Cancel');click('Confirm period');assert.equal(events,0);
+  click('Apply period to dashboard');f.listeners.get('datazoom')({start:30,end:50});click('Confirm period');assert.equal(events,0);f.release();f.window.close();
 });

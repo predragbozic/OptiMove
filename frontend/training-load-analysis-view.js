@@ -301,18 +301,18 @@ function renderLayoutBarHtml() {
   if (!a.editMode || !canEdit()) return "";
   const dirty = Boolean(a.layoutDraft);
   return `
-    <div class="tl-layout-bar" role="region" aria-label="Uređivanje rasporeda">
+    <div class="tl-layout-bar" role="region" aria-label="Editing layout">
       <div class="tl-layout-bar-text">
-        <strong>Uređivanje rasporeda</strong>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Povuci naslov vidžeta za pomeranje, a donji desni ugao za veličinu. Možeš koristiti i strelice.</span>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Koristi „Pomeri gore” i „Pomeri dole” za redosled na telefonu.</span>
-        <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Nesačuvane izmene" : "Još nema izmena"}</span>
+        <strong>Editing layout</strong>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget title to move it, or its bottom-right corner to resize. You can also use the arrows.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up and Move down to set the order on phones.</span>
+        <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Unsaved changes" : "No changes yet"}</span>
       </div>
       <div class="tl-layout-bar-actions">
-        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Otkaži</button>
+        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Cancel</button>
         ${dirty
-          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Čuvanje…" : "Sačuvaj raspored"}</button>`
-          : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Završi</button>`}
+          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving…" : "Save layout"}</button>`
+          : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Done</button>`}
       </div>
     </div>
   `;
@@ -353,19 +353,19 @@ function renderWidgetToolbarHtml(widget, layout, position) {
   return `
     <div class="tl-analysis-widget-tools" role="group" aria-label="${escapeAttr(`Layout of ${widget.title}`)}">
       <div class="tl-layout-tool-group tl-analysis-grid-control">
-        ${layoutToolButtonHtml("left", id, "Pomeri levo", "&larr;", x <= 0)}
-        ${layoutToolButtonHtml("right", id, "Pomeri desno", "&rarr;", x + width >= 12)}
-        ${layoutToolButtonHtml("up", id, "Pomeri gore", "&uarr;", y <= 0)}
-        ${layoutToolButtonHtml("down", id, "Pomeri dole", "&darr;", false)}
+        ${layoutToolButtonHtml("left", id, "Move left", "&larr;", x <= 0)}
+        ${layoutToolButtonHtml("right", id, "Move right", "&rarr;", x + width >= 12)}
+        ${layoutToolButtonHtml("up", id, "Move up", "&uarr;", y <= 0)}
+        ${layoutToolButtonHtml("down", id, "Move down", "&darr;", false)}
       </div>
       <div class="tl-layout-tool-group tl-analysis-grid-control">
-        ${layoutToolButtonHtml("narrower", id, "Suzi vidžet", "&minus;", width <= limits.minWidth)}
+        ${layoutToolButtonHtml("narrower", id, "Narrower", "&minus;", width <= limits.minWidth)}
         <span class="tl-layout-size" title="Width × height in grid units">${width} × ${height}</span>
-        ${layoutToolButtonHtml("wider", id, "Proširi vidžet", "+", width >= limits.maxWidth)}
+        ${layoutToolButtonHtml("wider", id, "Wider", "+", width >= limits.maxWidth)}
       </div>
       <div class="tl-layout-tool-group tl-analysis-mobile-reorder-group">
-        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(id)}" ${position.index <= 0 ? "disabled" : ""}>Pomeri gore</button>
-        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(id)}" ${position.index >= position.total - 1 ? "disabled" : ""}>Pomeri dole</button>
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(id)}" ${position.index <= 0 ? "disabled" : ""}>Move up</button>
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(id)}" ${position.index >= position.total - 1 ? "disabled" : ""}>Move down</button>
       </div>
     </div>
   `;
@@ -386,8 +386,8 @@ function renderWidgetMenuHtml(widget) {
       ${open ? `
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
-          ${blocked ? `<p class="tl-menu-note" role="note">Prvo sačuvaj ili otkaži izmene rasporeda.</p>` : ""}
-          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Obriši vidžet", dataset, danger: true, disabled: blocked || a.saving })}
+          ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
+          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
         </div>
       ` : ""}
     </div>
@@ -529,7 +529,7 @@ function renderWidgetHtml(widget, position) {
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
-        ${canEdit() && !state.trainingLoad.analysis.editMode ? `<button type="button" class="plain-button compact-button tl-widget-settings" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="${escapeAttr(`Podesi ${widget.title}`)}" ${settingsBlocked ? 'disabled' : ''}>Podesi</button>` : ''}
+        ${canEdit() && !state.trainingLoad.analysis.editMode ? `<button type="button" class="plain-button compact-button tl-widget-settings" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="${escapeAttr(`Settings for ${widget.title}`)}" ${settingsBlocked ? 'disabled' : ''}>Settings</button>` : ''}
       </header>
       <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
@@ -553,8 +553,8 @@ function renderGridHtml() {
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
-          ${widgets.length ? `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-toggle-edit" ${a.saving ? "disabled" : ""}>Uredi raspored</button>` : ''}
-          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Dodaj metriku</span></button>
+          ${widgets.length ? `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-toggle-edit" ${a.saving ? "disabled" : ""}>Edit layout</button>` : ''}
+          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
         </div>
       ` : ""}
     </section>
@@ -568,9 +568,9 @@ function renderGridHtml() {
     ${widgets.length
       ? `<div class="tl-analysis-grid">${widgets.map((w, index) => renderWidgetHtml(w, { index, total: widgets.length })).join("")}</div>`
       : `<section class="panel tl-analysis-empty">
-          <h3>${a.pagesMode?'Ova stranica je prazna':'No metrics yet'}</h3>
+          <h3>${a.pagesMode?'This page is empty':'No metrics yet'}</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
-          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">${a.pagesMode?'Dodaj prvu metriku':'Add your first metric'}</button></div>` : ""}
+          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">${a.pagesMode?'Add your first metric':'Add your first metric'}</button></div>` : ""}
         </section>`}
   `;
 }
@@ -895,13 +895,13 @@ export function renderTrainingLoadAnalysisHtml() {
   const dashboardControls = (html, label) => editing || a.pageWritePending || a.pagesMode&&a.detailLoading ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
   return `
     <div class="tl-analysis">
-      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filteri</summary>${dashboardControls(renderTopBarHtml(), 'Filteri dashboarda tokom podešavanja')}</details>` : dashboardControls(renderTopBarHtml(), 'Kontrole dashboarda tokom čuvanja')}
+      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filters</summary>${dashboardControls(renderTopBarHtml(), 'Dashboard filters while editing')}</details>` : dashboardControls(renderTopBarHtml(), 'Dashboard controls while saving')}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
       ${renderPagesHtml(a)}
       ${renderSimpleEditorHtml(a.simpleEditor)}
-      <div ${a.pagesMode?'id="tl-page-panel" role="tabpanel" aria-label="Sadržaj aktivne stranice"':''}>${dashboardControls(renderGridHtml(), 'Sačuvani dashboard tokom podešavanja')}</div>
+      <div ${a.pagesMode?'id="tl-page-panel" role="tabpanel" aria-label="Active page content"':''}>${dashboardControls(renderGridHtml(), 'Saved dashboard while editing')}</div>
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}

@@ -1477,7 +1477,7 @@ export function reconcileConfirmedPageWrite({receipt,pending}) {
     }
   }
   const editor=a.editor,widget=editor?.open&&a.widgets.find(w=>w.id===editor.widgetId);
-  if(widget && editor.draft){rebaseAnalysisEditorDraft(widget,editor.draft,editor.base);editor.base=analysisEditorDraftFromWidget(widget);editor.serverChanged=true;editor.error='Prethodna operacija je potvrđena. Preostale izmene su sačuvane u nacrtu; proverite ih pre nastavka.';}
+  if(widget && editor.draft){rebaseAnalysisEditorDraft(widget,editor.draft,editor.base);editor.base=analysisEditorDraftFromWidget(widget);editor.serverChanged=true;editor.error='The previous operation is confirmed. Remaining changes are retained in your draft; review them before continuing.';}
 }
 
 export function moveAnalysisWidgetMobile(widgetId, direction) {

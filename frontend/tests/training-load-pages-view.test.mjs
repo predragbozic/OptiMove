@@ -12,7 +12,7 @@ function model(extra = {}) {
 const dom = a => JSDOM.fragment(renderPagesHtml(a));
 const control = (root, type) => root.querySelector(`[data-action="${prefix}${type}"]`);
 const tabs = root => [...root.querySelectorAll('[role="tab"]')];
-const form = (mode = 'create', extra = {}) => ({ mode, name: 'Nova stranica', preset: 'last_28_days', targetId: 'page-2', widgetCount: 4, ...extra });
+const form = (mode = 'create', extra = {}) => ({ mode, name: 'New page', preset: 'last_28_days', targetId: 'page-2', widgetCount: 4, ...extra });
 const management = ['create', 'rename', 'duplicate', 'left', 'right', 'defaults', 'delete'];
 
 test('exportovani pending helper bez zahteva vraća prazno', () => {
@@ -50,7 +50,7 @@ test('legacy režim vraća prazno; render ne menja ulaz', () => {
 
 test('nav ima imenovane kartice, izabranu Page i vezu ka panelu glavnog prikaza', () => {
   const root = dom(model());
-  assert.equal(root.querySelector('nav').getAttribute('aria-label'), 'Stranice kontrolne table');
+  assert.equal(root.querySelector('nav').getAttribute('aria-label'), 'Dashboard pages');
   assert.equal(root.querySelector('[role="tablist"]').getAttribute('aria-orientation'), 'horizontal');
   assert.deepEqual(tabs(root).map(tab => tab.textContent), ['Pregled', 'Napredak', 'Oporavak']);
   assert.deepEqual(tabs(root).map(tab => tab.getAttribute('aria-selected')), ['false', 'true', 'false']);
@@ -69,13 +69,13 @@ test('nav ima imenovane kartice, izabranu Page i vezu ka panelu glavnog prikaza'
 test('aktivna Page ima native details meni sa svim akcijama i ciljanim ID-jem', () => {
   const root = dom(model());
   assert.ok(root.querySelector('details > summary'));
-  assert.equal(root.querySelector('summary').getAttribute('aria-label'), 'Opcije stranice Napredak');
-  assert.equal(control(root, 'create').textContent, '+ Stranica');
+  assert.equal(root.querySelector('summary').getAttribute('aria-label'), 'Page options Napredak');
+  assert.equal(control(root, 'create').textContent, '+ Page');
   for (const type of management.filter(type => type !== 'create')) {
     assert.equal(control(root, type).dataset.pageId, 'page-2');
     assert.equal(control(root, type).disabled, false);
   }
-  assert.equal(control(root, 'defaults').textContent, 'Sačuvaj početni raspon i filtere');
+  assert.equal(control(root, 'defaults').textContent, 'Save default period and filters');
 });
 
 test('krajnje kartice blokiraju pomeranje preko granice, poslednja Page blokira brisanje', () => {
@@ -105,7 +105,7 @@ test('nepoverljivi nazivi, ID-jevi, input vrednosti i greške ostaju običan tek
   assert.equal(tabs(root)[0].textContent, hostile);
   assert.equal(tabs(root)[0].dataset.pageId, hostile);
   assert.equal(control(root, 'rename').dataset.pageId, hostile);
-  assert.equal(root.querySelector('summary').getAttribute('aria-label'), `Opcije stranice ${hostile}`);
+  assert.equal(root.querySelector('summary').getAttribute('aria-label'), `Page options ${hostile}`);
   assert.equal(root.querySelector('input').value, hostile);
   assert.equal(root.querySelector('[role="alert"]').textContent, hostile);
   const deletion = dom(model({ pageForm: form('delete', { name: hostile }) }));
@@ -123,14 +123,14 @@ test('create forma koristi delegirani submit, named input maxlength 200 i četir
   assert.equal(input.name, 'name');
   assert.equal(input.maxLength, 200);
   assert.equal(input.required, true);
-  assert.equal(input.value, 'Nova stranica');
-  assert.equal(root.querySelector(`label[for="${input.id}"]`).textContent.trim(), 'Naziv stranice');
+  assert.equal(input.value, 'New page');
+  assert.equal(root.querySelector(`label[for="${input.id}"]`).textContent.trim(), 'Page name');
   const select = control(root, 'form-preset');
   assert.equal(select.name, 'preset');
   assert.equal(select.value, 'this_week');
   assert.deepEqual([...select.options].map(option => option.value), ['last_28_days', 'last_7_days', 'this_week', 'current']);
   assert.equal(element.querySelector('[type="submit"]').hasAttribute('data-action'), false);
-  assert.equal(control(root, 'form-cancel').textContent, 'Otkaži');
+  assert.equal(control(root, 'form-cancel').textContent, 'Cancel');
 });
 
 for (const mode of ['rename', 'duplicate']) {
@@ -139,19 +139,19 @@ for (const mode of ['rename', 'duplicate']) {
     assert.ok(control(root, 'form-name'));
     assert.equal(root.querySelector('select'), null);
     assert.equal(root.querySelector('[type="submit"]').disabled, false);
-    if (mode === 'duplicate') assert.match(root.querySelector('form').textContent, /zadržava početni raspon i filtere/);
+    if (mode === 'duplicate') assert.match(root.querySelector('form').textContent, /keeps the original page’s default period and filters/);
   });
 }
 
 test('delete jasno prikazuje broj vidžeta i zabranjuje poslednju Page', () => {
   const a = model({ pageForm: form('delete', { widgetCount: 17 }) });
   let root = dom(a);
-  assert.match(root.querySelector('form').textContent, /trajno se brišu svi njeni vidžeti. Broj vidžeta: 17/);
+  assert.match(root.querySelector('form').textContent, /permanently deletes all its widgets. Widget count: 17/);
   assert.equal(root.querySelector('input, select'), null);
   assert.equal(root.querySelector('[type="submit"]').disabled, false);
   a.pages = [a.page]; root = dom(a);
   assert.equal(root.querySelector('[type="submit"]').disabled, true);
-  assert.match(root.textContent, /Poslednju stranicu nije moguće obrisati/);
+  assert.match(root.textContent, /The last page cannot be deleted/);
 });
 
 test('limit 32 blokira create i duplicate u meniju i u otvorenoj formi', () => {

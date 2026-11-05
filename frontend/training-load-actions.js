@@ -223,7 +223,7 @@ function discardAnalysisLayoutDraft() {
 // (resetTrainingLoadForWorkspaceChange) or reloads the page.
 export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   if(pageWriteIsPending())return false;
-  if(state.trainingLoad.analysis.pageForm && !window.confirm('Odbaciti nesačuvanu promenu stranice?'))return false;
+  if(state.trainingLoad.analysis.pageForm && !window.confirm('Discard your unsaved page changes?'))return false;
   if (state.activeTab !== "training-load") return leaveSimpleEditor({ discard });
   // Imports (phase 4b): an import of several sessions that is still running
   // must not be lost unseen, and a selection made but not imported is asked
@@ -666,7 +666,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     mayLeave:()=>{
       const a=state.trainingLoad.analysis;
       if(a.saving || a.editor?.saving || a.metricPanel?.saving || !analysisEditorMayBeDiscarded() || !analysisLayoutMayBeDiscarded())return false;
-      if(a.metricPanel && !window.confirm('Odbaciti nesačuvana podešavanja metrike?'))return false;
+      if(a.metricPanel && !window.confirm('Discard your unsaved metric settings?'))return false;
       discardAnalysisEditorDraft();discardAnalysisLayoutDraft();a.metricPanel=null;return true;
     },
     refresh:async preferredPageId=>{
@@ -676,7 +676,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     },reconcile:reconcileConfirmedPageWrite,
   });
   if(pageWriteIsPending())return true;
-  if(state.trainingLoad.analysis.pageForm){if(!window.confirm('Odbaciti nesačuvanu promenu stranice?'))return true;state.trainingLoad.analysis.pageForm=null;}
+  if(state.trainingLoad.analysis.pageForm){if(!window.confirm('Discard your unsaved page changes?'))return true;state.trainingLoad.analysis.pageForm=null;}
   if (type.startsWith('training-load-simple-')) {
     const handled = await handleSimpleEditorAction(action, renderTrainingLoad);
     if (!handled && state.trainingLoad.analysis.simpleAdvancedCreate) {

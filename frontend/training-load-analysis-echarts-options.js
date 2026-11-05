@@ -49,14 +49,14 @@ export function dashboardChartPlots(model, labelForSeries, rowContext, options =
 export function renderDashboardChartPlots(model, labelForSeries, rowContext, options = {}) {
   const composition = options.presentation == null ? null : composeDashboardCharts(model,labelForSeries,rowContext,options);
   const plots = composition?.plots ?? dashboardChartPlots(model,labelForSeries,rowContext);
-  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Izaberite najviše 20 sportista ili tabelu. Nijedan sportista nije izostavljen.' : 'Podešavanja grafikona ili period nisu dostupni. Sve vraćene vrednosti ostaju u tabeli.')}</p>` : '';
+  const notice = composition && composition.status !== 'ready' ? `<p role="status">${escapeHtml(composition.status === 'requiresChoice' ? 'Select up to 20 athletes or use a table. No athletes have been omitted.' : 'Chart settings or the period are unavailable. All returned values remain in the table.')}</p>` : '';
   return notice + plots.map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">
         <div class="tl-analysis-echarts" aria-hidden="true"></div>
         <p class="muted tl-analysis-chart-failure" role="status" hidden>Chart unavailable. The values below are still available.</p>
-        ${plot.enhanced ? `<details class="tl-chart-tools"><summary>Kontrole grafikona</summary><div class="tl-chart-controls" aria-label="Kontrole grafikona"></div></details><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Detalji izabrane tačke</summary><pre></pre></details>` : ''}
+        ${plot.enhanced ? `<details class="tl-chart-tools"><summary>Chart controls</summary><div class="tl-chart-controls" aria-label="Chart controls"></div></details><p class="tl-chart-interaction-status" role="status"></p><details class="tl-chart-point-details"><summary>Selected point details</summary><pre></pre></details>` : ''}
       </optimove-dashboard-chart>
     </figure>
   `).join("");

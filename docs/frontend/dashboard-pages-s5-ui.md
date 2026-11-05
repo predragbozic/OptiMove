@@ -1,5 +1,7 @@
 # S5 — stranice u Dashboards interfejsu
 
+Važeća odluka o jeziku interfejsa: sve sistemske kontrole i poruke Dashboards koriste engleski, u skladu sa ostatkom aplikacije. To obuhvata Pages obrasce, upozorenja i oporavak čuvanja, Simple podešavanja, raspored, kontrole i detalje grafikona, prazna stanja i pristupačne nazive. Primeri: `+ Page`, `Page options`, `Settings`, `Edit layout`, `Save layout`. Nazivi koje korisnik unese nisu automatski prevođeni. Višejezičnost je zaseban budući korak; ovaj PR ne uvodi lokalizacioni sistem. Raniji srpski nazivi u opisu ispod predstavljaju istoriju funkcionalnosti. Provera promene jezika: **343/343 ciljano PASS**, build PASS; lokalni pregled stvarnog view koda bez baze.
+
 Osnova: Draft PR #374, commit `f45a4351984d5df0a2c71e5108e57352a41611a1`. S5 ne uvodi migraciju. Zavisi od Pages v57, Page Simple v58 i Page Advanced v59; svi prethodni PR-ovi ostaju zasebni i nisu spojeni ovim radom.
 
 ## Ponašanje
