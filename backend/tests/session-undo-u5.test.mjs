@@ -391,13 +391,19 @@ test("6. the request body is checked before anything is locked: key, reason, exp
   assert.deepEqual(await allRowCounts(), rowsBefore);
 });
 
-test("7. a pending candidate, a superseded one and a candidate of nothing imported cannot be undone", async () => {
+test("7. a pending candidate and a superseded one cannot be undone", async () => {
   const team = await setupTeam();
   await checkNow(team, [cleanBundle({ sessionId: 9108 })]);
   const pending = (await listFor(team))[0];
   const rowsBefore = await allRowCounts();
   const r = await api(undoPath(team, pending.id), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "x" } });
   assert.deepEqual([r.status, r.body.error], [409, "candidate_not_imported"]);
+  await admin.query("begin");
+  await admin.query("set local session_replication_role = replica");
+  await admin.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = last_seen_check_id where id = $1`, [pending.id]);
+  await admin.query("commit");
+  const sup = await api(undoPath(team, pending.id), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "x" } });
+  assert.deepEqual([sup.status, sup.body.error], [409, "candidate_not_imported"]);
   assert.deepEqual(await allRowCounts(), rowsBefore);
 });
 
@@ -742,19 +748,44 @@ test("18. an unanswered COMMIT is outcome_unknown; repeating the same request re
   const redo = await undo(team, b, { requestKey: keyB });
   assert.equal(redo.status, 200, redo.text);
   assert.equal(redo.body.undo.replayed, false);
+  // (c) the connection dies during the COMMIT (an error without a SQLSTATE): never a plain 500 - the outcome is unknown.
+  const c = await importSession(team, 9137, { hour: 12 });
+  const keyC = key();
+  undoService.setUndoCommitBoundForTests(5000, async (client) => { await client.query("commit"); throw new Error("Connection terminated unexpectedly"); });
+  try {
+    const lost = await undo(team, c, { requestKey: keyC });
+    assert.deepEqual([lost.status, lost.body.error, lost.body.retrySameRequest], [503, "outcome_unknown", true]);
+  } finally { undoService.setUndoCommitBoundForTests(null); }
+  const replayC = await undo(team, c, { requestKey: keyC });
+  assert.deepEqual([replayC.status, replayC.body.undo?.replayed], [200, true], "the COMMIT had reached the server: the repeat returns what it did");
+  // (d) an explicit PostgreSQL error answer to COMMIT does say the undo did not happen.
+  const d = await importSession(team, 9138, { hour: 14 });
+  undoService.setUndoCommitBoundForTests(5000, async () => { throw Object.assign(new Error("deferred constraint"), { code: "23503" }); });
+  try {
+    const refused = await undo(team, d);
+    assert.notEqual(refused.body.error, "outcome_unknown");
+  } finally { undoService.setUndoCommitBoundForTests(null); }
 });
 
-test("19. a failure after the removal (here: the request insert) rolls the whole call back", async () => {
+test("19. a failure at the last step (the request insert), after the removal and the log row, rolls the whole call back; a second call with the same key in one transaction replays", async () => {
   const team = await setupTeam();
   const s = await importSession(team, 9128);
   const rowsBefore = await allRowCounts();
-  // A foreign key the request row cannot satisfy: point the candidate's check at nothing is impossible, so make the log insert fail.
-  await admin.query(`create or replace function pg_temp.noop() returns void as 'select 1' language sql`).catch(() => {});
+  await admin.query(`create or replace function public.u5_fail() returns trigger as $$ begin raise exception 'u5 injected failure' using errcode = 'XX999'; end; $$ language plpgsql`);
+  await admin.query(`create trigger u5_fail_t before insert on training_load.gpexe_session_undo_requests for each row execute function public.u5_fail()`);
+  try {
+    const r = await undo(team, s);
+    assert.equal(r.status, 500, r.text);
+  } finally {
+    await admin.query(`drop trigger u5_fail_t on training_load.gpexe_session_undo_requests`);
+    await admin.query(`drop function public.u5_fail()`);
+  }
+  assert.deepEqual(await allRowCounts(), rowsBefore, "the removal, the log row and the candidate mark were all rolled back");
+  assert.equal((await counts(team.teamId)).events, 1);
   const c = await newClient();
   try {
     await c.query("begin");
     await c.query("select set_config('lock_timeout','5s',true)");
-    // The same request key twice in one transaction: the second call replays, so it cannot double-write.
     const k = key();
     const one = (await c.query(`select * from training_load.undo_imported_session($1,$2,$3,$4,'twice',null)`, [team.padmin.id, team.teamId, s.candidateId, k])).rows[0];
     const two = (await c.query(`select * from training_load.undo_imported_session($1,$2,$3,$4,'twice',null)`, [team.padmin.id, team.teamId, s.candidateId, k])).rows[0];
@@ -1013,4 +1044,61 @@ test("26. lock order (the rule of .claude/rules/migrations.md): inside the funct
   assert.doesNotMatch(afterFirstWrite, /\bfor (update|share|no key update)\b|pg_advisory|\block table\b/i, "no locking clause after the first write");
   // The rights rows are read one statement at a time, users first: no statement locks both.
   assert.doesNotMatch(body, /for share of u, r|for update of u, r/i);
+});
+
+test("27. a replay through another team's route is the identical 404, not the saved answer", async () => {
+  const a = await setupTeam();
+  const b = await setupTeam();
+  const s = await importSession(a, 9139);
+  const requestKey = key();
+  const first = await undo(a, s, { requestKey });
+  assert.equal(first.status, 200, first.text);
+  const rowsBefore = await allRowCounts();
+  const via = await api(undoPath(b, s.candidateId), { method: "POST", cookie: b.padmin.cookie, body: { requestKey, reason: "wrong athlete link", expected: { eventId: s.eventId } } });
+  assert.deepEqual([via.status, via.body.error], [404, "notFound"]);
+  // The same acting admin: the same user reaching team B.
+  const sameAdmin = await api(undoPath(b, s.candidateId), { method: "POST", cookie: a.padmin.cookie, body: { requestKey, reason: "wrong athlete link", expected: { eventId: s.eventId } } });
+  assert.equal(sameAdmin.status, 404, sameAdmin.text);
+  // Called directly with the admin of A and B's team id: the function itself refuses.
+  const c = await newClient();
+  try {
+    await assert.rejects(c.query(`select * from training_load.undo_imported_session($1,$2,$3,$4,'wrong athlete link',$5)`, [a.padmin.id, b.teamId, s.candidateId, requestKey, s.eventId]), /session_undo:candidate_not_found/);
+  } finally { await c.end(); }
+  assert.deepEqual(await allRowCounts(), rowsBefore);
+});
+
+test("28. an undo aimed at a candidate an approval is holding is refused before it can wait for it: no deadlock, the approval finishes", async () => {
+  const team = await setupTeam();
+  await checkNow(team, [cleanBundle({ sessionId: 9140 })]);
+  const x = (await listFor(team)).find((c) => c.gpexeTeamSessionId === "9140");
+  let release; const hold = new Promise((r) => { release = r; });
+  let reached; const reachedP = new Promise((r) => { reached = r; });
+  service.setApprovalObserver(async () => { reached(); await hold; });
+  try {
+    const approveP = withSwitchOn(() => api(`/teams/${team.teamId}/imports`, {
+      method: "POST", cookie: team.padmin.cookie, body: { candidateIds: [x.id], previewHashes: { [x.id]: x.previewHash } },
+    }));
+    await reachedP;
+    const started = Date.now();
+    const r = await api(undoPath(team, x.id), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "misdirected" } });
+    assert.deepEqual([r.status, r.body.error], [409, "candidate_not_imported"]);
+    assert.ok(Date.now() - started < 3000, "refused at once, without waiting for the approval's locks");
+    release();
+    const a = await approveP;
+    assert.equal(a.body.results[0].outcome, "imported", a.text);
+  } finally { service.setApprovalObserver(null); }
+});
+
+test("29. newer content for the session already published: the old snapshot is not offered again", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9141);
+  // GPEXE changed the session; a search publishes the new content as a pending candidate beside the imported one.
+  await checkNow(team, [cleanBundle({ sessionId: 9141, updatedOn: "2026-09-14T21:30:00.000" })]);
+  const live = (await listFor(team)).filter((c) => c.gpexeTeamSessionId === "9141" && c.status !== "imported");
+  assert.equal(live.length, 1, "the newer content is a live candidate");
+  const r = await undo(team, s);
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.body.undo.offeredAgain, r.body.undo.newCandidateId], [false, null]);
+  const after = (await listFor(team)).filter((c) => c.gpexeTeamSessionId === "9141");
+  assert.deepEqual(after.map((c) => c.id), [live[0].id], "exactly one live candidate remains: the newer one");
 });

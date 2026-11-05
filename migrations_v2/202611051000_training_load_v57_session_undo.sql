@@ -426,6 +426,9 @@ declare
   v_new uuid;
   v_last_status text;
   v_constraint text;
+  v_status text;
+  v_pass integer := 0;
+  v_act_before uuid[];
 begin
   if p_actor is null or p_team is null or p_candidate is null or p_request_key is null then
     raise exception 'undo_imported_session: actor, team, candidate and request key are required' using errcode = '22023';
@@ -445,12 +448,25 @@ begin
     raise exception 'user % may not undo an imported session', p_actor using errcode = '42501';
   end if;
 
+  -- 1b. An unlocked look at the candidate BEFORE the team lock. The approval locks a candidate row and only then waits for
+  --     the team lock, the undo the other way round; an undo aimed at a candidate that is not imported (an approval may hold
+  --     it) is therefore refused here, before it can wait for that row while holding the team lock. An imported row is only
+  --     ever locked by an approval that refuses it before it waits for the team lock, so the later FOR UPDATE cannot
+  --     deadlock. An undone row passes on purpose: its replay is answered below.
+  select c.status into v_status from training_load.gpexe_import_candidates c where c.id = p_candidate and c.owner_team_id = p_team;
+  if not found then
+    perform training_load.session_undo_refuse('candidate_not_found');
+  end if;
+  if v_status <> 'imported' then
+    perform training_load.session_undo_refuse('candidate_not_imported');
+  end if;
+
   -- 2. The team's import lock: the importer's own key, so an import and an undo of the same team wait for each other.
   perform pg_advisory_xact_lock(hashtextextended('gpexe-import-team:' || lower(p_team::text), 21));
 
   -- 3. A replay answers the saved outcome before any further lock.
   select * into v_req from training_load.gpexe_session_undo_requests q
-   where q.requested_by_user_id = p_actor and q.request_key = p_request_key;
+   where q.requested_by_user_id = p_actor and q.request_key = p_request_key and q.owner_team_id = p_team;
   if found then
     if v_req.request_hash <> v_hash then
       perform training_load.session_undo_refuse('request_key_reused');
@@ -499,11 +515,20 @@ begin
   -- 6. The scope, collected again after the activities are locked (a link added meanwhile is seen here or waits).
   v_scope := training_load.session_undo_scope(v_event_id);
   v_act := coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}');
-  if cardinality(v_act) > 0 then
+  -- Lock the activities, look again, and repeat until the set no longer grows (a link added while a lock was waited for is
+  -- seen by the next look; three rounds are far more than the importer's own creation under the team lock can need).
+  loop
+    exit when cardinality(v_act) = 0;
     perform 1 from training.activities a where a.id = any(v_act) order by a.id for update;
+    v_act_before := v_act;
     v_scope := training_load.session_undo_scope(v_event_id);
     v_act := coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}');
-  end if;
+    exit when v_act <@ v_act_before;
+    v_pass := v_pass + 1;
+    if v_pass >= 3 then
+      raise exception 'undo_imported_session: the activities of the event keep changing' using errcode = '55P03';
+    end if;
+  end loop;
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
     perform training_load.session_undo_refuse('manual_occasion');
   end if;
@@ -631,7 +656,13 @@ begin
   select k.status into v_last_status from training_load.gpexe_import_checks k
    where k.id = v_cand.last_seen_check_id and k.owner_team_id = p_team;
   if v_cand.raw_bundle is not null and v_cand.raw_purged_at is null and v_cand.raw_expires_at > now()
-     and v_last_status = 'succeeded' then
+     and v_last_status = 'succeeded'
+     -- Never offer content older than what the team already has: a live candidate of the same session with other content
+     -- (newer data a search published) means the old snapshot would be approvable over it.
+     and not exists (select 1 from training_load.gpexe_import_candidates o
+                      where o.owner_team_id = p_team and o.gpexe_team_session_id = v_cand.gpexe_team_session_id
+                        and o.id <> p_candidate and o.import_undone_at is null and o.bundle_hash <> v_cand.bundle_hash
+                        and o.status in ('pending', 'blocked', 'imported')) then
     v_new := gen_random_uuid();
     insert into training_load.gpexe_import_candidates
       (id, owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, raw_expires_at,

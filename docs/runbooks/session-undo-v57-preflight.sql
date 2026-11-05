@@ -10,7 +10,7 @@ select (select max(migration_name) from public.schema_migrations where migration
                     and migration_name > 'migrations_v2/202611051000_training_load_v57_session_undo.sql') as nothing_after_v57;
 
 -- 2. The five bodies v57 copies are the ones in force (md5 of prosrc); the migration refuses to run otherwise.
-select n.nspname || '.' || p.proname as function, md5(p.prosrc) as actual_md5,
+select count(*) over () = 5 as all_five_present, n.nspname || '.' || p.proname as function, md5(p.prosrc) as actual_md5,
        md5(p.prosrc) = case p.proname
          when 'forbid_update_delete' then '2a0b9cc2529c6fd401840b20ec86cf03'
          when 'source_metric_append_only' then 'ce27068e9a81b17f613eb038f58daf91'

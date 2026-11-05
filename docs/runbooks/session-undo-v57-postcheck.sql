@@ -7,14 +7,14 @@ select count(*) = 1 as recorded_once,
   from public.schema_migrations where migration_name = 'migrations_v2/202611051000_training_load_v57_session_undo.sql';
 
 -- 2. The new bodies are in force (md5 of prosrc).
-select p.proname as function, md5(p.prosrc) as actual_md5,
+select count(*) over () = 7 as all_seven_present, p.proname as function, md5(p.prosrc) as actual_md5,
        md5(p.prosrc) = case p.proname
          when 'forbid_update_delete_unless_session_undo' then '2ffa110ec96ea1966291c876be457460'
          when 'forbid_event_source_binding_delete_unless_session_undo' then '7d181f998af3d88f7edfed027f421fe6'
          when 'source_metric_append_only_unless_session_undo' then 'f607bfcf8f618b5d394513f066d79d0b'
          when 'protect_activity_source_observation_v57' then 'ea21a2a49f320dc7d6be45becc7743f5'
          when 'protect_gpexe_import_candidate_v57' then '311d7f35e2e2ad4d56afa1f7760f78e0'
-         when 'undo_imported_session' then 'd16fda9662e38c8374c1e818506a4e3d'
+         when 'undo_imported_session' then 'f1c72b3ecfbf55dcadc8aec05247c15c'
          when 'session_undo_scope' then 'f605cb502a36a4d8e372373fe1e2207a' end as ok
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname in ('training_load', 'training')
@@ -54,6 +54,5 @@ select exists (select 1 from pg_indexes where schemaname = 'training_load' and i
 select (select count(*) from training_load.gpexe_session_undo_requests) as request_rows,
        (select count(*) from training_load.gpexe_import_candidates where import_undone_at is not null) as undone_candidates;
 
--- 6. No marker leaked and nothing is stuck.
-select coalesce(current_setting('optimove.session_undo_tx', true), '') = '' as no_marker,
-       not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx;
+-- 6. Nothing is stuck. (The marker is transaction-local, so a fresh session can never show a leak; this block reads the sessions only.)
+select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx;

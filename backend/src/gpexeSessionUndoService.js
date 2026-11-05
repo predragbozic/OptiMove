@@ -80,7 +80,11 @@ function mapDatabaseError(error) {
     return refusal(known[0], known[0] === 404 ? "notFound" : code, known[1], Object.keys(details).length ? details : undefined);
   }
   // The acting user's right was lost (or never held): the identical 404.
-  if (error?.code === "42501") return refusal(404, "notFound", "Not found.");
+  if (error?.code === "42501") {
+    // The identical 404 for a lost right; any other 42501 (a marker guard) is an integrity fault an operator must see.
+    if (!/^user .* may not undo an imported session/.test(message)) console.error(`[gpexe] undo: unexpected 42501 (${message.slice(0, 80)})`);
+    return refusal(404, "notFound", "Not found.");
+  }
   if (error?.code === "22023") return refusal(400, "invalid_request", "Check the values sent.");
   if (error?.code === "55P03" || error?.code === "40P01" || error?.code === "57014") {
     return refusal(409, "try_again", "Another change was running; nothing was removed. Try again in a moment.");
@@ -108,7 +112,10 @@ async function inTransaction(fn, { keep }) {
     try {
       await Promise.race([commitFault ? commitFault(client) : client.query("commit"), bound]);
     } catch (error) {
-      if (error?.commitUnanswered) {
+      // No answer in time, or an error that is not a PostgreSQL error response (a dropped connection): the server may have
+      // committed. Only an explicit PostgreSQL error (a five-character SQLSTATE) says the COMMIT did not happen.
+      const answeredByServer = typeof error?.code === "string" && error.code.length === 5 && !error.commitUnanswered;
+      if (!answeredByServer) {
         // Once the COMMIT was sent the answer is never "nothing was removed".
         client.release(true);
         released = true;
