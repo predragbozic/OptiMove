@@ -188,7 +188,6 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   assert.deepEqual(items, [
     ["training-load-analysis-rename-dashboard", "Rename"],
     ["training-load-analysis-set-active", "Active dashboard"],
-    ["training-load-analysis-toggle-edit", "Edit layout"],
     ["training-load-analysis-archive", "Archive"],
     ["training-load-analysis-delete-dashboard", "Delete permanently"],
   ]);
@@ -619,8 +618,8 @@ test("the Add metric button and the empty-state CTA exist only for an editable d
   // bar; before anything has moved it offers Cancel + Done.
   state.trainingLoad.analysis.editMode = true;
   html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /class="tl-layout-bar"[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
-  assert.doesNotMatch(html, /Save layout/);
+  assert.match(html, /class="tl-layout-bar"[\s\S]*data-action="training-load-analysis-toggle-edit">Završi</);
+  assert.doesNotMatch(html, /Sačuvaj raspored/);
   state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
   html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, /data-action="training-load-analysis-add-widget"/);
@@ -1273,7 +1272,7 @@ function twoWidgets() {
   ];
 }
 
-test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (in and out of layout mode) with Settings / Advanced settings / Edit layout / Delete widget; one popover at a time, Escape closes it; read-only dashboards have none", async () => {
+test("widget menu keeps deletion without duplicating Settings or the visible layout control; read-only dashboards have none", async () => {
   resetState();
   loadedDashboard();
   installFetchMock(responder());
@@ -1289,11 +1288,12 @@ test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (i
   assert.doesNotMatch(html, /role="menu" aria-label="Dashboard actions"/);
   assert.match(html, /class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="Actions for Average RPE"/);
   assert.deepEqual(menuItems(html), [
-    ["training-load-analysis-edit-widget", "Settings"],
-    ["training-load-analysis-open-advanced", "Advanced settings"],
-    ["training-load-analysis-toggle-edit", "Edit layout"],
-    ["training-load-analysis-delete-widget", "Delete widget"],
+    ["training-load-analysis-delete-widget", "Obriši vidžet"],
   ]);
+  assert.equal((html.match(/data-action="training-load-analysis-toggle-edit"/g)||[]).length, 1, "one visible layout entry for the Page");
+  assert.equal((html.match(/data-action="training-load-analysis-edit-widget"/g)||[]).length, 1, "one Settings entry per widget");
+  assert.match(html, />Uredi raspored</);
+  assert.doesNotMatch(html, /data-action="training-load-analysis-open-advanced"/, "advanced options live inside Settings");
   assert.match(html, new RegExp(`class="tl-menu-item is-danger"[^>]*data-action="training-load-analysis-delete-widget" data-widget-id="${widgetId}"`));
   assert.equal(closeTrainingLoadAnalysisOverlay(), true);
   assert.equal(a.menu, "");
@@ -1301,8 +1301,6 @@ test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (i
   a.editMode = true;
   a.menu = `widget:${widgetId}`;
   assert.deepEqual(menuItems(renderTrainingLoadAnalysisHtml()).map(([action]) => action), [
-    "training-load-analysis-edit-widget",
-    "training-load-analysis-open-advanced",
     "training-load-analysis-delete-widget",
   ], "in layout mode the menu has no 'Edit layout'");
 
@@ -1371,11 +1369,11 @@ test("H2 layout mode: a layout bar (Cancel + Done until something moves, then 'U
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
   assert.equal(a.editMode, true);
   html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /class="tl-layout-bar" role="region" aria-label="Layout editing"/);
-  assert.match(html, /No changes yet/);
+  assert.match(html, /class="tl-layout-bar" role="region" aria-label="Uređivanje rasporeda"/);
+  assert.match(html, /Još nema izmena/);
   assert.match(html, /data-action="training-load-analysis-cancel-layout"/);
-  assert.match(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
-  assert.doesNotMatch(html, /Save layout/);
+  assert.match(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Završi</);
+  assert.doesNotMatch(html, /Sačuvaj raspored/);
   assert.doesNotMatch(html, /tl-analysis-add-widget-button/);
   assert.doesNotMatch(html, />Settings<|>Delete</, "no inline Settings/Delete buttons in the widget tools");
   assert.match(html, /role="group" aria-label="Layout of Average RPE"/);
@@ -1396,9 +1394,9 @@ test("H2 layout mode: a layout bar (Cancel + Done until something moves, then 'U
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-wider", widgetId }), { renderTrainingLoad });
   html = renderTrainingLoadAnalysisHtml();
   assert.equal(layoutButtonDisabled(html, widgetId, "wider"), true, "a KPI is at most 4 columns wide");
-  assert.match(html, /class="tl-layout-bar-status is-dirty" aria-live="polite">Unsaved changes</);
-  assert.match(html, /data-action="training-load-analysis-save-layout" >Save layout</);
-  assert.doesNotMatch(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
+  assert.match(html, /class="tl-layout-bar-status is-dirty" aria-live="polite">Nesačuvane izmene</);
+  assert.match(html, /data-action="training-load-analysis-save-layout" >Sačuvaj raspored</);
+  assert.doesNotMatch(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Završi</);
   assert.equal(writes().length, 0, "moving only changes the local draft");
 });
 
@@ -1477,8 +1475,9 @@ test("H2 while a layout draft is unsaved, the widget menu disables Settings / Ad
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
   a.menu = `widget:${widgetId}`;
   const html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /Save or cancel the layout changes first\./);
-  for (const action of ["edit-widget", "open-advanced", "delete-widget"]) {
+  assert.match(html, /Prvo sačuvaj ili otkaži izmene rasporeda\./);
+  assert.doesNotMatch(html, /data-action="training-load-analysis-edit-widget"|data-action="training-load-analysis-open-advanced"/);
+  for (const action of ["delete-widget"]) {
     assert.match(html, new RegExp(`data-action="training-load-analysis-${action}" data-widget-id="${widgetId}"\\s+disabled`), `${action} disabled`);
   }
   let prompted = false;

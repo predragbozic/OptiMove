@@ -233,7 +233,6 @@ function renderDashboardMenuHtml() {
             ${isActive
               ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
               : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
-            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
             ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
           ` : ""}
           ${canDeleteDashboard() ? `
@@ -290,7 +289,7 @@ function renderTopBarHtml() {
 }
 
 // ---------------- Dashboards UX H2: layout editing bar ----------------
-// Layout editing is its own mode (dashboard or widget "⋯" -> Edit layout).
+// Layout editing has one visible entry in the active Page header.
 // While it is on, this bar is the one place to leave it: Cancel drops the
 // local draft and exits; the primary button saves the draft (atomic
 // PUT /layout) and exits, or reads "Done" while nothing has been moved.
@@ -302,18 +301,18 @@ function renderLayoutBarHtml() {
   if (!a.editMode || !canEdit()) return "";
   const dirty = Boolean(a.layoutDraft);
   return `
-    <div class="tl-layout-bar" role="region" aria-label="Layout editing">
+    <div class="tl-layout-bar" role="region" aria-label="Uređivanje rasporeda">
       <div class="tl-layout-bar-text">
-        <strong>Editing layout</strong>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget or use its arrows; drag the corner or use − / + to resize.</span>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up / Move down to set the order on phones.</span>
-        <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Unsaved changes" : "No changes yet"}</span>
+        <strong>Uređivanje rasporeda</strong>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Povuci naslov vidžeta za pomeranje, a donji desni ugao za veličinu. Možeš koristiti i strelice.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Koristi „Pomeri gore” i „Pomeri dole” za redosled na telefonu.</span>
+        <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Nesačuvane izmene" : "Još nema izmena"}</span>
       </div>
       <div class="tl-layout-bar-actions">
-        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Cancel</button>
+        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Otkaži</button>
         ${dirty
-          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving..." : "Save layout"}</button>`
-          : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Done</button>`}
+          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Čuvanje…" : "Sačuvaj raspored"}</button>`
+          : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Završi</button>`}
       </div>
     </div>
   `;
@@ -333,8 +332,8 @@ function renderEmptyHtml() {
   `;
 }
 
-// H2: layout-only controls, shown in layout mode (Settings/Delete moved to
-// the widget "⋯" menu). A button that would be a no-op at the current
+// Layout-only controls. Settings lives on the card; deletion stays in its
+// menu. A button that would be a no-op at the current
 // position is disabled - clampAnalysisLayoutEntry would undo it anyway.
 // Desktop gets the 12-column nudges and width -/+; phones only Move up/
 // Move down, because the phone layout reads nothing but the order
@@ -354,29 +353,26 @@ function renderWidgetToolbarHtml(widget, layout, position) {
   return `
     <div class="tl-analysis-widget-tools" role="group" aria-label="${escapeAttr(`Layout of ${widget.title}`)}">
       <div class="tl-layout-tool-group tl-analysis-grid-control">
-        ${layoutToolButtonHtml("left", id, "Move left", "&larr;", x <= 0)}
-        ${layoutToolButtonHtml("right", id, "Move right", "&rarr;", x + width >= 12)}
-        ${layoutToolButtonHtml("up", id, "Move up", "&uarr;", y <= 0)}
-        ${layoutToolButtonHtml("down", id, "Move down", "&darr;", false)}
+        ${layoutToolButtonHtml("left", id, "Pomeri levo", "&larr;", x <= 0)}
+        ${layoutToolButtonHtml("right", id, "Pomeri desno", "&rarr;", x + width >= 12)}
+        ${layoutToolButtonHtml("up", id, "Pomeri gore", "&uarr;", y <= 0)}
+        ${layoutToolButtonHtml("down", id, "Pomeri dole", "&darr;", false)}
       </div>
       <div class="tl-layout-tool-group tl-analysis-grid-control">
-        ${layoutToolButtonHtml("narrower", id, "Narrower", "&minus;", width <= limits.minWidth)}
+        ${layoutToolButtonHtml("narrower", id, "Suzi vidžet", "&minus;", width <= limits.minWidth)}
         <span class="tl-layout-size" title="Width × height in grid units">${width} × ${height}</span>
-        ${layoutToolButtonHtml("wider", id, "Wider", "+", width >= limits.maxWidth)}
+        ${layoutToolButtonHtml("wider", id, "Proširi vidžet", "+", width >= limits.maxWidth)}
       </div>
       <div class="tl-layout-tool-group tl-analysis-mobile-reorder-group">
-        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(id)}" ${position.index <= 0 ? "disabled" : ""}>Move up</button>
-        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(id)}" ${position.index >= position.total - 1 ? "disabled" : ""}>Move down</button>
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(id)}" ${position.index <= 0 ? "disabled" : ""}>Pomeri gore</button>
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(id)}" ${position.index >= position.total - 1 ? "disabled" : ""}>Pomeri dole</button>
       </div>
     </div>
   `;
 }
 
-// H2: the widget "⋯" menu - on every widget of an editable dashboard, in
-// and out of layout mode (before H2 a widget's Settings were only reachable
-// from inside layout mode). While a layout draft is unsaved, Settings/
-// Advanced/Delete are disabled: each of them reloads the dashboard on
-// success, which would silently drop the draft.
+// The card owns its Settings entry and the Page header owns layout editing.
+// This menu keeps deletion, blocked while a layout draft is unsaved.
 function renderWidgetMenuHtml(widget) {
   const a = state.trainingLoad.analysis;
   if (!canEdit()) return "";
@@ -390,12 +386,8 @@ function renderWidgetMenuHtml(widget) {
       ${open ? `
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
-          ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
-          ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
-          ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
-          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout" })}
-          <div class="tl-menu-separator" role="separator"></div>
-          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
+          ${blocked ? `<p class="tl-menu-note" role="note">Prvo sačuvaj ili otkaži izmene rasporeda.</p>` : ""}
+          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Obriši vidžet", dataset, danger: true, disabled: blocked || a.saving })}
         </div>
       ` : ""}
     </div>
@@ -561,7 +553,8 @@ function renderGridHtml() {
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
-          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
+          ${widgets.length ? `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-toggle-edit" ${a.saving ? "disabled" : ""}>Uredi raspored</button>` : ''}
+          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Dodaj metriku</span></button>
         </div>
       ` : ""}
     </section>
