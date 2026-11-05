@@ -540,3 +540,28 @@ test("8. an athlete whose team membership is not active is offered in none of th
   assert.deepEqual([after.body.exact, after.body.ambiguous, after.body.dateConflicts], [[], [], []]);
   assert.ok(!after.text.includes("Gone"), "no name of a former member");
 });
+
+test("9. lock order users then role (#191): a revocation that holds the users row and then updates the role row never deadlocks with the read - the read waits at the users row and then finds the role ended (identical 404)", async () => {
+  const { o } = await ready(2, 3701);
+  await scriptG(3701, "Ana", "Zqlock", "2005-01-02");
+  await setAthlete(o.athleteIds[0], "Ana Zqlock", "2005-01-02");
+  await load(o);
+  for (const who of ["coach", "club admin"]) {
+    const subject = who === "coach" ? await coachOf(o.teamId) : await clubAdmin(o.clubId);
+    assert.equal((await sug(o, subject.cookie)).status, 200);
+    const writer = new pg.Client({ connectionString: db.url });
+    await writer.connect();
+    try {
+      await writer.query("begin");
+      await writer.query(`select 1 from public.users where id = $1 for update`, [subject.id]);
+      const reading = sug(o, subject.cookie);
+      await new Promise((r) => setTimeout(r, 400));
+      await writer.query(who === "coach" ? `update public.user_team_roles set is_active = false where user_id = $1` : `update public.user_club_roles set is_active = false where user_id = $1`, [subject.id]);
+      await writer.query("commit");
+      const r = await reading;
+      assert.deepEqual([r.status, r.body], [404, NOT_FOUND], `${who}: no deadlock, the read sees the ended role`);
+    } finally {
+      await writer.end();
+    }
+  }
+});
