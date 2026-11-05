@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { loadPagesDashboard,clearPagesState,pageAdvancedApi,rememberPageRuntime } from './training-load-pages-data.js';
 
 let chartRosterLoad;
 function loadChartRoster(onPainted) {
@@ -127,6 +128,7 @@ export function applyAnalysisPeriodPreset(key) {
   const preset = ANALYSIS_PERIOD_PRESETS.find((p) => p.key === key);
   if (!preset) return false;
   state.trainingLoad.analysis.period = presetRange(preset.days);
+  if(state.trainingLoad.analysis.pagesMode)state.trainingLoad.analysis.pageRuntimeUsesDefaults=false;
   return true;
 }
 
@@ -159,10 +161,12 @@ function queryContextKey() {
   return buildContextKey([
     ...currentUserWorkspaceContextParts(),
     a.selectedDashboardId,
+    a.pagesMode ? a.selectedPageId : '',
+    a.pagesMode ? a.page?.defaultsRevision : '',
     a.dashboard?.revision || "",
     widgetRevisions,
-    a.period.dateFrom,
-    a.period.dateTo,
+    a.pagesMode && a.pageRuntimeUsesDefaults ? 'page-defaults' : a.period.dateFrom,
+    a.pagesMode && a.pageRuntimeUsesDefaults ? '' : a.period.dateTo,
     JSON.stringify(analysisRuntimeFilterPayload()),
   ]);
 }
@@ -266,9 +270,17 @@ export async function loadActiveDashboard(onPainted) {
   onPainted?.();
 }
 
-export async function loadDashboardDetail(dashboardId, onPainted, { force = false } = {}) {
+export async function loadDashboardDetail(dashboardId, onPainted, { force = false,preferredPageId } = {}) {
   const analysis = state.trainingLoad.analysis;
   const generation = ++detailGeneration;
+  const descriptor=analysis.dashboards?.find(d=>d.id===dashboardId)||analysis.dashboard;
+  if(Number.isSafeInteger(descriptor?.pages_revision) && descriptor.pages_revision>0){
+    if(await loadPagesDashboard(dashboardId,onPainted,{force,preferredPageId})){
+      if((analysis.widgets||[]).some(w=>w.presentation_config?.chartComposition==='athletes-v1'||w.presentation_config?.chartInteractions))loadChartRoster(onPainted);
+      if(analysis.widgets.some(w=>w.series?.some(s=>s.metric_definition_id)))void loadAnalysisMetricDefinitions().then(()=>onPainted?.(),()=>{});
+      return;
+    }
+  }else if(analysis.pagesMode || analysis.pagesDashboardId)clearPagesState(analysis);
   const contextKey = detailContextKey(dashboardId);
   await loadCachedView({
     namespace: DASHBOARD_DETAIL_NAMESPACE,
@@ -302,21 +314,22 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
 export async function queryAnalysisDashboard(onPainted, { force = false } = {}) {
   const a = state.trainingLoad.analysis;
   if (!a.selectedDashboardId || !a.dashboard || a.dashboard.status === "archived" || a.dashboard.is_template) return;
-  ensureAnalysisPeriod();
+  if(!a.pagesMode || !a.pageRuntimeUsesDefaults)ensureAnalysisPeriod();
   const generation = ++queryGeneration;
   const contextKey = queryContextKey();
   await loadCachedView({
     namespace: DASHBOARD_QUERY_NAMESPACE,
     contextKey,
     forceRefresh: force,
-    fetcher: () => api(`/api/training-load/dashboards/${encodeURIComponent(a.selectedDashboardId)}/query`, {
+    fetcher: () => api(`/api/training-load/dashboards/${encodeURIComponent(a.selectedDashboardId)}${a.pagesMode?`/pages/${encodeURIComponent(a.selectedPageId)}`:''}/query`, {
       method: "POST",
-      body: JSON.stringify({ dateFrom: a.period.dateFrom, dateTo: a.period.dateTo, ...analysisRuntimeFilterPayload() }),
+      body: JSON.stringify(a.pagesMode?{...(!a.pageRuntimeUsesDefaults?{period:{...a.period,timeZone:a.period.timeZone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'}}:{}),runtimeFilter:analysisRuntimeFilterPayload()}:{dateFrom:a.period.dateFrom,dateTo:a.period.dateTo,...analysisRuntimeFilterPayload()}),
     }),
     showLoading: () => { a.queryLoading = true; a.queryError = ""; onPainted?.(); },
     applyData: (data) => {
       if (generation !== queryGeneration || queryContextKey() !== contextKey) return;
       a.queryResult = data;
+      if(a.pagesMode && a.pageRuntimeUsesDefaults && data.resolvedPeriod)a.period={...data.resolvedPeriod};
       a.queryLoading = false;
       a.queryError = "";
       onPainted?.();
@@ -347,7 +360,7 @@ async function mutateDashboard(fn, onPainted, { reloadDetail = true } = {}) {
     return result;
   } catch (error) {
     analysis.saving = false;
-    if (error.status === 409 && error.message === "staleRevision") {
+    if (error.status === 409 && ['staleRevision','stalePageRevision','stalePagesRevision','stalePageLayoutRevision','stalePageDefaultsRevision'].includes(error.data?.error||error.message)) {
       if (analysis.selectedDashboardId) await loadDashboardDetail(analysis.selectedDashboardId, onPainted, { force: true });
       analysis.notice = "Dashboard changed on the server. Reloaded the latest version.";
       onPainted?.();
@@ -483,7 +496,7 @@ export async function updateAnalysisDashboardMetadata(body, onPainted) {
 export async function saveAnalysisLayout(onPainted) {
   const a = state.trainingLoad.analysis;
   if (!a.dashboard || !a.layoutDraft) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/layout`, {
+  return mutateDashboard(() => pageAdvancedApi(`/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/layout`, {
     method: "PUT",
     body: JSON.stringify({ expectedRevision: a.dashboard.revision, layout: a.layoutDraft }),
   }), onPainted);
@@ -652,9 +665,9 @@ export async function saveAnalysisMetricPanel(onPainted) {
   const panel = a.metricPanel;
   if (!panel || !a.dashboard || !metricPanelCanSave(panel)) return false;
   const base = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}`;
-  const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
-  const patch = (url, body) => api(url, { method: "PATCH", body: JSON.stringify(body) });
-  const del = (url, body) => api(url, { method: "DELETE", body: JSON.stringify(body) });
+  const post = (url, body) => pageAdvancedApi(url, { method: "POST", body: JSON.stringify(body) });
+  const patch = (url, body) => pageAdvancedApi(url, { method: "PATCH", body: JSON.stringify(body) });
+  const del = (url, body) => pageAdvancedApi(url, { method: "DELETE", body: JSON.stringify(body) });
   // A best-effort compensating call: true when it went through.
   const tryQuietly = async (fn) => { try { await fn(); return true; } catch { return false; } };
   const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
@@ -841,7 +854,7 @@ export async function saveAnalysisMetricPanel(onPainted) {
           const others = allSeries.filter((s) => s.id !== series.id && s.id !== stale?.id && s.id !== added.seriesId);
           if (others.length) {
             const order = [added.seriesId, ...others.map((s) => s.id)].map((seriesId, i) => ({ seriesId, seriesOrder: i + 1 }));
-            await tryQuietly(() => api(`${seriesUrl}/reorder`, { method: "PUT", body: JSON.stringify({ expectedWidgetRevision: revision, order }) }));
+            await tryQuietly(() => pageAdvancedApi(`${seriesUrl}/reorder`, { method: "PUT", body: JSON.stringify({ expectedWidgetRevision: revision, order }) }));
           }
         }
       } else if (series.analytical_aggregation !== panel.aggregation || series.data_scope_level !== panel.scope) {
@@ -1201,6 +1214,7 @@ export function rebaseAnalysisEditorDraft(widget, draft, base = null) {
   const referenced = new Set(draft.series.map((entry) => entry.id).filter(Boolean));
   for (const entry of draft.series) {
     if (!entry.pendingAdd) continue;
+    if(entry.pendingAdd.requestId && state.trainingLoad.analysis.pageWritePending?.requestId===entry.pendingAdd.requestId)continue;
     // A POST whose response was lost: if a series with this metric appeared
     // that was not there before the POST, it landed - adopt it (a replace
     // that added first still has its previous series to remove).
@@ -1283,7 +1297,7 @@ export async function saveAnalysisWidgetEditor(onPainted) {
   }
   const widgetUrl = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/widgets/${encodeURIComponent(widget.id)}`;
   const seriesUrl = `${widgetUrl}/series`;
-  const send = (method, url, body) => api(url, { method, body: JSON.stringify(body) });
+  const send = (method, url, body) => pageAdvancedApi(url, { method, body: JSON.stringify(body) });
   const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
   const rows = sortedWidgetSeries(widget);
   const byId = new Map(rows.map((row) => [row.id, row]));
@@ -1318,7 +1332,11 @@ export async function saveAnalysisWidgetEditor(onPainted) {
       entry.pendingAdd = null;
       return added;
     } catch (error) {
-      if (error.status === undefined) entry.pendingAdd = { knownIds };
+      if (error.status === undefined) {
+        const pending=a.pageWritePending;
+        entry.pendingAdd={knownIds,...(pending?{requestId:pending.requestId}:{})};
+        if(pending){pending.draftSeriesKey=entry.key;pending.replacesSeriesId=entry.id||null;}
+      }
       throw error;
     }
   };
@@ -1434,10 +1452,32 @@ export async function saveAnalysisWidgetEditor(onPainted) {
 export async function deleteAnalysisWidget(widgetId, onPainted) {
   const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
   if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}`, {
+  return mutateDashboard(() => pageAdvancedApi(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}`, {
     method: "DELETE",
     body: JSON.stringify({ expectedWidgetRevision: w.revision }),
   }), onPainted);
+}
+
+export function reconcileConfirmedPageWrite({receipt,pending}) {
+  const a=state.trainingLoad.analysis;
+  if(pending.kind!=='advanced' || a.selectedDashboardId!==pending.dashboardId || a.selectedPageId!==pending.pageId)return;
+  if(a.metricPanel && !a.metricPanel.widgetId && /\/widgets$/.test(pending.url) && receipt.result?.widgetId){a.metricPanel.widgetId=receipt.result.widgetId;a.metricPanel.createdInFlight=true;a.metricPanel.serverChanged=true;}
+  const seriesId=receipt.result?.seriesId;
+  if(seriesId && /\/series$/.test(pending.url)){
+    const panel=a.metricPanel,input=JSON.parse(pending.body);
+    if(panel && (panel.metric?.kind==='builtin'?panel.metric.key===input.builtInSeriesKey:panel.metric?.id===input.metricDefinitionId)){
+      const widget=a.widgets.find(w=>w.id===panel.widgetId);
+      if(panel.seriesId && panel.seriesId!==seriesId && widget?.series?.some(s=>s.id===panel.seriesId))panel.staleSeriesId=panel.seriesId;
+      panel.seriesId=seriesId;panel.originalMetric=panel.metric;panel.pendingAddMetric=null;panel.serverChanged=true;
+    }
+    const draft=a.editor?.draft,entry=draft?.series.find(e=>e.key===pending.draftSeriesKey);
+    if(entry){
+      if(pending.replacesSeriesId && pending.replacesSeriesId!==seriesId)draft.staleIds=[...new Set([...draft.staleIds,pending.replacesSeriesId])];
+      draft.series=draft.series.filter(e=>e===entry||e.id!==seriesId);entry.id=seriesId;entry.pendingAdd=null;
+    }
+  }
+  const editor=a.editor,widget=editor?.open&&a.widgets.find(w=>w.id===editor.widgetId);
+  if(widget && editor.draft){rebaseAnalysisEditorDraft(widget,editor.draft,editor.base);editor.base=analysisEditorDraftFromWidget(widget);editor.serverChanged=true;editor.error='Prethodna operacija je potvrđena. Preostale izmene su sačuvane u nacrtu; proverite ih pre nastavka.';}
 }
 
 export function moveAnalysisWidgetMobile(widgetId, direction) {

@@ -9,7 +9,7 @@ globalThis.window = dom.window;
 window.matchMedia = () => ({ matches: false });
 
 const { handleTrainingLoadAction, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadBeforeUnload, handleTrainingLoadAnalysisPointerDown } = await import('../training-load-actions.js');
-const { simpleEditor } = await import('../training-load-simple-actions.js');
+const { simpleEditor, leaveSimpleEditor } = await import('../training-load-simple-actions.js');
 const { renderSimpleEditorHtml } = await import('../training-load-simple-view.js');
 const { analysisEditorDraftFromWidget } = await import('../training-load-analysis-data.js');
 const { state, emptyTrainingLoadState } = await import('../state.js');
@@ -134,6 +134,130 @@ async function readyReplacement(stagedPeriod) {
   assert.deepEqual(simpleEditor.model.preview.resolvedPeriod, stagedPeriod);
   assert.deepEqual(analysis().period, period);
 }
+
+function enablePages() {
+  const page = { id: 'page-1', dashboardId, name: 'Pregled', position: 0, revision: 1, defaultsRevision: 3, layoutRevision: 1,
+    defaultFilter: { athleteIds: ['athlete-2'] }, periodConfig: { schemaVersion: 1, mode: 'fixed', ...period }, periodOrigin: 'configured' };
+  const capabilities = { pages: true, pageWidgetEditing: true, pageManagement: true, pageQuery: true };
+  analysis().dashboard.pages_revision = 1;
+  Object.assign(analysis(), { pagesMode: true, pagesDashboardId: dashboardId, pages: [page], pagesRevision: 1,
+    selectedPageId: page.id, page, pageCapabilities: capabilities });
+  const fetchLegacy = globalThis.fetch, pageCalls = [];
+  const response = body => ({ ok: true, status: 200, statusText: '', json: async () => structuredClone(body) });
+  globalThis.fetch = async (url, options) => {
+    pageCalls.push({ url: String(url), body: options?.body });
+    if (String(url) === `${base}/pages` && (!options?.method || options.method === 'GET')) {
+      return response({ dashboard: analysis().dashboard, pages: analysis().pages, pagesRevision: 1, capabilities });
+    }
+    if (String(url) === `${base}/pages/page-1` && (!options?.method || options.method === 'GET')) {
+      const currentPage = structuredClone(analysis().page);
+      const legacyDetail = await (await globalThis.fetch(base, options)).json();
+      return response({ page: currentPage, widgets: legacyDetail.widgets });
+    }
+    return fetchLegacy(String(url).replace(/\/pages\/[^/]+\/simple\//, '/simple/').replace(/\/pages\/[^/]+\/query$/, '/query'), options);
+  };
+  return pageCalls;
+}
+
+test('Simple save čuva lični septembarski period uz configured Page defaults i šalje ga u query', async () => {
+  const pageCalls = enablePages();
+  analysis().pageRuntimeUsesDefaults = true;
+  const sharedPage = structuredClone(analysis().page);
+  const staged = { dateFrom: '2026-09-01', dateTo: '2026-09-30', timeZone: period.timeZone };
+  await readyReplacement(staged);
+  receiptPeriod = staged;
+  await simple('save');
+  const query = pageCalls.find(call => call.url === `${base}/pages/page-1/query`);
+  assert.ok(query);
+  assert.deepEqual(JSON.parse(query.body).period, staged);
+  assert.equal(simpleEditor.model.saveState, 'recorded');
+  assert.equal(simpleEditor.model.saveError, '');
+  assert.equal(analysis().pagesMode, true);
+  assert.equal(analysis().selectedPageId, sharedPage.id);
+  assert.equal(analysis().pageRuntimeUsesDefaults, false);
+  assert.deepEqual(analysis().period, staged);
+  assert.deepEqual(analysis().pageRuntime[sharedPage.id].period, staged);
+  assert.equal(analysis().pageRuntime[sharedPage.id].usesDefaults, false);
+  assert.deepEqual(analysis().page, sharedPage);
+  const saved = pageCalls.find(call => call.url.endsWith('/simple/widgets'));
+  assert.equal(JSON.parse(saved.body).input.draft.periodIntent.savePageDefaults, false);
+  assert.equal(pageCalls.some(call => call.url.endsWith('/defaults')), false);
+});
+
+test('Page context nasleđuje dashboard → Page → runtime, uključujući eksplicitno clear', async () => {
+  enablePages();
+  analysis().dashboard.default_filter = { athleteIds: ['athlete-1'] };
+  for (const [pageFilter, runtime, expected] of [
+    [{ athleteIds: ['athlete-2'] }, {}, ['athlete-2']],
+    [{}, {}, ['athlete-1']],
+    [{ athleteIds: null }, {}, null],
+    [{ athleteIds: ['athlete-2'] }, { athleteIds: ['athlete-1'] }, ['athlete-1']],
+  ]) {
+    analysis().page.defaultFilter = pageFilter;
+    analysis().runtimeFilter = runtime;
+    await openNew();
+    assert.equal(simpleEditor.model.context.pageId, 'page-1');
+    assert.equal(simpleEditor.model.context.pageDefaultsRevision, 3);
+    assert.deepEqual(simpleEditor.model.context.pageDefaultFilter, pageFilter);
+    assert.deepEqual(simpleEditor.model.context.effectiveInheritedAthleteIds, expected);
+    assert.deepEqual(simpleEditor.model.context.period, period);
+    assert.equal(simpleEditor.close(), true);
+  }
+});
+
+test('Page unknown blokira preSwitch i close; retry koristi isti Page ID i originalno telo', async () => {
+  const pageCalls = enablePages();
+  await unknownSave();
+  const original = pageCalls.find(call => call.url.endsWith('/widgets'));
+  let asked = false;
+  assert.equal(leaveSimpleEditor({ discard: false, confirm: () => { asked = true; return true; } }), false);
+  assert.equal(asked, false);
+  assert.equal(simpleEditor.close(), false);
+  analysis().page.defaultsRevision++;
+  analysis().period.dateTo = '2026-10-30';
+  loseSaveResponse = false; receiptPeriod = period;
+  await simple('retry');
+  const retries = pageCalls.filter(call => call.url.endsWith('/widgets'));
+  assert.equal(retries.length, 2);
+  assert.deepEqual(retries[1], original);
+  assert.equal(JSON.parse(original.body).input.context.pageId, 'page-1');
+  assert.equal(simpleEditor.model.saveState, 'recorded');
+  assert.equal(analysis().selectedPageId, 'page-1');
+});
+
+for (const changed of ['page', 'dashboard', 'identity']) {
+  test(`spor Page save ne osvežava drugi kontekst: ${changed}`, async () => {
+    const pageCalls = enablePages(); await readyNew();
+    const fetchPage = globalThis.fetch;
+    let finish;
+    globalThis.fetch = (url, options) => String(url).endsWith('/simple/widgets')
+      ? new Promise(resolve => { finish = () => resolve({ ok: true, status: 200, json: async () => ({ widgetId, resolvedPeriod: period }) }); })
+      : fetchPage(url, options);
+    const operation = simple('save');
+    if (changed === 'page') { analysis().page = { ...analysis().page, id: 'page-2' }; analysis().selectedPageId = 'page-2'; }
+    else if (changed === 'dashboard') analysis().selectedDashboardId = 'other-dashboard';
+    else state.currentUser = { ...state.currentUser, id: 'other-coach' };
+    finish(); await operation;
+    assert.equal(pageCalls.some(call => call.url === base || call.url.endsWith('/query')), false);
+    assert.equal(analysis().notice || '', '');
+    assert.deepEqual(analysis().period, period);
+  });
+}
+
+test('promena Page tokom detail reload-a sprečava naknadni query i notice za drugu Page', async () => {
+  enablePages(); await readyNew();
+  receiptPeriod = period;
+  const fetchPage = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (String(url) === base) { analysis().page = { ...analysis().page, id: 'page-2' }; analysis().selectedPageId = 'page-2'; }
+    return fetchPage(url, options);
+  };
+  await simple('save');
+  assert.equal(simpleEditor.model.saveState, 'recorded');
+  assert.equal(calls.some(call => call.url.endsWith('/query')), false);
+  assert.equal(analysis().notice || '', '');
+  assert.equal(analysis().selectedPageId, 'page-2');
+});
 
 test('status recovery keeps a newer dashboard period and filter and queries them instead of the staged period', async () => {
   const staged = { dateFrom: '2026-09-01', dateTo: '2026-09-30', timeZone: period.timeZone };

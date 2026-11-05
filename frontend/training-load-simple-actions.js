@@ -38,18 +38,38 @@ function paint(model) {
   }
   previousModel = model; previousStep = model?.step;
 }
-export const simpleEditor = createSimpleEditorController({ request: api, paint,
-  getContext: () => ({ identity: currentUserWorkspaceContextParts(), dashboardId: analysis().dashboard?.id,
-    period: { ...analysis().period, timeZone: analysis().period.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
-    runtimeFilter: analysisRuntimeFilterPayload(), inheritedAthleteIds: analysisRuntimeFilterPayload().athleteIds ?? analysis().dashboard?.default_filter?.athleteIds ?? null,
-    athletes: state.trainingLoad.orgPickerData?.athletes ?? [] }),
+function getContext() {
+  const a = analysis(), page = a.pagesMode ? a.page : null;
+  const runtimeFilter = analysisRuntimeFilterPayload();
+  const defaults = { ...a.dashboard?.default_filter, ...page?.defaultFilter, ...runtimeFilter };
+  return { identity: currentUserWorkspaceContextParts(), dashboardId: a.dashboard?.id,
+    ...(page ? { pageId: page.id, pageDefaultsRevision: page.defaultsRevision, pageDefaultFilter: page.defaultFilter } : {}),
+    period: { ...a.period, timeZone: a.period.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
+    runtimeFilter, inheritedAthleteIds: defaults.athleteIds ?? null, effectiveInheritedAthleteIds: defaults.athleteIds ?? null,
+    athletes: state.trainingLoad.orgPickerData?.athletes ?? [] };
+}
+function isActiveTarget(target) {
+  const a = analysis(), context = getContext();
+  return JSON.stringify(context.identity) === JSON.stringify(target.context.identity)
+    && context.dashboardId === target.context.dashboardId
+    && a.selectedDashboardId === target.context.dashboardId
+    && (context.pageId ?? null) === (target.context.pageId ?? null)
+    && (!target.context.pageId || a.selectedPageId === target.context.pageId);
+}
+export const simpleEditor = createSimpleEditorController({ request: api, paint, getContext,
   saved: async (receipt, target) => {
+    if (!isActiveTarget(target)) return;
     const a = analysis();
     const periodKey = period => JSON.stringify([period.dateFrom, period.dateTo, period.timeZone || target.context.period.timeZone]);
     const newerPeriod = periodKey(a.period) !== periodKey(target.context.period);
-    if (target.draft.periodIntent.mode === 'replacePageRuntime' && !newerPeriod) a.period = { ...receipt.resolvedPeriod ?? target.preview.resolvedPeriod };
+    if (target.draft.periodIntent.mode === 'replacePageRuntime' && !newerPeriod) {
+      a.period = { ...receipt.resolvedPeriod ?? target.preview.resolvedPeriod };
+      if (target.context.pageId) a.pageRuntimeUsesDefaults = false;
+    }
     await loadDashboardDetail(target.context.dashboardId, render, { force: true });
+    if (!isActiveTarget(target)) return;
     await queryAnalysisDashboard(render, { force: true });
+    if (!isActiveTarget(target)) return;
     a.notice = newerPeriod ? 'Widget saved. Kept your newer dashboard period.' : 'Widget saved.';
   },
 });

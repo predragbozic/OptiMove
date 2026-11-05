@@ -1,5 +1,6 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
+import { renderPagesHtml,renderPagePendingHtml } from './training-load-pages-view.js';
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
@@ -78,7 +79,7 @@ function layoutFor(widget) {
 
 function canEdit() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && (!state.trainingLoad.analysis.pagesMode || state.trainingLoad.analysis.pageCapabilities.pageWidgetEditing===true);
 }
 
 // Permanent delete is offered for any open dashboard except a system
@@ -555,7 +556,7 @@ function renderGridHtml() {
     <section class="tl-analysis-dashboard-head">
       <div>
         <p class="eyebrow">${a.dashboard.is_template ? "Template" : a.dashboard.status === "archived" ? "Archived" : "Dashboard"}</p>
-        <h3>${escapeHtml(a.dashboard.name)}</h3>
+        <h3>${escapeHtml(a.pagesMode?a.page?.name??a.dashboard.name:a.dashboard.name)}</h3>
         ${a.dashboard.description ? `<p class="muted">${escapeHtml(a.dashboard.description)}</p>` : ""}
       </div>
       ${canEdit() && !a.editMode ? `
@@ -574,9 +575,9 @@ function renderGridHtml() {
     ${widgets.length
       ? `<div class="tl-analysis-grid">${widgets.map((w, index) => renderWidgetHtml(w, { index, total: widgets.length })).join("")}</div>`
       : `<section class="panel tl-analysis-empty">
-          <h3>No metrics yet</h3>
+          <h3>${a.pagesMode?'Ova stranica je prazna':'No metrics yet'}</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
-          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">Add your first metric</button></div>` : ""}
+          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">${a.pagesMode?'Dodaj prvu metriku':'Add your first metric'}</button></div>` : ""}
         </section>`}
   `;
 }
@@ -719,6 +720,7 @@ function renderMetricPanelHtml() {
             ${renderPanelPreviewHtml(panel)}
           </section>
         </div>
+        ${renderPagePendingHtml(a.pageWritePending)}
         ${panel.error ? `<p class="builder-error" role="alert">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.serverChanged ? `<p class="muted tl-metric-panel-server-note">Closing keeps what is already saved on the dashboard.</p>` : ""}
         <div class="tl-analysis-modal-actions tl-metric-panel-actions">
@@ -879,6 +881,7 @@ function renderEditorHtml() {
           ` : ""}
         </div>
         <div class="tl-analysis-modal-actions tl-editor-footer">
+          ${renderPagePendingHtml(a.pageWritePending)}
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
           ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}
           <div class="tl-editor-footer-row">
@@ -896,15 +899,16 @@ function renderEditorHtml() {
 export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
   const editing = Boolean(a.simpleEditor?.open);
-  const dashboardControls = (html, label) => editing ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
+  const dashboardControls = (html, label) => editing || a.pageWritePending || a.pagesMode&&a.detailLoading ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
   return `
     <div class="tl-analysis">
-      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filteri</summary>${dashboardControls(renderTopBarHtml(), 'Filteri dashboarda tokom podešavanja')}</details>` : renderTopBarHtml()}
+      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filteri</summary>${dashboardControls(renderTopBarHtml(), 'Filteri dashboarda tokom podešavanja')}</details>` : dashboardControls(renderTopBarHtml(), 'Kontrole dashboarda tokom čuvanja')}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
+      ${renderPagesHtml(a)}
       ${renderSimpleEditorHtml(a.simpleEditor)}
-      ${dashboardControls(renderGridHtml(), 'Sačuvani dashboard tokom podešavanja')}
+      <div ${a.pagesMode?'id="tl-page-panel" role="tabpanel" aria-label="Sadržaj aktivne stranice"':''}>${dashboardControls(renderGridHtml(), 'Sačuvani dashboard tokom podešavanja')}</div>
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}

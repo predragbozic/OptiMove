@@ -14,6 +14,7 @@ function fixture(options={}) {
   const widget={id:widgetId,page_id:pageId,widget_type:'table',presentation_config:{schemaVersion:1}};
   const client=Object.assign(new EventEmitter(),{release:destroy=>state.releases.push(destroy),query:async(sql,params=[])=>{
     state.queries.push({sql,params});
+    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true}]};
     if(sql==='commit'&&state.commitLost){state.commitLost=false;throw new Error('connection lost');}
     if(sql.includes('mutate_dashboard_page')){state.mutations.push(params);const receipt={requestId:params[1],dashboardId,pageId,operation:params[5],pagesRevision:2};state.ledger={request_id:params[1],payload_hash:params[2],workspace:target.workspace,receipt};return{rows:[{receipt}]};}
     if(sql.includes('dashboard_page_requests'))return{rows:state.ledger?.request_id===params[2]?[state.ledger]:[]};
@@ -26,6 +27,13 @@ function fixture(options={}) {
   return{state,page,target,service};
 }
 const createBody=()=>({contractVersion:1,requestId,name:'  Nova stranica  ',expectedPagesRevision:1,defaultFilter:{},periodConfig:{schemaVersion:1,mode:'fixed',...period}});
+
+test('Page UI readiness requires both sanctioned ports and returns authorized parent metadata',async()=>{
+  const f=fixture({portsReady:true});const result=await f.service.list({req,dashboardId});
+  assert.equal(result.dashboard.id,dashboardId);assert.equal(result.capabilities.pages,true);assert.equal(result.capabilities.pageWidgetEditing,true);
+  assert.equal(f.state.mutations.length,0);
+  const legacy=fixture();assert.equal((await legacy.service.list({req,dashboardId})).capabilities.pages,false);
+});
 
 test('read snapshot vraća samo članove stranice i završava rollback-om bez upisa',async()=>{
   const f=fixture();const result=await f.service.detail({req,dashboardId,pageId});
