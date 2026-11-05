@@ -70,6 +70,21 @@ test('notRecorded status keeps durable request locked; other Page cannot consume
   await resolvePageWrite();assert.equal(f.a.pageWritePending.status,'unknown');
   const count=f.calls.length;f.a.selectedPageId='p2';assert.equal(await resolvePageWrite(),null);assert.equal(f.calls.length,count);
 });
+for(const change of ['actor','analysis','dashboard','page'])test(`Late Page create receipt cannot refresh a changed ${change} context`,async()=>{
+  let complete;
+  const f=reset(c=>c.method==='POST'?new Promise(resolve=>{complete=resolve;}):defaultResponse(c));await loadDashboardDetail('d1',()=>{});
+  const action=type=>({dataset:{action:'training-load-analysis-page-'+type}});let refreshed=0,painted=0;
+  const options={render(){painted++;},refresh:async()=>{refreshed++;},mayLeave:()=>true};
+  await handlePageAction(action('create'),options);f.a.pageForm.name='New page';
+  const pending=handlePageAction(action('form-submit'),options);while(!complete)await new Promise(resolve=>setTimeout(resolve,0));
+  if(change==='actor')state.currentUser.id='other-user';
+  if(change==='analysis')state.trainingLoad.analysis=emptyTrainingLoadState().analysis;
+  if(change==='dashboard')f.a.selectedDashboardId='other-dashboard';
+  if(change==='page')f.a.selectedPageId='p2';
+  const before=painted;complete({operation:'create',pageId:'created-in-old-context'});await pending;
+  assert.equal(refreshed,0);assert.equal(painted,before);assert.equal(f.a.notice,'');
+});
+
 test('Delete confirmation retains the Page revision shown when the form opened',async()=>{
   const f=reset(c=>c.method==='DELETE'?{operation:'delete',pageId:'p1'}:defaultResponse(c));await loadDashboardDetail('d1',()=>{});
   const action=type=>({dataset:{action:'training-load-analysis-page-'+type}}),options={render(){},refresh:async()=>{},mayLeave:()=>true};

@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { mutatePage,resolvePageWrite } from './training-load-pages-data.js';
+import { currentUserWorkspaceContextParts } from './access.js';
 
 export function handlePageTabKeydown(event) {
   if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey
@@ -24,9 +25,13 @@ export function handlePageTabKeydown(event) {
 const formError=error=>({stalePageRevision:'This page has changed. Refresh it and review the changes.',stalePagesRevision:'The page order has changed. Refresh the dashboard.',stalePageDefaultsRevision:'The default settings have changed. Refresh the page.',lastPageRequired:'The last page cannot be deleted.',pageLimitReached:'A dashboard can have up to 32 pages.',notFound:'This page is no longer available.',invalidRequest:'Check the page name and settings.'}[error.data?.error]||error.message||'The change was not saved. Please try again.');
 export async function handlePageAction(action,{render,refresh,mayLeave,reconcile}){
   const a=state.trainingLoad.analysis,type=action.dataset.action.replace('training-load-analysis-page-','');
+  const who=JSON.stringify(currentUserWorkspaceContextParts()),dashboardId=a.selectedDashboardId,pageId=a.selectedPageId;
+  const current=()=>state.trainingLoad.analysis===a && JSON.stringify(currentUserWorkspaceContextParts())===who && a.selectedDashboardId===dashboardId;
+  const targetCurrent=()=>current() && a.selectedPageId===pageId;
   if(type==='write-status'||type==='write-retry'){
     const promise=resolvePageWrite({retry:type==='write-retry'});render();const result=await promise;
-    if(result){await refresh(result.pending.kind==='pages'&&['create','duplicate'].includes(result.receipt.operation)?result.receipt.pageId:undefined);reconcile?.(result);a.pageForm=null;a.notice='Saving is confirmed. Review the remaining changes before saving again.';}
+    if(!targetCurrent())return true;
+    if(result){const next=result.pending.kind==='pages'&&['create','duplicate'].includes(result.receipt.operation)?result.receipt.pageId:undefined;await refresh(next);if(!current() || result.receipt.operation!=='delete' && a.selectedPageId!==(next??pageId))return true;reconcile?.(result);a.pageForm=null;a.notice='Saving is confirmed. Review the remaining changes before saving again.';}
     render();return true;
   }
   if(a.pageWritePending || a.saving || a.detailLoading || a.editor?.saving || a.metricPanel?.saving || ['saving','unknown'].includes(a.simpleEditor?.saveState))return true;
@@ -68,7 +73,7 @@ export async function handlePageAction(action,{render,refresh,mayLeave,reconcile
     operation='defaults';fields={expectedPageDefaultsRevision:a.page.defaultsRevision,periodConfig:{schemaVersion:1,mode:'fixed',dateFrom:a.period.dateFrom,dateTo:a.period.dateTo,timeZone:a.period.timeZone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'},defaultFilter:{...(a.page.defaultFilter??{}),...runtime}};
   }else return true;
   const promise=mutatePage(operation,fields);render();
-  try{const receipt=await promise;if(['create','duplicate'].includes(operation))preferred=receipt.pageId;await refresh(preferred);a.pageForm=null;a.notice=operation==='delete'?'The page was deleted.':'Page changes saved.';}
-  catch(error){if(a.pageForm){a.pageForm.submitting=false;a.pageForm.error=formError(error);}else a.mutationError=formError(error);}
+  try{const receipt=await promise;if(!targetCurrent())return true;if(['create','duplicate'].includes(operation))preferred=receipt.pageId;await refresh(preferred);if(!current() || operation!=='delete' && a.selectedPageId!==(preferred??pageId))return true;a.pageForm=null;a.notice=operation==='delete'?'The page was deleted.':'Page changes saved.';}
+  catch(error){if(!targetCurrent())return true;if(a.pageForm){a.pageForm.submitting=false;a.pageForm.error=formError(error);}else a.mutationError=formError(error);}
   render();return true;
 }
