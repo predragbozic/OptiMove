@@ -1021,15 +1021,16 @@ export function setEditorDisplayMode(draft, mode, available = false) {
     if (!available) return 'Bar + line is not available on this dashboard yet.';
     if (!['line_chart', 'bar_chart'].includes(draft.widgetType) || !['day', 'week'].includes(draft.groupBy) || draft.series.length < 1 || draft.series.length > 2) return 'Choose a line or bar chart, day or week, and one or two numeric metrics first.';
     if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose resolved numeric metrics for Bar + line.';
-    draft.widgetType = 'line_chart';
-    if (draft.series.length === 1) addEditorSeries(draft);
-    const axesReady = draft.series.filter(entry => entry.fields.axis === 'primary').length === 1 && draft.series.filter(entry => entry.fields.axis === 'secondary').length === 1;
-    draft.series.forEach((entry, index) => { if (!axesReady) entry.fields.axis = index === 0 ? 'primary' : 'secondary'; entry.fields.comparisonPeriod = null; });
     const next = structuredClone(value ?? interactiveChartPresentation(draft.groupBy, 'combined').value);
     next.chartVariant = 'combined'; next.chartComposition = 'metrics-v1';
     next.chartInteractions ??= interactiveChartPresentation(draft.groupBy).value.chartInteractions;
     next.chartInteractions.yAxis = { mode: 'auto' };
+    draft.widgetType = 'line_chart';
+    // Apply the target display before adding its second series; Heatmap caps at one.
     draft.presentation = { mode: 'replace', value: next };
+    if (draft.series.length === 1) addEditorSeries(draft);
+    const axesReady = draft.series.filter(entry => entry.fields.axis === 'primary').length === 1 && draft.series.filter(entry => entry.fields.axis === 'secondary').length === 1;
+    draft.series.forEach((entry, index) => { if (!axesReady) entry.fields.axis = index === 0 ? 'primary' : 'secondary'; entry.fields.comparisonPeriod = null; });
   } else if (mode === 'separate' && value != null) draft.presentation = { mode: 'clear' };
   return '';
 }
@@ -1052,6 +1053,8 @@ export function editorSeriesEntry(draft, key) {
 
 export function addEditorSeries(draft) {
   if (editorIsCombined(draft) && draft.series.length >= 2) return "";
+  const presentation = editorPresentation(draft);
+  if (presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
   const key = `new-${draft.nextKey}`;
   draft.nextKey += 1;
   const entry = {
@@ -1133,11 +1136,17 @@ export function analysisEditorProblem(draft) {
   if (presentation && !editorPresentationKnown(presentation) && draft.presentation?.mode !== 'preserve') return 'Unsupported presentation settings must be preserved.';
   if (presentation) {
     const known = editorPresentationKnown(presentation);
-    const requiredType = known ? { combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart' }[presentation.chartVariant] : null;
+    const requiredType = known ? { combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[presentation.chartVariant] : null;
     const incompatible = known
       ? !['line_chart', 'bar_chart'].includes(draft.widgetType) || requiredType && requiredType !== draft.widgetType
       : draft.widgetType !== draft.savedWidgetType;
     if (incompatible) return 'Choose a compatible chart type or explicitly change the display mode before saving.';
+  }
+  if (presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation)) {
+    if (!['day', 'week'].includes(draft.groupBy)) return 'Heatmap supports day or week only.';
+    if (draft.series.length !== 1) return 'Heatmap requires exactly one numeric metric.';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose a resolved numeric metric for Heatmap.';
+    if (chartPresentation(presentation).axis.mode !== 'auto') return 'Heatmap requires automatic axes.';
   }
   if (editorIsCombined(draft)) {
     if (!['day', 'week'].includes(draft.groupBy)) return 'Bar + line supports day or week only.';
@@ -1188,7 +1197,7 @@ export function analysisEditorPlan(widget, draft) {
 
   if (widgetBody.widgetType && draft.presentation?.mode === 'replace' && widget.presentation_config != null) {
     const variant = widget.presentation_config.chartVariant;
-    const requiredType = { area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart' }[variant];
+    const requiredType = { area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[variant];
     if (requiredType && requiredType !== draft.widgetType) widgetBody.presentation = { mode: 'clear' };
   }
 

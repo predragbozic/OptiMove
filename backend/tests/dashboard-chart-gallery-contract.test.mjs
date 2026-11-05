@@ -20,3 +20,13 @@ test('combined is a valid Advanced presentation and explicitly requires the mult
  assert.equal(compileSimpleDraft(d,snapshot(),context()).status,'advancedRequired');
  for(const invalid of [{...value,chartComposition:'athletes-v1'},{...value,chartVariant:'area'},{...value,chartInteractions:{yAxis:{mode:'fixed',min:0,max:10}}}])assert.equal(validateContract('presentationV1',invalid).valid,false);
 });
+test('heatmap compiles one numeric series only for bar/day-week with paired matrix and auto axes',()=>{
+ const value={schemaVersion:1,chartVariant:'heatmap',chartComposition:'matrix-v1',chartInteractions:{yAxis:{mode:'auto'}}};
+ assert.equal(validateContract('presentationV1',value).valid,true);
+ const enabled=()=>{const s=snapshot();s.capabilities.chartComposition.push('matrix-v1');return s;};
+ const d=draft();d.view.type='bar_chart';d.presentation={mode:'replace',value};const scope=context();scope.authorizedAthleteIds=Array.from({length:21},(_,i)=>`00000000-0000-4000-8000-${String(i+100).padStart(12,'0')}`);
+ const overLimit=compileSimpleDraft(d,enabled(),scope);assert.equal(overLimit.status,'requiresChoice');assert.ok(overLimit.issues.some(i=>i.reason==='maxChartAthletes'));
+ for(const groupBy of ['day','week']){const d=draft();d.view={...d.view,type:'bar_chart',groupBy};d.presentation={mode:'replace',value};const result=compileSimpleDraft(d,enabled(),context());assert.equal(result.status,'valid',JSON.stringify(result));}
+ for(const [type,groupBy]of [['line_chart','day'],['bar_chart','athlete']]){const d=draft();d.view={...d.view,type,groupBy};d.presentation={mode:'replace',value};assert.ok(compileSimpleDraft(d,snapshot(),context()).issues.some(i=>i.code==='incompatiblePresentation'));}
+ for(const invalid of [{...value,chartComposition:'athletes-v1'},{...value,chartVariant:'area'},{...value,chartInteractions:{yAxis:{mode:'fixed',min:0,max:10}}}])assert.equal(validateContract('presentationV1',invalid).valid,false);
+});

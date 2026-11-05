@@ -10,6 +10,7 @@ const drawings = {
   bar_chart: '<path d="M14 10v50h96"/><path d="M25 59V36h16v23m12 0V19h16v40m12 0V29h16v30"/>',
   area: '<path d="M22 60V47l20-17 20 9 20-23 22 8v36Z" fill="currentColor" fill-opacity=".18"/><path d="M14 10v50h96M22 47l20-17 20 9 20-23 22 8"/>',
   'horizontal-bar': '<path d="M14 10v52h96M15 17h58v10H15m0 9h84v10H15m0 9h40v7H15"/>',
+  heatmap: '<path d="M14 10v52h96"/><g fill="currentColor"><path d="M23 15h17v12H23zM65 31h17v12H65zM86 47h17v12H86z" fill-opacity=".2"/><path d="M44 15h17v12H44zM86 31h17v12H86zM23 47h17v12H23z" fill-opacity=".45"/><path d="M65 15h17v12H65zM23 31h17v12H23zM44 47h17v12H44z" fill-opacity=".7"/><path d="M86 15h17v12H86zM44 31h17v12H44zM65 47h17v12H65z"/></g>',
 };
 export const chartGalleryChoices = [
   { id: 'table', type: 'table', name: 'Table', description: 'Inspect returned values and data quality row by row.' },
@@ -19,6 +20,7 @@ export const chartGalleryChoices = [
   { id: 'area', type: 'line_chart', variant: 'area', name: 'Area', description: 'Follow a line with a filled area to make its shape easier to read.' },
   { id: 'horizontal-bar', type: 'bar_chart', variant: 'horizontal-bar', name: 'Horizontal bar', description: 'Compare groups with sideways bars and room for category labels.' },
   { id: 'combined', type: 'line_chart', variant: 'combined', name: 'Bar + line', description: 'Use two numeric metrics: bars on the left axis and a line on the right, in Advanced settings.' },
+  { id: 'heatmap', type: 'bar_chart', variant: 'heatmap', name: 'Heatmap', description: 'Compare one numeric metric across athletes and days or weeks. Color shows magnitude only.' },
 ];
 export function galleryPresentation(model) {
   const intent = model.draft?.presentation;
@@ -47,7 +49,8 @@ export function galleryUnavailable(model, choice) {
     return '';
   }
   if (choice.variant && !model.capabilities?.capabilities?.chartVariants?.includes(choice.variant)) return 'This chart variant is not available on this dashboard yet.';
-  if (gallerySelection(model) !== choice.id && (!knownPresentation(galleryPresentation(model)) || model.savedPresentation != null && !['line_chart', 'bar_chart'].includes(choice.type))) return 'Open the Advanced editor to change this display and preserve saved presentation settings.';
+  if (choice.id === 'heatmap' && !['day', 'week'].includes(model.draft?.view?.groupBy)) return 'Heatmap supports day or week only. Choose day or week before selecting Heatmap.';
+  if (gallerySelection(model) !== choice.id && (!knownPresentation(galleryPresentation(model)) || model.savedPresentation != null && !['line_chart', 'bar_chart'].includes(choice.type) && galleryVariant(model) !== 'heatmap')) return 'Open the Advanced editor to change this display and preserve saved presentation settings.';
   return '';
 }
 export function applyGalleryChoice(draft, model, id) {
@@ -59,13 +62,21 @@ export function applyGalleryChoice(draft, model, id) {
   if (choice.variant || previousVariant) {
     if (['line_chart', 'bar_chart'].includes(choice.type)) {
       const value = structuredClone(previous ?? interactiveChartPresentation(draft.view.groupBy, choice.variant).value);
+      const generated = interactiveChartPresentation(draft.view.groupBy, choice.variant).value;
+      if (choice.variant === 'heatmap' || previousVariant === 'heatmap') {
+        // Composition must follow the selected display, never the saved sidecar.
+        delete value.chartComposition;
+        if (generated.chartComposition) value.chartComposition = generated.chartComposition;
+      }
       delete value.chartVariant;
       if (choice.variant) {
         value.chartVariant = choice.variant;
         value.chartInteractions ??= interactiveChartPresentation(draft.view.groupBy, choice.variant).value.chartInteractions;
       }
+      if (choice.variant === 'heatmap') value.chartInteractions.yAxis = { mode: 'auto' };
       draft.presentation = { mode: 'replace', value };
-    } else if (model.widgetId) draft.presentation = { mode: 'preserve' };
+    } else if (previousVariant === 'heatmap') draft.presentation = { mode: 'clear' };
+    else if (model.widgetId) draft.presentation = { mode: 'preserve' };
     else delete draft.presentation;
   } else if (!['line_chart', 'bar_chart'].includes(choice.type) && draft.presentation?.mode === 'replace') {
     if (model.widgetId) draft.presentation = { mode: 'preserve' };

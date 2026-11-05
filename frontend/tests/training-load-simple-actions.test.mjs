@@ -14,6 +14,7 @@ const { renderSimpleEditorHtml } = await import('../training-load-simple-view.js
 const { analysisEditorDraftFromWidget } = await import('../training-load-analysis-data.js');
 const { state, emptyTrainingLoadState } = await import('../state.js');
 const { clearAllViewCache } = await import('../view-cache.js');
+const { interactiveChartPresentation } = await import('../training-load-chart-composer.js');
 
 const dashboardId = '11111111-1111-4111-8111-111111111111';
 const widgetId = '55555555-5555-4555-8555-555555555555';
@@ -590,12 +591,12 @@ for (const [id, type, variant] of [['table','table'], ['kpi','kpi'], ['line_char
 test('gallery blocks unavailable variants and nonnumeric displays even through a forwarded action', async () => {
   await readyNew();
   const m = simpleEditor.model, before = structuredClone(m.draft), preview = m.preview;
-  for (const id of ['area','horizontal-bar']) await simple('view', {}, id);
+  for (const id of ['area','horizontal-bar','heatmap']) await simple('view', {}, id);
   assert.deepEqual(m.draft, before);
   assert.equal(m.preview, preview);
   m.capabilities.capabilities.chartVariants = ['area','horizontal-bar'];
   m.selectedMetric = { value_type: 'text' };
-  for (const id of ['kpi','line_chart','bar_chart','area','horizontal-bar']) await simple('view', {}, id);
+  for (const id of ['kpi','line_chart','bar_chart','area','horizontal-bar','heatmap']) await simple('view', {}, id);
   assert.deepEqual(m.draft, before);
   m.selectedMetric = { value_type: 'numeric' };
   m.capabilities.widgetTypes = ['table'];
@@ -719,6 +720,47 @@ for (const [variant, type] of [['area','line_chart'], ['horizontal-bar','bar_cha
     assert.equal(calls.filter(call => /simple\/widgets/.test(call.url)).length, 0);
   });
 }
+
+for (const reopened of [false, true]) test(`${reopened ? 'reopened' : 'new'} heatmap refuses athlete/session and copies day/week sidecars without losing custom interactions`, async () => {
+  const presentation = interactiveChartPresentation('day', 'heatmap').value;
+  Object.assign(presentation.chartInteractions, { tooltip: { mode: 'formatted' }, legend: { toggle: false }, pointSelection: { mode: 'disabled' }, zoom: { mode: 'disabled', applyPeriodAction: false } });
+  if (reopened) {
+    analysis().widgets = [widget({ widget_type: 'bar_chart', presentation_config: presentation })];
+    await act('training-load-analysis-edit-widget', { widgetId });
+    await simple('next'); await simple('next');
+  } else {
+    await readyNew();
+    simpleEditor.model.capabilities.capabilities.chartVariants = ['heatmap'];
+    await simple('view', {}, 'heatmap');
+    simpleEditor.model.draft.presentation.value = structuredClone(presentation);
+  }
+  const m = simpleEditor.model;
+  m.capabilities.capabilities.chartVariants = ['heatmap'];
+  await simple('preview');
+  assert.equal(control('view', 'heatmap').checked, true);
+  const version = m.draft.draftVersion, preview = m.preview, before = structuredClone(m.draft);
+  await simple('view', {}, 'heatmap'); await simple('group', {}, 'day');
+  assert.equal(m.draft.draftVersion, version); assert.equal(m.preview, preview);
+  for (const group of ['athlete', 'session']) {
+    const count = calls.length;
+    await simple('group', {}, group);
+    assert.deepEqual(m.draft, before); assert.equal(m.preview, preview);
+    assert.equal(calls.length, count);
+    assert.match(root.textContent, /Heatmap supports day or week only/);
+    assert.equal(control('view', 'heatmap').checked, true);
+  }
+  for (const group of ['week', 'day']) {
+    await simple('group', {}, group);
+    assert.equal(m.error, ''); assert.equal(m.preview, null); assert.equal(m.canSave, false);
+    assert.equal(m.draft.presentation.mode, 'replace');
+    assert.equal(m.draft.presentation.value.chartComposition, 'matrix-v1');
+    assert.deepEqual(m.draft.presentation.value.chartInteractions, { ...presentation.chartInteractions, zoom: { mode: 'local', applyPeriodAction: true } });
+    assert.deepEqual(m.savedPresentation, reopened ? presentation : null);
+    await simple('preview');
+    assert.deepEqual(calls.at(-1).body.draft.presentation, m.draft.presentation);
+    assert.equal(calls.at(-1).body.draft.view.groupBy, group); assert.equal(m.canSave, true);
+  }
+});
 
 test('reopened opaque schema99 with a variant never gets cloned or rewritten by grouping', async () => {
   const presentation = { schemaVersion: 99, chartVariant: 'area', chartComposition: 'opaque', chartInteractions: { zoom: { mode: 'custom' } }, other: ['keep'] };
