@@ -12,8 +12,11 @@ const drawings = {
   bar_chart: '<path d="M14 10v50h96"/><path d="M25 59V36h16v23m12 0V19h16v40m12 0V29h16v30"/>',
   area: '<path d="M22 60V47l20-17 20 9 20-23 22 8v36Z" fill="currentColor" fill-opacity=".18"/><path d="M14 10v50h96M22 47l20-17 20 9 20-23 22 8"/>',
   'horizontal-bar': '<path d="M14 10v52h96M15 17h58v10H15m0 9h84v10H15m0 9h40v7H15"/>',
+  boxplot: '<path d="M14 10v50h96M35 14v10m-8-10h16M27 24h16v24H27zM27 35h16M35 48v9m-8 0h16M78 20v9m-8-9h16M70 29h16v18H70zM70 38h16M78 47v9m-8 0h16"/><circle cx="78" cy="11" r="2"/>',
   heatmap: '<path d="M14 10v52h96"/><g fill="currentColor"><path d="M23 15h17v12H23zM65 31h17v12H65zM86 47h17v12H86z" fill-opacity=".2"/><path d="M44 15h17v12H44zM86 31h17v12H86zM23 47h17v12H23z" fill-opacity=".45"/><path d="M65 15h17v12H65zM23 31h17v12H23zM44 47h17v12H44z" fill-opacity=".7"/><path d="M86 15h17v12H86zM44 31h17v12H44zM65 47h17v12H65z"/></g>',
 };
+export const boxplotExplanation = 'Each day or week shows the distribution across returned athlete values using the existing aggregation, not session samples or inferred raw observations. At least 5 valid athletes are required to draw a bucket. Quartiles use type 7 interpolation; whiskers and outliers use the Tukey 1.5 IQR rule. Units and source provenance must be compatible. If data is insufficient, the values table remains available.';
+
 export const chartGalleryChoices = [
   { id: 'table', type: 'table', name: 'Table', description: 'Inspect returned values and data quality row by row.' },
   { id: 'kpi', type: 'kpi', name: 'KPI', description: 'Highlight the returned metric value for the selected group and period.' },
@@ -25,6 +28,7 @@ export const chartGalleryChoices = [
   { id: 'heatmap', type: 'bar_chart', variant: 'heatmap', name: 'Heatmap', description: 'Compare one numeric metric across athletes and days or weeks. Color shows magnitude only.' },
   { id: 'scatter', type: 'line_chart', variant: 'scatter', name: 'Scatter', description: 'Compare two numeric metrics with X and Y axes in Advanced settings.' },
   { id: 'stacked', type: 'bar_chart', variant: 'stacked', name: 'Stacked bar', description: 'Declare 2 to 8 non-overlapping catalog metric components of one quantity in Advanced settings.' },
+  { id: 'boxplot', type: 'bar_chart', variant: 'boxplot', name: 'Box plot', description: 'Show the distribution across returned athlete values for each day or week, using the existing aggregation.' },
 ];
 export function galleryPresentation(model) {
   const intent = model.draft?.presentation;
@@ -71,8 +75,10 @@ export function galleryUnavailable(model, choice) {
     return '';
   }
   if (choice.variant && !model.capabilities?.capabilities?.chartVariants?.includes(choice.variant)) return 'This chart variant is not available on this dashboard yet.';
+  if (choice.id === 'boxplot' && model.selectedMetric?.value_type !== 'numeric') return 'Choose a numeric metric to use Box plot.';
+  if (choice.id === 'boxplot' && !['day', 'week'].includes(model.draft?.view?.groupBy)) return 'Box plot supports day or week only. Choose day or week before selecting Box plot.';
   if (choice.id === 'heatmap' && !['day', 'week'].includes(model.draft?.view?.groupBy)) return 'Heatmap supports day or week only. Choose day or week before selecting Heatmap.';
-  if (gallerySelection(model) !== choice.id && (!knownPresentation(galleryPresentation(model)) || model.savedPresentation != null && !['line_chart', 'bar_chart'].includes(choice.type) && galleryVariant(model) !== 'heatmap')) return 'Open the Advanced editor to change this display and preserve saved presentation settings.';
+  if (gallerySelection(model) !== choice.id && (!knownPresentation(galleryPresentation(model)) || model.savedPresentation != null && !['line_chart', 'bar_chart'].includes(choice.type) && !['heatmap', 'boxplot'].includes(galleryVariant(model)))) return 'Open the Advanced editor to change this display and preserve saved presentation settings.';
   return '';
 }
 export function applyGalleryChoice(draft, model, id) {
@@ -85,7 +91,7 @@ export function applyGalleryChoice(draft, model, id) {
     if (['line_chart', 'bar_chart'].includes(choice.type)) {
       const value = structuredClone(previous ?? interactiveChartPresentation(draft.view.groupBy, choice.variant).value);
       const generated = interactiveChartPresentation(draft.view.groupBy, choice.variant).value;
-      if (choice.variant === 'heatmap' || previousVariant === 'heatmap') {
+      if (['heatmap', 'boxplot'].includes(choice.variant) || ['heatmap', 'boxplot'].includes(previousVariant)) {
         // Composition must follow the selected display, never the saved sidecar.
         delete value.chartComposition;
         if (generated.chartComposition) value.chartComposition = generated.chartComposition;
@@ -95,9 +101,9 @@ export function applyGalleryChoice(draft, model, id) {
         value.chartVariant = choice.variant;
         value.chartInteractions ??= interactiveChartPresentation(draft.view.groupBy, choice.variant).value.chartInteractions;
       }
-      if (choice.variant === 'heatmap') value.chartInteractions.yAxis = { mode: 'auto' };
+      if (['heatmap', 'boxplot'].includes(choice.variant)) value.chartInteractions.yAxis = { mode: 'auto' };
       draft.presentation = { mode: 'replace', value };
-    } else if (previousVariant === 'heatmap') draft.presentation = { mode: 'clear' };
+    } else if (['heatmap', 'boxplot'].includes(previousVariant)) draft.presentation = { mode: 'clear' };
     else if (model.widgetId) draft.presentation = { mode: 'preserve' };
     else delete draft.presentation;
   } else if (!['line_chart', 'bar_chart'].includes(choice.type) && draft.presentation?.mode === 'replace') {
@@ -112,5 +118,5 @@ export function renderChartGallery(model, locked = false) {
   return `<fieldset class="tl-simple-view-options"${locked ? ' disabled' : ''}><legend>Display</legend>${choices.map(({ choice, reason }) => {
     const prefix = `tl-simple-gallery-${choice.id}`, sharedReason = reason === combinedGuidance;
     return `<label class="tl-simple-chart-card"><input type="radio" name="training-load-simple-view" data-action="training-load-simple-view" value="${choice.id}"${selected === choice.id ? ' checked' : ''}${reason ? ' disabled' : ''} aria-labelledby="${prefix}-name" aria-describedby="${prefix}-description${reason ? ` ${sharedReason ? combinedGuidanceId : `${prefix}-reason`}` : ''}"><span class="tl-simple-chart-card-body"><svg viewBox="0 0 120 72" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${drawings[choice.id]}</svg><strong id="${prefix}-name">${choice.name}</strong><span id="${prefix}-description">${choice.description}</span>${reason && !sharedReason ? `<span class="tl-simple-chart-reason" id="${prefix}-reason">${escapeHtml(reason)}</span>` : ''}</span></label>`;
-  }).join('')}</fieldset>${sharedGuidance ? `<p class="tl-simple-message" id="${combinedGuidanceId}">${combinedGuidance}</p>` : ''}${!knownPresentation(galleryPresentation(model)) ? '<p class="tl-simple-message">Saved presentation settings are preserved. Open the Advanced editor to change the display.</p>' : ''}`;
+  }).join('')}</fieldset>${selected === 'boxplot' ? `<p class="tl-simple-message">${boxplotExplanation}</p>` : ''}${sharedGuidance ? `<p class="tl-simple-message" id="${combinedGuidanceId}">${combinedGuidance}</p>` : ''}${!knownPresentation(galleryPresentation(model)) ? '<p class="tl-simple-message">Saved presentation settings are preserved. Open the Advanced editor to change the display.</p>' : ''}`;
 }

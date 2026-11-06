@@ -62,7 +62,10 @@ export function createPageAdvancedService({ pool, authorize, assertFilterVisible
           if(!source.visible || source.conn?.state!=='active')throw previewError('notFound',404);
         }
         const receipt=(await q('select training_load.mutate_dashboard_page_advanced($1::uuid,$2::uuid,$3::text,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::text,$9::jsonb,$10::jsonb) as receipt',[req.user.id,input.requestId,hash,dashboardId,pageId,widgetId,seriesId,operation,JSON.stringify(input),JSON.stringify(target.workspace)])).rows[0]?.receipt;
-        if(!receipt)throw previewError('saveFailed');return {receipt,replayed:false};
+        if(!receipt)throw previewError('saveFailed');
+        const boxplotChecks=(await q("select to_regprocedure('training_load.dashboard_boxplot_flush_checks()') is not null as ready")).rows[0];
+        if(boxplotChecks?.ready===true)await q('select training_load.dashboard_boxplot_flush_checks()');
+        return {receipt,replayed:false};
       }});
     },
   };

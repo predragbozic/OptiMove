@@ -9,6 +9,7 @@ function remember(key, value) {
 }
 export function chartPointText(point, precision, formatted = false) {
   if (!point) return 'No data';
+  if(point.derivedDistribution){const s=point.statistics,n=value=>formatted?Number(value).toFixed(precision):String(value);return [point.metricLabel,point.identity.bucketKey,`Across ${s.count} returned athlete values · ${point.excluded} missing/problem/duplicate athletes excluded`,`Low whisker: ${n(s.low)}`,`Q1: ${n(s.q1)}`,`Median: ${n(s.median)}`,`Q3: ${n(s.q3)}`,`High whisker: ${n(s.high)}`,`Observed range: ${n(s.minimum)} – ${n(s.maximum)} ${point.identity.unit}`,'Quartiles: type 7; whiskers: observed values within 1.5 IQR. Not session samples or reference thresholds.'].join('\n');}
   if(point.pairedPoint)return `X:\n${chartPointText({...point,pairedPoint:null},precision,formatted)}\n\nY:\n${chartPointText(point.pairedPoint,precision,formatted)}`;
   if (!point.identity) return 'Duplicate observations. See the values table.';
   const value=point.chartStatus === 'value' ? formatted ? Number(point.value).toFixed(precision) : String(point.value) : `${point.chartStatus}: ${String(point.rawValue)}`;
@@ -42,7 +43,7 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     if (!plot.queryId || !selected?.identity || selected.queryId!==plot.queryId) return;
     let summary=details.querySelector('.tl-chart-point-summary');if(!summary){summary=document.createElement('p');summary.className='tl-chart-point-summary';details.insertBefore(summary,details.querySelector('pre'));}
     summary.textContent=chartPointText(selected,plot.precision);
-    details.querySelector('pre').textContent=JSON.stringify({queryId:selected.queryId,phase:selected.phase,rowIndex:selected.rowIndex,identityKey:selected.identityKey,identity:selected.identity,status:selected.status,value:selected.rawValue,raw:selected.raw,...(selected.pairedPoint?{y:{rowIndex:selected.pairedPoint.rowIndex,identityKey:selected.pairedPoint.identityKey,identity:selected.pairedPoint.identity,value:selected.pairedPoint.rawValue,raw:selected.pairedPoint.raw}}:{})},null,2);
+    details.querySelector('pre').textContent=JSON.stringify(selected.derivedDistribution?{derivedDistribution:true,queryId:selected.queryId,phase:selected.phase,statistics:selected.statistics,excluded:selected.excluded,contributingRows:selected.contributingRows}:{queryId:selected.queryId,phase:selected.phase,rowIndex:selected.rowIndex,identityKey:selected.identityKey,identity:selected.identity,status:selected.status,value:selected.rawValue,raw:selected.raw,...(selected.pairedPoint?{y:{rowIndex:selected.pairedPoint.rowIndex,identityKey:selected.pairedPoint.identityKey,identity:selected.pairedPoint.identity,value:selected.pairedPoint.rawValue,raw:selected.pairedPoint.raw}}:{})},null,2);
     details.open=true;
   };
   const updateStatus=()=>{

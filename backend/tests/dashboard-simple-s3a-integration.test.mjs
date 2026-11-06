@@ -29,7 +29,9 @@ if (!process.execArgv.includes('--experimental-test-module-mocks')) {
       const client = new EventEmitter();
       client.query = async (sql, params) => {
         calls.push({ sql, params });
-        if (sql.includes('dashboard_chart_variants_v1')) return {rows:[{ready:options.variantsReady===true}]};
+        if (sql.includes('dashboard_chart_variants_v1')) return {rows:[{ready:options.variantsReady===true,boxplot_ready:options.boxplotReady===true}]};
+        if (sql.includes('to_regprocedure') && sql.includes('save_simple_page_widget')) return {rows:[{ready:true}]};
+        if (sql.includes('from training_load.dashboard_pages')) return {rows:[{id:id(20),dashboard_id:id(2),defaults_revision:1,default_filter:{},period_config:{schemaVersion:1,mode:'fixed',...context().period}}]};
         if (sql.includes('from public.schema_migrations')) return { rows: [{ migration_name: SIMPLE_MIGRATION_NAME, checksum: SIMPLE_MIGRATION_SHA256 }] };
         if (sql.includes('information_schema.columns')) return { rows: [{ presentation: true, receipts: true, writer: true }] };
         if (sql.includes('from public.users')) return { rows: options.inactiveUser ? [] : [{ id: id(3), is_active: true }] };
@@ -60,6 +62,19 @@ if (!process.execArgv.includes('--experimental-test-module-mocks')) {
     for(const ready of [false,true]){
       const f=fixture({variantsReady:ready});const result=await serviceFor(f).capabilities({req,dashboardId:dashboard.id});
       assert.deepEqual(result.capabilities.chartVariants,ready?['area','horizontal-bar']:[]);
+    }
+  });
+  test('boxplot marker gates Page-only advertising and validation independently of old variants',async()=>{
+    for(const page of [false,true])for(const boxplotReady of [false,true]){
+      const f=fixture({boxplotReady,dashboard:{pages_revision:1}}),service=serviceFor(f);
+      const args={req,dashboardId:id(2),...(page?{pageId:id(20)}:{})};
+      const caps=await service.capabilities(args);
+      assert.equal(caps.capabilities.chartVariants.includes('boxplot'),page&&boxplotReady);
+      const e=envelope();e.draft.view.type='bar_chart';e.draft.presentation={mode:'replace',value:{schemaVersion:1,chartVariant:'boxplot',chartComposition:'distribution-v1',chartInteractions:{}}};
+      if(page)e.context={kind:'page',pageId:id(20),period:context().period};
+      const result=await service.validate({...args,envelope:e});
+      assert.equal(result.status,page&&boxplotReady?'valid':'invalid',JSON.stringify(result));
+      if(result.status==='invalid')assert.ok(result.issues.some(i=>i.code==='unsupportedCapability'));
     }
   });
   async function serve(t, router, authenticated = true) {
