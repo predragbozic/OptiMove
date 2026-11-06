@@ -1013,6 +1013,10 @@ export function editorIsCombined(draft) {
   const value = editorPresentation(draft);
   return value?.chartVariant === 'combined' && chartPresentation(value).mode === 'enhanced';
 }
+export function editorIsBoxplot(draft) {
+  const value = editorPresentation(draft);
+  return value?.chartVariant === 'boxplot' && chartPresentation(value).mode === 'enhanced';
+}
 export function editorIsScatter(draft) {
   const value = editorPresentation(draft);
   return value?.chartVariant === 'scatter' && chartPresentation(value).mode === 'enhanced';
@@ -1143,7 +1147,7 @@ export function addEditorSeries(draft) {
   const stacked = editorIsStacked(draft);
   if ((editorIsCombined(draft) || editorIsScatter(draft)) && draft.series.length >= 2) return "";
   const presentation = editorPresentation(draft);
-  if (!stacked && presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
+  if (!stacked && ['heatmap', 'boxplot'].includes(presentation?.chartVariant) && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
   const key = `new-${draft.nextKey}`;
   draft.nextKey += 1;
   const entry = {
@@ -1236,7 +1240,7 @@ export function analysisEditorProblem(draft) {
   if (presentation && !editorPresentationKnown(presentation) && draft.presentation?.mode !== 'preserve') return 'Unsupported presentation settings must be preserved.';
   if (presentation) {
     const known = editorPresentationKnown(presentation);
-    const requiredType = known ? { scatter: 'line_chart', combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', stacked: 'bar_chart' }[presentation.chartVariant] : null;
+    const requiredType = known ? { scatter: 'line_chart', combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', boxplot: 'bar_chart', stacked: 'bar_chart' }[presentation.chartVariant] : null;
     const incompatible = known
       ? !['line_chart', 'bar_chart'].includes(draft.widgetType) || requiredType && requiredType !== draft.widgetType
       : draft.widgetType !== draft.savedWidgetType;
@@ -1247,6 +1251,14 @@ export function analysisEditorProblem(draft) {
     if (draft.series.length !== 1) return 'Heatmap requires exactly one numeric metric.';
     if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose a resolved numeric metric for Heatmap.';
     if (chartPresentation(presentation).axis.mode !== 'auto') return 'Heatmap requires automatic axes.';
+  }
+  if (editorIsBoxplot(draft)) {
+    if (!['day', 'week'].includes(draft.groupBy)) return 'Box plot supports day or week only.';
+    if (draft.series.length !== 1) return 'Box plot requires exactly one numeric metric.';
+    if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return 'Choose a resolved numeric metric for Box plot.';
+    if ((draft.series[0].fields.axis || 'primary') !== 'primary') return 'Box plot requires the primary axis.';
+    if (draft.series[0].fields.comparisonPeriod) return 'Box plot does not support comparisons.';
+    if (presentation.chartComposition !== 'distribution-v1' || chartPresentation(presentation).axis.mode !== 'auto') return 'Box plot requires distribution-v1 composition and automatic axes.';
   }
   if (editorIsScatter(draft)) {
     if (!['day', 'week'].includes(draft.groupBy)) return 'Scatter supports day or week only.';
@@ -1305,7 +1317,7 @@ export function analysisEditorPlan(widget, draft) {
 
   if (widgetBody.widgetType && draft.presentation?.mode === 'replace' && widget.presentation_config != null) {
     const variant = widget.presentation_config.chartVariant;
-    const requiredType = { scatter: 'line_chart', area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', stacked: 'bar_chart' }[variant];
+    const requiredType = { scatter: 'line_chart', area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', boxplot: 'bar_chart', stacked: 'bar_chart' }[variant];
     if (requiredType && requiredType !== draft.widgetType) widgetBody.presentation = { mode: 'clear' };
   }
 
@@ -1368,10 +1380,20 @@ export function analysisEditorPlan(widget, draft) {
   const keptInServerOrder = rows.map((row) => row.id).filter((id) => keptInDraftOrder.includes(id));
   const orderChanged = keptInDraftOrder.join(",") !== keptInServerOrder.join(",");
   if (draft.series.length > 1 && (orderChanged || adds.length || metricOps.some((op) => op.type === "replaceSeries"))) ops.push({ type: "reorder" });
-  if (draft.presentation?.mode && draft.presentation.mode !== 'preserve') {
+  // Each staged Advanced request commits separately. A known boxplot must
+  // never see the replacement's DELETE or an incompatible series PATCH/ADD.
+  const clearBoxplotFirst = widget.presentation_config?.chartVariant === 'boxplot' &&
+    chartPresentation(widget.presentation_config).mode === 'enhanced' &&
+    ops.some((op) => ['deleteSeries', 'replaceSeries', 'resolveSeries', 'patchSeries', 'addSeries'].includes(op.type));
+  if (clearBoxplotFirst) {
+    ops.unshift({ type: 'patchWidget', body: { presentation: { mode: 'clear' } } });
+    delete widgetBody.presentation;
+  }
+  if (clearBoxplotFirst || draft.presentation?.mode && draft.presentation.mode !== 'preserve') {
     const next = editorPresentation(draft);
-    if (JSON.stringify(next) !== JSON.stringify(widget.presentation_config ?? null)) {
-      const presentationOp = { type: 'patchWidget', body: { presentation: structuredClone(draft.presentation) } };
+    if (clearBoxplotFirst ? next !== null : JSON.stringify(next) !== JSON.stringify(widget.presentation_config ?? null)) {
+      const presentation = clearBoxplotFirst ? { mode: 'replace', value: structuredClone(next) } : structuredClone(draft.presentation);
+      const presentationOp = { type: 'patchWidget', body: { presentation } };
       // Clear with the type patch atomically; apply the target presentation after all series exist.
       if (next === null && widgetBody.widgetType) widgetBody.presentation = { mode: 'clear' }; else ops.push(presentationOp);
     }

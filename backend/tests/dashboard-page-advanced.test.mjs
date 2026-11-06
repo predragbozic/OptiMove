@@ -80,10 +80,12 @@ if(!process.execArgv.includes('--experimental-test-module-mocks')){
   const {createPageAdvancedService}=await import('../src/dashboardPages/advancedService.js');
   const target={req:{user:{id:id(1)}},workspace:{type:'team'},dashboard:{id:id(2),status:'active',is_template:false,data_workspace_type:'team'}};
   const args=()=>({req:target.req,dashboardId:id(2),pageId:id(3),operation:'widgetDelete',widgetId:id(4),body:wrapper({expectedWidgetRevision:1})});
-  function fixture({receipt=null,foreign=false,archived=false,lostCommit=false}={}){
+  function fixture({receipt=null,foreign=false,archived=false,lostCommit=false,boxplotReady=false,boxplotError=false}={}){
     const f=connection({lostCommit});let saved=receipt;
     const original=f.client.query;
     f.client.query=async(sql,params)=>{
+      if(sql.includes("to_regprocedure('training_load.dashboard_boxplot_flush_checks()')"))return {rows:[{ready:boxplotReady}]};
+      if(sql==='select training_load.dashboard_boxplot_flush_checks()'){f.calls.push({sql,params});if(boxplotError)throw Object.assign(new Error('boxplot shape'),{code:'S2C02'});return {rows:[]};}
       if(sql.includes('from training_load.dashboard_page_advanced_requests'))return {rows:saved?[saved]:[]};
       if(sql.includes('from training_load.dashboard_pages'))return {rows:[{id:id(3)}]};
       if(sql.includes('from training_load.dashboard_widgets'))return {rows:foreign?[]:[{id:id(4)}]};
@@ -96,6 +98,12 @@ if(!process.execArgv.includes('--experimental-test-module-mocks')){
     const foreign=fixture({foreign:true});await assert.rejects(foreign.service.mutate(args()),{code:'notFound'});
     const f=fixture(),first=await f.service.mutate(args());assert.equal(first.pageId,id(3));
     const replay=await f.service.mutate(args());assert.equal(replay.verification,'replayed');
+  });
+  test('Box plot constraints flush before COMMIT; known shape rejection rolls back instead of reporting unknown outcome',async()=>{
+    const valid=fixture({boxplotReady:true});assert.equal((await valid.service.mutate(args())).verification,'commitAcknowledged');
+    assert.ok(valid.calls.findIndex(c=>c.sql==='select training_load.dashboard_boxplot_flush_checks()')<valid.calls.findIndex(c=>c.sql==='commit'));
+    const invalid=fixture({boxplotReady:true,boxplotError:true});await assert.rejects(invalid.service.mutate(args()),{code:'S2C02'});
+    assert.ok(invalid.calls.some(c=>c.sql==='rollback'));assert.equal(invalid.calls.some(c=>c.sql==='commit'),false);
   });
   test('Advanced lost COMMIT is recovered from Page ledger; archive/status keep completed proof',async()=>{
     const f=fixture({lostCommit:true});const result=await f.service.mutate(args());assert.equal(result.verification,'verifiedAfterCommitError');

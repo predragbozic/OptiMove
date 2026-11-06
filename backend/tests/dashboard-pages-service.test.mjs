@@ -15,7 +15,7 @@ function fixture(options={}) {
   const widgets=options.widgets ?? [widget], series=options.series ?? [{id:'series',widget_id:widgetId}];
   const client=Object.assign(new EventEmitter(),{release:destroy=>state.releases.push(destroy),query:async(sql,params=[])=>{
     state.queries.push({sql,params});
-    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true,scatter_ready:options.scatterReady===true,stacked_ready:options.stackedReady===true}]};
+    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true,scatter_ready:options.scatterReady===true,boxplot_ready:options.boxplotReady===true,stacked_ready:options.stackedReady===true}]};
     if(sql==='commit'&&state.commitLost){state.commitLost=false;throw new Error('connection lost');}
     if(sql.includes('mutate_dashboard_page')){state.mutations.push(params);const receipt={requestId:params[1],dashboardId,pageId,operation:params[5],pagesRevision:2};state.ledger={request_id:params[1],payload_hash:params[2],workspace:target.workspace,receipt};return{rows:[{receipt}]};}
     if(sql.includes('dashboard_page_requests'))return{rows:state.ledger?.request_id===params[2]?[state.ledger]:[]};
@@ -278,4 +278,20 @@ test('Stacked editing requires marker, Page ports and authorized management/quer
  for(const [portsReady,stackedReady,canManage,canQuery,expected]of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
   const f=fixture({portsReady,stackedReady});Object.assign(f.target,{canManage,canQuery});assert.equal((await f.service.list({req,dashboardId})).capabilities.stackedCharts,expected);
  }
+});
+
+test('boxplot editing requires marker, Page ports and management/query rights',async()=>{
+ for(const [portsReady,boxplotReady,canManage,canQuery,expected]of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
+  const f=fixture({portsReady,boxplotReady});Object.assign(f.target,{canManage,canQuery});assert.equal((await f.service.list({req,dashboardId})).capabilities.boxplotCharts,expected);
+ }
+});
+
+test('boxplot Page query returns athlete aggregate rows and semantic partitions unchanged',async()=>{
+ const presentation={schemaVersion:1,chartVariant:'boxplot',chartComposition:'distribution-v1',chartInteractions:{}};
+ const rows=[{athleteId:user,bucketKey:'2026-11-01',value:12,unit:'m',semanticIdentity:{version:'one'},sourcePolicy:'manual'},{athleteId:other,bucketKey:'2026-11-01',value:30,unit:'km',semanticIdentity:{version:'two'},sourcePolicy:'api_import'}];
+ const result={widgetId,series:[{seriesId:other,status:'ok',data:{current:rows,comparison:null}}]};
+ const f=fixture({widget:{id:widgetId,page_id:pageId,widget_type:'bar_chart',group_by:'day',presentation_config:presentation},series:[{id:other,widget_id:widgetId,axis:'primary',comparison_period:null}],result:[result]});
+ const output=await f.service.query({req,dashboardId,pageId,body:{period}});
+ assert.deepEqual(output.widgets,[{...result,presentation_config:presentation}]);assert.equal(f.state.batches.length,1);
+ assert.deepEqual(rows.map(row=>row.value),[12,30]);
 });

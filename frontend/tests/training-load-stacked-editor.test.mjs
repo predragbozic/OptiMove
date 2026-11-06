@@ -23,8 +23,8 @@ beforeEach(() => {
 });
 
 test('tenth accessible gallery choice requires both Simple and page readiness and a saved base chart', () => {
-  const choice = chartGalleryChoices.at(-1);
-  assert.equal(chartGalleryChoices.length, 10); assert.equal(choice.id, 'stacked'); assert.equal(choice.variant, 'stacked');
+  const choice = chartGalleryChoices.find(c => c.id === 'stacked');
+  assert.equal(chartGalleryChoices.indexOf(choice) + 1, 10); assert.equal(choice.id, 'stacked'); assert.equal(choice.variant, 'stacked');
   const model = { widgetId: 'widget', savedWidgetType: 'line_chart', savedGroupBy: 'day', pageStackedAvailable: true, capabilities: caps(), draft: { view: { type: 'line_chart', groupBy: 'day' } } };
   assert.equal(galleryUnavailable(model, choice), '');
   for (const mutate of [m => { m.widgetId = null; }, m => { m.pageStackedAvailable = false; }, m => { m.capabilities.capabilities.stackedCharts = false; }, m => { m.draft.view.groupBy = 'athlete'; }]) {
@@ -107,7 +107,7 @@ test('known saved stacks allow title-only preserve; mismatch never defaults ackn
 
 test('known stacked Simple partial state cannot rewrite an ordinary sidecar, including same chooser', () => {
   const w = saved(), model = { widgetId: w.id, savedWidgetType: w.widget_type, savedGroupBy: w.group_by, savedPresentation: w.presentation_config, pageStackedAvailable: true, capabilities: caps(), draft: null };
-  assert.equal(galleryUnavailable(model, chartGalleryChoices.at(-1)), '');
+  assert.equal(galleryUnavailable(model, chartGalleryChoices.find(c => c.id === 'stacked')), '');
   for (const choice of chartGalleryChoices.filter(c => c.id !== 'stacked')) assert.match(galleryUnavailable(model, choice), /Advanced editor/);
   const draft = { view: { type: 'bar_chart', groupBy: 'day' }, presentation: { mode: 'preserve' } }, before = structuredClone(draft);
   model.draft = draft;

@@ -9,7 +9,7 @@ import { chartPresentation } from '../training-load-chart-composer.js';
 const model = () => ({ draft: { view: { type: 'table', groupBy: 'day' } }, selectedMetric: { value_type: 'numeric' }, capabilities: { widgetTypes: ['table','kpi','line_chart','bar_chart'], capabilities: { chartVariants: ['area','horizontal-bar'] } } });
 const documentFor = html => new JSDOM(html).window.document;
 
-test('ten native radio cards have distinct accessible names, descriptions and decorative original SVGs', () => {
+test('eleven native radio cards have distinct accessible names, descriptions and decorative original SVGs', () => {
   const m = model(), before = structuredClone(m), doc = documentFor(renderChartGallery(m));
   assert.equal(doc.querySelector('legend').textContent, 'Display');
   const radios = [...doc.querySelectorAll('input[type="radio"]')];
@@ -18,7 +18,7 @@ test('ten native radio cards have distinct accessible names, descriptions and de
   for (const [index, input] of radios.entries()) {
     assert.equal(doc.getElementById(input.getAttribute('aria-labelledby')).textContent, chartGalleryChoices[index].name);
     assert.ok(doc.getElementById(input.getAttribute('aria-describedby').split(' ')[0]).textContent.length > 25);
-    assert.equal(input.disabled, ['combined', 'heatmap', 'scatter', 'stacked'].includes(input.value));
+    assert.equal(input.disabled, ['combined', 'heatmap', 'scatter', 'stacked', 'boxplot'].includes(input.value));
     const svg = input.closest('label').querySelector('svg');
     assert.equal(svg.getAttribute('aria-hidden'), 'true');
     assert.equal(svg.getAttribute('focusable'), 'false');
@@ -33,7 +33,7 @@ test('absent and partial capability disable only unadvertised variants and assoc
     const m = model(); m.capabilities.capabilities.chartVariants = advertised;
     const doc = documentFor(renderChartGallery(m));
     for (const input of doc.querySelectorAll('input')) {
-      const variant = ['area','horizontal-bar','heatmap'].includes(input.value);
+      const variant = ['area','horizontal-bar','heatmap','boxplot'].includes(input.value);
       const blocked = ['combined', 'scatter', 'stacked'].includes(input.value) || variant && !advertised?.includes(input.value);
       assert.equal(input.disabled, Boolean(blocked));
       if (blocked && !['combined', 'scatter', 'stacked'].includes(input.value)) {

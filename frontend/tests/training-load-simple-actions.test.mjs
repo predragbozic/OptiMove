@@ -762,6 +762,48 @@ for (const reopened of [false, true]) test(`${reopened ? 'reopened' : 'new'} hea
   }
 });
 
+for (const reopened of [false, true]) test(`${reopened ? 'reopened' : 'new'} boxplot refuses athlete/session and copies day/week sidecars without losing custom interactions`, async () => {
+  const presentation = interactiveChartPresentation('day', 'boxplot').value;
+  Object.assign(presentation.chartInteractions, { tooltip: { mode: 'formatted' }, legend: { toggle: false }, pointSelection: { mode: 'disabled' }, zoom: { mode: 'disabled', applyPeriodAction: false } });
+  if (reopened) {
+    analysis().widgets = [widget({ widget_type: 'bar_chart', presentation_config: presentation })];
+    await act('training-load-analysis-edit-widget', { widgetId });
+    await simple('next'); await simple('next');
+  } else {
+    await readyNew();
+    simpleEditor.model.capabilities.capabilities.chartVariants = ['boxplot'];
+    simpleEditor.model.selectedMetric.value_type = 'numeric';
+    await simple('view', {}, 'boxplot');
+    simpleEditor.model.draft.presentation.value = structuredClone(presentation);
+  }
+  const m = simpleEditor.model;
+  m.capabilities.capabilities.chartVariants = ['boxplot'];
+  await simple('preview');
+  assert.equal(control('view', 'boxplot').checked, true);
+  const version = m.draft.draftVersion, preview = m.preview, before = structuredClone(m.draft);
+  await simple('view', {}, 'boxplot'); await simple('group', {}, 'day');
+  assert.equal(m.draft.draftVersion, version); assert.equal(m.preview, preview);
+  for (const group of ['athlete', 'session', 'component', 'cohort']) {
+    const count = calls.length;
+    await simple('group', {}, group);
+    assert.deepEqual(m.draft, before); assert.equal(m.preview, preview);
+    assert.equal(calls.length, count);
+    assert.match(root.textContent, /Box plot supports day or week only/);
+    assert.equal(control('view', 'boxplot').checked, true);
+  }
+  for (const group of ['week', 'day']) {
+    await simple('group', {}, group);
+    assert.equal(m.error, ''); assert.equal(m.preview, null); assert.equal(m.canSave, false);
+    assert.equal(m.draft.presentation.mode, 'replace');
+    assert.equal(m.draft.presentation.value.chartComposition, 'distribution-v1');
+    assert.deepEqual(m.draft.presentation.value.chartInteractions, { ...presentation.chartInteractions, zoom: { mode: 'local', applyPeriodAction: true } });
+    assert.deepEqual(m.savedPresentation, reopened ? presentation : null);
+    await simple('preview');
+    assert.deepEqual(calls.at(-1).body.draft.presentation, m.draft.presentation);
+    assert.equal(calls.at(-1).body.draft.view.groupBy, group); assert.equal(m.canSave, true);
+  }
+});
+
 test('reopened opaque schema99 with a variant never gets cloned or rewritten by grouping', async () => {
   const presentation = { schemaVersion: 99, chartVariant: 'area', chartComposition: 'opaque', chartInteractions: { zoom: { mode: 'custom' } }, other: ['keep'] };
   const savedWidget = widget({ widget_type: 'line_chart', group_by: 'day', presentation_config: presentation });

@@ -147,8 +147,8 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'group' && galleryVariant(model) === 'scatter' && chartPresentation(galleryPresentation(model)).mode === 'enhanced') {
     model.error = 'Open the Advanced editor to change Scatter settings.'; paint(model);
   }
-  else if (type === 'group' && galleryVariant(model) === 'heatmap' && chartPresentation(galleryPresentation(model)).mode === 'enhanced' && !['day', 'week'].includes(action.value)) {
-    model.error = 'Heatmap supports day or week only. Switch the display before grouping by athlete or session.';
+  else if (type === 'group' && ['heatmap', 'boxplot'].includes(galleryVariant(model)) && chartPresentation(galleryPresentation(model)).mode === 'enhanced' && !['day', 'week'].includes(action.value)) {
+    model.error = `${galleryVariant(model) === 'boxplot' ? 'Box plot' : 'Heatmap'} supports day or week only. Switch the display before changing the grouping.`;
     paint(model);
   }
   else if (type === 'group') simpleEditor.change(draft => {
@@ -156,7 +156,7 @@ export async function handleSimpleEditorAction(action, onRender) {
     draft.view.groupBy = action.value;
     const presentation = galleryPresentation(model);
     const knownChart = chartPresentation(presentation).mode === 'enhanced';
-    if (draft.presentation?.mode === 'preserve' && knownChart && ['area', 'horizontal-bar', 'heatmap'].includes(presentation.chartVariant)) {
+    if (draft.presentation?.mode === 'preserve' && knownChart && ['area', 'horizontal-bar', 'heatmap', 'boxplot'].includes(presentation.chartVariant)) {
       draft.presentation = { mode: 'replace', value: structuredClone(presentation) };
     }
     if (draft.presentation?.mode === 'replace' && knownChart) {
