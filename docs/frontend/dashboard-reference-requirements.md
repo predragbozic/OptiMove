@@ -35,4 +35,10 @@ Značajna promena, varijacija i slične oznake zahtevaju eksplicitnu metodologij
 
 ## Redosled rada
 
+### Dopuna vlasnika — 6. novembar 2026.
+
+Galerija uključuje i budući **Spider/Radar**. Vlasnik je potvrdio procenat reference: **100% znači dostignutu referencu**, 80% ostvarenje 80% reference. To nije postojeći `referencePercent` iz S1.1, gde jednakost daje 0% odstupanja. Novi obračun `referenceAttainment` / `attainment-positive-v1` računa `value / reference * 100`, zahteva pozitivnu referencu i nenegativnu količinu, ne pretvara nedostatak u nulu i ne ograničava 120% na 100%. Boja ili veći procenat sami po sebi ne znače bolji rezultat.
+
+S7a uvodi izolovan ugovor i čist obračun; ne aktivira novu karticu galerije, upis referenci ili capability. [Plan i granice aktivacije](dashboard-references-s7a.md).
+
 S3b čuva identitet sportiste/metrike, vremenski bucket, jedinicu, izvor i originalni red, prikazuje ih u detaljima i ne menja merenja. S3c uvodi ugovor pravila tabela. Pre referenci iz tabela, dinamičkih proseka i procenata potreban je prošireni serverski korak referenci, ranije označen kao S3d; ovaj zahtev ga čini potrebnim za opisani krajnji scenario. Frontend ne računa te reference samostalno. Šema, dozvole, izbor uzorka i verzionisanje prvo se pregledaju i odobravaju kao zasebna celina.
