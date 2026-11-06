@@ -1,4 +1,5 @@
 import { composeScatter } from './training-load-scatter-composer.js';
+import { composeStacked, validStackDefinition } from './training-load-stacked-composer.js';
 
 export function chartIdentityKey(value) {
   if (Array.isArray(value)) return `[${value.map(chartIdentityKey).join(',')}]`;
@@ -12,18 +13,19 @@ const palette = ['#157b70','#427eb5','#8560b0','#9b641e','#a54343','#246778','#7
 const color = id => { let hash = 0; for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) >>> 0; return palette[hash % palette.length]; };
 const only = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 
-export function interactiveChartPresentation(groupBy, variant) {
+export function interactiveChartPresentation(groupBy, variant, stackDefinition) {
   const time=['day','week'].includes(groupBy) && variant!=='scatter';
-  return {mode:'replace',value:{schemaVersion:1,...(variant?{chartVariant:variant}:{}),...(variant==='scatter'?{chartComposition:'pairs-v1'}:variant==='heatmap'?{chartComposition:'matrix-v1'}:variant==='combined'?{chartComposition:'metrics-v1'}:time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
+  return {mode:'replace',value:{schemaVersion:1,...(variant?{chartVariant:variant}:{}),...(variant==='stacked'?{chartComposition:'components-v1',...(stackDefinition?{stackDefinition:structuredClone(stackDefinition)}:{})}:variant==='scatter'?{chartComposition:'pairs-v1'}:variant==='heatmap'?{chartComposition:'matrix-v1'}:variant==='combined'?{chartComposition:'metrics-v1'}:time || groupBy==='athlete'?{chartComposition:'athletes-v1'}:{}),chartInteractions:{tooltip:{mode:'exact'},legend:{toggle:true},zoom:{mode:time?'local':'disabled',applyPeriodAction:time},pointSelection:{mode:'details'},yAxis:{mode:'auto'}}}};
 }
 
 export function chartPresentation(presentation) {
   if (presentation == null) return { mode:'legacy' };
-  if (!only(presentation,['schemaVersion','chartVariant','chartComposition','chartInteractions']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && !['athletes-v1','metrics-v1','matrix-v1','pairs-v1'].includes(presentation.chartComposition)) return { mode:'unsupported' };
-  if (Object.hasOwn(presentation,'chartVariant') && (!['area','horizontal-bar','combined','heatmap','scatter'].includes(presentation.chartVariant) || !Object.hasOwn(presentation,'chartInteractions'))) return {mode:'unsupported'};
+  if (!only(presentation,['schemaVersion','chartVariant','chartComposition','chartInteractions','stackDefinition']) || presentation.schemaVersion !== 1 || presentation.chartComposition !== undefined && !['athletes-v1','metrics-v1','matrix-v1','pairs-v1','components-v1'].includes(presentation.chartComposition)) return { mode:'unsupported' };
+  if (Object.hasOwn(presentation,'chartVariant') && (!['area','horizontal-bar','combined','heatmap','scatter','stacked'].includes(presentation.chartVariant) || !Object.hasOwn(presentation,'chartInteractions'))) return {mode:'unsupported'};
   if ((presentation.chartVariant==='combined') !== (presentation.chartComposition==='metrics-v1')) return {mode:'unsupported'};
   if ((presentation.chartVariant==='heatmap') !== (presentation.chartComposition==='matrix-v1')) return {mode:'unsupported'};
   if ((presentation.chartVariant==='scatter') !== (presentation.chartComposition==='pairs-v1')) return {mode:'unsupported'};
+  if ((presentation.chartVariant==='stacked') !== (presentation.chartComposition==='components-v1') || (presentation.chartVariant==='stacked') !== Object.hasOwn(presentation,'stackDefinition') || presentation.chartVariant==='stacked' && !validStackDefinition(presentation.stackDefinition))return {mode:'unsupported'};
   if(Object.hasOwn(presentation,'chartInteractions') && !only(presentation.chartInteractions,['tooltip','legend','zoom','pointSelection','yAxis']))return {mode:'unsupported'};
   const input = presentation.chartInteractions ?? {};
   if (!only(input,['tooltip','legend','zoom','pointSelection','yAxis'])) return { mode:'unsupported' };
@@ -31,7 +33,7 @@ export function chartPresentation(presentation) {
   if(Object.hasOwn(input,'yAxis') && !only(input.yAxis,['mode','min','max']))return {mode:'unsupported'};
   const axis=input.yAxis ?? {mode:'auto'};
   if (!only(axis,axis.mode === 'fixed' ? ['mode','min','max'] : ['mode']) || !['auto','fixed'].includes(axis.mode) || axis.mode === 'fixed' && (!Number.isFinite(axis.min) || !Number.isFinite(axis.max) || axis.min >= axis.max)) return {mode:'unsupported'};
-  if(['combined','heatmap','scatter'].includes(presentation.chartVariant) && axis.mode!=='auto')return {mode:'unsupported'};
+  if(['combined','heatmap','scatter','stacked'].includes(presentation.chartVariant) && axis.mode!=='auto')return {mode:'unsupported'};
   if(presentation.chartVariant==='scatter' && (input.zoom?.mode==='local' || input.zoom?.applyPeriodAction))return {mode:'unsupported'};
   return {mode:'enhanced',variant:presentation.chartVariant,composition:presentation.chartComposition === 'athletes-v1',tooltip:input.tooltip?.mode ?? 'exact',legend:input.legend?.toggle ?? true,zoom:input.zoom?.mode ?? 'disabled',applyPeriod:input.zoom?.applyPeriodAction === true,pointDetails:input.pointSelection?.mode === 'details',axis};
 }
@@ -54,7 +56,8 @@ export function composeDashboardCharts(model, labelForSeries, rowContext, option
   const settings = chartPresentation(options.presentation);
   if (settings.mode !== 'enhanced') return {status:settings.mode,plots:[]};
   if (model.status !== 'ready' || !['line_chart','bar_chart'].includes(model.widgetType)) return {status:'notReady',plots:[]};
-  if (settings.variant && model.widgetType!==({area:'line_chart','horizontal-bar':'bar_chart',combined:'line_chart',heatmap:'bar_chart',scatter:'line_chart'}[settings.variant])) return {status:'unsupported',plots:[]};
+  if (settings.variant && model.widgetType!==({area:'line_chart','horizontal-bar':'bar_chart',combined:'line_chart',heatmap:'bar_chart',scatter:'line_chart',stacked:'bar_chart'}[settings.variant])) return {status:'unsupported',plots:[]};
+  if(settings.variant==='stacked')return composeStacked(model,labelForSeries,options,settings,{identityKey:chartIdentityKey,buckets:chartBuckets,color});
   if(settings.variant==='scatter')return composeScatter(model,labelForSeries,options,settings,{identityKey:chartIdentityKey,buckets:chartBuckets,color});
   if(settings.variant==='combined')return composeCombinedCharts(model,labelForSeries,options,settings);
   if(settings.variant==='heatmap')return composeHeatmap(model,labelForSeries,options,settings);

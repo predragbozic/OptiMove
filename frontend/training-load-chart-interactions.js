@@ -13,7 +13,7 @@ export function chartPointText(point, precision, formatted = false) {
   if (!point.identity) return 'Duplicate observations. See the values table.';
   const value=point.chartStatus === 'value' ? formatted ? Number(point.value).toFixed(precision) : String(point.value) : `${point.chartStatus}: ${String(point.rawValue)}`;
   return [point.metricLabel ?? point.identity.builtInSeriesKey ?? point.identity.metricDefinitionId,point.athleteName,point.identity.bucketKey,`${value} ${point.identity.unit ?? '(unit not specified)'}`,
-    `Source policy: ${point.identity.source.policy ?? 'not reported'}`,`Configured source: ${point.identity.source.configuredConnectionId ?? 'not reported'}`,`Reported source: ${Object.keys(point.identity.source.reported).length?JSON.stringify(point.identity.source.reported):'not reported'}`].join('\n');
+    `Source policy: ${point.identity.source.policy ?? 'not reported'}`,`Configured source: ${point.identity.source.configuredConnectionId ?? 'not reported'}`,`Reported source: ${Object.keys(point.identity.source.reported).length?JSON.stringify(point.identity.source.reported):'not reported'}`,...(Number.isFinite(point.stackTotal)?[`Original total (all components): ${point.stackTotal} ${point.identity.unit}`]:[])].join('\n');
 }
 
 export function bindDashboardChartInteractions(host, chart, plot, scope = globalThis) {
@@ -49,7 +49,8 @@ export function bindDashboardChartInteractions(host, chart, plot, scope = global
     const ids=plot.option.series.map(series=>series.id);
     const hidden=ids.length && ids.every(id=>state.selected[id]===false);
     for(const [id,element] of legendButtons)element.setAttribute('aria-pressed',String(state.selected[id]!==false));
-    status.textContent=[hidden?'All series are hidden. Reset the view to show them again.':'',...(state.yAuto?[]:plot.warnings)].filter(Boolean).join(' ');
+    const partialStack=plot.settings.variant==='stacked' && !hidden && ids.some(id=>state.selected[id]===false);
+    status.textContent=[hidden?'All series are hidden. Reset the view to show them again.':'',partialStack?'Some components are hidden. Displayed bar heights are not the complete total.':'',...(state.yAuto?[]:plot.warnings)].filter(Boolean).join(' ');
   };
   const setRange=(first,last,dispatch=true)=>{
     if (!Number.isInteger(first)||!Number.isInteger(last)||first<0||last<first||last>=plot.buckets.length) return;

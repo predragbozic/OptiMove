@@ -979,7 +979,7 @@ function normalizedFilterOverride(override) {
 }
 
 export function analysisEditorDraftFromWidget(widget) {
-  return {
+  const draft = {
     title: widget.title || "",
     widgetType: widget.widget_type,
     groupBy: widget.group_by || "day",
@@ -992,18 +992,21 @@ export function analysisEditorDraftFromWidget(widget) {
     staleIds: [],
     nextKey: 1,
   };
+  if (editorIsStacked(draft)) draft.stackedAcknowledgement = stackedBinding(draft);
+  return draft;
 }
 
-export function openAnalysisWidgetEditor(widget, { combinedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.combinedCharts === true, scatterAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.scatterCharts === true } = {}) {
+export function openAnalysisWidgetEditor(widget, { combinedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.combinedCharts === true, stackedAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.stackedCharts === true, scatterAvailable = state.trainingLoad.analysis.pagesMode && state.trainingLoad.analysis.pageCapabilities?.scatterCharts === true } = {}) {
   const draft = analysisEditorDraftFromWidget(widget);
   // `base` is the widget as the coach first saw it: after a stale-revision
   // reload, only what the coach actually changed stays theirs (see
   // rebaseAnalysisEditorDraft).
-  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, combinedAvailable, scatterAvailable, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
+  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, combinedAvailable, scatterAvailable, stackedAvailable, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
 }
 
 // Preserve opaque sidecars unless the coach explicitly chooses a supported mode.
 export function editorPresentation(draft) {
+  if (draft.stackedSetup) return null;
   return draft.presentation?.mode === 'replace' ? draft.presentation.value : draft.presentation?.mode === 'clear' ? null : draft.savedPresentation ?? null;
 }
 export function editorIsCombined(draft) {
@@ -1017,9 +1020,82 @@ export function editorIsScatter(draft) {
 export function editorPresentationKnown(value) {
   return value == null || chartPresentation(value).mode === 'enhanced' && (value.chartVariant !== 'combined' || value.chartInteractions?.yAxis?.mode === 'auto');
 }
+// Pending setup is local intent, never an incomplete presentation sidecar.
+export function editorIsStacked(draft) {
+  const value = editorPresentation(draft);
+  return draft.stackedSetup === true || value?.chartVariant === 'stacked' && chartPresentation(value).mode === 'enhanced';
+}
+function stackedBinding(draft) {
+  const fallbackUnit = editorPresentation(draft)?.stackDefinition?.unit;
+  return JSON.stringify({ groupBy: draft.groupBy, widgetType: draft.widgetType, components: draft.series.map(entry => ({
+    metric: entry.metric, unit: editorMetricFacts(entry.metric).unit ?? fallbackUnit,
+    scope: entry.fields.dataScopeLevel, aggregation: entry.fields.analyticalAggregation,
+    role: entry.fields.aggregationRolePolicy, coverage: entry.fields.coveragePolicy,
+    source: entry.fields.sourcePolicy, connection: entry.sourceConnectionId ?? null,
+    axis: entry.fields.axis, comparison: entry.fields.comparisonPeriod ?? null,
+  })).sort((a, b) => JSON.stringify(a.metric).localeCompare(JSON.stringify(b.metric))) });
+}
+export function stackedRequirements(draft) {
+  if (draft.widgetType !== 'bar_chart') return 'Stacked requires a vertical bar chart.';
+  if (!['day', 'week'].includes(draft.groupBy)) return 'Stacked supports day or week only.';
+  if (draft.series.length < 2 || draft.series.length > 8) return 'Choose 2 to 8 distinct catalog metrics as Stacked components. Add metric 2 before continuing.';
+  const ids = draft.series.map(entry => entry.metric?.kind === 'metric' ? entry.metric.id : null);
+  if (ids.some(id => typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) || new Set(ids.map(id => id?.toLowerCase())).size !== ids.length) return 'Choose distinct catalog metrics for every component; built-in metrics cannot be stacked.';
+  const facts = draft.series.map(entry => editorMetricFacts(entry.metric));
+  if (facts.some((fact, i) => !fact.known || !fact.numeric || draft.series[i].resolutionStatus !== 'resolved')) return 'Choose resolved numeric catalog metrics for every Stacked component.';
+  const unit = facts[0].unit;
+  if (typeof unit !== 'string' || !unit.trim() || unit.trim() !== unit || unit.length > 100 || facts.some(fact => fact.unit !== unit)) return 'Choose components with the same nonempty unit (at most 100 characters).';
+  const first = draft.series[0];
+  if (draft.series.some(entry => !entry.fields.dataScopeLevel || entry.fields.dataScopeLevel !== first.fields.dataScopeLevel)) return 'Set every Stacked component to the same scope.';
+  if (facts.some((fact, i) => fact.scopes.length && !fact.scopes.includes(draft.series[i].fields.dataScopeLevel))) return 'Choose a scope supported by every Stacked component.';
+  if (draft.series.some(entry => entry.fields.analyticalAggregation !== 'sum')) return 'Set Aggregation to Total (sum) for every Stacked component.';
+  if (draft.series.some(entry => entry.fields.aggregationRolePolicy !== 'standalone_only')) return 'Set Values included to Direct values only for every component.';
+  if (draft.series.some(entry => entry.fields.coveragePolicy !== 'complete_only')) return 'Set Total coverage to Complete totals only for every component.';
+  if (draft.series.some(entry => !entry.fields.sourcePolicy || entry.fields.sourcePolicy === 'not_applicable' || entry.fields.sourcePolicy !== first.fields.sourcePolicy || (entry.sourceConnectionId ?? null) !== (first.sourceConnectionId ?? null))) return 'Choose the same source policy and connection for every Stacked component.';
+  if (draft.series.some(entry => entry.fields.sourcePolicy === 'source_connection' && !entry.sourceConnectionId)) return 'Select a connected source for every Stacked component or choose another source policy.';
+  if (draft.series.some(entry => entry.fields.axis !== 'primary' || entry.fields.comparisonPeriod)) return 'Set every Stacked component to the primary axis and remove comparisons.';
+  return '';
+}
+export function editorStackAcknowledged(draft) {
+  if (!editorIsStacked(draft) || draft.stackedSetup || stackedRequirements(draft)) return false;
+  const def = editorPresentation(draft)?.stackDefinition;
+  const ids = draft.series.map(entry => entry.metric?.id?.toLowerCase()).sort();
+  return def?.unit === editorMetricFacts(draft.series[0]?.metric).unit &&
+    JSON.stringify((def?.components ?? []).map(id => id.toLowerCase()).sort()) === JSON.stringify(ids) &&
+    draft.stackedAcknowledgement === stackedBinding(draft);
+}
+export function invalidateEditorStack(draft) {
+  if (!editorIsStacked(draft)) return;
+  draft.stackedSetup = true;
+  delete draft.stackedAcknowledgement;
+  // Keep the saved sidecar intact; Save is blocked until a new declaration exists.
+  draft.presentation = { mode: 'preserve' };
+}
+export function acknowledgeEditorStack(draft, checked) {
+  if (!editorIsStacked(draft)) return '';
+  invalidateEditorStack(draft);
+  if (!checked) return '';
+  const problem = stackedRequirements(draft);
+  if (problem) return problem;
+  const stackDefinition = { schemaVersion: 1, semantics: 'non-overlapping-additive', unit: editorMetricFacts(draft.series[0].metric).unit, components: draft.series.map(entry => entry.metric.id) };
+  draft.presentation = interactiveChartPresentation(draft.groupBy, 'stacked', stackDefinition);
+  delete draft.stackedSetup;
+  draft.stackedAcknowledgement = stackedBinding(draft);
+  return '';
+}
 export function setEditorDisplayMode(draft, mode, available = false) {
   const value = editorPresentation(draft);
   if (!editorPresentationKnown(value)) return 'Saved presentation settings are not supported here and will be preserved.';
+  if (mode === 'stacked') {
+    if (editorIsStacked(draft)) return '';
+    if (!available) return 'Stacked is not available on this dashboard yet.';
+    if (!['line_chart', 'bar_chart'].includes(draft.widgetType) || !['day', 'week'].includes(draft.groupBy)) return 'Choose a line or bar chart and day or week before setting up Stacked.';
+    draft.widgetType = 'bar_chart';
+    draft.stackedSetup = true;
+    delete draft.stackedAcknowledgement;
+    draft.presentation = { mode: 'clear' };
+    return '';
+  }
   if (['combined', 'scatter'].includes(mode)) {
     const scatter = mode === 'scatter', label = scatter ? 'Scatter' : 'Bar + line';
     if (scatter ? editorIsScatter(draft) : editorIsCombined(draft)) return '';
@@ -1027,17 +1103,22 @@ export function setEditorDisplayMode(draft, mode, available = false) {
     if (!['line_chart', 'bar_chart'].includes(draft.widgetType) || !['day', 'week'].includes(draft.groupBy) || draft.series.length < 1 || draft.series.length > 2) return 'Choose a line or bar chart, day or week, and one or two numeric metrics first.';
     if (draft.series.some(entry => !editorMetricFacts(entry.metric).numeric || entry.resolutionStatus && entry.resolutionStatus !== 'resolved')) return `Choose resolved numeric metrics for ${label}.`;
     const next = structuredClone(value ?? interactiveChartPresentation(draft.groupBy, mode).value);
+    delete next.stackDefinition;
     next.chartVariant = mode; next.chartComposition = scatter ? 'pairs-v1' : 'metrics-v1';
     next.chartInteractions ??= interactiveChartPresentation(draft.groupBy).value.chartInteractions;
     next.chartInteractions.yAxis = { mode: 'auto' };
     next.chartInteractions.zoom = interactiveChartPresentation(draft.groupBy, mode).value.chartInteractions.zoom;
+    delete draft.stackedSetup; delete draft.stackedAcknowledgement;
     draft.widgetType = 'line_chart';
     // Apply the target display before adding its second series; Heatmap caps at one.
     draft.presentation = { mode: 'replace', value: next };
     if (draft.series.length === 1) addEditorSeries(draft);
     const axesReady = draft.series.filter(entry => entry.fields.axis === 'primary').length === 1 && draft.series.filter(entry => entry.fields.axis === 'secondary').length === 1;
     draft.series.forEach((entry, index) => { if (!axesReady) entry.fields.axis = index === 0 ? 'primary' : 'secondary'; entry.fields.comparisonPeriod = null; });
-  } else if (mode === 'separate' && value != null) draft.presentation = { mode: 'clear' };
+  } else if (mode === 'separate') {
+    if (value != null || draft.stackedSetup) draft.presentation = { mode: 'clear' };
+    delete draft.stackedSetup; delete draft.stackedAcknowledgement;
+  }
   return '';
 }
 
@@ -1058,25 +1139,30 @@ export function editorSeriesEntry(draft, key) {
 }
 
 export function addEditorSeries(draft) {
+  if (editorIsStacked(draft) && draft.series.length >= 8) return '';
+  const stacked = editorIsStacked(draft);
   if ((editorIsCombined(draft) || editorIsScatter(draft)) && draft.series.length >= 2) return "";
   const presentation = editorPresentation(draft);
-  if (presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
+  if (!stacked && presentation?.chartVariant === 'heatmap' && editorPresentationKnown(presentation) && draft.series.length >= 1) return "";
   const key = `new-${draft.nextKey}`;
   draft.nextKey += 1;
   const entry = {
     key, id: "", metric: null, sourceConnectionId: null, pendingAdd: null,
     fields: { displayLabel: null, axis: "primary", color: null, dataScopeLevel: "session", analyticalAggregation: "avg", sourcePolicy: null, aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_and_partial", comparisonPeriod: null },
   };
-  setEditorSeriesMetric(entry, { kind: "builtin", key: "rpe" });
+  if (!stacked) setEditorSeriesMetric(entry, { kind: "builtin", key: "rpe" });
+  else invalidateEditorStack(draft);
   draft.series.push(entry);
   return key;
 }
 
 // Returns the key to select next (the neighbour), or "".
 export function removeEditorSeries(draft, key) {
+  if (editorIsStacked(draft) && draft.series.length <= 2) return key;
   if ((editorIsCombined(draft) || editorIsScatter(draft)) && draft.series.length <= 2) return key;
   const index = draft.series.findIndex((entry) => entry.key === key);
   if (index < 0) return "";
+  invalidateEditorStack(draft);
   const [entry] = draft.series.splice(index, 1);
   if (entry.id && !draft.removedIds.includes(entry.id)) draft.removedIds.push(entry.id);
   return (draft.series[index] || draft.series[index - 1])?.key || "";
@@ -1092,7 +1178,8 @@ export function moveEditorSeries(draft, key, direction) {
 // A metric change keeps the series' settings, but never in a combination
 // the table CHECKs refuse: a built-in is always source 'not_applicable' at
 // its catalog-fixed data level; a catalog metric never 'not_applicable'.
-export function setEditorSeriesMetric(entry, metric) {
+export function setEditorSeriesMetric(entry, metric, { preservePolicies = false } = {}) {
+  const previous = preservePolicies ? { fields: structuredClone(entry.fields), sourceConnectionId: entry.sourceConnectionId } : null;
   entry.metric = metric;
   entry.resolutionStatus = ["builtin", "metric"].includes(metric.kind) ? "resolved" : "unresolved";
   if (metric.kind === "builtin") {
@@ -1110,6 +1197,7 @@ export function setEditorSeriesMetric(entry, metric) {
     entry.fields.analyticalAggregation = (metric.kind === "builtin" && BUILT_IN_DEFAULTS[metric.key]?.aggregation) || "last";
   }
   if (facts.scopes.length && !facts.scopes.includes(entry.fields.dataScopeLevel)) entry.fields.dataScopeLevel = facts.scopes[0];
+  if (previous) { entry.fields = previous.fields; entry.sourceConnectionId = previous.sourceConnectionId; }
 }
 
 // What the catalog says about a staged metric: its unit (undefined when not
@@ -1126,6 +1214,7 @@ function editorMetricFacts(metric) {
 }
 
 export function setEditorWidgetType(draft, widgetType) {
+  invalidateEditorStack(draft);
   draft.widgetType = widgetType;
   if (!analysisWidgetSupportsComparison(widgetType)) {
     for (const entry of draft.series) entry.fields.comparisonPeriod = null;
@@ -1138,11 +1227,16 @@ export function analysisEditorProblem(draft) {
   const title = draft.title.trim();
   if (!title) return "Give the widget a title.";
   if (title.length > 200) return "The title can be at most 200 characters.";
+  if (editorIsStacked(draft)) {
+    const problem = stackedRequirements(draft);
+    if (problem) return problem;
+    if (!editorStackAcknowledged(draft)) return 'Confirm that the selected metrics are non-overlapping components of the same quantity, with no total plus its parts.';
+  }
   const presentation = editorPresentation(draft);
   if (presentation && !editorPresentationKnown(presentation) && draft.presentation?.mode !== 'preserve') return 'Unsupported presentation settings must be preserved.';
   if (presentation) {
     const known = editorPresentationKnown(presentation);
-    const requiredType = known ? { scatter: 'line_chart', combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[presentation.chartVariant] : null;
+    const requiredType = known ? { scatter: 'line_chart', combined: 'line_chart', area: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', stacked: 'bar_chart' }[presentation.chartVariant] : null;
     const incompatible = known
       ? !['line_chart', 'bar_chart'].includes(draft.widgetType) || requiredType && requiredType !== draft.widgetType
       : draft.widgetType !== draft.savedWidgetType;
@@ -1211,7 +1305,7 @@ export function analysisEditorPlan(widget, draft) {
 
   if (widgetBody.widgetType && draft.presentation?.mode === 'replace' && widget.presentation_config != null) {
     const variant = widget.presentation_config.chartVariant;
-    const requiredType = { scatter: 'line_chart', area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart' }[variant];
+    const requiredType = { scatter: 'line_chart', area: 'line_chart', combined: 'line_chart', 'horizontal-bar': 'bar_chart', heatmap: 'bar_chart', stacked: 'bar_chart' }[variant];
     if (requiredType && requiredType !== draft.widgetType) widgetBody.presentation = { mode: 'clear' };
   }
 
@@ -1289,7 +1383,7 @@ export function analysisEditorIsDirty(analysis = state.trainingLoad.analysis) {
   const editor = analysis.editor;
   if (!editor?.open || !editor.draft) return false;
   const widget = (analysis.widgets || []).find((w) => w.id === editor.widgetId);
-  return analysisEditorPlan(widget, editor.draft).length > 0;
+  return editor.draft.stackedSetup === true || editorIsStacked(editor.draft) && !editorStackAcknowledged(editor.draft) || analysisEditorPlan(widget, editor.draft).length > 0;
 }
 
 function editorSeriesPostBody(entry, seriesOrder) {
@@ -1338,7 +1432,7 @@ export function rebaseAnalysisEditorDraft(widget, draft, base = null) {
     for (const key of ["title", "widgetType", "groupBy"]) if (draft[key] === base[key]) draft[key] = serverDraft[key];
     if (JSON.stringify(draft.localFilterOverride) === JSON.stringify(base.localFilterOverride)) draft.localFilterOverride = serverDraft.localFilterOverride;
     draft.savedWidgetType = serverDraft.savedWidgetType;
-    if (JSON.stringify(draft.presentation) === JSON.stringify(base.presentation)) {
+    if (!draft.stackedSetup && JSON.stringify(draft.presentation) === JSON.stringify(base.presentation)) {
       draft.presentation = serverDraft.presentation;
       draft.savedPresentation = serverDraft.savedPresentation;
     }
@@ -1404,6 +1498,9 @@ export async function saveAnalysisWidgetEditor(onPainted) {
   }
   if (editorIsCombined(draft) && !editorIsCombined(analysisEditorDraftFromWidget(widget)) && (!editor.combinedAvailable || a.pagesMode && a.pageCapabilities?.combinedCharts !== true)) {
     editor.error = 'Bar + line is not available on this dashboard yet.'; onPainted?.(); return false;
+  }
+  if (editorIsStacked(draft) && !editorIsStacked(analysisEditorDraftFromWidget(widget)) && (!editor.stackedAvailable || !a.pagesMode || a.pageCapabilities?.stackedCharts !== true)) {
+    editor.error = 'Stacked is not available on this dashboard yet.'; onPainted?.(); return false;
   }
   if (editorIsScatter(draft) && !editorIsScatter(analysisEditorDraftFromWidget(widget)) && (!editor.scatterAvailable || !a.pagesMode || a.pageCapabilities?.scatterCharts !== true)) {
     editor.error = 'Scatter is not available on this dashboard yet.'; onPainted?.(); return false;

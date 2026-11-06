@@ -51,3 +51,5 @@
   .tl-analysis-topbar .tl-analysis-date-control { width:auto; min-width:0; }
   .tl-analysis-topbar .tl-analysis-topbar-group:nth-child(3) { display:block; }
 }
+.tl-analysis-editor label.tl-stacked-acknowledgement { display:flex; flex-direction:row; align-items:flex-start; gap:.65rem; max-width:100%; line-height:1.5; }
+.tl-analysis-editor .tl-stacked-acknowledgement input[type="checkbox"] { width:1.15rem; height:1.15rem; min-height:1.15rem; flex:0 0 1.15rem; margin:.15rem 0 0; }
