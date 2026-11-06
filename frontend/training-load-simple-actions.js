@@ -82,7 +82,7 @@ export async function openSimpleEditor(widget, onRender) {
   await simpleEditor.open(widget);
   if (simpleEditor.model?.unavailable) { simpleEditor.close(); return false; }
   const target = simpleEditor.model;
-  if (target) { target.savedGroupBy = widget?.group_by; target.pageScatterAvailable = analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true; target.savedWidgetType = widget?.widget_type; target.pageCombinedAvailable = !analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true; }
+  if (target) { target.savedGroupBy = widget?.group_by; target.pageStackedAvailable = analysis().pagesMode && analysis().pageCapabilities?.stackedCharts === true; target.pageScatterAvailable = analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true; target.savedWidgetType = widget?.widget_type; target.pageCombinedAvailable = !analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true; }
   if (target?.draft && !target.error) {
     target.rosterLoading = true; paint(target);
     try {
@@ -112,14 +112,14 @@ export async function handleSimpleEditorAction(action, onRender) {
   if (type === 'status') { await simpleEditor.status(); return true; }
   if (simpleEditor.pending || model.saveState === 'recorded') return true;
   const displayMode = action.value || action.dataset.value;
-  const pairedChoice = type === 'view' && ['combined', 'scatter'].includes(displayMode);
+  const pairedChoice = type === 'view' && ['combined', 'scatter', 'stacked'].includes(displayMode);
   if (pairedChoice) {
     const widget = analysis().widgets.find(row => row.id === model.widgetId);
     const choice = chartGalleryChoices.find(row => row.id === displayMode);
-    const available = displayMode === 'scatter' ? model.capabilities?.capabilities?.scatterCharts === true && analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true : model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true);
+    const available = displayMode === 'stacked' ? model.capabilities?.capabilities?.stackedCharts === true && analysis().pagesMode && analysis().pageCapabilities?.stackedCharts === true : displayMode === 'scatter' ? model.capabilities?.capabilities?.scatterCharts === true && analysis().pagesMode && analysis().pageCapabilities?.scatterCharts === true : model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true);
     if (!widget || model.stale || !isActiveTarget(model) || !available || galleryUnavailable(model, choice) || !['line_chart', 'bar_chart'].includes(widget.widget_type) || !['day', 'week'].includes(widget.group_by)) return true;
     if (!leaveSimpleEditor()) return true;
-    openAnalysisWidgetEditor(widget, { ...(displayMode === 'scatter' ? { scatterAvailable: available } : { combinedAvailable: available }) });
+    openAnalysisWidgetEditor(widget, { ...(displayMode === 'stacked' ? { stackedAvailable: available } : displayMode === 'scatter' ? { scatterAvailable: available } : { combinedAvailable: available }) });
     const editor = analysis().editor;
     // Catalog metadata is needed before accepting two numeric series.
     await loadAnalysisMetricDefinitions();
@@ -127,9 +127,10 @@ export async function handleSimpleEditorAction(action, onRender) {
     editor.error = setEditorDisplayMode(editor.draft, displayMode, available);
     render(); return true;
   }
+  if (galleryVariant(model) === 'stacked' && chartPresentation(galleryPresentation(model)).mode === 'enhanced' && type !== 'advanced') { model.error = 'Open Advanced settings to edit Stacked components and confirm their declaration.'; render(); return true; }
   if (type === 'advanced') {
     const widget = analysis().widgets.find(row => row.id === model.widgetId);
-    if (model.widgetId && widget && isActiveTarget(model) && leaveSimpleEditor()) { openAnalysisWidgetEditor(widget, { combinedAvailable: model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true) }); render(); void loadAnalysisMetricDefinitions().then(render); }
+    if (model.widgetId && widget && isActiveTarget(model) && leaveSimpleEditor()) { openAnalysisWidgetEditor(widget, { stackedAvailable: model.capabilities?.capabilities?.stackedCharts === true && analysis().pagesMode && analysis().pageCapabilities?.stackedCharts === true, combinedAvailable: model.capabilities?.capabilities?.combinedCharts === true && (!analysis().pagesMode || analysis().pageCapabilities?.combinedCharts === true) }); render(); void loadAnalysisMetricDefinitions().then(render); }
     else if (!model.widgetId && leaveSimpleEditor()) {
       analysis().simpleAdvancedCreate = true;
       return false;

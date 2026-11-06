@@ -71,6 +71,9 @@ import {
   setEditorSeriesMetric,
   setEditorWidgetType,
   setEditorDisplayMode,
+  editorIsStacked,
+  invalidateEditorStack,
+  acknowledgeEditorStack,
   loadAnalysisEditorCombinedCapability,
   setMetricPanelMetric,
   updateAnalysisDashboardMetadata,
@@ -1460,10 +1463,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === 'training-load-analysis-stacked-acknowledgement') {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.error = acknowledgeEditorStack(editor.draft, action.checked === true);
+    renderTrainingLoad(); return true;
+  }
   if (type === "training-load-analysis-widget-display-mode") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.error = setEditorDisplayMode(editor.draft, action.value, action.value === 'scatter' ? editor.scatterAvailable : editor.combinedAvailable);
+    editor.error = setEditorDisplayMode(editor.draft, action.value, action.value === 'stacked' ? editor.stackedAvailable : action.value === 'scatter' ? editor.scatterAvailable : editor.combinedAvailable);
     renderTrainingLoad(); return true;
   }
   if (type === "training-load-analysis-widget-title" || type === "training-load-analysis-widget-type" || type === "training-load-analysis-widget-group") {
@@ -1475,7 +1484,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       editor.draft.title = action.value ?? "";
     }
     else if (type.endsWith("type")) setEditorWidgetType(editor.draft, action.value || editor.draft.widgetType);
-    else editor.draft.groupBy = action.value || editor.draft.groupBy;
+    else { invalidateEditorStack(editor.draft); editor.draft.groupBy = action.value || editor.draft.groupBy; }
     renderTrainingLoad();
     return true;
   }
@@ -1520,10 +1529,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const editor = state.trainingLoad.analysis.editor;
     const entry = editorSeriesEntry(editor?.draft, action.dataset.seriesKey || editor?.seriesKey);
     if (!entry || editor.saving) return true;
+    const stacked = editorIsStacked(editor.draft);
+    invalidateEditorStack(editor.draft);
     if (type.endsWith("builtin")) {
-      if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey });
+      if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey }, { preservePolicies: stacked });
     } else if (action.dataset.metricId) {
-      setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId });
+      setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId }, { preservePolicies: stacked });
     }
     renderTrainingLoad();
     return true;
@@ -1563,7 +1574,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       if (key === "displayLabel" && entry.fields.displayLabel === (raw.trim() || null)) return true;
       const nullable = key === "displayLabel" || key === "color" || key === "comparisonPeriod";
       const value = key === "displayLabel" ? raw.trim() : raw;
-      if (value || nullable) entry.fields[key] = value || null;
+      if (value || nullable) {
+        if (!["displayLabel", "color"].includes(key)) invalidateEditorStack(editor.draft);
+        entry.fields[key] = value || null;
+      }
       renderTrainingLoad();
       return true;
     }

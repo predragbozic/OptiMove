@@ -3,6 +3,7 @@ import { chartPresentation, interactiveChartPresentation } from './training-load
 
 // Original schematic illustrations; decorative, never preview data.
 const drawings = {
+  stacked: '<path d="M14 10v50h96M25 59V20h16v39m12 0V10h16v49m12 0V30h16v29M25 40h16m12-10h16m12 15h16"/>',
   scatter: '<path d="M14 10v50h96"/><circle cx="30" cy="46" r="3"/><circle cx="48" cy="34" r="3"/><circle cx="67" cy="40" r="3"/><circle cx="86" cy="20" r="3"/>',
   combined: '<path d="M14 10v50h96M25 59V36h16v23m12 0V19h16v40m12 0V29h16v30M22 47l20-17 20 9 20-23 22 8"/>',
   table: '<rect x="12" y="10" width="96" height="52" rx="3"/><path d="M12 26h96M12 44h96M44 10v52M76 10v52"/>',
@@ -23,6 +24,7 @@ export const chartGalleryChoices = [
   { id: 'combined', type: 'line_chart', variant: 'combined', name: 'Bar + line', description: 'Use two numeric metrics: bars on the left axis and a line on the right, in Advanced settings.' },
   { id: 'heatmap', type: 'bar_chart', variant: 'heatmap', name: 'Heatmap', description: 'Compare one numeric metric across athletes and days or weeks. Color shows magnitude only.' },
   { id: 'scatter', type: 'line_chart', variant: 'scatter', name: 'Scatter', description: 'Compare two numeric metrics with X and Y axes in Advanced settings.' },
+  { id: 'stacked', type: 'bar_chart', variant: 'stacked', name: 'Stacked bar', description: 'Declare 2 to 8 non-overlapping catalog metric components of one quantity in Advanced settings.' },
 ];
 export function galleryPresentation(model) {
   const intent = model.draft?.presentation;
@@ -39,10 +41,19 @@ export function gallerySelection(model) {
 const combinedGuidance = 'Open the Advanced editor to change a Bar + line display and preserve its two-metric settings.';
 const combinedGuidanceId = 'tl-simple-gallery-combined-guidance';
 export function galleryUnavailable(model, choice) {
+  if (choice.id !== 'stacked' && [model.savedPresentation, galleryPresentation(model)].some(value => value?.chartVariant === 'stacked' && chartPresentation(value).mode === 'enhanced')) return 'Open the Advanced editor to change Stacked components and preserve their declaration.';
   if (choice.id !== 'scatter' && [model.savedPresentation, galleryPresentation(model)].some(value => value?.chartVariant === 'scatter' && chartPresentation(value).mode === 'enhanced')) return 'Open the Advanced editor to change a Scatter display and preserve its two-metric settings.';
   if (choice.id !== 'combined' && [model.savedPresentation, galleryPresentation(model)].some(value => value?.chartVariant === 'combined' || value?.chartComposition === 'metrics-v1')) return combinedGuidance;
   if (!(model.capabilities?.widgetTypes ?? []).some(type => (typeof type === 'string' ? type : type.key) === choice.type && type.is_active !== false)) return 'This display type is currently unavailable.';
   if (choice.type !== 'table' && model.selectedMetric?.value_type && model.selectedMetric.value_type !== 'numeric') return 'Choose a numeric metric to use this display.';
+  if (choice.id === 'stacked') {
+    if (!model.widgetId) return 'Create a base line or bar chart first, then choose Stacked in Advanced settings and add metric 2.';
+    if (model.capabilities?.capabilities?.stackedCharts !== true || model.pageStackedAvailable !== true) return 'Stacked is not available on this dashboard yet.';
+    if (!['line_chart', 'bar_chart'].includes(model.savedWidgetType ?? model.draft?.view?.type)) return 'Create a base line or bar chart first, then open Advanced settings.';
+    if (!['day', 'week'].includes(model.draft?.view?.groupBy ?? model.savedGroupBy)) return 'Stacked supports day or week only.';
+    if (!knownPresentation(galleryPresentation(model))) return 'Open the Advanced editor to preserve saved presentation settings.';
+    return '';
+  }
   if (choice.id === 'scatter') {
     if (!model.widgetId) return 'Create a line chart first, then add the second metric in Advanced settings.';
     if (model.capabilities?.capabilities?.scatterCharts !== true || model.pageScatterAvailable !== true) return 'Scatter is not available on this dashboard yet.';
@@ -66,7 +77,7 @@ export function galleryUnavailable(model, choice) {
 }
 export function applyGalleryChoice(draft, model, id) {
   const choice = chartGalleryChoices.find(item => item.id === id);
-  if (['combined', 'scatter'].includes(choice?.id)) return; // Advanced handoff only; Simple remains single-series.
+  if (['combined', 'scatter', 'stacked'].includes(choice?.id)) return; // Advanced handoff only; Simple remains single-series.
   if (!choice || galleryUnavailable(model, choice) || gallerySelection(model) === id) return;
   const previous = galleryPresentation(model), previousVariant = previous?.chartVariant;
   draft.view.type = choice.type;

@@ -15,8 +15,8 @@ beforeEach(() => { state.trainingLoad = emptyTrainingLoadState(); state.currentU
 
 test('ninth Scatter card requires a saved base chart and both Page and Simple capabilities; selection never writes a Simple sidecar', () => {
   const m = { widgetId: 'widget', savedWidgetType: 'bar_chart', pageScatterAvailable: true, draft: { view: { type: 'bar_chart', groupBy: 'day' } }, selectedMetric: { value_type: 'numeric' }, capabilities: { widgetTypes: ['line_chart', 'bar_chart'], capabilities: { scatterCharts: true } } };
-  const choice = chartGalleryChoices.at(-1);
-  assert.deepEqual([chartGalleryChoices.length, choice.id, choice.variant, choice.type], [9, 'scatter', 'scatter', 'line_chart']);
+  const choice = chartGalleryChoices.find(choice => choice.id === 'scatter');
+  assert.deepEqual([chartGalleryChoices.indexOf(choice) + 1, choice.id, choice.variant, choice.type], [9, 'scatter', 'scatter', 'line_chart']);
   assert.equal(galleryUnavailable(m, choice), '');
   const dom = new JSDOM(renderChartGallery(m));
   try { const input = dom.window.document.querySelector('[value="scatter"]'); assert.equal(input.disabled, false); assert.equal(dom.window.document.getElementById(input.getAttribute('aria-labelledby')).textContent, 'Scatter'); assert.equal(input.closest('label').querySelector('svg').getAttribute('aria-hidden'), 'true'); } finally { dom.window.close(); }

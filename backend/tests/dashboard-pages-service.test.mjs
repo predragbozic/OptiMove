@@ -15,7 +15,7 @@ function fixture(options={}) {
   const widgets=options.widgets ?? [widget], series=options.series ?? [{id:'series',widget_id:widgetId}];
   const client=Object.assign(new EventEmitter(),{release:destroy=>state.releases.push(destroy),query:async(sql,params=[])=>{
     state.queries.push({sql,params});
-    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true,scatter_ready:options.scatterReady===true}]};
+    if(sql.includes('to_regprocedure'))return{rows:[{ready:options.portsReady===true,combined_ready:options.combinedReady===true,scatter_ready:options.scatterReady===true,stacked_ready:options.stackedReady===true}]};
     if(sql==='commit'&&state.commitLost){state.commitLost=false;throw new Error('connection lost');}
     if(sql.includes('mutate_dashboard_page')){state.mutations.push(params);const receipt={requestId:params[1],dashboardId,pageId,operation:params[5],pagesRevision:2};state.ledger={request_id:params[1],payload_hash:params[2],workspace:target.workspace,receipt};return{rows:[{receipt}]};}
     if(sql.includes('dashboard_page_requests'))return{rows:state.ledger?.request_id===params[2]?[state.ledger]:[]};
@@ -265,5 +265,17 @@ test('incomplete Scatter axes never select a first series or emit trusted pairs'
 test('Scatter editing requires marker, Page ports, query and management rights',async()=>{
  for(const [portsReady,scatterReady,canManage,canQuery,expected]of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
   const f=fixture({portsReady,scatterReady});Object.assign(f.target,{canManage,canQuery});assert.equal((await f.service.list({req,dashboardId})).capabilities.scatterCharts,expected);
+ }
+});
+test('ordinary Page query returns server stack proof only for known declared Stacked widgets',async()=>{
+ const series=[xSeriesId,ySeriesId].map((id,index)=>({id,widget_id:widgetId,metric_definition_id:index?requestId:other,axis:'primary',resolution_status:'resolved',data_scope_level:'day',analytical_aggregation:'sum',source_policy:'manual',aggregation_role_policy:'standalone_only',coverage_policy:'complete_only'}));
+ const result=[{widgetId,series:series.map((s,i)=>({seriesId:s.id,status:'ok',data:{current:[{athleteId:user,bucketKey:'2026-11-02',value:i?3:2,unit:'m'}]}}))}];
+ const f=pairingFixture({series,result});f.widget.widget_type='bar_chart';f.widget.presentation_config={schemaVersion:1,chartVariant:'stacked',chartComposition:'components-v1',chartInteractions:{},stackDefinition:{schemaVersion:1,semantics:'non-overlapping-additive',unit:'m',components:[other,requestId]}};
+ const query=()=>f.service.query({req,dashboardId,pageId,body:{period}}),data=await query();assert.equal(data.widgets[0].metricStack.status,'ready');assert.equal(data.widgets[0].metricStack.buckets[0].total,5);assert.equal(data.widgets[0].metricStack.queryId,data.queryId);assert.equal(f.state.batches.length,1);assertReadOnly(f);
+ f.widget.presentation_config.schemaVersion=99;assert.equal(Object.hasOwn((await query()).widgets[0],'metricStack'),false);
+});
+test('Stacked editing requires marker, Page ports and authorized management/query rights',async()=>{
+ for(const [portsReady,stackedReady,canManage,canQuery,expected]of [[true,true,true,true,true],[false,true,true,true,false],[true,false,true,true,false],[true,true,false,true,false],[true,true,true,false,false]]){
+  const f=fixture({portsReady,stackedReady});Object.assign(f.target,{canManage,canQuery});assert.equal((await f.service.list({req,dashboardId})).capabilities.stackedCharts,expected);
  }
 });
