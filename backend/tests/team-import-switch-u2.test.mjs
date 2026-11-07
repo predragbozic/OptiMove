@@ -645,7 +645,9 @@ async function booleansOf(client, sql) {
 const approverMd5 = async (client) => (await client.query(`select md5(p.prosrc) as m from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname = 'lock_gpexe_import_approver'`)).rows[0].m;
 
 test("12. migration v56: the preflight passes on v54, the post-check on v56, the rollback refuses with any recorded fact and otherwise restores v54 exactly, and the migration applies again", async () => {
-  const withoutV56 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v56"));
+  // v57 (U5) sorts after v56; this rehearsal is about v56 being the last migration, so it stops there.
+  const UPTO_V56 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const withoutV56 = UPTO_V56.filter((m) => !m.includes("v56"));
   const rb = await createDb2({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u2rb", migrations: withoutV56 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
@@ -656,7 +658,7 @@ test("12. migration v56: the preflight passes on v54, the post-check on v56, the
     assert.ok(pre.length >= 10, "the preflight returned its booleans");
     assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok on a v54 database");
     assert.equal(await approverMd5(client), V54_APPROVER_MD5);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UPTO_V56);
     assert.notEqual(await approverMd5(client), V54_APPROVER_MD5);
     const postcheck = fs.readFileSync(RUNBOOK("team-import-switch-v56-postcheck.sql"), "utf8");
     const post = await booleansOf(client, postcheck);
@@ -680,7 +682,7 @@ test("12. migration v56: the preflight passes on v54, the post-check on v56, the
     await rb.drop();
   }
   // A clean database: apply -> rollback -> v54 exactly -> apply again.
-  const rb2 = await createDb2({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u2rb2", migrations: GPEXE_TEST_MIGRATIONS });
+  const rb2 = await createDb2({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u2rb2", migrations: UPTO_V56 });
   const c2 = new pg.Client({ connectionString: rb2.url });
   await c2.connect();
   try {
@@ -693,7 +695,7 @@ test("12. migration v56: the preflight passes on v54, the post-check on v56, the
     assert.match(checkDef, /platform_admin.*team_grant/);
     assert.doesNotMatch(checkDef, /club_admin|team_coach/, "the original CHECK is back");
     assert.equal((await c2.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V56])).rows[0].n, 0);
-    await applyGpexeTestMigrations(rb2.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb2.url, UPTO_V56);
     assert.equal(await approverMd5(c2), newMd5, "re-applied: the same body");
   } finally {
     await c2.end();

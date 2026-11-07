@@ -80,6 +80,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611041100_training_load_v54_rights_locks_users_first.sql",
   "202611041300_training_load_v55_team_dashboards_club_variables.sql",
   "202611041400_training_load_v56_team_import_switch.sql",
+  "202611051000_training_load_v57_session_undo.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

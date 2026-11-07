@@ -484,7 +484,8 @@ test("database: the deletion log is append-only and only records removals that h
   }
   await assert.rejects(admin.query(`update training_load.import_deletion_log set reason = 'rewritten' where event_id = $1`, [summary.eventId]), /append-only/);
   await assert.rejects(admin.query(`delete from training_load.import_deletion_log where event_id = $1`, [summary.eventId]), /append-only/);
-  await assert.rejects(admin.query(`truncate training_load.import_deletion_log`), /append-only \(TRUNCATE refused\)/);
+  // Since v57 the undo's request table references the log, so PostgreSQL itself refuses the TRUNCATE first (the guard trigger stays the second line).
+  await assert.rejects(admin.query(`truncate training_load.import_deletion_log`), /append-only \(TRUNCATE refused\)|cannot truncate a table referenced in a foreign key constraint/);
   // Nor through a cascade from a table it references: ON DELETE RESTRICT does
   // not apply to TRUNCATE, the trigger does.
   const c = await newClient();
