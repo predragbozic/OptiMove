@@ -22772,3 +22772,44 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 100%;
   }
 }
+
+/* U6a review: a folded row shows that it opens (the flex summary has no marker of its own), the progress block with Stop stays in sight. */
+.imports-attn-sessions > summary,
+.imports-settings > summary {
+  list-style: none;
+}
+.imports-attn-sessions > summary::-webkit-details-marker,
+.imports-settings > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-attn-sessions > summary::after,
+.imports-settings > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+.imports-attn-sessions[open] > summary::after,
+.imports-settings[open] > summary::after {
+  content: "\25BE";
+}
+.gpexe-panel-head + .imports-attn-group {
+  border-top: 0;
+}
+.imports-attn-group:first-of-type {
+  border-top: 1px solid var(--line);
+}
+.imports-progress {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.imports-dates-fields .gpexe-date {
+  min-width: 0;
+}
+@media (forced-colors: active) {
+  .imports-progress-bar {
+    border: 1px solid CanvasText;
+  }
+  .imports-progress-bar > i {
+    background: Highlight;
+  }
+}

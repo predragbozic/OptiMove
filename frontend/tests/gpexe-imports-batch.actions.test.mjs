@@ -813,7 +813,7 @@ test("leaving Training Load with a selection or a running import asks first; dec
   await new Promise((resolve) => setImmediate(resolve));
   confirmAnswer = false;
   assert.equal(confirmLeaveTrainingLoad("weekly"), false);
-  assert.match(confirmQuestions.at(-1), /An import of several sessions is still running\. Its result will be under Imports when it finishes\. Leave anyway\?/);
+  assert.match(confirmQuestions.at(-1), /An import of several sessions is still running\. If you leave now it stops after the request in flight; what is left stays under Imports to import again\. Leave anyway\?/);
   assert.equal(confirmLeaveTrainingLoad(null, { discard: false }), false);
   assert.match(confirmQuestions.at(-1), /If you switch workspace now, its result is lost\. Leave anyway\?/, "the workspace exit tells the truth");
   release();
@@ -944,7 +944,7 @@ test("J19 U1: while a day filter is active the daily line says its counts are fo
   await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
   const page = html();
   assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
-  assert.match(page, /Import 3 ready imports every ready session, not only the day shown\./, "the button says it is for all dates");
+  assert.match(page, /Import 3 ready imports all 3 ready sessions, not only those of the day you picked\./, "the button says it is for all dates");
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   await act("training-load-gpexe-import-ready");
   assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");

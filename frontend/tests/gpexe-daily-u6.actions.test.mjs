@@ -184,11 +184,12 @@ test("U6a 2: Needs attention is grouped by reason - 6 unlinked, 2 manual review,
   assert.match(page, /<h3>Needs attention \(9\)<\/h3>/);
   const groups = [...page.matchAll(/<div class="imports-attn-group" data-attention-group="([a-z]+)">([\s\S]*?)<details class="imports-attn-sessions">/g)].map((m) => ({ key: m[1], html: m[2] }));
   assert.deepEqual(groups.map((g) => g.key), ["unlinked", "review", "data"], "the order is the order of what unblocks most");
+  assert.ok(!/class="primary-button[^"]*"[^>]*data-attention/.test(page) && !groups.some((g) => /primary-button/.test(g.html)), "only the state bar's button is primary");
   const counts = groups.map((g) => g.html.match(/imports-attn-count">([^<]+)</)[1]);
   assert.deepEqual(counts, ["6 sessions", "2 sessions", "1 session"]);
   for (const g of groups) assert.equal((g.html.match(/<button /g) || []).length, 1, `${g.key}: one button`);
   assert.match(groups[0].html, /data-action="training-load-gpexe-map-open"[^>]*>Link athletes</);
-  assert.match(groups[1].html, /data-action="training-load-gpexe-open" data-candidate-id="cand-7">Open</);
+  assert.match(groups[1].html, /data-action="training-load-gpexe-open" data-candidate-id="cand-7">Open the first session</, "a group of several says it opens the first");
   assert.match(groups[2].html, /data-action="training-load-gpexe-open" data-candidate-id="cand-9">Details</);
   assert.equal((page.match(/<details class="imports-attn-sessions">/g) || []).length, 3, "the sessions are folded");
   assert.ok(!/<details class="imports-attn-sessions" open/.test(page));
@@ -212,8 +213,11 @@ test("U6a 4: guide step 4 is not 'every GPEXE athlete is linked' while a session
   const open = guideSteps({ ...base, candidates: [unlinked(1), ready(2)] });
   const s4 = open.steps.find((s) => s.id === 4);
   assert.equal(s4.state, "next");
-  assert.match(s4.text, /1 session has athletes that are not linked yet/);
-  assert.equal(s4.action?.kind, "link");
+  assert.match(s4.text, /Every athlete is linked now, but 1 session was reviewed before that/);
+  assert.equal(s4.action?.kind, "check", "nothing is left to link: the way on is a new search, never a Link athletes button with nothing in it");
+  const stillUnlinked = guideSteps({ ...base, sourceAthletes: [{ status: "unlinked" }], candidates: [unlinked(1)] }).steps.find((s) => s.id === 4);
+  assert.equal(stillUnlinked.action?.kind, "link", "an athlete that is still not linked is linked first");
+  assert.equal(guideSteps({ ...base, admin: false, candidates: [unlinked(1)] }).steps.find((s) => s.id === 4).action, null, "a coach gets the sentence only");
   // An imported or undone session no longer counts.
   const old = guideSteps({ ...base, candidates: [{ ...unlinked(1), status: "imported" }, { ...unlinked(2), importUndoneAt: "2026-11-01T00:00:00Z" }] });
   assert.equal(old.steps.find((s) => s.id === 4).state, "done");
@@ -346,4 +350,53 @@ test("U6a 11: a lost answer in a later round marks only that round's sessions as
   assert.deepEqual(gx().batch.unknown.candidateIds, ["cand-3", "cand-4", "cand-5", "cand-6"], "only the lost request's sessions");
   assert.ok(!gx().uncertain["cand-1"] && !gx().uncertain["cand-2"], "the sessions answered earlier are not marked");
   assert.equal(importsUnloadShouldWarn(), true, "and it keeps asking until the result is confirmed");
+});
+
+test("U6a 12: the summary of a long series is counted from each session's final result, never summed over the rounds", async () => {
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([[done(1), done(2), budget(3), budget(4), budget(5), budget(6)], [done(3), done(4), done(5), budget(6)], [done(6)]], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.deepEqual(gx().batch.summary, { requested: 6, imported: 6, alreadyImported: 0, refused: 0, unknown: 0, notAttempted: 0 });
+  assert.ok(!/not tried/.test(dialog() || ""), "no 'not tried' on a series that finished");
+});
+
+test("U6a 13: a refusal in a later round (the switch turned off) shows what the earlier round did and why the series stopped, and the list is read again", async () => {
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([[done(1), done(2), budget(3), budget(4), budget(5), budget(6)], () => ({ status: 409, body: { error: "import_switch_off", message: "Importing is switched off." } })], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  const readsBefore = candidatesReads();
+  await act("training-load-gpexe-batch-send");
+  assert.equal(seen.length, 2);
+  const panel = dialog();
+  assert.match(panel, /The series stopped\./, "the reason is shown in the result panel");
+  assert.match(panel, /Imported\./, "and what the first round did");
+  assert.ok(candidatesReads() > readsBefore, "the list is read again after sessions were imported in round 1");
+});
+
+test("U6a 14: confirming a move to another part of the app while a series runs stops it after the request in flight, and the question says so", async () => {
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([
+    () => { assert.equal(confirmLeaveTrainingLoad("calendar"), true); return result({}, [done(1), done(2), budget(3), budget(4), budget(5), budget(6)]); },
+    [done(3), done(4), done(5), done(6)],
+  ], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.match(confirmQuestions.at(-1), /it stops after the request in flight; what is left stays under Imports/);
+  assert.equal(seen.length, 1, "no second round after the person agreed to leave");
+});
+
+test("U6a 15: a result that is not confirmed is the first group; the guide never offers Link athletes when nothing is left to link", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [unlinked(1), review(2), ready(3)] }));
+  await openImports();
+  gx().uncertain["cand-2"] = { kind: "unknown", error: { status: 503, code: "import_outcome_unknown" }, verify: null, checks: 0 };
+  const keys = attentionGroups(gx().candidates, gx()).map((g) => g.key);
+  assert.equal(keys[0], "unknown");
 });

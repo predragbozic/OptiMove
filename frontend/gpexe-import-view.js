@@ -486,7 +486,7 @@ function renderSourceCardHtml(source, gx, status) {
             <label class="gpexe-date"><span>To (DD.MM.YYYY)</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
           </div>
         </details>
-        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated)) : "Without dates, the last 14 days are searched (at most 31). "}Nothing is imported until you import it.</p>
+        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated)) : "Without dates, the last 14 days are searched (at most 31)."} Finding sessions does not import anything.</p>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
@@ -765,19 +765,27 @@ function renderBucketsHtml(gx, status) {
 // U6a: one group of sessions that need a person: the kind of problem, one sentence, how many, and ONE button.
 // The sessions are folded inside; opening one is the same review as before.
 function renderAttentionGroupHtml(grp, gx, status, rows) {
+  // Only the state bar's button is primary; a group's button names what it does (and, for a group of several, that it opens the first).
   let button;
+  let why = "";
   if (grp.key === "unlinked") {
-    button = `<button type="button" class="primary-button gpexe-button" data-action="${grp.action}" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>${grp.button}</button>`;
+    const usable = Boolean(gx.sourceAthletes && !gx.sourceAthletesError);
+    button = `<button type="button" class="plain-button gpexe-button" data-action="${grp.action}" ${usable ? "" : "disabled"}>${grp.button}</button>`;
+    if (!usable) why = gx.sourceAthletesError ? "The list of GPEXE athletes could not be loaded. Use Try again under Athletes below." : "Loading the list of GPEXE athletes...";
   } else if (grp.key === "fresh") {
-    button = `<button type="button" class="primary-button gpexe-button" data-action="${grp.action}" ${status.settings && !gx.checkStarting ? "" : "disabled"}>${grp.button}</button>`;
+    const dates = grp.items.map((c) => c.sessionStartedAt).filter(Boolean).sort();
+    const range = dates.length ? (formatDate(dates[0]) === formatDate(dates[dates.length - 1]) ? formatDate(dates[0]) : `${formatDate(dates[0])} - ${formatDate(dates[dates.length - 1])}`) : "";
+    button = `<button type="button" class="plain-button gpexe-button" data-action="${grp.action}" ${status.settings && !gx.checkStarting ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : grp.button)}</button>`;
   } else {
-    button = `<button type="button" class="plain-button gpexe-button" data-action="${grp.action}" data-candidate-id="${escapeAttr(grp.first.id)}">${grp.button}</button>`;
+    const label = grp.count > 1 ? (grp.key === "data" ? "Details of the first session" : "Open the first session") : grp.button;
+    button = `<button type="button" class="plain-button gpexe-button" data-action="${grp.action}" data-candidate-id="${escapeAttr(grp.first.id)}">${escapeHtml(label)}</button>`;
   }
   return `
     <div class="imports-attn-group" data-attention-group="${escapeAttr(grp.key)}">
       <div class="imports-attn-head"><h4>${escapeHtml(grp.title)}</h4><span class="imports-attn-count">${escapeHtml(plural(grp.count, "session", "sessions"))}</span></div>
       <p>${escapeHtml(grp.sentence)}</p>
       <div class="imports-attn-actions">${button}</div>
+      ${why ? `<p class="muted" role="status">${escapeHtml(why)}</p>` : ""}
       <details class="imports-attn-sessions"><summary>Show the ${escapeHtml(plural(grp.count, "session", "sessions"))}</summary>${rows(grp.items, "attention")}</details>
     </div>`;
 }
@@ -860,7 +868,7 @@ function renderDailyStripHtml(gx, ready, attention, status = gx.status) {
   const notes = [];
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
-  if (gx.calendar?.day && d.n) notes.push(`${d.label} imports every ready session, not only the day shown.`);
+  if (gx.calendar?.day && d.n) notes.push(`${d.label} imports all ${plural(d.pickable.length, "ready session", "ready sessions")}, not only those of the day you picked.`);
   if (d.reviewOnly) notes.push(d.reviewOnly);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
@@ -898,6 +906,7 @@ function batchOutcomeText(r) {
   if (o === "imported") return { cls: "is-imported", text: r.commitConfirmation === "verified_after_commit_error" ? "Imported (the confirmation arrived late, but the import is in OptiMove)." : "Imported." };
   if (o === "already_imported") return { cls: "is-imported", text: "Already imported, nothing more was written." };
   if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
+  if (o === "not_attempted" && r.code === "batch_time_budget" && state.trainingLoad.gpexe?.batch?.sending) return { cls: "is-skipped", text: "Waiting: the series goes on with this session by itself." };
   if (o === "not_attempted" && r.code === "batch_time_budget") return { cls: "is-skipped", text: "Not tried: time ran out. Nothing was saved for this session - import it again from the Ready list." };
   if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
   const code = r.code;
@@ -993,8 +1002,8 @@ function renderBatchProgressHtml(b) {
     <div class="imports-progress" role="group" aria-label="Import progress">
       <p role="status"><strong>Importing ${done} of ${total} sessions...</strong>${b.stopRequested ? " Stopping after this request." : ""}</p>
       <div class="imports-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${Math.round((done / total) * 100)}%"></i></div>
-      <p class="muted">It goes on by itself until it ends or a session needs a person. Leaving this page pauses it; Import ready sends what is left.</p>
-      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-stop" ${b.stopRequested ? "disabled" : ""}>Stop after this request</button>
+      <p class="muted">It goes on by itself until it ends or a session needs a person. If you leave Imports it stops after the request in flight; Import ready sends what is left.</p>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-stop" ${b.stopRequested ? "disabled" : ""}>Stop after this step</button>
     </div>`;
 }
 
@@ -1058,9 +1067,11 @@ function renderBatchResultsHtml(gx) {
     return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}${techHtml([["Outcome", r.outcome], ["Code", r.code], ["Approval id", r.approvalId], ["Candidate id", r.candidateId]])}</li>`;
   });
   const summary = batchSummaryText(b.summary);
+  const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>The series stopped.</strong> ${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : "";
   const still = batchSelection(gx).length;
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
+    ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
     ${(b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}

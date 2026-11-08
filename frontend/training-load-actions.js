@@ -1,7 +1,7 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import {
-  clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
+  clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports, stopBatchSeries } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
@@ -264,9 +264,12 @@ function importsBatchMayBeLeft(nextTab) {
   // A workspace switch or a notification (nextTab null) resets Training
   // Load: that exit loses the result; a move inside the app keeps it.
   if (batch.sending) {
-    return ask(nextTab === null
+    const leave = ask(nextTab === null
       ? "An import of several sessions is still running. If you switch workspace now, its result is lost. Leave anyway?"
-      : "An import of several sessions is still running. Its result will be under Imports when it finishes. Leave anyway?");
+      : "An import of several sessions is still running. If you leave now it stops after the request in flight; what is left stays under Imports to import again. Leave anyway?");
+    // The series must not go on unattended after the person agreed to leave (the request already sent still finishes).
+    if (leave) stopBatchSeries();
+    return leave;
   }
   // A click on the Training load item itself reloads the tab and keeps the
   // Imports state: nothing to ask.

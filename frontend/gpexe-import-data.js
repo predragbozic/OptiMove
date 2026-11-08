@@ -1144,9 +1144,19 @@ const isBudgetStop = (r) => r.outcome === "not_attempted" && r.code === "batch_t
 // A refusal that waits for a person (anything but a busy server or a server fault, which leave the session as it was).
 const needsPerson = (r) => r.outcome === "refused" && r.code !== "try_again" && r.code !== "internal_error";
 
-function addSummary(total, part) {
-  const out = { ...(total || {}) };
-  for (const [k, v] of Object.entries(part || {})) out[k] = typeof v === "number" ? (out[k] || 0) + v : v;
+// The summary of one logical batch is counted from the final result of each session - never summed over the answers of the rounds, which
+// would count a session once per round it was returned untried.
+function summaryOf(order, collected) {
+  const out = { requested: order.length, imported: 0, alreadyImported: 0, refused: 0, unknown: 0, notAttempted: 0 };
+  for (const id of order) {
+    const r = collected.get(id);
+    if (!r) out.notAttempted += 1;
+    else if (r.outcome === "imported") out.imported += 1;
+    else if (r.outcome === "already_imported") out.alreadyImported += 1;
+    else if (r.outcome === "refused") out.refused += 1;
+    else if (r.outcome === "import_outcome_unknown") out.unknown += 1;
+    else out.notAttempted += 1;
+  }
   return out;
 }
 
@@ -1177,7 +1187,6 @@ export async function sendBatch(render) {
   gx.batch.progress = { total: items.length, done: 0, rounds: 1 };
   render();
   const collected = new Map();
-  let summary = null;
   let round = 0;
   let candidateIds = [];
   try {
@@ -1191,7 +1200,6 @@ export async function sendBatch(render) {
       const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }), ...(signal ? { signal } : {}) });
       if (generation !== gx.generation) return;
       const results = Array.isArray(answer?.results) ? answer.results : [];
-      summary = addSummary(summary, answer?.summary);
       for (const r of results) {
         collected.set(r.candidateId, r);
         // The same marks the single review uses: an unconfirmed result stays
@@ -1207,7 +1215,7 @@ export async function sendBatch(render) {
         if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && (r.code === "internal_error" || r.code === "try_again"))) delete gx.batch.selected[r.candidateId];
       }
       gx.batch.results = order.map((id) => collected.get(id)).filter(Boolean);
-      gx.batch.summary = summary;
+      gx.batch.summary = summaryOf(order, collected);
       const waiting = results.filter(isBudgetStop).map((r) => r.candidateId);
       gx.batch.progress = { total: order.length, done: [...collected.values()].filter((r) => !isBudgetStop(r)).length, rounds: round + 1 };
       const decided = results.length - waiting.length;
@@ -1228,7 +1236,12 @@ export async function sendBatch(render) {
       // reason stays under the Ready bucket until the next choice. After an
       // earlier round the answers already given are shown, so the panel closes.
       gx.batch.error = info;
-      if (collected.size) gx.batch.confirming = false;
+      if (collected.size) {
+        // Earlier rounds already wrote: show what they did, then the reason the series stopped, and read the list again below.
+        gx.batch.confirming = false;
+        gx.batch.results = order.map((id) => collected.get(id)).filter(Boolean);
+        gx.batch.summary = summaryOf(order, collected);
+      }
     } else {
       // No answer: the sessions of this request may or may not be imported, some or all.
       // Never "failed". Every one is marked as not confirmed; the list is
@@ -1249,7 +1262,7 @@ export async function sendBatch(render) {
   // stale row leaves the selection with its sentence; the other refusals
   // (the switch, the right) change nothing in the list.
   if (generation !== gx.generation) return;
-  if (gx.batch.error && gx.batch.error.status !== 404 && gx.batch.error.status !== 400) return;
+  if (gx.batch.error && !collected.size && gx.batch.error.status !== 404 && gx.batch.error.status !== 400) return;
   // Once: the list decides what stays selected and which unconfirmed
   // sessions are now shown as imported.
   await reloadGpexeCandidates(render);
