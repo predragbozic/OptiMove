@@ -53,6 +53,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
+import { cancelUndo, checkUndo, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -88,7 +89,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // (the select is disabled; this guards a stale change), and only after
     // a question while sessions are chosen but not imported.
     if (String(action.value) === gx.teamId) return true;
-    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown) {
+    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown || undoBusy(gx)) {
       renderTrainingLoad();
       return true;
     }
@@ -123,7 +124,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // While an approval is running its answer must be seen - it may be the
     // only place an uncertain outcome is reported.
     if (gx.detail?.approving || gx.detail?.verifying) return true;
+    // U5b: an undo in flight must be seen; a result not confirmed stays for Check the result when the session is reopened.
+    if (gx.undo?.step === "sending") return true;
     const refresh = closeGpexeCandidate();
+    if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
     renderTrainingLoad();
     // The session was imported but the list still shows it as pending:
     // read the list again so it moves under Imported.
@@ -154,6 +158,43 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
+    return true;
+  }
+  // U5b: undoing an imported session (platform admin; the server decides again).
+  if (type === "training-load-gpexe-undo-open") {
+    const candidate = gx.detail?.candidate;
+    if (!undoOffered(candidate, gx)) return true;
+    await openUndo(candidate.id, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-undo-cancel") {
+    if (cancelUndo()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-undo-confirm") {
+    const u = gx.undo;
+    if (!u || u.step !== "ready") return true;
+    const reason = fieldValue("[data-gpexe-undo-reason]");
+    // Keep what was typed even when the question is refused locally.
+    u.reason = reason;
+    // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
+    const problem = undoReasonProblem(reason);
+    if (problem) {
+      u.reasonProblem = problem;
+      renderTrainingLoad();
+      return true;
+    }
+    const label = gx.detail?.candidate?.label || "this session";
+    const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
+    const total = Number(u.preview?.removedTotal) || 0;
+    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}? This can't be undone here; to get the data back, import the session again.`;
+    u.reasonProblem = "";
+    if (!globalThis.window?.confirm?.(question)) return true;
+    await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-undo-check") {
+    await checkUndo(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-verify") {

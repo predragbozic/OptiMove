@@ -103,6 +103,7 @@ function resetGpexeTeamState(teamId) {
   gx.check = null;
   gx.error = null;
   gx.detail = null;
+  gx.undo = null;
   gx.notice = "";
   gx.uncertain = {};
   gx.linkConfirm = null;
@@ -915,10 +916,17 @@ export function withdrawnByCheck(c) {
 // A version the list does not show: replaced by newer content, or withdrawn.
 export function isHiddenVersion(c, gx = g()) {
   const group = candidateGroup(c, gx);
-  return group === "replaced" || group === "withdrawn";
+  return group === "replaced" || group === "withdrawn" || group === "undone";
+}
+
+// U5b: an import that was undone stays `imported` on the server (the approval is history) and carries
+// importUndoneAt. It is history, never "Imported": its data is no longer in OptiMove.
+export function isImportUndone(c) {
+  return c?.status === "imported" && Boolean(c.importUndoneAt);
 }
 
 export function candidateGroup(c, gx = g()) {
+  if (isImportUndone(c)) return "undone";
   if (c.status === "imported") return "imported";
   if (c.status === "superseded") return withdrawnByCheck(c) ? "withdrawn" : "replaced";
   if (!c.snapshot?.available) return "notyet";
@@ -955,7 +963,7 @@ export function rowReasons(c) {
 //               source's Technical details).
 export function inboxBucket(c, gx = g()) {
   const group = candidateGroup(c, gx);
-  if (group === "replaced" || group === "withdrawn") return "hidden";
+  if (group === "replaced" || group === "withdrawn" || group === "undone") return "hidden";
   if (group === "imported") return "imported";
   if (group === "excluded") return "out";
   if (isUncertain(c, gx)) return "attention";
@@ -1303,6 +1311,8 @@ export function importsUnloadShouldWarn(gx = g()) {
   if (gx?.batch?.sending || gx?.batch?.unknown) return true;
   // U4: "Use OptiMove variables" in flight, or its last answer not confirmed.
   if (gx?.guide?.write?.sending || gx?.guide?.write?.unknown) return true;
+  // U5b: an undo in flight, or its last answer not confirmed.
+  if (gx?.undo?.step === "sending" || gx?.undo?.step === "unknown") return true;
   // A mark counts while its session is listed and still unresolved; a mark
   // whose session the list no longer shows (replaced by newer data, hidden)
   // cannot be resolved on this screen and must not block leaving forever.

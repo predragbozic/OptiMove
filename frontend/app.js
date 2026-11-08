@@ -86,6 +86,7 @@ import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoach
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
+import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
@@ -1319,6 +1320,7 @@ function handleContentInput(event) {
   if (handleIconPickerInput(event.target)) return;
   if (handleIconGalleryInput(event.target)) return;
   // Data configuration -> Variables: the form's values and the list filter.
+  if (handleUndoReasonInput(event.target)) return;
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
   if (handleSourceFieldsInput(event.target)) return;

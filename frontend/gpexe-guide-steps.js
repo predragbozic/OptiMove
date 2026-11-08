@@ -16,7 +16,7 @@ export function guideSteps(f) {
   const checkDone = f.check?.status === "succeeded";
   const running = f.check?.status === "running";
   const list = Array.isArray(f.candidates) ? f.candidates : null;
-  const imported = Boolean(list && list.some((c) => c.status === "imported"));
+  const imported = Boolean(list && list.some((c) => c.status === "imported" && !c.importUndoneAt));
   const athletes = Array.isArray(f.sourceAthletes) ? f.sourceAthletes : null;
   const unlinked = athletes ? athletes.filter((a) => a.status === "unlinked").length : null;
   const linked = athletes ? athletes.filter((a) => a.status === "linked").length : 0;
