@@ -15,6 +15,7 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { renderGuideHtml } from "./gpexe-guide-view.js";
+import { attentionGroups } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
@@ -371,6 +372,14 @@ function errorText(error, fallback) {
 // with its own routes and state - never another top-level screen.
 export const IMPORT_SOURCES = [{ key: "gpexe", name: "GPEXE" }];
 
+// U6a: the administrator's controls (switch, reason, mode, Record a date, history) in one folded card; the main screen shows only the state.
+function renderImportSettingsHtml(gx) {
+  const panel = renderTeamSwitchPanelHtml(gx);
+  if (!panel) return "";
+  const open = Boolean(gx.teamSwitch?.error || gx.teamSwitch?.notice || gx.teamSwitch?.busy);
+  return `<details class="gpexe-panel imports-settings" ${open ? "open" : ""}><summary>Import settings</summary>${panel}</details>`;
+}
+
 export function renderGpexeImportsHtml() {
   const gx = state.trainingLoad.gpexe;
   const teams = gpexeTeamOptions();
@@ -408,7 +417,7 @@ export function renderGpexeImportsHtml() {
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
       ${status ? renderGuideHtml(gx, status) : ""}
       ${status ? renderSourceCardHtml(IMPORT_SOURCES[0], gx, status) : ""}
-      ${status ? renderTeamSwitchPanelHtml(gx) : ""}
+      ${status ? renderImportSettingsHtml(gx) : ""}
       ${status ? renderNextStepHtml(gx, status, IMPORT_SOURCES[0]) : ""}
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
@@ -452,24 +461,31 @@ function renderSourceCardHtml(source, gx, status) {
   // A step that needs other dates (a stale review, an expired snapshot)
   // opens the dates and fills them in, so "find again" is one click.
   const dated = datesNeededFor(list, gx);
+  const importOn = Boolean(sw.enabled) && status.teamImportSwitch?.enabled !== false;
+  const daily = dailyImportState(gx, status);
   return `
     <section class="gpexe-panel imports-source" aria-label="Data source ${escapeAttr(source.name)}">
-      <div class="imports-source-head">
-        <h3>${escapeHtml(source.name)}</h3>
-        <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
+      <div class="imports-statusbar" role="group" aria-label="Import state">
+        <div class="imports-facts">
+          <strong>${escapeHtml(source.name)}</strong>
+          <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
+          ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
+          ${connected ? `<span class="muted imports-lastsearch">${check?.finishedAt || check?.startedAt ? `Last search ${escapeHtml(fmtDateTime(check.finishedAt || check.startedAt))}` : "No search yet"}</span>` : ""}
+        </div>
+        ${connected ? `<div class="imports-actions">
+          ${daily.n ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button>` : ""}
+          <button type="button" class="${daily.n ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
+        </div>` : ""}
       </div>
       ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       ${connected ? `
-        <div class="gpexe-check-row imports-find-row">
-          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
-          <details class="imports-dates" ${dated ? "open" : ""}>
-            <summary>Choose dates</summary>
-            <div class="imports-dates-fields">
-              <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
-              <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
-            </div>
-          </details>
-        </div>
+        <details class="imports-dates" ${dated ? "open" : ""}>
+          <summary>Choose dates</summary>
+          <div class="imports-dates-fields">
+            <label class="gpexe-date"><span>From (DD.MM.YYYY)</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
+            <label class="gpexe-date"><span>To (DD.MM.YYYY)</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
+          </div>
+        </details>
         <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated)) : "Without dates, the last 14 days are searched (at most 31). "}Nothing is imported until you import it.</p>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
@@ -666,17 +682,16 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   if (!status.settings) text = "A platform admin needs to connect this team to a data source (Settings > Data sources).";
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
   else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after ${stale.length === 1 ? "this review was" : "these reviews were"} made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}${ready.length ? ` ${readyText.replace(/^\w/, (ch) => ch.toUpperCase())} now.` : ""}`;
-  else if (unlinkedAthletes) text = `Next step: ${plural(unlinkedAthletes, "GPEXE athlete is", "GPEXE athletes are")} not linked - use Link athletes (below), then find new sessions.`;
-  else if (attention && ready.length) text = `Next step: ${plural(attention, "item needs", "items need")} attention · ${readyText}.`;
-  else if (attention) text = `Next step: ${plural(attention, "item needs", "items need")} attention - see below.`;
+  // U6a: what the state bar and the groups below already say is not repeated here.
+  else if (unlinkedAthletes || attention) text = "";
   else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
-  else if (ready.length) text = `Next step: ${readyText} - use Import ready above, tick specific ones below, or open one to review it.`;
+  else if (ready.length) text = "";
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   // A failed search is not "nothing found": its reason is in the box above.
   else if (!list.length && check?.status === "failed") text = "The last search did not finish - its reason is in the box above.";
   else if (!list.length) text = "Nothing found yet. Find new sessions to see what the source has.";
   else text = "Nothing needs attention. Find new sessions to see what's new.";
-  return `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>`;
+  return text ? `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>` : "";
 }
 
 // One sentence per attention row: what is in the way and the one step.
@@ -714,7 +729,7 @@ function renderBucketsHtml(gx, status) {
     ${attention.length ? `
       <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
         <div class="gpexe-panel-head"><h3>Needs attention (${attention.length})</h3></div>
-        ${rows(attention, "attention")}
+        ${attentionGroups(attention, gx).map((grp) => renderAttentionGroupHtml(grp, gx, status, rows)).join("")}
       </section>
     ` : ""}
     <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
@@ -745,6 +760,26 @@ function renderBucketsHtml(gx, status) {
       </details>
     ` : ""}
   `;
+}
+
+// U6a: one group of sessions that need a person: the kind of problem, one sentence, how many, and ONE button.
+// The sessions are folded inside; opening one is the same review as before.
+function renderAttentionGroupHtml(grp, gx, status, rows) {
+  let button;
+  if (grp.key === "unlinked") {
+    button = `<button type="button" class="primary-button gpexe-button" data-action="${grp.action}" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>${grp.button}</button>`;
+  } else if (grp.key === "fresh") {
+    button = `<button type="button" class="primary-button gpexe-button" data-action="${grp.action}" ${status.settings && !gx.checkStarting ? "" : "disabled"}>${grp.button}</button>`;
+  } else {
+    button = `<button type="button" class="plain-button gpexe-button" data-action="${grp.action}" data-candidate-id="${escapeAttr(grp.first.id)}">${grp.button}</button>`;
+  }
+  return `
+    <div class="imports-attn-group" data-attention-group="${escapeAttr(grp.key)}">
+      <div class="imports-attn-head"><h4>${escapeHtml(grp.title)}</h4><span class="imports-attn-count">${escapeHtml(plural(grp.count, "session", "sessions"))}</span></div>
+      <p>${escapeHtml(grp.sentence)}</p>
+      <div class="imports-attn-actions">${button}</div>
+      <details class="imports-attn-sessions"><summary>Show the ${escapeHtml(plural(grp.count, "session", "sessions"))}</summary>${rows(grp.items, "attention")}</details>
+    </div>`;
 }
 
 // One line per session: what it is, when, and - only where the coach has to
@@ -807,23 +842,28 @@ function renderSessionRowHtml(c, status, kind, pick = false) {
 // the list's order decides which, never a hidden one.
 // J19 U1: the daily line - what is ready, what needs the coach, and one button
 // for the ready ones (the existing review and confirmation, up to BATCH_MAX).
-function renderDailyStripHtml(gx, ready, attention, status = gx.status) {
-  if (!ready.length && !attention.length) return "";
+// U6a: what the one main button does. "Import N ready" when clean Ready sessions can go in one batch, otherwise nothing
+// (the button of the state bar is then "Find new sessions"). Shared by the state bar and the notes under the groups.
+function dailyImportState(gx, status = gx.status) {
+  const ready = (gx.candidates || []).filter((c) => inboxBucket(c, gx) === "ready");
   const allowed = batchAllowed(gx);
   const pickable = allowed ? ready.filter((c) => batchSelectable(c, gx)) : [];
-  const allDates = gx.calendar?.day ? ` <span class="muted">(all dates)</span>` : "";
-  const reviewOnly = !allowed && ready.length ? reviewOnlyText(status) : "";
   const n = Math.min(pickable.length, BATCH_MAX);
   const label = pickable.length > BATCH_MAX ? `Import first ${BATCH_MAX} ready` : `Import ${n} ready`;
-  return `
-    <div class="imports-daily" role="group" aria-label="Import summary">
-      <p class="imports-daily-counts"><strong>Ready ${ready.length}</strong> · <strong>Needs you ${attention.length}</strong>${allDates}</p>
-      ${n ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(label)}</button>` : ""}
-      ${pickable.length > BATCH_MAX ? `<p class="muted">${plural(pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.</p>` : ""}
-      ${allowed && pickable.length < ready.length ? `<p class="muted">${plural(ready.length - pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - pickable.length === 1 ? "its" : "their"} own.</p>` : ""}
-      ${reviewOnly ? `<p class="muted">${escapeHtml(reviewOnly)}</p>` : ""}
-    </div>
-  `;
+  return { ready, allowed, pickable, n, label, reviewOnly: !allowed && ready.length ? reviewOnlyText(status) : "" };
+}
+
+// The notes that belong to the main button: sessions that stay for the next batch, ones that must be opened, why importing is not offered.
+function renderDailyStripHtml(gx, ready, attention, status = gx.status) {
+  if (!ready.length) return "";
+  const d = dailyImportState(gx, status);
+  const notes = [];
+  if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
+  if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
+  if (gx.calendar?.day && d.n) notes.push(`${d.label} imports every ready session, not only the day shown.`);
+  if (d.reviewOnly) notes.push(d.reviewOnly);
+  if (!notes.length) return "";
+  return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
 }
 
 function renderSelectBarHtml(gx, visibleReady) {
@@ -939,10 +979,23 @@ function renderBatchOverlayHtml(gx) {
           <h3>${escapeHtml(title)}</h3>
           <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="${close}" aria-label="Close" ${busy}>&times;</button>
         </div>
-        <div class="gpexe-detail-body">${body}</div>
+        <div class="gpexe-detail-body">${renderBatchProgressHtml(b)}${body}</div>
       </section>
     </div>
   `;
+}
+
+// U6a: while a long selection goes on in several requests: how far it is, that it goes on by itself, and Stop.
+function renderBatchProgressHtml(b) {
+  if (!b.sending || !b.progress || b.progress.total < 2) return "";
+  const { total, done } = b.progress;
+  return `
+    <div class="imports-progress" role="group" aria-label="Import progress">
+      <p role="status"><strong>Importing ${done} of ${total} sessions...</strong>${b.stopRequested ? " Stopping after this request." : ""}</p>
+      <div class="imports-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${Math.round((done / total) * 100)}%"></i></div>
+      <p class="muted">It goes on by itself until it ends or a session needs a person. Leaving this page pauses it; Import ready sends what is left.</p>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-stop" ${b.stopRequested ? "disabled" : ""}>Stop after this request</button>
+    </div>`;
 }
 
 // The confirmation: every chosen session by name and time, what happens,
@@ -1102,17 +1155,17 @@ function retryButtonHtml(gx) {
   return `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>`;
 }
 
+// U6a: the daily screen has no list of linked athletes - it lives on the Link athletes screen only. What stays here is the way in to that
+// screen, the one fact that needs a word, and the failure of the athletes read (with its retry) or of a link change.
 function renderLinksHtml(gx) {
-  const links = gx.links || [];
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
   const inactive = (gx.sourceAthletes || []).filter((a) => a.status === "linked_inactive").length;
-  // The count of athletes to link is on the button; only the other fact is a line.
   const facts = [];
   if (inactive) facts.push(plural(inactive, "link points", "links point") + " to an athlete no longer in the team");
   return `
     <section class="gpexe-panel" aria-label="Athlete links">
       <div class="gpexe-panel-head imports-links-head">
-        <h3>GPEXE athletes linked to this team</h3>
+        <h3>Athletes</h3>
         <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
       </div>
       ${facts.length ? `<p class="imports-links-facts">${escapeHtml(facts.join(" · "))}.</p>` : ""}
@@ -1120,23 +1173,12 @@ function renderLinksHtml(gx) {
         <div class="gpexe-warning imports-links-unavailable" role="status">
           <p>${gx.sourceAthletes
             ? "The list of GPEXE athletes could not be refreshed, so it may be out of date. Link athletes is off until it is read again; the sessions and the search still work."
-            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work."}</p>
+            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions and the search still work."}</p>
           ${retryButtonHtml(gx)}
           ${errorTech(gx.sourceAthletesError)}
         </div>
       ` : ""}
-      <p class="muted gpexe-hint">A link is never guessed: find the athlete in GPEXE first, then link the whole team under Link athletes or one athlete from a session's review. A wrong link can be removed here before an import is approved. Unlinking doesn't change results that are already imported: those can't be changed here — contact a platform administrator.</p>
       ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
-      ${!links.length ? `<p class="muted">No athlete is linked yet.</p>` : `
-        <ul class="gpexe-link-list">
-          ${links.map((l) => `
-            <li>
-              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? gpexeSideText(l.gpexeAthleteId) : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</div>
-              <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
-            </li>
-          `).join("")}
-        </ul>
-      `}
     </section>
   `;
 }
@@ -1828,7 +1870,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)} is one of them, close this review and check "GPEXE athletes linked to this team".</p>${idTechHtml(id)}`;
+    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
   }
   return `
     <div class="gpexe-link">

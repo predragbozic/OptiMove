@@ -129,7 +129,7 @@ function emptyMapping() {
 }
 
 function emptyBatch() {
-  return { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null };
+  return { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false };
 }
 
 export async function loadGpexeTeam(render) {
@@ -841,7 +841,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
       if (!isDefiniteRefusal(info)) {
         linksChanged();
         gx.linkConfirm = null;
-        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" on the Imports page, and unlink it there if it is wrong." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the linked athletes under Link athletes, and unlink it there if it is wrong." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -875,7 +875,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
       // the reviews on screen are treated as made with the old links.
       if (!isDefiniteRefusal(info)) {
         linksChanged();
-        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" on the Imports page." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the linked athletes under Link athletes." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -1134,46 +1134,89 @@ export function closeBatchReview() {
 // (imported and already imported sessions leave it; a refused one stays
 // only while it is still Ready with the same hash - a changed one is
 // never resent).
+// U6a: the server works for at most 45 s per request, so a long selection answers "not tried: time ran out" for the rest. The
+// series goes on by itself with exactly those sessions (the same hashes the person chose them with) until it is done, until a
+// session is refused for a reason that needs a person, until a result is not confirmed, until Stop, or until a round decides
+// nothing. Every round is an ordinary request; leaving Imports or the team (a new generation) ends the series, and one click on
+// Import ready sends what is left.
+export const BATCH_MAX_ROUNDS = 30;
+const isBudgetStop = (r) => r.outcome === "not_attempted" && r.code === "batch_time_budget";
+// A refusal that waits for a person (anything but a busy server or a server fault, which leave the session as it was).
+const needsPerson = (r) => r.outcome === "refused" && r.code !== "try_again" && r.code !== "internal_error";
+
+function addSummary(total, part) {
+  const out = { ...(total || {}) };
+  for (const [k, v] of Object.entries(part || {})) out[k] = typeof v === "number" ? (out[k] || 0) + v : v;
+  return out;
+}
+
+export function stopBatchSeries() {
+  const gx = g();
+  if (!gx.batch.sending) return false;
+  gx.batch.stopRequested = true;
+  return true;
+}
+
 export async function sendBatch(render) {
   const gx = g();
   if (gx.batch.sending || !gx.batch.confirming) return;
   const generation = gx.generation;
-  const items = batchSelection(gx);
+  let items = batchSelection(gx);
   if (!items.length) {
     gx.batch.confirming = false;
     render();
     return;
   }
-  const candidateIds = items.map((i) => i.candidateId);
-  const previewHashes = Object.fromEntries(items.map((i) => [i.candidateId, i.previewHash]));
+  const order = items.map((i) => i.candidateId);
   gx.batch.sending = true;
   gx.batch.error = null;
   gx.batch.results = null;
   gx.batch.summary = null;
   gx.batch.unknown = null;
+  gx.batch.stopRequested = false;
+  gx.batch.progress = { total: items.length, done: 0, rounds: 1 };
   render();
+  const collected = new Map();
+  let summary = null;
+  let round = 0;
+  let candidateIds = [];
   try {
-    // J19 U1 (R5): the server's batch time budget is 45 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
-    // before this 90 s client bound, which is below the hosting proxy's 100 s. An aborted request is a lost answer ("Result not
-    // confirmed" - Check again), never "nothing was imported".
-    const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(BATCH_REQUEST_BOUND_MS) : undefined;
-    const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }), ...(signal ? { signal } : {}) });
-    if (generation !== gx.generation) return;
-    const results = Array.isArray(answer?.results) ? answer.results : [];
-    gx.batch.results = results;
-    gx.batch.summary = answer?.summary || null;
-    for (const r of results) {
-      // The same marks the single review uses: an unconfirmed result stays
-      // marked on the row and in a reopened review until it is confirmed.
-      if (r.outcome === "import_outcome_unknown") {
-        gx.uncertain[r.candidateId] = { kind: "unknown", error: { status: 503, code: r.code || "import_outcome_unknown", message: "", data: { verify: r.verify || null } }, verify: r.verify || null, checks: 0 };
-      } else if (r.outcome === "imported" || r.outcome === "already_imported") delete gx.uncertain[r.candidateId];
-      // The server has decided about every session it tried: it leaves the
-      // selection here, whatever the reload says (a refused session is only
-      // chosen again from the fresh list). A session not tried, or refused
-      // because the server failed or was busy (try_again: nothing written),
-      // waits for the reload's verdict.
-      if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && (r.code === "internal_error" || r.code === "try_again"))) delete gx.batch.selected[r.candidateId];
+    for (round = 0; round < BATCH_MAX_ROUNDS; round += 1) {
+      candidateIds = items.map((i) => i.candidateId);
+      const previewHashes = Object.fromEntries(items.map((i) => [i.candidateId, i.previewHash]));
+      // J19 U1 (R5): the server's batch time budget is 45 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
+      // before this 90 s client bound, which is below the hosting proxy's 100 s. An aborted request is a lost answer ("Result not
+      // confirmed" - Check again), never "nothing was imported".
+      const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(BATCH_REQUEST_BOUND_MS) : undefined;
+      const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }), ...(signal ? { signal } : {}) });
+      if (generation !== gx.generation) return;
+      const results = Array.isArray(answer?.results) ? answer.results : [];
+      summary = addSummary(summary, answer?.summary);
+      for (const r of results) {
+        collected.set(r.candidateId, r);
+        // The same marks the single review uses: an unconfirmed result stays
+        // marked on the row and in a reopened review until it is confirmed.
+        if (r.outcome === "import_outcome_unknown") {
+          gx.uncertain[r.candidateId] = { kind: "unknown", error: { status: 503, code: r.code || "import_outcome_unknown", message: "", data: { verify: r.verify || null } }, verify: r.verify || null, checks: 0 };
+        } else if (r.outcome === "imported" || r.outcome === "already_imported") delete gx.uncertain[r.candidateId];
+        // The server has decided about every session it tried: it leaves the
+        // selection here, whatever the reload says (a refused session is only
+        // chosen again from the fresh list). A session not tried, or refused
+        // because the server failed or was busy (try_again: nothing written),
+        // waits for the reload's verdict.
+        if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && (r.code === "internal_error" || r.code === "try_again"))) delete gx.batch.selected[r.candidateId];
+      }
+      gx.batch.results = order.map((id) => collected.get(id)).filter(Boolean);
+      gx.batch.summary = summary;
+      const waiting = results.filter(isBudgetStop).map((r) => r.candidateId);
+      gx.batch.progress = { total: order.length, done: [...collected.values()].filter((r) => !isBudgetStop(r)).length, rounds: round + 1 };
+      const decided = results.length - waiting.length;
+      const stop = !waiting.length || decided <= 0 || gx.batch.stopRequested || results.some((r) => needsPerson(r) || r.outcome === "import_outcome_unknown");
+      if (stop) break;
+      // The rest of the series: exactly the sessions the server did not try, with the hashes they were chosen with.
+      items = items.filter((i) => waiting.includes(i.candidateId));
+      gx.batch.progress.rounds = round + 2;
+      render();
     }
     gx.batch.confirming = false;
   } catch (error) {
@@ -1182,10 +1225,12 @@ export async function sendBatch(render) {
     if (isDefiniteRefusal(info)) {
       // The whole request was refused before anything was tried: the
       // confirmation stays open with the reason, Back closes it, and the
-      // reason stays under the Ready bucket until the next choice.
+      // reason stays under the Ready bucket until the next choice. After an
+      // earlier round the answers already given are shown, so the panel closes.
       gx.batch.error = info;
+      if (collected.size) gx.batch.confirming = false;
     } else {
-      // No answer: the sessions may or may not be imported, some or all.
+      // No answer: the sessions of this request may or may not be imported, some or all.
       // Never "failed". Every one is marked as not confirmed; the list is
       // read again once and only what it shows as imported is confirmed.
       gx.batch.unknown = { candidateIds, error: info, checks: 0 };
@@ -1195,6 +1240,7 @@ export async function sendBatch(render) {
   } finally {
     if (generation === gx.generation) {
       gx.batch.sending = false;
+      gx.batch.stopRequested = false;
       render();
     }
   }
@@ -1286,14 +1332,14 @@ export function clearCalendarDay() {
   g().calendar.day = "";
 }
 
-// Whether the calendar panel is open: as the coach left it; otherwise open
-// on a desktop, folded on a phone (the list is the day's work), and open
-// while a day is filtered so the "Show all dates" line is in sight.
+// Whether the calendar panel is open: as the coach left it; otherwise folded
+// on every screen (U6a: the list is the day's work), and open while a day is
+// filtered so the "Show all dates" line is in sight.
 export function calendarOpen(gx = g()) {
   const open = gx.calendar?.open;
   if (open === true || open === false) return open;
   if (gx.calendar?.day) return true;
-  return !globalThis.window?.matchMedia?.("(max-width: 760px)")?.matches;
+  return false;
 }
 
 // The panel was opened or folded (the <details> element's own "toggle"

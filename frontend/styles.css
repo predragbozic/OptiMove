@@ -22658,3 +22658,117 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     background: Highlight;
   }
 }
+
+/* U6a: the daily Imports screen - one state bar with one main button, problems grouped by reason, the rest folded. */
+.imports-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.imports-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.imports-lastsearch {
+  overflow-wrap: anywhere;
+}
+.imports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-actions .gpexe-button,
+.imports-attn-actions .gpexe-button {
+  min-height: 44px;
+}
+.imports-attn-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.imports-attn-group:first-of-type {
+  border-top: 0;
+}
+.imports-attn-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.imports-attn-head h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+.imports-attn-count {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+.imports-attn-group > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.imports-attn-sessions > summary,
+.imports-links-fold > summary,
+.imports-settings > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.imports-settings {
+  padding-block: 0;
+}
+.imports-settings > .gpexe-panel {
+  border: 0;
+  padding-inline: 0;
+}
+.imports-progress {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-progress p {
+  margin: 0;
+}
+.imports-progress-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--line);
+}
+.imports-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent, currentColor);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .imports-progress-bar > i {
+    transition: width 0.3s;
+  }
+}
+@media (max-width: 760px) {
+  .imports-actions,
+  .imports-attn-actions {
+    width: 100%;
+  }
+  .imports-actions .gpexe-button,
+  .imports-attn-actions .gpexe-button,
+  .imports-progress .gpexe-button {
+    width: 100%;
+  }
+}

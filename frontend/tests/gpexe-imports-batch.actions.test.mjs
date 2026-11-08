@@ -680,7 +680,7 @@ test("13. the calendar marks every day with a found session, whatever its bucket
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
   await openImports();
   const page = html();
-  assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/, "open on a desktop");
+  assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "U6a: folded by default, on a desktop too");
   assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Sessions calendar<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
   assert.match(page, /Markers show sessions already found by OptiMove\. Other dates may not have been searched yet\./);
   assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
@@ -894,7 +894,8 @@ test("J19 U1: the daily line shows Ready and Needs you, and Import N ready selec
   let sent = 0;
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), ready(3)], onImports: () => { sent += 1; return result({ imported: 0 }, []); } }));
   await openImports();
-  assert.match(html(), /<strong>Ready 3<\/strong> · <strong>Needs you 0<\/strong>/);
+  assert.match(html(), /<h3>Ready to import \(3\)<\/h3>/);
+  assert.ok(!/Needs you/.test(html()), "the old counts line is gone: the groups and the button say it");
   assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
   await act("training-load-gpexe-import-ready");
   assert.deepEqual(Object.keys(gx().batch.selected), ["cand-1", "cand-2", "cand-3"]);
@@ -916,7 +917,7 @@ test("J19 U1: when the coach may not approve there is no Import N ready button, 
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } }, candidates: [ready(1)] }));
   await openImports();
-  assert.match(html(), /<strong>Ready 1<\/strong>/);
+  assert.match(html(), /<h3>Ready to import \(1\)<\/h3>/);
   assert.ok(!/training-load-gpexe-import-ready/.test(html()));
 });
 
@@ -942,7 +943,8 @@ test("J19 U1: while a day filter is active the daily line says its counts are fo
   await openImports();
   await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
   const page = html();
-  assert.match(page, /<strong>Ready 3<\/strong> · <strong>Needs you 0<\/strong> <span class="muted">\(all dates\)<\/span>/);
+  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
+  assert.match(page, /Import 3 ready imports every ready session, not only the day shown\./, "the button says it is for all dates");
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   await act("training-load-gpexe-import-ready");
   assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");
