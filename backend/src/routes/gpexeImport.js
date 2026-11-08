@@ -11,6 +11,7 @@ import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
 import * as teamSwitch from "../teamImportSwitchService.js";
+import * as sessionUndo from "../gpexeSessionUndoService.js";
 
 const router = Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -73,7 +74,7 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify, reason } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest } = error.details || {};
         // The precise reason of a source-connection refusal names connection
         // and server configuration facts: an administrator of the team's club
         // or of the platform gets it; a coach gets the stable code and the
@@ -87,6 +88,10 @@ function handle(fn) {
           // A count only (J17 section 8.2, D11): never the changes themselves.
           ...(Number.isInteger(changesToImported) && changesToImported >= 0 ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
+          // U5: counts only (what blocks the undo, or that the same request may be repeated).
+          ...(rosterWork && typeof rosterWork === "object" ? { rosterWork } : {}),
+          ...(Number.isInteger(calendarLinks) ? { calendarLinks } : {}),
+          ...(retrySameRequest === true ? { retrySameRequest: true } : {}),
         });
       }
       next(error);
@@ -374,6 +379,36 @@ router.get("/teams/:teamId/athlete-pair-suggestions", async (req, res, next) => 
     next(error);
   }
 });
+
+// U5 (J19-U5, v57): the in-app undo of one imported session. The first version is for an active platform admin only
+// (the owner's Q1; the final state, whoever may make athlete links, is a second step): everyone else - the club's admin
+// and a coach included - gets the identical 404, as for a missing candidate. The database function derives and locks the
+// right again.
+async function undoAccess(req, res) {
+  const access = await teamAccess(req, res);
+  if (!access) return null;
+  if (identity.identityAdminBasis(req, access) !== "platform_admin") { notFound(res); return null; }
+  if (!UUID.test(req.params.candidateId)) { notFound(res); return null; }
+  return access;
+}
+
+router.get("/teams/:teamId/candidates/:candidateId/undo-preview", handle(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const access = await undoAccess(req, res);
+  if (!access) return;
+  res.json({ undoPreview: await sessionUndo.undoPreview(access.teamId, req.params.candidateId, { userId: String(req.user.id) }) });
+}));
+
+router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const access = await undoAccess(req, res);
+  if (!access) return;
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const expected = body.expected && typeof body.expected === "object" ? body.expected : {};
+  res.json({ undo: await sessionUndo.undoImport(access.teamId, req.params.candidateId, {
+    userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
+  }) });
+}));
 
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {
   const access = await teamAccess(req, res);
