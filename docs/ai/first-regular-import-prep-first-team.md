@@ -11,7 +11,7 @@
 
 - **Today:** one session (GPEXE 190122, First team) was imported on 2026-11-02 through the first window (M6). The environment switch is off. The First team has **no** per-team switch row (v56's post-check: 0 rows), so nobody can approve an import, a platform admin included. No backup date and no restore-probe date is recorded in the app.
 - **Two switches must both be on** for an approval: `GPEXE_IMPORT_APPLY_ENABLED` (Render, the whole server) and the team's own switch (the app, immediate). Turning the team switch **on** needs a recorded backup dated within **2 days** and a restore probe within **35 days**.
-- **The owner's part** (section 2): read the backup date in Supabase, run the restore probe, record both dates in the app, turn the First team on in pilot mode, and (once) set the environment switch on.
+- **The owner's part** (section 2): on the **Free** Supabase plan only the owner's own `pg_dump` counts as the backup (younger than 2 days at every switch-on) and a local restore of it is the probe (valid 35 days) - one run of `gpexe-backup-verify.mjs --remote-source` gives both; record both dates in the app, turn the First team on in pilot mode, and set the environment switch on (whether it then stays on is the owner's open decision).
 - **The first window's 9-R SQL files** (section 3) were built for a different problem (one environment-wide switch, one approval, a freeze). Most of what they check is now done by the per-team switch, by the undo, or cannot hold for regular imports. Proposal: retire the window procedure for regular imports and issue **one** generic, parameter-free, read-only check instead.
 - **The first import** (section 4) goes through the Imports screen: find, link pairs, review, *Import N ready*, with the *Rukovodilac*'s checks before and after.
 - **Still open** (section 5): the Supabase plan and its backup options are **not known to this document**; the first production undo has not been run; the backup-freshness mechanism, the legacy token cut-over (F3c4) and the second-club conditions are not done.
@@ -32,46 +32,30 @@
 
 The owner does these steps, in this order. The main session and the *Rukovodilac* never hold the Supabase login, the Render login or the dump.
 
-### A0. Know the Supabase plan
+### A0. The Supabase plan (checked by the *Rukovodilac*, 2026-11-08)
 
-Everything below depends on the plan of the Supabase project. **This document does not know it.** Open the project's *Settings -> Billing* (the plan name) and *Database -> Backups*. Write the plan and what *Database -> Backups* shows into the record row of A4.
+The *Rukovodilac* read the project's metadata (read-only): the organization is on the **Free** plan; the project is OptiMove, region eu-west-1, PostgreSQL 17.6. Everything below follows from that. If the plan changes, the options of the note at the end of A2 open up and this part is revised.
 
-### A1. Where the date of the last backup is
+### A1. The backup: the owner's own `pg_dump`, and only that
 
-What Supabase's documentation says (read in search results on 2026-11-08; **the documentation pages themselves could not be opened from this session**, so confirm each point on the dashboard before relying on it):
+On the Free plan Supabase's own daily backup **does not count** for the app's condition: do not record a date from *Database -> Backups*. The backup that counts is the owner's manual dump, taken and verified with `gpexe-backup-verify.mjs --remote-source` (`docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase), from the owner's computer"), the same way as for the first window (`OptiMove-backups/optimove-production-2026-11-02.dump`: VERIFIED, 222 tables, 92,490 rows, 0 differences).
 
-| Plan | Automatic daily backups |
-|---|---|
-| Free | The search result only showed that a FAQ exists for this ([Supabase FAQ](https://supabase.com/kb/faqs/platform/free-plan-backups)); its answer was not read. Treat the Free plan as having **no** automatic backup until the dashboard says otherwise; then only a manual dump exists. |
-| Pro | The last 7 days. |
-| Team | The last 14 days. |
-| Enterprise | Up to 30 days. |
+**The dump must be younger than 2 days every time a team is turned on.** The app checks the recorded backup date against the day the team is turned on (a date in the future, or older than 400 days, is refused). A dump from 2026-11-02 is therefore too old for a switch-on today: take a new one, verify it (it prints `VERIFIED` and writes `<dump>.verify.json`), and only then record its date. A dump is also not a rolling protection: a dump taken before the first import does not contain the imports, so after imports it is the way back to **that** moment, not to the latest state; the in-app undo (v57) is the correction for a wrong import, and the dump is the last resort.
 
-([Database Backups](https://supabase.com/docs/guides/platform/backups).) The dashboard path is *Database -> Backups* of the project, where the list of daily backups with their dates is shown. **If the Point-in-Time Recovery (PITR) add-on is on, Supabase no longer takes daily backups** (same page); then the page shows the PITR window instead, and the date to record is the day of the newest recoverable point.
+### A2. The restore probe: a local restore of the dump (the only path on Free)
 
-What the app wants is only a **date** (a day, not later than today, not older than 400 days). The condition is: the recorded backup date is within 2 days of the day the team is turned on.
+The restore probe is what `gpexe-backup-verify.mjs --remote-source` already does at the end of the same run: the dump is restored into a local `optimove_tests_gpexe_restore_*` database on the owner's computer and compared with the source (every table's row count and digest, every catalog object); the local database is always dropped. It reads the production database only (one exported snapshot) and writes nothing to it. It needs PostgreSQL 17 client tools on the owner's computer (the script checks that `pg_dump` is at least the server's major version). **One run of that script is the backup and the probe at once**: record the backup date and the probe date as the same day, with the `.verify.json` sha256 in the note.
 
-The owner's own manual dump (`OptiMove-backups/optimove-production-<date>.dump`, taken and verified in M6 with `gpexe-backup-verify.mjs --remote-source`) is a **backup for this purpose too**: its date is the day it was taken. It works on every plan, including Free, and it is the one this repository has already proven (222 tables, 92,490 rows, 0 differences on 2026-11-02). A dump is only as fresh as its day: take a new one for each recording (2 days).
+**The probe is valid for 35 days** (the app's condition: a restore probe dated within the last 35 days when a team is turned on). A new dump within 2 days is needed at every switch-on; a probe is needed at least every 35 days; running the script gives both, so the simplest routine is to run it before every switch-on and at least monthly.
 
-### A2. The restore probe, without touching production
-
-A restore probe means: a backup was **restored somewhere else** and its content was compared with the source. Options that exist (prices and conditions as the documentation states them; confirm on the pricing page):
-
-| Option | What it proves | Touches production? | Cost | Notes |
-|---|---|---|---|---|
-| **1. The owner's dump and a local restore** (`gpexe-backup-verify.mjs --remote-source`, `docs/runbooks/gpexe-backup-verify.md`, "The deployed database (Supabase), from the owner's computer") | That the owner's own `pg_dump` restores and equals the source (every table's row count and digest, every catalog object). | No: the source is only read, on one exported snapshot. The restore goes into a local `optimove_tests_gpexe_restore_*` database that the script always drops. | None. Needs PostgreSQL 17 client tools on the owner's computer (the script checks `pg_dump` is at least the server's major version). | **Recommended as the probe the app records.** It is the same file the owner already ran. It does not prove that Supabase's own backup restores. |
-| **2. "Restore to a new project"** | That a Supabase backup restores, on Supabase's side, into a separate project. | No: the source project is not changed; the copy is a new project in the same region. | A new project bills as a project (compute and disk, by the hour, while it exists). Needs a paid plan and **physical** backups on the source. **The exact bill is not on a page this session could read**; the owner reads it in the restore dialog before confirming. | **Two cautions from the documentation:** the copy includes extensions that act outside the database (`pg_cron`, `pg_net`, wrappers), and their jobs start running as soon as the copy is up; and the copy must be **deleted** afterwards (a paused project can still bill for storage - confirm). Never point the Render service at it. Whether OptiMove uses any such extension is not recorded here: run `select extname from pg_extension` first (read-only). |
-| **3. PITR into a copy** | That a precise point in time restores. | The documentation describes restoring in place; whether PITR can target a **new** project is not clear from what this session read. **Do not use an in-place PITR restore as a probe: it replaces the project's data.** | The add-on is billed hourly: about 100 USD a month for 7 days of retention, 200 for 14, 400 for 28 (documentation figures), not covered by the spend cap; **turning it on stops the daily backups**. | **Not recommended for this purpose.** Only if the owner wants PITR for its own sake. |
-| **4. Downloading Supabase's daily backup from the dashboard** | The same restore as option 1, but from Supabase's file. | No. | None. | Only a **logical** backup can be downloaded; projects on newer Postgres versions use **physical** backups, which cannot be downloaded directly, and large databases are not offered for download at all. Likely unavailable; option 1 replaces it. |
-
-**Proposal:** record the probe from **option 1** every month (it costs nothing and is already scripted), and do option 2 **once**, before the first regular import, if the plan allows it and the owner wants proof that Supabase's own backup is restorable. If the plan is Free, only option 1 exists and the owner decides whether that is enough (the J17 decision O2 already chose it for the M6 window).
+*Note for the future (needs a paid plan, so not available now):* Supabase's **Restore to a new project** (a separate project for the copy, billed while it exists, which must be deleted afterwards; the copy also starts `pg_cron` / `pg_net` jobs) and **Point-in-Time Recovery** (about 100 / 200 / 400 USD a month for 7 / 14 / 28 days of retention; turning it on stops the daily backups; an in-place restore replaces the project's data, so it is never a probe). These come from search-result summaries of Supabase's documentation (the pages could not be opened from this session); confirm them on the pricing page if the plan changes.
 
 ### A3. Recording both dates in the app
 
 OptiMove cannot read Supabase; it stores the date the owner states.
 
 1. Sign in as a platform admin; open *Training Load -> Data & Analysis -> Imports*, choose the **First team**.
-2. In *Imports for this team*, open **Record a date**. Choose **Database backup**, the date (today at most), an optional note (the plan, the file name, "verify.json sha256 ..."), **Record**. Repeat with **Restore probe** and the date the probe was done.
+2. In *Imports for this team*, open **Record a date**. Choose **Database backup**, the date of the owner's verified dump (today at most), an optional note (the file name and the `.verify.json` sha256), **Record**. Repeat with **Restore probe** and the date of the same verified run.
 3. The same can be sent as `POST /api/training-load/gpexe/import-prerequisites` with `{ kind: "backup" | "restore_probe", recordedOn: "YYYY-MM-DD", note }`; only a platform admin.
 4. The dates are global (the platform's, not the team's). The panel lists the conditions with a tick: *Database backup (at most 2 days old)*, *Restore probe (at most 35 days old)*.
 
@@ -89,7 +73,7 @@ The dates are **checked once, when a team is turned on**, not at every approval.
 
 `GPEXE_IMPORT_APPLY_ENABLED=true` in Render is still required: both switches must be on. **A Render environment change takes effect only with a deploy** (J17 section 10.5, departure 4). The owner sets it, deploys, and confirms `importSwitch` on the Imports status and `/api/health` three times in a row on the same commit.
 
-Recommendation: leave the environment switch **on** from then on and use the **team switch as the gate**. A team with no switch row stays off, the team switch turns off at once (no deploy), and the environment switch remains the emergency stop for the whole server. The decision is the owner's.
+**Open decision for the owner (not decided here):** whether `GPEXE_IMPORT_APPLY_ENABLED` stays **on** from then on, with the **team switch as the gate**, or is turned on and off around imports as in the first window. The *Rukovodilac*'s recommendation, which the owner decides: leave it on. A team with no switch row stays off (v56's post-check: 0 rows), the team switch turns off at once without a deploy, and the environment switch remains the emergency stop for the whole server (it needs a deploy to take effect). Until the owner decides, the environment switch is turned on for the first import and off again after the post-check, as in J17.
 
 ## 3. Part B - are the 9-R window files still needed?
 
@@ -143,10 +127,10 @@ Everything below is a person on the Imports screen of the First team (a platform
 
 | Open item | Where it is recorded | Needed before the first regular import? |
 |---|---|---|
-| The Supabase plan and what it offers (backups, PITR, restore to a new project) | this document, A0-A2 | **Yes**: the backup date and the probe depend on it. |
-| A fresh **backup** and a **restore probe**, recorded in the app | A1-A3 | **Yes** (the database refuses the switch without them). |
+| The Supabase plan is **Free** (the *Rukovodilac*, 2026-11-08): only the owner's own dump is a backup; Supabase's daily backup, PITR and restore to a new project are not available | A0-A2 | Settled; revisit if the plan changes. |
+| A fresh **dump** (younger than 2 days at the switch-on) and a **restore probe** (within 35 days), recorded in the app | A1-A3 | **Yes** (the database refuses the switch without them). |
 | The **record row** of the operational gate, written before the switch | `gpexe-in-app-import.md` | **Yes** (a person's step). |
-| The owner's decision whether the environment switch stays on | A5 | **Yes** (a decision). |
+| **Open decision for the owner:** whether the environment switch stays on, with the team switch as the gate | A5 | **Yes** (a decision). |
 | The first **production undo** has not been run; the wrong-link procedure rests on tests (30 backend, 20 frontend) | `CURRENT_STATE.md` U5-1, U5b | Recommended: owner-run rehearsal on one session after the first import's check, before relying on it. Not a team-mode attestation yet. |
 | **Backup freshness at every approval**, or an automatic switch off when the backup goes stale | owner's decision of 2026-11-04 (U2 notes) | Before a **second club** or **regular self-service**; for the pilot the owner turns the team off. |
 | **F3c4**: the legacy `GPEXE_API_TOKEN` path retired, `legacy_env` forbidden for new check rows | `CURRENT_STATE.md`, F3c3/F3c4 | Not blocking: the First team reads only through its binding. It is still recorded as part of "F3c complete". |
@@ -160,7 +144,6 @@ Everything below is a person on the Imports screen of the First team (a platform
 
 ## 6. What this document does not claim
 
-- **Supabase's prices, plans and restore behaviour** come from search-result summaries of its public documentation (2026-11-08). The documentation pages themselves could not be opened from this session. Confirm each figure and condition on the dashboard and the pricing page; where the pages differ from this document, the pages win.
-- It does not say which Supabase plan the project is on.
+- **The Supabase plan** is the *Rukovodilac*'s read-only reading of the project's metadata (Free). The paid-plan options in A2's note are from search-result summaries of Supabase's public documentation; the pages themselves could not be opened from this session, so confirm them before relying on them if the plan changes.
 - It sends no GPEXE request, reads no production data and changes no setting.
 - The proposed `gpexe-import-check.sql` is not written; it is a separate documents-and-SQL pull request after the *Rukovodilac*'s decision.
