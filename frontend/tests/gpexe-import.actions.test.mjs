@@ -239,7 +239,8 @@ test("GPEXE imports: a Data & Analysis sub-tab that loads status, candidates and
   assert.ok(!/backup/i.test(html), "the screen never says anything about a backup");
   assert.match(html, /training-load-filter-button[^>]*disabled/, "the shell filter does not apply here");
   assert.match(html, /session of/);
-  assert.match(html, /Ana Example/);
+  assert.ok(state.trainingLoad.gpexe.links.some((l) => l.athleteName === "Ana Example"), "the links are loaded (they are listed on the Link athletes screen)");
+  assert.ok(!/GPEXE athletes linked to this team/.test(html), "U6a: no list of linked athletes on the daily screen");
 });
 
 test("GPEXE imports: in a team workspace only that team is shown; in a club workspace switching team reloads, and an answer for the old team is dropped", async () => {
@@ -782,9 +783,10 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
   await openImports();
   await new Promise((resolve) => setImmediate(resolve));
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 items need attention · 1 session is ready to import\./);
-  assert.ok(html.indexOf('class="imports-source"') < html.indexOf('class="gpexe-next"'), "the source card comes first, then the next step");
-  assert.ok(html.indexOf('class="gpexe-next"') < html.indexOf('Needs attention ('), "the next step comes before the buckets");
+  // U6a: the state bar and the groups say what the old next-step line said; there is no second line.
+  assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the groups");
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the ready session is listed");
+  assert.ok(html.indexOf('class="imports-statusbar"') < html.indexOf('Needs attention ('), "the state bar comes before the groups");
   const mainScreen = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/GPEXE team 980|Reads GPEXE team/.test(mainScreen), "the GPEXE team id is only in Technical details");
   assert.match(html, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
@@ -895,8 +897,10 @@ function setupServer(sourceCode, message) {
     },
   });
 }
+// U6a: an attention session is folded inside its group; the group's own button carries the id too, so a row is found by its own button.
+const rowIdx = (h, id) => h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${id}"`);
 const setupRowStep = (h) => {
-  const at = h.indexOf('data-candidate-id="c-setup"');
+  const at = rowIdx(h, "c-setup");
   return h.slice(at, h.indexOf("</button>", at)).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
 };
 const setupBlock = (h) => h.slice(h.indexOf('class="gpexe-blocked"'), h.indexOf('<details class="gpexe-tech">', h.indexOf('class="gpexe-blocked"')));
@@ -1026,9 +1030,9 @@ test("blocked sessions in the list: sorted from the list's own code with no deta
   // Every other block is in Needs attention, and the row's step is exactly
   // the detail's "What to do".
   assert.match(html, /<h3>Needs attention \(5\)<\/h3>/);
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 5 items need attention · 1 session is ready to import\./);
+  assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the groups");
   for (const id of ["c-thr", "c-stats", "c-none", "c-data", "c-conf"]) {
-    const row = html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
+    const row = html.slice(rowIdx(html, id), html.indexOf("</button>", rowIdx(html, id)));
     const rowStep = row.match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
     assert.ok(rowStep, `${id}: a next step in the list`);
     await openCandidate(id);
@@ -1058,7 +1062,8 @@ test("when nothing needs a decision but some sessions can't be imported yet, the
     return base(call);
   });
   await openImports();
-  assert.match(renderTrainingLoadCoachHtml(), /class="gpexe-next"[^>]*>Next step: 1 item needs attention - see below\./);
+  assert.ok(!/class="gpexe-next"/.test(renderTrainingLoadCoachHtml()), "no next-step line repeats the groups");
+  assert.match(renderTrainingLoadCoachHtml(), /<h3>Needs attention \(1\)<\/h3>/);
   assert.match(renderTrainingLoadCoachHtml(), /Check the team thresholds in GPEXE, then find new sessions\./);
 });
 
@@ -1335,11 +1340,11 @@ test("uncertain outcome: it stays visible after the review is closed - in the li
   await act("training-load-gpexe-close");
   let html = renderTrainingLoadCoachHtml();
   assert.ok(!state.trainingLoad.gpexe.detail);
-  const row = html.slice(html.indexOf('data-candidate-id="cand-1"'), html.indexOf("</button>", html.indexOf('data-candidate-id="cand-1"')));
+  const row = html.slice(rowIdx(html, "cand-1"), html.indexOf("</button>", rowIdx(html, "cand-1")));
   assert.match(row, /<span class="gpexe-badge is-unknown">Result not confirmed<\/span>/);
   assert.match(row, /Import result not confirmed yet - open it to check the result\./);
   assert.ok(!/Waiting for approval/.test(row), "not shown as simply waiting");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 item needs attention - see below\./);
+  assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the groups");
   assert.match(html, /Import result not confirmed yet - open it to check the result\./);
 
   await openCandidate();
@@ -1439,7 +1444,7 @@ test("link: a lost answer closes the confirmation, treats the links as changed a
   await act("training-load-gpexe-link-confirm");
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!/gpexe-link-confirm/.test(html), "the confirmation is closed");
-  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the list &quot;GPEXE athletes linked to this team&quot; on the Imports page, and unlink it there if it is wrong\./);
+  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the linked athletes under Link athletes, and unlink it there if it is wrong\./);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "the link may have been made: no Approve on the old review");
 });
 
@@ -1580,7 +1585,7 @@ test("texts shown in the review never point to a list 'below' - the link list is
   state.trainingLoad.gpexe.links = [{ id: "link-9", gpexeAthleteId: "109", athleteId: "ath-2", athleteName: "Bo Example" }];
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
-  assert.match(html, /If athlete 104 is one of them, close this review and check "GPEXE athletes linked to this team"\./);
+  assert.match(html, /If athlete 104 is one of them, close this review and check the linked athletes under Link athletes\./);
 
   // (b) a lost answer to a link and (c) to an unlink
   resetState();
@@ -1599,7 +1604,7 @@ test("texts shown in the review never point to a list 'below' - the link list is
   const dialog = () => { const h = renderTrainingLoadCoachHtml(); return h.slice(h.indexOf('class="gpexe-detail-body"')); };
   assert.ok(!/ below/.test(dialog().replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "").replace(/Do the step below/g, "")), "no 'below' in the dialog after a lost link answer");
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
-  assert.match(dialog(), /We can(?:'|&#039;)t tell whether the link was removed\. Check the list &quot;GPEXE athletes linked to this team&quot; on the Imports page\./);
+  assert.match(dialog(), /We can(?:'|&#039;)t tell whether the link was removed\. Check the linked athletes under Link athletes\./);
   assert.ok(!/linked to this team&quot; below/.test(renderTrainingLoadCoachHtml()));
 });
 test("unlink from the link notice names the pair even when the link list could not be read again", async () => {
@@ -1689,7 +1694,7 @@ test("Imports: the source card shows the source name, the connection, when sessi
   await openImports();
   const html = renderTrainingLoadCoachHtml();
   const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
-  assert.match(card, /<h3>GPEXE<\/h3>/);
+  assert.match(card, /<strong>GPEXE<\/strong>/);
   assert.match(card, /imports-state is-on">Connected</);
   assert.match(card, /Sessions from the last successful search are listed below\./, "no search recorded, but sessions are listed");
   assert.match(card, /data-action="training-load-gpexe-check"[^>]*>Find new sessions</);
@@ -1743,7 +1748,7 @@ test("Imports: while importing is off, or the viewer may not approve, the next s
   for (const [teamStatus, phrase] of [
     [{ enabled: false, canApprove: true }, /Next step: 1 session can be reviewed\. Importing waits until it is turned on in this environment\./],
     [{ enabled: true, canApprove: false }, /Next step: 1 session can be reviewed\. An approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
-    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - use Import ready above, tick specific ones below, or open one to review it\./],
+    [{ enabled: true, canApprove: true }, /<h3>Ready to import \(1\)<\/h3>/],
   ]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
@@ -1883,7 +1888,7 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
   assert.match(html, /<summary>Imported \(2\)<\/summary>/);
   assert.ok(!/Training replaced/.test(html), "a replaced version is hidden");
-  const row = (id) => html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
+  const row = (id) => html.slice(rowIdx(html, id), html.indexOf("</button>", rowIdx(html, id)));
   const step = (id) => row(id).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
   assert.equal(step("a-link"), "1 recorded athlete is not linked yet - link them under Link athletes (below), then find new sessions.");
   assert.equal(step("a-team"), "1 linked athlete is no longer in the team - open it to see who.");
@@ -2032,7 +2037,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /data-action="training-load-gpexe-map-open"[^>]*>Link athletes \(2\)<\/button>/);
   assert.match(html, /<p class="imports-links-facts">1 link points to an athlete no longer in the team\.<\/p>/, "the count is on the button, only the other fact is a line");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 GPEXE athletes are not linked - use Link athletes \(below\), then find new sessions\./);
+  assert.ok(!/class="gpexe-next"/.test(html), "the unlinked athletes are named by the button and the group, not by a second line");
   assert.ok(!/gpexe-map"/.test(html), "closed until opened");
 
   await act("training-load-gpexe-map-open");
@@ -2269,7 +2274,7 @@ test("Link athletes: a choice the re-read list no longer supports (another coach
   assert.equal(confirmQuestions.length, 0);
 });
 
-test("Link athletes: a failed source-athletes read degrades only that screen - the inbox, Find new sessions and the links stay; Link athletes is off with the reason; the next successful read clears it", async () => {
+test("Link athletes: a failed source-athletes read degrades only that screen - the inbox and Find new sessions stay; Link athletes is off with the reason; the next successful read clears it", async () => {
   resetState();
   let sourcesFail = true;
   installFetchMock(gpexeServer({
@@ -2283,11 +2288,13 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   assert.ok(!/class="gpexe-error"/.test(html), "no page-level error block");
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
   assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
-  assert.match(html, /<strong>Ana Example<\/strong> <span class="muted">GPEXE athlete 101<\/span>/, "the links are listed");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - use Import ready above, tick specific ones below, or open one to review it\./, "the next step is not about linking");
+  assert.ok(state.trainingLoad.gpexe.links.length > 0, "the links are still loaded");
+  assert.ok(!/<strong>Ana Example<\/strong>/.test(html), "U6a: and not listed on the daily screen");
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the ready session is listed; nothing about linking replaces it");
+  assert.ok(!/class="gpexe-next"/.test(html), "no second line about the next step");
   // 3: Link athletes is off, and the coach reads why - in the coach's words.
   assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
-  assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions, the search and the links below still work\./);
+  assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions and the search still work\./);
   assert.match(html, /data-action="training-load-gpexe-sources-retry" >Try again<\/button>/);
   assert.ok(!/No GPEXE athlete has been seen yet/.test(html), "a failed read is not 'nothing seen'");
   assert.ok(!/internal_error|boom/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "the code only under Technical details");

@@ -20,6 +20,9 @@ export function guideSteps(f) {
   const athletes = Array.isArray(f.sourceAthletes) ? f.sourceAthletes : null;
   const unlinked = athletes ? athletes.filter((a) => a.status === "unlinked").length : null;
   const linked = athletes ? athletes.filter((a) => a.status === "linked").length : 0;
+  // U6a: a session that still lists an athlete as not linked (no_linked_athlete, athletes_not_linked) is a fact the athletes list can miss
+  // (it is read separately and can be older or empty); linking is never "done" while one is open.
+  const sessionsUnlinked = list ? list.filter((c) => !c.importUndoneAt && c.status !== "imported" && c.status !== "superseded" && (c.reasons || []).some((r) => r.code === "no_linked_athlete" || r.code === "athletes_not_linked")).length : 0;
 
   // Steps 1 and 2: the administrator's work. A coach gets one sentence.
   let s1;
@@ -63,13 +66,16 @@ export function guideSteps(f) {
   // Step 4: link athletes (the coach and the administrators).
   let s4;
   if (f.sourceAthletesError || unlinked === null) s4 = s3 === "done" ? "unknown" : "waiting";
+  else if (unlinked === 0 && sessionsUnlinked > 0) s4 = s3 === "done" ? "next" : "waiting";
   else if (unlinked === 0 && linked > 0) s4 = "done";
   else if (unlinked === 0) s4 = "waiting";
   else s4 = s3 === "done" ? "next" : "waiting";
   add(4, s4, s4 === "done" ? "Every GPEXE athlete is linked." : s4 === "unknown" ? "Could not be checked."
+    : unlinked === 0 && sessionsUnlinked > 0 ? `Every athlete is linked now, but ${sessionsUnlinked} ${sessionsUnlinked === 1 ? "session was" : "sessions were"} reviewed before that. ${f.admin ? "Find new sessions to refresh them." : "An administrator finds new sessions to refresh them."}`
     : unlinked === 0 ? "No GPEXE athlete has been seen yet. Find sessions first."
     : s4 === "next" ? `${unlinked} GPEXE ${unlinked === 1 ? "athlete is" : "athletes are"} not linked yet.` : "Waiting for step 3.",
-  s4 === "next" ? { kind: "link", label: "Link athletes" } : null);
+  s4 === "next" && unlinked > 0 ? { kind: "link", label: "Link athletes" }
+    : s4 === "next" && f.admin ? { kind: "check", label: "Find new sessions" } : null);
 
   // Step 5: import - a status for everyone; the approval is the existing button.
   let s5;
