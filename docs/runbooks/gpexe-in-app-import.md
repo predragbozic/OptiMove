@@ -964,7 +964,7 @@ replaces the first window's two files for regular imports; those stay as the rec
 - **What it does not value-check:** an approval into an existing event (a session approved again with changes) and an undone
   import. Block 8 counts both; a person reads them. When a batch imported several sessions, the blocks check the newest of them.
 - **Proof:** `backend/tests/gpexe-import-check-sql.test.mjs` on disposable databases: the file's shape; a world like production's
-  pilot before any import; after one approval; after a second import; after the undo of the newest; and 17 planted breaks.
+  pilot before any import; after one approval; after a second import; after the undo of the newest; and the planted breaks (a running check, a second enabled team, a grant, a non-canonical link, an orphan candidate, an approval without its event or with changes, a missing T6 row, a changed value, a left-out value stored or zeroed, an occasion outside the batch, other T7 keys, a gpexe_* definition).
 
 ## Checking the real GPEXE API (read only)
 
