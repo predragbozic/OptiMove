@@ -945,6 +945,27 @@ environment:
 One row: the first controlled import (M6), recorded in J17
 (`docs/ai/phase9-importer-mappings-contract.md`) section 10.5.
 
+## The read-only import check for regular imports
+
+`docs/runbooks/gpexe-import-check.sql` (17 numbered blocks, read only, no parameter, not pinned to a migration or a team)
+replaces the first window's two files for regular imports; those stay as the record of the window
+(`gpexe-import-window-preflight.sql`, `gpexe-import-window-postcheck.sql`, pinned to v51 and to one approval).
+
+- **Run:** one block per call, each sent as `begin transaction read only;` + the block + `rollback;`. The record names the file's sha256.
+- **Before an import (blocks 1-8):** the migrations and the last one; nothing running and a quiet moment; the team switches and the
+  recorded backup / restore-probe dates with their ages; every binding with open activations; every active platform admin; every
+  approver grant; the non-canonical link count; the imports so far and what the value-by-value blocks do not cover.
+- **After an import (blocks 1, 2 and 8-17):** the **checked approval** is the newest approval that was the first import of its session
+  (no changes, its event created in the approval itself) whose candidate is still imported and not undone. Its team and binding, the
+  candidate and the approved preview, the counts against the preview, every value against its preview entry, every value's T6 row,
+  the T7 keys, nothing stored where the preview left a value out, no `gpexe_*` definition, and the rest of what the import wrote
+  (event, batch, activity, identities, roster decisions - which must stay 0 until the import is accepted, because the undo refuses
+  after one).
+- **What it does not value-check:** an approval into an existing event (a session approved again with changes) and an undone
+  import. Block 8 counts both; a person reads them. When a batch imported several sessions, the blocks check the newest of them.
+- **Proof:** `backend/tests/gpexe-import-check-sql.test.mjs` on disposable databases: the file's shape; a world like production's
+  pilot before any import; after one approval; after a second import; after the undo of the newest; and the planted breaks (a running check, a second enabled team, a grant, a non-canonical link, an orphan candidate, an approval without its event or with changes, a missing T6 row, a changed value, a left-out value stored or zeroed, an occasion outside the batch, other T7 keys, a gpexe_* definition).
+
 ## Checking the real GPEXE API (read only)
 
 Before F1 is called ready, the owner runs this probe in their own terminal.

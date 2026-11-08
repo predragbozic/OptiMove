@@ -48,3 +48,4 @@ docs/runbooks/club-mapping-transitions-v52*.sql text eol=lf
 # Phase 7i-B1 (v53): the rollback restores v36's request guard and v48's T5 guard verbatim, and the preflight and the
 # post-check compare them by md5; new files only, same reason.
 docs/runbooks/system-variables-club-v53*.sql text eol=lf
+docs/runbooks/gpexe-import-check.sql text eol=lf
