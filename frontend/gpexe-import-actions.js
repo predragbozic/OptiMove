@@ -53,7 +53,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { cancelUndo, checkUndo, openUndo, sendUndo, undoBusy, undoOffered } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -177,16 +177,20 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     const reason = fieldValue("[data-gpexe-undo-reason]");
     // Keep what was typed even when the question is refused locally.
     u.reason = reason;
-    const label = gx.detail?.candidate?.label || "this session";
-    const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
-    const question = `Undo the import of ${label}? Its imported data is removed from OptiMove${versions > 1 ? ` (all ${versions} approved versions)` : ""}. This cannot be reversed here.`;
-    // The reason is checked before the question, so a missing one never costs a confirmation.
-    if (!reason.trim()) {
-      await sendUndo(reason, renderTrainingLoad);
+    // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
+    const problem = undoReasonProblem(reason);
+    if (problem) {
+      u.reasonProblem = problem;
+      renderTrainingLoad();
       return true;
     }
+    const label = gx.detail?.candidate?.label || "this session";
+    const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
+    const total = Number(u.preview?.removedTotal) || 0;
+    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}? This can't be undone here; to get the data back, import the session again.`;
+    u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
-    await sendUndo(reason, renderTrainingLoad);
+    await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-undo-check") {

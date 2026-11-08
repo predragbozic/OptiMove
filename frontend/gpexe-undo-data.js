@@ -61,6 +61,15 @@ export function undoFor(candidateId, gx = g()) {
   return gx.undo && gx.undo.id === candidateId ? gx.undo : null;
 }
 
+// A phone shows a long dialog: bring the part that changed into view (a convenience only).
+export function scrollUndoIntoView() {
+  try {
+    globalThis.document?.querySelector?.(".gpexe-undo")?.scrollIntoView?.({ block: "nearest" });
+  } catch {
+    // Scrolling is a convenience only.
+  }
+}
+
 export async function openUndo(candidateId, render) {
   const gx = g();
   if (undoBusy(gx) || !candidateId) return;
@@ -79,6 +88,7 @@ export async function openUndo(candidateId, render) {
     undo.step = "refused";
   }
   render();
+  scrollUndoIntoView();
 }
 
 // Back out of the question or the answer; never while a write is in flight or unconfirmed.
@@ -89,9 +99,21 @@ export function cancelUndo() {
   return true;
 }
 
-// The reason is the one thing the person types; checked here before anything is sent.
+// A line break or tab in the reason is a space (a textarea gives a person Enter); every other control character is refused.
+export function normalizeUndoReason(reason) {
+  return String(reason ?? "").replace(/[\r\n\t]+/g, " ").trim();
+}
+
+// What the person types is kept as they type it, so a repaint of the dialog never empties the field.
+export function handleUndoReasonInput(target, gx = g()) {
+  if (!target?.matches?.("[data-gpexe-undo-reason]")) return false;
+  if (gx.undo?.step === "ready") gx.undo.reason = String(target.value ?? "");
+  return true;
+}
+
+// The reason is the one thing the person types; checked here before anything is asked or sent.
 export function undoReasonProblem(reason) {
-  const text = String(reason ?? "").trim();
+  const text = normalizeUndoReason(reason);
   if (!text) return "Write why the import is undone.";
   if (text.length > UNDO_REASON_MAX) return `The reason is too long (${text.length} of ${UNDO_REASON_MAX} characters).`;
   // eslint-disable-next-line no-control-regex
@@ -111,7 +133,18 @@ async function settle(undo, generation, body, render) {
     if (generation !== gx.generation || gx.undo !== undo) return;
     const info = errorInfo(error);
     undo.error = info;
-    if (isDefiniteRefusal(info) && info.code !== "outcome_unknown") {
+    // A resend of an unconfirmed request is answered "busy" or "not found" while the first one may still be running or
+    // committing: that says nothing about the first one, so it stays not confirmed (only a saved answer settles it).
+    const resend = undo.checks > 0;
+    if (resend && isDefiniteRefusal(info) && (info.code === "try_again" || info.status === 404)) {
+      undo.step = "unknown";
+      undo.stillUnknown = true;
+    } else if (isDefiniteRefusal(info) && info.code === "try_again") {
+      // Nothing was removed and nothing is lost: back to the question with the reason kept.
+      undo.requestKey = null;
+      undo.refusalNote = info.message || "Another change was running; nothing was removed. Try again in a moment.";
+      undo.step = "ready";
+    } else if (isDefiniteRefusal(info) && info.code !== "outcome_unknown") {
       // Settled for certain: nothing was removed (or, for these two, it had been already). A new attempt gets a new key.
       undo.requestKey = null;
       undo.step = info.code === "already_undone" || info.code === "candidate_not_imported" ? "settled" : "refused";
@@ -122,6 +155,7 @@ async function settle(undo, generation, body, render) {
   }
   if (generation === gx.generation) {
     render();
+    scrollUndoIntoView();
     // The session moved on either way: read the list again, and the open review when it is settled.
     if (undo.step === "done" || undo.step === "settled") {
       await refreshReviewedCandidate(undo, generation);
@@ -155,7 +189,8 @@ export async function sendUndo(reason, render) {
     return false;
   }
   undo.reasonProblem = "";
-  undo.reason = String(reason).trim();
+  undo.refusalNote = "";
+  undo.reason = normalizeUndoReason(reason);
   undo.requestKey = undo.requestKey || globalThis.crypto.randomUUID();
   undo.step = "sending";
   undo.error = null;
@@ -170,6 +205,7 @@ export async function checkUndo(render) {
   const undo = gx.undo;
   if (!undo || undo.step !== "unknown" || !undo.requestKey) return false;
   undo.checks += 1;
+  undo.stillUnknown = false;
   undo.step = "sending";
   render();
   await settle(undo, gx.generation, { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);

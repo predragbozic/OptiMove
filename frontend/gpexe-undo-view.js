@@ -1,7 +1,7 @@
 // Imports: the undo of one imported session, as the review of an imported session shows it (J19-U5b).
 // Data and rules: gpexe-undo-data.js. The server's sentences are shown as they are; the codes stay under Technical details.
 import { isImportUndone } from "./gpexe-import-data.js";
-import { UNDO_REASON_MAX, undoFor, undoOffered } from "./gpexe-undo-data.js";
+import { UNDO_REASON_MAX, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -44,6 +44,7 @@ function refusalHtml(error) {
     <div class="gpexe-refused" role="alert">
       <p><strong>Nothing was removed.</strong> ${escapeHtml(error?.message || "The undo was refused.")}</p>
       ${extra.length ? `<p class="muted">${escapeHtml(extra.join(" "))}</p>` : ""}
+      ${error?.data?.error === "roster_decisions_exist" ? `<p class="muted">Ask the coach to remove those roster decisions first, then undo the import. If that is not possible, this session can't be undone here yet.</p>` : ""}
     </div>
     ${errorTech(error)}`;
 }
@@ -53,15 +54,16 @@ function scopeHtml(u) {
   const summary = removedSummary(p.removedCounts);
   const versions = Array.isArray(p.undoneCandidateIds) ? p.undoneCandidateIds.length : 1;
   return `
-    <p>Undoing removes what this import wrote to OptiMove for this session: ${summary ? escapeHtml(summary) : "its results and activity"} (${escapeHtml(plural(Number(p.removedTotal) || 0, "record", "records"))} in all). The deletion is recorded with your reason. It cannot be reversed here: importing again writes new data.</p>
-    ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was approved ${versions} times with different data.</strong> They share one import, so all ${versions} approved versions are undone together.</p>` : ""}
+    <p>This removes from OptiMove: ${summary ? escapeHtml(summary) : "this session's results and activity"}.</p>
+    <p><strong>This can't be undone here.</strong> To get the data back, import the session again.</p>
+    ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> Undoing removes all ${versions} imports together.</p>` : ""}
     <p class="muted">${p.wouldOfferAgain
-      ? "The session is then offered again for review, so it can be imported under the corrected athlete links."
-      : "The session is not offered again right away. Find new sessions to bring it back for review."}</p>`;
+      ? "Afterwards the session is offered again for review, so you can import it under the corrected athlete links."
+      : "Afterwards the session is not offered again right away. Find new sessions to bring it back for review."}</p>`;
 }
 
 function sectionHtml(body) {
-  return `<section class="gpexe-undo gpexe-panel" aria-label="Undo this import"><h4>Undo this import</h4>${body}</section>`;
+  return `<section class="gpexe-undo" aria-label="Undo this import"><h4>Undo this import</h4>${body}</section>`;
 }
 
 // An undone import: history, never "Imported" (the server keeps the approval as a record).
@@ -69,7 +71,7 @@ export function renderUndoneNoteHtml(c, gx) {
   if (!isImportUndone(c)) return "";
   // The undo section above already says it right after the undo itself.
   const u = undoFor(c.id, gx);
-  if (u && (u.step === "done" || u.step === "settled")) return "";
+  if (u && (u.step === "done" || u.step === "settled" || u.step === "unknown")) return "";
   return `<p class="gpexe-warning" role="note"><strong>This import was undone.</strong> Its data is no longer in OptiMove. If the session was offered again, it is listed again for review; otherwise find new sessions.</p>`;
 }
 
@@ -78,6 +80,8 @@ export function renderUndoHtml(c, gx) {
   const u = undoFor(c?.id, gx);
   if (!u) {
     if (!undoOffered(c, gx)) return "";
+    // Another session's undo is still not confirmed: say so instead of offering a button that cannot work.
+    if (undoBusy(gx)) return sectionHtml(`<p class="muted">An undo for another session is not finished or not confirmed yet. Open that session and check its result first.</p>`);
     return sectionHtml(`
       <p class="muted">Imported under a wrong athlete link? Undo removes this session's imported data so it can be imported again once the links are right.</p>
       <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-open">Undo this import...</button>`);
@@ -93,8 +97,9 @@ export function renderUndoHtml(c, gx) {
     const r = u.result || {};
     const summary = removedSummary(r.removedCounts);
     const again = r.offeredAgain
-      ? `<p>The session is offered again for review${r.previewReady ? "" : "; its review is not ready yet, so find new sessions to refresh it"}.</p>${r.newCandidateId ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(r.newCandidateId)}">Review the offered session</button>` : ""}`
+      ? `<p>Fix the athlete links, then review the session again: it is offered again${r.previewReady ? "" : "; its review is not ready yet, so find new sessions to refresh it"}.</p>${r.newCandidateId ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(r.newCandidateId)}">Review the offered session</button>` : ""}`
       : `<p>The session is not offered again right away. Find new sessions to bring it back for review.</p>`;
+    // The next step is the point of the undo.
     return sectionHtml(`
       <div class="gpexe-success" role="status">
         <p><strong>Import undone.</strong> ${summary ? escapeHtml(`Removed: ${summary}.`) : ""}${r.replayed ? " This was the answer saved for the same request." : ""}</p>
@@ -104,9 +109,10 @@ export function renderUndoHtml(c, gx) {
   if (u.step === "unknown") {
     return sectionHtml(`
       <div class="gpexe-unknown" role="alert">
-        <p><strong>We can't tell yet whether the import was undone.</strong> Don't start another undo: check the result first. Checking repeats the same request, so it can never undo twice.</p>
+        <p><strong>We can't tell yet whether the import was undone.</strong> Press Check the result. It is safe to press again: it never undoes twice.</p>
+        ${u.stillUnknown ? `<p class="muted">Still not confirmed: the server was busy. Check again in a moment.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-undo-check">Check the result</button>
-        ${u.checks >= 3 ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Reload the page and look at the session; if it still shows as imported, contact the developer with the Technical details.</p>` : ""}
+        ${u.checks >= 3 ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Reload the page and look at the session. If it still shows as imported and the problem stays, report it with the Technical details.</p>` : ""}
         ${errorTech(u.error)}
       </div>`);
   }
@@ -114,6 +120,7 @@ export function renderUndoHtml(c, gx) {
   const sending = u.step === "sending";
   return sectionHtml(`
     ${scopeHtml(u)}
+    ${u.refusalNote ? `<p class="gpexe-error" role="alert"><strong>Nothing was removed.</strong> ${escapeHtml(u.refusalNote)}</p>` : ""}
     <label class="gpexe-undo-reason">Why is this import undone? (required)
       <textarea data-gpexe-undo-reason maxlength="${UNDO_REASON_MAX}" rows="3" ${sending ? "disabled" : ""}>${escapeHtml(u.reason || "")}</textarea>
     </label>

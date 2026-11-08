@@ -34,7 +34,9 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests, inboxBucket, candidateGroup, isImportUndone, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
-const { undoReasonProblem, UNDO_REASON_MAX } = await import("../gpexe-undo-data.js");
+const { undoReasonProblem, UNDO_REASON_MAX, normalizeUndoReason, handleUndoReasonInput } = await import("../gpexe-undo-data.js");
+const { confirmLeaveTrainingLoad } = await import("../training-load-actions.js");
+const { guideSteps } = await import("../gpexe-guide-steps.js");
 const { removedSummary } = await import("../gpexe-undo-view.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
@@ -201,8 +203,8 @@ test("2. the scope is read first (read-only), names what goes, every approved ve
   assert.equal(undoCalls().length, 0);
   const s = undoSection();
   assert.match(s, /13 athletes&#039; records, 117 imported values, 2 drills, 1 activity/);
-  assert.match(s, /160 records in all/);
-  assert.match(s, /approved 2 times with different data/, "both versions named");
+  assert.match(s, /This can&#039;t be undone here|This can't be undone here/);
+  assert.match(s, /imported more than once with different data[\s\S]*all 2 imports together/, "both versions named");
   assert.match(s, /offered again for review/);
   assert.match(s, /Why is this import undone\? \(required\)/);
   assert.match(s, /maxlength="500"/);
@@ -237,7 +239,7 @@ test("4. the explicit question: declining sends nothing; accepting sends one req
   confirmAnswer = false;
   await act("training-load-gpexe-undo-confirm");
   assert.equal(confirmAsked.length, 1);
-  assert.match(confirmAsked[0], /Undo the import of FULL TRAINING 05\.10\.\?/);
+  assert.match(confirmAsked[0], /Remove 160 records of FULL TRAINING 05\.10\. from OptiMove\? This can't be undone here/);
   assert.equal(undoCalls().length, 0, "declined");
   confirmAnswer = true;
   await act("training-load-gpexe-undo-confirm");
@@ -450,4 +452,128 @@ test("13. a team's undo state never shows on another session's review", async ()
   await openCandidate("cand-other");
   assert.match(undoSection(), /Undo this import\.\.\./, "the other session starts from the offer");
   assert.equal(gx().undo, null);
+});
+
+test("3b. the WHOLE reason is checked before the question: a control character is refused without asking; a line break is a space", async () => {
+  setup({ undo: () => { performUndo(); return { status: 200, body: { undo: okUndo() } }; } });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "bad\u0001reason";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(confirmAsked.length, 0, "no destructive question for an input that is refused anyway");
+  assert.equal(undoCalls().length, 0);
+  assert.equal(gx().undo.step, "ready");
+  assert.match(html(), /control characters/);
+  assert.equal(normalizeUndoReason("line1\nline2\r\n\tline3 "), "line1 line2 line3");
+  typedReason = "Wrong link\nsecond line";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(confirmAsked.length, 1);
+  assert.equal(undoCalls()[0].body.reason, "Wrong link second line");
+});
+
+test("6b. 'busy' or 'not found' on Check the result stays NOT confirmed (the first request may still commit); a saved answer then settles it", async () => {
+  let n = 0;
+  setup({
+    undo: () => {
+      n += 1;
+      if (n === 1) throw new TypeError("Failed to fetch");
+      if (n === 2) return { status: 409, body: { error: "try_again", message: "Another change was running; nothing was removed. Try again in a moment." } };
+      if (n === 3) return { status: 404, body: { error: "notFound" } };
+      performUndo();
+      return { status: 200, body: { undo: okUndo({ replayed: true }) } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  const key = undoCalls()[0].body.requestKey;
+  await act("training-load-gpexe-undo-check");
+  assert.equal(gx().undo.step, "unknown");
+  assert.equal(gx().undo.requestKey, key);
+  assert.doesNotMatch(undoSection(), /Nothing was removed/);
+  assert.match(undoSection(), /server was busy/);
+  await act("training-load-gpexe-undo-check");
+  assert.equal(gx().undo.step, "unknown", "404 on the resend too");
+  await act("training-load-gpexe-undo-check");
+  assert.equal(gx().undo.step, "done");
+  assert.deepEqual(undoCalls().map((c) => c.body.requestKey), [key, key, key, key]);
+});
+
+test("6c. a busy answer to the FIRST request is a plain refusal: nothing was removed, back to the question with the reason kept", async () => {
+  let n = 0;
+  setup({ undo: () => { n += 1; if (n === 1) return { status: 409, body: { error: "try_again", message: "Another change was running; nothing was removed. Try again in a moment." } }; performUndo(); return { status: 200, body: { undo: okUndo() } }; } });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "ready");
+  assert.match(undoSection(), /Nothing was removed\./);
+  assert.match(undoSection(), /Wrong link/, "the reason is kept");
+  await act("training-load-gpexe-undo-confirm");
+  assert.notEqual(undoCalls()[1].body.requestKey, undoCalls()[0].body.requestKey);
+  assert.equal(gx().undo.step, "done");
+});
+
+test("14. leaving Training Load asks over an undo that is running or not confirmed (the real leave guard); a decline blocks", async () => {
+  setup({ undo: () => { throw new TypeError("Failed to fetch"); } });
+  state.activeTab = "training-load";
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "unknown");
+  confirmAnswer = false;
+  confirmAsked = [];
+  assert.equal(confirmLeaveTrainingLoad("settings"), false, "declined: stays");
+  assert.match(confirmAsked.at(-1), /not confirmed/);
+  confirmAnswer = true;
+  assert.equal(confirmLeaveTrainingLoad("settings"), true);
+  gx().undo.step = "sending";
+  confirmAnswer = false;
+  assert.equal(confirmLeaveTrainingLoad("settings"), false);
+  assert.match(confirmAsked.at(-1), /being undone/);
+});
+
+test("15. an undone session does not count as imported in the setup guide", async () => {
+  const base = { admin: true, conn: { status: "ready", connected: true, reconnect: false, bound: true }, check: { status: "succeeded" }, sourceAthletes: [], links: [] };
+  const withImported = JSON.stringify(guideSteps({ ...base, candidates: [row()] }).steps.map((s) => s.state));
+  const withUndone = JSON.stringify(guideSteps({ ...base, candidates: [undoneRow()] }).steps.map((s) => s.state));
+  const none = JSON.stringify(guideSteps({ ...base, candidates: [] }).steps.map((s) => s.state));
+  assert.notEqual(withImported, withUndone, "an imported session changes the guide");
+  assert.equal(withUndone, none, "an undone one does not");
+});
+
+test("16. another session's undo that is not confirmed: no dead button on a second review, and the first review shows one message", async () => {
+  setup({ candidates: [row(), row({ id: "cand-b", gpexeTeamSessionId: "9977002", label: "MATCH 06.10." })], undo: () => { throw new TypeError("Failed to fetch"); } });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  await act("training-load-gpexe-close");
+  await openCandidate("cand-b");
+  assert.doesNotMatch(undoSection(), /undo-open/);
+  assert.match(undoSection(), /undo for another session is not finished or not confirmed/);
+  await act("training-load-gpexe-close");
+  // The first one, if it had committed, never shows "This import was undone" next to "We can't tell yet".
+  world.candidates[0].importUndoneAt = "2026-11-08T07:00:00Z";
+  await openCandidate("cand-imp");
+  assert.match(html(), /We can't tell yet/);
+  assert.doesNotMatch(html(), /This import was undone\./);
+});
+
+test("17. what is typed is kept when the dialog is painted again", async () => {
+  setup();
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const handled = handleUndoReasonInput({ matches: (sel) => sel === "[data-gpexe-undo-reason]", value: "Typed so far" });
+  assert.equal(handled, true);
+  assert.equal(handleUndoReasonInput({ matches: () => false, value: "x" }), false);
+  assert.match(html(), />Typed so far<\/textarea>/);
 });
