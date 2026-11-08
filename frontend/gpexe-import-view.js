@@ -1091,6 +1091,8 @@ function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   const group = candidateGroup(c, gx);
   // v33: a pending or "up to date" row the last successful search did not confirm is neither.
   if ((group === "decision" || group === "uptodate") && notConfirmedForImport(c)) return `<span class="gpexe-badge is-pending">Not confirmed for import</span>`;
+  // A session with an open reason (no linked athlete, athletes left out) is never "Up to date": it needs a step.
+  if (group === "uptodate" && rowReasons(c).length) return `<span class="gpexe-badge is-blocked">Needs attention</span>`;
   const [cls, text] = GROUP_BADGE[group] || [c.status, c.status];
   return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
 }
@@ -2012,6 +2014,7 @@ function renderApproveHtml(c, detail, status) {
   if (group === "replaced") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.superseded_by_newer_data)}</p>`;
   // v33: not confirmed by a successful search - no approval, whatever else the row says.
   if (notConfirmedForImport(c)) return `<p class="muted gpexe-approve-note">${escapeHtml(notConfirmedText(c, gx))}</p>`;
+  if (group === "uptodate" && rowReasons(c).length) return `<p class="muted gpexe-approve-note">${escapeHtml(attentionText(c, status, gx))}</p>`;
   if (group === "uptodate") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.nothing_to_import)}</p>`;
   // This review was made with the athlete links as they were at the last
   // check; after a link change it must be made again before approving.
