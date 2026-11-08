@@ -355,7 +355,10 @@ export async function pollGpexeCheck(render) {
       // (lastSeenAt from then on) have reviews made with the current links.
       if (gx.check.status === "succeeded" && gx.linkSeq && gx.checkLinkSeq === gx.linkSeq && !gx.linkCheckStartedAt) gx.linkCheckStartedAt = gx.check.startedAt || null;
       gx.checkLinkSeq = null;
-      const [status] = await Promise.all([api(teamPath(gx.teamId, "/status")).catch(() => null), reloadGpexeCandidates(render)]);
+      // The links and the source athletes are read again too: a finished search may have shown new GPEXE athletes, and
+      // "Link athletes (N)" and the next step must be right without a reload. A failed read marks the list as possibly
+      // out of date (reloadGpexeLinks), like after a link change.
+      const [status] = await Promise.all([api(teamPath(gx.teamId, "/status")).catch(() => null), reloadGpexeCandidates(render), reloadGpexeLinks(generation)]);
       if (generation !== gx.generation) return;
       if (status) gx.status = status;
       render();
