@@ -15,6 +15,8 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { renderGuideHtml } from "./gpexe-guide-view.js";
+import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
+import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import {
@@ -68,6 +70,7 @@ const BLOCKER_TEXT = {
   // v33: the coach's sentence; an administrator reads notConfirmedText.
   not_confirmed_for_import: "Not confirmed for import yet. Find new sessions again, then review it.",
   already_imported: "Already imported.",
+  import_undone: "The import of this session was undone. It can't be approved again; find new sessions to review it.",
   snapshot_expired_check_again: "The GPEXE data is too old. Find new sessions, then review it again.",
   nothing_to_import: "Nothing new to import - no action needed.",
 };
@@ -81,6 +84,7 @@ const GROUP_BADGE = {
   imported: ["imported", "Imported"],
   replaced: ["superseded", "Replaced"],
   withdrawn: ["superseded", "No longer found"],
+  undone: ["superseded", "Import undone"],
 };
 
 // v33: what "not confirmed for import" means, in the viewer's words, with the
@@ -192,6 +196,7 @@ const GPS_TEXT = {
 // What a refused approval means, and the one thing to do next. Every code
 // here is a refusal BEFORE anything was written (the server says so).
 const REFUSAL_TEXT = {
+  import_undone: "Not imported: the import of this session was undone. Find new sessions to review it again.",
   import_switch_off: "Not imported: importing is switched off in this environment.",
   team_import_switch_off: "Not imported: imports are switched off for this team. A platform administrator can turn them on (the club administrator too, in team mode).",
   not_an_approver: "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right.",
@@ -1538,7 +1543,7 @@ function renderCandidateDetailHtml(gx, status) {
   const detail = gx.detail;
   const c = detail.candidate;
   // Not closable while an approval runs: its answer must be seen.
-  const busy = detail.approving || detail.verifying ? "disabled" : "";
+  const busy = detail.approving || detail.verifying || undoBusy(gx) ? "disabled" : "";
   const title = c ? sessionTitle(c) : "GPEXE session";
   return `
     <div class="builder-athlete-overlay gpexe-detail-overlay">
@@ -1570,6 +1575,7 @@ function renderCandidateBodyHtml(c, detail, status) {
       ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
     ${renderApprovalRecordHtml(c)}
+    ${renderUndoneNoteHtml(c, state.trainingLoad.gpexe)}
     ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data is too old. Find new sessions to see it again." : "No preview."}</p>` : `
       ${renderBlockedHtml(preview, c)}
       ${renderChangesHtml(preview, c)}
@@ -1579,6 +1585,7 @@ function renderCandidateBodyHtml(c, detail, status) {
     `}
     ${renderOutcomeHtml(detail)}
     ${renderApproveHtml(c, detail, status)}
+    ${renderUndoHtml(c, state.trainingLoad.gpexe)}
   `;
 }
 
@@ -1599,7 +1606,7 @@ function renderApprovalRecordHtml(c) {
   if (!c.approval) return "";
   const a = c.approval;
   const counts = countsText(a.import?.counts);
-  return `<p class="gpexe-success">Imported ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
+  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
 // The coach's reason and step for a blocked session, from the list's neutral

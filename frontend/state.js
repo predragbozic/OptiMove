@@ -755,6 +755,8 @@ export const emptyGpexeImportState = () => ({
   polling: "",
   notice: "",
   detail: null,
+  // U5b: the undo of the open review's imported session ({ id, step, preview, reason, requestKey, result, error }); in memory only.
+  undo: null,
   // Approvals whose result is not confirmed yet, by candidate id: the last
   // unknown outcome, shown again when the session is reopened.
   uncertain: {},

@@ -254,6 +254,11 @@ function importsBatchMayBeLeft(nextTab) {
   if ((guideWrite?.sending || guideWrite?.unknown) && nextTab !== "training-load" && !askNow(guideWrite.sending
     ? "OptiMove variables are being switched on. If you leave now, the result is not shown. Leave anyway?"
     : "The result of switching on an OptiMove variable is not confirmed. If you leave now, Check result is lost. Leave anyway?")) return false;
+  // U5b: an undo running or not confirmed - the same protection as an import.
+  const undoStep = state.trainingLoad.gpexe?.undo?.step;
+  if ((undoStep === "sending" || undoStep === "unknown") && nextTab !== "training-load" && !askNow(undoStep === "sending"
+    ? "An import is being undone. If you leave now, the result is not shown. Leave anyway?"
+    : "The result of undoing an import is not confirmed. If you leave now, Check the result is lost. Leave anyway?")) return false;
   if (!batch) return true;
   const ask = askNow;
   // A workspace switch or a notification (nextTab null) resets Training

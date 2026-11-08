@@ -16846,6 +16846,45 @@ p.muted.gpexe-source-fields {
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
+/* U5b: undoing an imported session (admin only). */
+.gpexe-undo {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.gpexe-undo h4 {
+  margin: 0;
+}
+.gpexe-undo-reason {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+.gpexe-undo-reason textarea {
+  width: 100%;
+  min-height: 72px;
+  box-sizing: border-box;
+  /* 16px: iOS does not zoom into the field. */
+  font-size: 16px;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+.gpexe-undo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gpexe-undo-actions .gpexe-button,
+.gpexe-undo .gpexe-button {
+  min-height: 44px;
+}
 .gpexe-accept {
   display: flex;
   align-items: flex-start;
