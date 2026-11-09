@@ -1,6 +1,6 @@
 # J20 — Session review: one table for the whole decision about one GPEXE session
 
-Status: **Proposed** (docs only; no code, no migration). Written on the *Rukovodilac*'s order of 2026-11-09 after the owner accepted
+Status: **Accepted** on 2026-11-09 with the owner's decisions O1–O4 (section 11, relayed by the *Rukovodilac*); docs only, no code, no migration. Written on the *Rukovodilac*'s order of 2026-11-09 after the owner accepted
 the direction of the "Session Review Table" sketch (https://claude.ai/artifact/LxSceTeB6kxiRtXLJkprP5; the flow sketch
 https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7). Base: `origin/main` `bbd5b450`. Parts: **J20-A** (A1 the recompute route, A2 the screen),
 **J20-B** the subset import (★★), **J20-C** the roster states in the same flow. The open owner questions are in section 11.
@@ -126,10 +126,11 @@ sent, the answer never says "nothing was written". A repeat after an unknown out
 screen shows *Result not confirmed · Update the review again*. A real-route test covers a failed or lost `COMMIT`. **Other writers:** U5's undo and any
 other writer that holds the team lock must not then touch a candidate row (that would be team → candidate); the recorded-SQL-order test includes them.
 
-**Total budget:** the route has a wall-clock
-bound like the approval (client-side bound with the connection released with an error on timeout), because the per-statement bounds do not bound the
-whole transaction; it holds the team lock for the length of the preview (seconds for a session with drills), during which a check start, a link write,
-a roster command and an approval wait up to their own lock bounds. The screen does not call it while a check of the team is running.
+**Bounds:** the route has the approval's bounds - the server-side `lock_timeout`, `statement_timeout` and `idle_in_transaction_session_timeout` of
+`setImportTransactionBounds` and the bounded COMMIT with the connection released with an error on no answer; it adds **no** extra whole-request
+client-side bound (the approval has none either; the open risk is recorded in `docs/ai/CURRENT_STATE.md`). It holds the team lock for the length of
+the preview (seconds for a session with drills), during which a check start, a link write, a roster command and an approval wait up to their own
+lock bounds. **One recompute per team in flight per instance** (a second call answers `409 try_again` before it takes a connection). The screen does not call it while a check of the team is running.
 
 **Rate limit.** No durable storage exists for an interval, so it is **per instance, in memory** (limit stated: after a deploy or across instances there
 can be more rounds, still bounded by the team lock). It applies only to **repeated calls on the same candidate with the same stored hash**; a call after
@@ -227,39 +228,35 @@ Roster states are decisions on an **activity**, which exists only after the impo
 **Recommendation: A.** The states are small, reversible, and already have a correct write path; the import is the only irreversible act
 and should not wait for them. If the first months show friction, B is a later change, not a rework. **Decision for the owner: section 11, O2.**
 
-### 5.3 The undo (U5) and roster decisions — the open question
+### 5.3 The undo (U5) and roster decisions — decided (O1, extended variant b)
 
 U5 refuses a session that has any coach roster decision (`roster_decisions_exist`). With J20, every session in which the coach saves states will carry
 decisions the flow itself wrote, so a **platform administrator's** undo of a wrongly linked athlete's session would be refused at once. (A coach
-never had an in-app undo: U5 is for an active platform admin only, J19-U5; the screen tells a coach "ask a platform administrator".) Options:
+never had an in-app undo: U5 is for an active platform admin only, J19-U5; the screen tells a coach "ask a platform administrator".)
 
-| | What | For | Against |
-|---|---|---|---|
-| **a. Keep the refusal** | undo stays refused | simplest; a decision is a human judgment, never deleted silently | the administrator has no in-app way out; contradicts U5's purpose |
-| **b. Undo clears what J20's flow wrote** | the flow's states carry an **origin that the server derives, never a field the client sends**; undo removes exactly those, listing them in the confirmation ("5 attendance states set at import will be removed") and in the deletion log; later Roster-tab decisions still refuse | removes the dead end for the common case; keeps later human judgments safe | a ★★ migration of real size (below) |
-| **c. Undo clears every roster decision of the session** | with the list and the log | no dead end at all | deletes judgments a coach made after seeing the session |
+**The owner's decision (O1, 2026-11-09): undo and re-import must ALWAYS be possible, because in practice coaches change statuses later.**
+* The states that J20's flow wrote are deleted by the undo, and the confirmation lists them ("5 attendance states set at import will be removed").
+* If **later decisions from the Roster tab** exist, the undo is **not blocked**. The administrator gets a separate warning with the list and the
+  count of those decisions and must confirm it explicitly; then they are deleted too.
+* Everything deleted goes to the deletion log: what, by whom, when, why (the reason the undo already requires).
+* **Who may undo is unchanged:** an active platform admin (J19-U5).
+* This is its own ★★ migration PR, before J20-C is released.
 
-**What b really needs (found by `db-reviewer` and `security-reviewer`).**
+**What it needs (found by `db-reviewer` and `security-reviewer`; the design holds, the rule changed).**
 * The v57 refusal counts four things: decisions, requests, completions and the completion log. All four tables are append-only with their own
-  triggers and TRUNCATE guards (v25), and v57 added delete exceptions only for the tables it names. b needs delete exceptions for the four, an
-  **origin column on the request record** (the idempotency record is `activity_roster_requests`, which has none; the decision cannot carry it
-  alone) and a rule for the completion and log rows that every roster input writes (they are removed with the activity and recorded in the
-  deletion log).
-* A later **Change** in the Roster tab creates a new decision **without** the tag (5a2 supersedes with new ids), so undo refuses again for that
-  athlete: a human judgment is never removable by the flow's tag. A test: J20 saves a state, the coach changes it in the Roster tab, undo →
-  `roster_decisions_exist`.
-* The origin is set **only server-side** by the J20 states route (a closed-set CHECK, default `'roster'`; the generic roster routes cannot send it), so a coach cannot tag their own decisions to make them removable. Undo and roster commands take the same team import lock, so undo-against-Change serialises; a concurrency test.
-* The rule becomes: refuse if any decision, request, completion or log row exists whose request origin is not `session_review`, or whose decision
-  supersedes or is superseded by one that is not (a later Roster-tab decision supersedes through the current pointer, so removing the tagged one
-  would break the chain).
-* **The origin is written only by a dedicated command bound to the approval of that activity by the same user**; the plain roster route ignores or
-  refuses an origin in its body. A test proves that a tagged request through the plain route is refused or untagged, because otherwise any coach could make a
-  deliberate decision undoable by a platform admin. The migration's actor guard names who may write the tag.
-* b changes **nothing about who may undo** (an active platform admin, J19-U5). Option c, or a wider audience, are separate rights decisions.
-
-**Recommendation: b**, as its own ★★ migration PR, after O1. Not implemented in J20-A/B/C. Until it exists, J20-C's confirmation says plainly:
-"Saving attendance states means this session can no longer be undone from here." (true today for anyone who uses the Roster tab) and J20-C is **not
-released before O1 is decided**.
+  triggers and TRUNCATE guards (v25), and v57 added delete exceptions only for the tables it names. The migration needs **delete exceptions for the
+  rows of that session in all four**, written in the undo's transaction under the team import lock and recorded in the deletion log.
+* An **origin column on the request record** (`activity_roster_requests` has none; a closed-set CHECK, default `'roster'`) stays, but **only to tell
+  the two kinds of warning apart** (what J20 wrote, what a coach changed later); it is **not a condition** of the undo any more.
+* The origin is set **only server-side** by the J20 states route, bound to the approval of that activity by the same user; the generic roster routes
+  cannot send it (a test proves a tagged request through the plain route is refused or untagged), so the warning cannot be made to understate a coach's
+  own decisions.
+* Undo and roster commands take the same team import lock, so undo-against-Change serialises; a concurrency test. The completion and log rows that
+  every roster input writes are removed with the session and listed in the deletion log.
+* A test: J20 saves a state, the coach changes it in the Roster tab, undo → not refused, the warning lists the later decision, nothing is deleted
+  without the explicit confirmation, and the deletion log holds both.
+* Not implemented in J20-A/B/C. Until that migration exists, a session with any roster decision still cannot be undone from here (U5's refusal), so
+  J20-C is **not released before it**.
 
 ## 6. The old screens
 
@@ -268,11 +265,25 @@ released before O1 is decided**.
   session imported by an earlier flow is handled. An imported row in Imports links to it ("Open roster").
 * *Link athletes* (the whole-team screen) stays for bulk linking; U6a's group button *Link athletes* keeps pointing to it.
 
-## 7. "Estimated" values (not built)
+## 7. "Estimated" values (not built; requirements for the 5b contract)
 
-Phase 5b (a copy of the athlete's previous value or the team average, stored as an estimate with provenance) is a separate phase with its
-own contract. J20 reserves the **row kind** and the column in this contract only; **no control is drawn** (a visible control with no effect
-would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No device data" row gains a third action.
+Phase 5b (estimated values for an athlete without GPS data, stored as an estimate with provenance) is a separate phase with its own contract; its
+backend comes later and **nothing of it is built now**. J20 reserves the **row kind** and the column; **no control is drawn** (a visible control with
+no effect would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No device data" row gains a **third action** (the design of the
+row must leave room for it). The owner's requirements (2026-11-09, relayed by the *Rukovodilac*) for the 5b contract:
+
+1. **An estimate is always visible as an estimate.** Every value carries a mark and its source, for example "estimate: own average × 75 min". In
+   analyses, dashboards and load calculations it must be distinguishable from a measured value and must be **possible to exclude**. An estimate must
+   never enter trends silently as a measured value.
+2. **Sources, in this order of quality (the order of the choice):**
+   1. the athlete's own average, scaled by minutes played (a match without a GPS);
+   2. the position average;
+   3. the team average;
+   4. another athlete's values, the weakest, with a warning in the UI.
+3. **The position average has a prerequisite.** Read-only check on production by the *Rukovodilac* (2026-11-09): `public.sport_positions` exists
+   (v42, a catalog for test norms) but has **0 rows**, and no athlete, membership or team table has a position column. Assigning a position to an
+   athlete is therefore a **separate small prerequisite** before this option. *Recorded as an unconfirmed assumption for the 5b discovery* (this
+   document did not re-read production).
 
 ## 8. Agreement with U6a
 
@@ -293,7 +304,7 @@ would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No
    **security** (the screen surfaces identity data). Browser QA at 1280 / 390 / 375 / 360. A frontend test renders the row for a viewer without
    `identityAdmin` and expects no GPEXE name or date of birth in the HTML.
 2. **J20-B** (★★, **with a migration**, trigger 1, 3 and 4) after O3 and its discovery proof: the approvals' new columns and trigger rule, `excludedAthleteIds` in the preview route and the approval; the screen's *Leave out* turned on. The owner's order naming the migration and the *Rukovodilac*'s preflight apply.
-3. **J20-C** (★★, trigger 4: a retried second write after an irreversible import) after O1 and O2: the states step. Packet checklist: a route-level test "import succeeds, the bulk-states answer is lost, *Check result* with the same `requestKey` writes once". If O1 needs the undo change, it is a separate ★★ migration before J20-C ships.
+3. **J20-C** (★★, trigger 4: a retried second write after an irreversible import) after the O1 migration (decided, 5.3) and O2 (decided): the states step. Packet checklist: a route-level test "import succeeds, the bulk-states answer is lost, *Check result* with the same `requestKey` writes once". The undo change of 5.3 is a separate ★★ migration before J20-C ships.
 4. U6b (the club-connection wizard) is independent and may go in any order.
 
 Every part: the packet of `CLAUDE.md` (goal, acceptance, diff, tests with real counts); a part that touches a migration, the approval or
@@ -304,13 +315,14 @@ a roster write also needs the owner's order naming the migration and the *Rukovo
 Estimated values (5b); per-athlete undo (U5 Q5); editing a value; merging two tracks of one athlete (a GPEXE data matter); the club-connection
 wizard (U6b); any change of what the import writes (mappings, units, variables).
 
-## 11. Questions for the owner (one block, each with a recommendation)
+## 11. Owner's decisions (2026-11-09, relayed by the *Rukovodilac*)
 
-* **O1 — Undo and roster decisions** (5.3): a, **b (recommended)**, or c. Needed before J20-C ships.
-* **O2 — States in the same transaction or after it** (5.2): **A (recommended)** or B.
-* **O3 — May the coach leave an athlete out of an import?** (5.1) Today a session is imported whole. Recommended yes; the left-out ids
-  (no names) are stored on the approval record so the absence stays explainable (this is a decision, not a default: if the owner declines the
-  record, it is a recorded choice). A left-out athlete is not importable until GPEXE's content changes. If the answer is no, J20-B disappears
-  and the table only explains.
-* **O4 — Who may import a subset:** the same people who may approve today (a platform admin, a team approver grant, and a club admin or team
-  coach only while the team's switch is on in mode `team`, U2). The subset preview has the same audience. Recommended unchanged.
+* **O1 — Undo and roster decisions: the extended variant b.** Undo and re-import must always be possible (5.3): the states J20 wrote are deleted and
+  listed; later Roster-tab decisions do not block the undo but get a separate warning with a list and count and an explicit confirmation, and are
+  deleted too; everything goes to the deletion log; who may undo is unchanged; a separate ★★ migration PR before J20-C is released.
+* **O2 — Option A.** The states are written right after the import, by the same button, as a second step; they can always be changed afterwards in
+  the Roster tab, as today.
+* **O3 — Yes.** The coach may leave an athlete out of an import; the left-out ids are stored on the approval. The owner also asks that **estimated
+  values for an athlete without GPS data (phase 5b)** are provided for: the backend comes later, and the design must be adapted now (section 7).
+* **O4 — Unchanged.** A partial import may be done by the same people who approve today (a platform admin, a team approver grant, and a club admin or
+  team coach only while the team's switch is on in mode `team`, U2). The subset preview has the same audience.
