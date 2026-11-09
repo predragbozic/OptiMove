@@ -1987,6 +1987,8 @@ const ROW_STATUS = Object.freeze({
   not_imported: { label: "Not imported", note: "", counts: false },
   nothing_new: { label: "Nothing new", note: "Already in OptiMove; nothing new to import.", counts: false },
   no_record: { label: "No GPEXE record", note: "No GPS record in this session; nothing is written.", counts: false },
+  // J20-B: a choice, not a problem. The roster is where the coach says whether the athlete took part.
+  left_out: { label: "Left out by you", note: "You left this athlete out of the import. Nothing of them is stored from this session; open the session's Roster tab to say whether they took part.", counts: false },
 });
 
 // Only an outcome that writes counts: created, supplemented, corrected. An
@@ -2049,7 +2051,7 @@ function valueCellText(row, col, c) {
 }
 
 const PROBLEM_KIND = { needs_link: "not_linked", no_record: "no_data", blocked: "review", not_imported: "review" };
-const REVIEW_ORDER = ["blocked", "needs_link", "not_imported", "no_record", "importable", "participation", "nothing_new"];
+const REVIEW_ORDER = ["blocked", "needs_link", "not_imported", "no_record", "importable", "participation", "nothing_new", "left_out"];
 
 function unlinkedChoicesFor(preview, c) {
   const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
@@ -2068,7 +2070,7 @@ function reviewRowsOf(preview, c) {
   const leftOut = new Set(c?.approval?.excludedAthleteIds || []);
   const rows = (preview.athletes || []).map((a) => {
     if (leftOut.has(String(a.gpexeAthleteId))) {
-      return { a, name: athleteName(c, a.athleteId, a.gpexeAthleteId), status: "not_imported", label: "Left out by you", note: "You left this athlete out when the session was imported.", changes: 0, leftOutByCoach: true };
+      return { a, name: athleteName(c, a.athleteId, a.gpexeAthleteId), status: "left_out", label: ROW_STATUS.left_out.label, note: ROW_STATUS.left_out.note, changes: 0, leftOutByCoach: true };
     }
     const status = reviewRowStatus(a, preview);
     const info = ROW_STATUS[status];
@@ -2100,7 +2102,7 @@ export function leaveOutOffered(c, detail = state.trainingLoad.gpexe.detail, sta
 
 function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }) {
   const ready = r.status === "importable" || r.status === "participation";
-  const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked";
+  const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" || r.status === "left_out" ? "" : "is-blocked";
   const cells = VALUE_COLUMNS.map((col) => `<td data-label="${escapeAttr(col.label)}" role="cell">${escapeHtml(r.a ? valueCellText(r, col, c) : "-")}</td>`).join("");
   const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices, { compact: !!c?.helperValues }) : "";
   return `
@@ -2120,7 +2122,7 @@ function leaveOutCellHtml(r, lo) {
   // A row the import would not write has nothing to leave out: an empty cell on a wide table, no line at all in the phone cards.
   if (!imports) return `<td role="cell" class="gpexe-leave-out-cell is-empty" aria-hidden="true"></td>`;
   const id = String(r.a.gpexeAthleteId);
-  return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><label class="gpexe-leave-out"><input type="checkbox" data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="${escapeAttr(id)}" ${lo.chosen.has(id) ? "checked" : ""} aria-label="${escapeAttr(`Leave ${r.name} out of this import`)}"><span>Leave out</span></label></td>`;
+  return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><label class="gpexe-leave-out"><input type="checkbox" data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="${escapeAttr(id)}" ${lo.chosen.has(id) ? "checked" : ""} aria-label="${escapeAttr(`Leave out ${r.name}`)}"><span>Leave out</span></label></td>`;
 }
 
 function reviewTableOf(rows, c, choices, lo = { offered: false, chosen: new Set() }) {
@@ -2158,8 +2160,9 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
   return `
     <section class="gpexe-review-table" aria-label="Session review">
       <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
-      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
+      <p class="muted">${n ? `${plural(n - Math.min(n, leaveOutIds(c, detail).length), "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}${leaveOutIds(c, detail).length ? `, ${leaveOutIds(c, detail).length} left out` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
       ${updating}${updateError}
+      ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
       <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
       ${shown.length ? reviewTableOf(shown, c, choices, lo) : ""}
       ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices, lo)}</details>` : ""}
@@ -2180,7 +2183,7 @@ function renderOutcomeHtml(detail) {
     return `
       <div class="gpexe-success" role="status">
         <p><strong>Imported.</strong>${counts ? ` ${escapeHtml(counts)}.` : ""}</p>
-        ${r.approval?.excludedAthleteIds?.length ? `<p>${escapeHtml(`${plural(r.approval.excludedAthleteIds.length, "athlete was", "athletes were")} left out, as you chose.`)}</p>` : ""}
+        ${r.approval?.excludedAthleteIds?.length ? `<p>${escapeHtml(`${plural(r.approval.excludedAthleteIds.length, "athlete was", "athletes were")} left out, as you chose. Open the session's Roster tab to say whether they took part.`)}</p>` : ""}
         ${r.commitConfirmation === "verified_after_commit_error" ? `<p>The database's confirmation did not arrive in time, but the server found the import committed.</p>` : ""}
         ${r.candidateReadError ? `<p>${escapeHtml(r.candidateReadError.message)}</p>` : ""}
       </div>
@@ -2195,7 +2198,9 @@ function renderOutcomeHtml(detail) {
       const differs = Array.isArray(recorded) && Array.isArray(chosen) && !sameIds(recorded, chosen);
       return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>
         ${Array.isArray(recorded) && recorded.length ? `<p>${escapeHtml(`${plural(recorded.length, "athlete was", "athletes were")} left out of this import.`)}</p>` : ""}
-        ${differs ? `<p class="gpexe-warning" role="alert">It was imported with ${recorded.length ? "a different set of athletes" : "nobody"} left out than the set you have chosen now. What the server recorded is what happened.</p>` : ""}
+        ${differs ? `<p class="gpexe-warning" role="alert">${escapeHtml(recorded.length
+    ? `Imported. Left out: ${leftOutNames(detail.candidate, recorded.map(String)).join(", ")}. This differs from your current ticks; what is shown is what was imported.`
+    : `Imported with nobody left out, although you had ticked ${leftOutNames(detail.candidate, (chosen || []).map(String)).join(", ")}.`)}</p>` : ""}
         ${reviewErrorTech(o.error)}</div>`;
     }
     return `
@@ -2258,11 +2263,15 @@ function leftOutNames(c, ids) {
   return ids.map((id) => { const a = byId.get(id); return a ? athleteName(c, a.athleteId, a.gpexeAthleteId) : "an athlete"; });
 }
 
+// The set no longer fits the session: another review of the session is needed, not the same request again.
+const STALE_SET_CODES = new Set(["invalid_exclusion", "invalid_excluded_athlete"]);
 const SUBSET_ERROR_TEXT = {
   try_again: "The review without them could not be made right now. Try again in a moment.",
   no_importable_athlete: "Leaving these athletes out would leave nobody to import.",
-  invalid_exclusion: "One of the athletes can't be left out any more. Update the review and choose again.",
-  invalid_excluded_athlete: "One of the athletes can't be left out any more. Update the review and choose again.",
+  invalid_exclusion: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
+  invalid_excluded_athlete: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
+  nothing_to_import: "The athletes that remain have nothing new to import.",
+  subset_blocked: "Leaving these athletes out would block the session. Choose again, or import the whole session.",
   not_an_approver: "You may not approve imports for this team.",
 };
 
@@ -2276,9 +2285,10 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
   return `
     <div class="gpexe-approve gpexe-approve-subset">
       <p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
-        <span class="muted">${leave.length === 1 ? "Nothing of this athlete is imported, and this athlete stays out" : "Nothing of them is imported, and they stay out"} unless GPEXE's data for this session changes.</span></p>
+        <span class="muted">${leave.length === 1 ? `Nothing of ${escapeHtml(names[0])} is imported from this session.` : "Nothing of them is imported from this session."} If GPEXE later sends different data for it, you will review it again. Open the session's Roster tab afterwards to say whether they took part.</span></p>
       ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
       ${ready ? `<p class="muted" role="status">${escapeHtml(`Reviewed without them: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
+      ${!ready && !loading && !failed ? `<p class="muted">First we check the import without them. Nothing is saved yet.</p>` : ""}
       ${after <= 0 && !loading ? `<p class="muted gpexe-approve-note">Nobody would be left to import. Untick an athlete to continue.</p>` : ""}
       <div class="gpexe-approve-bar${after <= 0 ? " is-idle" : ""}">
       ${changes ? `
@@ -2289,7 +2299,9 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
       ` : ""}
         ${ready
     ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || after <= 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(after, "athlete", "athletes")}`}</button>`
-    : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : "Review without them"}</button>`}
+    : failed && STALE_SET_CODES.has(sub.error?.code)
+      ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-review-update" ${detail.updating ? "disabled" : ""}>${detail.updating ? "Updating..." : "Update the review"}</button>`
+      : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : "Review without them"}</button>`}
       </div>
     </div>
   `;

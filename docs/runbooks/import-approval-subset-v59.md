@@ -1,12 +1,12 @@
-# Leaving athletes out of an import (migration v58, J20-B)
+# Leaving athletes out of an import (migration v59, J20-B)
 
-`docs/ai/j20-session-review-contract.md` section 5.1 and 9.1. Migration: `migrations_v2/202611091100_training_load_v58_import_approval_subset.sql`.
-Files beside this runbook: `import-approval-subset-v58-preflight.sql`, `-postcheck.sql`, `-rollback.sql`.
+`docs/ai/j20-session-review-contract.md` section 5.1 and 9.1. Migration: `migrations_v2/202611091100_training_load_v59_import_approval_subset.sql`.
+Files beside this runbook: `import-approval-subset-v59-preflight.sql`, `-postcheck.sql`, `-rollback.sql`.
 
 ## What it is
 
 * An approval may record `excluded_athlete_ids` (GPEXE athlete ids, ids only, no names; at most 60) and `subset_hash`, the hash of the preview recomputed
-  with that set. Every approval that exists before v58 reads as "nobody left out" (`'{}'`, no hash); nothing is rewritten.
+  with that set. Every approval that exists before v59 reads as "nobody left out" (`'{}'`, no hash); nothing is rewritten.
 * The approval's `preview_hash` is still the whole candidate's stored hash, so the v33 trigger still compares the candidate and the approval as before.
 * The trigger cannot recompute a preview: that the set and the hash agree with a preview computed under the locks is `approveCandidate` step 12's job
   (tested). A raw writer that supplies a well-formed set and a well-formed wrong hash is outside that guarantee, like v35's guards.
@@ -25,5 +25,5 @@ as before; the recorded exclusion stays with the approval.
 
 ## Rollback
 
-`import-approval-subset-v58-rollback.sql` restores v33's trigger body and drops the columns and CHECKs. It refuses (changing nothing) once any approval has a non-empty set or
-a hash, under a later migration, when the body in force is not v58's, or while the migrator runs. After a subset approval exists, v58 is forward-only.
+`import-approval-subset-v59-rollback.sql` restores v33's trigger body and drops the columns and CHECKs. It refuses (changing nothing) once any approval has a non-empty set or
+a hash, under a later migration, when the body in force is not v59's, or while the migrator runs. After a subset approval exists, v59 is forward-only.

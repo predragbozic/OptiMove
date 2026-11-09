@@ -138,7 +138,7 @@ async function openReview(opts = {}) {
 test("1. a 'Leave out' box on each row the import would write, for a viewer who may approve; none for a viewer who may not, and none on a session that is not pending", async () => {
   await openReview();
   assert.deepEqual(boxes(), [["101", false], ["102", false], ["103", false]]);
-  assert.match(html(), /aria-label="Leave Ana Example out of this import"/, "the accessible name carries the athlete");
+  assert.match(html(), /aria-label="Leave out Ana Example"/, "the accessible name carries the athlete");
   assert.match(html(), /<th scope="col" role="columnheader">Leave out<\/th>/);
   await openReview({ teamStatus: { enabled: true, canApprove: false } });
   assert.deepEqual(boxes(), [], "a viewer without the approval right sees no box");
@@ -232,8 +232,7 @@ test("6. a lost answer is never 'not imported': Check the result reads the recor
   await act("training-load-gpexe-verify");
   const page = html();
   assert.match(page, /<strong>Imported\.<\/strong> Checked: the import is in OptiMove\./);
-  assert.match(page, /1 athlete was left out of this import\./);
-  assert.match(page, /different set of athletes left out than the set you have chosen now/);
+  assert.match(page, /Imported\. Left out: Bea Example\. This differs from your current ticks; what is shown is what was imported\./);
   assert.equal(approvals().length, 1, "Check the result never approves again");
 });
 
@@ -244,7 +243,8 @@ test("7. an imported session shows the athletes it left out as 'Left out by you'
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const page = html();
   assert.match(page, /Left out by you/);
-  assert.match(page, /You left this athlete out when the session was imported\./);
+  assert.match(page, /You left this athlete out of the import\. Nothing of them is stored from this session; open the session(?:'|&#039;)s Roster tab to say whether they took part\./);
+  assert.doesNotMatch(page, /gpexe-badge is-blocked">Left out by you/, "a choice is not shown as a problem");
   assert.deepEqual(boxes(page), [], "no box on an imported session");
   approval = null;
 });
@@ -257,4 +257,54 @@ test("8. leaving everybody out is not importable: the button says nobody is left
   assert.match(page, /data-action="training-load-gpexe-subset-review"[^>]*disabled/);
   await act("training-load-gpexe-subset-review");
   assert.equal(subsets().length, 1, "the review is still askable by the action, and the server refuses it with no_importable_athlete");
+});
+
+test("9. the review shows the hint; a set that no longer fits offers Update the review (not the same request again); the review step is explained", async () => {
+  await openReview({ onSubset: async () => ({ status: 400, body: { error: "invalid_exclusion", message: "x" } }) });
+  const page = html();
+  assert.match(page, /To import without someone, tick Leave out on their row\./);
+  assert.match(page, /To import without someone, tick Leave out on their row/);
+  await tick("103");
+  assert.match(html(), /First we check the import without them\. Nothing is saved yet\./);
+  assert.match(html(), /Nothing of Cy Example is imported from this session\. If GPEXE later sends different data for it, you will review it again\./);
+  await act("training-load-gpexe-subset-review");
+  const failed = html();
+  assert.match(failed, /The session changed, and one of the athletes you left out is no longer part of it\. Update the review, then choose again\./);
+  assert.match(failed, /data-action="training-load-gpexe-review-update"[^>]*>Update the review</);
+  assert.doesNotMatch(failed, /data-action="training-load-gpexe-subset-review"/, "the same request is not offered again");
+  assert.match(failed, /1 athlete is ready to import|2 athletes are ready to import, 1 left out/);
+});
+
+test("10. an unconfirmed subset approval keeps its set across a closed and reopened review: the whole session is never offered in its place, and the retry sends the same set after a new review", async () => {
+  await openReview({ onApprove: async () => ({ status: 503, body: { error: "import_outcome_unknown", message: "unknown", verify: { candidateId: "cand-1", approvalId: "ap-9" } } }) });
+  await tick("103");
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  assert.equal(gx().detail.outcome.kind, "unknown");
+  await act("training-load-gpexe-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.deepEqual(gx().detail.leaveOut, ["103"], "the set that was sent is restored");
+  // Nothing visible yet: the first answer may still be finishing.
+  const base = responder;
+  responder = async (call) => (call.url.endsWith("/approvals/ap-9") ? { status: 404, body: { error: "notFound" } } : base(call));
+  await act("training-load-gpexe-verify");
+  assert.equal(gx().detail.outcome.verified, "not_visible_yet");
+  const page = html();
+  assert.doesNotMatch(page, /data-action="training-load-gpexe-approve"/, "no whole-session Import button while a subset is pending a new review");
+  assert.match(page, /data-action="training-load-gpexe-subset-review"/);
+  const before = approvals().length;
+  await act("training-load-gpexe-approve");
+  assert.equal(approvals().length, before, "a forced approve sends nothing without the review");
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  const last = approvals().at(-1);
+  assert.deepEqual(last.body.excludedAthleteIds, ["103"], "the retry carries the same set");
+  assert.ok(last.body.subsetHash);
+});
+
+test("11. a refused set that would block the session gets its own sentence", async () => {
+  await openReview({ onSubset: async () => ({ status: 409, body: { error: "subset_blocked", message: "x" } }) });
+  await tick("103");
+  await act("training-load-gpexe-subset-review");
+  assert.match(html(), /Leaving these athletes out would block the session\. Choose again, or import the whole session\./);
 });

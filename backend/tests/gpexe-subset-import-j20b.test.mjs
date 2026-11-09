@@ -1,5 +1,5 @@
 // J20-B (contract docs/ai/j20-session-review-contract.md section 5.1): an approval that leaves
-// athletes out (excludedAthleteIds, migration v58). On disposable optimove_tests_gpexe_*
+// athletes out (excludedAthleteIds, migration v59). On disposable optimove_tests_gpexe_*
 // databases only; no GPEXE request, no credential (marker values of the fake source only).
 //   1  the subset preview stores nothing: the candidate row is byte for byte what it was
 //   2  a subset approval imports exactly the chosen set; the approval records who was left
@@ -9,13 +9,13 @@
 //   5  already_imported on a repeat; the recorded set through getApproval
 //   6  determinism: the same set gives the same subset hash, two sets two hashes
 //   7  the batch refuses excludedAthleteIds
-//   8  the database: raw inserts (migration v58 triggers and CHECKs)
+//   8  the database: raw inserts (migration v59 triggers and CHECKs)
 //   9  a lost COMMIT of a subset approval is verified and returns the recorded set; not committed is 503
 //  10  the SQL order of the subset preview and that it never commits
 //  11  a subset preview against an approval of the same candidate: no deadlock, no 500
 //  12  a coach without the approver right cannot ask for a subset preview
 //  16  a coach with an approver grant: the subset preview and the refusal body are projected for the coach (no activation, mapping
-//      version or fingerprint), and the subset approval passes the v58 trigger on the team_grant basis
+//      version or fingerprint), and the subset approval passes the v59 trigger on the team_grant basis
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -356,7 +356,7 @@ test("7. the batch refuses excludedAthleteIds: it can never import a subset behi
   assert.equal(await valueCount(t.teamId), 0);
 });
 
-test("8. the database (v58): well-formed sets pass, malformed ones and a hash without a set (or a set without a hash) are refused; the documented limit of a wrong but well-formed hash", async () => {
+test("8. the database (v59): well-formed sets pass, malformed ones and a hash without a set (or a set without a hash) are refused; the documented limit of a wrong but well-formed hash", async () => {
   const { t, c } = await readyWorld();
   const tryInsert = async (excluded, subsetHash) => {
     const c2 = new pg.Client({ connectionString: db.url });
@@ -396,7 +396,7 @@ test("8. the database (v58): well-formed sets pass, malformed ones and a hash wi
   const done = await approveSubset(t, c.id, { previewHash: c.preview_hash, subsetHash: (await subsetPreview(t, c.id, [athleteId(3)])).body.subset.subsetHash, excludedAthleteIds: [athleteId(3)] });
   assert.equal(done.status, 200, JSON.stringify(done.body));
   await assert.rejects(admin.query(`update training_load.gpexe_import_approvals set excluded_athlete_ids = '{}', subset_hash = null where candidate_id = $1`, [c.id]), /append-only/);
-  // Rows from before v58 read as "nobody left out".
+  // Rows from before v59 read as "nobody left out".
   const old = await q(`select column_default, is_nullable from information_schema.columns where table_schema='training_load' and table_name='gpexe_import_approvals' and column_name='excluded_athlete_ids'`);
   assert.equal(old[0].is_nullable, "NO");
   assert.match(old[0].column_default, /\{\}/);
@@ -521,12 +521,59 @@ test("16. a coach with an approver grant: the subset preview and a refused subse
   assert.doesNotMatch(JSON.stringify(done.body.candidate?.preview ?? {}), ADMIN_FIELDS);
 });
 
+
+test("17. an athlete whose results were imported before cannot be left out (a clear 400, never a loop of preview_changed); a subset that would write nothing is nothing_to_import", async () => {
+  const { t, c } = await readyWorld();
+  // The stored preview says athlete 3's result was imported before (unchanged): leaving it out would leave it behind.
+  const preview = JSON.parse(JSON.stringify(c.preview));
+  preview.athletes.find((a) => a.gpexeAthleteId === athleteId(3)).results.forEach((r) => { r.outcome = "unchanged"; });
+  await q(`update training_load.gpexe_import_candidates set preview = $2 where id = $1`, [c.id, preview]);
+  const r = await subsetPreview(t, c.id, [athleteId(3)]);
+  assert.deepEqual([r.status, r.body.error], [400, "invalid_exclusion"], JSON.stringify(r.body));
+  const a = await approveSubset(t, c.id, { previewHash: c.preview_hash, subsetHash: "a".repeat(64), excludedAthleteIds: [athleteId(3)] });
+  assert.deepEqual([a.status, a.body.error], [400, "invalid_exclusion"]);
+  // Restore; leaving out the others is still allowed.
+  await q(`update training_load.gpexe_import_candidates set preview = $2 where id = $1`, [c.id, c.preview]);
+  assert.equal((await subsetPreview(t, c.id, [athleteId(3)])).status, 200);
+});
+
+test("18. a subset approval whose binding ended never stores a refreshed preview (the stored candidate stays byte for byte); the whole-session approval does store it", async () => {
+  const { t, c } = await readyWorld();
+  const s = (await subsetPreview(t, c.id, [athleteId(3)])).body.subset;
+  const un = await api(`/sources/gpexe/connections/${t.connectionId}/bindings/${t.bindingId}/unbind`, { method: "POST", cookie: t.padmin.cookie,
+    body: { requestKey: crypto.randomUUID(), reason: "j20b test: binding ended", expected: { teamId: t.teamId, sourceTeamId: t.sourceTeamId } } });
+  assert.equal(un.status, 200, JSON.stringify(un.body));
+  const before = (await q(`select * from training_load.gpexe_import_candidates where id = $1`, [c.id]))[0];
+  const blockedReview = await subsetPreview(t, c.id, [athleteId(3)]);
+  assert.deepEqual([blockedReview.status, blockedReview.body.error], [409, "subset_blocked"], `a review that would be blocked gets its own code: ${JSON.stringify(blockedReview.body).slice(0, 200)}`);
+  const r = await approveSubset(t, c.id, { previewHash: s.previewHash, subsetHash: s.subsetHash, excludedAthleteIds: [athleteId(3)] });
+  assert.deepEqual([r.status, r.body.error], [409, "preview_changed"], JSON.stringify(r.body).slice(0, 300));
+  assert.deepEqual((await q(`select * from training_load.gpexe_import_candidates where id = $1`, [c.id]))[0], before, "nothing of the candidate changed");
+  const full = await approve(t, c.id, c.preview_hash);
+  assert.deepEqual([full.status, full.body.error], [409, "preview_changed"]);
+  assert.notEqual((await candidateRow(t)).preview_hash, before.preview_hash, "the whole-session refusal stores the recomputed (blocked) preview, as before");
+});
+
+test("19. static: the router sends no unprojected subset preview to the client (previewOverride only inside getCandidate calls; subset.preview / subsetPreview never inside a res.json)", () => {
+  const route = fs.readFileSync(new URL("../src/routes/gpexeImport.js", import.meta.url), "utf8");
+  const overrides = [...route.matchAll(/previewOverride\s*:/g)];
+  assert.ok(overrides.length >= 2);
+  for (const m of overrides) {
+    const head = route.slice(Math.max(0, m.index - 400), m.index);
+    assert.match(head, /service\.getCandidate\(/, "previewOverride is only an argument of service.getCandidate");
+  }
+  const jsonCalls = [...route.matchAll(/\.json\(\{[^]*?\}\);/g)].map((m) => m[0]);
+  for (const call of jsonCalls) {
+    assert.doesNotMatch(call, /\bsubset\.preview\b|\bsubsetPreview\b(?!\s*&&)/, `an unprojected subset preview in a response: ${call.slice(0, 120)}`);
+  }
+});
+
 // ---------------------------------------------------------------------------
-// Migration v58: preflight, post-check, rollback rehearsal, the md5 gate
+// Migration v59: preflight, post-check, rollback rehearsal, the md5 gate
 // ---------------------------------------------------------------------------
 const RUNBOOK = (name) => new URL(`../../docs/runbooks/${name}`, import.meta.url);
-const V58 = "migrations_v2/202611091100_training_load_v58_import_approval_subset.sql";
-const WITHOUT_V58 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v58")));
+const V59 = "migrations_v2/202611091100_training_load_v59_import_approval_subset.sql";
+const WITHOUT_V59 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v59")));
 async function booleansOf(client, sql) {
   const out = [];
   for (const res of [].concat(await client.query(sql))) for (const row of res.rows) for (const [k, v] of Object.entries(row)) if (typeof v === "boolean") out.push([k, v]);
@@ -542,27 +589,27 @@ async function catalogOf(client) {
   };
 }
 
-test("13. migration v58: the preflight passes on v57+, the post-check on v58, the rollback restores the earlier catalog exactly and the migration applies again to the same result", async () => {
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "subsetrb", migrations: WITHOUT_V58 });
+test("13. migration v59: the preflight passes on v57+, the post-check on v59, the rollback restores the earlier catalog exactly and the migration applies again to the same result", async () => {
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "subsetrb", migrations: WITHOUT_V59 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
-    const pre = await booleansOf(client, fs.readFileSync(RUNBOOK("import-approval-subset-v58-preflight.sql"), "utf8"));
+    const pre = await booleansOf(client, fs.readFileSync(RUNBOOK("import-approval-subset-v59-preflight.sql"), "utf8"));
     assert.ok(pre.length >= 12, `the preflight returned its booleans (${pre.length})`);
-    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v58");
+    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v59");
     const before = await catalogOf(client);
     await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
-    const post = await booleansOf(client, fs.readFileSync(RUNBOOK("import-approval-subset-v58-postcheck.sql"), "utf8"));
+    const post = await booleansOf(client, fs.readFileSync(RUNBOOK("import-approval-subset-v59-postcheck.sql"), "utf8"));
     assert.ok(post.length >= 8, `the post-check returned its booleans (${post.length})`);
-    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok on a v58 database");
+    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok on a v59 database");
     const md5 = (await client.query(`select md5(prosrc) m from pg_proc where proname = 'validate_gpexe_import_approval'`)).rows[0].m;
-    assert.match(fs.readFileSync(RUNBOOK("import-approval-subset-v58-postcheck.sql"), "utf8"), new RegExp(md5), "the post-check names the body in force");
-    assert.match(fs.readFileSync(RUNBOOK("import-approval-subset-v58-rollback.sql"), "utf8"), new RegExp(md5), "the rollback names the body in force");
+    assert.match(fs.readFileSync(RUNBOOK("import-approval-subset-v59-postcheck.sql"), "utf8"), new RegExp(md5), "the post-check names the body in force");
+    assert.match(fs.readFileSync(RUNBOOK("import-approval-subset-v59-rollback.sql"), "utf8"), new RegExp(md5), "the rollback names the body in force");
     const after = await catalogOf(client);
     assert.notDeepEqual(after, before);
-    await client.query(fs.readFileSync(RUNBOOK("import-approval-subset-v58-rollback.sql"), "utf8"));
+    await client.query(fs.readFileSync(RUNBOOK("import-approval-subset-v59-rollback.sql"), "utf8"));
     assert.deepEqual(await catalogOf(client), before, "the rollback restores the earlier catalog exactly");
-    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V58])).rows[0].n, 0);
+    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V59])).rows[0].n, 0);
     await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
   } finally {
@@ -576,12 +623,12 @@ test("14. the rollback refuses, changing nothing, once a subset approval exists,
   const s = (await subsetPreview(t, c.id, [athleteId(3)])).body.subset;
   const done = await approveSubset(t, c.id, { previewHash: s.previewHash, subsetHash: s.subsetHash, excludedAthleteIds: [athleteId(3)] });
   assert.equal(done.status, 200, JSON.stringify(done.body));
-  const rollback = fs.readFileSync(RUNBOOK("import-approval-subset-v58-rollback.sql"), "utf8");
+  const rollback = fs.readFileSync(RUNBOOK("import-approval-subset-v59-rollback.sql"), "utf8");
   const before = await catalogOf(admin);
   const c2 = new pg.Client({ connectionString: db.url });
   await c2.connect();
   try {
-    await assert.rejects(c2.query(rollback), /v58 rollback refused: a subset approval exists/);
+    await assert.rejects(c2.query(rollback), /v59 rollback refused: a subset approval exists/);
     await c2.query("rollback").catch(() => {});
     await c2.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) select 'migrations_v2/202611091200_later.sql', checksum, runner_version from public.schema_migrations limit 1`);
     await assert.rejects(c2.query(rollback), /later migrations are applied/);
@@ -589,24 +636,24 @@ test("14. the rollback refuses, changing nothing, once a subset approval exists,
     await c2.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611091200_later.sql'`);
     await c2.query("begin");
     await c2.query(`create or replace function training_load.validate_gpexe_import_approval() returns trigger as 'begin return new; end' language plpgsql`);
-    await assert.rejects(c2.query(rollback), /is not v58's/);
+    await assert.rejects(c2.query(rollback), /is not v59's/);
     await c2.query("rollback");
   } finally {
     await c2.end();
   }
   assert.deepEqual(await catalogOf(admin), before, "nothing changed");
-  assert.equal((await q(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V58]))[0].n, 1);
+  assert.equal((await q(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V59]))[0].n, 1);
 });
 
 test("15. the md5 gate: the migration refuses to run when the trigger function in force is not v33's", async () => {
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "subsetgate", migrations: WITHOUT_V58 });
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "subsetgate", migrations: WITHOUT_V59 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
     await client.query(`create or replace function training_load.validate_gpexe_import_approval() returns trigger as 'begin return new; end' language plpgsql`);
-    await assert.rejects(applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS), /ABORT while applying .*v58_import_approval_subset.*SQLSTATE 23514/);
-    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V58])).rows[0].n, 0);
-    assert.equal((await client.query(`select count(*)::int n from information_schema.columns where table_name = 'gpexe_import_approvals' and column_name = 'excluded_athlete_ids'`)).rows[0].n, 0, "nothing of v58 was applied");
+    await assert.rejects(applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS), /ABORT while applying .*v59_import_approval_subset.*SQLSTATE 23514/);
+    assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V59])).rows[0].n, 0);
+    assert.equal((await client.query(`select count(*)::int n from information_schema.columns where table_name = 'gpexe_import_approvals' and column_name = 'excluded_athlete_ids'`)).rows[0].n, 0, "nothing of v59 was applied");
   } finally {
     await client.end();
     await rb.drop();

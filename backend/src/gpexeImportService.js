@@ -2377,6 +2377,13 @@ function checkExclusionAgainstPreview(preview, excluded) {
   for (const id of excluded) {
     if (byId.get(id).notImported) throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out is already left out of this import.");
   }
+  // An athlete whose results were imported earlier cannot be left out: the earlier results would be left behind (the writer refuses
+  // that) and a change to them could not be accepted without them. Only an athlete whose every result is new (`created`) can go.
+  for (const id of excluded) {
+    if ((byId.get(id).results ?? []).some((r) => r.outcome && r.outcome !== "created" && r.outcome !== "not_imported")) {
+      throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out was imported before; it can't be left out of a later version of this session.");
+    }
+  }
   const remaining = [...byId.values()].filter((a) => !a.notImported && !excluded.includes(String(a.gpexeAthleteId)));
   if (!remaining.length) throw refusal(409, "no_importable_athlete", "Leaving these athletes out would leave nobody to import.");
 }
@@ -2485,7 +2492,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
     if (!binding) {
       const blocked = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
-      refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
+      // J20-B: a subset approval never stores a refreshed preview (the full hash is the candidate's; the next full review recomputes it).
+      if (!subset) refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
       throw previewChanged(teamId, candidateId, "This session can no longer be imported through the team's source binding; nothing was imported. Review the candidate again.");
     }
     // Steps 4-6: the activations, the registry locks and their re-check, the
@@ -2537,6 +2545,9 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // hash against the preview recomputed with the set, re-validates the set against the athletes recomputed
     // under the lock (an id that disappeared or became left-out is a changed preview, not a validation
     // error), and NEVER stores anything: the list, the batch and other coaches rely on the stored full preview.
+    if (subset && fresh.preview.status === "no_changes" && !fresh.invalidExclusions.length) {
+      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
+    }
     if (subset) {
       if (fresh.invalidExclusions.length || fresh.previewHash !== subsetHash || fresh.preview.status !== "ready" || !fresh.summary
           || (fresh.preview.changesToImported?.length ?? 0) !== changesToImported) {
@@ -2876,27 +2887,31 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
 export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, expectedClubId = undefined }) {
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
   if (!excluded.length) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
-  if (recomputeInFlight.has(String(teamId))) {
+  // Its own in-flight set (a member without the approver right must not hold the slot of A1's recompute), and the interval slot is
+  // taken only once the approver right is confirmed (a refused request does not use it up).
+  if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
     throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
   }
   const key = `subset:${teamId}:${userId}`;
-  const nowMs = Date.now();
   const last = recomputeSeen.get(key);
-  if (last !== undefined && nowMs - last < recomputeMinIntervalMs) {
+  if (last !== undefined && Date.now() - last < recomputeMinIntervalMs) {
     throw refusal(409, "try_again", "The review was updated a moment ago; try again in a few seconds.");
   }
-  recomputeInFlight.add(String(teamId));
-  recomputeSeen.delete(key);
-  recomputeSeen.set(key, nowMs);
-  if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
+  const takeSlot = () => {
+    recomputeSeen.delete(key);
+    recomputeSeen.set(key, Date.now());
+    if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
+  };
+  subsetInFlight.add(String(teamId));
   try {
-    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId });
+    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot });
   } finally {
-    recomputeInFlight.delete(String(teamId));
+    subsetInFlight.delete(String(teamId));
   }
 }
 
-async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId }) {
+const subsetInFlight = new Set();
+async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot }) {
   const client = await pool.connect();
   let sessionLost = false;
   const onClientError = () => { sessionLost = true; };
@@ -2906,6 +2921,7 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
     await setImportTransactionBounds(client);
     const unlocked = await canApproveGpexeImport({ query: (text, params) => client.query(text, params) }, userId, teamId);
     if (!unlocked.hasRight) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    takeSlot();
     const row = (await client.query(
       `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
               superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect, import_undone_at
@@ -2962,6 +2978,11 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
         throw error;
       }
       fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+    }
+    // A set that leaves the session blocked (an athlete imported earlier, a mapping that changed) is refused here with its own code,
+    // never handed to the coach as a review that can only fail at the approval.
+    if (fresh.preview.status === "blocked") {
+      throw refusal(409, "subset_blocked", "Leaving these athletes out would block the session; nothing was changed.");
     }
     // The set re-validated against the athletes recomputed under the lock.
     if (fresh.invalidExclusions.length) {

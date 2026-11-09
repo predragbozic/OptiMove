@@ -1,28 +1,28 @@
--- Rollback of migration v58 (an approval may leave athletes out, J20-B):
--- migrations_v2/202611091100_training_load_v58_import_approval_subset.sql
+-- Rollback of migration v59 (an approval may leave athletes out, J20-B):
+-- migrations_v2/202611091100_training_load_v59_import_approval_subset.sql
 --
 -- Not a migration and never run automatically. Rehearsed on disposable databases
 -- (backend/tests/gpexe-subset-import-j20b.test.mjs: apply -> rollback -> the v57 catalog exactly -> re-apply, every refusal below).
--- Before it is run anywhere real: a fresh restore-verified backup exists; the deployed commit no longer contains the v58
--- migration file (otherwise the migrator applies v58 again at the next start); and the owner approved this database
+-- Before it is run anywhere real: a fresh restore-verified backup exists; the deployed commit no longer contains the v59
+-- migration file (otherwise the migrator applies v59 again at the next start); and the owner approved this database
 -- specifically (.claude/rules/database-safety.md).
 --
--- It restores v33's trigger function body, drops the three CHECKs and the two columns, and removes the v58 record. It changes no other
+-- It restores v33's trigger function body, drops the three CHECKs and the two columns, and removes the v59 record. It changes no other
 -- row. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v58 is not recorded, or any later migrations_v2 migration is;
---   * the trigger function in force is not v58's (by md5);
+--   * v59 is not recorded, or any later migrations_v2 migration is;
+--   * the trigger function in force is not v59's (by md5);
 --   * any approval has a non-empty excluded_athlete_ids or a subset_hash (a subset import happened: the record of who was left
 --     out would be lost, so the way back is forward-only).
 -- One transaction. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 -f import-approval-subset-v58-rollback.sql
+--   psql -v ON_ERROR_STOP=1 -f import-approval-subset-v59-rollback.sql
 begin;
 set local lock_timeout = '5s';
 
 do $$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v58 rollback refused: the migrator is running';
+    raise exception 'v59 rollback refused: the migrator is running';
   end if;
 end $$;
 
@@ -30,20 +30,20 @@ lock table training_load.gpexe_import_approvals in access exclusive mode;
 
 do $$
 declare
-  v58 constant text := 'migrations_v2/202611091100_training_load_v58_import_approval_subset.sql';
+  v59 constant text := 'migrations_v2/202611091100_training_load_v59_import_approval_subset.sql';
 begin
-  if not exists (select 1 from public.schema_migrations where migration_name = v58) then
-    raise exception 'v58 rollback refused: v58 is not recorded on this database';
+  if not exists (select 1 from public.schema_migrations where migration_name = v59) then
+    raise exception 'v59 rollback refused: v59 is not recorded on this database';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v58) then
-    raise exception 'v58 rollback refused: later migrations are applied';
+  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v59) then
+    raise exception 'v59 rollback refused: later migrations are applied';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'training_load' and p.proname = 'validate_gpexe_import_approval') is distinct from 'b27b0872c62dd73c71305dafc5992edd' then
-    raise exception 'v58 rollback refused: the body in force of training_load.validate_gpexe_import_approval is not v58''s';
+       where n.nspname = 'training_load' and p.proname = 'validate_gpexe_import_approval') is distinct from 'febf8070345d1983e4c3bf1addec96c9' then
+    raise exception 'v59 rollback refused: the body in force of training_load.validate_gpexe_import_approval is not v59''s';
   end if;
   if exists (select 1 from training_load.gpexe_import_approvals where cardinality(excluded_athlete_ids) > 0 or subset_hash is not null) then
-    raise exception 'v58 rollback refused: a subset approval exists (the record of who was left out would be lost)';
+    raise exception 'v59 rollback refused: a subset approval exists (the record of who was left out would be lost)';
   end if;
 end $$;
 
@@ -110,18 +110,18 @@ alter table training_load.gpexe_import_approvals
   drop column excluded_athlete_ids,
   drop column subset_hash;
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202611091100_training_load_v58_import_approval_subset.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202611091100_training_load_v59_import_approval_subset.sql';
 
--- Post-gate: v33's body is in force and no v58 object is left.
+-- Post-gate: v33's body is in force and no v59 object is left.
 do $$
 begin
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'validate_gpexe_import_approval') is distinct from '1b4cc435b11a5b8e462dee4b296bf068' then
-    raise exception 'v58 rollback failed: the trigger function is not v33''s';
+    raise exception 'v59 rollback failed: the trigger function is not v33''s';
   end if;
   if exists (select 1 from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_import_approvals'
               and column_name in ('excluded_athlete_ids', 'subset_hash')) then
-    raise exception 'v58 rollback failed: a v58 column is still there';
+    raise exception 'v59 rollback failed: a v59 column is still there';
   end if;
 end $$;
 commit;

@@ -1,4 +1,4 @@
--- v58: an approval may leave athletes out (J20-B, docs/ai/j20-session-review-contract.md section 5.1).
+-- v59: an approval may leave athletes out (J20-B, docs/ai/j20-session-review-contract.md section 5.1).
 --
 -- What it changes (Trigger 1, a migration; Trigger 3, a record of who was left out):
 --   * gpexe_import_approvals gains `excluded_athlete_ids` (GPEXE athlete ids the coach left out of this import; ids only,
@@ -16,7 +16,7 @@
 -- tests. A raw writer that supplies a well-formed set and a well-formed but wrong hash is outside that guarantee.
 --
 -- Before it changes anything it checks that the trigger function in force is v33's (md5 of pg_proc.prosrc); after, that it is
--- the new one. Rollback: docs/runbooks/import-approval-subset-v58-rollback.sql (refuses once any approval has a non-empty set).
+-- the new one. Rollback: docs/runbooks/import-approval-subset-v59-rollback.sql (refuses once any approval has a non-empty set).
 
 do $$
 begin
@@ -24,7 +24,7 @@ begin
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'validate_gpexe_import_approval')
      is distinct from '1b4cc435b11a5b8e462dee4b296bf068' then
-    raise exception 'v58 refused: the body in force of training_load.validate_gpexe_import_approval is not v33''s' using errcode = '23514';
+    raise exception 'v59 refused: the body in force of training_load.validate_gpexe_import_approval is not v33''s' using errcode = '23514';
   end if;
 end;
 $$;
@@ -89,7 +89,7 @@ begin
   if cand.drill_parameter_effect is null or cand.drill_parameter_effect not in ('not_required', 'confirmed') then
     raise exception 'gpexe_import_approvals: candidate % has no confirmed drill-parameter effect', new.candidate_id;
   end if;
-  -- v58: the set of athletes left out is a canonical, sorted, unique list of GPEXE ids. (The size and the pairing with
+  -- v59: the set of athletes left out is a canonical, sorted, unique list of GPEXE ids. (The size and the pairing with
   -- subset_hash are the table's own CHECKs.) That the set and the hash match a preview is the application's step 12.
   if cardinality(new.excluded_athlete_ids) > 0 then
     if array_ndims(new.excluded_athlete_ids) is distinct from 1
@@ -110,8 +110,8 @@ begin
   if (select md5(p.prosrc)
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'validate_gpexe_import_approval')
-     = '1b4cc435b11a5b8e462dee4b296bf068' then
-    raise exception 'v58 failed: the trigger function still has v33''s body' using errcode = '23514';
+     is distinct from 'febf8070345d1983e4c3bf1addec96c9' then
+    raise exception 'v59 failed: the trigger function is not the intended v59 body' using errcode = '23514';
   end if;
 end;
 $$;

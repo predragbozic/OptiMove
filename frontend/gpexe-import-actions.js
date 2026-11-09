@@ -158,7 +158,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-subset-review") {
     const candidate = gx.detail?.candidate;
-    if (!candidate || !leaveOutOffered(candidate, gx.detail, gx.status)) return true;
+    // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
+    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && (gx.detail.leaveOut || []).length > 0;
+    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
     const ids = leaveOutIds(candidate, gx.detail);
     if (!ids.length) return true;
     await reviewGpexeSubset(ids, renderTrainingLoad);

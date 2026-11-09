@@ -22915,4 +22915,6 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .gpexe-approve-subset > p { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .gpexe-review-rows td.gpexe-leave-out-cell.is-empty { display: none; }
+  /* The checkbox carries its own "Leave out" text: the card's data-label would say it twice. */
+  .gpexe-review-rows td.gpexe-leave-out-cell::before { display: none; }
 }

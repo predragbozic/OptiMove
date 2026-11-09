@@ -380,7 +380,10 @@ export async function openGpexeCandidate(candidateId, render) {
   const generation = gx.generation;
   // An approval whose result is still not confirmed is shown again as such.
   const uncertain = gx.uncertain[candidateId] ? { ...gx.uncertain[candidateId] } : null;
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: [], subset: null };
+  // J20-B: an unconfirmed subset approval keeps the set it was sent with; a reopened review restores it, so the whole session can never be
+  // offered (and sent) in its place. The reviewed hash is not kept: the review is made again.
+  const keptSet = Array.isArray(uncertain?.chosenExcluded) ? uncertain.chosenExcluded.map(String) : [];
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.notice = "";
@@ -896,8 +899,9 @@ export async function recomputeGpexeReview(render) {
       return;
     }
     detail.candidate = answer.candidate;
-    // What the coach ticked was for the old list of changes.
+    // What the coach ticked was for the old list of changes, and a subset review was for the old preview.
     detail.acceptChanges = false;
+    detail.subset = null;
     gx.recomputedAtLinkSeq = { ...(gx.recomputedAtLinkSeq || {}), [candidateId]: seq, ...(answer.candidate.id ? { [answer.candidate.id]: seq } : {}) };
     // The inbox row still holds the old summary and hash: read the list again.
     void reloadGpexeCandidates(render);
