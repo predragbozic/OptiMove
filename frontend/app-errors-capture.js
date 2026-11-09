@@ -57,12 +57,16 @@ export function buildReport({ screen, action, code, status, error }) {
   return body;
 }
 
-export function createReporter({ send = defaultSend, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS } = {}) {
+export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS } = {}) {
+  // The default sender needs a signed-in page; an injected sender (a test) decides for itself.
+  const send = sendIn || defaultSend;
+  const isSignedIn = signedIn || (sendIn ? () => true : () => Boolean(context.getUser()));
   const seen = new Map();
   let windowStart = 0;
   let inWindow = 0;
   return function report(input) {
     try {
+      if (!isSignedIn()) return false; // before any slot is spent: an error before sign-in must not hide the same one after it
       const body = buildReport(input);
       const t = now();
       if (t - windowStart >= 60_000) { windowStart = t; inWindow = 0; }
@@ -82,7 +86,6 @@ export function createReporter({ send = defaultSend, now = () => Date.now(), per
 }
 
 export function defaultSend(body) {
-  if (!context.getUser()) return Promise.resolve();
   return fetch("/api/app-errors", { method: "POST", credentials: "same-origin", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 

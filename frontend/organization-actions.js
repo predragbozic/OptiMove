@@ -311,7 +311,7 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     // connections reads its club again for the same reason.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
     // App health reads the recorded errors again on every entry.
-    if (state.organization.section === "appHealth") void enterAppHealthSection(() => { if (state.organization.section === "appHealth") void renderOrganizationPanel({ refresh: false }); });
+    if (state.organization.section === "appHealth") void enterAppHealthSection(() => { if (state.activeTab === "organization" && state.organization.section === "appHealth") void renderOrganizationPanel({ refresh: false }); });
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     // Storage (PR 5) reads everything again on entry for the same reason.
     if (state.organization.section === "storage") enterStorageAdminSection();

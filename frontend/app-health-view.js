@@ -78,7 +78,7 @@ export function renderAppHealthPanelHtml() {
         ${(h.groups || []).length > places.length && places.length >= 40 ? `<p class="muted">Only the first ${places.length} places are listed.</p>` : ""}</details>` : ""}
       ${h.role !== "all" ? `<p class="muted app-health-note">Showing groups where at least one affected person is ${escapeHtml(ROLE_LABEL[h.role] || h.role)}. The counts cover everyone in the group.</p>` : ""}
       ${h.error ? `<p class="builder-error" role="alert">${escapeHtml(h.error)}</p>` : ""}
-      ${groups === null ? (h.loading ? `<p class="muted">Loading…</p>` : "") : groups.length
+      ${groups === null ? (h.loading ? `<p class="muted">Loading…</p>` : h.error ? "" : `<p class="muted">Nothing is loaded yet. Press Refresh.</p>`) : groups.length
         ? `<p class="app-health-summary">${groups.length} ${groups.length === 1 ? "kind of error" : "kinds of errors"} · ${groups.reduce((n, g) => n + g.occurrences, 0)} times · most recent first</p>
            <div class="app-health-list ${h.loading ? "is-loading" : ""}" aria-busy="${h.loading ? "true" : "false"}">${groups.map((g) => groupCard(g, h.selected)).join("")}</div>`
         : `<p class="muted app-health-empty">${(h.groups || []).length ? "No errors match these filters." : `No errors recorded in the last ${h.days === 1 ? "24 hours" : `${h.days} days`}.`}</p>${(h.groups || []).length ? `<button type="button" class="plain-button" data-action="app-health-clear">Clear filters</button>` : ""}`}

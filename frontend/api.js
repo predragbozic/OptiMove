@@ -42,7 +42,7 @@ export async function api(path, options = {}) {
   try {
     return await response.json();
   } catch (parseError) {
-    if (reportable(path)) reportApiFailure({ code: "unexpected_response", status: response.status });
+    if (reportable(path) && parseError?.name !== "AbortError") reportApiFailure({ code: "unexpected_response", status: response.status });
     throw parseError;
   }
 }

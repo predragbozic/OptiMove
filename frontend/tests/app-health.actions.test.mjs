@@ -66,6 +66,13 @@ test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a f
   await new Promise((res) => setTimeout(res, 5));
   const throwing = C.createReporter({ send: () => { throw new Error("sync"); } });
   assert.equal(throwing({ screen: "home", code: "x" }), false);
+  // an error before sign-in spends no slot: the same error after sign-in is still sent
+  let earlySignedIn = false; const sent2 = [];
+  const early = C.createReporter({ send: async (b) => { sent2.push(b); }, isSignedIn: () => earlySignedIn });
+  assert.equal(early({ screen: "home", code: "boot_error" }), false);
+  earlySignedIn = true;
+  assert.equal(early({ screen: "home", code: "boot_error" }), true);
+  assert.equal(sent2.length, 1);
   // the default sender: nothing when signed out; a POST of the closed body when signed in
   let calls = [];
   globalThis.fetch = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 204 }; };
@@ -106,6 +113,7 @@ test("3. api.js reports a 5xx, no answer and an unreadable answer; nothing for a
   capture(); reply(401, null, { json: false }); await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "a signed-out answer is not an error of the app");
   capture(); reply(500, { error: "internal_error" }); await assert.rejects(api("/api/app-errors")); assert.deepEqual(sent, [], "the report route is never reported");
   capture(); globalThis.fetch = async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }; await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "an abort is the page's own choice");
+  capture(); globalThis.fetch = async () => ({ ok: true, status: 200, statusText: "", json: async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); } }); await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "an abort while the body is read too");
   capture(); C.noteAction("training-load-gpexe-open"); reply(500, { error: "internal_error" }); await assert.rejects(api("/api/x"));
   assert.equal(sent[0].action, "training-load-gpexe-open");
   assert.ok(!JSON.stringify(sent).match(/token|example|3f2b8c1e|plans/));
@@ -188,6 +196,18 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   const older = D.loadAppHealth(render);
   state.appHealth.days = 1; const newer = D.loadAppHealth(render); await newer; release(); await older; await flush();
   assert.equal(state.appHealth.groups[0].fingerprint, "b".repeat(64), "the older answer never replaces the newer one");
+  // nothing loaded yet is said, not blank
+  state.appHealth = D.emptyAppHealth();
+  assert.match(renderAppHealthPanelHtml(), /Press Refresh/);
+  // a late answer never repaints Settings over another screen
+  const { handleOrganizationAction } = await import("../organization-actions.js");
+  let painted = 0; let releaseLate; const lateGate = new Promise((r) => { releaseLate = r; });
+  globalThis.fetch = async () => { await lateGate; return { ok: true, status: 200, statusText: "", json: async () => ({ groups: [] }) }; };
+  state.organization = { ...(state.organization || {}), section: "overview" }; state.activeTab = "organization";
+  await handleOrganizationAction({ dataset: { action: "organization-section", section: "appHealth" } }, { renderOrganizationPanel: () => { painted += 1; } });
+  const afterEntry = painted;
+  state.activeTab = "weekly"; releaseLate(); await flush(); await flush();
+  assert.equal(painted, afterEntry, "no repaint once the person is on another tab");
   // the tab
   assert.match(renderSettingsNavHtml({ isPlatformAdmin: true }), /data-section="appHealth"/);
   assert.ok(!/appHealth/.test(renderSettingsNavHtml({ isPlatformAdmin: false })));
