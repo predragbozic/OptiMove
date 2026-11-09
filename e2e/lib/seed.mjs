@@ -24,6 +24,9 @@ export async function seedWorld(databaseUrl) {
       const id = (await client.query(
         `insert into public.athletes (athlete_id, first_name, last_name, full_name, display_name, device_timezone) values (nextval('public.athlete_generated_id_seq')::text, $1, $2, $3, $3, 'Europe/Sarajevo') returning id`,
         [first, last, name])).rows[0].id;
+      // The application gives an athlete BOTH rows (POST /api/organization/athletes: a club membership, then the team's), and a club admin reaches
+      // the athlete through the club one - so the seed does the same.
+      await client.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,null,'club','active','2026-01-01T00:00:00Z')`, [id, clubA]);
       await client.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [id, clubA, teamA]);
       athleteIds.push(id);
     }
