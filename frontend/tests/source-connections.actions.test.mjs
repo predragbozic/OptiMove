@@ -135,7 +135,7 @@ async function openClub(options = {}, { who = asPlatformAdmin } = {}) {
   return r;
 }
 
-test("1. the tab is offered to a platform admin (platform or club workspace) and to the owning club's admin in that club's workspace only; a coach, a club admin in another workspace and an account without the facts never see it, and the section falls back to Overview", () => {
+test("1. the tab is offered to a platform admin (platform or club workspace) and to the owning club's admin in that club's workspace only; a coach, a club admin in another workspace and an account without the facts never see it, and the section falls back to Athletes for a coach", () => {
   asPlatformAdmin();
   assert.match(renderSettingsNavHtml(state.organization.data, "overview"), /data-section="sourceConnections"/);
   assert.deepEqual(sourceConnectionsAdminContext(), { basis: "platform_admin", workspaceType: "platform", clubId: null });
@@ -162,7 +162,7 @@ test("1. the tab is offered to a platform admin (platform or club workspace) and
   assert.equal(sourceConnectionsAdminContext(), null);
   assert.doesNotMatch(renderSettingsNavHtml(state.organization.data, "overview"), /sourceConnections/);
   const panel = renderOrganizationPanelHtml({ currentUser: state.currentUser, data: state.organization.data, error: "", role: "Coach", scope: "Team" });
-  assert.equal(state.organization.section, "overview", "a coach is never left on the section");
+  assert.equal(state.organization.section, "athletes", "a coach is never left on the section; the default is Athletes");
   assert.doesNotMatch(panel, /Source connections<\/h3>/);
   assert.equal(html(), "", "nothing is rendered without an administrator context");
   // The nav helper is safe without any user at all (older callers).

@@ -49,3 +49,7 @@ an all-green run, which needs no baseline.
 Any report that claims tests were run must include the exact command(s) and the exact
 pass/fail numbers from that session's actual output — not a remembered or estimated
 count, and not a number carried over from a previous session without re-running.
+
+## Frontend PR gate
+
+Before asking for a GO, run the whole `--preset frontend-fast` on the head and on a clean `origin/main` and compare: every file that fails on the head but not on main is a NO-GO, even if it is far from the diff (PR #432 broke two such files that a narrow filter missed).

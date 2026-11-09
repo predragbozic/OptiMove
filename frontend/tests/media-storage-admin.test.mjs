@@ -83,8 +83,8 @@ test("1. the Storage tab exists for a platform administrator in the platform wor
   assert.match(renderSettingsNavHtml(state.organization.data), /data-section="storage">Storage</);
   reset({ workspace: "private_coach" });
   assert.doesNotMatch(renderSettingsNavHtml(state.organization.data), /data-section="storage"/);
-  assert.match(renderOrganizationPanelHtml({ currentUser: state.currentUser, data: state.organization.data, error: "", role: "Admin", scope: "Platform" }), /Users/);
-  assert.equal(state.organization.section, "overview", "a workspace without the tab never shows the section");
+  assert.doesNotMatch(renderOrganizationPanelHtml({ currentUser: state.currentUser, data: state.organization.data, error: "", role: "Admin", scope: "Platform" }), /Storage/);
+  assert.equal(state.organization.section, "athletes", "a coach workspace never shows the Storage section; the default section is Athletes");
   reset({ platformAdmin: false });
   assert.doesNotMatch(renderSettingsNavHtml(state.organization.data), /Storage/);
   assert.equal(data.storageAdminContext(state.organization.data), false);
