@@ -19,6 +19,7 @@ const get = (cookie, path = "/api/organization/clubs-summary") => env.api(path, 
 test("1. a platform admin in the platform workspace reads the active clubs with their counts, no-store, and no person anywhere", async () => {
   const res = await get(m.roles.platformAdmin.cookie);
   assert.equal(res.status, 200, res.text);
+  assert.equal(res.cacheControl, "no-store");
   assert.deepEqual(Object.keys(res.body), ["clubs"]);
   const byId = Object.fromEntries(res.body.clubs.map((c) => [c.id, c]));
   const c1 = byId[m.clubs.c1];
