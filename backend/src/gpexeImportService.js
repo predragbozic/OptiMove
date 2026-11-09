@@ -2578,6 +2578,220 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
 }
 
 // ---------------------------------------------------------------------------
+// J20-A1: recompute the whole candidate's preview now (J20 section 5.0)
+// ---------------------------------------------------------------------------
+// A link writes only gpexe_athlete_links; the candidate keeps the preview of
+// its last check, so a review made before a link stays stale until a check.
+// This recomputes the preview under the approval's own lock order (candidate
+// row FOR UPDATE, then the team's import lock) and stores it with the same
+// compare-and-set a refused approval uses - ON THE ROUTE'S OWN CLIENT, in the
+// same transaction (the pool-level storeRefreshedPreview would wait for the
+// row lock this transaction holds). The approval compares the client's hash
+// with the stored one, so a hash that was returned but not stored could never
+// be approved. Nothing but the candidate's derived columns is written; the
+// approver-rights lock (6b) is not taken.
+let recomputeCommit = null;
+let recomputeCommitTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
+export function setRecomputeCommitForTests(commit, { timeoutMs = COMMIT_ANSWER_TIMEOUT_MS } = {}) {
+  recomputeCommit = commit ?? null;
+  recomputeCommitTimeoutMs = timeoutMs;
+}
+let recomputeObserver = null;
+export function setRecomputeObserverForTests(observer) {
+  recomputeObserver = observer ?? null;
+}
+const RECOMPUTE_MIN_INTERVAL_MS = 3_000;
+let recomputeMinIntervalMs = RECOMPUTE_MIN_INTERVAL_MS;
+const recomputeSeen = new Map();
+export function setRecomputeIntervalForTests(ms) {
+  recomputeMinIntervalMs = ms ?? RECOMPUTE_MIN_INTERVAL_MS;
+  recomputeSeen.clear();
+}
+
+async function storeRefreshedPreviewOn(client, candidateId, { expectedPreviewHash, preview, previewHash }) {
+  return (await client.query(
+    `update training_load.gpexe_import_candidates
+        set preview = $3, preview_hash = $4, preview_computed_at = now(), status = $5
+      where id = $1 and preview_hash is not distinct from $2 and status in ('pending', 'blocked') and raw_bundle is not null`,
+    [candidateId, expectedPreviewHash, preview, previewHash, preview.status === "blocked" ? "blocked" : "pending"],
+  )).rowCount;
+}
+
+// One recompute per team in flight per instance: a team manager who is not an
+// approver cannot queue N of them on the candidate row and the team lock (the
+// pool and the approvers' waits). Answered before a connection is taken.
+const recomputeInFlight = new Set();
+
+export async function recomputeCandidatePreview(teamId, candidateId, { userId, expectedClubId = undefined }) {
+  if (recomputeInFlight.has(String(teamId))) {
+    throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
+  }
+  recomputeInFlight.add(String(teamId));
+  try {
+    return await recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expectedClubId });
+  } finally {
+    recomputeInFlight.delete(String(teamId));
+  }
+}
+
+async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expectedClubId = undefined }) {
+  const client = await pool.connect();
+  let commitSent = false;
+  let commitUncertain = false;
+  let released = false;
+  let sessionLost = false;
+  const onClientError = () => { sessionLost = true; };
+  client.on("error", onClientError);
+  try {
+    // A fast refusal only; the values read under the row lock below are the
+    // authoritative ones.
+    const early = (await client.query(
+      `select status, preview_hash from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`,
+      [candidateId, teamId],
+    )).rows[0];
+    if (!early) throw refusal(404, "notFound", "Not found.");
+    // The same stored hash asked for again within the interval is a repeat,
+    // not a deliberate step (the key holds the stored hash and the team's link set, so a link
+    // is a deliberate step and is not throttled).
+    const linkSet = (await client.query(
+      `select md5(coalesce(string_agg(id::text || ':' || coalesce(unlinked_at::text, ''), ',' order by id), '')) as fingerprint
+         from training_load.gpexe_athlete_links where owner_team_id = $1`, [teamId])).rows[0].fingerprint;
+    const key = `${candidateId}:${early.preview_hash}:${linkSet}`;
+    const nowMs = Date.now();
+    const last = recomputeSeen.get(key);
+    if (last !== undefined && nowMs - last < recomputeMinIntervalMs) {
+      throw refusal(409, "try_again", "The review was updated a moment ago; try again in a few seconds.");
+    }
+
+    await client.query("begin isolation level read committed");
+    await setImportTransactionBounds(client);
+    const row = (await client.query(
+      `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
+              superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect, import_undone_at
+         from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2 for update`,
+      [candidateId, teamId],
+    )).rows[0];
+    if (!row) throw refusal(404, "notFound", "Not found.");
+    if (row.status === "imported") throw refusal(409, row.import_undone_at ? "import_undone" : "already_imported", row.import_undone_at
+      ? "The import of this session was undone; find new sessions again to review it."
+      : "This candidate has already been imported.");
+    if (row.status === "superseded") {
+      if (row.superseded_by_candidate_id) {
+        throw refusal(409, "superseded_by_newer_data", "GPEXE has newer data for this session; review the newer candidate.",
+          { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
+      }
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
+    if (!(await candidateActionable(client, row, teamId))) {
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
+    if (!snapshotState(row).available || row.raw_bundle == null) {
+      throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; press \"Check now\" again.");
+    }
+
+    await lockTeamForImport(client, teamId);
+    await lockApprovalTeam(client, teamId, expectedClubId);
+    const lastCheck = (await client.query(
+      `select source_path, source_binding_id from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`,
+      [row.last_seen_check_id, teamId],
+    )).rows[0];
+    const bindingId = lastCheck?.source_path === "source_connection" && lastCheck.source_binding_id ? String(lastCheck.source_binding_id) : null;
+    const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
+    let fresh;
+    // previewLocked leaves the real import's writes in the open transaction
+    // (the approval commits them; a check rolls everything back). Here the
+    // transaction commits the candidate's derived columns only, so the import
+    // runs inside a savepoint of our own and is rolled back to it before the
+    // compare-and-set. The savepoint is opened BEFORE prepareImportMapping,
+    // which writes the Metrics Core source instance's T7 keys (insert or
+    // update of metric_source_connections) the first time a team is mapped:
+    // those writes must not survive a recompute (nothing but the candidate's
+    // derived columns is stored). The price: rolling back to a savepoint
+    // releases the locks taken after it, so the registry locks are NOT held
+    // through the compare-and-set. The stored preview is advisory; the
+    // approval recomputes under its own locks and is authoritative (J20 5.0).
+    await client.query("savepoint j20_recompute_preview");
+    if (!binding) {
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
+    } else {
+      let mapping;
+      try {
+        let gates = null;
+        try {
+          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+        } catch (error) {
+          if (!(error instanceof GpexeMappingError)) throw error;
+        }
+        mapping = gates
+          ? await prepareImportMapping(client, { teamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId })
+          : { block: null, rows: [], activationSet: [], unactivated: [], binding, connection: null };
+      } catch (error) {
+        if (error instanceof ImportMappingChangedError) {
+          throw previewChanged(teamId, candidateId, "The team's mappings changed while the review was updated; try again.");
+        }
+        throw error;
+      }
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId });
+    }
+    await client.query("rollback to savepoint j20_recompute_preview");
+    await client.query("release savepoint j20_recompute_preview");
+    if (recomputeObserver) await recomputeObserver({ client, candidateId });
+
+    const stored = await storeRefreshedPreviewOn(client, candidateId, {
+      expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash,
+    });
+    if (stored !== 1) throw previewChanged(teamId, candidateId, "The review changed while it was updated; read it again.");
+
+    await client.query("set constraints all immediate");
+    commitSent = true;
+    const committing = Promise.resolve().then(() => (recomputeCommit ? recomputeCommit(client) : client.query("commit")));
+    committing.catch(() => {});
+    try {
+      await withinBound(committing, recomputeCommitTimeoutMs);
+    } catch (commitError) {
+      commitUncertain = true;
+      released = true;
+      client.removeListener("error", onClientError);
+      client.release(true);
+      console.error(`[gpexe] recompute of candidate ${candidateId}: the COMMIT was not confirmed (${formatDbError(commitError)}); checking the stored hash`);
+      let storedHash = null;
+      try {
+        const check = await withinBound(query(
+          `select preview_hash from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [candidateId, teamId]), uncertainCommitCheckTimeoutMs);
+        storedHash = check.rows[0]?.preview_hash ?? null;
+      } catch (error) {
+        console.error(`[gpexe] checking candidate ${candidateId} after an unconfirmed recompute COMMIT failed: ${formatDbError(error)}`);
+      }
+      if (storedHash !== fresh.previewHash) {
+        throw refusal(503, "outcome_unknown",
+          "The database did not confirm the update of the review, and it could not be verified yet. Update the review again.",
+          { reviewAgain: reviewAgain(teamId, candidateId) });
+      }
+    }
+    recomputeSeen.delete(key);
+    recomputeSeen.set(key, Date.now());
+    if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
+    return { previewHash: fresh.previewHash, previousPreviewHash: row.preview_hash };
+  } catch (error) {
+    if (!commitSent) await client.query("rollback").catch(() => {});
+    if (error instanceof GpexeImportServiceError) throw error;
+    if (error instanceof ApprovalTeamGoneError) throw refusal(404, "notFound", "Not found.");
+    if (!commitSent && (isImportWaitError(error) || sessionLost || isSessionEndedError(error))) {
+      if (!isImportWaitError(error)) sessionLost = true;
+      console.error(`[gpexe] recompute of candidate ${candidateId} stopped before its COMMIT (${error?.code ?? "connection"}); nothing was changed`);
+      throw refusal(409, "try_again", "Another check, import or change of this team was running, or the server was busy. Nothing was changed; try again in a moment.");
+    }
+    console.error(`[gpexe] recompute of candidate ${candidateId} failed: ${formatDbError(error)}`);
+    throw refusal(500, "internal_error", "The review could not be updated on the server; nothing was changed.");
+  } finally {
+    if (!released) {
+      client.removeListener("error", onClientError);
+      client.release(commitUncertain || sessionLost ? true : undefined);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Batch approval (Imports phase 4a)
 // ---------------------------------------------------------------------------
 
