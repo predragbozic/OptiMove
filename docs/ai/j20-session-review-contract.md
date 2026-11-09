@@ -2,7 +2,7 @@
 
 Status: **Proposed** (docs only; no code, no migration). Written on the *Rukovodilac*'s order of 2026-11-09 after the owner accepted
 the direction of the "Session Review Table" sketch (https://claude.ai/artifact/LxSceTeB6kxiRtXLJkprP5; the flow sketch
-https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7). Base: `origin/main` `bbd5b450`. Parts: **J20-A** the screen over what exists,
+https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7). Base: `origin/main` `bbd5b450`. Parts: **J20-A** (A1 the recompute route, A2 the screen),
 **J20-B** the subset import (★★), **J20-C** the roster states in the same flow. The open owner questions are in section 9.
 
 ## 0. In short
@@ -34,29 +34,39 @@ Rows that need a person are on top; rows that are fine are folded. Nothing new i
 | The preview is a rolled-back run of the real import under the team lock; it lists per GPEXE athlete: participation, GPS status, `results[]` with values (version 3: variable label, unit, value, source field and source value), `skippedValues[]`, `notImported` (`athlete_not_linked`, `athlete_not_in_team`, `session_blocked`, a blocking kind), and `teamAthletesWithoutGpexeRecord` | `backend/src/gpexeImportPreview.js` (the `entry.notImported` branch near line 476) |
 | `approveCandidate` imports the **whole candidate** exactly as its preview showed it; refused unless `previewHash` equals the hash of the preview recomputed in the same transaction | `gpexeImportService.js` `approveCandidate`, v23 trigger |
 | A GPEXE athlete that is not linked or not in the team is left out of the import automatically (the session stays importable) | preview `notImported` |
-| A link change changes the preview and its hash; the screen already treats a review made before a link change as stale (`reviewMadeBeforeLinkChange`) | `frontend/gpexe-import-data.js` |
+| A link writes only `gpexe_athlete_links`. `getCandidate` returns the **stored** preview and hash, so after a link the review stays as it was and the screen marks it stale (`reviewMadeBeforeLinkChange`) until a check that started after the link has seen the session. Nothing recomputes it on demand today (only a check's finalization and a refused approval do, via `storeRefreshedPreview`) | `gpexeImportService.js` `getCandidate`, `linkAthlete`; `frontend/gpexe-import-data.js` |
 | Roster decisions (*Participated · no device data*, *Did not participate* with a reason) are written by the 5a2 routes, one athlete or a bulk of up to 60, idempotent by `requestKey`, on an activity that already exists | `docs/ai/phase5a-discovery-and-contract.md`, `activity-roster-*` |
 | The in-app undo of an imported session (v57, U5) refuses a session with any roster decision (`roster_decisions_exist`) | `docs/ai/j19-u5-undo-contract.md` Q4 |
 | Linking one GPEXE athlete: `POST …/athlete-links` `{ gpexeAthleteId, athleteId }`; U3 suggests pairs and U3's *Confirm all* links several | existing routes |
 
-## 3. The screen (J20-A, frontend only, ★)
+## 3. The screen (J20-A2, frontend, ★)
 
 **Header:** the session (type, date and time), the team, one summary sentence ("15 of 22 athletes have data · 4 need a person"), the
 state of the import switch in the coach's words. **Filter chips:** *Needs a person* (default when any), *Not linked*, *No data*,
 *Conflict*, *All*. Counts on the chips.
 
 **Rows (one per team athlete plus one per GPEXE athlete that is not yet matched).** Columns: athlete (OptiMove name; a not-linked
-GPEXE athlete is shown by its GPEXE name and, for an administrator, its date of birth, as in *Link athletes*), the values (Duration,
+GPEXE athlete is shown **by audience** as section 4 says: an administrator by the stored GPEXE name and date of birth, a coach as
+"GPEXE athlete N" with the helper values), the values (Duration,
 Total distance, Maximal running speed — the variables the team's mappings fill — each with the GPEXE value in small type), and a status
 chip. Order: needs-a-person rows first (not linked, then conflict, then no data), then the rows that are fine, which are folded under
 "N athletes are fine" and open on a tap.
 
-| Row kind | What the row shows | The one action on the row |
+The row kinds are derived from the preview's **real** codes (`ATHLETE_ANOMALY`, `notImported`, `BLOCK_MESSAGES`, `skippedValues` in
+`gpexeImportPreview.js`), not invented ones; a test enumerates them from the source so a new code cannot be unrepresented.
+
+| Row kind (preview fact) | What the row shows | The action on the row |
 |---|---|---|
-| Fine | values, chip "Will be imported" | *Leave out* (checkbox "Import" off) |
-| Not linked (a GPEXE athlete) | GPEXE name, values, chip "Not linked" | *Link to…*: a chooser of the team's active athletes not yet linked (existing rules: same-name athletes cannot be chosen, nothing preselected, U3's suggestion first); *Leave out* |
-| No device data (a team athlete GPEXE did not record) | no values, chip "No data from the device" | *Participated · no device data* or *Did not participate* (+ reason list) — these are **states**, written after the import (section 5) |
-| Conflict (more than one track, mixed time zones for one athlete, a value the mapping refuses) | what is wrong in one sentence | *Leave out* only (the cause is GPEXE data; the coach cannot fix it here) |
+| Importable (no `notImported`) | values, chip "Will be imported" | *Leave out* (J20-B; the only kind that can be excluded) |
+| Imported with some values left out (`skippedValues`) | values plus a note per left-out value and its reason | none (the athlete is still imported) |
+| Not linked (`notImported: athlete_not_linked`) | identification by audience (section 4), values, chip "Not linked" | *Link to…* (chooser of the team's active athletes not yet linked; same-name athletes cannot be chosen; nothing preselected; U3's suggestion first). Already left out by the importer: no *Leave out* |
+| Not in the team (`athlete_not_in_team`) | chip "Not in this team" | none |
+| Needs review / invalid data (`multiple_tracks`, `stats_invalid`, `whole_session_row_count`) | one sentence of what is wrong | none (a GPEXE data matter; already left out by the importer) |
+| No device data (a team athlete in `teamAthletesWithoutGpexeRecord`) | no values, chip "No data from the device" | *Participated · no device data* or *Did not participate* (+ reason list): **states**, written after the import (5.2) |
+| Session blocked (`session_blocked`, a `BLOCK_MESSAGES` kind) | no rows; the block's sentence and the step that lifts it | none; the primary action stays off |
+
+`excludedAthleteIds` (J20-B) accepts only athletes whose preview entry is *Importable*; any other id answers `400 invalid_exclusion`
+(5.1). The "Needs a person" chip counts Not linked, Needs review and No data rows.
 
 **Primary action** at the bottom (sticky on a phone): **Import N athletes** — N counts the rows with "Import" on and values.
 Below it, when states were chosen: "and save M attendance states". One confirmation names the counts, not every athlete (the list is on
@@ -66,13 +76,14 @@ the screen). A session in which nobody can be imported keeps the button off and 
 every control 44 px, every input 16 px; the roster's bottom-sheet pattern for the state choice. **Language:** coach words; ids, codes and
 fingerprints only in an administrator's Technical details.
 
-## 4. Linking from a row (J20-A)
+## 4. Linking from a row (J20-A1 + A2)
 
 The row's *Link to…* uses the existing link route for one pair. The right to link is "manages the team in the active workspace" (any
 coach of the team, as in `routes/gpexeImport.js`): **broader than the import right**, so the screen never assumes that a coach who can
-link can also import, and offers *Import* only when the status read says so. A link changes the preview, so after it the screen
-**re-reads the candidate** (the server recomputes preview and hash), keeps the coach's other row choices keyed by GPEXE athlete id,
-and shows the row in its new kind. The primary action always sends the hash of the screen's latest read. A lost link answer is
+link can also import, and offers *Import* only when the status read says so. A link does **not** change the stored preview (section 2), so J20-A needs a server route that recomputes it (**J20-A1**, 5.0). After a link the
+screen calls it **once**, replaces the review with its answer (the new preview and hash), keeps the coach's other row choices keyed by GPEXE
+athlete id, and shows the row in its new kind. Without A1 the only way is a full *Find new sessions* check (minutes, GPEXE requests, 429
+exposure), which is why A1 is part of J20-A. The primary action always sends the hash of the screen's latest read. A lost link answer is
 *Result not confirmed* with *Check result* (same key), as everywhere else in Imports.
 
 **What a row shows about an unlinked GPEXE athlete, by audience.** An administrator (identity basis of `gpexeAthleteIdentityService.js`:
@@ -85,12 +96,25 @@ they are and does not widen them. The production-use gate for names and dates of
 
 ## 5. The server side
 
-### 5.1 Importing a subset (J20-B, ★★: triggers 1, 3 and 4; **needs a migration**)
+### 5.0 The recompute route (J20-A1, ★★ trigger 4, no migration)
+
+`POST …/candidates/:id/preview` `{}` returns the preview and `previewHash` recomputed **now** for the whole candidate. It is **locking and
+rolled back, not "read-only"**: it runs the real import in a rolled-back transaction under the team's import lock, with the approval's lock order
+and the 9-0 bounds (`lock_timeout` 5 s, `statement_timeout` 10 s, `idle_in_transaction_session_timeout` 10 s), answers `409 try_again` /
+`check_preview_busy` when the lock is not free, **writes nothing at all and never calls `storeRefreshedPreview`**, and has a per-user and
+per-team minimum interval. Audience and 404 as in 5.1 (the approval's audience; the identical 404; the same projection as `GET candidate`,
+including D10: a blocked preview's hash only to a platform admin; `no-store`). The client sends it once per deliberate step (after a link, on
+*Review*), one in flight. Tests: link then call → the new preview shows the athlete and the hash differs; a call while a check holds the team
+lock → bounded `try_again` with `preview_hash` and `preview_computed_at` unchanged; a coach's body carries no admin-only code. 5.1's subset
+preview is this route with `excludedAthleteIds`.
+
+### 5.1 Importing a subset (J20-B, ★★: triggers 1, 3 and 4; **needs a migration**; the approval gate and the v23 trigger both change)
 
 * **Inputs.** The approval and the preview take an optional `excludedAthleteIds` (GPEXE athlete ids). Canonical form: validated as
   canonical GPEXE ids, de-duplicated and sorted before anything is hashed, at most 60. An id that is not one of the candidate's own athletes
   is `400 invalid_excluded_athlete` (never ignored: garbage must not change a hash); an id the preview already leaves out
-  (`notImported`) is dropped canonically. Excluding everyone is `no_importable_athlete` (existing). The approval **re-validates the set
+  (`notImported`) is **rejected** with `400 invalid_exclusion` (it is already left out, and a client sending it has the wrong screen); only an
+  importable athlete may be excluded. Excluding everyone is `no_importable_athlete` (existing). The approval **re-validates the set
   against the athletes of the candidate recomputed under the lock**, not against what the client saw: an id that disappeared answers
   `409 preview_changed`, not a validation error. An excluded athlete is a `notImported` entry with the code `left_out_by_coach` and
   nothing of it is written.
@@ -105,8 +129,7 @@ they are and does not widen them. The production-use gate for names and dates of
   (`storeRefreshedPreview`); the subset path **never calls it**. It answers `409 preview_changed` with the recomputed subset preview in the body
   only, because the list, U6a's batch (which holds the full preview's hash) and other coaches rely on the stored full preview. A test proves
   that a refused subset approval leaves the candidate's stored preview and hash byte for byte as they were.
-* **The preview route** `POST …/candidates/:id/preview` `{ excludedAthleteIds }` runs the same rolled-back preview as a check, so it is
-  **not cheap and not free of locks**: it runs under the team's import lock with the 9-0 bounds (`lock_timeout` 5 s,
+* **The subset preview** is 5.0's route with `excludedAthleteIds`. It is **not cheap and not free of locks**: it runs under the team's import lock with the 9-0 bounds (`lock_timeout` 5 s,
   `statement_timeout` 10 s, `idle_in_transaction_session_timeout` 10 s), answers `409 try_again` / `check_preview_busy` when the lock is not
   free, and has a per-user and per-team minimum interval. Its **audience is the approval's** (O4), not the whole team's: reading the existing
   full preview stays a team-manager read (`GET candidate`), but a subset preview exists only to be approved. The screen asks for it once, on a
@@ -119,14 +142,21 @@ they are and does not widen them. The production-use gate for names and dates of
 * **What a left-out athlete means afterwards.** The candidate becomes `imported` as a whole. A later check of unchanged GPEXE content finds
   the imported candidate and yields `no_changes`: **a left-out athlete is not importable until GPEXE's content for the session changes**
   (`supplemented` only adds values to results that already exist). J20 does not add an "import the rest" path. A second approval of the same
-  candidate is `409 not pending`; the screen says so. If the content changes, the new candidate's review offers the stored exclusion set as the
+  candidate is `409 already_imported` (not an idempotent replay); the retry path after a lost answer is `already_imported` plus `getApproval`,
+  which returns the recorded `excluded_athlete_ids`, so the screen can show what was left out. A test approves with an exclusion, repeats the
+  request, expects `409 already_imported`, and reads the same exclusion from `getApproval`. If the content changes, the new candidate's review offers the stored exclusion set as the
   default, and an athlete imported earlier cannot be excluded (the existing rule).
 * **Roster observations.** An athlete left out by the coach with a real GPEXE record gets **no** "No usable device record" observation (that is
-  for a record the importer cannot use); the roster allows a state for them, with the record shown as flagged, and the bulk absence still refuses
-  an athlete with a source record (5a3b).
+  for a record the importer cannot use). On the roster such an athlete is "recorded by source" without values; J20-C's states are **not offered**
+  for them (the bulk absence refuses an athlete with a source record, 5a3b), and the J20 *No data* row covers only
+  `teamAthletesWithoutGpexeRecord`. **Discovery proof required before O3 is asked:** a disposable-database test that imports with
+  `excluded=[a3]`, runs a new check of the unchanged bundle, and shows no pending candidate offering a3 and the roster state of a3; the owner is
+  told the result with the question.
+* **Recompute and rollback.** The subset approval has no request key of its own; a lost COMMIT is resolved by the existing bounded COMMIT and
+  `resolveUncertainCommit`, and the answer after an error never says "nothing was imported" once the COMMIT was sent.
 * **Determinism.** The subset hash is computed over the canonical sorted set; a test proves that the same set gives the same hash across runs
   and that two different sets give different hashes and each approval imports exactly its set.
-* Reviews: `db-reviewer`, `security-reviewer`, `code-reviewer`; external review.
+* Reviews: `db-reviewer`, `security-reviewer`, `code-reviewer`; external review (trigger 1 migration, 3, 4).
 
 ### 5.2 Attendance states in the same flow (J20-C) — options
 
@@ -156,7 +186,7 @@ and should not wait for them. If the first months show friction, B is a later ch
 
 ### 5.3 The undo (U5) and roster decisions — the open question
 
-U5 refuses a session that has any coach roster decision (`roster_decisions_exist`). With J20 almost every freshly imported session will carry
+U5 refuses a session that has any coach roster decision (`roster_decisions_exist`). With J20, every session in which the coach saves states will carry
 decisions the flow itself wrote, so a **platform administrator's** undo of a wrongly linked athlete's session would be refused at once. (A coach
 never had an in-app undo: U5 is for an active platform admin only, J19-U5; the screen tells a coach "ask a platform administrator".) Options:
 
@@ -172,6 +202,9 @@ never had an in-app undo: U5 is for an active platform admin only, J19-U5; the s
   **origin column on the request record** (the idempotency record is `activity_roster_requests`, which has none; the decision cannot carry it
   alone) and a rule for the completion and log rows that every roster input writes (they are removed with the activity and recorded in the
   deletion log).
+* A later **Change** in the Roster tab creates a new decision **without** the tag (5a2 supersedes with new ids), so undo refuses again for that
+  athlete: a human judgment is never removable by the flow's tag. A test: J20 saves a state, the coach changes it in the Roster tab, undo →
+  `roster_decisions_exist`.
 * The rule becomes: refuse if any decision, request, completion or log row exists whose request origin is not `session_review`, or whose decision
   supersedes or is superseded by one that is not (a later Roster-tab decision supersedes through the current pointer, so removing the tagged one
   would break the chain).
@@ -204,6 +237,7 @@ would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No
   which session is "first".
 * U6a's batch import (several clean *Ready* sessions at once, with progress and *Stop after this step*) stays: a clean session needs no
   per-athlete decision. Opening a ready session from U6a's list opens this screen for the one session.
+* Before J20-A2 merges, the author confirms against U6a's head that the group buttons open the first session, the batch uses `previewHashes` for whole sessions only, and the modal's removal does not break the group button (not verified by the J20 review, which had no access to PR #408).
 * "Next session" in this screen steps through the same group; a refused or unconfirmed import is shown here with the same *Result not
   confirmed · Check result* pattern.
 
@@ -220,11 +254,13 @@ would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No
 
 ## 10. Order, marks and gates
 
-1. **J20-A** (frontend only, ★): the table, the filter chips, the folded group, linking from a row, the phone cards, over the existing
-   routes; the primary button still imports the **whole** session (rows are shown, "Leave out" is not offered yet). Reviews: code,
-   ux, mobile. Browser QA at 1280 / 390 / 375 / 360.
-2. **J20-B** (★★, **with a migration**) after O3: the approvals' new columns and trigger rule, `excludedAthleteIds` in the preview route and the approval; the screen's *Leave out* turned on. The owner's order naming the migration and the *Rukovodilac*'s preflight apply.
-3. **J20-C** (★) after O1 and O2: the states step. If O1 needs the undo change, it is a separate ★★ migration before J20-C ships.
+1. **J20-A1** (★★, trigger 4; backend, no migration): the recompute route of 5.0. Reviews: code, security; the *Nezavisni revizor*.
+   **J20-A2** (★, frontend): the table, the filter chips, the folded group, linking from a row, the phone cards, the audience-dependent
+   identification; the primary button still imports the **whole** session ("Leave out" is not offered yet). Reviews: code, ux, mobile,
+   **security** (the screen surfaces identity data). Browser QA at 1280 / 390 / 375 / 360. A frontend test renders the row for a viewer without
+   `identityAdmin` and expects no GPEXE name or date of birth in the HTML.
+2. **J20-B** (★★, **with a migration**, trigger 1, 3 and 4) after O3 and its discovery proof: the approvals' new columns and trigger rule, `excludedAthleteIds` in the preview route and the approval; the screen's *Leave out* turned on. The owner's order naming the migration and the *Rukovodilac*'s preflight apply.
+3. **J20-C** (★★, trigger 4: a retried second write after an irreversible import) after O1 and O2: the states step. Packet checklist: a route-level test "import succeeds, the bulk-states answer is lost, *Check result* with the same `requestKey` writes once". If O1 needs the undo change, it is a separate ★★ migration before J20-C ships.
 4. U6b (the club-connection wizard) is independent and may go in any order.
 
 Every part: the packet of `CLAUDE.md` (goal, acceptance, diff, tests with real counts); a part that touches a migration, the approval or
