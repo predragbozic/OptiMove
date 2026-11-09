@@ -140,7 +140,7 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   assert.deepEqual(calls, ["/api/app-errors/groups?days=7"]);
   let html = renderAppHealthPanelHtml();
   assert.match(html, /\/api\/athletes\/:id\/plans/);
-  assert.match(html, /14× · 3 people/);
+  assert.match(html, /14 times · 3 people/);
   // Design PR4: the row says what happened in words; the code and the status are a small second line.
   assert.match(html, /<span class="app-health-what">Server error<small class="app-health-code">internal_error · HTTP 500<\/small><\/span>/);
   assert.match(html, /3 kinds of errors · 17 times · most recent first/);
@@ -165,13 +165,13 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   await handleAppHealthAction({ dataset: { action: "app-health-role", role: "all" } }, { render });
   await handleAppHealthAction({ dataset: { action: "app-health-where", where: "/api/athletes/:id/plans" } }, { render });
   html = renderAppHealthPanelHtml();
-  assert.match(listOf(html), /14×/); assert.ok(!/training-load/.test(listOf(html)));
+  assert.match(listOf(html), /14 times/); assert.ok(!/training-load/.test(listOf(html)));
   await handleAppHealthAction({ dataset: { action: "app-health-role", role: "none" } }, { render });
   assert.match(renderAppHealthPanelHtml(), /No errors match these filters\./);
   assert.match(renderAppHealthPanelHtml(), /Showing groups where at least one affected person is Signed out\. The counts cover everyone in the group\./);
   await handleAppHealthAction({ dataset: { action: "app-health-clear" } }, { render });
   assert.equal(state.appHealth.role, "all"); assert.equal(state.appHealth.where, "all");
-  assert.match(listOf(renderAppHealthPanelHtml()), /14×/, "Clear filters brings the groups back");
+  assert.match(listOf(renderAppHealthPanelHtml()), /14 times/, "Clear filters brings the groups back");
   // a place that has no group in the new period stops being a filter
   state.appHealth.where = "/api/athletes/:id/plans";
   serveGroups([GROUPS[1]]);

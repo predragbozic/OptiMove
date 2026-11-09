@@ -23416,14 +23416,13 @@ p.coach-home-library-note.muted:not([role="status"]) {
 
 /* Section labels in sentence case ("Signed in as", "Users", "Organization browser"), as written. */
 .organization-view .organization-hero .eyebrow,
-.organization-view .organization-browser .eyebrow,
-.organization-view .organization-list-head .eyebrow {
+.organization-view .organization-browser .eyebrow {
   font-size: var(--om-text-sm);
   font-weight: var(--om-weight-semibold);
   letter-spacing: 0;
   text-transform: none;
 }
-.organization-view .organization-list-head .eyebrow {
+.organization-view .organization-browser .organization-list-head .eyebrow {
   margin: 0;
   color: var(--text);
   font-size: var(--om-text-md);
@@ -23444,16 +23443,25 @@ p.coach-home-library-note.muted:not([role="status"]) {
   overflow-wrap: break-word;
   line-height: var(--om-leading-tight);
 }
-/* In the browser's narrow columns the actions (badges, Invite, Manage account, edit) go on a
-   second line under the name, so they never cover it or squeeze it to a few letters. */
-.organization-view .organization-browser .organization-row:not(.is-selectable) {
-  grid-template-columns: 42px minmax(0, 1fr);
-  row-gap: var(--om-space-2);
+/* In a narrow list card (the Overview's columns, a phone) the actions (badges, Invite, Manage
+   account, edit) go on a second line under the name, so they never cover it or squeeze it to a
+   few letters; a wide list keeps them on the right of the same line. */
+.organization-view .organization-browser .organization-list-card {
+  container-type: inline-size;
 }
-.organization-view .organization-browser .organization-row:not(.is-selectable) > .organization-row-actions {
-  grid-column: 2;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+@container (max-width: 480px) {
+  .organization-view .organization-browser .organization-row:not(.is-selectable) {
+    grid-template-columns: 42px minmax(0, 1fr);
+    row-gap: var(--om-space-2);
+  }
+  .organization-view .organization-browser .organization-row:not(.is-selectable) > .organization-row-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+.organization-view .organization-browser .organization-row-actions:empty {
+  display: none;
 }
 .organization-view .organization-avatar {
   color: var(--om-accent-strong);

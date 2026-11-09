@@ -19,6 +19,14 @@ const show = (groups) => { state.appHealth = { ...D.emptyAppHealth(), groups }; 
 test("App health counts one occurrence as \"1 time\"", () => {
   assert.match(show([group(1)]), /1 kind of error · 1 time · most recent first/);
   assert.match(show([group(1), group(2, 2)]), /2 kinds of errors · 3 times ·/);
+  assert.match(show([group(1)]), /1 time · 1 person/, "the row says it the same way");
+});
+
+test("the cap note also shows when the filters match nothing", () => {
+  state.appHealth = { ...D.emptyAppHealth(), role: "athlete", groups: Array.from({ length: 100 }, (_, i) => group(i)) };
+  const html = renderAppHealthPanelHtml();
+  assert.match(html, /No errors match these filters/);
+  assert.match(html, /app-health-truncated/);
 });
 
 test("App health says when the list may be cut at the read's cap, and only then", () => {
@@ -35,8 +43,12 @@ test("the backend's read still caps at 100 by default (the note's number)", () =
   assert.match(route, /listErrorGroups\(\{ days \}\)/);
 });
 
-test("organization rows show the name's initials, not the row type", () => {
+test("organization rows show the name's initials, not the row type or the id", () => {
   assert.doesNotMatch(view, /type\.slice\(0, 2\)\.toUpperCase\(\)/);
+  assert.doesNotMatch(view, /organization-avatar">AT</);
+  assert.doesNotMatch(view, /\|\| "AT"\)\.slice\(0, 2\)/);
+  assert.doesNotMatch(view, /title\.slice\(0, 2\)\.toUpperCase\(\)/);
+  assert.doesNotMatch(view, /<span class="organization-avatar">/, "every text avatar is aria-hidden");
   assert.match(view, /<span class="organization-avatar" aria-hidden="true">\$\{escapeHtml\(programInitials\(title\)\)\}<\/span>/);
 });
 
@@ -44,6 +56,7 @@ test("the Settings rules stay inside the hero and the organization browser (neve
   const body = pr4.slice(pr4.indexOf("*/") + 2).replace(/\/\*[\s\S]*?\*\//g, "");
   let checked = 0;
   for (const m of body.matchAll(/([^{};]+)\{/g)) {
+    if (m[1].trim().startsWith("@")) continue;
     for (const sel of m[1].split(",").map((x) => x.trim()).filter(Boolean)) {
       assert.ok(sel.startsWith(".organization-view .organization-") || sel.startsWith(".app-health-"), `scoped: ${sel}`);
       checked += 1;
@@ -51,6 +64,17 @@ test("the Settings rules stay inside the hero and the organization browser (neve
   }
   assert.ok(checked >= 8, `${checked} selectors checked`);
   assert.match(pr4, /\.organization-view \.organization-row strong \{\n\s*white-space: normal;\n\s*overflow-wrap: break-word;/);
-  assert.match(pr4, /\.organization-view \.organization-browser \.organization-row:not\(\.is-selectable\) > \.organization-row-actions \{\n\s*grid-column: 2;/);
+  // Only a narrow list card stacks the actions; a wide list keeps them on the right.
+  const narrow = pr4.slice(pr4.indexOf("@container (max-width: 480px)"));
+  assert.ok(pr4.indexOf("@container (max-width: 480px)") > 0);
+  assert.match(pr4, /\.organization-browser \.organization-list-card \{\n\s*container-type: inline-size;/);
+  assert.match(narrow, /^@container \(max-width: 480px\) \{\n\s*\.organization-view \.organization-browser \.organization-row:not\(\.is-selectable\) \{\n\s*grid-template-columns: 42px minmax\(0, 1fr\);/);
+  assert.doesNotMatch(pr4.slice(0, pr4.indexOf("@container")), /grid-template-columns/, "no stacking outside the container query");
   assert.match(pr4, /\.organization-view \.organization-hero \.eyebrow,[\s\S]*?text-transform: none;/);
+});
+
+test("Data sources and Source connections use none of the classes the PR4 block styles", () => {
+  for (const f of ["data-sources-view.js", "source-connections-view.js"]) {
+    assert.doesNotMatch(readFileSync(new URL(`../${f}`, import.meta.url), "utf8"), /organization-(row|list-head|list-card|avatar|hero|browser)\b/, f);
+  }
 });
