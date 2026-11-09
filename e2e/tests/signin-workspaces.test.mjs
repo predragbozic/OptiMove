@@ -49,7 +49,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     try {
       assert.equal(await page.getByText("Settings", { exact: true }).count(), 0, "no Settings entry");
       assert.equal(await page.getByText("Training load", { exact: true }).count(), 0, "no Training load entry");
-      assert.ok((await page.locator("body").innerText()).includes("Weekly plan"), "the athlete's own pages are there");
+      assert.ok((await page.locator("body").textContent()).includes("Weekly plan"), "the athlete's own pages are there (in the menu, open or folded)");
     } finally {
       await context.close();
     }
