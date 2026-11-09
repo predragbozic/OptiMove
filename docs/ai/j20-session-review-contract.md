@@ -3,7 +3,7 @@
 Status: **Proposed** (docs only; no code, no migration). Written on the *Rukovodilac*'s order of 2026-11-09 after the owner accepted
 the direction of the "Session Review Table" sketch (https://claude.ai/artifact/LxSceTeB6kxiRtXLJkprP5; the flow sketch
 https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7). Base: `origin/main` `bbd5b450`. Parts: **J20-A** (A1 the recompute route, A2 the screen),
-**J20-B** the subset import (★★), **J20-C** the roster states in the same flow. The open owner questions are in section 9.
+**J20-B** the subset import (★★), **J20-C** the roster states in the same flow. The open owner questions are in section 11.
 
 ## 0. In short
 
@@ -182,7 +182,7 @@ Roster states are decisions on an **activity**, which exists only after the impo
   states survive a reload (kept in the browser for the session); "never lost silently" depends on that.
 
 **Recommendation: A.** The states are small, reversible, and already have a correct write path; the import is the only irreversible act
-and should not wait for them. If the first months show friction, B is a later change, not a rework. **Decision for the owner: section 9, O2.**
+and should not wait for them. If the first months show friction, B is a later change, not a rework. **Decision for the owner: section 11, O2.**
 
 ### 5.3 The undo (U5) and roster decisions — the open question
 
@@ -241,18 +241,7 @@ would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No
 * "Next session" in this screen steps through the same group; a refused or unconfirmed import is shown here with the same *Result not
   confirmed · Check result* pattern.
 
-## 9. Open questions for the owner
-
-* **O1 — Undo and roster decisions** (5.3): a, **b (recommended)**, or c. Needed before J20-C ships.
-* **O2 — States in the same transaction or after it** (5.2): **A (recommended)** or B.
-* **O3 — May the coach leave an athlete out of an import?** (5.1) Today a session is imported whole. Recommended yes; the left-out ids
-  (no names) are stored on the approval record so the absence stays explainable (this is a decision, not a default: if the owner declines the
-  record, it is a recorded choice). A left-out athlete is not importable until GPEXE's content changes. If the answer is no, J20-B disappears
-  and the table only explains.
-* **O4 — Who may import a subset:** the same people who may approve today (a platform admin, a team approver grant, and a club admin or team
-  coach only while the team's switch is on in mode `team`, U2). The subset preview has the same audience. Recommended unchanged.
-
-## 10. Order, marks and gates
+## 9. Order, marks and gates
 
 1. **J20-A1** (★★, trigger 4; backend, no migration): the recompute route of 5.0. Reviews: code, security; the *Nezavisni revizor*.
    **J20-A2** (★, frontend): the table, the filter chips, the folded group, linking from a row, the phone cards, the audience-dependent
@@ -266,7 +255,18 @@ would read as broken, `.claude/rules/frontend.md`). When 5b is accepted, the "No
 Every part: the packet of `CLAUDE.md` (goal, acceptance, diff, tests with real counts); a part that touches a migration, the approval or
 a roster write also needs the owner's order naming the migration and the *Rukovodilac*'s preflight (standing order).
 
-## 11. Not in J20
+## 10. Not in J20
 
 Estimated values (5b); per-athlete undo (U5 Q5); editing a value; merging two tracks of one athlete (a GPEXE data matter); the club-connection
 wizard (U6b); any change of what the import writes (mappings, units, variables).
+
+## 11. Questions for the owner (one block, each with a recommendation)
+
+* **O1 — Undo and roster decisions** (5.3): a, **b (recommended)**, or c. Needed before J20-C ships.
+* **O2 — States in the same transaction or after it** (5.2): **A (recommended)** or B.
+* **O3 — May the coach leave an athlete out of an import?** (5.1) Today a session is imported whole. Recommended yes; the left-out ids
+  (no names) are stored on the approval record so the absence stays explainable (this is a decision, not a default: if the owner declines the
+  record, it is a recorded choice). A left-out athlete is not importable until GPEXE's content changes. If the answer is no, J20-B disappears
+  and the table only explains.
+* **O4 — Who may import a subset:** the same people who may approve today (a platform admin, a team approver grant, and a club admin or team
+  coach only while the team's switch is on in mode `team`, U2). The subset preview has the same audience. Recommended unchanged.
