@@ -57,7 +57,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { cancelUndo, checkUndo, laterRosterCount, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, focusTick, laterRosterCount, markTickMissing, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -216,8 +216,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // The coach's later work is removed only after its own explicit tick, asked before the final question.
     const later = laterRosterCount(u.preview);
     if (later > 0 && !u.confirmLater) {
-      u.reasonProblem = "Tick the box to confirm that the coach's later work is removed too.";
+      markTickMissing(u);
       renderTrainingLoad();
+      focusTick();
       return true;
     }
     const label = gx.detail?.candidate?.label || "this session";
@@ -227,6 +228,18 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);
+    return true;
+  }
+  // v60: the list the administrator confirmed changed (or was never shown): the same question again, the reason kept, the tick cleared.
+  if (type === "training-load-gpexe-undo-reopen") {
+    const u = gx.undo;
+    if (!u || u.step !== "refused") return true;
+    const { id, reason } = u;
+    if (cancelUndo()) {
+      await openUndo(id, renderTrainingLoad);
+      if (gx.undo && gx.undo.id === id && gx.undo.step === "ready") gx.undo.reason = reason || "";
+      renderTrainingLoad();
+    }
     return true;
   }
   if (type === "training-load-gpexe-undo-check") {

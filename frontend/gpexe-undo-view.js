@@ -40,12 +40,13 @@ function refusalHtml(error) {
       <p><strong>Nothing was removed.</strong> ${escapeHtml(error?.message || "The undo was refused.")}</p>
       ${extra.length ? `<p class="muted">${escapeHtml(extra.join(" "))}</p>` : ""}
       ${error?.data?.error === "roster_work_changed" || error?.data?.error === "roster_work_needs_confirmation"
-        ? `<p class="muted">Close this and open Undo again: it shows the coach's work as it is now, and you confirm that list.</p>` : ""}
+        ? `<p class="muted">Show the list again: it is the coach's work as it is now. Your reason is kept and you tick again.</p>
+           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-undo-reopen">Show the list again</button>` : ""}
     </div>
     ${errorTech(error)}`;
 }
 
-const KIND_LABEL = { did_not_participate: "Did not participate", participated_no_values: "Participated, no device data", manual_values: "Manual values", estimated: "Estimated values", cleared: "State removed" };
+const KIND_LABEL = { did_not_participate: "Did not participate", participated_no_values: "Participated, no device data", manual_values: "Manual values", estimated: "Estimated values", cleared: "A state was removed earlier" };
 
 // v60 (O1): what the roster holds. What the import flow wrote goes with the session; a coach's later work is listed and
 // needs its own tick. Names and codes only: a note a coach wrote is never shown here.
@@ -55,16 +56,22 @@ function rosterHtml(u) {
   const imp = w.importWritten?.decisions || 0;
   const later = laterRosterCount(u.preview);
   const list = Array.isArray(w.laterDecisions) ? w.laterDecisions : [];
+  const decisions = w.later?.decisions || 0;
   const total = Number.isInteger(w.laterDecisionsTotal) ? w.laterDecisionsTotal : list.length;
+  const cut = total > list.length;
   const rows = list.map((d) => `<li>${escapeHtml(d.athleteName || "An athlete")}: ${escapeHtml(KIND_LABEL[d.kind] || d.kind)}${d.reasonCode ? ` (${escapeHtml(String(d.reasonCode).replace(/_/g, " "))})` : ""}</li>`).join("");
+  // What is removed, from the counts: decisions and/or the session's completion (a completion alone has no list).
+  const what = [decisions > 0 ? `${plural(decisions, "decision", "decisions")} from the Roster tab` : "", w.later?.completions ? "the session's completion (marked complete)" : ""].filter(Boolean).join(" and ") || "other roster records";
+  const tick = cut ? `I understand all ${total} decisions, including those not listed, are removed with the session.` : "I understand this work by the coach is removed with the session.";
   return `
     ${imp > 0 ? `<p>${escapeHtml(plural(imp, "attendance state set at import", "attendance states set at import"))} will be removed.</p>` : ""}
     ${later > 0 ? `
       <div class="gpexe-warning" role="note">
-        <p><strong>A coach has also worked on this session since the import.</strong> ${escapeHtml(plural(total, "decision", "decisions"))} from the Roster tab${w.later?.completions ? " and its completion" : ""} will be removed too.</p>
-        ${rows ? `<ul class="gpexe-undo-later">${rows}</ul>` : ""}
-        ${total > list.length ? `<p class="muted">And ${total - list.length} more.</p>` : ""}
-        <label class="gpexe-undo-confirm"><input type="checkbox" data-gpexe-undo-confirm-later ${u.confirmLater ? "checked" : ""} ${u.step === "sending" ? "disabled" : ""}> I understand the coach's work above is removed too.</label>
+        <p><strong>A coach has also worked on this session since the import.</strong> ${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))} will be removed too.${rows ? ` First ${list.length} shown${cut ? ` of ${total}` : ""}:` : ""}</p>
+        ${rows ? `<ul class="gpexe-undo-later" role="region" tabindex="0" aria-label="Decisions that will be removed">${rows}</ul>` : ""}
+        ${cut ? `<p class="muted">And ${total - list.length} more, not listed here. They are removed too and recorded in the log.</p>` : ""}
+        <label class="gpexe-undo-confirm"><input type="checkbox" data-gpexe-undo-confirm-later ${u.confirmLater ? "checked" : ""} ${u.tickProblem ? 'aria-invalid="true"' : ""} ${u.step === "sending" ? "disabled" : ""}> ${escapeHtml(tick)}</label>
+        ${u.tickProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.tickProblem)}</p>` : ""}
       </div>` : ""}`;
 }
 

@@ -351,7 +351,8 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   let s = undoSection();
   assert.match(s, /Nothing was removed\./);
   assert.match(s, /The coach&#039;s work on this session changed after you looked at it\./);
-  assert.match(s, /Close this and open Undo again/);
+  assert.match(s, /Show the list again/);
+  assert.match(s, /data-action="training-load-gpexe-undo-reopen"/);
   assert.doesNotMatch(outsideTech(s), /roster_work_changed/);
   assert.match(s, /roster_work_changed/, "the code is under Technical details");
   assert.equal(gx().undo.step, "refused");
@@ -693,4 +694,71 @@ test("22. the data layer refuses a send over later work without the tick even wh
   tick(true);
   assert.equal(await sendUndo("Wrong links", render), true);
   assert.equal(undoCalls()[0].body.confirmRosterFingerprint, FP);
+});
+
+test("23. 'Show the list again' re-reads the list in place: the reason is kept, the tick is cleared, the new fingerprint is the one sent", async () => {
+  let n = 0;
+  let previews = 0;
+  setup({
+    preview: () => { previews += 1; return { status: 200, body: { undoPreview: { ...SCOPE, rosterWork: { ...WORK(previews === 1 ? 1 : 2), fingerprint: previews === 1 ? FP : "e".repeat(32) } } } }; },
+    undo: () => {
+      n += 1;
+      if (n === 1) return { status: 409, body: { error: "roster_work_changed", message: "The coach's work on this session changed after you looked at it. Nothing was removed; review the list again.", rosterWork: WORK(2) } };
+      performUndo();
+      return { status: 200, body: { undo: okUndo({ rosterWork: WORK(2) }) } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  tick(true);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "refused");
+  await act("training-load-gpexe-undo-reopen");
+  assert.equal(previewCalls().length, 2, "the list was read again");
+  assert.equal(gx().undo.step, "ready");
+  assert.equal(gx().undo.reason, "Wrong links", "the reason is kept");
+  assert.equal(Boolean(gx().undo.confirmLater), false, "the tick is cleared");
+  assert.match(undoSection(), /2 decisions from the Roster tab/);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 1 + 0, "without the tick nothing is sent");
+  assert.match(undoSection(), /Tick the box to confirm/);
+  tick(true);
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 2);
+  assert.equal(undoCalls()[1].body.confirmRosterFingerprint, "e".repeat(32));
+});
+
+test("24. a completion alone is described from the counts; a long list says it is cut, scrolls, and the tick covers all; the missing tick is shown at the tick", async () => {
+  const only = { importWritten: { decisions: 0, requests: 0, completions: 0, completionLog: 0 }, later: { decisions: 0, requests: 1, completions: 1, completionLog: 2 }, laterDecisions: [], laterDecisionsTotal: 0, fingerprint: FP };
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: only } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  let ready = undoSection();
+  assert.match(ready, /The session&#039;s completion \(marked complete\) will be removed too\./);
+  assert.doesNotMatch(ready, /0 decisions|gpexe-undo-later/);
+  assert.match(ready, /I understand this work by the coach is removed with the session\./);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  const box = ready.indexOf("data-gpexe-undo-confirm-later");
+  const after = undoSection();
+  const alertAt = after.indexOf("Tick the box to confirm");
+  assert.ok(alertAt > after.indexOf("data-gpexe-undo-confirm-later") && alertAt < after.indexOf("data-gpexe-undo-reason"), "the message sits right under the tick, above the reason field");
+  assert.match(after, /aria-invalid="true"/);
+  assert.ok(box > 0);
+  // a long list: 60 of 143
+  const big = { ...WORK(60), later: { decisions: 143, requests: 3, completions: 0, completionLog: 0 }, laterDecisionsTotal: 143 };
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: big } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  ready = undoSection();
+  assert.match(ready, /143 decisions from the Roster tab/);
+  assert.match(ready, /First 60 shown of 143:/);
+  assert.match(ready, /And 83 more, not listed here\. They are removed too and recorded in the log\./);
+  assert.match(ready, /I understand all 143 decisions, including those not listed, are removed with the session\./);
+  assert.match(ready, /role="region" tabindex="0" aria-label="Decisions that will be removed"/);
 });

@@ -16892,11 +16892,19 @@ p.muted.gpexe-source-fields {
   resize: vertical;
 }
 .gpexe-undo-later {
-  margin: 6px 0 6px 18px;
-  padding: 0;
+  margin: 6px 0 6px 0;
+  padding: 0 4px 0 18px;
   display: grid;
   gap: 2px;
   overflow-wrap: anywhere;
+  /* A long list scrolls inside the box, so the tick stays near its heading on a phone. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.gpexe-undo-later:focus-visible {
+  outline: 2px solid var(--focus, #2f6fed);
+  outline-offset: 2px;
 }
 .gpexe-undo-confirm {
   display: flex;

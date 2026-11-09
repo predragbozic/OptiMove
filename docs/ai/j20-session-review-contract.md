@@ -277,7 +277,9 @@ The undo of an imported session never refuses for roster work (section 5.3). As 
   the list shown (`confirmRosterFingerprint`), compared under the lock (`roster_work_changed`: nothing removed); `roster_work_needs_confirmation` carries the counts
   and the fingerprint. The preview is read-only for every administrator who may undo and returns both blocks with the athletes' names.
 * The deletion log records the removal in `import_deletion_log.roster_work_removed` (bounded, no free text, confirmed by the administrator who ran it).
-* Not built: `roster_work_too_large` (more than 500 later decisions) has no test with real rows; J20-C writes `'import'` requests.
+* More than 500 later decisions: the undo stays possible; the log keeps 500 entries and the total (tested with 501).
+* The read-only preview cannot commit (it ends in an exception that carries the answer); the undo takes the roster's completion lock exclusively and reads the scope again before it counts and deletes.
+* Not built: J20-C, the writer of `'import'` requests. **J20-C acceptance criteria from this review:** the states step writes the request in the same flow as the approval, and a test proves no generic roster command can set `origin`.
 * Runbook: `docs/runbooks/session-undo-roster-work-v60.md`.
 
 ## 6. The old screens

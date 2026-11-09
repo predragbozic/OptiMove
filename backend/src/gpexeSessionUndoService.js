@@ -53,7 +53,6 @@ const SENTENCES = {
   // v60 (O1): roster work never blocks the undo. A coach's later work needs an explicit confirmation of the list shown.
   roster_work_needs_confirmation: [409, "A coach has changed attendance states or completion on this session since the import. Confirm the list to remove it with the import."],
   roster_work_changed: [409, "The coach's work on this session changed after you looked at it. Nothing was removed; review the list again."],
-  roster_work_too_large: [409, "This session carries more roster decisions than can be listed in the log. Contact a platform administrator."],
   calendar_link_exists: [409, "This session is attached to a calendar event. Remove it from the calendar event first, then undo the import."],
   manual_write_request_exists: [409, "A manual entry refers to this session's data, so it cannot be removed here."],
   referenced_elsewhere: [409, "Other records still refer to this session's data. Nothing was removed."],
@@ -100,7 +99,7 @@ function mapDatabaseError(error) {
     const known = SENTENCES[code];
     if (!known) return refusal(409, "undo_refused", "The undo was refused; nothing was changed.");
     const details = {};
-    if (code === "roster_work_needs_confirmation" || code === "roster_work_changed" || code === "roster_work_too_large") {
+    if (code === "roster_work_needs_confirmation" || code === "roster_work_changed") {
       const work = projectRosterWork(parseDetail(error.detail));
       if (work) details.rosterWork = work;
     }
@@ -184,10 +183,18 @@ export async function undoPreview(teamId, candidateId, { userId }) {
   try {
     return await inTransaction(async (client) => {
       if (previewFault) await previewFault(client);
-      const row = (await client.query(
-        `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, 'preview')`,
-        [userId, teamId, candidateId],
-      )).rows[0];
+      // The read-only call cannot commit: the function ends in an exception that carries the answer (v60). A savepoint keeps the
+      // transaction usable for the names below; the whole transaction is rolled back at the end anyway.
+      await client.query("savepoint undo_preview");
+      let row = null;
+      try {
+        await client.query(`select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, 'preview')`, [userId, teamId, candidateId]);
+      } catch (error) {
+        if (error?.code === "55000" && error.message === "session_undo:preview") row = parseDetail(error.detail);
+        else throw error;
+      }
+      if (!row) throw new Error("the preview call returned instead of stopping");
+      await client.query("rollback to savepoint undo_preview");
       const shaped = { ...shapeResult(row), wouldOfferAgain: Boolean(row.new_candidate_id) };
       // The list of a coach's later decisions names the athletes (an administrator reads it before confirming; ids mean nothing).
       const ids = [...new Set((shaped.rosterWork?.laterDecisions || []).map((d) => d.athleteId))];

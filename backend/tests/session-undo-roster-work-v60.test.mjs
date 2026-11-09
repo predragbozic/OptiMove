@@ -254,15 +254,15 @@ async function coachDecides(team, s, athleteId, { kind = "participated_no_values
 }
 
 // What the J20 states step will write: ONE request of origin 'import' by the approver, and its decisions. Raw (J20-C is not built).
-async function importStates(team, s, athleteIds, { by = team.padmin.id, createdAt = null, kind = "participated_no_values", origin = "import" } = {}) {
+async function importStates(team, s, athleteIds, { by = team.padmin.id, createdAt = null, kind = "participated_no_values", origin = "import", operation = "decide_bulk" } = {}) {
   const c = await newClient();
   const requestId = crypto.randomUUID();
   try {
     await c.query("begin");
     await c.query(
       `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin${createdAt ? ", created_at" : ""})
-       values ($1, $2, $3, $4, 'decide_bulk', $5, '{}'::jsonb, $6${createdAt ? ", $7" : ""})`,
-      [requestId, s.activityId, key(), "a".repeat(64), by, origin, ...(createdAt ? [createdAt] : [])],
+       values ($1, $2, $3, $4, $7, $5, '{}'::jsonb, $6${createdAt ? ", $8" : ""})`,
+      [requestId, s.activityId, key(), "a".repeat(64), by, origin, operation, ...(createdAt ? [createdAt] : [])],
     );
     for (const athleteId of athleteIds) {
       await c.query(
@@ -380,7 +380,7 @@ test("4. the confirmation is a compare-and-set: a list that changed after the pr
   assert.equal((await counts(team.teamId)).events, 1);
 });
 
-test("5. 'preview' is the read-only call's marker: the route refuses it, and the function with it removes nothing once rolled back", async () => {
+test("5. 'preview' is the read-only call's marker: the route refuses it, and the function with it cannot commit (it ends in an exception carrying the answer)", async () => {
   const team = await setupTeam();
   const s = await importSession(team, 9206);
   const [x] = await needing(team, s);
@@ -390,12 +390,15 @@ test("5. 'preview' is the read-only call's marker: the route refuses it, and the
     assert.deepEqual([r.status, r.body.error], [400, "invalid_request"], String(bad));
   }
   const rowsBefore = await allRowCounts();
+  // The read-only call cannot commit: it ends in an exception that carries the answer, even inside an explicit transaction that is then "committed".
   const c = await newClient();
   try {
     await c.query("begin");
-    const row = (await c.query(`select * from training_load.undo_imported_session($1, $2, $3, $4, 'preview', null, 'preview')`, [team.padmin.id, team.teamId, s.candidateId, key()])).rows[0];
-    assert.equal(row.roster_work.later.decisions, 1);
-    await c.query("rollback");
+    let seen = null;
+    await assert.rejects(c.query(`select * from training_load.undo_imported_session($1, $2, $3, $4, 'preview', null, 'preview')`, [team.padmin.id, team.teamId, s.candidateId, key()]),
+      (e) => { seen = e; return e.code === "55000" && e.message === "session_undo:preview"; });
+    assert.equal(JSON.parse(seen.detail).roster_work.later.decisions, 1);
+    await c.query("commit");
   } finally { await c.end(); }
   assert.deepEqual(await allRowCounts(), rowsBefore);
 });
@@ -414,7 +417,7 @@ test("7. origin 'import' is accepted only for the approver's own request made af
   const s = await importSession(team, 9207);
   const [x, y, z] = await needing(team, s);
   // not the approver
-  await assert.rejects(importStates(team, s, [x], { by: team.coach.id }), (e) => e.code === "23514" && /import-origin request needs/.test(e.message));
+  await assert.rejects(importStates(team, s, [x], { by: team.coach.id }), (e) => e.code === "23514" && /import-origin request is a decision/.test(e.message));
   // made before the approval
   await assert.rejects(importStates(team, s, [x], { createdAt: "2020-01-01T00:00:00Z" }), (e) => e.code === "23514");
   // another team's session: the approver of THIS team has no approval for that activity
@@ -426,7 +429,7 @@ test("7. origin 'import' is accepted only for the approver's own request made af
     await assert.rejects(
       c0.query(`insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin) values ($1, $2, $3, 'decide_bulk', $4, '{}'::jsonb, 'import')`,
         [so.activityId, key(), "a".repeat(64), team.padmin.id]),
-      (e) => e.code === "23514" && /import-origin request needs/.test(e.message));
+      (e) => e.code === "23514" && /import-origin request is a decision/.test(e.message));
     // ...while the same insert for a session he did approve passes (rolled back here).
     await c0.query("begin");
     await c0.query(`insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin) values ($1, $2, $3, 'decide_bulk', $4, '{}'::jsonb, 'import')`,
@@ -441,6 +444,8 @@ test("7. origin 'import' is accepted only for the approver's own request made af
   assert.deepEqual((await admin.query(`select origin from training.activity_roster_requests where activity_id = $1 order by origin`, [s.activityId])).rows.map((r) => r.origin), ["import", "roster"]);
   // the closed set
   await assert.rejects(importStates(team, s, [x], { origin: "coach" }), (e) => e.code === "23514");
+  // only a decision can be import-origin
+  await assert.rejects(importStates(team, s, [x], { operation: "complete" }), (e) => e.code === "23514" && /import-origin request is a decision/.test(e.message));
 });
 
 test("8. the four roster tables stay append-only outside the undo: no DELETE, UPDATE or TRUNCATE passes, a session-level setting is no key", async () => {
@@ -492,6 +497,9 @@ test("9. the deletion log's roster_work_removed has a closed, bounded shape and 
   };
   await insert(base);
   await insert(null);
+  // more than 500 later decisions: the list stops at 500 and the total says how many there were
+  await insert({ ...base, later: { ...base.later, decisions: 501 }, laterDecisionsTotal: 501, laterDecisions: Array.from({ length: 500 }, () => base.laterDecisions[0]) });
+  await assert.rejects(insert({ ...base, laterDecisions: [{ ...base.laterDecisions[0], decidedAt: "yesterday, after the match" }] }), (e) => e.code === "23514", "a free-text time");
   const cases = {
     "an extra key": { ...base, note: "free text" },
     "a missing key": (() => { const w = structuredClone(base); delete w.laterConfirmed; return w; })(),
@@ -612,6 +620,50 @@ test("16. the fingerprint covers the completion too: a Complete after the previe
   const stale = await api(undoPath(team, s.candidateId), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "x", expected: { eventId: s.eventId }, confirmRosterFingerprint: first.fingerprint } });
   assert.deepEqual([stale.status, stale.body.error], [409, "roster_work_changed"]);
   assert.deepEqual(await allRowCounts(), rowsBefore);
+});
+
+test("17. more than 500 later decisions: the undo is still possible; the log keeps 500 and the total, the answer shows 60", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9219);
+  // 501 decisions by a coach, raw (foreign keys and triggers are off for the insert only: the athletes are invented ids).
+  const c = await newClient();
+  const requestId = crypto.randomUUID();
+  try {
+    await c.query("begin");
+    await c.query("set local session_replication_role = replica");
+    await c.query(`insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result) values ($1, $2, $3, $4, 'decide_bulk', $5, '{}'::jsonb)`, [requestId, s.activityId, key(), "b".repeat(64), team.coach.id]);
+    await c.query(
+      `insert into training.activity_athlete_decisions (activity_id, athlete_id, owner_team_id, request_id, decision_kind, decided_by_user_id, decided_by_basis)
+       select $1, gen_random_uuid(), $2, $3, 'participated_no_values', $4, 'team_coach' from generate_series(1, 501)`, [s.activityId, team.teamId, requestId, team.coach.id]);
+    await c.query("commit");
+  } finally { await c.end(); }
+  const p = (await preview(team, s)).body.undoPreview.rosterWork;
+  assert.equal(p.laterDecisionsTotal, 501);
+  assert.equal(p.laterDecisions.length, 60);
+  assert.equal(p.later.decisions, 501);
+  const ok = await api(undoPath(team, s.candidateId), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "big", expected: { eventId: s.eventId }, confirmRosterFingerprint: p.fingerprint } });
+  assert.equal(ok.status, 200, ok.text);
+  assert.deepEqual(await rosterRows(s.activityId), ZERO);
+  const w = (await admin.query(`select roster_work_removed w from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].w;
+  assert.deepEqual([w.laterDecisionsTotal, w.laterDecisions.length, w.later.decisions], [501, 500, 501]);
+});
+
+test("18. a roster input the system writes between the scope read and the deletes is held back by the completion lock (shared writers wait for the undo)", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9220);
+  const holder = await newClient();
+  await holder.query("begin");
+  // A system roster input holds the completion lock shared, as roster_record_change does.
+  await holder.query(`select training.lock_roster_completions($1::uuid[], false)`, [[s.activityId]]);
+  const started = Date.now();
+  const racing = undo(team, s);
+  await sleep(1500);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.gpexe_session_undo_requests where owner_team_id = $1`, [team.teamId])).rows[0].n, 0, "the undo waits for the shared holder");
+  await holder.query("commit");
+  await holder.end();
+  const r = await racing;
+  assert.equal(r.status, 200, r.text);
+  assert.ok(Date.now() - started >= 1400);
 });
 
 // ---------------------------------------------------------------------------

@@ -101,6 +101,7 @@ begin
        or (e ->> 'athleteId') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
        or (e ->> 'decidedByUserId') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
        or jsonb_typeof(e -> 'decidedAt') is distinct from 'string'
+       or (e ->> 'decidedAt') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,16}(Z|[+-][0-9:]{2,5})$'
        or (e ->> 'kind') not in ('did_not_participate', 'participated_no_values', 'manual_values', 'estimated', 'cleared')
        or (jsonb_typeof(e -> 'reasonCode') not in ('string', 'null'))
        or (jsonb_typeof(e -> 'reasonCode') = 'string' and (e ->> 'reasonCode') !~ '^[a-z][a-z0-9_]{0,59}$') then
@@ -149,7 +150,7 @@ begin
   perform training.assert_canonical_team_activity(new.activity_id, null, 'activity_roster_requests');
   -- v60: only the import flow's own request may say so: the same user approved an import of this session (an event linked to
   -- the activity or its alias set) and the request is not older than that approval.
-  if new.origin = 'import' and not exists (
+  if new.origin = 'import' and (new.operation not in ('decide', 'decide_bulk') or not exists (
     select 1
       from training_load.gpexe_import_approvals a
       join training.activity_metric_event_links l on l.metric_event_id = a.metric_event_id
@@ -157,8 +158,8 @@ begin
        and a.approved_at <= new.created_at
        and exists (select 1 from training.activity_alias_ids(training.resolve_canonical_activity_id(new.activity_id)) aa
                     where aa.activity_id = l.activity_id)
-  ) then
-    raise exception 'activity_roster_requests: an import-origin request needs the same user''s approval of an import of this session, made before it'
+  )) then
+    raise exception 'activity_roster_requests: an import-origin request is a decision and needs the same user''s approval of an import of this session, made before it'
       using errcode = 'check_violation';
   end if;
   return new;
@@ -590,6 +591,14 @@ begin
       raise exception 'undo_imported_session: the activities of the event keep changing' using errcode = '55P03';
     end if;
   end loop;
+  -- v60: the roster inputs the system writes (a membership, link or measurement change) take the completion lock shared and write
+  --   completions and log rows; take it exclusively, as Complete does (after the activities), and read the scope again, so what is
+  --   counted, fingerprinted and logged is what is deleted.
+  perform training.lock_roster_completions(coalesce(array(select jsonb_array_elements_text(v_scope -> 'aliasIds')::uuid), '{}'), true);
+  v_scope := training_load.session_undo_scope(v_event_id);
+  if not (coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}') <@ v_act) then
+    raise exception 'undo_imported_session: the activities of the event keep changing' using errcode = '55P03';
+  end if;
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
     perform training_load.session_undo_refuse('manual_occasion');
   end if;
@@ -610,9 +619,6 @@ begin
   v_roster_n := v_later_n + (v_work -> 'importWritten' ->> 'decisions')::int + (v_work -> 'importWritten' ->> 'requests')::int
              + (v_work -> 'importWritten' ->> 'completions')::int + (v_work -> 'importWritten' ->> 'completionLog')::int;
   if p_confirm_later is distinct from 'preview' then
-    if (v_work ->> 'laterDecisionsTotal')::int > 500 then
-      perform training_load.session_undo_refuse('roster_work_too_large', v_work::text);
-    end if;
     if p_confirm_later is not null and p_confirm_later is distinct from (v_work ->> 'fingerprint') then
       perform training_load.session_undo_refuse('roster_work_changed', v_work::text);
     end if;
@@ -786,6 +792,12 @@ begin
   set constraints training_load.gpexe_import_candidates_import_undone_request_fkey immediate;
   -- The marker covers this call only.
   perform set_config('optimove.session_undo_tx', '', true);
+  -- The read-only call cannot commit: it ends here with an exception that carries the answer (the service reads it from the DETAIL).
+  if p_confirm_later = 'preview' then
+    raise exception 'session_undo:preview' using errcode = '55000', detail = jsonb_build_object(
+      'event_id', v_event_id, 'deletion_log_id', v_log, 'removed_counts', v_removed, 'removed_total', v_total,
+      'new_candidate_id', v_new, 'undone_candidate_ids', to_jsonb(v_ids), 'roster_work', v_work)::text;
+  end if;
   return query select false, v_event_id, v_log, v_removed, v_total, v_new, v_ids, v_work;
 end;
 $$ language plpgsql;
@@ -799,15 +811,15 @@ comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, 
 do $$
 declare
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', 'd7dddfdd0fbd4430b9892e1948b2b3bb'],
+    ['training_load', 'undo_imported_session', '9be6ca4eee78a9d26310206aad2b0335'],
     ['training_load', 'session_undo_scope', '514617da209da9d2703477ef5c4a69dd'],
     ['training_load', 'session_undo_roster_work', '1b6b9dae1db45b329ca24f522fd0a06d'],
-    ['training', 'protect_activity_roster_request', '48dd4baacbfb374847515356e1a33c42'],
+    ['training', 'protect_activity_roster_request', '4549eaa47dc6c6ad34af9a2d548ff173'],
     ['training', 'check_activity_athlete_decision', 'cb038617f44d1e6028825d73f5048c64'],
     ['training', 'protect_activity_completion', '1bd5b84c90536e4a7802e2ed2c3e7229'],
     ['training', 'protect_activity_completion_log', '310479ead5bac4ba0ada834a6c20543c'],
     ['training_load', 'validate_import_deletion_log', '8bc1c58cee9d8a42b9d7bdec06978f5b'],
-    ['training_load', 'import_deletion_log_roster_work_ok', '15b84bbba78720367aa55bb11eaa76fa']];
+    ['training_load', 'import_deletion_log_roster_work_ok', '63ef21b28862101fa25979a90ee47202']];
   i int;
 begin
   for i in 1 .. array_length(expected, 1) loop

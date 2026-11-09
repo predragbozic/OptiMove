@@ -33,15 +33,15 @@ do $$
 declare
   v60 constant text := 'migrations_v2/202611091200_training_load_v60_session_undo_roster_work.sql';
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', 'd7dddfdd0fbd4430b9892e1948b2b3bb'],
+    ['training_load', 'undo_imported_session', '9be6ca4eee78a9d26310206aad2b0335'],
     ['training_load', 'session_undo_scope', '514617da209da9d2703477ef5c4a69dd'],
     ['training_load', 'session_undo_roster_work', '1b6b9dae1db45b329ca24f522fd0a06d'],
-    ['training', 'protect_activity_roster_request', '48dd4baacbfb374847515356e1a33c42'],
+    ['training', 'protect_activity_roster_request', '4549eaa47dc6c6ad34af9a2d548ff173'],
     ['training', 'check_activity_athlete_decision', 'cb038617f44d1e6028825d73f5048c64'],
     ['training', 'protect_activity_completion', '1bd5b84c90536e4a7802e2ed2c3e7229'],
     ['training', 'protect_activity_completion_log', '310479ead5bac4ba0ada834a6c20543c'],
     ['training_load', 'validate_import_deletion_log', '8bc1c58cee9d8a42b9d7bdec06978f5b'],
-    ['training_load', 'import_deletion_log_roster_work_ok', '15b84bbba78720367aa55bb11eaa76fa']];
+    ['training_load', 'import_deletion_log_roster_work_ok', '63ef21b28862101fa25979a90ee47202']];
   i int;
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v60) then

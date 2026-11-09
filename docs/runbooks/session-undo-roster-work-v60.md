@@ -21,15 +21,28 @@ Tests: `backend/tests/session-undo-roster-work-v60.test.mjs` (16), `backend/test
   argument defaults to null). Import-written work goes with the session without a question. Later work goes only when the call carries the
   **fingerprint** of the list the administrator saw (`p_confirm_later`), compared under the team lock and the activity locks with the list as it is then:
   no confirmation -> `roster_work_needs_confirmation` (409, counts and the fingerprint), another fingerprint -> `roster_work_changed` (409), nothing
-  removed in either case. More than 500 later decisions -> `roster_work_too_large` (the log cannot hold the list).
-* The value `'preview'` in `p_confirm_later` is the read-only call's marker: it skips that gate and returns the blocks; the service runs it in a
-  transaction it rolls back. The route accepts only a 32-character hex fingerprint, so `'preview'` cannot arrive from a client.
+  removed in either case. With more than 500 later decisions the undo is still possible: the log keeps 500 entries and the total, the fingerprint covers all of them.
+* The undo takes the roster's completion lock exclusively (as Complete does, after the activities) and reads the scope again before it counts, fingerprints and deletes, so a
+  roster input the system writes (a membership, link or measurement change, which take that lock shared) cannot slip between the count and the delete.
+* The value `'preview'` in `p_confirm_later` is the read-only call's marker: it skips that gate, runs the removal and ends in an exception (`session_undo:preview`, SQLSTATE 55000)
+  that carries the answer in its DETAIL, so the call can never commit; the service reads the DETAIL and rolls the transaction back. The route accepts only a 32-character hex
+  fingerprint, so `'preview'` cannot arrive from a client. The preview holds the team lock and the activity locks while it runs, like the undo itself.
+* The origin `'import'` is accepted only for a decision (`decide`, `decide_bulk`) by the approver after the approval. It does not bind the request to the J20-C states step itself:
+  J20-C must (acceptance criterion) write it in the same flow as the approval and a test must show that no generic roster command can set it.
 * The four roster tables get ONE DELETE exception each, true only inside the undo's own transaction (the v57 marker). UPDATE, TRUNCATE and every other
   DELETE stay refused.
 * The deletion log records what went: `import_deletion_log.roster_work_removed` (counts, a list of at most 500 later decisions with athlete id, kind, reason
   code, deciding user and time - never a note - and the administrator who confirmed, who must be the one who ran the undo). The log's insert guard checks
   the shape; the log stays append-only.
 * The roster commands and the undo already take the same team import lock in the same users-first order, so an undo and a Change serialise (tested in both orders).
+
+## Limits, stated
+
+* The marker is a transaction-local setting any SQL-capable session of the application's role can set (the v35 / v57 limit); v60 widens what it unlocks to the four roster tables.
+* A coach's free-text note of a removed decision is destroyed with it; only the kind and the reason code are logged. The rollback does not bring it back.
+* The log guard checks the shape of `roster_work_removed`, not that the counts are true; the function is its only writer.
+* A refusal (`roster_work_needs_confirmation`, `roster_work_changed`) is not audited; only a committed undo writes a log row.
+* Not run on PostgreSQL 17 (production); run on 16.
 
 ## Running it
 

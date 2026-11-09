@@ -107,12 +107,30 @@ export function normalizeUndoReason(reason) {
 // What the person types is kept as they type it, so a repaint of the dialog never empties the field.
 export function handleUndoReasonInput(target, gx = g()) {
   if (target?.matches?.("[data-gpexe-undo-confirm-later]")) {
-    if (gx.undo?.step === "ready") gx.undo.confirmLater = Boolean(target.checked);
+    if (gx.undo?.step === "ready") {
+      gx.undo.confirmLater = Boolean(target.checked);
+      if (gx.undo.confirmLater) gx.undo.tickProblem = "";
+    }
     return true;
   }
   if (!target?.matches?.("[data-gpexe-undo-reason]")) return false;
   if (gx.undo?.step === "ready") gx.undo.reason = String(target.value ?? "");
   return true;
+}
+
+export const TICK_PROBLEM = "Tick the box to confirm that the coach's later work is removed too.";
+export function markTickMissing(undo) {
+  undo.tickProblem = TICK_PROBLEM;
+}
+// The missing tick is shown at the tick itself and the tick is brought into view (a convenience only).
+export function focusTick() {
+  try {
+    const box = globalThis.document?.querySelector?.("[data-gpexe-undo-confirm-later]");
+    box?.scrollIntoView?.({ block: "center" });
+    box?.focus?.();
+  } catch {
+    // Focus is a convenience only.
+  }
 }
 
 // v60 (O1): the coach's later roster work the preview found. Nonzero => the undo needs the explicit confirmation of the list.
@@ -205,10 +223,12 @@ export async function sendUndo(reason, render) {
   // The later work needs the confirmation of exactly the list the preview showed (its fingerprint); the server compares it again.
   const needsConfirm = laterRosterCount(undo.preview) > 0;
   if (needsConfirm && !undo.confirmLater) {
-    undo.reasonProblem = "Tick the box to confirm that the coach's later work is removed too.";
+    markTickMissing(undo);
     render();
+    focusTick();
     return false;
   }
+  undo.tickProblem = "";
   undo.requestKey = undo.requestKey || globalThis.crypto.randomUUID();
   undo.step = "sending";
   undo.error = null;
