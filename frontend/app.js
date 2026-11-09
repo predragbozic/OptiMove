@@ -28,6 +28,8 @@ import {
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
+import { handleAppHealthAction } from "./app-health-actions.js";
+import { installAppErrorCapture } from "./app-errors-capture.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
 import { ensureDriveImportStatus, handleDriveImportAction, handleDriveImportBeforeUnload, handleDriveImportChange, handleDriveImportPointer, handleDriveImportToggle } from "./drive-import-actions.js";
@@ -296,6 +298,8 @@ init();
 
 async function init() {
   bindEvents();
+  // Option A (A2): a signed-in browser reports its own errors, in a closed shape and without any text of them.
+  installAppErrorCapture({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
   state.exerciseLayout = window.matchMedia("(max-width: 760px)").matches ? "vertical" : "horizontal";
   renderRailState();
@@ -2984,6 +2988,7 @@ async function handleContentClick(event) {
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
+  if (await handleAppHealthAction(action, { render: renderDataSourcesSurface })) return;
   // The team <select> of "Approve pair" acts on its change event only: a click that opens the native list
   // must not repaint the control it is opening.
   if (action.dataset.action === "source-connections-pair-team") return;

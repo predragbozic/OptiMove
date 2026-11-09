@@ -22658,3 +22658,35 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     background: Highlight;
   }
 }
+
+/* Settings -> App health (A2): groups of recorded errors. Chips and rows are real buttons, 44 px on phones. */
+.app-health { display: flex; flex-direction: column; gap: 12px; }
+.app-health-head { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.app-health-head h3 { margin: 0 0 4px; }
+.app-health-head p { margin: 0; max-width: 62ch; }
+.app-health-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.app-health-chip { touch-action: manipulation; max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.app-health-chip.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.app-health-summary { margin: 0; color: var(--muted); font-size: 14px; }
+.app-health-note { margin: 0; font-size: 14px; }
+.app-health-places > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.app-health-places[open] > summary { margin-bottom: 4px; }
+.app-health-list.is-loading { opacity: 0.55; }
+.app-health-list { display: flex; flex-direction: column; gap: 8px; }
+.app-health-group { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+.app-health-group.is-open { border-color: var(--accent); }
+.app-health-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px 12px; width: 100%; padding: 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; align-items: baseline; }
+.app-health-where, .app-health-what { overflow-wrap: anywhere; }
+.app-health-where { font-weight: 600; }
+.app-health-kind { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 4px; background: var(--surface-soft); border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.app-health-seen, .app-health-count { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.app-health-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 8px 16px; margin: 0; padding: 0 12px 12px; }
+.app-health-detail div { min-width: 0; }
+.app-health-detail dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.app-health-detail dd { margin: 2px 0 0; overflow-wrap: anywhere; font-size: 14px; }
+.app-health-empty { padding: 12px 0; }
+@media (max-width: 760px), (pointer: coarse) {
+  .app-health-chip { min-height: 44px; padding: 10px 14px; }
+  .app-health-row { grid-template-columns: minmax(0, 1fr); min-height: 44px; }
+  .app-health .plain-button { min-height: 44px; }
+}
