@@ -1955,6 +1955,12 @@ body:not(.athlete-mode):not(.login-mode) .sidebar-submenu-toggle:hover {
   color: #fff;
 }
 
+/* The Athletes toggle's chevron belongs to the phone drawer (styled and shown in the mobile-nav rule below). Without a
+   rule of its own it was drawn on a computer as a filled black triangle under "Athletes". */
+.athletes-toggle-chevron {
+  display: none;
+}
+
 body:not(.athlete-mode):not(.login-mode) .sidebar-submenu-toggle .rail-chevron {
   width: 15px;
   height: 15px;
@@ -9352,6 +9358,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 
   body.mobile-nav-open:not(.login-mode) .athletes-toggle-chevron {
+    display: block;
     width: 15px;
     height: 15px;
     flex: 0 0 auto;
