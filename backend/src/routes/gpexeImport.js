@@ -474,6 +474,7 @@ router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (
   const expected = body.expected && typeof body.expected === "object" ? body.expected : {};
   res.json({ undo: await sessionUndo.undoImport(access.teamId, req.params.candidateId, {
     userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
+    confirmRosterFingerprint: body.confirmRosterFingerprint ?? null,
   }) });
 }));
 

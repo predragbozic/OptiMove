@@ -106,9 +106,20 @@ export function normalizeUndoReason(reason) {
 
 // What the person types is kept as they type it, so a repaint of the dialog never empties the field.
 export function handleUndoReasonInput(target, gx = g()) {
+  if (target?.matches?.("[data-gpexe-undo-confirm-later]")) {
+    if (gx.undo?.step === "ready") gx.undo.confirmLater = Boolean(target.checked);
+    return true;
+  }
   if (!target?.matches?.("[data-gpexe-undo-reason]")) return false;
   if (gx.undo?.step === "ready") gx.undo.reason = String(target.value ?? "");
   return true;
+}
+
+// v60 (O1): the coach's later roster work the preview found. Nonzero => the undo needs the explicit confirmation of the list.
+export function laterRosterCount(preview) {
+  const l = preview?.rosterWork?.later;
+  if (!l || typeof l !== "object") return 0;
+  return ["decisions", "requests", "completions", "completionLog"].reduce((n, k) => n + (Number.isInteger(l[k]) ? l[k] : 0), 0);
 }
 
 // The reason is the one thing the person types; checked here before anything is asked or sent.
@@ -191,11 +202,21 @@ export async function sendUndo(reason, render) {
   undo.reasonProblem = "";
   undo.refusalNote = "";
   undo.reason = normalizeUndoReason(reason);
+  // The later work needs the confirmation of exactly the list the preview showed (its fingerprint); the server compares it again.
+  const needsConfirm = laterRosterCount(undo.preview) > 0;
+  if (needsConfirm && !undo.confirmLater) {
+    undo.reasonProblem = "Tick the box to confirm that the coach's later work is removed too.";
+    render();
+    return false;
+  }
   undo.requestKey = undo.requestKey || globalThis.crypto.randomUUID();
   undo.step = "sending";
   undo.error = null;
   render();
-  await settle(undo, gx.generation, { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);
+  const body = { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } };
+  if (needsConfirm) body.confirmRosterFingerprint = undo.preview.rosterWork.fingerprint;
+  undo.sentBody = body;
+  await settle(undo, gx.generation, body, render);
   return true;
 }
 
@@ -208,6 +229,6 @@ export async function checkUndo(render) {
   undo.stillUnknown = false;
   undo.step = "sending";
   render();
-  await settle(undo, gx.generation, { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);
+  await settle(undo, gx.generation, undo.sentBody || { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);
   return true;
 }

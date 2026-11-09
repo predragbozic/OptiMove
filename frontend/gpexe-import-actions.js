@@ -57,7 +57,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { cancelUndo, checkUndo, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, laterRosterCount, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -210,6 +210,13 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     const problem = undoReasonProblem(reason);
     if (problem) {
       u.reasonProblem = problem;
+      renderTrainingLoad();
+      return true;
+    }
+    // The coach's later work is removed only after its own explicit tick, asked before the final question.
+    const later = laterRosterCount(u.preview);
+    if (later > 0 && !u.confirmLater) {
+      u.reasonProblem = "Tick the box to confirm that the coach's later work is removed too.";
       renderTrainingLoad();
       return true;
     }

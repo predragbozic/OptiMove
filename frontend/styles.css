@@ -16891,6 +16891,26 @@ p.muted.gpexe-source-fields {
   color: var(--text);
   resize: vertical;
 }
+.gpexe-undo-later {
+  margin: 6px 0 6px 18px;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.gpexe-undo-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  font-weight: 600;
+}
+.gpexe-undo-confirm input {
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  flex: none;
+}
 .gpexe-undo-actions {
   display: flex;
   flex-wrap: wrap;

@@ -338,7 +338,7 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   setup({
     undo: () => {
       n += 1;
-      if (n === 1) return { status: 409, body: { error: "roster_decisions_exist", message: "A coach has already worked on this session's roster.", rosterWork: { decisions: 3, completion: 1 } } };
+      if (n === 1) return { status: 409, body: { error: "roster_work_changed", message: "The coach's work on this session changed after you looked at it.", rosterWork: { later: { decisions: 3, completions: 1 } } } };
       performUndo();
       return { status: 200, body: { undo: okUndo() } };
     },
@@ -350,10 +350,10 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   await act("training-load-gpexe-undo-confirm");
   let s = undoSection();
   assert.match(s, /Nothing was removed\./);
-  assert.match(s, /A coach has already worked on this session&#039;s roster\./);
-  assert.match(s, /Roster work found: 3 decisions, 1 completion\./);
-  assert.doesNotMatch(outsideTech(s), /roster_decisions_exist/);
-  assert.match(s, /roster_decisions_exist/, "the code is under Technical details");
+  assert.match(s, /The coach&#039;s work on this session changed after you looked at it\./);
+  assert.match(s, /Close this and open Undo again/);
+  assert.doesNotMatch(outsideTech(s), /roster_work_changed/);
+  assert.match(s, /roster_work_changed/, "the code is under Technical details");
   assert.equal(gx().undo.step, "refused");
   const firstKey = undoCalls()[0].body.requestKey;
   await act("training-load-gpexe-undo-cancel");
@@ -576,4 +576,108 @@ test("17. what is typed is kept when the dialog is painted again", async () => {
   assert.equal(handled, true);
   assert.equal(handleUndoReasonInput({ matches: () => false, value: "x" }), false);
   assert.match(html(), />Typed so far<\/textarea>/);
+});
+
+// ---------------------------------------------------------------------------
+// O1 (v60): roster work never blocks the undo; a coach's later work needs its own tick, and the confirmation carries the fingerprint.
+const FP = "f".repeat(32);
+const WORK = (later, imp = 0) => ({
+  importWritten: { decisions: imp, requests: imp ? 1 : 0, completions: 0, completionLog: 0 },
+  later: { decisions: later, requests: later ? 1 : 0, completions: later ? 1 : 0, completionLog: later ? 1 : 0 },
+  laterDecisions: Array.from({ length: later }, (_, i) => ({ athleteId: `ath-${i}`, athleteName: i === 0 ? "Ana <b>Example</b>" : null, kind: i === 0 ? "did_not_participate" : "participated_no_values", reasonCode: i === 0 ? "illness" : null, decidedByUserId: "u-1", decidedAt: "2026-11-09T10:00:00Z" })),
+  laterDecisionsTotal: later,
+  fingerprint: FP,
+});
+const tick = (checked) => handleUndoReasonInput({ matches: (sel) => sel === "[data-gpexe-undo-confirm-later]", checked }, gx());
+
+test("18. later roster work: the review lists it (names escaped, no note), the undo needs the tick, and the request carries the fingerprint of the list shown", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(2, 3) } } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo({ rosterWork: WORK(2, 3) }) } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const ready = undoSection();
+  assert.match(ready, /3 attendance states set at import will be removed\./);
+  assert.match(ready, /A coach has also worked on this session since the import\./);
+  assert.match(ready, /2 decisions from the Roster tab/);
+  assert.match(ready, /Ana &lt;b&gt;Example&lt;\/b&gt;: Did not participate \(illness\)/);
+  assert.match(ready, /An athlete: Participated, no device data/);
+  assert.match(ready, /data-gpexe-undo-confirm-later/);
+  assert.doesNotMatch(ready, /<b>Example/, "an athlete's name is escaped");
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 0, "without the tick nothing is asked or sent");
+  assert.equal(confirmAsked.length, 0);
+  assert.match(undoSection(), /Tick the box to confirm that the coach&#039;s later work is removed too\./);
+  tick(true);
+  assert.match(undoSection(), /data-gpexe-undo-confirm-later checked/, "the tick survives a repaint");
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(confirmAsked.length, 1);
+  assert.equal(undoCalls().length, 1);
+  assert.equal(undoCalls()[0].body.confirmRosterFingerprint, FP);
+  assert.match(undoSection(), /The coach&#039;s 2 later decisions on the roster were removed too\./);
+});
+
+test("19. only import-written states: a sentence, no tick, no fingerprint in the request", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(0, 5) } } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo({ rosterWork: WORK(0, 5) }) } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const ready = undoSection();
+  assert.match(ready, /5 attendance states set at import will be removed\./);
+  assert.doesNotMatch(ready, /data-gpexe-undo-confirm-later|A coach has also worked/);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 1);
+  assert.equal("confirmRosterFingerprint" in undoCalls()[0].body, false);
+  assert.doesNotMatch(undoSection(), /later decision/);
+});
+
+test("20. a confirmation refused because the list changed removes nothing, keeps the key unused and asks to open Undo again; a lost answer resends the SAME body", async () => {
+  let n = 0;
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(1) } } }),
+    undo: () => {
+      n += 1;
+      if (n === 1) return { status: 409, body: { error: "roster_work_changed", message: "The coach's work on this session changed after you looked at it. Nothing was removed; review the list again.", rosterWork: WORK(2) } };
+      if (n === 2) return { status: 502, body: null };
+      performUndo();
+      return { status: 200, body: { undo: okUndo({ rosterWork: WORK(1) }) } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  tick(true);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "refused");
+  assert.match(undoSection(), /Nothing was removed\./);
+  await act("training-load-gpexe-undo-cancel");
+  await act("training-load-gpexe-undo-open");
+  tick(true);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "unknown", "a lost answer is not confirmed");
+  await act("training-load-gpexe-undo-check");
+  const [, lost, check] = undoCalls();
+  assert.deepEqual(check.body, lost.body, "Check the result sends the same body, fingerprint included");
+  assert.equal(lost.body.confirmRosterFingerprint, FP);
+});
+
+test("21. the tick is ignored while the dialog is not in its question step", async () => {
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(1) } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  tick(true);
+  assert.equal(gx().undo.confirmLater, true);
+  await act("training-load-gpexe-undo-cancel");
+  tick(true);
+  assert.equal(gx().undo, null);
 });

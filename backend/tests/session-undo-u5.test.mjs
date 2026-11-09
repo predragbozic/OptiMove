@@ -426,10 +426,12 @@ test("8. refusals: coach roster work, a calendar link, a hand-corrected value - 
   });
   assert.equal(put.status, 200, await put.text());
   const afterRoster = await allRowCounts();
+  // v60 (O1): roster work never refuses the undo for good; a coach's later work needs the confirmation of its list.
   const blockedRoster = await undo(team, s);
-  assert.deepEqual([blockedRoster.status, blockedRoster.body.error], [409, "roster_decisions_exist"]);
-  assert.ok(blockedRoster.body.rosterWork.decisions >= 1);
-  assert.match(blockedRoster.body.message, /roster/);
+  assert.deepEqual([blockedRoster.status, blockedRoster.body.error], [409, "roster_work_needs_confirmation"]);
+  assert.ok(blockedRoster.body.rosterWork.later.decisions >= 1);
+  assert.match(blockedRoster.body.rosterWork.fingerprint, /^[0-9a-f]{32}$/);
+  assert.match(blockedRoster.body.message, /coach/i);
   assert.deepEqual(await allRowCounts(), afterRoster);
   assert.notDeepEqual(afterRoster, rowsBefore, "the coach's decision is real data");
   assert.equal((await counts(team.teamId)).events, 1);
@@ -866,16 +868,23 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   const team = await setupTeam();
   const s = await importSession(team, 9130);
   const rollback = fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8");
-  const before = await catalogOf(admin);
   const c = await newClient();
-  // v59 (and later) are applied on this database, which the v57 rollback refuses first; the checks below are about its own refusals, so the
+  const V60 = "migrations_v2/202611091200_training_load_v60_session_undo_roster_work.sql";
+  // The undo is made while v60 is in force (the app calls its 7-argument function). Then v60 is rolled back (its own rehearsal is in
+  // session-undo-roster-work-v60.test.mjs): the v57 rollback refuses to run over v60's bodies, so its own refusals are checked on the
+  // v57 state, and v60 is applied again at the end for the tests that follow.
+  const u = await undo(team, s);
+  assert.equal(u.status, 200, u.text);
+  await assert.rejects(c.query(rollback), /v57 rollback refused: later migrations are applied/, "v57's rollback refuses under v59 / v60");
+  await c.query("rollback").catch(() => {});
+  await c.query(fs.readFileSync(RUNBOOK("session-undo-roster-work-v60-rollback.sql"), "utf8"));
+  const before = await catalogOf(admin);
+  // v59 is still applied on this database, which the v57 rollback refuses first; the checks below are about its own refusals, so the
   // later records are hidden for the test and put back at the end.
   await c.query(`create temp table u5_saved_migrations as select * from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > $1`.replace("$1", `'${V57}'`));
   await c.query(`delete from public.schema_migrations where migration_name in (select migration_name from u5_saved_migrations)`);
   try {
     // 1. an undo exists
-    const u = await undo(team, s);
-    assert.equal(u.status, 200, u.text);
     await assert.rejects(c.query(rollback), /v57 rollback refused: an undo was made/);
     await c.query("rollback").catch(() => {});
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 1);
@@ -894,8 +903,10 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
     await c.query("rollback");
     assert.deepEqual((await catalogOf(c)).functions, (await catalogOf(admin)).functions, "the replaced bodies were rolled back");
   } finally {
-    await c.query(`insert into public.schema_migrations select * from u5_saved_migrations`).catch(() => {});
+    await c.query(`insert into public.schema_migrations select * from u5_saved_migrations where migration_name <> '${V60}' on conflict do nothing`).catch(() => {});
     await c.end();
+    await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")));
+    assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V60])).rows[0].n, 1, "v60 is applied again");
   }
 });
 
