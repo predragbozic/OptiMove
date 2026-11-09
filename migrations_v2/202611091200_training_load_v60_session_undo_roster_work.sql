@@ -270,7 +270,8 @@ create function training_load.session_undo_roster_work(p_alias uuid[]) returns j
   --                   requests', completion log rows of such requests, completions all of whose log rows are such;
   --   later         = everything else, a coach's own work: a request of origin 'roster', every decision of an athlete who has
   --                   one (a later decision that supersedes an import-origin one makes the chain later work), a log row of a
-  --                   request of another origin or with none, a completion with any such log row (or none).
+  --                   request of another origin, a completion with any such log row (or no log row at all). A log row with no request is the system's own
+  --                   (a membership, link or measurement change): neutral, never counted as a coach's work.
   -- The fingerprint covers the ids of the later work (and the completion revisions) in a fixed order.
   with req as (
     select id, activity_id, origin from training.activity_roster_requests where activity_id = any(p_alias)
@@ -282,7 +283,7 @@ create function training_load.session_undo_roster_work(p_alias uuid[]) returns j
   ), dec_c as (
     select d.*, d.athlete_id in (select athlete_id from later_athletes) as is_later from dec d
   ), logs as (
-    select l.id, l.activity_id, coalesce(r.origin, 'roster') <> 'import' as is_later
+    select l.id, l.activity_id, (r.id is not null and r.origin <> 'import') as is_later
       from training.activity_completion_log l left join req r on r.id = l.request_id
      where l.activity_id = any(p_alias)
   ), comp as (
@@ -594,9 +595,13 @@ begin
   -- v60: the roster inputs the system writes (a membership, link or measurement change) take the completion lock shared and write
   --   completions and log rows; take it exclusively, as Complete does (after the activities), and read the scope again, so what is
   --   counted, fingerprinted and logged is what is deleted.
-  perform training.lock_roster_completions(coalesce(array(select jsonb_array_elements_text(v_scope -> 'aliasIds')::uuid), '{}'), true);
+  v_alias := coalesce(array(select jsonb_array_elements_text(v_scope -> 'aliasIds')::uuid), '{}');
+  perform training.lock_roster_completions(v_alias, true);
   v_scope := training_load.session_undo_scope(v_event_id);
-  if not (coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}') <@ v_act) then
+  -- What was locked and deleted from is exactly what the second read sees: the same activities and no alias that was not locked.
+  if not (coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}') <@ v_act
+          and v_act <@ coalesce(array(select jsonb_array_elements_text(v_scope -> 'activityIds')::uuid), '{}')
+          and coalesce(array(select jsonb_array_elements_text(v_scope -> 'aliasIds')::uuid), '{}') <@ v_alias) then
     raise exception 'undo_imported_session: the activities of the event keep changing' using errcode = '55P03';
   end if;
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
@@ -811,9 +816,9 @@ comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, 
 do $$
 declare
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', '9be6ca4eee78a9d26310206aad2b0335'],
+    ['training_load', 'undo_imported_session', '0c4434b062fe401225d1a0e003a98cb5'],
     ['training_load', 'session_undo_scope', '514617da209da9d2703477ef5c4a69dd'],
-    ['training_load', 'session_undo_roster_work', '1b6b9dae1db45b329ca24f522fd0a06d'],
+    ['training_load', 'session_undo_roster_work', 'bde0945274c10d2b415d947e08508805'],
     ['training', 'protect_activity_roster_request', '4549eaa47dc6c6ad34af9a2d548ff173'],
     ['training', 'check_activity_athlete_decision', 'cb038617f44d1e6028825d73f5048c64'],
     ['training', 'protect_activity_completion', '1bd5b84c90536e4a7802e2ed2c3e7229'],

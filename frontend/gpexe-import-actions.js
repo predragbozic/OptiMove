@@ -239,6 +239,13 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       await openUndo(id, renderTrainingLoad);
       if (gx.undo && gx.undo.id === id && gx.undo.step === "ready") gx.undo.reason = reason || "";
       renderTrainingLoad();
+      // The button that was pressed is gone with the repaint: the dialog's heading takes the focus.
+      try {
+        const h = globalThis.document?.querySelector?.(".gpexe-undo h4");
+        if (h) { h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); }
+      } catch {
+        // Focus is a convenience only.
+      }
     }
     return true;
   }

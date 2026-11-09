@@ -109,7 +109,17 @@ export function handleUndoReasonInput(target, gx = g()) {
   if (target?.matches?.("[data-gpexe-undo-confirm-later]")) {
     if (gx.undo?.step === "ready") {
       gx.undo.confirmLater = Boolean(target.checked);
-      if (gx.undo.confirmLater) gx.undo.tickProblem = "";
+      if (gx.undo.confirmLater && gx.undo.tickProblem) {
+        gx.undo.tickProblem = "";
+        // No repaint on a tick: take the message and the invalid mark away in place.
+        try {
+          target.removeAttribute?.("aria-invalid");
+          target.removeAttribute?.("aria-describedby");
+          globalThis.document?.getElementById?.("gpexe-undo-tick-problem")?.remove?.();
+        } catch {
+          // A convenience only.
+        }
+      }
     }
     return true;
   }
@@ -127,7 +137,7 @@ export function focusTick() {
   try {
     const box = globalThis.document?.querySelector?.("[data-gpexe-undo-confirm-later]");
     box?.scrollIntoView?.({ block: "center" });
-    box?.focus?.();
+    box?.focus?.({ preventScroll: true });
   } catch {
     // Focus is a convenience only.
   }

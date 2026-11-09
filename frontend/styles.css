@@ -16898,9 +16898,14 @@ p.muted.gpexe-source-fields {
   gap: 2px;
   overflow-wrap: anywhere;
   /* A long list scrolls inside the box, so the tick stays near its heading on a phone. */
-  max-height: 40vh;
+  max-height: min(40vh, 16rem);
+  max-height: min(40dvh, 16rem);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 .gpexe-undo-later:focus-visible {
   outline: 2px solid var(--focus, #2f6fed);

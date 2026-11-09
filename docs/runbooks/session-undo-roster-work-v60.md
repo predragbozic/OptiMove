@@ -42,6 +42,8 @@ Tests: `backend/tests/session-undo-roster-work-v60.test.mjs` (16), `backend/test
 * A coach's free-text note of a removed decision is destroyed with it; only the kind and the reason code are logged. The rollback does not bring it back.
 * The log guard checks the shape of `roster_work_removed`, not that the counts are true; the function is its only writer.
 * A refusal (`roster_work_needs_confirmation`, `roster_work_changed`) is not audited; only a committed undo writes a log row.
+* Deploy window: the migration drops the 6-argument undo function while the old instance may still be serving; an undo or preview on the old instance fails (function does not exist, nothing written) until the deploy completes. Run it at a quiet moment.
+* A completion log row with no request (a system roster input) is neutral; it is removed with the session and never makes it "a coach's later work".
 * Not run on PostgreSQL 17 (production); run on 16.
 
 ## Running it

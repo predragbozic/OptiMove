@@ -40,7 +40,7 @@ function refusalHtml(error) {
       <p><strong>Nothing was removed.</strong> ${escapeHtml(error?.message || "The undo was refused.")}</p>
       ${extra.length ? `<p class="muted">${escapeHtml(extra.join(" "))}</p>` : ""}
       ${error?.data?.error === "roster_work_changed" || error?.data?.error === "roster_work_needs_confirmation"
-        ? `<p class="muted">Show the list again: it is the coach's work as it is now. Your reason is kept and you tick again.</p>
+        ? `<p class="muted">Your reason is kept. You will need to tick again.</p>
            <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-undo-reopen">Show the list again</button>` : ""}
     </div>
     ${errorTech(error)}`;
@@ -62,16 +62,18 @@ function rosterHtml(u) {
   const rows = list.map((d) => `<li>${escapeHtml(d.athleteName || "An athlete")}: ${escapeHtml(KIND_LABEL[d.kind] || d.kind)}${d.reasonCode ? ` (${escapeHtml(String(d.reasonCode).replace(/_/g, " "))})` : ""}</li>`).join("");
   // What is removed, from the counts: decisions and/or the session's completion (a completion alone has no list).
   const what = [decisions > 0 ? `${plural(decisions, "decision", "decisions")} from the Roster tab` : "", w.later?.completions ? "the session's completion (marked complete)" : ""].filter(Boolean).join(" and ") || "other roster records";
-  const tick = cut ? `I understand all ${total} decisions, including those not listed, are removed with the session.` : "I understand this work by the coach is removed with the session.";
+  const done = w.later?.completions ? ", and so is its completion" : "";
+  const tick = cut ? `I understand all ${total} decisions, including those not listed, are removed with the session${done}.` : "I understand this work by the coach is removed with the session.";
   return `
     ${imp > 0 ? `<p>${escapeHtml(plural(imp, "attendance state set at import", "attendance states set at import"))} will be removed.</p>` : ""}
     ${later > 0 ? `
       <div class="gpexe-warning" role="note">
-        <p><strong>A coach has also worked on this session since the import.</strong> ${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))} will be removed too.${rows ? ` First ${list.length} shown${cut ? ` of ${total}` : ""}:` : ""}</p>
+        <p><strong>A coach has also worked on this session since the import.</strong> ${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))} will be removed too.${rows ? (cut ? ` First ${list.length} of ${total} shown:` : " The decisions:") : ""}</p>
         ${rows ? `<ul class="gpexe-undo-later" role="region" tabindex="0" aria-label="Decisions that will be removed">${rows}</ul>` : ""}
+        ${list.length > 6 ? `<p class="muted">Scroll the list to see all ${list.length}.</p>` : ""}
         ${cut ? `<p class="muted">And ${total - list.length} more, not listed here. They are removed too and recorded in the log.</p>` : ""}
-        <label class="gpexe-undo-confirm"><input type="checkbox" data-gpexe-undo-confirm-later ${u.confirmLater ? "checked" : ""} ${u.tickProblem ? 'aria-invalid="true"' : ""} ${u.step === "sending" ? "disabled" : ""}> ${escapeHtml(tick)}</label>
-        ${u.tickProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.tickProblem)}</p>` : ""}
+        <label class="gpexe-undo-confirm"><input type="checkbox" data-gpexe-undo-confirm-later ${u.confirmLater ? "checked" : ""} ${u.tickProblem ? 'aria-invalid="true" aria-describedby="gpexe-undo-tick-problem"' : ""} ${u.step === "sending" ? "disabled" : ""}> ${escapeHtml(tick)}</label>
+        ${u.tickProblem ? `<p class="gpexe-error" id="gpexe-undo-tick-problem" role="alert">${escapeHtml(u.tickProblem)}</p>` : ""}
       </div>` : ""}`;
 }
 

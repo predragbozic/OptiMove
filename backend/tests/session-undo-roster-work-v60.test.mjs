@@ -454,7 +454,6 @@ test("8. the four roster tables stay append-only outside the undo: no DELETE, UP
   const [x] = await needing(team, s);
   await importStates(team, s, [x]);
   await coachDecides(team, s, (await needing(team, s))[0]);
-  await admin.query(`insert into training.activity_completions (activity_id, owner_team_id, status, revision) select null, null, 'not_complete', 0 where false`);
   const c = await newClient();
   try {
     await c.query(`select set_config('optimove.session_undo_tx', txid_current()::text, false)`);
@@ -544,7 +543,7 @@ test("10. undo and a roster Change serialise on the team import lock: whichever 
       assert.equal(rows.decisions, 1);
     } else {
       assert.equal(undoRes.status, 200, undoRes.text);
-      assert.notEqual(decisionRes.status, 200, "the coach's decision found the session gone");
+      assert.ok([404, 409].includes(decisionRes.status), `the coach's decision found the session gone (a stable answer, not a 500): ${decisionRes.status}`);
       assert.deepEqual(rows, ZERO, "no roster row survives the undo");
     }
   }
@@ -664,6 +663,31 @@ test("18. a roster input the system writes between the scope read and the delete
   const r = await racing;
   assert.equal(r.status, 200, r.text);
   assert.ok(Date.now() - started >= 1400);
+});
+
+test("19. a log row the system wrote (no request) is neutral, never a coach's work; a coach's own completion is later work (test 15)", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9221);
+  const [x] = await needing(team, s);
+  await importStates(team, s, [x]);
+  const logRows = async () => (await admin.query(`select revision, request_id from training.activity_completion_log where activity_id = $1 order by revision`, [s.activityId])).rows;
+  const w0 = (await admin.query(`select training_load.session_undo_roster_work($1::uuid[]) as w`, [[s.activityId]])).rows[0].w;
+  assert.deepEqual([w0.later.completions, w0.later.completionLog], [0, 0], "only the import wrote so far");
+  // A system row with no request (a membership, link or measurement change), added raw with the triggers off for the insert only.
+  const c = await newClient();
+  const next = async () => ((await logRows()).reduce((m, r) => Math.max(m, r.revision), 0)) + 1;
+  try {
+    await c.query("begin");
+    await c.query("set local session_replication_role = replica");
+    await c.query(`insert into training.activity_completion_log (activity_id, request_id, revision, from_status, to_status, cause) values ($1, null, $2, 'complete', 'needs_review', 'roster_changed')`, [s.activityId, await next()]);
+    await c.query("commit");
+  } finally { await c.end(); }
+  const w1 = (await admin.query(`select training_load.session_undo_roster_work($1::uuid[]) as w`, [[s.activityId]])).rows[0].w;
+  assert.deepEqual([w1.later.completions, w1.later.completionLog], [0, 0], "a system row is no coach's work");
+  assert.equal(w1.importWritten.completionLog, w0.importWritten.completionLog + 1, "it goes with the session as the system's own");
+  const ok = await undo(team, s);
+  assert.equal(ok.status, 200, `no confirmation is needed for the system's own rows: ${ok.text}`);
+  assert.deepEqual(await rosterRows(s.activityId), ZERO);
 });
 
 // ---------------------------------------------------------------------------

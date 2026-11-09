@@ -757,8 +757,42 @@ test("24. a completion alone is described from the counts; a long list says it i
   await act("training-load-gpexe-undo-open");
   ready = undoSection();
   assert.match(ready, /143 decisions from the Roster tab/);
-  assert.match(ready, /First 60 shown of 143:/);
+  assert.match(ready, /First 60 of 143 shown:/);
+  assert.match(ready, /Scroll the list to see all 60\./);
   assert.match(ready, /And 83 more, not listed here\. They are removed too and recorded in the log\./);
   assert.match(ready, /I understand all 143 decisions, including those not listed, are removed with the session\./);
   assert.match(ready, /role="region" tabindex="0" aria-label="Decisions that will be removed"/);
+});
+
+test("25. a short list is introduced plainly, a cut list with a completion says so in the tick, and ticking takes the stale alert away in place", async () => {
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(2) } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const ready = undoSection();
+  assert.match(ready, /The decisions:/);
+  assert.doesNotMatch(ready, /First \d+ of|Scroll the list/);
+  typedReason = "Wrong links";
+  await act("training-load-gpexe-undo-confirm");
+  assert.match(undoSection(), /id="gpexe-undo-tick-problem"/);
+  assert.match(undoSection(), /aria-describedby="gpexe-undo-tick-problem"/);
+  let removed = 0;
+  const attrs = new Set(["aria-invalid", "aria-describedby"]);
+  const realGet = globalThis.document.getElementById;
+  globalThis.document.getElementById = (id) => (id === "gpexe-undo-tick-problem" ? { remove: () => { removed += 1; } } : null);
+  try {
+    handleUndoReasonInput({ matches: (sel) => sel === "[data-gpexe-undo-confirm-later]", checked: true, removeAttribute: (a) => attrs.delete(a) }, gx());
+  } finally {
+    globalThis.document.getElementById = realGet;
+  }
+  assert.equal(removed, 1, "the message node is removed");
+  assert.equal(attrs.size, 0, "the invalid mark and the description are removed");
+  assert.equal(gx().undo.tickProblem, "");
+  // a cut list plus a completion
+  const big = { ...WORK(60), later: { decisions: 143, requests: 3, completions: 1, completionLog: 1 }, laterDecisionsTotal: 143 };
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: big } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  assert.match(undoSection(), /are removed with the session, and so is its completion\./);
 });
