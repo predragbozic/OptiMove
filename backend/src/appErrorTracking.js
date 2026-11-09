@@ -63,7 +63,9 @@ export function stackSignatureFromError(error) {
     const fn = (m[1] || "anonymous").replace(/[^A-Za-z0-9_.]/g, "").slice(0, 40) || "anonymous";
     const base = file.split(/[\\/]/).pop().replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 40);
     if (!base) continue;
-    frames.push(`${fn}@${base}`);
+    const frame = `${fn}@${base}`;
+    if ([...frames, frame].join(" > ").length > 200) break; // whole frames only: keep what fits, never drop the signature
+    frames.push(frame);
     if (frames.length >= 4) break;
   }
   return cleanStackSignature(frames.join(" > "));
@@ -152,7 +154,9 @@ export async function writeEvent(event, { executor = pool } = {}) {
     let outcome = "counted";
     if (!bumped.rowCount) {
       const recent = (await client.query(
-        `select count(*)::int as n from public.app_error_events where user_hash is not distinct from $1 and first_seen_at > now() - interval '${REPEAT_WINDOW}'`, [hash])).rows[0].n;
+        hash
+          ? `select count(*)::int as n from public.app_error_events where user_hash = $1 and first_seen_at > now() - interval '${REPEAT_WINDOW}'`
+          : `select count(*)::int as n from public.app_error_events where user_hash is null and first_seen_at > now() - interval '${REPEAT_WINDOW}' and $1::text is null`, [hash])).rows[0].n;
       if (recent >= (hash ? MAX_ROWS_PER_USER_WINDOW : MAX_ROWS_WITHOUT_USER_WINDOW)) {
         outcome = "dropped";
       } else {

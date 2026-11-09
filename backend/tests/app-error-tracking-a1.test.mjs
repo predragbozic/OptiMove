@@ -70,6 +70,10 @@ test("1. sanitizers keep closed shapes only", () => {
   assert.equal(M.cleanStackSignature("a b\nc'; drop table x;--"), null);
   for (const bad of ["ana.example@example.invalid reset token abc for Ana Example", "Error: boom", "a@b > ", "fn@file > fn@file > fn@file > fn@file > fn@file", "x".repeat(300)]) assert.equal(M.cleanStackSignature(bad), null, bad);
   assert.equal(M.cleanStackSignature("render@view.js > start@app.js"), "render@view.js > start@app.js");
+  const long = new Error("x");
+  long.stack = "Error: x\n" + ["queryBuiltInSeriesFromContext@trainingLoadDashboardQuery.js", "resolveFactsToRowsAndShiftRanges@trainingLoadDashboardQuery.js", "executeDashboardQueryForWidgets@trainingLoadDashboardWidgets.js", "handler@trainingLoadDashboard.js"].map((f) => `    at ${f.split("@")[0]} (file:///app/backend/src/${f.split("@")[1]}:1:1)`).join("\n");
+  const longSig = M.stackSignatureFromError(long);
+  assert.ok(longSig && longSig.length <= 200 && longSig.startsWith("queryBuiltInSeriesFromContext@"), `long real names keep the whole frames that fit (${longSig})`);
   const a = M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 500, stackSignature: "f@a.js" });
   assert.equal(a, M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 500, stackSignature: "f@a.js" }));
   assert.notEqual(a, M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 501, stackSignature: "f@a.js" }));
