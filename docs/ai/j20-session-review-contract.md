@@ -101,11 +101,13 @@ they are and does not widen them. The production-use gate for names and dates of
 
 `POST …/candidates/:id/preview` `{}` recomputes the preview and `previewHash` of the **whole candidate** now and **stores them with the existing
 compare-and-set** of a refused approval (`storeRefreshedPreview`: `where id = $1 and preview_hash = <expected> and status in ('pending','blocked')`),
-then returns them. This is required: `approveCandidate` compares the client's hash with the **stored** `preview_hash` first
+then returns them. **The store uses a client-bound variant of the same SQL** (`storeRefreshedPreview(client, …)`, today it uses the pool-level
+`query`, which would run on a second connection and wait for the route's own row lock until the idle bound killed the transaction) and checks the
+`rowCount`; a test proves the `UPDATE` runs on the route's client. This is required: `approveCandidate` compares the client's hash with the **stored** `preview_hash` first
 (`gpexeImportService.js` near line 2400) and the approval trigger (v23, redefined in v33) requires the approval's hash to equal the candidate's
 stored one, so a hash that was returned but not stored could never be approved (after a link every import would answer `409 preview_changed` until a
-full check). The route writes **no durable row except the candidate's own derived columns** (preview, hash, computed-at) by compare-and-set; a lost
-compare-and-set answers `409 preview_changed` with the current stored one. Sequence values are consumed by the rolled-back import. The list, U6a's batch
+full check). The route writes **no durable row except the candidate's own derived columns** (preview, hash, computed-at) by compare-and-set; a `rowCount` of 0
+(practically unreachable while the row is locked) is a `ROLLBACK` and `409 preview_changed`. Sequence values are consumed by the rolled-back import. The list, U6a's batch
 hash and other coaches see the new hash (a batch then gets `preview_changed`, which is safe).
 
 **Sequence and lock order: the approval's, exactly (candidate row, then team).** `approveCandidate` locks the candidate `FOR UPDATE` first and the
@@ -116,8 +118,15 @@ lock is held (team → candidate), the inverse of an approval, and the two would
 `last_seen_check_id` as approval step 3 (a missing binding yields the blocked `mapping_not_usable` preview) → mapping registry locks → the preview
 (rolled-back real import, in a savepoint) → the compare-and-set `UPDATE` of the candidate, **in the same transaction** → `COMMIT`. There is no window
 in which the stored preview is older than what the route returned. It does **not** take the approver-rights lock (6b): the right is checked unlocked
-and nothing but derived columns is written. A recompute waits behind an approval up to its `lock_timeout` and answers `409 try_again`. `409 try_again` /
-`check_preview_busy` when a lock is not free. **Total budget:** the route has a wall-clock
+and nothing but derived columns is written. A recompute waits behind an approval up to its `lock_timeout`. Before the `COMMIT`, `55P03`, `57014` and `40P01` are a `ROLLBACK` and `409 try_again` /
+`check_preview_busy` with the stored columns unchanged. The values read under the row lock (hash, status, bundle) are authoritative; the unlocked read is a
+fast refusal only, and the compare-and-set's expected hash comes from the locked row. **Lost COMMIT.** The route uses the approval's pattern: the `COMMIT` bounded (15 s), the connection closed with an error on no answer, and the stored hash
+read on another connection; if it equals the recomputed hash the answer is `200` with the new preview, otherwise `503 outcome_unknown`. Once the `COMMIT` was
+sent, the answer never says "nothing was written". A repeat after an unknown outcome is idempotent (it recomputes and stores the same hash again); the
+screen shows *Result not confirmed · Update the review again*. A real-route test covers a failed or lost `COMMIT`. **Other writers:** U5's undo and any
+other writer that holds the team lock must not then touch a candidate row (that would be team → candidate); the recorded-SQL-order test includes them.
+
+**Total budget:** the route has a wall-clock
 bound like the approval (client-side bound with the connection released with an error on timeout), because the per-statement bounds do not bound the
 whole transaction; it holds the team lock for the length of the preview (seconds for a session with drills), during which a check start, a link write,
 a roster command and an approval wait up to their own lock bounds. The screen does not call it while a check of the team is running.
