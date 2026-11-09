@@ -45,8 +45,13 @@ test("(1280 px) a late clubs summary does not repaint the club's Home after a wo
     await page.click("#workspaceToggle");
     await page.click(`[data-action="workspace-select"][data-workspace-type="club"][data-workspace-scope-id="${world.ids.clubA}"]`);
     await page.waitForSelector(".coach-home-grid .coach-home-panel-plan", { timeout: 20_000 });
+    // The late answer must really reach the page, or the checks below would prove nothing.
+    const lateAnswer = page.waitForResponse((r) => r.url().includes("/api/organization/clubs-summary"), { timeout: 20_000 });
     release();
-    await page.waitForResponse((r) => r.url().includes("/api/organization/clubs-summary"), { timeout: 20_000 }).catch(() => {});
+    // It reaches the server after the switch, so the server may refuse it for the new workspace: either way it is a
+    // late result of the old workspace (an answer or a failure), and neither may repaint the club's Home.
+    const late = await lateAnswer;
+    assert.ok(late.status() >= 200, `the held clubs summary reached the page after the switch (${late.status()})`);
     await page.waitForTimeout(1000);
     assert.equal(await page.locator(".coach-home-clubs").count(), 0, "no clubs list on the club's Home");
     assert.equal(await page.locator(".coach-home-grid .coach-home-panel-plan").count(), 1, "the club's athletes are still on screen");
