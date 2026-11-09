@@ -258,12 +258,26 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
 export async function purgeAppErrorEvents({ executor = pool, days = RETENTION_DAYS } = {}) {
   let total = 0;
   for (let i = 0; i < 200; i += 1) {
-    const r = await executor.query(
-      `delete from public.app_error_events where id in (select id from public.app_error_events where last_seen_at < now() - make_interval(days => $1) order by id limit ${PURGE_BATCH})`,
-      [days],
-    );
-    total += r.rowCount;
-    if (r.rowCount < PURGE_BATCH) break;
+    // One short transaction per batch with its own bounds: a purge never holds a lock or a connection for long.
+    const client = await executor.connect();
+    let deleted = 0;
+    try {
+      await client.query("begin");
+      await client.query("set local statement_timeout = '10s'");
+      await client.query("set local lock_timeout = '2s'");
+      deleted = (await client.query(
+        `delete from public.app_error_events where id in (select id from public.app_error_events where last_seen_at < now() - make_interval(days => $1) order by id limit ${PURGE_BATCH})`,
+        [days],
+      )).rowCount;
+      await client.query("commit");
+    } catch (error) {
+      try { await client.query("rollback"); } catch { /* the connection is released below */ }
+      throw error;
+    } finally {
+      client.release();
+    }
+    total += deleted;
+    if (deleted < PURGE_BATCH) break;
   }
   return total;
 }

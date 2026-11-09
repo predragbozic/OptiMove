@@ -44,7 +44,7 @@ A server error repeating the same fingerprint within a minute is dropped in memo
 
 ## Retention
 
-Rows whose `last_seen_at` is older than 30 days are deleted in batches of 5000 by `purgeAppErrorEvents()`, run by the server on
+Rows whose `last_seen_at` is older than 30 days are deleted in batches of 5000, each in its own transaction with a 10 s statement timeout and a 2 s lock timeout, by `purgeAppErrorEvents()`, run by the server on
 start (after 60 s) and every 6 hours (`startAppErrorRetentionSchedule`). A row is never updated except `repeat_count` and
 `last_seen_at`; `TRUNCATE` is refused. There is no separate run table: the purge logs only its failure code.
 
@@ -63,6 +63,8 @@ migration is applied; otherwise drops the table (the rows are telemetry) and its
 deployed commit must no longer contain the migration file or import `appErrorTracking.js` first. Rehearsed in test 7 of the suite.
 
 ## Limits and notes
+
+* `role` is derived from the session's roles: a club admin or a team coach is recorded as `coach` (a pilot simplification).
 
 * The user hash is a short, unsalted one-way hash of a random UUID: it lets one user's repeats be counted and distinct users
   be counted; it is not a defence against someone who already holds the user list (who can recompute it).
