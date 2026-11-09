@@ -269,6 +269,23 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   res.json({ ...result, candidate, ...(candidateReadError ? { candidateReadError } : {}) });
 }));
 
+// J20-A1: recompute the whole candidate's preview now (a link does not change
+// the stored one). Team managers, like GET candidate and the link right; the
+// answer is GET candidate's projection. Stores only the candidate's derived
+// columns (compare-and-set, same transaction); see service.recomputeCandidatePreview.
+router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.candidateId)) return notFound(res);
+  res.setHeader("Cache-Control", "no-store");
+  await service.recomputeCandidatePreview(access.teamId, req.params.candidateId, { userId: req.user.id, expectedClubId: access.clubId });
+  const candidate = await service.getCandidate(access.teamId, req.params.candidateId, {
+    audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
+  });
+  if (!candidate) return notFound(res);
+  res.json({ candidate, importSwitch: service.applySwitchInfo() });
+}));
+
 // Approve several clean "Ready" candidates of the team in one request
 // (Imports phase 4a). Body: { candidateIds: [...], previewHashes: { id:
 // hash } }, 1 to service.BATCH_APPROVE_MAX distinct ids, each with the
