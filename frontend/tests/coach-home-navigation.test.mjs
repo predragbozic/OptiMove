@@ -234,7 +234,7 @@ test("platform administration Home is untouched by the empty and error states", 
   const errored = renderCoachHomeHtml({ rows: [], error: "x", user });
   assert.match(errored, /<div role="alert"><p class="builder-error">x<\/p>/);
   assert.match(errored, /class="coach-home-workspaces"/);
-  assert.doesNotMatch(errored, /coach-home-state/);
+  assert.doesNotMatch(errored, /class="coach-home-state[ "]/, "no coach state card; only the retry button reuses the button class");
   assert.match(errored, /coach-home-retry/);
   const none = renderCoachHomeHtml({ rows: [], user: { activeWorkspace: { type: "platform" }, availableWorkspaces: [] } });
   assert.match(none, /No clubs yet/);
