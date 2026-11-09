@@ -44,7 +44,7 @@ function groupCard(g, selected) {
     <article class="app-health-group ${open ? "is-open" : ""}">
       <button type="button" class="app-health-row" data-action="app-health-open" data-fingerprint="${escapeAttr(g.fingerprint)}" aria-expanded="${open ? "true" : "false"}">
         <span class="app-health-where"><span class="app-health-kind">${kind}</span> ${escapeHtml(where)}</span>
-        <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}</span>
+        <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}<small class="app-health-code">${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</small></span>
         <span class="app-health-count">${escapeHtml(String(g.occurrences))}× · ${escapeHtml(String(g.users))} ${g.users === 1 ? "person" : "people"}</span>
         <span class="app-health-seen">Since ${escapeHtml(formatSeen(g.firstSeenAt))} · last ${escapeHtml(formatSeen(g.lastSeenAt))}</span>
       </button>
@@ -52,7 +52,6 @@ function groupCard(g, selected) {
         <dl class="app-health-detail">
           <div><dt>First seen</dt><dd>${escapeHtml(formatSeen(g.firstSeenAt))}</dd></div>
           <div><dt>Last seen</dt><dd>${escapeHtml(formatSeen(g.lastSeenAt))}</dd></div>
-          <div><dt>Code</dt><dd>${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</dd></div>
           <div><dt>Roles</dt><dd>${escapeHtml((g.roles || []).map((r) => ROLE_LABEL[r] || r).join(", ") || "—")}</dd></div>
           ${g.action ? `<div><dt>Last button pressed</dt><dd>${escapeHtml(g.action)}</dd></div>` : ""}
           <div><dt>Release</dt><dd>${escapeHtml(g.release ? g.release.slice(0, 8) : "unknown")}</dd></div>
