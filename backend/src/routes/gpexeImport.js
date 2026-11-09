@@ -6,7 +6,7 @@ import { Router } from "express";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT, query } from "../db.js";
 import { canApproveGpexeImport, importAudienceOf, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
-import { previewHasClubVariable, projectPreview } from "../gpexeImportAudience.js";
+import { previewHasClubVariable } from "../gpexeImportAudience.js";
 import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
@@ -80,15 +80,18 @@ function handle(fn) {
         // or of the platform gets it; a coach gets the stable code and the
         // sentence to contact an administrator (the F3c2e contract).
         const adminViewer = adminViewerOf(req);
-        // J20-B: a refused subset approval carries the recomputed subset preview in the body only, projected for
-        // this request's audience like every other preview; it was never stored.
+        // J20-B: a refused subset approval carries the recomputed subset preview in the body only, projected for this request's
+        // audience by getCandidate like every other preview; it was never stored.
         let subsetBody = null;
-        if (subsetPreview && typeof subsetHash === "string") {
-          subsetBody = {
-            excludedAthleteIds: Array.isArray(excludedAthleteIds) ? excludedAthleteIds : [],
-            subsetHash,
-            preview: projectPreview(subsetPreview, req.gpexeImportAudience, { namesClubVariables: await namesClubVariablesFor(req, subsetPreview) }),
-          };
+        if (subsetPreview && typeof subsetHash === "string" && req.gpexeTeamAccess && UUID.test(String(req.params.candidateId))) {
+          try {
+            const projected = await service.getCandidate(req.gpexeTeamAccess.teamId, req.params.candidateId, {
+              audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subsetPreview,
+            });
+            if (projected) subsetBody = { excludedAthleteIds: Array.isArray(excludedAthleteIds) ? excludedAthleteIds : [], subsetHash, preview: projected.preview, athletes: projected.athletes };
+          } catch (readError) {
+            console.error(`[gpexe] reading the subset preview of ${req.params.candidateId} for a refusal failed: ${service.formatDbError(readError)}`);
+          }
         }
         const message = typeof reason === "string" && !adminViewer ? "The team's source connection cannot be used right now; contact an administrator. Nothing was read." : error.message;
         return res.status(error.status).json({
@@ -297,11 +300,14 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
     const subset = await service.previewCandidateSubset(access.teamId, req.params.candidateId, {
       userId: req.user.id, excludedAthleteIds: req.body.excludedAthleteIds, expectedClubId: access.clubId,
     });
-    const names = await namesClubVariablesFor(req, subset.preview);
+    const projected = await service.getCandidate(access.teamId, req.params.candidateId, {
+      audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subset.preview,
+    });
+    if (!projected) return notFound(res);
     return res.json({
       subset: {
-        excludedAthleteIds: subset.excludedAthleteIds, previewHash: subset.previewHash, subsetHash: subset.subsetHash,
-        preview: projectPreview(subset.preview, req.gpexeImportAudience, { namesClubVariables: names }),
+        excludedAthleteIds: subset.excludedAthleteIds, previewHash: subset.fullHash, subsetHash: subset.subsetHash,
+        preview: projected.preview, athletes: projected.athletes,
       },
       importSwitch: service.applySwitchInfo(),
     });

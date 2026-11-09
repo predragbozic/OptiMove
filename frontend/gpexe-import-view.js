@@ -206,6 +206,9 @@ const REFUSAL_TEXT = {
   nothing_to_import: "Nothing to import: GPEXE has nothing new for this session.",
   changes_need_acceptance: "Not imported yet: this import changes results that were already imported. Tick the box to accept those changes, then approve.",
   preview_changed: "Not imported: the data changed since you opened this session. Review it again, then approve.",
+  no_importable_athlete: "Not imported: leaving these athletes out would leave nobody to import.",
+  invalid_exclusion: "Not imported: one of the athletes you left out can't be left out any more. Update the review and choose again.",
+  invalid_excluded_athlete: "Not imported: one of the athletes you left out can't be left out any more. Update the review and choose again.",
   internal_error: "Not imported: the server failed before writing anything. Try again later.",
   // Switch condition 2: a bounded wait before the COMMIT (another check,
   // import or change of the team, or a busy server); nothing was written.
@@ -2060,7 +2063,13 @@ function unlinkedChoicesFor(preview, c) {
 
 function reviewRowsOf(preview, c) {
   const changes = changesByAthlete(preview);
+  // J20-B: an imported session was approved with some athletes left out by the coach; the stored preview is the whole
+  // candidate's, so the recorded set (the approval) marks those rows.
+  const leftOut = new Set(c?.approval?.excludedAthleteIds || []);
   const rows = (preview.athletes || []).map((a) => {
+    if (leftOut.has(String(a.gpexeAthleteId))) {
+      return { a, name: athleteName(c, a.athleteId, a.gpexeAthleteId), status: "not_imported", label: "Left out by you", note: "You left this athlete out when the session was imported.", changes: 0, leftOutByCoach: true };
+    }
     const status = reviewRowStatus(a, preview);
     const info = ROW_STATUS[status];
     const n = changes.get(a.athleteId ? `a:${a.athleteId}` : `g:${a.gpexeAthleteId}`) || 0;
@@ -2072,7 +2081,24 @@ function reviewRowsOf(preview, c) {
   return rows;
 }
 
-function reviewRowHtml(r, c, choices) {
+// J20-B: the athletes the coach has ticked as "Leave out" in this review (in memory only), and whether the checkbox is offered at all.
+function leaveOutOf(detail) {
+  return new Set(detail?.leaveOut || []);
+}
+
+// Offered only where the approval itself is offered: a pending, confirmed session, a viewer who may approve, no blocker, no
+// link change waiting for an update, nothing in flight. The server decides again (the identical rules, step 12).
+export function leaveOutOffered(c, detail = state.trainingLoad.gpexe.detail, status = state.trainingLoad.gpexe.status) {
+  const gx = state.trainingLoad.gpexe;
+  if (!c || c.status !== "pending" || c.preview?.status !== "ready") return false;
+  if (status?.viewer?.canApprove !== true) return false;
+  if ((c.approvalBlockers || []).filter((b) => b !== "blocked").length) return false;
+  if (notConfirmedForImport(c) || withdrawnByCheck(c) || reviewMadeBeforeLinkChange(c, gx)) return false;
+  if (detail?.approving || detail?.updating || detail?.outcome?.kind === "imported" || detail?.outcome?.kind === "unknown") return false;
+  return true;
+}
+
+function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }) {
   const ready = r.status === "importable" || r.status === "participation";
   const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked";
   const cells = VALUE_COLUMNS.map((col) => `<td data-label="${escapeAttr(col.label)}" role="cell">${escapeHtml(r.a ? valueCellText(r, col, c) : "-")}</td>`).join("");
@@ -2083,14 +2109,23 @@ function reviewRowHtml(r, c, choices) {
       <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
       ${cells}
       <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}</td>
+      ${lo.offered ? leaveOutCellHtml(r, lo) : ""}
     </tr>${link ? `
-    <tr class="gpexe-review-link" role="presentation"><td colspan="${VALUE_COLUMNS.length + 3}" role="presentation">${link}</td></tr>` : ""}`;
+    <tr class="gpexe-review-link" role="presentation"><td colspan="${VALUE_COLUMNS.length + 3 + (lo.offered ? 1 : 0)}" role="presentation">${link}</td></tr>` : ""}`;
 }
 
-function reviewTableOf(rows, c, choices) {
+// The "Leave out" cell of a row the import would write. The accessible name carries the athlete, so a screen reader hears who.
+function leaveOutCellHtml(r, lo) {
+  const imports = r.a && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId;
+  if (!imports) return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><span aria-hidden="true">-</span></td>`;
+  const id = String(r.a.gpexeAthleteId);
+  return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><label class="gpexe-leave-out"><input type="checkbox" data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="${escapeAttr(id)}" ${lo.chosen.has(id) ? "checked" : ""} aria-label="${escapeAttr(`Leave ${r.name} out of this import`)}"><span>Leave out</span></label></td>`;
+}
+
+function reviewTableOf(rows, c, choices, lo = { offered: false, chosen: new Set() }) {
   return `<div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows" role="table">
-    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Athlete</th><th scope="col" role="columnheader">Status</th>${VALUE_COLUMNS.map((col) => `<th scope="col" role="columnheader">${escapeHtml(col.label)}</th>`).join("")}<th scope="col" role="columnheader">What happens</th></tr></thead>
-    <tbody role="rowgroup">${rows.map((r) => reviewRowHtml(r, c, choices)).join("")}</tbody>
+    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Athlete</th><th scope="col" role="columnheader">Status</th>${VALUE_COLUMNS.map((col) => `<th scope="col" role="columnheader">${escapeHtml(col.label)}</th>`).join("")}<th scope="col" role="columnheader">What happens</th>${lo.offered ? `<th scope="col" role="columnheader">Leave out</th>` : ""}</tr></thead>
+    <tbody role="rowgroup">${rows.map((r) => reviewRowHtml(r, c, choices, lo)).join("")}</tbody>
   </table></div>`;
 }
 
@@ -2100,6 +2135,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
   const rows = reviewRowsOf(preview, c);
   if (!rows.length) return "";
   const choices = unlinkedChoicesFor(preview, c);
+  const lo = { offered: leaveOutOffered(c, detail), chosen: leaveOutOf(detail) };
   const problem = rows.filter((r) => PROBLEM_KIND[r.status]);
   const fine = rows.filter((r) => !PROBLEM_KIND[r.status]);
   const counts = { needs: 0, not_linked: 0, no_data: 0, review: 0, all: rows.length };
@@ -2124,8 +2160,8 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
       <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
       ${updating}${updateError}
       <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
-      ${shown.length ? reviewTableOf(shown, c, choices) : ""}
-      ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices)}</details>` : ""}
+      ${shown.length ? reviewTableOf(shown, c, choices, lo) : ""}
+      ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices, lo)}</details>` : ""}
     </section>
   `;
 }
@@ -2143,6 +2179,7 @@ function renderOutcomeHtml(detail) {
     return `
       <div class="gpexe-success" role="status">
         <p><strong>Imported.</strong>${counts ? ` ${escapeHtml(counts)}.` : ""}</p>
+        ${r.approval?.excludedAthleteIds?.length ? `<p>${escapeHtml(`${plural(r.approval.excludedAthleteIds.length, "athlete was", "athletes were")} left out, as you chose.`)}</p>` : ""}
         ${r.commitConfirmation === "verified_after_commit_error" ? `<p>The database's confirmation did not arrive in time, but the server found the import committed.</p>` : ""}
         ${r.candidateReadError ? `<p>${escapeHtml(r.candidateReadError.message)}</p>` : ""}
       </div>
@@ -2151,7 +2188,14 @@ function renderOutcomeHtml(detail) {
   if (o.kind === "unknown") {
     const verified = o.verified;
     if (verified === "imported") {
-      return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>${reviewErrorTech(o.error)}</div>`;
+      // J20-B: a lost answer is retried by checking, never by a second approval; the RECORDED set says what was really left out.
+      const recorded = o.approval?.excludedAthleteIds;
+      const chosen = o.chosenExcluded;
+      const differs = Array.isArray(recorded) && Array.isArray(chosen) && !sameIds(recorded, chosen);
+      return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>
+        ${Array.isArray(recorded) && recorded.length ? `<p>${escapeHtml(`${plural(recorded.length, "athlete was", "athletes were")} left out of this import.`)}</p>` : ""}
+        ${differs ? `<p class="gpexe-warning" role="alert">It was imported with ${recorded.length ? "a different set of athletes" : "nobody"} left out than the set you have chosen now. What the server recorded is what happened.</p>` : ""}
+        ${reviewErrorTech(o.error)}</div>`;
     }
     return `
       <div class="gpexe-unknown" role="alert">
@@ -2196,6 +2240,60 @@ function approveLeftOutText(c) {
   return "Approving imports this whole session exactly as shown. Athletes and values left out stay out.";
 }
 
+// The ticked athletes that are still importable rows of this review (a stale tick from before an update is not counted).
+export function leaveOutIds(c, detail) {
+  const importable = new Set((c?.preview?.athletes || []).filter((a) => ROW_STATUS[reviewRowStatus(a, c.preview)].counts && a.gpexeAthleteId).map((a) => String(a.gpexeAthleteId)));
+  return [...leaveOutOf(detail)].filter((id) => importable.has(id)).sort((a, b) => Number(a) - Number(b));
+}
+
+export function sameIds(a, b) {
+  const x = [...(a || [])].map(String).sort();
+  const y = [...(b || [])].map(String).sort();
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+function leftOutNames(c, ids) {
+  const byId = new Map((c.preview?.athletes || []).map((a) => [String(a.gpexeAthleteId), a]));
+  return ids.map((id) => { const a = byId.get(id); return a ? athleteName(c, a.athleteId, a.gpexeAthleteId) : "an athlete"; });
+}
+
+const SUBSET_ERROR_TEXT = {
+  try_again: "The review without them could not be made right now. Try again in a moment.",
+  no_importable_athlete: "Leaving these athletes out would leave nobody to import.",
+  invalid_exclusion: "One of the athletes can't be left out any more. Update the review and choose again.",
+  invalid_excluded_athlete: "One of the athletes can't be left out any more. Update the review and choose again.",
+  not_an_approver: "You may not approve imports for this team.",
+};
+
+function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
+  const names = leftOutNames(c, leave);
+  const sub = detail.subset && sameIds(detail.subset.ids, leave) ? detail.subset : null;
+  const ready = sub?.status === "ready";
+  const after = ready ? importableAthleteCount(sub.preview) : importN - leave.length;
+  const loading = sub?.status === "loading";
+  const failed = sub?.status === "error";
+  return `
+    <div class="gpexe-approve gpexe-approve-subset">
+      <p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
+        <span class="muted">Nothing of ${leave.length === 1 ? "this athlete" : "them"} is imported, and ${leave.length === 1 ? "they" : "they"} stay out unless GPEXE's data for this session changes.</span></p>
+      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
+      ${ready ? `<p class="muted" role="status">${escapeHtml(`Reviewed without them: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
+      ${after <= 0 && !loading ? `<p class="muted gpexe-approve-note">Nobody would be left to import. Untick an athlete to continue.</p>` : ""}
+      <div class="gpexe-approve-bar${after <= 0 ? " is-idle" : ""}">
+      ${changes ? `
+        <label class="gpexe-accept">
+          <input type="checkbox" data-gpexe-accept data-action="training-load-gpexe-accept" ${detail.acceptChanges ? "checked" : ""}>
+          <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
+        </label>
+      ` : ""}
+        ${ready
+    ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || after <= 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(after, "athlete", "athletes")}`}</button>`
+    : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : "Review without them"}</button>`}
+      </div>
+    </div>
+  `;
+}
+
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
   if (detail.outcome?.error?.code === "already_imported") return "";
@@ -2224,6 +2322,10 @@ function renderApproveHtml(c, detail, status) {
   if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;
   const importN = importableAthleteCount(c.preview);
+  // J20-B: with athletes ticked as "Leave out" the approval is the SUBSET's: it is reviewed first (one deliberate step that
+  // asks the server for the preview without them) and the button imports exactly that review.
+  const leave = leaveOutIds(c, detail);
+  if (leave.length) return renderSubsetApproveHtml(c, detail, leave, importN, changes);
   return `
     <div class="gpexe-approve">
       <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>

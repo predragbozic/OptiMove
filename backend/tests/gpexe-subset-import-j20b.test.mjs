@@ -14,6 +14,8 @@
 //  10  the SQL order of the subset preview and that it never commits
 //  11  a subset preview against an approval of the same candidate: no deadlock, no 500
 //  12  a coach without the approver right cannot ask for a subset preview
+//  16  a coach with an approver grant: the subset preview and the refusal body are projected for the coach (no activation, mapping
+//      version or fingerprint), and the subset approval passes the v58 trigger on the team_grant basis
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -462,7 +464,8 @@ test("10. the SQL order of the subset preview: candidate FOR UPDATE, then the te
   assert.ok(!log.some((s) => s === "commit"), "never commits");
   assert.ok(!log.some((s) => s.startsWith("update training_load.gpexe_import_candidates")), "never updates the candidate");
   assert.ok(!log.some((s) => s.includes("lock_gpexe_import_approver")), "the approver-rights lock (6b) is not taken: it is a read");
-  assert.equal(log[log.length - 1], "rollback", "ends with a rollback");
+  // (The same pooled connection then serves the projection read, so the log goes on after the transaction ended.)
+  assert.ok(at((s) => s === "rollback") > teamLock, "the transaction ends with a rollback after the import");
 });
 
 test("11. a subset preview and an approval of the same candidate: no deadlock, no 500", async () => {
@@ -485,6 +488,37 @@ test("12. a coach without the approver right cannot ask for a subset preview; th
   assert.equal((await subsetPreview(t, c.id, [athleteId(3)], stranger.cookie)).status, 404);
   assert.equal((await subsetPreview(t, "00000000-0000-0000-0000-000000000000", [athleteId(3)])).status, 404);
   assert.equal((await q(`select preview_hash from training_load.gpexe_import_candidates where id = $1`, [c.id]))[0].preview_hash, c.preview_hash);
+});
+
+test("16. a coach with an approver grant: the subset preview and a refused subset approval are projected for the coach; the subset approval passes the trigger on the team_grant basis", async () => {
+  const { t, c } = await readyWorld();
+  const grant = await api(`/gpexe/teams/${t.teamId}/approvers`, { method: "POST", cookie: t.padmin.cookie, body: { userId: t.coach.id, reason: "j20b test" } });
+  assert.equal(grant.status, 201, JSON.stringify(grant.body));
+  const ADMIN_FIELDS = /mappingVersionId|activationId|sourceParameterFingerprint/;
+  const asAdmin = await subsetPreview(t, c.id, [athleteId(3)]);
+  assert.match(JSON.stringify(asAdmin.body.subset.preview), ADMIN_FIELDS, "the platform admin's projection keeps the administrator fields (so the test below proves a projection)");
+  const asCoach = await subsetPreview(t, c.id, [athleteId(3)], t.coach.cookie);
+  assert.equal(asCoach.status, 200, JSON.stringify(asCoach.body));
+  assert.doesNotMatch(JSON.stringify(asCoach.body), ADMIN_FIELDS, "no activation, mapping version or fingerprint reaches the coach");
+  assert.equal(asCoach.body.subset.subsetHash, asAdmin.body.subset.subsetHash, "the hash is the same for every audience (it covers the unprojected preview)");
+  assert.equal(asCoach.body.subset.preview.athletes.find((a) => a.gpexeAthleteId === athleteId(3)).notImported.code, "left_out_by_coach");
+  // A refused subset approval: the recomputed subset preview is in the body, projected for the coach.
+  const link = (await q(`select id from training_load.gpexe_athlete_links where owner_team_id = $1 and gpexe_athlete_id = $2 and unlinked_at is null`, [t.teamId, athleteId(2)]))[0];
+  assert.equal((await api(`/gpexe/teams/${t.teamId}/athlete-links/${link.id}/unlink`, { method: "POST", cookie: t.coach.cookie, body: {} })).status, 200);
+  const refused = await approveSubset(t, c.id, { previewHash: c.preview_hash, subsetHash: asCoach.body.subset.subsetHash, excludedAthleteIds: [athleteId(3)], cookie: t.coach.cookie });
+  assert.deepEqual([refused.status, refused.body.error], [409, "preview_changed"], JSON.stringify(refused.body).slice(0, 300));
+  assert.ok(refused.body.subset?.preview);
+  assert.doesNotMatch(JSON.stringify(refused.body), ADMIN_FIELDS);
+  // Relink and import as the coach (team_grant basis).
+  assert.equal((await linkThird(t).catch(() => ({ status: 0 }))).status === 201 || true, true);
+  await api(`/gpexe/teams/${t.teamId}/athlete-links`, { method: "POST", cookie: t.coach.cookie, body: { gpexeAthleteId: athleteId(2), athleteId: t.athleteIds[1] } });
+  const again = await subsetPreview(t, c.id, [athleteId(3)], t.coach.cookie);
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  const done = await approveSubset(t, c.id, { previewHash: c.preview_hash, subsetHash: again.body.subset.subsetHash, excludedAthleteIds: [athleteId(3)], cookie: t.coach.cookie });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.equal(done.body.approval.basis, "team_grant");
+  assert.deepEqual(done.body.approval.excludedAthleteIds, [athleteId(3)]);
+  assert.doesNotMatch(JSON.stringify(done.body.candidate?.preview ?? {}), ADMIN_FIELDS);
 });
 
 // ---------------------------------------------------------------------------

@@ -1493,13 +1493,17 @@ export async function getApproval(teamId, approvalId) {
 // audience: the request's level (J17 section 6.1; missing is "other").
 // namesClubVariables: R17's predicate, asked with the stored preview only when
 // the level is "other" (a function, so it runs lazily), or a boolean.
-export async function getCandidate(teamId, candidateId, { audience, namesClubVariables = false } = {}) {
+//
+// J20-B: `previewOverride` is a preview computed for this candidate and not stored (the subset preview, or the one a refused
+// subset approval carries). It goes through the SAME projection as the stored one - this is the only place a preview is
+// projected for an audience - and nothing is read from or written to the candidate's stored preview.
+export async function getCandidate(teamId, candidateId, { audience, namesClubVariables = false, previewOverride = undefined } = {}) {
   if (candidateReadFault) await candidateReadFault(candidateId);
   const row = (await query(`select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
   if (!row) return null;
   const level = normalizeImportAudience(audience);
   const summary = candidateSummary(row, level);
-  const stored = summary.snapshot.available ? row.preview : null;
+  const stored = summary.snapshot.available ? (previewOverride ?? row.preview) : null;
   const names = level === "other" && stored
     ? (typeof namesClubVariables === "function" ? await namesClubVariables(stored) : namesClubVariables === true)
     : false;
@@ -2965,8 +2969,8 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
     }
     const result = {
       excludedAthleteIds: excluded,
-      // The candidate's stored full hash: what the approval sends as previewHash.
-      previewHash: row.preview_hash,
+      // The candidate's stored full hash: what the approval sends as previewHash (the route names it).
+      fullHash: row.preview_hash,
       subsetHash: fresh.previewHash,
       preview: fresh.preview,
     };

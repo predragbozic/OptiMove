@@ -22896,3 +22896,20 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 /* The platform admin's Home: the clubs list. */
 .coach-home-clubs h3 { margin: 20px 0 0; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .coach-home-clubs .coach-home-workspaces { margin-top: 8px; }
+
+/* J20-B: "Leave out" on a row of the session review, and the subset approval. A 44 px target; the label stays beside the box. */
+.gpexe-leave-out-cell { white-space: nowrap; }
+.gpexe-leave-out {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.gpexe-leave-out input[type="checkbox"] {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.gpexe-approve-subset > p { overflow-wrap: anywhere; }

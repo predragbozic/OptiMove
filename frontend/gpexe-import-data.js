@@ -380,7 +380,7 @@ export async function openGpexeCandidate(candidateId, render) {
   const generation = gx.generation;
   // An approval whose result is still not confirmed is shown again as such.
   const uncertain = gx.uncertain[candidateId] ? { ...gx.uncertain[candidateId] } : null;
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain };
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: [], subset: null };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.notice = "";
@@ -437,6 +437,49 @@ function rememberOutcome(candidateId, outcome) {
 // The approval, and what its answer means for the coach. The outcome kinds
 // are exactly the server's three states: imported, not imported (a refusal
 // before anything was written), and unknown (the COMMIT was not confirmed).
+// J20-B: the ticked athletes. A change of the set makes the subset review stale, so it is dropped (the coach reviews again).
+export function setGpexeLeaveOut(gpexeAthleteId, checked) {
+  const gx = g();
+  const detail = gx.detail;
+  if (!detail || detail.approving || detail.subset?.status === "loading") return false;
+  const id = String(gpexeAthleteId);
+  const set = new Set(detail.leaveOut || []);
+  if (checked) set.add(id); else set.delete(id);
+  const next = [...set].sort((a, b) => Number(a) - Number(b));
+  if (next.join(",") === (detail.leaveOut || []).join(",")) return false;
+  detail.leaveOut = next;
+  detail.subset = null;
+  return true;
+}
+
+// The deliberate Review step: ONE request that asks the server for the preview without the ticked athletes. It stores nothing
+// on the server; the answer is only used by the Import button that follows it.
+export async function reviewGpexeSubset(ids, render) {
+  const gx = g();
+  const detail = gx.detail;
+  const candidate = detail?.candidate;
+  if (!candidate || detail.approving || detail.subset?.status === "loading" || !ids.length) return;
+  const generation = gx.generation;
+  const sub = { status: "loading", ids: [...ids] };
+  detail.subset = sub;
+  render();
+  try {
+    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), { method: "POST", body: JSON.stringify({ excludedAthleteIds: ids }) });
+    if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
+    const s = answer?.subset;
+    if (!s || typeof s.subsetHash !== "string" || !s.preview) {
+      detail.subset = { status: "error", ids: [...ids], error: { code: "bad_answer" } };
+    } else {
+      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
+    }
+  } catch (error) {
+    if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
+    detail.subset = { status: "error", ids: [...ids], error: errorInfo(error) };
+  } finally {
+    if (generation === gx.generation && gx.detail === detail) render();
+  }
+}
+
 export async function approveGpexeCandidate({ acceptChanges }, render) {
   const gx = g();
   const detail = gx.detail;
@@ -444,6 +487,8 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
   if (!candidate || detail.approving) return;
   const generation = gx.generation;
   const checks = detail.outcome?.checks || 0;
+  // J20-B: a subset approval sends exactly the reviewed set and its hash; nothing else ever carries them.
+  const subset = detail.subset?.status === "ready" ? detail.subset : null;
   detail.approving = true;
   detail.verifying = false;
   detail.outcome = null;
@@ -451,9 +496,15 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
   try {
     const body = { previewHash: candidate.previewHash };
     if (acceptChanges) body.acceptChanges = true;
+    if (subset) {
+      body.previewHash = subset.previewHash;
+      body.excludedAthleteIds = subset.ids;
+      body.subsetHash = subset.subsetHash;
+    }
     const result = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/approve`), { method: "POST", body: JSON.stringify(body) });
     if (generation !== gx.generation || gx.detail !== detail) return;
     detail.outcome = { kind: "imported", result };
+    detail.subset = null;
     rememberOutcome(detail.id, detail.outcome);
     if (result.candidate) detail.candidate = result.candidate;
   } catch (error) {
@@ -461,13 +512,15 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     const info = errorInfo(error);
     if (isDefiniteRefusal(info)) {
       detail.outcome = { kind: "refused", error: info };
+      // The subset review belongs to a world that moved: it is made again, never reused.
+      if (subset) detail.subset = null;
       // The candidate may have moved on (imported by someone else, blocked,
       // expired): show it as it is now, so no stale Approve button remains.
       if (info.code !== "preview_changed") await refreshDetailCandidate(detail, generation);
     } else {
       // A lost answer, a gateway error, a 503: the import may or may not be
       // in the database. Never "nothing was imported".
-      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks };
+      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [] };
     }
     rememberOutcome(detail.id, detail.outcome);
   } finally {
