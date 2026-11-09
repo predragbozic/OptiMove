@@ -217,6 +217,28 @@ test("a failed clubs-summary read becomes the error state with a retry, never an
   } finally { globalThis.fetch = originalFetch; }
 });
 
+for (const outcome of ["answer", "failure"]) {
+  test(`a clubs-summary ${outcome} that lands after a workspace switch is dropped (the club's Home is not replaced)`, async () => {
+    state.currentUser.activeWorkspace = { type: "platform" };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      // The admin switches to a club workspace while the platform read is in flight.
+      state.currentUser.activeWorkspace = { type: "club", scopeId: "c1", label: "Alpha" };
+      return outcome === "answer"
+        ? { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ clubs: [{ id: "c1", name: "Alpha", teamCount: 1, athleteCount: 1 }] }), text: async () => "" }
+        : { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({}), text: async () => "{}" };
+    };
+    try {
+      let rendered = "not called";
+      await loadCoachHome({ renderCoachHome: (data) => { rendered = data; } });
+      assert.equal(rendered, "not called");
+    } finally {
+      globalThis.fetch = originalFetch;
+      state.currentUser.activeWorkspace = { type: "platform" };
+    }
+  });
+}
+
 test("platformHomeClubs keeps only well-formed rows and coerces the counts", async () => {
   const { platformHomeClubs } = await import("../coach-home-data.js");
   assert.deepEqual(platformHomeClubs({ clubs: [{ id: "a", name: "Alpha", teamCount: 2, athleteCount: "3" }, { name: "no id" }, null, { id: "b", teamCount: "x" }] }), [

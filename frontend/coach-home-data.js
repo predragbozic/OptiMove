@@ -48,13 +48,19 @@ export function platformHomeClubs(data) {
 export async function loadCoachHome({ setLoading, renderCoachHome, forceRefresh = false } = {}) {
   if (state.currentUser?.activeWorkspace?.type === "platform") {
     // The platform admin's Home lists the clubs from the light summary read (never the whole organization); a failed read
-    // leaves the page without the list.
+    // leaves the page without the list. An answer that lands after a workspace switch belongs to the old workspace and is
+    // dropped, as the roster read below drops one through getCurrentContextKey.
+    const contextKey = coachHomeContextKey();
+    let clubs;
     try {
-      return renderCoachHome({ rows: [], error: "", clubs: platformHomeClubs(await api("/api/organization/clubs-summary")) });
+      clubs = platformHomeClubs(await api("/api/organization/clubs-summary"));
     } catch {
+      if (coachHomeContextKey() !== contextKey) return undefined;
       // A failed read is never shown as "no clubs": the page says so and offers the same retry as the coach's Home.
       return renderCoachHome({ rows: [], error: "Clubs could not be loaded.", clubs: [] });
     }
+    if (coachHomeContextKey() !== contextKey) return undefined;
+    return renderCoachHome({ rows: [], error: "", clubs });
   }
   const contextKey = coachHomeContextKey();
   await loadCachedView({
