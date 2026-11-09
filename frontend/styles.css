@@ -23275,3 +23275,135 @@ body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle:focus-visible
     font-size: 13px;
   }
 }
+
+/* ==========================================================================
+   Design PR3: Home for the three roles, U1b, and the workspace switcher's name.
+   Visual only; built on the PR1 tokens.
+   ========================================================================== */
+
+/* The switcher's chevron is an icon (it was a 10 px text triangle). It only appears when the
+   switcher opens a menu. Sized for every surface that shows the switcher, the athlete app included. */
+.workspace-toggle-caret {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* On a narrow phone "Club · " / "Team · " (and " administration") give way to the name; the full label stays the
+   button's accessible name and title. */
+@media (max-width: 420px) {
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle-extra { display: none; }
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle { padding-block: var(--om-space-1); }
+  /* A long club or team name may take two lines inside the 44 px control instead of an ellipsis. */
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle-label {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+    text-align: left;
+  }
+}
+
+/* U1b: "Working in <workspace> as <role>" in sentence case. */
+.organization-scope-card {
+  gap: var(--om-space-1);
+  border-radius: var(--om-radius-lg);
+}
+.organization-scope-card span {
+  color: var(--om-accent-strong);
+  font-size: var(--om-text-sm);
+  font-weight: var(--om-weight-semibold);
+  text-transform: none;
+}
+.organization-scope-card strong {
+  font-size: var(--om-text-xl);
+  line-height: var(--om-leading-tight);
+  overflow-wrap: anywhere;
+}
+.organization-scope-card small {
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+}
+
+/* Home cards on the shared tokens: one radius and one quiet border. */
+.coach-home-panel {
+  gap: var(--om-space-3);
+  padding: var(--om-space-4);
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+}
+/* An empty day or library reads as an empty state, not a stray line of small text. */
+p.coach-home-day-note.muted,
+p.coach-home-library-note.muted:not([role="status"]) {
+  display: block;
+  padding: var(--om-space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--om-radius-md);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+  text-align: center;
+}
+
+/* The platform administrator's Home: the clubs as cards with their counts. */
+.coach-home-clubs h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+  margin: var(--om-space-5) 0 0;
+  color: var(--text);
+  font-size: var(--om-text-lg);
+  font-weight: var(--om-weight-semibold);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.coach-home-clubs-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--om-space-2);
+  border-radius: var(--om-radius-pill);
+  background: var(--accent-soft);
+  color: var(--om-accent-strong);
+  font-size: var(--om-text-xs);
+  font-weight: var(--om-weight-semibold);
+}
+.coach-home-clubs .coach-home-club-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: var(--om-space-3);
+  margin-top: var(--om-space-3);
+  border-top: 0;
+}
+.coach-home-clubs .coach-home-club-list > li { border-bottom: 0; }
+.coach-home-clubs .coach-home-club-list .coach-home-workspace {
+  min-height: 76px;
+  border: 1px solid var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+  background: var(--om-surface-raised);
+}
+.coach-home-clubs .coach-home-club-list .coach-home-workspace:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+.coach-home-clubs .coach-home-club-list .coach-home-workspace:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.coach-home-clubs .coach-home-club-list .coach-home-workspace-icon { color: #934c65; }
+.coach-home .coach-home-workspaces + p.muted,
+.coach-home > p.muted {
+  padding: var(--om-space-5) var(--om-space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--om-radius-md);
+  background: var(--surface-soft);
+  text-align: center;
+}

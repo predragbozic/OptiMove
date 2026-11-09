@@ -341,9 +341,10 @@ function plural(n, noun) {
 // The platform admin's Home: the clubs, each opening in Settings.
 function renderPlatformClubsHtml(clubs) {
   return `<section class="coach-home-clubs" aria-labelledby="coachHomeClubsTitle">
-    <h3 id="coachHomeClubsTitle">Clubs</h3>
+    <h3 id="coachHomeClubsTitle">Clubs <span class="coach-home-clubs-count">${escapeHtml(String(clubs.length))}</span></h3>
     <ul class="coach-home-workspaces coach-home-club-list">${clubs.map((club) => `<li>
       <button class="coach-home-workspace" type="button" data-action="home-open-club" data-club-id="${escapeAttr(club.id)}">
+        <svg class="coach-home-workspace-icon" viewBox="0 0 24 24" aria-hidden="true">${WORKSPACE_ICONS.club}</svg>
         <span class="coach-home-workspace-label"><strong>${escapeHtml(club.name)}</strong><small>${escapeHtml(`${plural(club.teamCount, "team")} · ${plural(club.athleteCount, "athlete")}`)}</small></span>
         ${ICON_CHEVRON_RIGHT}
       </button></li>`).join("")}</ul>

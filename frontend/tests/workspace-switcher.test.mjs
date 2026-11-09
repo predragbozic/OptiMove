@@ -77,7 +77,9 @@ test("1. a single available workspace shows its name with no dropdown affordance
   renderWorkspaceSwitcher();
 
   assert.equal(workspaceToggleEl.hidden, false);
-  assert.ok(workspaceToggleEl.innerHTML.includes("Platform administration"));
+  assert.equal(workspaceToggleEl.innerHTML.replace(/<[^>]+>/g, ""), "Platform administration");
+  assert.match(workspaceToggleEl.innerHTML, /Platform<span class="workspace-toggle-extra"> administration<\/span>/, "a narrow phone keeps \"Platform\"");
+  assert.equal(workspaceToggleEl.getAttribute("aria-label"), "Workspace: Platform administration");
   assert.equal(workspaceToggleEl.dataset.action, undefined, "a single workspace must not be given a toggle action");
   assert.equal(workspacePanelEl.hidden, true);
 });
@@ -205,6 +207,9 @@ test("12. after a workspace is revoked and a fallback takes over, the switcher r
   // because the previously active club workspace was revoked.
   state.currentUser = { activeWorkspace: teamWorkspace, availableWorkspaces: [teamWorkspace] };
   renderWorkspaceSwitcher();
-  assert.ok(workspaceToggleEl.innerHTML.includes("Team · U18 Boys"));
+  // The prefix is its own span (a narrow phone hides it); the visible text and the accessible name stay whole.
+  assert.equal(workspaceToggleEl.innerHTML.replace(/<[^>]+>/g, ""), "Team · U18 Boys");
+  assert.match(workspaceToggleEl.innerHTML, /<span class="workspace-toggle-extra">Team · <\/span>U18 Boys/);
+  assert.equal(workspaceToggleEl.getAttribute("aria-label"), "Workspace: Team · U18 Boys");
   assert.equal(workspaceToggleEl.dataset.action, undefined, "only one workspace remains, so no dropdown is needed");
 });
