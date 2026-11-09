@@ -4177,6 +4177,7 @@ function setStatus(text) {
   els.status.textContent = text;
   els.status.dataset.state = statusState(text);
   els.status.setAttribute("aria-label", `Status: ${text}`);
+  els.status.title = `Status: ${text}`;
 }
 
 // hotfix/athlete-home-mobile-layout: els.connectionIndicator only exists on

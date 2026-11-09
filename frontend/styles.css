@@ -18604,7 +18604,7 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
     font-size: 0;
     line-height: 0;
     border-radius: 50%;
-    background: #1f9d6b;
+    background: #157a52;
   }
   body:not(.athlete-mode):not(.login-mode) .topbar-actions > .workspace-menu .workspace-panel {
     right: auto;

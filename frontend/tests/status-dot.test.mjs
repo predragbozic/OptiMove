@@ -23,7 +23,8 @@ test("setStatus writes the text, data-state and an aria-label that contains the 
   assert.match(fn, /els\.status\.textContent = text/);
   assert.match(fn, /els\.status\.dataset\.state = statusState\(text\)/);
   assert.match(fn, /setAttribute\("aria-label", `Status: \$\{text\}`\)/);
-  assert.match(read("index.html"), /id="apiStatus" data-state="busy" role="status" aria-label="Status: Connecting"/);
+  assert.match(fn, /els\.status\.title = `Status: \$\{text\}`/, "a long-press / hover hint names the state too");
+  assert.match(read("index.html"), /id="apiStatus" data-state="busy" role="status" aria-label="Status: Connecting" title="Status: Connecting"/);
 });
 
 test("the phone rule turns only the ok state into a dot of at least 10 px; desktop and other states are untouched", () => {
