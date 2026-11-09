@@ -126,10 +126,11 @@ sent, the answer never says "nothing was written". A repeat after an unknown out
 screen shows *Result not confirmed · Update the review again*. A real-route test covers a failed or lost `COMMIT`. **Other writers:** U5's undo and any
 other writer that holds the team lock must not then touch a candidate row (that would be team → candidate); the recorded-SQL-order test includes them.
 
-**Total budget:** the route has a wall-clock
-bound like the approval (client-side bound with the connection released with an error on timeout), because the per-statement bounds do not bound the
-whole transaction; it holds the team lock for the length of the preview (seconds for a session with drills), during which a check start, a link write,
-a roster command and an approval wait up to their own lock bounds. The screen does not call it while a check of the team is running.
+**Bounds:** the route has the approval's bounds - the server-side `lock_timeout`, `statement_timeout` and `idle_in_transaction_session_timeout` of
+`setImportTransactionBounds` and the bounded COMMIT with the connection released with an error on no answer; it adds **no** extra whole-request
+client-side bound (the approval has none either; the open risk is recorded in `docs/ai/CURRENT_STATE.md`). It holds the team lock for the length of
+the preview (seconds for a session with drills), during which a check start, a link write, a roster command and an approval wait up to their own
+lock bounds. **One recompute per team in flight per instance** (a second call answers `409 try_again` before it takes a connection). The screen does not call it while a check of the team is running.
 
 **Rate limit.** No durable storage exists for an interval, so it is **per instance, in memory** (limit stated: after a deploy or across instances there
 can be more rounds, still bounded by the team lock). It applies only to **repeated calls on the same candidate with the same stored hash**; a call after
