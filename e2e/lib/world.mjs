@@ -77,10 +77,13 @@ export async function startWorld({ log = false, fakeSource = null } = {}) {
     if (fakeSource) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --import=${pathToFileURL(path.join(here, "fake-source-preload.mjs")).href}`.trim();
       env.E2E_FAKE_VISIBLE_TEAMS = (fakeSource.visibleTeams || []).join(",");
+      if (fakeSource.sessions) env.E2E_FAKE_SESSIONS = fakeSource.sessions;
+      // Writing imports is a server-side switch; only a world that asks for sessions turns it on.
+      if (fakeSource.sessions) env.GPEXE_IMPORT_APPLY_ENABLED = "true";
     }
     child = spawn(process.execPath, ["src/server.js"], { cwd: path.join(ROOT, "backend"), env, stdio: log ? "inherit" : "ignore" });
     await waitForHealth(baseUrl, child);
-    return { baseUrl, databaseName: db.name, accounts: seeded.accounts, ids: seeded.ids, stop };
+    return { baseUrl, databaseName: db.name, databaseUrl: db.url, accounts: seeded.accounts, ids: seeded.ids, stop };
   } catch (error) {
     await stop();
     throw error;
