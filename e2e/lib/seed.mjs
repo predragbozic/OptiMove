@@ -57,12 +57,16 @@ export async function seedWorld(databaseUrl) {
     await client.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [otherCoach.id, teamB]);
     await setWorkspace(otherCoach.id, "team", teamB);
 
+    const otherClubAdmin = await account("other_club_admin", "Other Club Admin Example", "other.club.admin@example.invalid");
+    await client.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [otherClubAdmin.id, clubB]);
+    await setWorkspace(otherClubAdmin.id, "club", clubB);
+
     const athlete = await account("athlete", "Ana Example", "athlete@example.invalid");
     await client.query(`update public.athletes set user_id = $1 where id = $2`, [athlete.id, athleteIds[0]]);
     await setWorkspace(athlete.id, "athlete", null);
 
     return {
-      accounts: [platformAdmin, clubAdmin, coach, otherCoach, athlete],
+      accounts: [platformAdmin, clubAdmin, coach, otherCoach, otherClubAdmin, athlete],
       ids: { clubA, clubB, teamA, teamA2, teamB, athleteIds },
     };
   } finally {

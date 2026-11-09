@@ -9,7 +9,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { generateKeyEntry } from "../../backend/src/sourceCredentialCrypto.js";
 import { createDisposableDatabase, dropDisposableDatabase } from "../../backend/tests/support/disposable-db.mjs";
 import { bootstrapLegacySnapshot } from "../../backend/tests/support/legacy-bootstrap.mjs";
 import { runMigrations } from "../../backend/src/migrate.js";
@@ -46,7 +47,7 @@ async function waitForHealth(baseUrl, child, timeoutMs = 60_000) {
   throw new Error("the server did not become healthy in time");
 }
 
-export async function startWorld({ log = false } = {}) {
+export async function startWorld({ log = false, fakeSource = null } = {}) {
   const baseDatabaseUrl = process.env.DATABASE_URL;
   if (!baseDatabaseUrl) throw new Error("DATABASE_URL must point at a local PostgreSQL server (it is only used to create a disposable optimove_tests_* database; see backend/.env.example)");
   const snapshotSql = fs.readFileSync(SNAPSHOT, "utf8");
@@ -70,7 +71,13 @@ export async function startWorld({ log = false } = {}) {
     const port = await freePort();
     const baseUrl = `http://localhost:${port}`;
     const env = { ...process.env, DATABASE_URL: db.url, PORT: String(port), NODE_ENV: "development" };
-    for (const key of Object.keys(env)) if (/^(SUPABASE|RENDER|GPEXE_API_TOKEN|SOURCE_CREDENTIAL_KEYS)/.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (/^(SUPABASE|RENDER|GPEXE_API_TOKEN|SOURCE_CREDENTIAL_)/.test(key)) delete env[key];
+    // A throwaway key for the stored source credential (never a real one) and, on request, the fake GPEXE source.
+    env.SOURCE_CREDENTIAL_KEYS = generateKeyEntry(1);
+    if (fakeSource) {
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --import=${pathToFileURL(path.join(here, "fake-source-preload.mjs")).href}`.trim();
+      env.E2E_FAKE_VISIBLE_TEAMS = (fakeSource.visibleTeams || []).join(",");
+    }
     child = spawn(process.execPath, ["src/server.js"], { cwd: path.join(ROOT, "backend"), env, stdio: log ? "inherit" : "ignore" });
     await waitForHealth(baseUrl, child);
     return { baseUrl, databaseName: db.name, accounts: seeded.accounts, ids: seeded.ids, stop };
