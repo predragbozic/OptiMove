@@ -27,7 +27,9 @@ import { generateSnapshot } from "../../tools/legacy-schema/generate.mjs";
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL = process.env.DATABASE_URL;
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LAST = GPEXE_TEST_MIGRATIONS[12]; // training_activity_v4_canonical_functions: legacy tables AND later migrations on both sides
+const LAST_EARLY = GPEXE_TEST_MIGRATIONS[12];
+const LAST = LAST_EARLY;
+const LAST_FINAL = GPEXE_TEST_MIGRATIONS[GPEXE_TEST_MIGRATIONS.length - 1]; // training_activity_v4_canonical_functions: legacy tables AND later migrations on both sides
 let tmp;
 let migrationsRoot;
 let preDb;
@@ -90,7 +92,11 @@ async function rowCounts(url) {
     const out = {};
     for (const t of tables) {
       if (t.table_name === "schema_migrations" || t.table_name === "migration_cutovers" || t.table_name.startsWith("optimove_disposable")) continue;
-      out[`${t.table_schema}.${t.table_name}`] = Number((await client.query(`select count(*) from "${t.table_schema}"."${t.table_name}"`)).rows[0].count);
+      const cols = (await client.query(`select column_name from information_schema.columns where table_schema = $1 and table_name = $2 and data_type not in ('uuid','timestamp with time zone','timestamp without time zone') order by ordinal_position`, [t.table_schema, t.table_name])).rows.map((r) => `"${r.column_name}"`);
+      const n = Number((await client.query(`select count(*) from "${t.table_schema}"."${t.table_name}"`)).rows[0].count);
+      // The content of the rows without generated ids and clock columns, not only their number.
+      const h = cols.length && n ? (await client.query(`select md5(string_agg(x, '|' order by x)) as h from (select (${cols.map((c) => `coalesce(${c}::text,'~')`).join(` || ',' || `)}) as x from "${t.table_schema}"."${t.table_name}") q`)).rows[0].h : null;
+      out[`${t.table_schema}.${t.table_name}`] = { n, h };
     }
     return out;
   } finally {
@@ -98,7 +104,10 @@ async function rowCounts(url) {
   }
 }
 
-test("a snapshot of a real pg_dump at migration K, plus the runner for the migrations after K, equals the database the existing path builds (catalog and seed rows)", async () => {
+async function scenario(LAST, tag) {
+  for (const db of [preDb, refDb]) if (db) await db.drop().catch(() => {});
+  if (freshDb) await dropDisposableDatabase({ name: freshDb.name, adminUrl: freshDb.adminUrl, baseDatabaseUrl: ORIGINAL }).catch(() => {});
+  preDb = refDb = freshDb = undefined;
   const upTo = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(LAST) + 1);
   preDb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL, label: "boot_pre", migrations: upTo });
   const env = { PATH: process.env.PATH };
@@ -114,6 +123,7 @@ test("a snapshot of a real pg_dump at migration K, plus the runner for the migra
   freshDb = await createDisposableDatabase({ prefix: "legacy", label: "boot", baseDatabaseUrl: ORIGINAL });
   const boot = await bootstrapLegacySnapshot({ databaseUrl: freshDb.url, snapshotSql: sql, migrationsRoot, lastMigration: LAST });
   assert.equal(boot.recorded, upTo.length);
+  assert.ok(boot.replayed.statements > 0, "seed statements were replayed");
   await runMigrations({ databaseUrl: freshDb.url, migrationsRoot });
 
   refDb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL, label: "boot_ref" });
@@ -125,6 +135,14 @@ test("a snapshot of a real pg_dump at migration K, plus the runner for the migra
     assert.ok(!missing.length && !extra.length, `catalog ${key}: ${missing.length} missing, ${extra.length} extra\nmissing: ${missing.slice(0, 3).join("\n         ")}\nextra:   ${extra.slice(0, 3).join("\n         ")}`);
   }
   assert.deepEqual(await rowCounts(freshDb.url), await rowCounts(refDb.url), "the seed rows of the migrations (replayed up to K, applied by the runner after K) equal the reference");
+}
+
+test("a snapshot of a real pg_dump at an early migration K, plus the runner for the migrations after K, equals the database the existing path builds (catalog and seed row content)", async () => {
+  await scenario(LAST_EARLY, "early");
+});
+
+test("the same at the LAST migration of the curated list (seed guards of v34+ replaced later in the chain: the replay must pass them and the seed content must still equal)", async () => {
+  await scenario(LAST_FINAL, "final");
 });
 
 test("the runner refuses a repository migration whose file changed after it was recorded (the checksums the bootstrap wrote are the real ones)", async () => {

@@ -111,6 +111,20 @@ test("5. the output is deterministic and carries the hash of its input and its o
   assert.match(a.sql, /^-- OptiMove legacy schema snapshot \(GENERATED/);
 });
 
+test("4c. the last migration is proved by indexes and triggers too, not only by tables", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-mini-"));
+  try {
+    for (const f of fs.readdirSync(miniMigrations)) fs.copyFileSync(path.join(miniMigrations, f), path.join(tmp, f));
+    fs.writeFileSync(path.join(tmp, "004_mini_d.sql"), "create index items_extra_idx on training_load.items (team_id);\n");
+    const inv = buildInventory(tmp);
+    assert.throws(() => generateSnapshot({ dumpText, inventory: inv, lastMigration: "004_mini_d.sql" }), (e) => e instanceof GeneratorRefusal && e.findings.some((f) => f.rule === "migration-missing-from-dump" && /items_extra_idx/.test(f.detail)));
+    const withIdx = `${dumpText}\nCREATE INDEX items_extra_idx ON training_load.items USING btree (team_id);\n`;
+    assert.throws(() => generateSnapshot({ dumpText: withIdx, inventory: inv, lastMigration: LAST }), (e) => e instanceof GeneratorRefusal && e.findings.some((f) => f.rule === "migration-newer-than-last" && /items_extra_idx/.test(f.detail)));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("6b. secret assignments are caught in the other spellings: a type with parentheses, other names, dollar quotes and concatenation", () => {
   const bad = [
     "CREATE FUNCTION public.f() RETURNS text LANGUAGE plpgsql AS $$ declare v_signing_key varchar(64) := 'abcd1234'; begin return 1; end $$;\n",

@@ -16,6 +16,7 @@ export function buildInventory(migrationsDir) {
     files: files.length,
     schemas: new Set(),          // schemas a migration creates: wholly v2
     objects: new Set(),          // kind:schema.name of tables, sequences, types, views, functions a migration creates
+    droppedNames: new Set(),     // bare names of triggers/indexes some migration drops
     indexes: new Set(),          // schema.name
     triggers: new Set(),         // table:name  (a trigger name is per table)
     policies: new Set(),
@@ -30,7 +31,7 @@ export function buildInventory(migrationsDir) {
   const alters = [];
   for (const f of files) {
     const { statements } = splitStatements(fs.readFileSync(path.join(migrationsDir, f), "utf8"));
-    const entry = { file: f, tables: [] };
+    const entry = { file: f, tables: [], indexes: [], triggers: [] };
     inv.perFile.push(entry);
     for (const s of statements) {
       const drop = /^drop\s+table\s+(?:if\s+exists\s+)?([\w".]+)/i.exec(s.text.trim());
@@ -38,6 +39,8 @@ export function buildInventory(migrationsDir) {
         const n = drop[1].replace(/"/g, "").toLowerCase();
         inv.dropped.add(n.includes(".") ? n : `public.${n}`);
       }
+      const dropObj = /^drop\s+(trigger|index)\s+(?:concurrently\s+)?(?:if\s+exists\s+)?([\w".]+)/i.exec(s.text.trim());
+      if (dropObj) inv.droppedNames.add(dropObj[2].replace(/"/g, "").toLowerCase().split(".").pop().slice(0, 63));
       const d = describe(s.text);
       const where = `${f}:${s.line}`;
       if (d.kind === "schema") inv.schemas.add(d.name);
@@ -46,8 +49,8 @@ export function buildInventory(migrationsDir) {
         created.push(d);
         if (d.kind === "table") entry.tables.push(`${d.schema}.${d.name}`);
       }
-      else if (d.kind === "index") inv.indexes.add(`${d.schema}.${d.name}`);
-      else if (d.kind === "trigger") inv.triggers.add(`${d.schema}.${d.table}:${d.name}`);
+      else if (d.kind === "index") { inv.indexes.add(`${d.schema}.${d.name}`); entry.indexes.push(`${d.schema}.${String(d.name).slice(0, 63)}`); }
+      else if (d.kind === "trigger") { inv.triggers.add(`${d.schema}.${d.table}:${d.name}`); entry.triggers.push(`${d.schema}.${d.table}:${String(d.name).slice(0, 63)}`); }
       else if (d.kind === "policy") inv.policies.add(`${d.schema}.${d.table}:${d.name}`);
       else if (d.kind === "alter-table") alters.push({ d, where });
       else if (d.kind === "other-dml" && /^do\s/i.test(s.text.trim())) inv.unanalysed.push(`${where} DO block: ${s.text.replace(/\s+/g, " ").slice(0, 60)}`);

@@ -53,7 +53,7 @@ export class GeneratorRefusal extends Error {
 // last one creates must be in the dump (unless a later migration drops it), and
 // no table of a later migration may be. A wrong `lastMigration` is a refusal,
 // never a silent mix.
-export function checkLastMigration({ inventory, lastMigration, dumpTables }) {
+export function checkLastMigration({ inventory, lastMigration, dumpTables, dumpIndexes = new Set(), dumpTriggers = new Set() }) {
   const files = inventory.perFile.map((p) => p.file);
   const at = files.indexOf(lastMigration);
   if (at === -1) throw new GeneratorRefusal(`the last migration "${lastMigration}" is not a file of the migrations directory`);
@@ -64,6 +64,19 @@ export function checkLastMigration({ inventory, lastMigration, dumpTables }) {
       const present = dumpTables.has(t);
       if (i <= at && !present) problems.push({ rule: "migration-missing-from-dump", line: 0, detail: `${entry.file}: ${t}` });
       if (i > at && present) problems.push({ rule: "migration-newer-than-last", line: 0, detail: `${entry.file}: ${t}` });
+    }
+    // Not only tables: a migration that adds just an index or a trigger is proved the same way.
+    // (The limit, stated: a column, a function body replaced with OR REPLACE and the work of a DO block are not proved.)
+    for (const [list, have, what] of [[entry.indexes ?? [], dumpIndexes, "index"], [entry.triggers ?? [], dumpTriggers, "trigger"]]) {
+      for (const x of list) {
+        // Only an object that exactly one migration creates and none drops proves anything.
+        const times = inventory.perFile.filter((e) => (what === "index" ? e.indexes : e.triggers)?.includes(x)).length;
+        const bare = x.split(":").pop().split(".").pop().toLowerCase();
+        if (times !== 1 || inventory.droppedNames.has(bare)) continue;
+        const present = have.has(x);
+        if (i <= at && !present) problems.push({ rule: "migration-missing-from-dump", line: 0, detail: `${entry.file}: ${what} ${x}` });
+        if (i > at && present) problems.push({ rule: "migration-newer-than-last", line: 0, detail: `${entry.file}: ${what} ${x}` });
+      }
     }
   });
   if (problems.length) throw new GeneratorRefusal(`the dump does not match the last migration "${lastMigration}": ${problems.length} table(s), first: ${problems[0].detail}`, problems);
@@ -82,6 +95,8 @@ export function generateSnapshot({ dumpText, inventory, lastMigration }) {
   const drop = (reason) => dropped.set(reason, (dropped.get(reason) ?? 0) + 1);
   const warnings = [];
   const dumpTables = new Set();
+  const dumpIndexes = new Set();
+  const dumpTriggers = new Set();
   const keptExtensions = [];
   const droppedExtensions = [];
   let extensionsSchema = false;
@@ -113,6 +128,8 @@ export function generateSnapshot({ dumpText, inventory, lastMigration }) {
       continue;
     }
     if (d.schema && isPlatform(d.schema)) { drop("platform-schema"); continue; }
+    if (d.kind === "index") dumpIndexes.add(`${d.schema}.${d.name}`);
+    else if (d.kind === "trigger") dumpTriggers.add(`${d.schema}.${d.table}:${d.name}`);
     switch (d.kind) {
       case "table":
         dumpTables.add(`${d.schema}.${d.name}`);
@@ -151,7 +168,7 @@ export function generateSnapshot({ dumpText, inventory, lastMigration }) {
   // The platform puts its extensions in the `extensions` schema; application
   // objects (a default calling extensions.uuid_generate_v4()) may refer to it.
   const needsExtensionsSchema = extensionsSchema || keptExtensions.length > 0;
-  const at = checkLastMigration({ inventory, lastMigration, dumpTables });
+  const at = checkLastMigration({ inventory, lastMigration, dumpTables, dumpIndexes, dumpTriggers });
   for (const u of inventory.unanalysed) warnings.push(`informational, a migration step the tool cannot analyse (any change it makes to a legacy table is not checked): ${u}`);
   for (const a of inventory.alterations) warnings.push(`informational, a migration changes a legacy definition in place: ${a}`);
   if (droppedExtensions.length) warnings.push(`extensions dropped (not in a stock PostgreSQL): ${[...new Set(droppedExtensions)].sort().join(", ")}`);

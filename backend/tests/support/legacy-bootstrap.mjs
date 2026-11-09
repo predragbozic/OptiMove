@@ -31,6 +31,15 @@ export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrat
   const replayed = { files: 0, statements: 0, skippedUnreplayable: 0 };
   try {
     await client.query(snapshotSql);
+    // The snapshot's preamble empties search_path for its own session; the seeds are
+    // replayed the way the runner would run them.
+    await client.query("reset search_path");
+    // A seed of an early migration omits columns that a later migration added as NOT NULL
+    // (and filled with an UPDATE that is replayed too). The snapshot has the final NOT NULLs,
+    // so they are lifted for the replay and restored after it; restoring fails loudly when a
+    // row is still null.
+    const notNull = replaySeeds ? (await client.query(`select n.nspname, c.relname, a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace where a.attnotnull and a.attnum > 0 and not a.attisdropped and c.relkind = 'r' and a.attidentity = '' and n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg\\_%' and not exists (select 1 from pg_index i where i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey))`)).rows : [];
+    for (const r of notNull) await client.query(`alter table "${r.nspname}"."${r.relname}" alter column "${r.attname}" drop not null`);
     for (const file of files.slice(0, at + 1)) {
       const abs = path.join(migrationsRoot, file);
       const buffer = fs.readFileSync(abs);
@@ -43,11 +52,25 @@ export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrat
       replayed.skippedUnreplayable += splitStatements(buffer.toString("utf8")).statements.filter((s) => /^(?:do|select)\s/i.test(s.text.trim())).length;
       const data = splitStatements(buffer.toString("utf8")).statements.filter((s) => describe(s.text).kind === "data" && !/^(?:copy|truncate)\b/i.test(s.text.trim()));
       if (data.length) replayed.files += 1;
-      for (const s of data) {
-        await client.query(s.text);
-        replayed.statements += 1;
+      if (data.length) {
+        // The snapshot already carries the FINAL guard triggers (a seed-window guard that
+        // a later migration replaced, actor guards ...); a seed of an earlier migration
+        // cannot pass them. The replay therefore runs with triggers off, which needs a
+        // superuser; the session setting is reset right after.
+        const su = await client.query("select current_setting('is_superuser') as su");
+        if (su.rows[0].su !== "on") throw new Error("replaying the seeds needs a superuser on the disposable server (session_replication_role)");
+        await client.query("set session_replication_role = replica");
+        try {
+          for (const s of data) {
+            await client.query(s.text);
+            replayed.statements += 1;
+          }
+        } finally {
+          await client.query("reset session_replication_role");
+        }
       }
     }
+    for (const r of notNull) await client.query(`alter table "${r.nspname}"."${r.relname}" alter column "${r.attname}" set not null`);
   } finally {
     await client.end();
   }
