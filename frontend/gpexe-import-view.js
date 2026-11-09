@@ -1849,7 +1849,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
     return `
       <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
         <p class="gpexe-link-pair"><strong>${escapeHtml(maskGpexeIds() ? gpexeAthleteLabel(id) : `GPEXE athlete ${id}`)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
-        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? After you find new sessions and approve the import, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When you approve the import, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
         <p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
         <div class="gpexe-link-actions">
@@ -2068,7 +2068,7 @@ function reviewRowHtml(r, c, choices) {
       ${cells}
       <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}</td>
     </tr>${link ? `
-    <tr class="gpexe-review-link" role="row"><td colspan="${VALUE_COLUMNS.length + 3}" role="cell">${link}</td></tr>` : ""}`;
+    <tr class="gpexe-review-link" role="presentation"><td colspan="${VALUE_COLUMNS.length + 3}" role="presentation">${link}</td></tr>` : ""}`;
 }
 
 function reviewTableOf(rows, c, choices) {

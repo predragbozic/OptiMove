@@ -22736,14 +22736,6 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     font-size: 0.8rem;
   }
 }
-.gpexe-review-rows td[data-label="Values"] {
-  white-space: nowrap;
-}
-@media (max-width: 760px) {
-  .gpexe-review-rows td[data-label="Values"] {
-    white-space: normal;
-  }
-}
 
 /* J20-A2: filter chips, the folded "fine" group and the dialog heading on a phone. */
 .gpexe-chips {

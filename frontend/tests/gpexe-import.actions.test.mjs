@@ -1221,7 +1221,7 @@ test("link: the confirmation shows the exact GPEXE id and the athlete's full nam
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /<p class="gpexe-link-pair"><strong>GPEXE athlete 104<\/strong> → <strong>Dario Petrov Example<\/strong><\/p>/);
   // The consequence covers this session AND every session imported later.
-  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? After you find new sessions and approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
+  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? The review updates right away\. When you approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
   assert.match(html, /<p>You can unlink it before an import is approved\. Unlinking doesn(?:'|&#039;)t change results that are already imported: if the link turns out wrong after an import, those results can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
   assert.ok(!/Future GPEXE sessions/.test(html), "not only 'future' sessions");
   assert.ok(!/move their results|correct wrongly/.test(html), "no promise of a move or correct function");
