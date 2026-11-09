@@ -14,6 +14,9 @@
     "test:backend:shared": "node scripts/test-runner.mjs --project backend --kind shared",
     "test:frontend:fast": "node scripts/test-runner.mjs --preset frontend-fast",
     "test:gpexe": "node scripts/test-runner.mjs --preset gpexe",
-    "test:pr": "node scripts/test-runner.selftest.mjs && node scripts/test-runner.mjs --preset pr"
+    "test:pr": "node scripts/test-runner.selftest.mjs && node scripts/test-runner.mjs --preset pr",
+    "e2e:install": "npm --prefix e2e ci && npx --prefix e2e playwright install chromium",
+    "e2e:demo": "node e2e/demo.mjs",
+    "test:e2e": "node scripts/test-runner.mjs --preset e2e"
   }
 }

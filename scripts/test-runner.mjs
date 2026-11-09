@@ -38,6 +38,8 @@ const EVENT_PREFIX = "@@optimove-test@@ ";
 const PROJECTS = {
   backend: { dir: "backend", kinds: ["unit", "disposable", "shared", "schema-clone"] },
   frontend: { dir: "frontend", kinds: ["unit"] },
+  // T3: browser flows against the real server on a disposable database (e2e/, its own package).
+  e2e: { dir: "e2e", kinds: ["e2e"] },
 };
 
 // Name families for --group. A group filters file names only; the kind of
@@ -51,6 +53,7 @@ const GROUPS = {
 const PRESETS = {
   "backend-fast": [{ project: "backend", kind: "unit" }],
   "frontend-fast": [{ project: "frontend", kind: "unit" }],
+  e2e: [{ project: "e2e", kind: "e2e" }],
   gpexe: [
     { project: "backend", group: "gpexe", kind: "unit" },
     { project: "backend", group: "gpexe", kind: "disposable" },
@@ -62,7 +65,7 @@ const PRESETS = {
   ],
 };
 
-const DEFAULT_TIMEOUT_MS = { unit: 5 * 60_000, disposable: 15 * 60_000, shared: 15 * 60_000, "schema-clone": 15 * 60_000 };
+const DEFAULT_TIMEOUT_MS = { e2e: 10 * 60_000, unit: 5 * 60_000, disposable: 15 * 60_000, shared: 15 * 60_000, "schema-clone": 15 * 60_000 };
 const DEFAULT_KNOWN_NO_EXIT_IDLE_MS = 10_000;
 // Kept identical to backend/tests/support/disposable-db.mjs (the runner's
 // self-test compares the two): the runner cannot import that module without
@@ -240,6 +243,7 @@ export function classifyFile({ project, file, testsDirAbs, cache, manifest }) {
   const disposable = closureTexts.some((t) => /create\s+database/i.test(t));
   const schemaClone = /LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL/.test(text);
   let kind = "unit";
+  if (project === "e2e") kind = "e2e";
   if (project === "backend") kind = schemaClone ? "schema-clone" : disposable ? "disposable" : needsDb ? "shared" : "unit";
   const override = manifest?.kindOverrides?.[file];
   if (override) kind = override;
@@ -610,7 +614,7 @@ function buildChildEnv({ kind, db }) {
   env.DOTENV_CONFIG_PATH = runtime.emptyEnvFile;
   env.OPTIMOVE_TEST_RUNNER = "1";
   env.OPTIMOVE_TEST_KIND = kind;
-  if (kind === "disposable" || kind === "schema-clone") {
+  if (kind === "disposable" || kind === "schema-clone" || kind === "e2e") {
     env.DATABASE_URL = db.adminUrl;
     env.TEST_DATABASE_ADMIN_URL = db.adminUrl;
   }
@@ -624,7 +628,7 @@ export function resolveDatabaseTargets({ kind, sharedDbName, backendDirAbs, envV
   const fileEnv = readEnvFile(path.join(backendDirAbs, ".env"));
   const raw = envValues.DATABASE_URL || fileEnv.DATABASE_URL;
   const parsed = parseSafeLocalDatabaseUrl(raw, "DATABASE_URL");
-  if (kind === "disposable") {
+  if (kind === "disposable" || kind === "e2e") {
     const adminUrl = withDatabase(parsed, "postgres");
     return { adminUrl, description: `disposable databases on ${describeTarget(parsed, "postgres")} (each file creates and drops its own optimove_tests_* database; the configured database "${parsed.dbName}" is never opened)` };
   }
