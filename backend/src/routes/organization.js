@@ -407,6 +407,30 @@ function globalRoleForRoleHint(roleHint) {
   return null;
 }
 
+// The platform admin's Home: one light row per active club (name, active teams, active athletes) and nothing about a
+// person. Anyone who is not an active platform administrator, in any workspace, gets the same 404 as an unknown route.
+router.get("/clubs-summary", async (req, res, next) => {
+  try {
+    // Authorization follows the ACTIVE workspace: a platform role held while another workspace is active changes nothing.
+    const { workspace: activeWorkspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    if (!(activeWorkspace?.type === "platform" && isPlatformAdministrator(req.authz))) return res.status(404).json({ error: "Not found", path: `${req.baseUrl}${req.path}` });
+    const { rows } = await query(
+      `select c.id, c.name,
+              (select count(*)::int from public.teams t where t.club_id = c.id and coalesce(t.is_active, true)) as team_count,
+              (select count(distinct m.athlete_id)::int
+                 from public.athlete_memberships m
+                 join public.athletes a on a.id = m.athlete_id
+                where m.club_id = c.id and m.status = 'active' and coalesce(a.is_active, true)) as athlete_count
+         from public.clubs c
+        where coalesce(c.is_active, true)
+        order by lower(c.name), c.id`);
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ clubs: rows.map((r) => ({ id: r.id, name: r.name, teamCount: r.team_count, athleteCount: r.athlete_count })) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post("/users", async (req, res, next) => {
   try {
     // Frontend hides this form from anyone without club/platform scope, but
