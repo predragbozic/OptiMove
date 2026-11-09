@@ -642,11 +642,19 @@ builds a **world** per test file and runs the real application on it:
     sees *Import 3 athletes* and imports: the candidate is `imported`, three participants, nine results (the whole session and two drills each) and every
     written value has its source provenance. Mutations: leaving the team's import switch off, and asserting another athlete than the one linked, both
     fail the test.
+  * **9, roster decisions on a team session** (`roster-decisions.test.mjs`, one world per width): the imported session of scenario 7 (three of the team's twelve
+    athletes measured; the seed's memberships start on 2026-01-01 so the roster of a November session lists the whole team) is opened from Training load > the
+    day > the session > *Roster*: "12 on the roster · 9 need a state". The coach sets *Participated · no device data* for one athlete (saved at once), *Did not
+    participate* with a reason for another, then selects the remaining seven and applies one group state (on a phone through *Set state...*). The screen says
+    "Everybody has a state"; the server's roster agrees (3 measured, 1 did not participate, 8 participated, nobody unknown). Another team's coach gets the
+    byte-identical 404 for the session and for a session that does not exist.
+  * **Chromium:** `launch()` uses Playwright's own build unless `E2E_CHROMIUM_EXECUTABLE` names another Chromium binary (for a machine whose installed build differs
+    from the one `playwright@1.56.1` expects); nothing else changes.
   * Mutation evidence: putting the coach in the platform workspace fails three of scenario 4; making the other club's admin an admin of our club fails
     1c, 1d and 3b. Authorization follows the **active workspace**, so a platform role held while the team workspace is active changes nothing (the
     product's rule, not a gap).
   * Accounts: `platform_admin`, `club_admin`, `team_coach`, `other_team_coach` (another club's coach), `other_club_admin` and `athlete`.
-* **Not yet built:** a CI job, roster decisions on a team session, 360 / 375 px, the Builder flow on a phone, driving Create and Test / Bind through the forms (Connect is driven through its form).
+* **Not yet built:** a CI job, 360 / 375 px, the Builder flow on a phone, driving Create and Test / Bind through the forms (Connect is driven through its form).
 
 ### 8.3 Candidates for later consolidation (not removed in T1)
 
