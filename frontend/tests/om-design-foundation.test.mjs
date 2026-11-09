@@ -6,7 +6,7 @@ import { readFileSync, readdirSync } from "node:fs";
 // adopter in PR1, the Settings tab bar.
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 const { renderSettingsNavHtml } = await import("../navigation.js");
-const { revealActiveTab } = await import("../om-tabs.js");
+const { revealActiveTab, refreshTabFades } = await import("../om-tabs.js");
 const { state } = await import("../state.js");
 
 const here = new URL("..", import.meta.url);
@@ -75,6 +75,15 @@ test("data-fade marks the side that has more tabs, and a row that fits has none"
   assert.equal(fits.attrs["data-fade"], undefined);
 });
 
+test("a width change marks the fade again: a row that now fits loses it", () => {
+  const r = row({ width: 300, scrollWidth: 900, active: { offset: 10, width: 90 } });
+  revealActiveTab(root(r));
+  assert.equal(r.attrs["data-fade"], "end");
+  r.clientWidth = 900;
+  refreshTabFades(root(r));
+  assert.equal(r.attrs["data-fade"], undefined);
+});
+
 test("revealActiveTab leaves a row that fits, a row without an active tab and a missing root alone", () => {
   const fits = row({ width: 900, scrollWidth: 900, active: { offset: 800, width: 90 } });
   revealActiveTab(root(fits));
@@ -86,7 +95,7 @@ test("revealActiveTab leaves a row that fits, a row without an active tab and a 
 });
 
 test("styles.css defines the tokens and components once, with a visible focus, after the old Settings tab rules", () => {
-  for (const token of ["--space-1", "--space-7", "--text-xs", "--text-2xl", "--radius-lg", "--success-soft", "--warning-soft", "--info-soft", "--focus-ring", "--tap-target"]) {
+  for (const token of ["--om-space-1", "--om-space-7", "--om-text-xs", "--om-text-2xl", "--om-radius-lg", "--om-success-soft", "--om-warning-soft", "--om-info-soft", "--om-focus-ring", "--om-tap-target"]) {
     assert.equal(css.split(`${token}:`).length - 1, 1, `${token} is defined exactly once`);
   }
   for (const cls of [".om-page-header", ".om-card", ".om-empty", ".om-btn", ".om-badge", ".om-tabs", ".om-eyebrow"]) assert.ok(css.includes(`${cls} {`), cls);
@@ -114,7 +123,26 @@ const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
 const token = (name) => css.match(new RegExp(`\\n  ${name}: (#[0-9a-f]{6});`))[1];
 
 test("component colors meet WCAG AA contrast", () => {
-  const pairs = [["--muted", "--surface"], ["--muted", "--surface-soft"], ["--text", "--surface-soft"], ["--accent-strong", "--surface"], ["--accent-strong", "--accent-soft"], ["--success", "--success-soft"], ["--warning", "--warning-soft"], ["--danger", "--danger-soft"], ["--info", "--info-soft"]];
+  const pairs = [["--muted", "--surface"], ["--muted", "--surface-soft"], ["--text", "--surface-soft"], ["--om-accent-strong", "--surface"], ["--om-accent-strong", "--accent-soft"], ["--om-success", "--om-success-soft"], ["--om-warning", "--om-warning-soft"], ["--danger", "--om-danger-soft"], ["--om-info", "--om-info-soft"], ["--danger", "--surface"]];
   for (const [fg, bg] of pairs) assert.ok(ratio(token(fg), token(bg)) >= 4.5, `${fg} on ${bg}: ${ratio(token(fg), token(bg)).toFixed(2)}`);
   assert.ok(ratio("#ffffff", token("--accent")) >= 4.5, "white on the primary button");
+});
+
+// Code review of PR1 (HIGH): a new :root token named like an older rule's var(--name, fallback)
+// switched that fallback off (the Imports batch results changed colour). Every PR1 token is
+// therefore --om- prefixed, appears nowhere before the PR1 block, and is defined once.
+test("PR1 tokens never redefine a token or switch on an existing var() fallback", () => {
+  const start = css.indexOf("OptiMove design foundation (PR1)");
+  assert.ok(start > 0);
+  const before = css.slice(0, start);
+  const tokens = [...css.slice(start).matchAll(/\n  (--[a-z0-9-]+):/g)].map((m) => m[1]);
+  assert.ok(tokens.length > 20);
+  const js = readdirSync(new URL("..", import.meta.url)).filter((f) => /\.(js|html)$/.test(f)).map((f) => readFileSync(new URL(f, new URL("..", import.meta.url)), "utf8")).join("\n");
+  for (const t of tokens) {
+    assert.match(t, /^--om-/, `${t} carries the --om- prefix`);
+    assert.doesNotMatch(before, new RegExp(`${t}(?![a-z0-9-])`), `${t} appears before PR1`);
+    assert.doesNotMatch(js, new RegExp(`${t}(?![a-z0-9-])`), `${t} is used by a module`);
+  }
+  // The two names that collided stay undefined, so the Imports rules keep their own fallbacks.
+  for (const old of ["--success", "--warning"]) assert.doesNotMatch(css, new RegExp(`\\n\\s*${old}:`));
 });

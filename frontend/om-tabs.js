@@ -18,8 +18,21 @@ function markFade(row) {
   else row.removeAttribute("data-fade");
 }
 
+// A width change (rotation, a resized window) can make a row fit or stop fitting without a
+// scroll: one window listener, installed once, marks every row on screen again.
+let resizeInstalled = false;
+export function refreshTabFades(doc = globalThis.document) {
+  doc?.querySelectorAll?.(".om-tabs").forEach(markFade);
+}
+function installResize() {
+  if (resizeInstalled || typeof globalThis.addEventListener !== "function") return;
+  resizeInstalled = true;
+  globalThis.addEventListener("resize", () => refreshTabFades(), { passive: true });
+}
+
 export function revealActiveTab(root) {
   if (!root?.querySelectorAll) return;
+  installResize();
   root.querySelectorAll(".om-tabs").forEach((row) => {
     const active = row.querySelector('.om-tab[aria-current="page"], .om-tab.is-active');
     if (active && row.scrollWidth > row.clientWidth) {
