@@ -10879,7 +10879,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 }
 
-/* ============================================================
+/* =====================================================
    Tests module (Phase 2 - WELLNESS)
    ============================================================ */
 
@@ -22868,6 +22868,30 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 /* A coach's Settings hero ("My team"): one column, long names and emails wrap. */
 .organization-hero-coach { grid-template-columns: minmax(0, 1fr); }
 .organization-hero-coach :is(h3, p) { overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  /* U4: on a phone (up to 640 px) "Online" is a 12 px dot in the top right corner of the header (level with the title), not a row of its own;
+     every other state keeps the text pill. The state is in the aria-label. */
+  body:not(.athlete-mode):not(.login-mode) .topbar { position: relative; }
+  /* keep the title text clear of the dot */
+  body:not(.athlete-mode):not(.login-mode) .topbar > div:first-child { padding-right: 20px; }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {
+    position: absolute;
+    pointer-events: none;
+    top: 8px;
+    right: 4px;
+    grid-column: auto;
+    min-width: 0;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    line-height: 0;
+    border-radius: 50%;
+    background: #157a52;
+  }
+}
 
 /* The platform admin's Home: the clubs list. */
 .coach-home-clubs h3 { margin: 20px 0 0; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
