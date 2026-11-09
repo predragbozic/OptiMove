@@ -3,8 +3,10 @@ import { chromium } from "playwright";
 
 export const WIDTHS = { desktop: 1280, phone: 390 };
 
+// E2E_CHROMIUM_EXECUTABLE points at a Chromium build other than the one this Playwright version expects.
 export async function launch() {
-  return chromium.launch();
+  const executablePath = process.env.E2E_CHROMIUM_EXECUTABLE || undefined;
+  return chromium.launch(executablePath ? { executablePath } : {});
 }
 
 // A page already signed in as one of the world's demo accounts (its session cookie), at a given width.
