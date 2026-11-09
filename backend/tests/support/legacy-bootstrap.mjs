@@ -40,6 +40,11 @@ export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrat
     // row is still null.
     const notNull = replaySeeds ? (await client.query(`select n.nspname, c.relname, a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace where a.attnotnull and a.attnum > 0 and not a.attisdropped and c.relkind = 'r' and a.attidentity = '' and n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg\\_%' and not exists (select 1 from pg_index i where i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey))`)).rows : [];
     for (const r of notNull) await client.query(`alter table "${r.nspname}"."${r.relname}" alter column "${r.attname}" drop not null`);
+    // The same for table CHECK constraints: an early seed can be valid only after a later
+    // migration's UPDATE. They are dropped for the replay and re-added afterwards (re-adding
+    // validates every row, so a row that is still invalid fails loudly).
+    const checks = replaySeeds ? (await client.query(`select n.nspname, c.relname, k.conname, pg_get_constraintdef(k.oid) as def from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace where k.contype = 'c' and c.relkind = 'r' and n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg\\_%'`)).rows : [];
+    for (const r of checks) await client.query(`alter table "${r.nspname}"."${r.relname}" drop constraint "${r.conname}"`);
     for (const file of files.slice(0, at + 1)) {
       const abs = path.join(migrationsRoot, file);
       const buffer = fs.readFileSync(abs);
@@ -71,6 +76,19 @@ export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrat
       }
     }
     for (const r of notNull) await client.query(`alter table "${r.nspname}"."${r.relname}" alter column "${r.attname}" set not null`);
+    // A seed row that only a skipped trigger would have completed (published_at of an activated
+    // version) stays as the seed left it: the constraint comes back NOT VALID, enforced for new
+    // rows, and is reported - never silently relaxed.
+    replayed.checksNotValidated = [];
+    for (const r of checks) {
+      try {
+        await client.query(`alter table "${r.nspname}"."${r.relname}" add constraint "${r.conname}" ${r.def}`);
+      } catch (e) {
+        if (e.code !== "23514") throw e;
+        await client.query(`alter table "${r.nspname}"."${r.relname}" add constraint "${r.conname}" ${r.def} not valid`);
+        replayed.checksNotValidated.push(`${r.nspname}.${r.relname}.${r.conname}`);
+      }
+    }
   } finally {
     await client.end();
   }

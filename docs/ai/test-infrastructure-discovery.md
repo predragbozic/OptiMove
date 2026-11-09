@@ -550,6 +550,26 @@ subtracted by parsing the migrations).
   database the existing path builds. CHECK constraints are compared through a normalisation, because a dump and restore deparse them
   differently (the known note on v32). Mutation evidence for the key guards.
 
+**The real snapshot (2026-11-09).** The owner generated `backend/tests/support/legacy-schema.sql` offline from the verified production dump
+(dump sha256 `9da41939…ced63`, last migration `202611051000_training_load_v57_session_undo.sql`, 22,359 lines, sha256
+`bd40e39b40005b01dab57a777c72410f57764b727e83c9c34d0c2a1609958d1c`) and it is committed byte for byte with its `.sha256`; the sha256 equal to the
+tool's own output is the proof it is the file the tool wrote (the raw dump and the tool's warnings, 33 `DO`-block notes and 4 in-place legacy
+definition changes, stay with the owner and the *Rukovodilac*; all informative). Evidence on this snapshot
+(`backend/tests/legacy-schema-real-snapshot.test.mjs`): the bootstrap applies it, records the migrations up to v57, the real runner applies the
+rest (v58 `app_error_events` at the time), and the app starts on that database with `GET /api/organization` answering 200 for a platform admin
+(the demo database's 500 came from the missing legacy columns this snapshot has).
+
+* **Two constraints come back `NOT VALID` after the seed replay, by design.** `tests.test_versions.test_versions_check3` and
+  `tests.test_battery_versions.test_battery_versions_check3`: the `tests_v42` seed sets a version `'active'` and a trigger set `published_at`;
+  triggers do not run while the seeds are replayed (`session_replication_role = replica`), so the seeded row has no `published_at` and the
+  final CHECK refuses it. The bootstrap drops the CHECKs for the replay and re-adds each one; where the re-add fails (`23514`) it comes back
+  `NOT VALID` (enforced for every new row, no data invented) and the helper returns the list as `replayed.checksNotValidated`. The test pins that
+  list **exactly**: any other constraint that cannot be re-validated fails the test by name. The snapshot itself also carries one constraint
+  that production has `NOT VALID` (`training_load.metric_write_requests.metric_write_requests_request_key_length`); it is kept as it is.
+* **For the T3 seed (reference and required fields found while bootstrapping):** the legacy `public.users` requires `first_name` and
+  `last_name` (no default) besides `email`, `full_name`, `display_name` and `password_hash`; the test asserts both are still required. The first
+  T3 task stays: run the app on this database and list the reference data it reads.
+
 ### 8.2 T3 — Playwright (plan only; nothing installed in T1)
 
 - **Scope**: the flows unit tests cannot prove — sign-in and workspace switch; the coach's
