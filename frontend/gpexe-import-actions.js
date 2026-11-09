@@ -30,6 +30,7 @@ import {
   confirmTeamMapping,
   finishTeamMappingResults,
   linkGpexeAthlete,
+  recomputeGpexeReview,
   loadGpexeTeam,
   openGpexeCandidate,
   openTeamMapping,
@@ -229,6 +230,16 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       return true;
     }
     gx.linkConfirm = { gpexeAthleteId, athleteId, athleteName };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-review-update") {
+    if (gx.detail?.updating || gx.linkBusy) return true;
+    await recomputeGpexeReview(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-review-filter") {
+    gx.reviewFilter = action.dataset.filter || "";
     renderTrainingLoad();
     return true;
   }

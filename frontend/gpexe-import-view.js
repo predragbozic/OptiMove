@@ -351,6 +351,16 @@ function sessionTitle(c) {
   return label.replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
 }
 
+// The session's name in plain words for the review's heading: "GPEXE FULL
+// TRAINING" reads "Full training". The raw GPEXE name stays in an
+// administrator's Technical details.
+function niceSessionName(c) {
+  let label = sessionTitle(c).replace(/^GPEXE\s+/i, "").replace(/\s+\d{1,2}\.\d{1,2}\.(?:\d{2,4})?$/, "").trim();
+  if (!label || label === "session") label = "Session";
+  if (label === label.toUpperCase()) label = label.toLowerCase();
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function athleteName(candidate, athleteId, gpexeAthleteId) {
   const name = athleteId ? candidate.athletes?.[athleteId]?.name : "";
   if (name) return name;
@@ -1546,10 +1556,11 @@ function renderTeamMappingHtml(gx, teams) {
 function renderLastLinkHtml(gx) {
   const l = gx.lastLink;
   if (!l) return "";
+  const current = Boolean(gx.detail?.id && gx.recomputedAtLinkSeq?.[gx.detail.id] === gx.linkSeq);
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong> Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.</p>
+      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>
@@ -1566,7 +1577,7 @@ function renderCandidateDetailHtml(gx, status) {
   const c = detail.candidate;
   // Not closable while an approval runs: its answer must be seen.
   const busy = detail.approving || detail.verifying || undoBusy(gx) ? "disabled" : "";
-  const title = c ? sessionTitle(c) : "GPEXE session";
+  const title = c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session";
   return `
     <div class="builder-athlete-overlay gpexe-detail-overlay">
       <button type="button" class="builder-athlete-backdrop" data-action="training-load-gpexe-close" aria-label="Close" ${busy}></button>
@@ -1596,6 +1607,7 @@ function renderCandidateBodyHtml(c, detail, status) {
       <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
       ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
+    ${adminTechHtml([["GPEXE session name", c.label]])}
     ${renderApprovalRecordHtml(c)}
     ${renderUndoneNoteHtml(c, state.trainingLoad.gpexe)}
     ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data is too old. Find new sessions to see it again." : "No preview."}</p>` : `
@@ -1931,7 +1943,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
       </summary>
       ${a.gps?.reason ? `<p class="muted">${escapeHtml(a.gps.reason.message)}</p>` : ""}
       ${allLeftOut ? `<p class="muted">All values left out: participation is recorded, but no value is imported for this athlete. The reasons are listed under Left out.</p>` : ""}
-      ${unlinked ? renderLinkHtml(a, c, unlinkedChoices) : ""}
+      ${unlinked ? `<p class="muted">Link this athlete in the Session review above.</p>` : ""}
       ${shownResults.map((r) => `
         <div class="gpexe-result">
           <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}${v3 && !(r.values || []).some((v) => v.value !== null && v.value !== undefined) ? " · no value imported (see Left out)" : ""}</p>
@@ -1951,7 +1963,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
 const ROW_STATUS = Object.freeze({
   importable: { label: "Importable", note: "Ready to import.", counts: true },
   participation: { label: "Participation only", note: "Present in this session; no value is imported.", counts: true },
-  needs_link: { label: "Needs a link", note: "Not imported now. Link this GPEXE athlete (open its row under Details by athlete), then find new sessions again.", counts: false },
+  needs_link: { label: "Needs a link", note: "Not imported until you link this athlete.", counts: false },
   blocked: { label: "Blocks the session", note: "The whole session waits until this is fixed.", counts: false },
   not_imported: { label: "Not imported", note: "", counts: false },
   nothing_new: { label: "Nothing new", note: "Already in OptiMove; nothing new to import.", counts: false },
@@ -1992,42 +2004,108 @@ function changesByAthlete(preview) {
   return m;
 }
 
-function renderReviewTableHtml(preview, c) {
-  const athletes = preview.athletes || [];
-  const noRecord = preview.teamAthletesWithoutGpexeRecord || [];
-  if (!athletes.length && !noRecord.length) return "";
+// The three values the team's mappings fill and a coach reads first; every
+// other variable lives under Details by athlete. A source field's key (v3) or
+// the old metric key (v2) tells which value is which.
+const VALUE_COLUMNS = Object.freeze([
+  { label: "Duration", keys: ["athlete_session.total_time", "gpexe_time_min"], helper: "duration", unit: "min" },
+  { label: "Total distance", keys: ["athlete_session.total_distance", "gpexe_total_distance"], helper: "distance", unit: "m" },
+  { label: "Max running speed", keys: ["athlete_session.max_v", "gpexe_max_speed"], helper: "maxSpeed", unit: "km/h" },
+]);
+
+// What the import would write for the whole session, or "-" (never a zero for
+// a value that is missing). A GPEXE athlete not linked yet shows the helper
+// values the server read from the session (they help to find the athlete).
+function valueCellText(row, col, c) {
+  const whole = (row.a?.results || []).filter((r) => r.level !== "drill" && WRITING_OUTCOMES.has(r.outcome));
+  for (const r of whole) {
+    const v = (r.values || []).find((x) => (col.keys.includes(x.sourceMetricKey) || col.keys.includes(x.metricKey)) && x.value !== null && x.value !== undefined);
+    if (v) return fmtValue(v.value, v.unit || col.unit);
+  }
+  if (row.status === "needs_link") {
+    const h = c?.helperValues?.[row.a.gpexeAthleteId];
+    if (h && h[col.helper] !== null && h[col.helper] !== undefined) return fmtValue(h[col.helper], col.unit);
+  }
+  return "-";
+}
+
+const PROBLEM_KIND = { needs_link: "not_linked", no_record: "no_data", blocked: "review", not_imported: "review" };
+const REVIEW_ORDER = ["blocked", "needs_link", "not_imported", "no_record", "importable", "participation", "nothing_new"];
+
+function unlinkedChoicesFor(preview, c) {
+  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
+  const choices = (preview.teamAthletesWithoutGpexeRecord || [])
+    .filter((a) => !linked.has(String(a.athleteId)))
+    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
+  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
+  for (const o of choices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  return choices;
+}
+
+function reviewRowsOf(preview, c) {
   const changes = changesByAthlete(preview);
-  const rows = athletes.map((a) => {
+  const rows = (preview.athletes || []).map((a) => {
     const status = reviewRowStatus(a, preview);
     const info = ROW_STATUS[status];
     const n = changes.get(a.athleteId ? `a:${a.athleteId}` : `g:${a.gpexeAthleteId}`) || 0;
     const note = status === "not_imported" ? `Not imported: ${a.notImported?.message || "open its row under Details by athlete"}` : info.note;
-    const values = status === "importable" ? plural(valuesToImport(a), "value", "values") : "-";
-    return { name: athleteName(c, a.athleteId, a.gpexeAthleteId), status, label: info.label, note, values, changes: n };
+    return { a, name: athleteName(c, a.athleteId, a.gpexeAthleteId), status, label: info.label, note, changes: n };
   });
-  for (const t of noRecord) rows.push({ name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, values: "-", changes: 0 });
-  // Rows that need attention come first; the server's order is kept inside a group.
-  const ORDER = ["blocked", "needs_link", "not_imported", "importable", "participation", "nothing_new", "no_record"];
-  rows.sort((x, y) => ORDER.indexOf(x.status) - ORDER.indexOf(y.status));
+  for (const t of preview.teamAthletesWithoutGpexeRecord || []) rows.push({ a: null, name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, changes: 0 });
+  rows.sort((x, y) => REVIEW_ORDER.indexOf(x.status) - REVIEW_ORDER.indexOf(y.status));
+  return rows;
+}
+
+function reviewRowHtml(r, c, choices) {
+  const ready = r.status === "importable" || r.status === "participation";
+  const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked";
+  const cells = VALUE_COLUMNS.map((col) => `<td data-label="${escapeAttr(col.label)}" role="cell">${escapeHtml(r.a ? valueCellText(r, col, c) : "-")}</td>`).join("");
+  const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices) : "";
+  return `
+    <tr class="gpexe-review-row is-${r.status}" role="row">
+      <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
+      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+      ${cells}
+      <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${link}</td>
+    </tr>`;
+}
+
+function reviewTableOf(rows, c, choices) {
+  return `<div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows" role="table">
+    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Athlete</th><th scope="col" role="columnheader">Status</th>${VALUE_COLUMNS.map((col) => `<th scope="col" role="columnheader">${escapeHtml(col.label)}</th>`).join("")}<th scope="col" role="columnheader">What happens</th></tr></thead>
+    <tbody role="rowgroup">${rows.map((r) => reviewRowHtml(r, c, choices)).join("")}</tbody>
+  </table></div>`;
+}
+
+const REVIEW_CHIPS = [["needs", "Needs a person"], ["not_linked", "Not linked"], ["no_data", "No data"], ["review", "Needs review"], ["all", "All"]];
+
+function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.detail) {
+  const rows = reviewRowsOf(preview, c);
+  if (!rows.length) return "";
+  const choices = unlinkedChoicesFor(preview, c);
+  const problem = rows.filter((r) => PROBLEM_KIND[r.status]);
+  const fine = rows.filter((r) => !PROBLEM_KIND[r.status]);
+  const counts = { needs: problem.length, not_linked: 0, no_data: 0, review: 0, all: rows.length };
+  for (const r of problem) counts[PROBLEM_KIND[r.status]] += 1;
+  const gx = state.trainingLoad.gpexe;
+  let filter = REVIEW_CHIPS.some(([k]) => k === gx.reviewFilter) && (counts[gx.reviewFilter] > 0 || gx.reviewFilter === "all") ? gx.reviewFilter : (counts.needs ? "needs" : "all");
+  const shown = filter === "all" ? problem : problem.filter((r) => filter === "needs" || PROBLEM_KIND[r.status] === filter);
   const n = importableAthleteCount(preview);
   const partOnly = rows.filter((r) => r.status === "participation").length;
-  const needLink = rows.filter((r) => r.status === "needs_link").length;
+  const needLink = counts.not_linked;
+  const chips = REVIEW_CHIPS.filter(([k]) => k === "all" || counts[k] > 0).map(([k, label]) => `<button type="button" class="gpexe-chip${filter === k ? " is-active" : ""}" data-action="training-load-gpexe-review-filter" data-filter="${k}" aria-pressed="${filter === k}">${escapeHtml(label)} <span class="gpexe-chip-count">${counts[k]}</span></button>`).join("");
+  const updating = detail?.updating ? `<p class="muted" role="status">Updating the review...</p>` : "";
+  const updateError = detail?.updateError ? `
+      <div class="gpexe-warning" role="alert"><p>${escapeHtml(detail.updateError.status === 429 || detail.updateError.code === "try_again" ? "The review could not be updated right now. Try again in a moment." : "The link was made, but the review could not be updated.")}</p>
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-review-update" ${detail.updating ? "disabled" : ""}>Update the review</button></div>` : "";
   return `
     <section class="gpexe-review-table" aria-label="Session review">
       <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
-      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete is", "athletes are")} not imported now: after linking, find new sessions again.` : ""}</p>
-      <div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows" role="table">
-        <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Athlete</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Values</th><th scope="col" role="columnheader">What happens</th></tr></thead>
-        <tbody role="rowgroup">
-          ${rows.map((r) => `
-            <tr class="gpexe-review-row is-${r.status}" role="row">
-              <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
-              <td data-label="Status" role="cell"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
-              <td data-label="Values" role="cell">${escapeHtml(r.values)}</td>
-              <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table></div>
+      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
+      ${updating}${updateError}
+      <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
+      ${shown.length ? reviewTableOf(shown, c, choices) : ""}
+      ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices)}</details>` : ""}
     </section>
   `;
 }

@@ -877,7 +877,7 @@ test("blocked sessions: the coach reads why and what to do; the server's message
     assert.match(block, k.step, k.code);
     assert.ok(!block.includes(k.message) && !block.includes(k.code), `${k.code}: no server message or code in the main text`);
     assert.ok(html.includes(`<dt>Server message</dt><dd>${k.message.replaceAll('"', "&quot;")}</dd>`), `${k.code}: server message in Technical details`);
-    assert.match(html, /aria-label="GPEXE OFFICIAL MATCH"/, "no raw timestamp in the session title");
+    assert.match(html, /aria-label="Official match · \d\d\.\d\d\.\d{4} \d\d:\d\d"/, "a plain-words title and a DD.MM.YYYY date, no raw timestamp");
   }
 });
 
@@ -1175,7 +1175,7 @@ test("link: no athlete is preselected, the session's values only help to find th
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
   assert.equal(linkPosts().length, 0, "choosing an athlete does not link");
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /<details class="gpexe-athlete "\s+open>[\s\S]*gpexe-link-confirm/, "the athlete stays open while linking");
+  assert.match(html, /class="gpexe-review-row is-needs_link"[\s\S]*gpexe-link-confirm/, "the confirmation sits in the athlete's own row while linking");
   assert.match(html, /data-action="training-load-gpexe-link-cancel"[^>]*>Cancel<\/button>/);
   assert.match(html, /data-action="training-load-gpexe-link-confirm"[^>]*>Confirm link<\/button>/);
 });
@@ -2527,9 +2527,9 @@ test("J20-A2: one row per athlete with one status each; the button names the ath
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.deepEqual(reviewRows(html).map((r) => r.status), ["needs_link", "importable", "no_record"], "attention first");
-  assert.equal(reviewRows(html)[1].name, "Ana Example");
-  assert.match(html, /1 athlete is ready to import\. 1 athlete is not imported now: after linking, find new sessions again\./);
+  assert.deepEqual(reviewRows(html).map((r) => r.status), ["needs_link", "no_record", "importable"], "attention first");
+  assert.equal(reviewRows(html)[2].name, "Ana Example");
+  assert.match(html, /1 athlete is ready to import\. 1 athlete needs a link first\./);
   assert.match(html, /data-action="training-load-gpexe-approve"[^>]*>Import 1 athlete<\/button>/);
   assert.ok(!/Approve import/.test(html), "the old label is gone");
 });
@@ -2555,7 +2555,7 @@ test("J20-A2: an athlete whose values are all left out is 'Participation only' a
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.deepEqual(reviewRows(html).map((r) => r.status), ["participation", "no_record"]);
+  assert.deepEqual(reviewRows(html).map((r) => r.status), ["no_record", "participation"]);
   assert.match(html, /1 athlete is ready to import \(1 participation only\)\./);
   assert.match(html, />Import 1 athlete<\/button>/);
 });
@@ -2653,4 +2653,109 @@ test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows n
     if (admin) assert.match(dialog, /<dd>preview_changed<\/dd>/);
     else assert.ok(!/preview_changed/.test(dialog) && dialog.includes(sentence), "no code in a coach's outcome");
   }
+});
+
+// J20-A2, H1: link from the row, then ONE server recompute replaces the review.
+function recomputedAfterLink() {
+  const d = linkDetail();
+  const a104 = { ...d.preview.athletes[1], athleteId: "ath-3", notImported: null,
+    results: [{ externalId: "athlete_session:4:full", level: "full", drillIndex: null, outcome: "created", values: [{ ...V3_DISTANCE, value: "5230", sourceValue: "5230", previous: null, change: "new" }] }] };
+  return { ...d, previewHash: "c".repeat(64), preview: { ...d.preview, athletes: [d.preview.athletes[0], a104], teamAthletesWithoutGpexeRecord: [d.preview.teamAthletesWithoutGpexeRecord[0]] } };
+}
+function previewPosts() {
+  return fetchCalls.filter((c) => c.url.endsWith("/preview") && c.method === "POST");
+}
+function serverWithRecompute(onPreview, extra = {}) {
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }), onApprove: () => ({ status: 200, body: { result: { import: { counts: { created: 1 } } }, candidate: linkDetail() } }), ...extra });
+  return async (call) => (call.url.endsWith("/preview") && call.method === "POST" ? onPreview(call) : base(call));
+}
+async function linkRow104() {
+  queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
+  await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
+  await act("training-load-gpexe-link-confirm");
+}
+
+test("J20-A2 H1: Link to... sits in the athlete's row; after the link ONE recompute replaces the review (new hash, row in its new kind); the coach is never told to find new sessions", async () => {
+  resetState();
+  installFetchMock(serverWithRecompute(() => ({ status: 200, body: { candidate: recomputedAfterLink() } })));
+  await openImports();
+  await openCandidate();
+  let html = renderTrainingLoadCoachHtml();
+  const row = html.slice(html.indexOf('class="gpexe-review-row is-needs_link"'), html.indexOf("</tr>", html.indexOf('class="gpexe-review-row is-needs_link"')));
+  assert.match(row, /data-gpexe-link-select="104"/, "the chooser is in the row");
+  assert.match(row, /data-action="training-load-gpexe-link"[^>]*>Link\.\.\.<\/button>/);
+  assert.equal((html.match(/data-gpexe-link-select="104"/g) || []).length, 1, "one chooser, not two");
+  await linkRow104();
+  assert.equal(linkPosts().length, 1);
+  assert.equal(previewPosts().length, 1, "exactly one recompute");
+  html = renderTrainingLoadCoachHtml();
+  assert.ok(!/is-needs_link/.test(html), "no row needs a link any more");
+  assert.match(html, />Import 2 athletes<\/button>/);
+  const dlg = html.slice(html.indexOf('role="dialog"'));
+  const hit = dlg.match(/.{0,120}find new sessions.{0,30}/is);
+  assert.equal(hit, null, `no 'find new sessions' in the review: ${hit?.[0]}`);
+  assert.ok(!/Athlete links changed after this review was made/.test(html), "the review is current");
+  await approve();
+  assert.equal(approveCalls()[0].body.previewHash, "c".repeat(64), "the approval carries the recomputed hash");
+});
+
+test("J20-A2 H1: a recompute that is refused leaves the review as it was and offers Update the review; the fallback is the old warning", async () => {
+  resetState();
+  let calls = 0;
+  installFetchMock(serverWithRecompute(() => { calls += 1; return calls === 1 ? { status: 429, body: { error: "too_many_requests", message: "Slow down." } } : { status: 200, body: { candidate: recomputedAfterLink() } }; }));
+  await openImports();
+  await openCandidate();
+  await linkRow104();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /The review could not be updated right now\. Try again in a moment\./);
+  assert.match(html, /data-action="training-load-gpexe-review-update"[^>]*>Update the review<\/button>/);
+  assert.match(html, /is-needs_link/, "the review on screen is the old one");
+  assert.match(html, /Athlete links changed after this review was made/, "approving stays off");
+  await act("training-load-gpexe-review-update");
+  assert.equal(previewPosts().length, 2);
+  html = renderTrainingLoadCoachHtml();
+  assert.ok(!/review-update|is-needs_link|Athlete links changed/.test(html));
+  assert.match(html, />Import 2 athletes<\/button>/);
+});
+
+test("J20-A2 M1/H2: chips with counts (Needs a person by default), the three value columns, and the fine rows folded", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">3<\/span>/);
+  assert.match(html, /data-filter="not_linked"[^>]*aria-pressed="false">Not linked <span class="gpexe-chip-count">1<\/span>/);
+  assert.match(html, /data-filter="no_data"[^>]*>No data <span class="gpexe-chip-count">2<\/span>/);
+  assert.match(html, /data-filter="all"[^>]*>All <span class="gpexe-chip-count">4<\/span>/);
+  assert.match(html, /<th scope="col" role="columnheader">Duration<\/th><th scope="col" role="columnheader">Total distance<\/th><th scope="col" role="columnheader">Max running speed<\/th>/);
+  const fine = html.slice(html.indexOf('<details class="gpexe-fine"'), html.indexOf("</details>", html.indexOf('<details class="gpexe-fine"')));
+  assert.match(fine, /1 athlete is fine/);
+  assert.ok(!/ open>/.test(fine.slice(0, 40)), "folded by default");
+  assert.match(fine, /data-label="Total distance" role="cell">3,000 m<\/td>/, "a mapped value, from the mapping");
+  assert.match(fine, /data-label="Duration" role="cell">-<\/td>/, "a value that is missing is a dash");
+  const problem = html.slice(html.indexOf('class="gpexe-values-wrap"'), html.indexOf('<details class="gpexe-fine"'));
+  assert.match(problem, /is-needs_link[\s\S]*data-label="Duration" role="cell">74 min<\/td>[\s\S]*data-label="Total distance" role="cell">5,230 m<\/td>[\s\S]*data-label="Max running speed" role="cell">29\.5 km\/h<\/td>/, "an unlinked athlete shows the helper values");
+  await act("training-load-gpexe-review-filter", { filter: "no_data" });
+  html = renderTrainingLoadCoachHtml();
+  assert.deepEqual(reviewRows(html).slice(0, 2).map((r) => r.status), ["no_record", "no_record"]);
+  assert.ok(!/is-needs_link/.test(html.slice(html.indexOf('class="gpexe-values-wrap"'), html.indexOf('<details class="gpexe-fine"'))), "only the chosen kind is in the table");
+  await act("training-load-gpexe-review-filter", { filter: "all" });
+  assert.match(renderTrainingLoadCoachHtml(), /<details class="gpexe-fine" open>/);
+});
+
+test("J20-A2 M2/L1: the heading is plain words and a DD.MM.YYYY date (the raw GPEXE name only for an administrator); the close button shares the heading's row", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: candidateDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<h3>[A-Z][a-z ]+ · \d\d\.\d\d\.\d{4} \d\d:\d\d<\/h3>/, (html.match(/<h3>[^<]*<\/h3>/g) || []).join(" | "));
+  assert.ok(!/GPEXE session name/.test(html));
+  resetState();
+  adminView();
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: candidateDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  assert.match(renderTrainingLoadCoachHtml(), /<dt>GPEXE session name<\/dt>/);
 });

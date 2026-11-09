@@ -22744,3 +22744,57 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     white-space: normal;
   }
 }
+
+/* J20-A2: filter chips, the folded "fine" group and the dialog heading on a phone. */
+.gpexe-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+}
+.gpexe-chip {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel, #fff);
+  font: inherit;
+  cursor: pointer;
+}
+.gpexe-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.gpexe-chip-count {
+  margin-left: 4px;
+  color: var(--muted);
+}
+.gpexe-fine > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 600;
+}
+.gpexe-detail .builder-section-panel-head {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.gpexe-detail .builder-section-panel-head h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-detail .builder-section-panel-head .builder-athlete-picker-cancel {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+.gpexe-review-rows .gpexe-link {
+  margin-top: 8px;
+}
