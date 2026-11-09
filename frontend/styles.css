@@ -22839,9 +22839,15 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     bottom: 0;
     z-index: 2;
     margin-top: 10px;
-    padding: 10px 0 4px;
+    padding: 10px 0 calc(4px + env(safe-area-inset-bottom, 0px));
     background: var(--surface);
     border-top: 1px solid var(--line);
+    display: grid;
+    gap: 8px;
+  }
+  /* Nothing can be imported: the disabled button needs no pinning. */
+  .gpexe-detail .gpexe-approve-bar.is-idle {
+    position: static;
   }
   .gpexe-detail .gpexe-approve-bar .gpexe-button {
     width: 100%;

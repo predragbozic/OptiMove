@@ -1850,6 +1850,12 @@ function suggestedChoice(id, unlinkedChoices) {
   return p ? unlinkedChoices.find((o) => String(o.id) === String(p.athleteId) && !o.duplicate) || null : null;
 }
 
+// The row shows the helper values in its cells; the box says so only when there is something to show.
+function compactHasValues(a, c) {
+  const h = c?.helperValues?.[a.gpexeAthleteId] || {};
+  return ["duration", "distance", "maxSpeed"].some((k) => h[k] !== null && h[k] !== undefined);
+}
+
 function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
@@ -1876,7 +1882,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
       ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
       ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
-      ${compact ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : renderLinkContextHtml(a, c)}
+      ${compact ? (compactHasValues(a, c) ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
@@ -2220,16 +2226,16 @@ function renderApproveHtml(c, detail, status) {
   const importN = importableAthleteCount(c.preview);
   return `
     <div class="gpexe-approve">
+      <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
+      ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
+      ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
+      <div class="gpexe-approve-bar${importN === 0 ? " is-idle" : ""}">
       ${changes ? `
         <label class="gpexe-accept">
           <input type="checkbox" data-gpexe-accept data-action="training-load-gpexe-accept" ${detail.acceptChanges ? "checked" : ""}>
           <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
         </label>
       ` : ""}
-      <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
-      ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
-      <div class="gpexe-approve-bar">
-        ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || importN === 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(importN, "athlete", "athletes")}`}</button>
       </div>
     </div>

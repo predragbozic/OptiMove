@@ -408,6 +408,8 @@ test("approve: changes to imported results are listed, and nothing is sent until
   assert.match(html, /<th scope="col">Variable<\/th><th scope="col">Before<\/th><th scope="col">New value<\/th><th scope="col">GPEXE value<\/th>/);
   assert.match(html, /<td>Distance<\/td><td>3,000 m<\/td><td>3,100 m<\/td><td>3,100 m<\/td>/);
   assert.match(html, /I accept the 1 change to results that were already imported\./);
+  // The checkbox sits in the same (sticky) bar as the button, so the button never scrolls away from it.
+  assert.match(html, /<div class="gpexe-approve-bar">\s*<label class="gpexe-accept">[\s\S]*?<\/label>\s*<button[^>]*training-load-gpexe-approve/);
 
   await approve();
   assert.equal(approveCalls().length, 0, "not accepted: nothing sent");
@@ -2862,15 +2864,50 @@ test("follow-up: no suggestion, a suggestion for another GPEXE athlete, or one n
   assert.equal(selectOf(renderTrainingLoadCoachHtml()), base, "a failed suggestion read leaves the chooser as it was");
 });
 
-test("follow-up: opening a review with an athlete who needs a link reads the suggestions once (GET); a review without one reads none", async () => {
+test("follow-up: a review with an athlete who needs a link reads the suggestions once (GET) and the exact pair reaches the chooser; a review without one reads none; a ready read is not repeated", async () => {
+  const suggestionRoute = (reads, exact) => (base) => async (call) => {
+    if (/athlete-pair-suggestions$/.test(call.url)) { reads.n += 1; return { status: 200, body: { state: "ok", exact, ambiguous: [], dateConflicts: [] } }; }
+    return base(call);
+  };
+  // needs a link: one read, and its exact pair is the first option
   resetState();
-  let reads = 0;
-  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) });
-  installFetchMock(async (call) => { if (/athlete-pair-suggestions$/.test(call.url)) { reads += 1; return { status: 200, body: { state: "ok", exact: [], ambiguous: [], dateConflicts: [] } }; } return base(call); });
+  let reads = { n: 0 };
+  let base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) });
+  installFetchMock(suggestionRoute(reads, [{ gpexeAthleteId: "104", gpexeName: "Dario P", birthDate: null, athleteId: "ath-3", athleteName: "Dario Petrov Example" }])(base));
   await openImports();
   await openCandidate();
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(reads, 1);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(reads.n, 1);
+  assert.match(selectOf(renderTrainingLoadCoachHtml()), /<option value="ath-3">Suggested: Dario Petrov Example<\/option>/);
+  // a ready read is not repeated when the review is opened again
+  await act("training-load-gpexe-close");
+  await openCandidate();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(reads.n, 1, "a ready read is kept");
+
+  // nobody needs a link: no read at all
+  resetState();
+  reads = { n: 0 };
+  const noLink = linkDetail();
+  noLink.preview = { ...noLink.preview, athletes: (noLink.preview.athletes || []).map((a) => (a.notImported?.code === "athlete_not_linked" ? { ...a, notImported: null } : a)) };
+  base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: noLink } }) });
+  installFetchMock(suggestionRoute(reads, [])(base));
+  await openImports();
+  await openCandidate();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(reads.n, 0);
+});
+
+test("follow-up: when the server read no value for an athlete the link box says so instead of pointing at empty cells", async () => {
+  resetState();
+  const empty = linkDetail();
+  empty.helperValues = { ...empty.helperValues, "104": { duration: null, distance: null, maxSpeed: null, drillRows: 0 } };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: empty } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /GPEXE sent no values for this athlete that could help you find them\./);
+  assert.ok(!/The values in this row help you find them/.test(html));
 });
 
 test("follow-up: the Import button sits in its own bar (sticky on phones), and the link confirmation keeps the wrong-link note behind a disclosure", async () => {
@@ -2884,4 +2921,16 @@ test("follow-up: the Import button sits in its own bar (sticky on phones), and t
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
   html = renderTrainingLoadCoachHtml();
   assert.match(html, /<details class="gpexe-fine"><summary>What if the link is wrong\?<\/summary><p>You can unlink it/);
+});
+
+test("follow-up: when nothing can be imported the explanation is outside the bar and the bar is marked idle (not pinned)", async () => {
+  resetState();
+  const none = linkDetail();
+  none.preview = { ...none.preview, athletes: (none.preview.athletes || []).map((a) => ({ ...a, athleteId: a.athleteId, notImported: a.notImported || { code: "athlete_not_linked" }, results: [] })) };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: none } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /gpexe-approve-note[\s\S]*<div class="gpexe-approve-bar is-idle">/, "the note comes first, the bar is idle");
+  assert.ok(!/gpexe-approve-note/.test(html.slice(html.indexOf('class="gpexe-approve-bar'))), "the note is not inside the bar");
 });
