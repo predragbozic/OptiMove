@@ -707,7 +707,7 @@ function renderProgramAccessRequestRow(row) {
   return `
     <article class="organization-row organization-request-row is-${escapeAttr(status)}">
       <button class="organization-table-athlete organization-request-athlete organization-request-athlete-button" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="${escapeAttr(row.athlete_id || row.user_id || "")}">
-        ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span>`}
+        ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(row.athlete_name || "Athlete"))}</span>`}
         <span>
           <strong>${escapeHtml(row.athlete_name || "Athlete")}</strong>
           <small>${escapeHtml([row.athlete_code ? `ID ${row.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>

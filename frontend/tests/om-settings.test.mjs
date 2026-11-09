@@ -8,6 +8,7 @@ globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }
 const { state } = await import("../state.js");
 const D = await import("../app-health-data.js");
 const { renderAppHealthPanelHtml, APP_HEALTH_GROUP_CAP } = await import("../app-health-view.js");
+const { renderProgramAccessRequests } = await import("../organization-view.js");
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const pr4 = css.slice(css.indexOf("Design PR4: Settings"));
@@ -77,4 +78,28 @@ test("Data sources and Source connections use none of the classes the PR4 block 
   for (const f of ["data-sources-view.js", "source-connections-view.js"]) {
     assert.doesNotMatch(readFileSync(new URL(`../${f}`, import.meta.url), "utf8"), /organization-(row|list-head|list-card|avatar|hero|browser)\b/, f);
   }
+});
+
+// Manager's NO-GO on 39d1210: one initials change named a variable its function does not have
+// (renderProgramAccessRequestRow has only `row`), so the row without a picture threw a ReferenceError.
+test("a program access request without a picture renders, with the athlete's initials", () => {
+  const html = renderProgramAccessRequests([{ id: "r1", status: "requested", athlete_name: "Demo Athlete", template_name: "Plan", requested_at: "2026-11-09T10:00:00Z" }]);
+  assert.match(html, /<span class="organization-avatar" aria-hidden="true">DA<\/span>/);
+  assert.match(html, /Demo Athlete/);
+});
+
+test("every programInitials(...) in organization-view.js names a variable of its own function", () => {
+  const lines = view.split("\n");
+  lines.forEach((line, n) => {
+    for (const m of line.matchAll(/programInitials\(([A-Za-z_$][\w$]*)/g)) {
+      const name = m[1];
+      let k = n;
+      while (k >= 0 && !/^(export )?function /.test(lines[k])) k -= 1;
+      assert.ok(k >= 0, `line ${n + 1}: no enclosing function`);
+      const head = lines[k];
+      const body = lines.slice(k, n + 1).join("\n");
+      const declared = new RegExp(`function [\\w$]+\\([^)]*\\b${name}\\b`).test(head) || new RegExp(`(const|let|var) ${name}\\b`).test(body);
+      assert.ok(declared, `line ${n + 1}: "${name}" is not a parameter or a local of ${head.trim()}`);
+    }
+  });
 });
