@@ -16646,6 +16646,10 @@ optimove-dashboard-chart {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.gpexe-badge.is-ready {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .gpexe-badge.is-blocked {
   border-color: var(--danger);
   color: var(--danger);
@@ -22689,4 +22693,46 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   .app-health-chip { min-height: 44px; padding: 10px 14px; }
   .app-health-row { grid-template-columns: minmax(0, 1fr); min-height: 44px; }
   .app-health .plain-button { min-height: 44px; }
+}
+
+/* J20-A2: the Session review table. On a phone each row is a card (no sideways scroll). */
+.gpexe-review-rows th[scope="row"] {
+  font-weight: 600;
+}
+.gpexe-review-rows .gpexe-badge {
+  white-space: normal;
+}
+@media (max-width: 760px) {
+  .gpexe-review-rows,
+  .gpexe-review-rows tbody,
+  .gpexe-review-rows tr,
+  .gpexe-review-rows th,
+  .gpexe-review-rows td {
+    display: block;
+    width: 100%;
+  }
+  .gpexe-review-rows thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .gpexe-review-rows tr {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .gpexe-review-rows th,
+  .gpexe-review-rows td {
+    border-bottom: 0;
+    padding: 2px 0;
+    overflow-wrap: anywhere;
+  }
+  .gpexe-review-rows td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--muted, #667);
+    font-size: 0.8rem;
+  }
 }

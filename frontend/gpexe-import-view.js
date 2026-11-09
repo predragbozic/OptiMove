@@ -267,6 +267,12 @@ function techHtml(entries, extra = "") {
   return `<details class="gpexe-tech"><summary>Technical details</summary><dl>${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>${extra}</details>`;
 }
 
+// J20-A2: GPEXE field names, raw values and ids are for the two administrators
+// only. A coach's review of the athletes carries no Technical details at all.
+function adminTechHtml(entries, extra = "") {
+  return maskGpexeIds() ? techHtml(entries, extra) : "";
+}
+
 function errorTech(error) {
   if (!error) return "";
   return techHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
@@ -1581,8 +1587,8 @@ function renderCandidateBodyHtml(c, detail, status) {
     ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data is too old. Find new sessions to see it again." : "No preview."}</p>` : `
       ${renderBlockedHtml(preview, c)}
       ${renderChangesHtml(preview, c)}
+      ${renderReviewTableHtml(preview, c)}
       ${renderAthletesHtml(preview, c)}
-      ${renderNoRecordHtml(preview, c)}
       ${renderSourceFieldsNoteHtml(preview)}
     `}
     ${renderOutcomeHtml(detail)}
@@ -1714,7 +1720,7 @@ function renderChangesHtml(preview, c) {
           </li>
         `).join("")}
       </ul>
-      ${techHtml(metricNamesTech(changes.flatMap((ch) => ch.values || []), isV3(preview)))}
+      ${adminTechHtml(metricNamesTech(changes.flatMap((ch) => ch.values || []), isV3(preview)))}
     </section>
   `;
 }
@@ -1761,7 +1767,7 @@ function renderAthletesHtml(preview, c) {
   for (const o of unlinkedChoices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
   return `
     <section class="gpexe-athletes" aria-label="Athletes in this session">
-      <h4>Athletes in GPEXE (${athletes.length})</h4>
+      <h4>Details by athlete (${athletes.length})</h4>
       ${athletes.map((a) => renderAthleteHtml(a, c, unlinkedChoices)).join("")}
     </section>
   `;
@@ -1919,19 +1925,83 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
         </div>
       `).join("")}
       ${renderSkippedHtml(a, v3)}
-      ${techHtml(tech)}
+      ${adminTechHtml(tech)}
     </details>
   `;
 }
 
-function renderNoRecordHtml(preview, c) {
-  const list = preview.teamAthletesWithoutGpexeRecord || [];
-  if (!list.length) return "";
+// J20-A2: one table for the whole session. Every athlete of the review has a
+// row and one status, so the coach sees at a glance who is imported, who needs
+// a link and who has nothing to import. The details below the table keep the
+// per-athlete values, the Left-out reasons and the link flow unchanged.
+const ROW_STATUS = Object.freeze({
+  importable: { label: "Importable", note: "Will be imported when you approve.", counts: true },
+  participation: { label: "Participation only", note: "Participation is recorded; no value is imported.", counts: true },
+  needs_link: { label: "Needs a link", note: "Not imported until you link this GPEXE athlete (open its row under Details by athlete).", counts: false },
+  blocked: { label: "Blocks the session", note: "The whole session waits until this is fixed.", counts: false },
+  not_imported: { label: "Not imported", note: "", counts: false },
+  no_record: { label: "No GPEXE record", note: "No GPS record in this session; nothing is written.", counts: false },
+});
+
+function valuesToImport(a) {
+  return (a.results || []).filter((r) => r.outcome !== "not_imported").reduce((n, r) => n + (r.values || []).filter((v) => v.value !== null && v.value !== undefined).length, 0);
+}
+
+function reviewRowStatus(a, preview) {
+  if (a.blocksSession) return "blocked";
+  if (a.notImported?.code === "athlete_not_linked") return "needs_link";
+  if (a.notImported) return "not_imported";
+  if (isV3(preview) && a.allValuesLeftOut === true) return "participation";
+  return valuesToImport(a) > 0 ? "importable" : "participation";
+}
+
+// The number Approve names: the athletes the approval imports (Importable and
+// Participation only). A row that needs a link, blocks, is not imported or has
+// no record is not part of it.
+export function importableAthleteCount(preview) {
+  return (preview?.athletes || []).filter((a) => ROW_STATUS[reviewRowStatus(a, preview)].counts).length;
+}
+
+function changesByAthlete(preview) {
+  const m = new Map();
+  for (const ch of preview?.changesToImported || []) {
+    const key = ch.athleteId ? `a:${ch.athleteId}` : `g:${ch.gpexeAthleteId}`;
+    m.set(key, (m.get(key) || 0) + 1);
+  }
+  return m;
+}
+
+function renderReviewTableHtml(preview, c) {
+  const athletes = preview.athletes || [];
+  const noRecord = preview.teamAthletesWithoutGpexeRecord || [];
+  if (!athletes.length && !noRecord.length) return "";
+  const changes = changesByAthlete(preview);
+  const rows = athletes.map((a) => {
+    const status = reviewRowStatus(a, preview);
+    const info = ROW_STATUS[status];
+    const n = changes.get(a.athleteId ? `a:${a.athleteId}` : `g:${a.gpexeAthleteId}`) || 0;
+    const note = status === "not_imported" ? `Not imported: ${a.notImported?.message || "open its row under Details by athlete"}` : info.note;
+    const values = status === "importable" ? plural(valuesToImport(a), "value", "values") : "-";
+    return { name: athleteName(c, a.athleteId, a.gpexeAthleteId), status, label: info.label, note, values, changes: n };
+  });
+  for (const t of noRecord) rows.push({ name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, values: "-", changes: 0 });
+  const n = importableAthleteCount(preview);
   return `
-    <section class="gpexe-norecord" aria-label="Team athletes without a GPEXE record">
-      <h4>Team athletes without a GPEXE record (${list.length})</h4>
-      <p class="muted">No GPS record in this session; participation is unknown. Nothing is written for them.</p>
-      <p>${escapeHtml(list.map((a) => athleteName(c, a.athleteId, null)).join(", "))}</p>
+    <section class="gpexe-review-table" aria-label="Session review">
+      <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
+      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} imported when you approve.` : "No athlete can be imported yet."}</p>
+      <div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows">
+        <thead><tr><th scope="col">Athlete</th><th scope="col">Status</th><th scope="col">Values</th><th scope="col">What happens</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr class="gpexe-review-row is-${r.status}">
+              <th scope="row" data-label="Athlete">${escapeHtml(r.name)}</th>
+              <td data-label="Status"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+              <td data-label="Values">${escapeHtml(r.values)}</td>
+              <td data-label="What happens">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("You accept the change next to the import button.")}` : ""}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
     </section>
   `;
 }
@@ -2029,6 +2099,7 @@ function renderApproveHtml(c, detail, status) {
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">Approving needs a platform admin or an explicit approver grant for this team.</p>`;
   if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;
+  const importN = importableAthleteCount(c.preview);
   return `
     <div class="gpexe-approve">
       ${changes ? `
@@ -2039,7 +2110,8 @@ function renderApproveHtml(c, detail, status) {
       ` : ""}
       <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
       ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
-      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving ? "disabled" : ""}>${detail.approving ? "Importing..." : "Approve import"}</button>
+      ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || importN === 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(importN, "athlete", "athletes")}`}</button>
     </div>
   `;
 }
