@@ -20,7 +20,7 @@ async function call(world, role, method, path, body) {
   return { status: res.status, body: parsed };
 }
 
-export async function prepareImports(world, { link = [101, 102, 103], from = "2026-11-01", to = "2026-11-08" } = {}) {
+export async function prepareImports(world, { link = [101, 102, 103], from = "2026-11-01", to = "2026-11-08", check = true } = {}) {
   const teamId = world.ids.teamA;
   const approved = await call(world, "platform_admin", "PUT", `${G}/teams/${teamId}/settings`, { gpexeTeamId: "7001" });
   if (approved.status !== 200) throw new Error(`approve pair: ${approved.status}`);
@@ -38,6 +38,7 @@ export async function prepareImports(world, { link = [101, 102, 103], from = "20
     const r = await call(world, "team_coach", "POST", `${G}/teams/${teamId}/athlete-links`, { gpexeAthleteId: String(gpexeId), athleteId: world.ids.athleteIds[i] });
     if (r.status !== 201) throw new Error(`link ${gpexeId}: ${r.status} ${JSON.stringify(r.body)}`);
   }
+  if (!check) return { teamId, bindingId, candidates: [], call: (role, method, path, body) => call(world, role, method, path, body) };
   const started = await call(world, "team_coach", "POST", `${G}/teams/${teamId}/checks`, { from, to });
   if (started.status !== 202) throw new Error(`start check: ${started.status} ${JSON.stringify(started.body)}`);
   for (let i = 0; i < 300; i += 1) {
