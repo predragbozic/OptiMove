@@ -72,6 +72,8 @@ export async function loadGpexeImports(render) {
 // refreshes the sessions inside its dates; both times are the server's.
 export function reviewMadeBeforeLinkChange(c, gx = state.trainingLoad.gpexe) {
   if (!gx?.linkSeq) return false;
+  // J20-A2: a review recomputed by the server after the last link change is current.
+  if (c?.id && gx.recomputedAtLinkSeq?.[c.id] === gx.linkSeq) return false;
   if (!gx.linkCheckStartedAt || !c?.lastSeenAt) return true;
   return new Date(c.lastSeenAt).getTime() < new Date(gx.linkCheckStartedAt).getTime();
 }
@@ -110,6 +112,7 @@ function resetGpexeTeamState(teamId) {
   gx.lastLink = null;
   gx.linkOpen = "";
   gx.linkSeq = 0;
+  gx.recomputedAtLinkSeq = {};
   gx.checkLinkSeq = null;
   gx.linkCheckStartedAt = null;
   gx.sourceAthletes = null;
@@ -815,6 +818,43 @@ export function finishTeamMappingResults() {
   gx.mapping = { ...gx.mapping, results: null };
 }
 
+// J20-A2 (J20 section 4): after a link, the server recomputes THIS review once
+// (one POST, the answer is the new candidate with its new hash). A refusal
+// ("try again", 429, a lost answer) leaves the review as it was and offers
+// "Update the review"; a find-new-sessions check stays the fallback.
+export async function recomputeGpexeReview(render) {
+  const gx = g();
+  const generation = gx.generation;
+  const detail = gx.detail;
+  if (!detail?.id || !detail.candidate || detail.updating) return;
+  const candidateId = detail.id;
+  const seq = gx.linkSeq;
+  detail.updating = true;
+  detail.updateError = null;
+  render();
+  try {
+    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}/preview`), { method: "POST", body: JSON.stringify({}) });
+    // The review object this update belongs to: a closed and reopened review is another object.
+    if (generation !== gx.generation || gx.detail !== detail) return;
+    if (!answer?.candidate) {
+      detail.updateError = { status: 200, code: "candidate_read_failed", message: answer?.candidateReadError?.message || "The review was updated; open it again to see it." };
+      return;
+    }
+    detail.candidate = answer.candidate;
+    // What the coach ticked was for the old list of changes.
+    detail.acceptChanges = false;
+    gx.recomputedAtLinkSeq = { ...(gx.recomputedAtLinkSeq || {}), [candidateId]: seq, ...(answer.candidate.id ? { [answer.candidate.id]: seq } : {}) };
+    // The inbox row still holds the old summary and hash: read the list again.
+    void reloadGpexeCandidates(render);
+  } catch (error) {
+    if (generation !== gx.generation || gx.detail !== detail) return;
+    detail.updateError = errorInfo(error);
+  } finally {
+    detail.updating = false;
+    if (generation === gx.generation && gx.detail === detail) render();
+  }
+}
+
 // Only called from "Confirm link": choosing an athlete sends nothing.
 export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName }, render) {
   const gx = g();
@@ -832,6 +872,11 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
     gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
     // The change is made; a failed re-read of the list only leaves it stale.
     await reloadGpexeLinks(generation).catch(() => {});
+    // J20-A2: update the review on screen with one server recompute.
+    if (generation === gx.generation && gx.detail?.candidate) {
+      gx.linkBusy = false;
+      await recomputeGpexeReview(render);
+    }
   } catch (error) {
     if (generation === gx.generation) {
       const info = errorInfo(error);
