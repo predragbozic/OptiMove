@@ -1935,9 +1935,9 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
 // a link and who has nothing to import. The details below the table keep the
 // per-athlete values, the Left-out reasons and the link flow unchanged.
 const ROW_STATUS = Object.freeze({
-  importable: { label: "Importable", note: "Will be imported when you approve.", counts: true },
-  participation: { label: "Participation only", note: "Participation is recorded; no value is imported.", counts: true },
-  needs_link: { label: "Needs a link", note: "Not imported until you link this GPEXE athlete (open its row under Details by athlete).", counts: false },
+  importable: { label: "Importable", note: "Ready to import.", counts: true },
+  participation: { label: "Participation only", note: "Present in this session; no value is imported.", counts: true },
+  needs_link: { label: "Needs a link", note: "Not imported now. Link this GPEXE athlete (open its row under Details by athlete), then find new sessions again.", counts: false },
   blocked: { label: "Blocks the session", note: "The whole session waits until this is fixed.", counts: false },
   not_imported: { label: "Not imported", note: "", counts: false },
   no_record: { label: "No GPEXE record", note: "No GPS record in this session; nothing is written.", counts: false },
@@ -1985,20 +1985,25 @@ function renderReviewTableHtml(preview, c) {
     return { name: athleteName(c, a.athleteId, a.gpexeAthleteId), status, label: info.label, note, values, changes: n };
   });
   for (const t of noRecord) rows.push({ name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, values: "-", changes: 0 });
+  // Rows that need attention come first; the server's order is kept inside a group.
+  const ORDER = ["blocked", "needs_link", "not_imported", "importable", "participation", "no_record"];
+  rows.sort((x, y) => ORDER.indexOf(x.status) - ORDER.indexOf(y.status));
   const n = importableAthleteCount(preview);
+  const partOnly = rows.filter((r) => r.status === "participation").length;
+  const needLink = rows.filter((r) => r.status === "needs_link").length;
   return `
     <section class="gpexe-review-table" aria-label="Session review">
       <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
-      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} imported when you approve.` : "No athlete can be imported yet."}</p>
-      <div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows">
-        <thead><tr><th scope="col">Athlete</th><th scope="col">Status</th><th scope="col">Values</th><th scope="col">What happens</th></tr></thead>
-        <tbody>
+      <p class="muted">${n ? `${plural(n, "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete is", "athletes are")} not imported now: after linking, find new sessions again.` : ""}</p>
+      <div class="gpexe-values-wrap"><table class="gpexe-values gpexe-review-rows" role="table">
+        <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Athlete</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Values</th><th scope="col" role="columnheader">What happens</th></tr></thead>
+        <tbody role="rowgroup">
           ${rows.map((r) => `
-            <tr class="gpexe-review-row is-${r.status}">
-              <th scope="row" data-label="Athlete">${escapeHtml(r.name)}</th>
-              <td data-label="Status"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
-              <td data-label="Values">${escapeHtml(r.values)}</td>
-              <td data-label="What happens">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("You accept the change next to the import button.")}` : ""}</td>
+            <tr class="gpexe-review-row is-${r.status}" role="row">
+              <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
+              <td data-label="Status" role="cell"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : r.status === "no_record" ? "" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+              <td data-label="Values" role="cell">${escapeHtml(r.values)}</td>
+              <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("You accept the change next to the import button.")}` : ""}</td>
             </tr>`).join("")}
         </tbody>
       </table></div>

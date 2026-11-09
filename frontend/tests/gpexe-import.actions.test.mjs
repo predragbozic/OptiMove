@@ -284,7 +284,7 @@ test("GPEXE imports: the review shows participation and GPS apart, a left-out va
   assert.match(html, /GPEXE athlete \d+/);
   assert.match(html, /Not imported: This GPEXE athlete is not linked/);
   assert.match(html, /Session review \(\d+ athletes\)/);
-  assert.match(html, /<th scope="row" data-label="Athlete">Bo Example<\/th>\s*<td data-label="Status"><span class="gpexe-badge is-blocked">No GPEXE record<\/span>/);
+  assert.match(html, /<th scope="row" data-label="Athlete" role="rowheader">Bo Example<\/th>\s*<td data-label="Status" role="cell"><span class="gpexe-badge ">No GPEXE record<\/span>/);
   assert.match(html, /Bo Example/);
   assert.match(html, /3,000 m/);
 });
@@ -2507,7 +2507,7 @@ test("check (J19 U1): when polling is started again after it gave up, it gets th
 
 function reviewRows(html) {
   const section = html.slice(html.indexOf('class="gpexe-review-table"'), html.indexOf("</section>", html.indexOf('class="gpexe-review-table"')));
-  return [...section.matchAll(/<tr class="gpexe-review-row is-([a-z_]+)">\s*<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => ({ status: m[1], name: m[2] }));
+  return [...section.matchAll(/<tr class="gpexe-review-row is-([a-z_]+)"[^>]*>\s*<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => ({ status: m[1], name: m[2] }));
 }
 
 test("J20-A2: one row per athlete with one status each; the button names the athletes it imports (Importable and Participation only)", async () => {
@@ -2516,12 +2516,9 @@ test("J20-A2: one row per athlete with one status each; the button names the ath
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.deepEqual(reviewRows(html), [
-    { status: "importable", name: "Ana Example" },
-    { status: "needs_link", name: html.match(/is-needs_link">\s*<th scope="row"[^>]*>([^<]*)</)[1] },
-    { status: "no_record", name: "Bo Example" },
-  ]);
-  assert.match(html, /1 athlete is imported when you approve\./);
+  assert.deepEqual(reviewRows(html).map((r) => r.status), ["needs_link", "importable", "no_record"], "attention first");
+  assert.equal(reviewRows(html)[1].name, "Ana Example");
+  assert.match(html, /1 athlete is ready to import\. 1 athlete is not imported now: after linking, find new sessions again\./);
   assert.match(html, /data-action="training-load-gpexe-approve"[^>]*>Import 1 athlete<\/button>/);
   assert.ok(!/Approve import/.test(html), "the old label is gone");
 });
@@ -2548,6 +2545,7 @@ test("J20-A2: an athlete whose values are all left out is 'Participation only' a
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
   assert.deepEqual(reviewRows(html).map((r) => r.status), ["participation", "no_record"]);
+  assert.match(html, /1 athlete is ready to import \(1 participation only\)\./);
   assert.match(html, />Import 1 athlete<\/button>/);
 });
 
