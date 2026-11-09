@@ -1259,7 +1259,7 @@ test("link: after linking the old review can't be approved until a new check, an
 
   let html = renderTrainingLoadCoachHtml();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "no Approve on a review made before the link");
-  assert.match(html, /Athlete links changed after this review was made\.<\/strong> Close it and find new sessions/);
+  assert.match(html, /Athlete links changed after this review was made\.<\/strong> Update the review[\s\S]*find new sessions/);
   assert.match(html, /GPEXE athlete 104 is now linked to Dario Petrov Example\./);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-2"[^>]*>Unlink Dario Petrov Example<\/button>/, "the way back is right there");
 
@@ -2759,4 +2759,48 @@ test("J20-A2 M2/L1: the heading is plain words and a DD.MM.YYYY date (the raw GP
   await openImports();
   await openCandidate();
   assert.match(renderTrainingLoadCoachHtml(), /<dt>GPEXE session name<\/dt>/);
+});
+
+test("J20-A2 (code review): the question before an import counts what the button counts; a recompute clears an earlier 'accept the changes' tick and re-reads the list; a lost link answer never recomputes", async () => {
+  // 1. one number on the button and in the question (an athlete with nothing new is in neither).
+  resetState();
+  const d = candidateDetail();
+  const a105 = { gpexeAthleteId: "105", athleteId: "ath-3", participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null }, notImported: null, blocksSession: false, skippedValues: [],
+    results: [{ externalId: "athlete_session:5:full", level: "full", drillIndex: null, outcome: "unchanged", values: [{ ...V3_DISTANCE, previous: "3000", change: "same" }] }] };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: { ...d, athletes: { ...d.athletes, "ath-3": { name: "Cy Example" } }, preview: { ...d.preview, athletes: [...d.preview.athletes, a105] } } } }), onApprove: () => ({ status: 200, body: { result: {}, candidate: d } }) }));
+  await openImports();
+  await openCandidate();
+  assert.match(renderTrainingLoadCoachHtml(), />Import 1 athlete<\/button>/);
+  let question = "";
+  globalThis.window = globalThis.window || {};
+  const had = globalThis.window.confirm;
+  globalThis.window.confirm = (q) => { question = q; return false; };
+  await approve();
+  globalThis.window.confirm = had;
+  assert.match(question, /for 1 athlete under the names shown/, question);
+
+  // 2. a recompute clears the tick and reads the list again.
+  resetState();
+  const change = { athleteId: "ath-1", gpexeAthleteId: "101", externalId: "athlete_session:1:full", level: "full", drillIndex: null, outcome: "corrected", message: "x", manualCorrectionKept: false, values: [] };
+  installFetchMock(serverWithRecompute(() => ({ status: 200, body: { candidate: { ...recomputedAfterLink(), changesToImported: 1, preview: { ...recomputedAfterLink().preview, changesToImported: [change] } } } }), { onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  state.trainingLoad.gpexe.detail.acceptChanges = true;
+  const listReads = () => fetchCalls.filter((c) => /\/candidates(\?|$)/.test(c.url) && c.method === "GET").length;
+  const before = listReads();
+  await linkRow104();
+  assert.equal(state.trainingLoad.gpexe.detail.acceptChanges, false, "the tick was for the old list of changes");
+  assert.ok(listReads() > before, "the inbox list was read again");
+
+  // 3. a lost link answer (network error) does not recompute and the review stays stale.
+  resetState();
+  const base = serverWithRecompute(() => ({ status: 200, body: { candidate: recomputedAfterLink() } }));
+  installFetchMock(async (call) => (call.url.endsWith("/athlete-links") && call.method === "POST" ? { throwNetworkError: true } : base(call)));
+  await openImports();
+  await openCandidate();
+  await linkRow104();
+  assert.equal(previewPosts().length, 0, "no recompute after a lost link answer");
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Athlete links changed after this review was made/);
+  assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "approving stays off");
 });

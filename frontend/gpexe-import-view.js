@@ -1854,7 +1854,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
         <p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
-          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
+          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
         </div>
       </div>
     `;
@@ -1875,7 +1875,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
             ${unlinkedChoices.map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
         </label>
-        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy ? "disabled" : ""}>Link...</button>
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
       ${idTechHtml(id)}
     </div>
@@ -2195,7 +2195,7 @@ function renderApproveHtml(c, detail, status) {
   // check; after a link change it must be made again before approving.
   if (reviewMadeBeforeLinkChange(c, gx)) {
     const day = c.sessionStartedAt ? formatDate(c.sessionStartedAt) : "";
-    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> Close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.</p>`;
+    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> ${detail.updating ? "Updating the review..." : `Update the review${detail.updateError ? " again" : ""}, or close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.`}${detail.updating ? "" : ` <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-review-update">Update the review</button>`}</p>`;
   }
   const viewer = status?.viewer || {};
   const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");

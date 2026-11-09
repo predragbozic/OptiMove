@@ -3,6 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
+import { importableAthleteCount } from "./gpexe-import-view.js";
 import { state } from "./state.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
@@ -155,7 +156,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // not confirm or no longer found (v33) - the server would refuse it too.
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
-    const athletes = (candidate.preview?.athletes || []).filter((a) => !a.notImported).length;
+    const athletes = importableAthleteCount(candidate.preview);
     const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
@@ -205,6 +206,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   // Linking is two steps. "Link..." only asks: it shows both sides of the
   // link together and sends nothing; "Confirm link" sends it.
   if (type === "training-load-gpexe-link") {
+    if (gx.detail?.updating) return true;
     const gpexeAthleteId = action.dataset.gpexeAthleteId;
     const athleteId = fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
     gx.linkOpen = gpexeAthleteId;
@@ -250,7 +252,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-link-confirm") {
     const pending = gx.linkConfirm;
-    if (!pending || gx.linkBusy) return true;
+    if (!pending || gx.linkBusy || gx.detail?.updating) return true;
     await linkGpexeAthlete(pending, renderTrainingLoad);
     return true;
   }

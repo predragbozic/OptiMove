@@ -112,6 +112,7 @@ function resetGpexeTeamState(teamId) {
   gx.lastLink = null;
   gx.linkOpen = "";
   gx.linkSeq = 0;
+  gx.recomputedAtLinkSeq = {};
   gx.checkLinkSeq = null;
   gx.linkCheckStartedAt = null;
   gx.sourceAthletes = null;
@@ -833,21 +834,24 @@ export async function recomputeGpexeReview(render) {
   render();
   try {
     const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}/preview`), { method: "POST", body: JSON.stringify({}) });
-    if (generation !== gx.generation || gx.detail?.id !== candidateId) return;
+    // The review object this update belongs to: a closed and reopened review is another object.
+    if (generation !== gx.generation || gx.detail !== detail) return;
     if (!answer?.candidate) {
       detail.updateError = { status: 200, code: "candidate_read_failed", message: answer?.candidateReadError?.message || "The review was updated; open it again to see it." };
       return;
     }
     detail.candidate = answer.candidate;
-    gx.recomputedAtLinkSeq = { ...(gx.recomputedAtLinkSeq || {}), [candidateId]: seq };
+    // What the coach ticked was for the old list of changes.
+    detail.acceptChanges = false;
+    gx.recomputedAtLinkSeq = { ...(gx.recomputedAtLinkSeq || {}), [candidateId]: seq, ...(answer.candidate.id ? { [answer.candidate.id]: seq } : {}) };
+    // The inbox row still holds the old summary and hash: read the list again.
+    void reloadGpexeCandidates(render);
   } catch (error) {
-    if (generation !== gx.generation || gx.detail?.id !== candidateId) return;
+    if (generation !== gx.generation || gx.detail !== detail) return;
     detail.updateError = errorInfo(error);
   } finally {
-    if (generation === gx.generation && gx.detail?.id === candidateId) {
-      detail.updating = false;
-      render();
-    }
+    detail.updating = false;
+    if (generation === gx.generation && gx.detail === detail) render();
   }
 }
 
