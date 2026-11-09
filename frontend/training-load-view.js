@@ -1360,7 +1360,7 @@ function renderResultsAthleteActivitiesHtml(athleteId, weekStart) {
   const activities = nav.data.days.flatMap((day) => (day.items || []).filter((i) => i.kind === "activity").map((i) => ({ ...i, date: day.date })));
   return `
     <div class="training-load-results-activities">
-      <p class="eyebrow">Canonical activities this week</p>
+      <p class="eyebrow">Sessions this week</p>
       ${activities.length ? `
         <div class="training-load-results-activity-list">
           ${activities.map((item) => `
@@ -1373,7 +1373,7 @@ function renderResultsAthleteActivitiesHtml(athleteId, weekStart) {
             </button>
           `).join("")}
         </div>
-      ` : `<p class="muted">No canonical activities recorded for this athlete this week.</p>`}
+      ` : `<p class="muted">No sessions recorded for this athlete this week.</p>`}
     </div>
   `;
 }
@@ -1515,7 +1515,7 @@ function renderOverviewCoverageBlockHtml(nav) {
   return `
     <section class="training-load-overview-block">
       <p class="eyebrow">Activity &amp; data coverage</p>
-      <p class="muted training-load-overview-block-note">Canonical activities recorded and how much of their data has been collected - not a training-load value.</p>
+      <p class="muted training-load-overview-block-note">Sessions recorded and how much of their data has been collected - not a training-load value.</p>
       <div class="training-load-summary-grid">
         <div class="training-load-summary-tile"><span class="training-load-summary-value">${cov.activityCount}</span><span class="training-load-summary-label">Activities recorded</span></div>
         <div class="training-load-summary-tile">${cov.rpeRequested ? `<span class="training-load-summary-value">${cov.rpeRated}/${cov.rpeRequested}</span>` : `<span class="training-load-summary-value training-load-summary-value-text">Not requested</span>`}<span class="training-load-summary-label">RPE coverage</span></div>

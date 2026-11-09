@@ -8,6 +8,9 @@ import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
 import { renderContentLanguageOptions } from "./account-language.js";
+
+// "1 team", "12 athletes": the count with its noun in the right number.
+const countLabel = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { COACH_SETTINGS_SECTIONS, isCoachSettings, renderSettingsNavHtml } from "./navigation.js";
 import { renderIconGalleryHtml } from "./icon-gallery.js";
@@ -279,7 +282,7 @@ export function renderOrganizationBrowser(data) {
         <div>
           ${isCoachSettings() ? "" : `<p class="eyebrow">Organization browser</p>`}
           <h3>${escapeHtml(isCoachSettings() ? "Athletes" : (selectedTeam?.name || selectedClub?.name || "All accessible organization"))}</h3>
-          <p class="muted">${escapeHtml(isCoachSettings() ? `${visibleAthletes.length} ${visibleAthletes.length === 1 ? "athlete" : "athletes"}` : selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${activeAthletes.length} athletes`)}</p>
+          <p class="muted">${escapeHtml(isCoachSettings() ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`)}</p>
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}

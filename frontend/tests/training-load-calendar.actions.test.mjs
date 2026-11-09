@@ -1095,7 +1095,7 @@ test("the Activities view identifies itself as showing canonical activities, dis
   cal.data = calendarPayload(cal.weekStart, {});
   const html = renderTrainingLoadCalendarHtml();
   assert.match(html, /tl-calendar-subtitle/, "a persistent, muted subtitle explains what this view shows");
-  assert.match(html, /canonical training activities/i);
+  assert.match(html, /Training sessions recorded each day/);
 });
 
 test("the activity-detail Overview/Athletes/Components/Sources switcher carries a distinguishing aria-label and is never confused with the two Data & Analysis nav levels above it", () => {
