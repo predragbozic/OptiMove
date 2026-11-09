@@ -22827,3 +22827,27 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     align-items: flex-start !important;
   }
 }
+
+/* J20-A2 follow-up: the Import button stays in reach on a phone; the chips wrap instead of clipping. */
+@media (max-width: 760px) {
+  /* The bar can only stick inside its parent's box, so the approve block gives up its own box on a phone. */
+  .gpexe-detail .gpexe-approve {
+    display: contents;
+  }
+  .gpexe-detail .gpexe-approve-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: 10px;
+    padding: 10px 0 4px;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+  }
+  .gpexe-detail .gpexe-approve-bar .gpexe-button {
+    width: 100%;
+  }
+  .gpexe-chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}

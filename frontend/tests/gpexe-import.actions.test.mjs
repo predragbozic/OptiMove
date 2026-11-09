@@ -1158,12 +1158,15 @@ test("link: no athlete is preselected, the session's values only help to find th
   assert.match(select, /<option value="" selected>Choose an athlete of the team<\/option>/);
   assert.equal((select.match(/selected/g) || []).length, 1, "only the empty choice is selected");
   assert.match(html, /<strong>Find athlete 104 in GPEXE first\. Link only if you are sure\.<\/strong>/);
-  assert.match(html, /to help you find them in GPEXE\. The values do not prove who it is\./);
-  assert.match(html, /<span>Distance<\/span> <strong>5,230 m<\/strong>/);
-  assert.match(html, /<span>Top speed<\/span> <strong>29\.5 km\/h<\/strong>/);
-  assert.match(html, /<span>Time<\/span> <strong>74 min<\/strong>/);
-  assert.match(html, /<span>Drills<\/span> <strong>2<\/strong>/);
-  assert.ok(!/SPEEDmax|TotDist/.test(html.slice(html.indexOf('class="gpexe-link"'), html.indexOf("</ul>", html.indexOf('class="gpexe-link"')))));
+  assert.match(html, /The values in this row help you find them in GPEXE\. They do not prove who it is\./);
+  // J20-A2 follow-up: the link box in the review row is light; the values the server read
+  // are in the row's own cells, not repeated in the box.
+  const rowOf = html.slice(html.indexOf('class="gpexe-review-row is-needs_link"'));
+  assert.match(rowOf, /5,230/);
+  assert.match(rowOf, /29\.5/);
+  assert.match(rowOf, /74/);
+  assert.ok(!/gpexe-link-context/.test(html), "the row's link box does not repeat Time / Distance / Top speed");
+  assert.ok(!/SPEEDmax|TotDist/.test(html));
 
   // Pressing "Link..." without a choice: nothing sent.
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
@@ -1181,35 +1184,38 @@ test("link: no athlete is preselected, the session's values only help to find th
   assert.match(html, /data-action="training-load-gpexe-link-confirm"[^>]*>Confirm link<\/button>/);
 });
 
-test("link context: a v3 review reads the helper values the server read from the session (helperValues), never the mapped values; a v2 review stored before 9-B still reads its own results; nothing known says so", async () => {
-  const contextOf = (h) => h.slice(h.indexOf('<ul class="gpexe-link-context">'), h.indexOf("</ul>", h.indexOf('<ul class="gpexe-link-context">')));
+test("link values: a v3 review shows the helper values the server read from the session (helperValues) in the athlete's row, never the mapped values; a v2 review stored before 9-B still reads its own results; the link box does not repeat them", async () => {
+  const rowOf = (h) => h.slice(h.indexOf('class="gpexe-review-row is-needs_link"'), h.indexOf("gpexe-review-link"));
   resetState();
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
   await openImports();
   await openCandidate();
-  let context = contextOf(renderTrainingLoadCoachHtml());
-  assert.match(context, /<li><span>Time<\/span> <strong>74 min<\/strong><\/li><li><span>Distance<\/span> <strong>5,230 m<\/strong><\/li><li><span>Top speed<\/span> <strong>29\.5 km\/h<\/strong><\/li>/);
-  assert.match(context, /<li><span>Drills<\/span> <strong>2<\/strong><\/li>/);
-  assert.ok(!/1,111/.test(context), "never the mapped value");
+  let html = renderTrainingLoadCoachHtml();
+  let row = rowOf(html);
+  assert.match(row, /74/);
+  assert.match(row, /5,230/);
+  assert.match(row, /29\.5/);
+  assert.ok(!/1,111/.test(row), "never the mapped value");
+  assert.ok(!/gpexe-link-context/.test(html));
 
   resetState();
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail({ previewVersion: 2 }) } }) }));
   await openImports();
   await openCandidate();
-  context = contextOf(renderTrainingLoadCoachHtml());
-  assert.match(context, /<li><span>Distance<\/span> <strong>5,230 m<\/strong><\/li><li><span>Top speed<\/span> <strong>29\.5 km\/h<\/strong><\/li><li><span>Time<\/span> <strong>74 min<\/strong><\/li>/);
-  assert.match(context, /<li><span>Drills<\/span> <strong>2<\/strong><\/li>/);
+  // A review stored before 9-B has no helperValues: the row cannot show them, so the link box keeps them.
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<li><span>Distance<\/span> <strong>5,230 m<\/strong><\/li><li><span>Top speed<\/span> <strong>29\.5 km\/h<\/strong><\/li><li><span>Time<\/span> <strong>74 min<\/strong><\/li>/);
 
-  // Nothing the server could read for the athlete: the sentence, never a zero.
+  // Nothing the server could read for the athlete: no value is invented, no zero.
   resetState();
   const empty = linkDetail();
   empty.helperValues = { ...empty.helperValues, "104": { duration: null, distance: null, maxSpeed: null, drillRows: 0 } };
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: empty } }) }));
   await openImports();
   await openCandidate();
-  const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /GPEXE sent no values for this athlete that could help you find them\./);
+  html = renderTrainingLoadCoachHtml();
   assert.ok(!/gpexe-link-context/.test(html));
+  assert.ok(!/5,230|29\.5/.test(rowOf(html)));
 });
 
 test("link: the confirmation shows the exact GPEXE id and the athlete's full name together; Cancel sends nothing; Confirm sends exactly that link", async () => {
@@ -2819,4 +2825,63 @@ test("J20-A2: with nobody that needs a person the default chip is All and the no
   assert.match(html, /data-filter="all"[^>]*aria-pressed="true">All /);
   assert.ok(!/data-filter="needs"/.test(html), "no 'Needs a person' chip when it would be empty");
   assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["no_record"]);
+});
+
+// ---- J20-A2 follow-up: U3's suggested pair in the row's chooser, the sticky Approve bar, the light link box.
+const selectOf = (html) => html.match(/<select class="gpexe-select" data-gpexe-link-select="104">([\s\S]*?)<\/select>/)?.[1] || "";
+const withSuggestion = (exact) => { state.trainingLoad.gpexe.suggestions = { status: "ready", data: { state: "ok", exact, ambiguous: [], dateConflicts: [] } }; };
+
+test("follow-up: U3's exact pair for this GPEXE athlete is the first option in the row's chooser, labelled Suggested, never selected, and choosing it still sends nothing", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  withSuggestion([{ gpexeAthleteId: "104", gpexeName: "Dario P", birthDate: "2005-01-02", athleteId: "ath-3", athleteName: "Dario Petrov Example" }]);
+  const sel = selectOf(renderTrainingLoadCoachHtml());
+  const options = [...sel.matchAll(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g)];
+  assert.equal(options[0][1], "", "the empty choice stays first");
+  assert.equal(options[1][1], "ath-3", "the suggested athlete comes right after it");
+  assert.match(options[1][3], /^Suggested: Dario Petrov Example$/);
+  assert.equal((sel.match(/selected/g) || []).length, 1, "nothing but the empty choice is selected");
+  assert.equal(options.filter((o) => o[1] === "ath-3").length, 1, "the suggested athlete is not listed twice");
+  assert.equal(linkPosts().length, 0);
+});
+
+test("follow-up: no suggestion, a suggestion for another GPEXE athlete, or one naming an athlete the chooser does not offer changes nothing", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  const base = selectOf(renderTrainingLoadCoachHtml());
+  assert.ok(!/Suggested/.test(base));
+  withSuggestion([{ gpexeAthleteId: "999", gpexeName: "X", birthDate: null, athleteId: "ath-3", athleteName: "Dario Petrov Example" }]);
+  assert.equal(selectOf(renderTrainingLoadCoachHtml()), base);
+  withSuggestion([{ gpexeAthleteId: "104", gpexeName: "X", birthDate: null, athleteId: "ath-not-offered", athleteName: "Nobody" }]);
+  assert.equal(selectOf(renderTrainingLoadCoachHtml()), base);
+  state.trainingLoad.gpexe.suggestions = { status: "error", data: null };
+  assert.equal(selectOf(renderTrainingLoadCoachHtml()), base, "a failed suggestion read leaves the chooser as it was");
+});
+
+test("follow-up: opening a review with an athlete who needs a link reads the suggestions once (GET); a review without one reads none", async () => {
+  resetState();
+  let reads = 0;
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) });
+  installFetchMock(async (call) => { if (/athlete-pair-suggestions$/.test(call.url)) { reads += 1; return { status: 200, body: { state: "ok", exact: [], ambiguous: [], dateConflicts: [] } }; } return base(call); });
+  await openImports();
+  await openCandidate();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(reads, 1);
+});
+
+test("follow-up: the Import button sits in its own bar (sticky on phones), and the link confirmation keeps the wrong-link note behind a disclosure", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
+  await openImports();
+  await openCandidate();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<div class="gpexe-approve-bar">[\s\S]*training-load-gpexe-approve[\s\S]*<\/div>/);
+  queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
+  await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<details class="gpexe-fine"><summary>What if the link is wrong\?<\/summary><p>You can unlink it/);
 });

@@ -1841,7 +1841,16 @@ function renderHelperContextHtml(a, c) {
 
 // Linking is two steps: choose the athlete (nothing is sent), then confirm
 // with both sides of the link shown together. No athlete is preselected.
-function renderLinkHtml(a, c, unlinkedChoices) {
+// U3's exact suggestion for this GPEXE athlete, when the server gave one and that
+// athlete can still be chosen here. Never preselected.
+function suggestedChoice(id, unlinkedChoices) {
+  const gx = state.trainingLoad.gpexe;
+  const data = gx.suggestions?.status === "ready" ? gx.suggestions.data : null;
+  const p = data?.exact?.find((x) => x.gpexeAthleteId === String(id));
+  return p ? unlinkedChoices.find((o) => String(o.id) === String(p.athleteId) && !o.duplicate) || null : null;
+}
+
+function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
   const pending = gx.linkConfirm && gx.linkConfirm.gpexeAthleteId === id ? gx.linkConfirm : null;
@@ -1851,7 +1860,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
         <p class="gpexe-link-pair"><strong>${escapeHtml(maskGpexeIds() ? gpexeAthleteLabel(id) : `GPEXE athlete ${id}`)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
         <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When you approve the import, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
-        <p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
+        ${(() => { const wrong = `<p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
@@ -1867,12 +1876,13 @@ function renderLinkHtml(a, c, unlinkedChoices) {
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
       ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
       ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
-      ${renderLinkContextHtml(a, c)}
+      ${compact ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
-            ${unlinkedChoices.map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${(() => { const sg = suggestedChoice(id, unlinkedChoices); return sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""; })()}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
         </label>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
@@ -2060,7 +2070,7 @@ function reviewRowHtml(r, c, choices) {
   const ready = r.status === "importable" || r.status === "participation";
   const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked";
   const cells = VALUE_COLUMNS.map((col) => `<td data-label="${escapeAttr(col.label)}" role="cell">${escapeHtml(r.a ? valueCellText(r, col, c) : "-")}</td>`).join("");
-  const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices) : "";
+  const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices, { compact: !!c?.helperValues }) : "";
   return `
     <tr class="gpexe-review-row is-${r.status}" role="row">
       <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
@@ -2218,8 +2228,10 @@ function renderApproveHtml(c, detail, status) {
       ` : ""}
       <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
       ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
-      ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
-      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || importN === 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(importN, "athlete", "athletes")}`}</button>
+      <div class="gpexe-approve-bar">
+        ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || importN === 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(importN, "athlete", "athletes")}`}</button>
+      </div>
     </div>
   `;
 }

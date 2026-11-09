@@ -389,6 +389,8 @@ export async function openGpexeCandidate(candidateId, render) {
     const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
     if (generation !== gx.generation || gx.detail?.id !== candidateId) return;
     gx.detail.candidate = candidate;
+    // J20-A2 follow-up (J20 section 4): U3's suggested pair comes first in a row's chooser.
+    if ((candidate?.preview?.athletes || []).some((a) => a.notImported?.code === "athlete_not_linked") && gx.suggestions?.status !== "ready") void loadPairSuggestions(render, { inReview: true });
   } catch (error) {
     if (generation !== gx.generation || gx.detail?.id !== candidateId) return;
     gx.detail.error = errorInfo(error);
@@ -1399,9 +1401,10 @@ function suggestionData(answer) {
 }
 
 // 404: not available here (no binding, no right) - the screen shows nothing of it.
-export async function loadPairSuggestions(render) {
+export async function loadPairSuggestions(render, { inReview = false } = {}) {
   const gx = g();
-  if (!gx.teamId || !gx.mapping?.open) return;
+  // The Link athletes screen asks when it opens; the session review asks when a row needs a link.
+  if (!gx.teamId || (!gx.mapping?.open && !inReview)) return;
   const generation = gx.generation;
   const epoch = suggestionEpoch;
   const seq = ++suggestionSeq;
