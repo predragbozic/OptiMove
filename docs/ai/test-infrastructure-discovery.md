@@ -509,6 +509,31 @@ the baseline, so a new failure is visible before review.
     remote machine's own loopback is caught too; and the content-marker guard for
     secret-scan tests (section 3.4) in place of the file-name / title tripwire.
 
+### 8.1a Step 0 of T3: the legacy-schema generator (as built, 2026-11-09)
+
+The `shared` kind and the sign-in need the legacy tables that no `migrations_v2` file creates. The decision (the *Rukovodilac*, option c) is a
+snapshot **generated offline from the schema of the owner's existing verified production dump**, never read from a database.
+
+* **The owner's one command**, run once on the owner's computer from the verified dump (it reads the dump, writes a text file):
+  `pg_restore --schema-only -f schema.sql <the verified dump>`. The owner hands `schema.sql` to the *Rukovodilac*, who runs the tool.
+* **The tool:** `node tools/legacy-schema-from-dump.mjs schema.sql` (files `tools/legacy-schema/*.mjs`). It reads that one SQL text and
+  `migrations_v2/`, opens **no database and no network connection and runs no other program** (a test pins the imports), and writes
+  `backend/tests/support/legacy-schema.sql` and `.sha256`. `--check` compares an existing snapshot with a fresh generation.
+* **What it keeps:** the objects the migrations do not create. The inventory is read from the migrations themselves (schemas, tables,
+  sequences, types, views, functions, indexes, triggers, and the columns and constraints a migration adds to a legacy table, which are
+  removed from the legacy `CREATE TABLE` and `ADD CONSTRAINT`). **What it drops:** owners, grants, comments, extensions, row-level security and
+  policies, publications, the platform's own schemas (`auth`, `storage`, `extensions`, `graphql*`, `realtime`, `vault`, `pgsodium`, ...),
+  `\restrict` lines and the dump's session settings (it writes its own fixed preamble).
+* **The scanner refuses to write** (exit 1, nothing on disk) on a data block or `INSERT`, a JWT, a connection string with a password, a
+  private key, an AWS key, an e-mail address, a role password, a secret assignment, a long random literal or a password hash. It reports rule
+  and line number, never the text. A false positive fails closed.
+* **What it cannot undo, and says so:** a migration that changes a legacy definition in place (`alter column`, `drop constraint`, `validate`)
+  and the `DO` blocks it cannot analyse are listed as WARNINGS. The proof that nothing was missed is the catalog comparison below, run on the real
+  snapshot: apply it to a fresh PostgreSQL, apply `migrations_v2` on top, and compare the catalog with the production catalog the owner's own
+  post-checks already describe. The first real run is the *Rukovodilac*'s review of the generated file before it is committed.
+* **Tests (synthetic dump and a miniature migrations directory in `backend/tests/fixtures/legacy-schema`):**
+  `legacy-schema-generator.test.mjs` (10, unit) and `legacy-schema-bootstrap.test.mjs` (2, disposable PostgreSQL), with mutation evidence.
+
 ### 8.2 T3 — Playwright (plan only; nothing installed in T1)
 
 - **Scope**: the flows unit tests cannot prove — sign-in and workspace switch; the coach's
