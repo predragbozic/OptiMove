@@ -96,6 +96,7 @@ import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWe
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import "./training-load-analysis-echarts.js";
 import { els } from "./dom.js";
+import { statusState } from "./status-state.js";
 import {
   handleExerciseDetailAction,
   handleExerciseLibraryAction,
@@ -4174,6 +4175,8 @@ function sameNodePosition(left, right) {
 
 function setStatus(text) {
   els.status.textContent = text;
+  els.status.dataset.state = statusState(text);
+  els.status.setAttribute("aria-label", `Status: ${text}`);
 }
 
 // hotfix/athlete-home-mobile-layout: els.connectionIndicator only exists on

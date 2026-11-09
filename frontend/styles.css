@@ -18588,6 +18588,24 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
     grid-column: 1 / -1;
     justify-self: end;
   }
+  /* U4: on a phone "Online" is a 12 px dot in the top right corner of the header (level with the title), not a row of its own;
+     every other state keeps the text pill. The state is in the aria-label. */
+  body:not(.athlete-mode):not(.login-mode) .topbar { position: relative; }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {
+    position: absolute;
+    top: 8px;
+    right: 4px;
+    grid-column: auto;
+    min-width: 0;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    line-height: 0;
+    border-radius: 50%;
+    background: #1f9d6b;
+  }
   body:not(.athlete-mode):not(.login-mode) .topbar-actions > .workspace-menu .workspace-panel {
     right: auto;
     left: 0;
