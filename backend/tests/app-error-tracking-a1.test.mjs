@@ -286,12 +286,13 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   const MIG = "migrations_v2/202611091000_app_error_events.sql";
   const blocks = (sql) => sql.split(/^-- \d+\./m).slice(1).map((b) => b.split("\n").slice(1).filter((l) => !l.startsWith("--")).join("\n").trim()).filter(Boolean);
   const post = blocks(await fs.readFile(new URL("app-error-events-v58-postcheck.sql", dir), "utf8"));
-  assert.equal(post.length, 6);
+  assert.equal(post.length, 7);
   const r1 = (await k.query(post[0])).rows[0];
   assert.deepEqual([r1.recorded_once, r1.is_last], [true, true]);
   const r2 = (await k.query(post[1])).rows[0];
   assert.deepEqual(Object.values(r2), [true, true, true, true]);
   assert.equal((await k.query(post[4])).rows[0].ok, true);
+  assert.deepEqual(Object.values((await k.query(post[5])).rows[0]), [true, true, true], "RLS on, nothing for PUBLIC");
   assert.equal((await k.query(post[2])).rows[0].ok, true);
   const pre = blocks(await fs.readFile(new URL("app-error-events-v58-preflight.sql", dir), "utf8"));
   assert.equal(pre.length, 5);
@@ -306,6 +307,23 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   assert.ok(Object.values((await k.query(pre[1])).rows[0]).every(Boolean));
   await assert.rejects(k.query(rollback), /v58 is not recorded/, "a second rollback refuses");
   await k.query("rollback");
-  await k.query(await fs.readFile(new URL("../../migrations_v2/202611091000_app_error_events.sql", import.meta.url), "utf8"));
-  assert.ok((await k.query(`select to_regclass('public.app_error_events') as t`)).rows[0].t);
+  // Re-apply with Supabase-like roles whose default privileges would grant them the table: the migration must take everything back.
+  const made = [];
+  for (const role of ["anon", "authenticated"]) {
+    if (!(await k.query(`select 1 from pg_roles where rolname = $1`, [role])).rowCount) { await k.query(`create role ${role} nologin`); made.push(role); }
+  }
+  await k.query(`alter default privileges in schema public grant all on tables to anon, authenticated, public`);
+  try {
+    await k.query(await fs.readFile(new URL("../../migrations_v2/202611091000_app_error_events.sql", import.meta.url), "utf8"));
+    assert.ok((await k.query(`select to_regclass('public.app_error_events') as t`)).rows[0].t);
+    for (const role of ["anon", "authenticated"]) {
+      for (const priv of ["SELECT", "INSERT", "UPDATE", "DELETE"]) assert.equal((await k.query(`select has_table_privilege($1, 'public.app_error_events', $2) as h`, [role, priv])).rows[0].h, false, `${role} ${priv}`);
+    }
+    assert.equal((await k.query(`select relrowsecurity from pg_class where oid = 'public.app_error_events'::regclass`)).rows[0].relrowsecurity, true);
+    const postAgain = (await fs.readFile(new URL("app-error-events-v58-postcheck.sql", dir), "utf8")).split(/^-- \d+\./m).slice(1).map((b) => b.split("\n").slice(1).filter((l) => !l.startsWith("--")).join("\n").trim()).filter(Boolean);
+    assert.deepEqual(Object.values((await k.query(postAgain[5])).rows[0]), [true, true, true], "default privileges that granted PUBLIC are taken back");
+  } finally {
+    await k.query(`alter default privileges in schema public revoke all on tables from anon, authenticated, public`);
+    for (const role of made) { try { await k.query(`drop owned by ${role}`); await k.query(`drop role ${role}`); } catch { /* left for the cluster's owner */ } }
+  }
 });
