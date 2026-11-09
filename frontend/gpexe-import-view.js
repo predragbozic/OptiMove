@@ -2117,7 +2117,8 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
 // The "Leave out" cell of a row the import would write. The accessible name carries the athlete, so a screen reader hears who.
 function leaveOutCellHtml(r, lo) {
   const imports = r.a && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId;
-  if (!imports) return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><span aria-hidden="true">-</span></td>`;
+  // A row the import would not write has nothing to leave out: an empty cell on a wide table, no line at all in the phone cards.
+  if (!imports) return `<td role="cell" class="gpexe-leave-out-cell is-empty" aria-hidden="true"></td>`;
   const id = String(r.a.gpexeAthleteId);
   return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><label class="gpexe-leave-out"><input type="checkbox" data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="${escapeAttr(id)}" ${lo.chosen.has(id) ? "checked" : ""} aria-label="${escapeAttr(`Leave ${r.name} out of this import`)}"><span>Leave out</span></label></td>`;
 }
@@ -2275,7 +2276,7 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
   return `
     <div class="gpexe-approve gpexe-approve-subset">
       <p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
-        <span class="muted">Nothing of ${leave.length === 1 ? "this athlete" : "them"} is imported, and ${leave.length === 1 ? "they" : "they"} stay out unless GPEXE's data for this session changes.</span></p>
+        <span class="muted">${leave.length === 1 ? "Nothing of this athlete is imported, and this athlete stays out" : "Nothing of them is imported, and they stay out"} unless GPEXE's data for this session changes.</span></p>
       ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
       ${ready ? `<p class="muted" role="status">${escapeHtml(`Reviewed without them: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
       ${after <= 0 && !loading ? `<p class="muted gpexe-approve-note">Nobody would be left to import. Untick an athlete to continue.</p>` : ""}

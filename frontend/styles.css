@@ -22913,3 +22913,6 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   flex: 0 0 auto;
 }
 .gpexe-approve-subset > p { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .gpexe-review-rows td.gpexe-leave-out-cell.is-empty { display: none; }
+}
