@@ -23407,3 +23407,63 @@ p.coach-home-library-note.muted:not([role="status"]) {
   background: var(--surface-soft);
   text-align: center;
 }
+
+/* ==========================================================================
+   Design PR4: Settings (the organization browser) and App health.
+   Visual only, on the PR1 tokens. Scoped to the hero and the organization browser, so the
+   Data sources / Source connections / App health panels inside Settings keep their own look.
+   ========================================================================== */
+
+/* Section labels in sentence case ("Signed in as", "Users", "Organization browser"), as written. */
+.organization-view .organization-hero .eyebrow,
+.organization-view .organization-browser .eyebrow,
+.organization-view .organization-list-head .eyebrow {
+  font-size: var(--om-text-sm);
+  font-weight: var(--om-weight-semibold);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.organization-view .organization-list-head .eyebrow {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--om-text-md);
+}
+
+/* Lists and rows: one radius, quiet borders; a name wraps instead of ending in "...". */
+.organization-view .organization-hero,
+.organization-view .organization-browser .organization-list-card {
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+}
+.organization-view .organization-row {
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-md);
+}
+.organization-view .organization-row strong {
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: var(--om-leading-tight);
+}
+/* In the browser's narrow columns the actions (badges, Invite, Manage account, edit) go on a
+   second line under the name, so they never cover it or squeeze it to a few letters. */
+.organization-view .organization-browser .organization-row:not(.is-selectable) {
+  grid-template-columns: 42px minmax(0, 1fr);
+  row-gap: var(--om-space-2);
+}
+.organization-view .organization-browser .organization-row:not(.is-selectable) > .organization-row-actions {
+  grid-column: 2;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+.organization-view .organization-avatar {
+  color: var(--om-accent-strong);
+  font-weight: var(--om-weight-semibold);
+}
+
+/* App health: the "most recently seen" note reads as a note, not an error. */
+.app-health-truncated {
+  padding: var(--om-space-2) var(--om-space-3);
+  border-radius: var(--om-radius-md);
+  background: var(--om-info-soft);
+  color: var(--om-info);
+}

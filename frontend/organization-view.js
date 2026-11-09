@@ -17,7 +17,7 @@ import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
 // Same figure as the sidebar's "Athletes" nav icon, with a plus badge added
 // (matching the document+plus "New" icon used for weekly plans) instead of
@@ -1278,7 +1278,7 @@ function renderOrganizationUserRow(row, selection = null) {
   return `
     <article class="organization-row organization-user-row ${loginActive ? "" : "is-disabled-account"}${check ? ` is-selectable${selection.ids.has(row.id) ? " is-selected" : ""}` : ""}"${check ? ` data-user-row="${escapeAttr(row.id)}"` : ""}>
       ${check}
-      <span class="organization-avatar">${escapeHtml((row.name || row.email || "US").slice(0, 2).toUpperCase())}</span>
+      <span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(row.name || row.email || "User"))}</span>
       <span class="organization-user-summary">
         <strong>${escapeHtml(row.name || row.email || "User")}</strong>
         <small>${escapeHtml(row.email || "")}</small>
@@ -1674,7 +1674,7 @@ function renderOrganizationRowContent(row, type) {
       : [row.short_name, row.club_name, row.city, row.country].filter(Boolean).join(" - ");
   const image = row.image_url || row.logo_url || "";
   return `
-    ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">${escapeHtml(type.slice(0, 2).toUpperCase())}</span>`}
+    ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(title))}</span>`}
     <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(subtitle || type)}</small></span>
   `;
 }

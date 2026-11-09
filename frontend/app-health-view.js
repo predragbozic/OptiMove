@@ -16,10 +16,11 @@ const CODE_LABEL = {
   unexpected_response: "An answer the app could not read",
   internal_error: "Server error",
 };
-export function codeLabel(code, status) {
-  const base = CODE_LABEL[code] || (status >= 500 ? "Server error" : "Error");
-  return `${base} (${code}${status ? ` · ${status}` : ""})`;
+export function codeWords(code, status) {
+  return CODE_LABEL[code] || (status >= 500 ? "Server error" : "Error");
 }
+// The groups read asks for at most this many (GET /api/app-errors/groups, the server's default limit).
+export const APP_HEALTH_GROUP_CAP = 100;
 const placeLabel = (g) => (whereOf(g) === "/unmatched" ? "Unknown route" : whereOf(g));
 
 export function formatSeen(value) {
@@ -28,6 +29,8 @@ export function formatSeen(value) {
   const two = (n) => String(n).padStart(2, "0");
   return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
+
+const timesLabel = (n) => `${n} ${n === 1 ? "time" : "times"}`;
 
 function chips(items, current, action, attr, busy = false) {
   return items.map(([value, label]) => `<button type="button" ${busy ? "disabled" : ""} class="app-health-chip ${String(current) === String(value) ? "is-active" : ""}" data-action="${action}" data-${attr}="${escapeAttr(value)}" aria-pressed="${String(current) === String(value) ? "true" : "false"}">${escapeHtml(label)}</button>`).join("");
@@ -41,7 +44,7 @@ function groupCard(g, selected) {
     <article class="app-health-group ${open ? "is-open" : ""}">
       <button type="button" class="app-health-row" data-action="app-health-open" data-fingerprint="${escapeAttr(g.fingerprint)}" aria-expanded="${open ? "true" : "false"}">
         <span class="app-health-where"><span class="app-health-kind">${kind}</span> ${escapeHtml(where)}</span>
-        <span class="app-health-what">${escapeHtml(codeLabel(g.code, g.status))}</span>
+        <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}</span>
         <span class="app-health-count">${escapeHtml(String(g.occurrences))}× · ${escapeHtml(String(g.users))} ${g.users === 1 ? "person" : "people"}</span>
         <span class="app-health-seen">Since ${escapeHtml(formatSeen(g.firstSeenAt))} · last ${escapeHtml(formatSeen(g.lastSeenAt))}</span>
       </button>
@@ -49,6 +52,7 @@ function groupCard(g, selected) {
         <dl class="app-health-detail">
           <div><dt>First seen</dt><dd>${escapeHtml(formatSeen(g.firstSeenAt))}</dd></div>
           <div><dt>Last seen</dt><dd>${escapeHtml(formatSeen(g.lastSeenAt))}</dd></div>
+          <div><dt>Code</dt><dd>${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</dd></div>
           <div><dt>Roles</dt><dd>${escapeHtml((g.roles || []).map((r) => ROLE_LABEL[r] || r).join(", ") || "—")}</dd></div>
           ${g.action ? `<div><dt>Last button pressed</dt><dd>${escapeHtml(g.action)}</dd></div>` : ""}
           <div><dt>Release</dt><dd>${escapeHtml(g.release ? g.release.slice(0, 8) : "unknown")}</dd></div>
@@ -79,7 +83,8 @@ export function renderAppHealthPanelHtml() {
       ${h.role !== "all" ? `<p class="muted app-health-note">Showing groups where at least one affected person is ${escapeHtml(ROLE_LABEL[h.role] || h.role)}. The counts cover everyone in the group.</p>` : ""}
       ${h.error ? `<p class="builder-error" role="alert">${escapeHtml(h.error)}</p>` : ""}
       ${groups === null ? (h.loading ? `<p class="muted">Loading…</p>` : h.error ? "" : `<p class="muted">Nothing is loaded yet. Press Refresh.</p>`) : groups.length
-        ? `<p class="app-health-summary">${groups.length} ${groups.length === 1 ? "kind of error" : "kinds of errors"} · ${groups.reduce((n, g) => n + g.occurrences, 0)} times · most recent first</p>
+        ? `<p class="app-health-summary">${groups.length} ${groups.length === 1 ? "kind of error" : "kinds of errors"} · ${timesLabel(groups.reduce((n, g) => n + g.occurrences, 0))} · most recent first</p>
+           ${(h.groups || []).length >= APP_HEALTH_GROUP_CAP ? `<p class="muted app-health-note app-health-truncated" role="note">Showing the ${APP_HEALTH_GROUP_CAP} most recently seen kinds of error. Older ones in this period may not be listed.</p>` : ""}
            <div class="app-health-list ${h.loading ? "is-loading" : ""}" aria-busy="${h.loading ? "true" : "false"}">${groups.map((g) => groupCard(g, h.selected)).join("")}</div>`
         : `<p class="muted app-health-empty">${(h.groups || []).length ? "No errors match these filters." : `No errors recorded in the last ${h.days === 1 ? "24 hours" : `${h.days} days`}.`}</p>${(h.groups || []).length ? `<button type="button" class="plain-button" data-action="app-health-clear">Clear filters</button>` : ""}`}
     </section>`;

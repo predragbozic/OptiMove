@@ -141,7 +141,9 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   let html = renderAppHealthPanelHtml();
   assert.match(html, /\/api\/athletes\/:id\/plans/);
   assert.match(html, /14× · 3 people/);
-  assert.match(html, /Server error \(internal_error · 500\)/);
+  // Design PR4: the row says what happened in words; the code and the status sit in the opened group.
+  assert.match(html, /<span class="app-health-what">Server error<\/span>/);
+  assert.ok(!/internal_error/.test(html), "no code on a folded row");
   assert.match(html, /3 kinds of errors · 17 times · most recent first/);
   assert.match(html, /Since 08\.11\.2026/);
   assert.ok(!/stack|renderImports@app\.js/.test(html), "the details are folded until a group is opened");
@@ -151,6 +153,7 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   html = renderAppHealthPanelHtml();
   assert.match(html, /renderImports@app\.js/);
   assert.match(html, /training-load-gpexe-open/);
+  assert.match(html, /<dt>Code<\/dt><dd>[a-z_]+( · HTTP \d{3})?<\/dd>/);
   assert.match(html, /Platform admin/);
   assert.match(html, /bbbbbbbbbbbb/);
   assert.ok(!html.replace(/<[^>]*>/g, "").includes("bbbbbbbbbbbbb"), "only a short group id is shown");
