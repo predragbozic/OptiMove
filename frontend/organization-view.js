@@ -76,9 +76,9 @@ const ICON_MANAGE_USERS = `
 // U1b: the card beside "Signed in as" says, in plain words, which workspace the
 // settings below belong to and in which role, from the active workspace (never role_hint).
 const WORKSPACE_ROLE_TEXT = { platform: "Platform administrator", club: "Club administrator", team: "Team coach", private_coach: "Private coach" };
-export function renderWorkspaceScopeCard(workspace, { role = "", scope = "" } = {}) {
+export function renderWorkspaceScopeCard(workspace, { scope = "" } = {}) {
   const place = workspace?.type === "platform" ? "All clubs and teams" : workspace?.type === "private_coach" ? "Private coaching" : (workspace?.label || scope || "Workspace");
-  const as = WORKSPACE_ROLE_TEXT[workspace?.type] || (role && role !== "User" ? role : "");
+  const as = WORKSPACE_ROLE_TEXT[workspace?.type] || "";
   return `<div class="organization-scope-card">
           <span>Working in</span>
           <strong>${escapeHtml(place)}</strong>
@@ -114,7 +114,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
           <h3>${escapeHtml(currentUser?.name || currentUser?.email || "User")}</h3>
           <p class="muted">${escapeHtml(currentUser?.email || "")}</p>
         </div>
-        ${renderWorkspaceScopeCard(state.currentUser?.activeWorkspace, { role, scope })}
+        ${renderWorkspaceScopeCard(state.currentUser?.activeWorkspace, { scope })}
         ${pendingRequests ? `
           <button class="organization-request-summary" type="button" data-action="program-library-requests">
             <span>${pendingRequests}</span>

@@ -12,12 +12,13 @@ const pr3 = css.slice(css.indexOf("Design PR3: Home for the three roles"));
 const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 test("U1b: the scope card says where and in which role, in plain words, from the active workspace", () => {
-  assert.equal(text(renderWorkspaceScopeCard({ type: "club", label: "Example Club" }, { role: "User", scope: "Example Club" })), "Working in Example Club as Club administrator");
+  assert.equal(text(renderWorkspaceScopeCard({ type: "club", label: "Example Club" }, { scope: "Example Club" })), "Working in Example Club as Club administrator");
   assert.equal(text(renderWorkspaceScopeCard({ type: "team", label: "First team" }, { role: "User" })), "Working in First team as Team coach");
   assert.equal(text(renderWorkspaceScopeCard({ type: "platform" }, { role: "User", scope: "All platform data" })), "Working in All clubs and teams as Platform administrator");
   assert.equal(text(renderWorkspaceScopeCard({ type: "private_coach" }, {})), "Working in Private coaching as Private coach");
-  // Never the legacy "User" label, and a name is escaped.
-  assert.equal(text(renderWorkspaceScopeCard(null, { role: "User", scope: "Workspace" })), "Working in Workspace");
+  // The role is never taken from role_hint: an unknown or missing workspace names no role.
+  assert.equal(text(renderWorkspaceScopeCard(null, { role: "Club admin", scope: "Club workspace" })), "Working in Club workspace");
+  assert.equal(text(renderWorkspaceScopeCard({ type: "athlete", label: "X" }, { role: "Coach" })), "Working in X");
   assert.doesNotMatch(renderWorkspaceScopeCard({ type: "club", label: "A <b>B</b>" }), /<b>B<\/b>/);
 });
 
@@ -40,5 +41,14 @@ test("a narrow phone hides the switcher's extra words and lets a long name take 
 });
 
 test("an empty day or library is a quiet empty state, a loading line is not", () => {
-  assert.match(pr3, /p\.coach-home-day-note\.muted,\np\.coach-home-library-note\.muted:not\(\[role="status"\]\) \{[^}]*border: 1px dashed/);
+  assert.match(pr3, /p\.coach-home-day-note\.muted:not\(\[role="status"\]\),\np\.coach-home-library-note\.muted:not\(\[role="status"\]\) \{[^}]*border: 1px dashed/);
+  assert.doesNotMatch(pr3, /\.coach-home > p\.muted \{|\+ p\.muted/, "no broad p.muted selector");
+  assert.match(renderCoachHomeHtml({ rows: [], user: { activeWorkspace: { type: "platform" }, availableWorkspaces: [] }, clubs: [] }), /<p class="muted coach-home-empty">No clubs yet\.<\/p>/);
+});
+
+test("PR3 leaves the Home cards' padding (12 px on a phone) and puts every hover behind (hover: hover)", () => {
+  const panel = pr3.slice(pr3.indexOf(".coach-home-panel {"), pr3.indexOf("}", pr3.indexOf(".coach-home-panel {")));
+  assert.doesNotMatch(panel, /padding/);
+  assert.match(css, /\.coach-home-panel \{ padding: 12px; \}/, "the older phone rule is still there");
+  for (const m of pr3.matchAll(/:hover/g)) assert.ok(pr3.lastIndexOf("@media (hover: hover)", m.index) > pr3.lastIndexOf("}\n}", m.index), "hover inside (hover: hover)");
 });
