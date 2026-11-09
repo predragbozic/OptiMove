@@ -420,7 +420,19 @@ test("7. origin 'import' is accepted only for the approver's own request made af
   // another team's session: the approver of THIS team has no approval for that activity
   const other = await setupTeam();
   const so = await importSession(other, 9208);
-  await assert.rejects(importStates(team, so, [x], { by: team.padmin.id }), (e) => e.code === "23514" || e.code === "23503" || /./.test(e.message));
+  // The approver's approval of ANOTHER session does not open this one: the request must hang on an activity linked to an event he approved.
+  const c0 = await newClient();
+  try {
+    await assert.rejects(
+      c0.query(`insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin) values ($1, $2, $3, 'decide_bulk', $4, '{}'::jsonb, 'import')`,
+        [so.activityId, key(), "a".repeat(64), team.padmin.id]),
+      (e) => e.code === "23514" && /import-origin request needs/.test(e.message));
+    // ...while the same insert for a session he did approve passes (rolled back here).
+    await c0.query("begin");
+    await c0.query(`insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin) values ($1, $2, $3, 'decide_bulk', $4, '{}'::jsonb, 'import')`,
+      [s.activityId, key(), "a".repeat(64), team.padmin.id]);
+    await c0.query("rollback");
+  } finally { await c0.end(); }
   // the plain routes write 'roster'
   await coachDecides(team, s, y);
   assert.deepEqual((await admin.query(`select distinct origin from training.activity_roster_requests where activity_id = $1`, [s.activityId])).rows.map((r) => r.origin), ["roster"]);
@@ -584,6 +596,22 @@ test("15. a completion the coach confirmed after the import is later work (with 
   assert.ok(ok.body.undo.removedCounts.activity_completions === 1 && ok.body.undo.removedCounts.activity_completion_log >= 1);
   const logged = (await admin.query(`select roster_work_removed w from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].w;
   assert.deepEqual([logged.later.completions, logged.later.decisions, logged.laterConfirmed], [1, 0, true]);
+});
+
+test("16. the fingerprint covers the completion too: a Complete after the preview changes it, and the old fingerprint removes nothing", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9218);
+  const all = await needing(team, s);
+  await importStates(team, s, all);
+  const first = (await preview(team, s)).body.undoPreview.rosterWork;
+  assert.equal(first.later.completions, 0);
+  const read = await (await rosterApi(`${s.activityId}/roster`, { cookie: team.coach.cookie })).json();
+  const done = await rosterApi(`${s.activityId}/roster/complete`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), expectedRevision: read.completion?.revision ?? 0, expectedFingerprint: read.rosterFingerprint } });
+  assert.equal(done.status, 200, await done.clone().text());
+  const rowsBefore = await allRowCounts();
+  const stale = await api(undoPath(team, s.candidateId), { method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "x", expected: { eventId: s.eventId }, confirmRosterFingerprint: first.fingerprint } });
+  assert.deepEqual([stale.status, stale.body.error], [409, "roster_work_changed"]);
+  assert.deepEqual(await allRowCounts(), rowsBefore);
 });
 
 // ---------------------------------------------------------------------------

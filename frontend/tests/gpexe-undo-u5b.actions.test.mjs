@@ -34,7 +34,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests, inboxBucket, candidateGroup, isImportUndone, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
-const { undoReasonProblem, UNDO_REASON_MAX, normalizeUndoReason, handleUndoReasonInput } = await import("../gpexe-undo-data.js");
+const { undoReasonProblem, UNDO_REASON_MAX, normalizeUndoReason, handleUndoReasonInput, sendUndo } = await import("../gpexe-undo-data.js");
 const { confirmLeaveTrainingLoad } = await import("../training-load-actions.js");
 const { guideSteps } = await import("../gpexe-guide-steps.js");
 const { removedSummary } = await import("../gpexe-undo-view.js");
@@ -680,4 +680,17 @@ test("21. the tick is ignored while the dialog is not in its question step", asy
   await act("training-load-gpexe-undo-cancel");
   tick(true);
   assert.equal(gx().undo, null);
+});
+
+test("22. the data layer refuses a send over later work without the tick even when the action layer is bypassed", async () => {
+  setup({ preview: () => ({ status: 200, body: { undoPreview: { ...SCOPE, rosterWork: WORK(2) } } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  assert.equal(await sendUndo("Wrong links", render), false);
+  assert.equal(undoCalls().length, 0);
+  assert.equal(gx().undo.step, "ready");
+  tick(true);
+  assert.equal(await sendUndo("Wrong links", render), true);
+  assert.equal(undoCalls()[0].body.confirmRosterFingerprint, FP);
 });

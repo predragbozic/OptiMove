@@ -266,6 +266,20 @@ never had an in-app undo: U5 is for an active platform admin only, J19-U5; the s
 * Not implemented in J20-A/B/C. Until that migration exists, a session with any roster decision still cannot be undone from here (U5's refusal), so
   J20-C is **not released before it**.
 
+### 9.2 O1 as built (migration v60)
+
+The undo of an imported session never refuses for roster work (section 5.3). As built, with the *Rukovodilac*'s decisions of 2026-11-09:
+* `activity_roster_requests.origin` (`'roster'` | `'import'`), set to `'import'` only for the approver's own request made after the approval (database check); the
+  generic roster routes never write it.
+* The roster work is split into import-written and later work by `training_load.session_undo_roster_work`; a later decision that supersedes an import-origin
+  one makes the athlete's whole chain later work, and a completion the coach confirmed after the import is later work.
+* `undo_imported_session` is 7-argument (DROP + CREATE under an md5 gate; the 6-argument function no longer exists). Later work goes only on the fingerprint of
+  the list shown (`confirmRosterFingerprint`), compared under the lock (`roster_work_changed`: nothing removed); `roster_work_needs_confirmation` carries the counts
+  and the fingerprint. The preview is read-only for every administrator who may undo and returns both blocks with the athletes' names.
+* The deletion log records the removal in `import_deletion_log.roster_work_removed` (bounded, no free text, confirmed by the administrator who ran it).
+* Not built: `roster_work_too_large` (more than 500 later decisions) has no test with real rows; J20-C writes `'import'` requests.
+* Runbook: `docs/runbooks/session-undo-roster-work-v60.md`.
+
 ## 6. The old screens
 
 * The review **modal** is replaced by this screen when J20-A ships (the modal's code stays one release behind a switch, then is removed).
