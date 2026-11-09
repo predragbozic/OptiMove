@@ -607,13 +607,36 @@ builds a **world** per test file and runs the real application on it:
   * the scenarios: `DATABASE_URL=... npm run test:e2e` (the runner's kind `e2e`, 10 minutes per file, the same cleanup audit as the other disposable kinds).
 * **Runner:** `e2e` is a project and a kind of `scripts/test-runner.mjs` (database rules of the `disposable` kind, preset `e2e`); a file is
   `e2e/tests/*.test.mjs`.
-* **Scenario 4, Data configuration by role** (`e2e/tests/role-visibility.test.mjs`, 6 tests, about 10 s): a team coach has the Data configuration tab
-  and is offered only Variables, Domains and Categories (at 1280 and 390 px); the coach reads `variables` and `classification` and gets the identical
-  404 for `fields`, `mappings`, `conversions`, `activations`, `source-instances`, `targets`, the source connections and a route that does not
-  exist; another club's coach gets the same; a platform administrator sees every card and every read; an athlete has no Training Load. Mutation
-  evidence: putting the coach in the platform workspace fails three of the six. Authorization follows the **active workspace**, so a platform role
-  held while the team workspace is active changes nothing (that is the product's rule, not a gap).
-* **Not yet built:** scenarios 1, 3 and 6 (waiting for their definitions), the fake GPEXE host, a CI job, the Builder flow on a phone.
+* **The scenarios** (each at 1280 and 390 px; definitions by the *Rukovodilac*, 2026-11-09; the names below are the test files in `e2e/tests/`):
+  * **1, sign-in and workspaces** (`signin-workspaces.test.mjs`): every demo account signs in and sees the Settings tabs of its role (platform admin:
+    Data sources, Source connections, Storage, App health; club admin: Source connections only; coach: none of the four); an athlete has no Settings
+    and no Training Load; each account reaches only its own workspace and a switch to another club's is refused; the other club's coach and admin see
+    no name, id or screen of our club, team or athletes, and a direct request for our team answers the **byte-identical 404** of a team that does not
+    exist. **Observed, not as first worded:** a team coach's Settings *does* list Overview, Clubs, Teams, Athletes, Users, Join links, Tags & Presets
+    and Icons (organization-browser screens scoped to what the coach may see; their direct `/api/organization/users|clubs|teams|storage|join-links`
+    reads are 404). The test asserts what is provable (the four privileged tabs absent, the isolation); whether a coach should have those tabs at
+    all is a product decision for a frontend change, not something the test asserts.
+  * **3, Source connections against the fake GPEXE source** (`source-connections.test.mjs`): the club admin Creates, Connects (the fake marker pair typed
+    into the real form), Tests, Binds the approved pair and Unbinds with a reason, each step with its screen text and answer (*Not connected* ->
+    *Verified*, "Access token stored, encrypted. It is never shown.", *Bound teams None yet* -> *1 team* -> *None yet*); an unapproved pair is refused;
+    the password and the token are in no page, address or answer; the platform admin sees the same state; a coach, the other club's admin and coach
+    and an athlete get the identical 404 for the connection and the list, and no coach or athlete has the tab. The fake source is the backend tests'
+    `createFakeSource()` preloaded into the **server process only** (`e2e/lib/fake-source-preload.mjs`, `node --import`): it answers the one approved
+    host `https://server3.gpexe.com/`, nothing else; the application's allowlist and catalog are untouched. The stored credential's key ring is a
+    throwaway generated per run.
+  * **4, Data configuration by role** (`role-visibility.test.mjs`): a team coach has the Data configuration tab and is offered only Variables, Domains
+    and Categories; the coach reads `variables` and `classification` and gets the identical 404 for `fields`, `mappings`, `conversions`,
+    `activations`, `source-instances`, `targets`, the source connections and a route that does not exist; another club's coach gets the same; a platform
+    administrator sees every card and every read; an athlete has no Training Load. (The club admin's full tabs are covered by 1.)
+  * **6, Settings -> App health** (`app-health.test.mjs`): one error is seeded the way the browser reports it (a coach's `POST /api/app-errors`); only
+    the platform admin sees the tab and the group, with the role *Coach*; club admin, coach and athlete have no tab and `GET /api/app-errors/groups`
+    is the identical 404 of an unknown route; no answer or section carries an e-mail, a name or a user id (the page header shows the signed-in viewer
+    only).
+  * Mutation evidence: putting the coach in the platform workspace fails three of scenario 4; making the other club's admin an admin of our club fails
+    1c, 1d and 3b. Authorization follows the **active workspace**, so a platform role held while the team workspace is active changes nothing (the
+    product's rule, not a gap).
+  * Accounts: `platform_admin`, `club_admin`, `team_coach`, `other_team_coach` (another club's coach), `other_club_admin` and `athlete`.
+* **Not yet built:** a CI job, 360 / 375 px, the Builder flow on a phone, driving Create and Test / Bind through the forms (Connect is driven through its form).
 
 ### 8.3 Candidates for later consolidation (not removed in T1)
 
