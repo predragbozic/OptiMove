@@ -3910,8 +3910,8 @@ pre-existing; pass/fail counts don't belong in this file
     2. **The platform administrator's Home says "No coaching workspaces available."** It is the real behaviour (`frontend/coach-home.js` lists coaching workspaces only, and a platform admin has none), not the seed. A small task: the platform admin's Home should list the clubs with a way into each workspace.
     3. **The coach's header on a 390 px phone** has five controls in a row and "Online" in a row of its own: it works but is dense. Recorded, not changed.
     4. **A team coach's Settings tabs:** Overview, Clubs, Teams, Athletes, Users, Join links, Tags & Presets and Icons are listed (organization-browser screens scoped to what the coach may see; the direct reads of users, clubs, teams, storage and join-links answer 404). Whether they should be simplified is a UX question for the *Rukovodilac*'s per-role review, not a rights question; T3 scenario 1 asserts only the rule (the four privileged tabs absent, isolation, the identical 404).
-  - **Open:** PR #428, T3 scenario 8 (Imports started in the UI with *Find new sessions*; a coach with an approver grant imports, a coach without the right is never offered Import; 1280 and 390 px), head `8370bb3f`, waiting for the *Rukovodilac*'s GO.
-  - **Still to build:** the O1 undo migration, J20-B, J20-C; T3's roster decisions through the UI, `E2E_CHROMIUM_EXECUTABLE` support in `launch()` (the *Rukovodilac*'s Chromium build differs from Playwright's) and the CI job.
+  - **Merged after that, each exactly from its reviewed head, with the *Rukovodilac*'s own `--preset e2e` run:** PR #428, T3 scenario 8 (Imports started in the UI with *Find new sessions*; a coach with an approver grant imports, a coach without the right is never offered Import; 1280 and 390 px; `82af83d0`, from `8370bb3f`, 7 files 32/32), and PR #429, T3 scenario 9 (roster decisions on a team session through the UI, the seed's memberships starting on 2026-01-01, and `E2E_CHROMIUM_EXECUTABLE` in `launch()`; `fcc0948b`, from `021effc3`, 8 files 34/34 with the *Rukovodilac*'s own Chromium). The e2e scenarios now cover sign-in and workspaces, role visibility, source connections, App health, the Imports flow, *Find new sessions* and roster decisions; a CI job and 360 / 375 px stay open.
+  - **Still to build:** the O1 undo migration, J20-B, J20-C, and T3's CI job. The *Rukovodilac*'s UX pass by role (2026-11-09, on `fcc0948`) is the next frontend queue: U1 the coach's Settings as "My team" (a plan first), U2 the platform admin's Home as a club list, U3 plainer Training Load wording and plurals, U4 the dense 390 px header.
 - **Eight failing test files found while checking U1 (2026-11-04), reproduced on a tree whose backend and frontend code is identical to `main` `0022f579` (the J19 docs merge), Node 22 in the cloud container; the causes are not investigated:**
   - backend `gpexe-client.test.mjs` - 2 of 19 tests fail;
   - backend `gpexe-rest-v1-adapter-reads.test.mjs` - 82 of 96 fail;
@@ -4786,6 +4786,7 @@ pre-existing; pass/fail counts don't belong in this file
   *Recorded, but not on this session's roster* and leaves the roster short. Importing older
   sessions therefore needs either correct membership start dates or a decision on how a
   roster before the first membership should read.
+  The e2e seed hides this on purpose: its memberships start on 2026-01-01 (PR #429), so a November session lists the whole team; a world whose members were added after the session shows the empty roster described here.
 - **A membership archived and restored before v25 lost its gap** (Settings revives the same
   row); the athlete appears on rosters inside that gap. Over-inclusion only; the coach can
   answer *Did not participate* · Other.
