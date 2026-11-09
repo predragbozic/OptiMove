@@ -5,7 +5,9 @@ import { readFileSync, readdirSync } from "node:fs";
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const start = css.indexOf("Design PR2: the page header");
-const pr2 = css.slice(start);
+// Only PR2's own block: it ends where the next design block starts (or at the end of the file).
+const next = css.indexOf("/* ==========================================================================", start + 1);
+const pr2 = css.slice(start, next > start ? next : undefined);
 const S = "body:not(.athlete-mode):not(.login-mode)";
 const rule = (sel, from = pr2) => {
   const at = from.indexOf(`${sel} {`);

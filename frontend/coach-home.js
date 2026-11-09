@@ -341,9 +341,10 @@ function plural(n, noun) {
 // The platform admin's Home: the clubs, each opening in Settings.
 function renderPlatformClubsHtml(clubs) {
   return `<section class="coach-home-clubs" aria-labelledby="coachHomeClubsTitle">
-    <h3 id="coachHomeClubsTitle">Clubs</h3>
+    <h3 id="coachHomeClubsTitle">Clubs <span class="coach-home-clubs-count">${escapeHtml(String(clubs.length))}</span></h3>
     <ul class="coach-home-workspaces coach-home-club-list">${clubs.map((club) => `<li>
       <button class="coach-home-workspace" type="button" data-action="home-open-club" data-club-id="${escapeAttr(club.id)}">
+        <svg class="coach-home-workspace-icon" viewBox="0 0 24 24" aria-hidden="true">${WORKSPACE_ICONS.club}</svg>
         <span class="coach-home-workspace-label"><strong>${escapeHtml(club.name)}</strong><small>${escapeHtml(`${plural(club.teamCount, "team")} · ${plural(club.athleteCount, "athlete")}`)}</small></span>
         ${ICON_CHEVRON_RIGHT}
       </button></li>`).join("")}</ul>
@@ -362,7 +363,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, 
       ? `${renderAthletePanel("plan", rows)}${renderAthletePanel("load", rows)}${renderCoachHomeDayHtml({ rows, home, today })}`
       : renderEmptyStateHtml();
   const body = platform
-    ? `${error ? `<div role="alert"><p class="builder-error">${escapeHtml(error)}</p><button class="plain-button coach-home-state-button" type="button" data-action="coach-home-retry">Try again</button></div>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length || error ? "" : `<p class="muted">No clubs yet.</p>`}`
+    ? `${error ? `<div role="alert"><p class="builder-error">${escapeHtml(error)}</p><button class="plain-button coach-home-state-button" type="button" data-action="coach-home-retry">Try again</button></div>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length || error ? "" : `<p class="muted coach-home-empty">No clubs yet.</p>`}`
     : `<div class="coach-home-grid">${athleteCards}${renderCoachHomeExercisesHtml(home.exercises)}${renderCoachHomeProgramsHtml(home.programs)}</div>
     ${!error && rows.length && picker.mode ? renderPickerDialog(coachHomePickerRows(rows, picker, home, today), picker, today) : ""}`;
   return `<section class="content-section coach-home">

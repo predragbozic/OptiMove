@@ -42,9 +42,18 @@ export function renderWorkspaceSwitcher() {
   }
 
   const canSwitch = available.length > 1;
-  const caret = canSwitch ? `<span class="workspace-toggle-caret" aria-hidden="true">&#9662;</span>` : "";
-  els.workspaceToggle.innerHTML = `<span class="workspace-toggle-label">${escapeHtml(workspaceLabel(active))}</span>${caret}`;
-  els.workspaceToggle.setAttribute("title", workspaceLabel(active));
+  const caret = canSwitch ? `<svg class="workspace-toggle-caret" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg>` : "";
+  // "Club · " / "Team · " is its own span so a narrow phone can hide it and keep the name;
+  // the full label stays the button's accessible name and its title.
+  const full = workspaceLabel(active);
+  const prefix = active.type === "club" ? "Club · " : active.type === "team" ? "Team · " : "";
+  const name = prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full;
+  // "Platform administration" keeps only "Platform" on a narrow phone, the same way.
+  const tail = active.type === "platform" && full === "Platform administration" ? " administration" : "";
+  const shown = tail ? full.slice(0, -tail.length) : name;
+  els.workspaceToggle.innerHTML = `<span class="workspace-toggle-label">${prefix && name !== full ? `<span class="workspace-toggle-extra">${escapeHtml(prefix)}</span>` : ""}${escapeHtml(shown)}${tail ? `<span class="workspace-toggle-extra">${escapeHtml(tail)}</span>` : ""}</span>${caret}`;
+  els.workspaceToggle.setAttribute("title", full);
+  els.workspaceToggle.setAttribute("aria-label", `Workspace: ${full}`);
   els.workspaceToggle.disabled = Boolean(state.workspaceSwitcher.pending);
 
   if (canSwitch) {
