@@ -5,6 +5,9 @@ import { readFileSync, readdirSync } from "node:fs";
 // Design foundation (PR1): the shared tokens and .om-* components, and their one
 // adopter in PR1, the Settings tab bar.
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+// Captures the resize listener om-tabs.js installs on its first revealActiveTab call.
+const windowHandlers = {};
+globalThis.addEventListener = (type, handler) => { windowHandlers[type] = handler; };
 const { renderSettingsNavHtml } = await import("../navigation.js");
 const { revealActiveTab, refreshTabFades } = await import("../om-tabs.js");
 const { state } = await import("../state.js");
@@ -82,6 +85,26 @@ test("a width change marks the fade again: a row that now fits loses it", () => 
   r.clientWidth = 900;
   refreshTabFades(root(r));
   assert.equal(r.attrs["data-fade"], undefined);
+});
+
+test("revealActiveTab installs a resize listener that marks the fade again", () => {
+  const r = row({ width: 300, scrollWidth: 900, active: { offset: 10, width: 90 } });
+  revealActiveTab(root(r));
+  assert.equal(typeof windowHandlers.resize, "function");
+  const saved = globalThis.document;
+  globalThis.document = root(r);
+  try {
+    r.clientWidth = 900;
+    windowHandlers.resize();
+    assert.equal(r.attrs["data-fade"], undefined);
+  } finally {
+    globalThis.document = saved;
+  }
+});
+
+test("badge modifiers keep plain names", () => {
+  for (const m of ["success", "warning", "danger", "info", "accent"]) assert.ok(css.includes(`.om-badge--${m} {`), m);
+  assert.doesNotMatch(css, /\.om-badge--om-/);
 });
 
 test("revealActiveTab leaves a row that fits, a row without an active tab and a missing root alone", () => {

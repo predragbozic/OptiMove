@@ -23121,10 +23121,10 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   font-weight: var(--om-weight-semibold);
   white-space: nowrap;
 }
-.om-badge--om-success { background: var(--om-success-soft); color: var(--om-success); }
-.om-badge--om-warning { background: var(--om-warning-soft); color: var(--om-warning); }
+.om-badge--success { background: var(--om-success-soft); color: var(--om-success); }
+.om-badge--warning { background: var(--om-warning-soft); color: var(--om-warning); }
 .om-badge--danger { background: var(--om-danger-soft); color: var(--danger); }
-.om-badge--om-info { background: var(--om-info-soft); color: var(--om-info); }
+.om-badge--info { background: var(--om-info-soft); color: var(--om-info); }
 .om-badge--accent { background: var(--accent-soft); color: var(--om-accent-strong); }
 
 /* Tabs: the active tab underlined. On a computer a row that does not fit wraps (a mouse
