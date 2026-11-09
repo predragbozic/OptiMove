@@ -22798,3 +22798,40 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .gpexe-review-rows .gpexe-link {
   margin-top: 8px;
 }
+.gpexe-review-rows th[scope="row"] {
+  min-width: 9rem;
+}
+.gpexe-review-rows td[data-label="Status"] {
+  white-space: nowrap;
+}
+.gpexe-review-rows .gpexe-review-link > td {
+  padding: 0 6px 12px;
+}
+@media (max-width: 760px) {
+  .gpexe-review-rows th[scope="row"] {
+    min-width: 0;
+  }
+  .gpexe-review-rows td[data-label="Status"] {
+    white-space: normal;
+  }
+  .gpexe-review-rows .gpexe-review-link {
+    border: 0;
+    padding: 0;
+    margin-top: -4px;
+  }
+}
+.gpexe-review-rows td[data-label="Status"] .gpexe-badge {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .gpexe-review-rows td[data-label="Status"] .gpexe-badge {
+    white-space: normal;
+  }
+}
+/* The Builder's <=560px rule stacks every .builder-section-panel-head; this dialog keeps the close button on the heading's row. */
+@media (max-width: 560px) {
+  .gpexe-detail .builder-section-panel-head {
+    flex-direction: row !important;
+    align-items: flex-start !important;
+  }
+}

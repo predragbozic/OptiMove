@@ -2066,8 +2066,9 @@ function reviewRowHtml(r, c, choices) {
       <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
       <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
       ${cells}
-      <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${link}</td>
-    </tr>`;
+      <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}</td>
+    </tr>${link ? `
+    <tr class="gpexe-review-link" role="row"><td colspan="${VALUE_COLUMNS.length + 3}" role="cell">${link}</td></tr>` : ""}`;
 }
 
 function reviewTableOf(rows, c, choices) {

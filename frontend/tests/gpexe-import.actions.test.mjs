@@ -2681,8 +2681,9 @@ test("J20-A2 H1: Link to... sits in the athlete's row; after the link ONE recomp
   await openImports();
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
-  const row = html.slice(html.indexOf('class="gpexe-review-row is-needs_link"'), html.indexOf("</tr>", html.indexOf('class="gpexe-review-row is-needs_link"')));
-  assert.match(row, /data-gpexe-link-select="104"/, "the chooser is in the row");
+  const at = html.indexOf('class="gpexe-review-row is-needs_link"');
+  const row = html.slice(at, html.indexOf("</tr>", html.indexOf("</tr>", at) + 5));
+  assert.match(row, /data-gpexe-link-select="104"/, "the chooser is in the row (its own full-width line under it)");
   assert.match(row, /data-action="training-load-gpexe-link"[^>]*>Link\.\.\.<\/button>/);
   assert.equal((html.match(/data-gpexe-link-select="104"/g) || []).length, 1, "one chooser, not two");
   await linkRow104();
