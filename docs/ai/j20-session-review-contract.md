@@ -34,7 +34,7 @@ Rows that need a person are on top; rows that are fine are folded. Nothing new i
 | The preview is a rolled-back run of the real import under the team lock; it lists per GPEXE athlete: participation, GPS status, `results[]` with values (version 3: variable label, unit, value, source field and source value), `skippedValues[]`, `notImported` (`athlete_not_linked`, `athlete_not_in_team`, `session_blocked`, a blocking kind), and `teamAthletesWithoutGpexeRecord` | `backend/src/gpexeImportPreview.js` (the `entry.notImported` branch near line 476) |
 | `approveCandidate` imports the **whole candidate** exactly as its preview showed it; refused unless `previewHash` equals the hash of the preview recomputed in the same transaction | `gpexeImportService.js` `approveCandidate`, v23 trigger |
 | A GPEXE athlete that is not linked or not in the team is left out of the import automatically (the session stays importable) | preview `notImported` |
-| A link writes only `gpexe_athlete_links`. `getCandidate` returns the **stored** preview and hash, so after a link the review stays as it was and the screen marks it stale (`reviewMadeBeforeLinkChange`) until a check that started after the link has seen the session. Nothing recomputes it on demand today (only a check's finalization and a refused approval do, via `storeRefreshedPreview`) | `gpexeImportService.js` `getCandidate`, `linkAthlete`; `frontend/gpexe-import-data.js` |
+| A link writes only `gpexe_athlete_links`. `getCandidate` returns the **stored** preview and hash, so after a link the review stays as it was and the screen marks it stale (`reviewMadeBeforeLinkChange`) until a check that started after the link has seen the session. Nothing recomputes it on demand today (a refused approval stores a fresh one via `storeRefreshedPreview`; a check publishes through the v33 finalization) | `gpexeImportService.js` `getCandidate`, `linkAthlete`; `frontend/gpexe-import-data.js` |
 | Roster decisions (*Participated · no device data*, *Did not participate* with a reason) are written by the 5a2 routes, one athlete or a bulk of up to 60, idempotent by `requestKey`, on an activity that already exists | `docs/ai/phase5a-discovery-and-contract.md`, `activity-roster-*` |
 | The in-app undo of an imported session (v57, U5) refuses a session with any roster decision (`roster_decisions_exist`) | `docs/ai/j19-u5-undo-contract.md` Q4 |
 | Linking one GPEXE athlete: `POST …/athlete-links` `{ gpexeAthleteId, athleteId }`; U3 suggests pairs and U3's *Confirm all* links several | existing routes |
@@ -58,14 +58,15 @@ The row kinds are derived from the preview's **real** codes (`ATHLETE_ANOMALY`, 
 | Row kind (preview fact) | What the row shows | The action on the row |
 |---|---|---|
 | Importable (no `notImported`) | values, chip "Will be imported" | *Leave out* (J20-B; the only kind that can be excluded) |
+| Participation only (`allValuesLeftOut`: kept, every mapped value left out) | note "no values could be imported" | none; counts in N (his participation is written), may be excluded |
 | Imported with some values left out (`skippedValues`) | values plus a note per left-out value and its reason | none (the athlete is still imported) |
 | Not linked (`notImported: athlete_not_linked`) | identification by audience (section 4), values, chip "Not linked" | *Link to…* (chooser of the team's active athletes not yet linked; same-name athletes cannot be chosen; nothing preselected; U3's suggestion first). Already left out by the importer: no *Leave out* |
 | Not in the team (`athlete_not_in_team`) | chip "Not in this team" | none |
 | Needs review / invalid data (`multiple_tracks`, `stats_invalid`, `whole_session_row_count`) | one sentence of what is wrong | none (a GPEXE data matter; already left out by the importer) |
-| No device data (a team athlete in `teamAthletesWithoutGpexeRecord`) | no values, chip "No data from the device" | *Participated · no device data* or *Did not participate* (+ reason list): **states**, written after the import (5.2) |
+| No device data (a team athlete in `teamAthletesWithoutGpexeRecord`) | no values, chip "No data from the device" | *Participated · no device data* or *Did not participate* (+ reason list): **states**, written after the import (5.2). `teamAthletesWithoutGpexeRecord` also lists the team athlete behind a *Not linked* GPEXE row, so while any *Not linked* row exists the state actions are disabled with "Link or leave out the unmatched GPEXE athletes first" |
 | Session blocked (`session_blocked`, a `BLOCK_MESSAGES` kind) | no rows; the block's sentence and the step that lifts it | none; the primary action stays off |
 
-`excludedAthleteIds` (J20-B) accepts only athletes whose preview entry is *Importable*; any other id answers `400 invalid_exclusion`
+`excludedAthleteIds` (J20-B) accepts only athletes whose preview entry is *Importable*; an id that is unknown to the candidate answers `400 invalid_excluded_athlete`, an id that is not *Importable* in the stored preview `400 invalid_exclusion`; any change found under the lock is `409 preview_changed` (never a 400)
 (5.1). The "Needs a person" chip counts Not linked, Needs review and No data rows.
 
 **Primary action** at the bottom (sticky on a phone): **Import N athletes** — N counts the rows with "Import" on and values.
@@ -98,15 +99,39 @@ they are and does not widen them. The production-use gate for names and dates of
 
 ### 5.0 The recompute route (J20-A1, ★★ trigger 4, no migration)
 
-`POST …/candidates/:id/preview` `{}` returns the preview and `previewHash` recomputed **now** for the whole candidate. It is **locking and
-rolled back, not "read-only"**: it runs the real import in a rolled-back transaction under the team's import lock, with the approval's lock order
-and the 9-0 bounds (`lock_timeout` 5 s, `statement_timeout` 10 s, `idle_in_transaction_session_timeout` 10 s), answers `409 try_again` /
-`check_preview_busy` when the lock is not free, **writes nothing at all and never calls `storeRefreshedPreview`**, and has a per-user and
-per-team minimum interval. Audience and 404 as in 5.1 (the approval's audience; the identical 404; the same projection as `GET candidate`,
-including D10: a blocked preview's hash only to a platform admin; `no-store`). The client sends it once per deliberate step (after a link, on
-*Review*), one in flight. Tests: link then call → the new preview shows the athlete and the hash differs; a call while a check holds the team
-lock → bounded `try_again` with `preview_hash` and `preview_computed_at` unchanged; a coach's body carries no admin-only code. 5.1's subset
-preview is this route with `excludedAthleteIds`.
+`POST …/candidates/:id/preview` `{}` recomputes the preview and `previewHash` of the **whole candidate** now and **stores them with the existing
+compare-and-set** of a refused approval (`storeRefreshedPreview`: `where id = $1 and preview_hash = <expected> and status in ('pending','blocked')`),
+then returns them. This is required: `approveCandidate` compares the client's hash with the **stored** `preview_hash` first
+(`gpexeImportService.js` near line 2400) and the approval trigger (v23, redefined in v33) requires the approval's hash to equal the candidate's
+stored one, so a hash that was returned but not stored could never be approved (after a link every import would answer `409 preview_changed` until a
+full check). The route writes **no durable row except the candidate's own derived columns** (preview, hash, computed-at) by compare-and-set; a lost
+compare-and-set answers `409 preview_changed` with the current stored one. Sequence values are consumed by the rolled-back import. The list, U6a's batch
+hash and other coaches see the new hash (a batch then gets `preview_changed`, which is safe).
+
+**Sequence and lock order (explicit, to avoid inverting against an approval, whose order is candidate row → team lock).** Read the candidate unlocked
+for authorization only → `BEGIN` (READ COMMITTED) → `setImportTransactionBounds` (`lock_timeout` 5 s, `statement_timeout` 10 s,
+`idle_in_transaction_session_timeout` 10 s) → team import lock → `lockApprovalTeam` → re-read the candidate **under the team lock without a row lock**
+(status pending/blocked, actionable, snapshot state, bundle; an approval holds the team lock to its COMMIT, so this read is consistent) → binding from
+`last_seen_check_id` as approval step 3 (a missing binding yields the blocked `mapping_not_usable` preview) → mapping registry locks → the preview
+(rolled-back real import) → compare-and-set store → `COMMIT`. It does **not** take the approver-rights lock (6b): the right is checked unlocked and
+nothing but derived columns is written. `409 try_again` / `check_preview_busy` when a lock is not free. **Total budget:** the route has a wall-clock
+bound like the approval (client-side bound with the connection released with an error on timeout), because the per-statement bounds do not bound the
+whole transaction; it holds the team lock for the length of the preview (seconds for a session with drills), during which a check start, a link write,
+a roster command and an approval wait up to their own lock bounds. The screen does not call it while a check of the team is running.
+
+**Rate limit.** No durable storage exists for an interval, so it is **per instance, in memory** (limit stated: after a deploy or across instances there
+can be more rounds, still bounded by the team lock). It applies only to **repeated calls on the same candidate with the same stored hash**; a call after
+a link change is a deliberate step and is not throttled by it. The screen on `429`/`try_again` keeps the stale marker and offers *Update the review* again.
+
+**Audience (whole-candidate recompute): the team managers**, the same as the link right and `GET candidate` (a coach who can link must see the result
+of the link). The answer uses the `GET candidate` projection, including D10 (a blocked preview's hash only to a platform admin) and
+`namesClubVariables`; only an approver's screen offers *Import*. A viewer without the import right sees the row in its new kind and no import button.
+The identical 404; `Cache-Control: no-store`. The subset variant (5.1) is **not** this: it never stores anything.
+
+Tests: link then call → the new preview shows the athlete, the hash differs, the stored hash equals the returned one; then `POST …/approve` with
+that hash imports (200); a second user linking between the recompute and the approval → `409 preview_changed` and the stored hash equals the
+recomputed one; a recorded-SQL-order test (rule of `.claude/rules/migrations.md`) and an approval-against-recompute concurrency test; a call while a
+check holds the team lock → bounded `try_again` with the stored columns unchanged; a coach's body carries no admin-only code.
 
 ### 5.1 Importing a subset (J20-B, ★★: triggers 1, 3 and 4; **needs a migration**; the approval gate and the v23 trigger both change)
 
@@ -122,14 +147,20 @@ preview is this route with `excludedAthleteIds`.
   candidate's stored `preview_hash` (the whole candidate), and `approveCandidate` compares the caller's hash with the stored one first. A hash
   that covers an exclusion set is a different hash, so a subset approval would fail the trigger. J20-B therefore changes the approvals table
   and the trigger: the approval keeps `preview_hash` (the candidate, as today) and gains `excluded_athlete_ids` (ids only, no names) and
-  `subset_hash`; the trigger checks the full-candidate hash against the candidate and the subset hash against the preview recomputed in the same
-  transaction. That also **records who was left out**, so "why is athlete X missing from this session" stays answerable. It is a ★★
+  `subset_hash`; the trigger (a `CREATE OR REPLACE` of the **v33** body of `validate_gpexe_import_approval`, with the LO-2 md5 precondition; v56 and later checked for a
+  redefinition) checks the full-candidate hash against the candidate, that `excluded_athlete_ids` is `'{}'` NOT NULL (no backfill), canonical, sorted,
+  unique and at most 60, that `subset_hash` is NULL exactly when the set is empty, its format, and that both are write-once. **A trigger cannot
+  recompute a preview**: the subset hash and the exclusion set are verified by `approveCandidate` step 12 under the locks, against the preview
+  recomputed in the same transaction (tested); a raw writer is outside that guarantee (the v35 pattern). The rollback refuses once any approval has a
+  non-empty set. A migration test: a raw INSERT with exclusions and no subset hash is refused (`23514`); one with a well-formed wrong hash succeeds,
+  pinned as the documented limit. **Which hash the client sends:** `previewHash` = the candidate's stored full hash (kept fresh by 5.0) and, for a
+  subset, additionally `subsetHash` and `excludedAthleteIds`. That also **records who was left out**, so "why is athlete X missing from this session" stays answerable. It is a ★★
   migration: the owner's order naming it, the *Rukovodilac*'s preflight (standing order), both ★★ reviews, trigger 1 external review.
 * **The stored preview is never overwritten by a subset.** On a hash mismatch the full path refreshes the candidate's stored preview
   (`storeRefreshedPreview`); the subset path **never calls it**. It answers `409 preview_changed` with the recomputed subset preview in the body
   only, because the list, U6a's batch (which holds the full preview's hash) and other coaches rely on the stored full preview. A test proves
   that a refused subset approval leaves the candidate's stored preview and hash byte for byte as they were.
-* **The subset preview** is 5.0's route with `excludedAthleteIds`. It is **not cheap and not free of locks**: it runs under the team's import lock with the 9-0 bounds (`lock_timeout` 5 s,
+* **The subset preview** is a separate variant of the same route with `excludedAthleteIds` that **stores nothing at all** (no compare-and-set; the stored full preview and hash stay byte for byte). It is **not cheap and not free of locks**: it runs under the team's import lock with the 9-0 bounds (`lock_timeout` 5 s,
   `statement_timeout` 10 s, `idle_in_transaction_session_timeout` 10 s), answers `409 try_again` / `check_preview_busy` when the lock is not
   free, and has a per-user and per-team minimum interval. Its **audience is the approval's** (O4), not the whole team's: reading the existing
   full preview stays a team-manager read (`GET candidate`), but a subset preview exists only to be approved. The screen asks for it once, on a
@@ -141,7 +172,7 @@ preview is this route with `excludedAthleteIds`.
   import a subset behind a hash that does not cover it.
 * **What a left-out athlete means afterwards.** The candidate becomes `imported` as a whole. A later check of unchanged GPEXE content finds
   the imported candidate and yields `no_changes`: **a left-out athlete is not importable until GPEXE's content for the session changes**
-  (`supplemented` only adds values to results that already exist). J20 does not add an "import the rest" path. A second approval of the same
+  (`supplemented` only adds values to results that already exist). J20 does not add an "import the rest" path. A retry with a **different** exclusion set after a lost answer is indistinguishable from a replay (there is no request key), so the screen compares the recorded `excluded_athlete_ids` (`getApproval`, same audience as the approval) with what the user chose and says so. A second approval of the same
   candidate is `409 already_imported` (not an idempotent replay); the retry path after a lost answer is `already_imported` plus `getApproval`,
   which returns the recorded `excluded_athlete_ids`, so the screen can show what was left out. A test approves with an exclusion, repeats the
   request, expects `409 already_imported`, and reads the same exclusion from `getApproval`. If the content changes, the new candidate's review offers the stored exclusion set as the
@@ -153,7 +184,7 @@ preview is this route with `excludedAthleteIds`.
   `excluded=[a3]`, runs a new check of the unchanged bundle, and shows no pending candidate offering a3 and the roster state of a3; the owner is
   told the result with the question.
 * **Recompute and rollback.** The subset approval has no request key of its own; a lost COMMIT is resolved by the existing bounded COMMIT and
-  `resolveUncertainCommit`, and the answer after an error never says "nothing was imported" once the COMMIT was sent.
+  `resolveUncertainCommit`, which is **extended to return the recorded `excluded_athlete_ids` and `subset_hash`**; a test through the real route proves a lost COMMIT of a subset approval never answers "nothing was imported". The answer after an error never says "nothing was imported" once the COMMIT was sent.
 * **Determinism.** The subset hash is computed over the canonical sorted set; a test proves that the same set gives the same hash across runs
   and that two different sets give different hashes and each approval imports exactly its set.
 * Reviews: `db-reviewer`, `security-reviewer`, `code-reviewer`; external review (trigger 1 migration, 3, 4).
@@ -178,7 +209,7 @@ Roster states are decisions on an **activity**, which exists only after the impo
 * **The states step waits for the activity.** After `import_outcome_unknown` or `verified_after_commit_error` the activity id may be unknown; the
   step stays off until the verified approval names it. The approval has no request key of its own: its replay protection is the candidate's
   status plus `resolveUncertainCommit`, and J20 adds no new idempotency record for it.
-* **The states step has its own `requestKey`, kept across a reload** (as 5a3b does), and *Save them again* reuses it. The chosen but unsaved
+* **The states step is N sequential calls**, because the roster bulk takes one kind, reason and note for all its athletes (`validateBulk`): one call per kind+reason group, each with its own `requestKey` generated before the import and kept across a reload, its own *Saved / Nothing saved / Result not confirmed* and its own *Check result*; no call is made until the import's outcome is confirmed (the activity id comes only from the import answer or `getApproval`); a states failure never rolls the import back; a test for "second call lost". **Each call has its own `requestKey`, kept across a reload** (as 5a3b does), and *Save them again* reuses it. The chosen but unsaved
   states survive a reload (kept in the browser for the session); "never lost silently" depends on that.
 
 **Recommendation: A.** The states are small, reversible, and already have a correct write path; the import is the only irreversible act
@@ -205,6 +236,7 @@ never had an in-app undo: U5 is for an active platform admin only, J19-U5; the s
 * A later **Change** in the Roster tab creates a new decision **without** the tag (5a2 supersedes with new ids), so undo refuses again for that
   athlete: a human judgment is never removable by the flow's tag. A test: J20 saves a state, the coach changes it in the Roster tab, undo →
   `roster_decisions_exist`.
+* The origin is set **only server-side** by the J20 states route (a closed-set CHECK, default `'roster'`; the generic roster routes cannot send it), so a coach cannot tag their own decisions to make them removable. Undo and roster commands take the same team import lock, so undo-against-Change serialises; a concurrency test.
 * The rule becomes: refuse if any decision, request, completion or log row exists whose request origin is not `session_review`, or whose decision
   supersedes or is superseded by one that is not (a later Roster-tab decision supersedes through the current pointer, so removing the tagged one
   would break the chain).
