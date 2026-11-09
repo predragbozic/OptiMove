@@ -2380,6 +2380,9 @@ async function openTrainingLoadFromCalendar({ activityId, date }) {
 
 function renderCoachHome({ rows, error, clubs = [] }) {
   coachHomeRows = rows || [];
+  // A late answer (the roster, the clubs) never draws Home over the screen the user opened meanwhile;
+  // opening Home again reads it again. The calendar's render has the same guard.
+  if (state.activeTab !== "coach-home") return;
   // A redraw (the athlete list opening, a background refresh) keeps every
   // strip where the coach left it and the focus where it was.
   const view = captureCoachHomeView(els.content.querySelector(".coach-home"));
