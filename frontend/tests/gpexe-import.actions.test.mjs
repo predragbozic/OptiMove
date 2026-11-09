@@ -276,6 +276,7 @@ test("GPEXE imports: the review shows participation and GPS apart, a left-out va
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { identityAdmin: true } },  onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({ previewVersion: 2 }) } }) }));
   await openImports();
   await openCandidate();
+  await act("training-load-gpexe-review-filter", { filter: "all" });
   const html = renderTrainingLoadCoachHtml();
   assert.match(html, /role="dialog"/);
   assert.match(html, /Participation: recorded by GPEXE · GPS: Measured/);
@@ -2526,6 +2527,7 @@ test("J20-A2: one row per athlete with one status each; the button names the ath
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: candidateDetail() } }) }));
   await openImports();
   await openCandidate();
+  await act("training-load-gpexe-review-filter", { filter: "all" });
   const html = renderTrainingLoadCoachHtml();
   assert.deepEqual(reviewRows(html).map((r) => r.status), ["needs_link", "no_record", "importable"], "attention first");
   assert.equal(reviewRows(html)[2].name, "Ana Example");
@@ -2554,6 +2556,7 @@ test("J20-A2: an athlete whose values are all left out is 'Participation only' a
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, athletes: [a101] } } } }) }));
   await openImports();
   await openCandidate();
+  await act("training-load-gpexe-review-filter", { filter: "all" });
   const html = renderTrainingLoadCoachHtml();
   assert.deepEqual(reviewRows(html).map((r) => r.status), ["no_record", "participation"]);
   assert.match(html, /1 athlete is ready to import \(1 participation only\)\./);
@@ -2725,7 +2728,8 @@ test("J20-A2 M1/H2: chips with counts (Needs a person by default), the three val
   await openImports();
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
-  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">3<\/span>/);
+  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">1<\/span>/);
+  assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["needs_link"], "the default view holds only what needs a person - never the no-data rows");
   assert.match(html, /data-filter="not_linked"[^>]*aria-pressed="false">Not linked <span class="gpexe-chip-count">1<\/span>/);
   assert.match(html, /data-filter="no_data"[^>]*>No data <span class="gpexe-chip-count">2<\/span>/);
   assert.match(html, /data-filter="all"[^>]*>All <span class="gpexe-chip-count">4<\/span>/);
@@ -2803,4 +2807,16 @@ test("J20-A2 (code review): the question before an import counts what the button
   const html = renderTrainingLoadCoachHtml();
   assert.match(html, /Athlete links changed after this review was made/);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "approving stays off");
+});
+
+test("J20-A2: with nobody that needs a person the default chip is All and the no-data rows are visible", async () => {
+  resetState();
+  const d = candidateDetail();
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, athletes: [d.preview.athletes[0]] } } } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /data-filter="all"[^>]*aria-pressed="true">All /);
+  assert.ok(!/data-filter="needs"/.test(html), "no 'Needs a person' chip when it would be empty");
+  assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["no_record"]);
 });
