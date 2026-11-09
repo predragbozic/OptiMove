@@ -142,7 +142,7 @@ export async function writeEvent(event, { executor = pool } = {}) {
     await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`app-error:${hash || "none"}:${fingerprint}`]);
     const bumped = await client.query(
       `update public.app_error_events
-          set repeat_count = repeat_count + 1, last_seen_at = now()
+          set repeat_count = repeat_count + 1, last_seen_at = greatest(last_seen_at, clock_timestamp())
         where id = (select id from public.app_error_events
                      where fingerprint = $1 and user_hash is not distinct from $2 and last_seen_at > now() - interval '${REPEAT_WINDOW}'
                      order by last_seen_at desc limit 1)

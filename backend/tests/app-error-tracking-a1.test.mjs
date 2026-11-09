@@ -245,6 +245,18 @@ test("5c. through a real route: a 5xx answers the generic body and one sanitized
   await k.query(`delete from public.app_error_events`);
 });
 
+test("5d. concurrent reports of the same user and fingerprint all count (the update guard never rejects a legitimate bump)", async () => {
+  await k.query(`delete from public.app_error_events`);
+  const ev = { source: "client", screen: "home", action: "race", code: "js_error", role: "coach", userHash: M.userHash("race-user") };
+  const outcomes = await Promise.all(Array.from({ length: 12 }, () => M.writeEvent(ev)));
+  assert.equal(outcomes.filter((o) => o === "stored").length, 1);
+  assert.equal(outcomes.filter((o) => o === "counted").length, 11);
+  const r = await rows();
+  assert.equal(r.length, 1);
+  assert.equal(r[0].repeat_count, 12);
+  await k.query(`delete from public.app_error_events`);
+});
+
 test("5b. events without a user are capped too", async () => {
   await k.query(`delete from public.app_error_events`);
   let stored = 0;
