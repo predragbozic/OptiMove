@@ -17,7 +17,7 @@ import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
 // Same figure as the sidebar's "Athletes" nav icon, with a plus badge added
 // (matching the document+plus "New" icon used for weekly plans) instead of
@@ -380,7 +380,7 @@ function renderArchivedTeamRow(team) {
   const note = !team.club_id ? "No club" : team.club_active === false ? " - the club is archived" : "";
   return `
     <article class="organization-row is-archived">
-      <span class="organization-avatar">${escapeHtml(title.slice(0, 2).toUpperCase())}</span>
+      <span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(title))}</span>
       <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(team.club_id ? team.club_name || "" : "")}${note}</small></span>
       <span class="organization-row-actions">
         ${restorable ? `<button class="plain-button compact-button" type="button" data-action="organization-restore-team" data-team-id="${escapeAttr(team.id)}" aria-label="Restore ${escapeAttr(title)}">Restore</button>` : ""}
@@ -393,7 +393,7 @@ function renderArchivedCoachRelationshipRow(row) {
   const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
   return `
     <article class="organization-row is-archived" ${athleteFilterAttrs(row, "settings-archived-private")}>
-      <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
+      <span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(title))}</span>
       <span><strong>${escapeHtml(title)}</strong><small>Archived from your athletes - login and history are kept</small></span>
       <span class="organization-row-actions">
         <button class="plain-button compact-button" type="button" data-action="organization-restore-coach-relationship" data-athlete-id="${escapeAttr(row.id)}">Restore</button>
@@ -406,7 +406,7 @@ function renderArchivedProfileRow(row) {
   const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
   return `
     <article class="organization-row is-archived" ${athleteFilterAttrs(row, "settings-archived-profiles")}>
-      <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
+      <span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(title))}</span>
       <span><strong>${escapeHtml(title)}</strong><small>Whole sporting profile archived - login and relationships are untouched</small></span>
       <span class="organization-row-actions">
         <button class="plain-button compact-button" type="button" data-action="organization-restore-profile" data-athlete-id="${escapeAttr(row.id)}">Restore profile</button>
@@ -707,7 +707,7 @@ function renderProgramAccessRequestRow(row) {
   return `
     <article class="organization-row organization-request-row is-${escapeAttr(status)}">
       <button class="organization-table-athlete organization-request-athlete organization-request-athlete-button" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="${escapeAttr(row.athlete_id || row.user_id || "")}">
-        ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}
+        ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(row.athlete_name || "Athlete"))}</span>`}
         <span>
           <strong>${escapeHtml(row.athlete_name || "Athlete")}</strong>
           <small>${escapeHtml([row.athlete_code ? `ID ${row.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>
@@ -811,7 +811,7 @@ function renderTeamAthleteRow(athlete, team) {
   const image = athlete.image_url || "";
   return `
     <div class="organization-table-row" role="row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
-      <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
+      <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
       <span>${renderAthleteLoginToggle(athlete)}</span>
       <span class="organization-row-actions">
@@ -826,7 +826,7 @@ function renderTeamAthleteRow(athlete, team) {
 function renderArchivedTeamAthleteRow(athlete, team) {
   return `
     <div class="organization-table-row is-archived" role="row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
-      <span class="organization-table-athlete"><span class="organization-avatar">${escapeHtml((athlete.athlete_id || "AT").slice(0, 2).toUpperCase())}</span><strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
+      <span class="organization-table-athlete"><span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span><strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
       <span class="muted">Removed from team</span>
       <span class="organization-row-actions">
@@ -1278,7 +1278,7 @@ function renderOrganizationUserRow(row, selection = null) {
   return `
     <article class="organization-row organization-user-row ${loginActive ? "" : "is-disabled-account"}${check ? ` is-selectable${selection.ids.has(row.id) ? " is-selected" : ""}` : ""}"${check ? ` data-user-row="${escapeAttr(row.id)}"` : ""}>
       ${check}
-      <span class="organization-avatar">${escapeHtml((row.name || row.email || "US").slice(0, 2).toUpperCase())}</span>
+      <span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(row.name || row.email || "User"))}</span>
       <span class="organization-user-summary">
         <strong>${escapeHtml(row.name || row.email || "User")}</strong>
         <small>${escapeHtml(row.email || "")}</small>
@@ -1674,7 +1674,7 @@ function renderOrganizationRowContent(row, type) {
       : [row.short_name, row.club_name, row.city, row.country].filter(Boolean).join(" - ");
   const image = row.image_url || row.logo_url || "";
   return `
-    ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">${escapeHtml(type.slice(0, 2).toUpperCase())}</span>`}
+    ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(title))}</span>`}
     <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(subtitle || type)}</small></span>
   `;
 }
