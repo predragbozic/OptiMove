@@ -40,8 +40,13 @@ async function services() {
 // rights checks.
 export async function platformAdmin(client, label = "9b-pa") {
   await assertDisposable(client);
+  // The legacy users table of a database built from the production snapshot requires first_name and last_name (the
+  // synthetic scaffold has no such columns): fill them when they exist.
+  const names = (await client.query(`select 1 from information_schema.columns where table_schema = 'public' and table_name = 'users' and column_name = 'first_name'`)).rowCount > 0;
   const id = (await client.query(
-    `insert into public.users (email, full_name, display_name) values ($1,$2,$2) returning id`,
+    names
+      ? `insert into public.users (email, first_name, last_name, full_name, display_name) values ($1,'9-B','Admin',$2,$2) returning id`
+      : `insert into public.users (email, full_name, display_name) values ($1,$2,$2) returning id`,
     [`${label}-${suffix()}@test.local`, `9-B ${label}`],
   )).rows[0].id;
   await client.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [id]);
