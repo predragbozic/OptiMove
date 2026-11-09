@@ -1,0 +1,182 @@
+// Option A, A2: the browser's error capture and Settings -> App health.
+//   1. what is sent is a closed shape: no message, URL, id, name or e-mail, ever;
+//   2. in-memory limits: the same error once a minute, at most N a minute, nothing when signed out, a failed send is silent;
+//   3. api.js reports a 5xx, no answer, an unreadable answer - and nothing for an ordinary refusal or for the report route;
+//   4. the screen: groups, filters, details, empty and error states, escaping; the tab only for a platform admin.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+globalThis.document = { querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false } } };
+globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }) };
+
+const SECRET = "ana.example@example.invalid";
+
+const C = await import("../app-errors-capture.js");
+const { api } = await import("../api.js");
+const { state } = await import("../state.js");
+const D = await import("../app-health-data.js");
+const { renderAppHealthPanelHtml } = await import("../app-health-view.js");
+const { handleAppHealthAction } = await import("../app-health-actions.js");
+const { renderSettingsNavHtml } = await import("../navigation.js");
+C.setCaptureContext({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
+
+const KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release"]);
+let sent;
+const capture = () => { sent = []; C.setReporterForTests(C.createReporter({ send: async (b) => { sent.push(b); } })); };
+
+test("1. the report is a closed shape", () => {
+  const err = new Error(`failed for ${SECRET} token=abc`);
+  err.stack = `Error: failed for ${SECRET} token=abc\n    at renderImports (https://app.example/assets/app-Ba80peD.js?v=1:10:20)\n    at start (https://app.example/app.js:3:4)\n    at https://app.example/x/y.js:1:1`;
+  const body = C.buildReport({ screen: "Training Load", action: "training-load-gpexe-open", code: "js_error", status: undefined, error: err });
+  assert.deepEqual(Object.keys(body).sort(), ["action", "code", "screen", "stackSig"]);
+  assert.equal(body.screen, "training_load");
+  assert.equal(body.stackSig, "renderImports@app-Ba80peD.js > start@app.js > anonymous@y.js");
+  assert.ok(!JSON.stringify(body).match(/example|token|abc|failed/));
+  assert.ok(Object.keys(body).every((k) => KEYS.has(k)));
+  // the Firefox / Safari shape
+  const ff = new Error("x"); ff.stack = "renderImports@https://app.example/app.js:10:20\nstart@https://app.example/app.js:3:4";
+  assert.equal(C.stackSigOf(ff), "renderImports@app.js > start@app.js");
+  assert.equal(C.stackSigOf({ message: "x", stack: "Error: x" }), null);
+  assert.equal(C.stackSigOf(null), null);
+  // a message line that looks like a frame is not read as one
+  const tricky = new Error("x\n    at secret-ana-example (file.js:1:1)"); tricky.stack = "Error: x\n    at secret-ana-example (file.js:1:1)\n    at real (a.js:1:1)";
+  assert.equal(C.stackSigOf(tricky), "real@a.js");
+  assert.equal(C.wordOf("A b/c?d=e@f", "x"), "a_b_c_d_e_f");
+  assert.equal(C.wordOf("", "fallback"), "fallback");
+  assert.deepEqual(C.buildReport({ screen: "home", code: "http_500", status: 500 }), { screen: "home", code: "http_500", status: 500 });
+  assert.equal(C.buildReport({ screen: "home", code: "x", status: 99 }).status, undefined);
+  const long = new Error("x"); long.stack = "Error: x\n" + ["queryBuiltInSeriesFromContext@trainingLoadDashboardQuery.js", "resolveFactsToRowsAndShiftRanges@trainingLoadDashboardQuery.js", "executeDashboardQueryForWidgets@trainingLoadDashboardWidgets.js", "handler@trainingLoadDashboard.js"].map((f) => `    at ${f.split("@")[0]} (https://a/${f.split("@")[1]}:1:1)`).join("\n");
+  const sig = C.stackSigOf(long);
+  assert.ok(sig && sig.length <= 200 && sig.startsWith("queryBuiltInSeriesFromContext@"));
+});
+
+test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a failed send is silent", async () => {
+  let t = 1_000_000;
+  const out = [];
+  const r = C.createReporter({ send: async (b) => { out.push(b); }, now: () => t, perMinute: 3 });
+  assert.equal(r({ screen: "home", code: "js_error" }), true);
+  assert.equal(r({ screen: "home", code: "js_error" }), false, "the same error within a minute");
+  for (const code of ["a", "b"]) assert.equal(r({ screen: "home", code }), true);
+  assert.equal(r({ screen: "home", code: "c" }), false, "more than N a minute");
+  t += 61_000;
+  assert.equal(r({ screen: "home", code: "js_error" }), true, "a new minute");
+  assert.equal(out.length, 4);
+  const failing = C.createReporter({ send: async () => { throw new Error("offline"); } });
+  assert.equal(failing({ screen: "home", code: "x" }), true);
+  await new Promise((res) => setTimeout(res, 5));
+  const throwing = C.createReporter({ send: () => { throw new Error("sync"); } });
+  assert.equal(throwing({ screen: "home", code: "x" }), false);
+  // the default sender: nothing when signed out; a POST of the closed body when signed in
+  let calls = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 204 }; };
+  state.currentUser = null;
+  const signedOut = C.createReporter({});
+  signedOut({ screen: "home", code: "js_error" });
+  await new Promise((res) => setTimeout(res, 5));
+  assert.equal(calls.length, 0, "a signed-out page sends nothing");
+  state.currentUser = { id: "u" };
+  const signedIn = C.createReporter({});
+  signedIn({ screen: "home", code: "js_error" });
+  await new Promise((res) => setTimeout(res, 5));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/app-errors");
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { screen: "home", code: "js_error" });
+  state.currentUser = null;
+});
+
+test("3. api.js reports a 5xx, no answer and an unreadable answer; nothing for a refusal or for the report route", async () => {
+  capture();
+  state.activeTab = "training-load";
+  const reply = (status, body, { json = true } = {}) => { globalThis.fetch = async () => ({ ok: status < 300, status, statusText: "", json: async () => { if (!json) throw new SyntaxError("<html>"); return body; } }); };
+  reply(500, { error: "internal_error", message: `boom ${SECRET}` });
+  await assert.rejects(api("/api/athletes/3f2b8c1e-1111-4222-8333-444455556666/plans?token=abc"));
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "internal_error", status: 500 }]);
+  capture(); reply(502, { error: "Bad Gateway & more" }); await assert.rejects(api("/api/x"));
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "http_502", status: 502 }]);
+  capture(); globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); }; await assert.rejects(api("/api/x"));
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "no_response" }]);
+  capture(); reply(200, null, { json: false }); await assert.rejects(api("/api/x"));
+  assert.deepEqual(sent.map((b) => b.code), ["unexpected_response"]);
+  capture(); reply(502, null, { json: false }); await assert.rejects(api("/api/x2"));
+  assert.deepEqual(sent.map((b) => b.code), ["http_502"], "a 5xx page that is not JSON");
+  capture(); reply(418, null, { json: false }); await assert.rejects(api("/api/x3"));
+  assert.deepEqual(sent.map((b) => b.code), ["unexpected_response"], "a refusal that is not JSON");
+  for (const [status, body] of [[400, { error: "invalid" }], [403, { error: "forbidden" }], [404, { error: "Not found" }], [409, { error: "try_again" }]]) { capture(); reply(status, body); await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], `${status} is an ordinary refusal`); }
+  capture(); reply(401, null, { json: false }); await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "a signed-out answer is not an error of the app");
+  capture(); reply(500, { error: "internal_error" }); await assert.rejects(api("/api/app-errors")); assert.deepEqual(sent, [], "the report route is never reported");
+  capture(); globalThis.fetch = async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }; await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "an abort is the page's own choice");
+  capture(); C.noteAction("training-load-gpexe-open"); reply(500, { error: "internal_error" }); await assert.rejects(api("/api/x"));
+  assert.equal(sent[0].action, "training-load-gpexe-open");
+  assert.ok(!JSON.stringify(sent).match(/token|example|3f2b8c1e|plans/));
+});
+
+const GROUPS = [
+  { fingerprint: "a".repeat(64), source: "server", screen: null, routeTemplate: "/api/athletes/:id/plans", action: null, code: "internal_error", status: 500, release: "0123456789abcdef", stackSignature: "handler@athletes.js > query@db.js", occurrences: 14, users: 3, firstSeenAt: "2026-11-08T08:00:00Z", lastSeenAt: "2026-11-09T07:30:00Z", roles: ["coach", "athlete"] },
+  { fingerprint: "b".repeat(64), source: "client", screen: "training-load", routeTemplate: null, action: "training-load-gpexe-open", code: "js_error", status: null, release: null, stackSignature: "renderImports@app.js", occurrences: 2, users: 1, firstSeenAt: "2026-11-09T06:00:00Z", lastSeenAt: "2026-11-09T06:30:00Z", roles: ["platform_admin"] },
+  { fingerprint: "c".repeat(64), source: "client", screen: "<img src=x onerror=alert(1)>", routeTemplate: null, action: null, code: "no_response", status: null, release: null, stackSignature: null, occurrences: 1, users: 1, firstSeenAt: "2026-11-09T06:00:00Z", lastSeenAt: "2026-11-09T06:30:00Z", roles: ["user"] },
+];
+function serveGroups(groups, status = 200) {
+  const calls = [];
+  globalThis.fetch = async (url) => { calls.push(url); return { ok: status < 300, status, statusText: "", json: async () => (status < 300 ? { days: 7, groups } : { error: "Not found" }) }; };
+  return calls;
+}
+const flush = () => new Promise((r) => setTimeout(r, 5));
+
+test("4. the screen: groups, filters, details, empty and error states, escaping, and the tab only for a platform admin", async () => {
+  const calls = serveGroups(GROUPS);
+  state.appHealth = D.emptyAppHealth();
+  const renders = [];
+  const render = () => renders.push(renderAppHealthPanelHtml());
+  await D.loadAppHealth(render);
+  assert.deepEqual(calls, ["/api/app-errors/groups?days=7"]);
+  let html = renderAppHealthPanelHtml();
+  assert.match(html, /\/api\/athletes\/:id\/plans/);
+  assert.match(html, /14× · 3 people/);
+  assert.match(html, /internal_error · 500/);
+  assert.ok(!/stack|renderImports@app\.js/.test(html), "the details are folded until a group is opened");
+  assert.ok(!html.includes("<img src=x"), "a stored word is escaped");
+  // details
+  await handleAppHealthAction({ dataset: { action: "app-health-open", fingerprint: "b".repeat(64) } }, { render });
+  html = renderAppHealthPanelHtml();
+  assert.match(html, /renderImports@app\.js/);
+  assert.match(html, /training-load-gpexe-open/);
+  assert.match(html, /Platform admin/);
+  assert.match(html, /bbbbbbbbbbbb/);
+  assert.ok(!html.replace(/<[^>]*>/g, "").includes("bbbbbbbbbbbbb"), "only a short group id is shown");
+  await handleAppHealthAction({ dataset: { action: "app-health-open", fingerprint: "b".repeat(64) } }, { render });
+  assert.ok(!/renderImports@app\.js/.test(renderAppHealthPanelHtml()), "a second tap folds it");
+  // filters
+  await handleAppHealthAction({ dataset: { action: "app-health-role", role: "platform_admin" } }, { render });
+  html = renderAppHealthPanelHtml();
+  const listOf = (h) => h.split('class="app-health-list"')[1] || "";
+  assert.match(listOf(html), /training-load/); assert.ok(!/\/api\/athletes/.test(listOf(html)));
+  await handleAppHealthAction({ dataset: { action: "app-health-role", role: "all" } }, { render });
+  await handleAppHealthAction({ dataset: { action: "app-health-where", where: "/api/athletes/:id/plans" } }, { render });
+  html = renderAppHealthPanelHtml();
+  assert.match(listOf(html), /14×/); assert.ok(!/training-load/.test(listOf(html)));
+  await handleAppHealthAction({ dataset: { action: "app-health-role", role: "none" } }, { render });
+  assert.match(renderAppHealthPanelHtml(), /No errors match these filters\./);
+  // period reads again
+  await handleAppHealthAction({ dataset: { action: "app-health-days", days: "30" } }, { render });
+  assert.equal(calls.at(-1), "/api/app-errors/groups?days=30");
+  await handleAppHealthAction({ dataset: { action: "app-health-days", days: "999" } }, { render });
+  assert.equal(calls.length, 2, "an unknown period sends nothing");
+  // empty and error
+  serveGroups([]); state.appHealth = D.emptyAppHealth(); await D.loadAppHealth(render);
+  assert.match(renderAppHealthPanelHtml(), /No errors recorded in the last 7 days\./);
+  serveGroups([], 404); state.appHealth = D.emptyAppHealth(); await D.loadAppHealth(render);
+  assert.match(renderAppHealthPanelHtml(), /only available to a platform administrator/);
+  serveGroups([], 500); state.appHealth = D.emptyAppHealth(); await D.loadAppHealth(render);
+  assert.match(renderAppHealthPanelHtml(), /could not be loaded/);
+  // a newer read wins
+  state.appHealth = D.emptyAppHealth();
+  let release; const gate = new Promise((r) => { release = r; });
+  globalThis.fetch = async (url) => { if (url.includes("days=7")) await gate; return { ok: true, status: 200, statusText: "", json: async () => ({ groups: url.includes("days=7") ? [GROUPS[0]] : [GROUPS[1]] }) }; };
+  const older = D.loadAppHealth(render);
+  state.appHealth.days = 1; const newer = D.loadAppHealth(render); await newer; release(); await older; await flush();
+  assert.equal(state.appHealth.groups[0].fingerprint, "b".repeat(64), "the older answer never replaces the newer one");
+  // the tab
+  assert.match(renderSettingsNavHtml({ isPlatformAdmin: true }), /data-section="appHealth"/);
+  assert.ok(!/appHealth/.test(renderSettingsNavHtml({ isPlatformAdmin: false })));
+});

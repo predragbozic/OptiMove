@@ -164,6 +164,8 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     // platform workspace, like application blocks. Every route behind it
     // checks the active platform_admin role again.
     ...(storageAdminContext(data) ? [["storage", "Storage"]] : []),
+    // App health (A2): the recorded errors, a platform administrator only; the route answers everyone else the unknown-route 404.
+    ...(data.isPlatformAdmin ? [["appHealth", "App health"]] : []),
   ];
   return `
     <nav class="settings-tabs" aria-label="Settings sections">

@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { CALENDAR_SETTINGS_ICON_HOST } from "./calendar-settings-actions.js";
 import { enterCalendarSettingsSection } from "./calendar-settings-data.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
+import { enterAppHealthSection } from "./app-health-data.js";
 import { closeIconPicker, iconPickerOpenFor } from "./icon-picker.js";
 import { enterIconGallery } from "./icon-gallery.js";
 import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
@@ -309,6 +310,8 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     // have changed its connection or a grant since it was last read. Source
     // connections reads its club again for the same reason.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
+    // App health reads the recorded errors again on every entry.
+    if (state.organization.section === "appHealth") void enterAppHealthSection(() => { if (state.organization.section === "appHealth") void renderOrganizationPanel({ refresh: false }); });
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     // Storage (PR 5) reads everything again on entry for the same reason.
     if (state.organization.section === "storage") enterStorageAdminSection();

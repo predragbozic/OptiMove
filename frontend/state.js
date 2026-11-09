@@ -1084,6 +1084,8 @@ export const createInitialState = () => ({
   // is being administered, its GPEXE connection, that connection's history
   // and who may approve its imports. The forms are drafts until a
   // confirmation is answered - nothing here is sent while it is being typed.
+  // Settings -> App health (A2): the recorded errors, read only.
+  appHealth: { days: 7, role: "all", where: "all", loading: false, error: "", groups: null, selected: "", generation: 0 },
   dataSources: {
     teamId: "", loading: false, error: null, status: null, history: null, approvers: null, generation: 0, notice: "", noticeFor: "",
     connectOpen: false, connectDraft: { gpexeTeamId: "", reason: "" }, connectConfirm: null, connectBusy: false, connectError: null,
