@@ -4,7 +4,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { api, launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { api, launch, openAs, openSettings, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -94,3 +94,29 @@ test("4e. an athlete has no Training Load and the metrics reads answer as if the
     await context.close();
   }
 });
+
+for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone]]) {
+  test(`4f. (${label}) Settings by role: a team coach gets My team (four tabs), a club admin keeps the organization tabs`, async () => {
+    const coach = await openAs(browser, world, "team_coach", width);
+    try {
+      const tabs = await openSettings(coach.page);
+      assert.deepEqual(tabs, ["Athletes", "Join links", "Tags & Presets", "Icons"]);
+      const text = (await coach.page.locator(".organization-view").innerText()).replace(/\s+/g, " ");
+      assert.match(text, /my team/i);
+      assert.match(text, /first team/i);
+      assert.match(text, /12 athletes/i);
+      assert.doesNotMatch(text, /organization browser|all accessible organization|0 clubs|signed in as/i);
+      assert.deepEqual(coach.pageErrors, [], "no uncaught page error");
+    } finally {
+      await coach.context.close();
+    }
+    const admin = await openAs(browser, world, "club_admin", width);
+    try {
+      const tabs = await openSettings(admin.page);
+      for (const t of ["Overview", "Clubs", "Teams", "Users"]) assert.ok(tabs.includes(t), `the club admin keeps ${t}`);
+      assert.deepEqual(admin.pageErrors, []);
+    } finally {
+      await admin.context.close();
+    }
+  });
+}

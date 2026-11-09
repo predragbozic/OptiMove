@@ -9,7 +9,7 @@ import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
 import { renderContentLanguageOptions } from "./account-language.js";
 import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
-import { renderSettingsNavHtml } from "./navigation.js";
+import { COACH_SETTINGS_SECTIONS, isCoachSettings, renderSettingsNavHtml } from "./navigation.js";
 import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
@@ -80,8 +80,18 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   if (state.organization.section === "sourceConnections" && !sourceConnectionsAdminContext()) state.organization.section = "overview";
   if (state.organization.section === "storage" && !storageAdminContext(data)) state.organization.section = "overview";
   if (state.organization.section === "calendar" && !calendarSettingsContext()) state.organization.section = "overview";
-  return `
-    <section class="content-section organization-view">
+  // A coach's Settings is "My team": a section outside its few tabs falls back to Athletes.
+  const coach = isCoachSettings();
+  if (coach && !COACH_SETTINGS_SECTIONS.includes(state.organization.section)) state.organization.section = "athletes";
+  const privateCoach = state.currentUser?.activeWorkspace?.type === "private_coach";
+  const hero = coach ? `
+      <section class="panel organization-hero organization-hero-coach">
+        <div>
+          <p class="eyebrow">${privateCoach ? "My athletes" : "My team"}</p>
+          <h3>${escapeHtml(privateCoach ? "Private coaching" : (state.currentUser?.activeWorkspace?.label || scope || "My team"))}</h3>
+          <p class="muted">${escapeHtml(currentUser?.name || currentUser?.email || "")}</p>
+        </div>
+      </section>` : `
       <section class="panel organization-hero">
         <div>
           <p class="eyebrow">Signed in as</p>
@@ -99,7 +109,10 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
             <small>Review now</small>
           </button>
         ` : ""}
-      </section>
+      </section>`;
+  return `
+    <section class="content-section organization-view">
+      ${hero}
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
       ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
@@ -264,9 +277,9 @@ export function renderOrganizationBrowser(data) {
     <section class="organization-browser">
       <div class="organization-browser-head">
         <div>
-          <p class="eyebrow">Organization browser</p>
-          <h3>${escapeHtml(selectedTeam?.name || selectedClub?.name || "All accessible organization")}</h3>
-          <p class="muted">${escapeHtml(selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${activeAthletes.length} athletes`)}</p>
+          ${isCoachSettings() ? "" : `<p class="eyebrow">Organization browser</p>`}
+          <h3>${escapeHtml(isCoachSettings() ? "Athletes" : (selectedTeam?.name || selectedClub?.name || "All accessible organization"))}</h3>
+          <p class="muted">${escapeHtml(isCoachSettings() ? `${visibleAthletes.length} ${visibleAthletes.length === 1 ? "athlete" : "athletes"}` : selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${activeAthletes.length} athletes`)}</p>
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}

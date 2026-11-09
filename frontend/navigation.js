@@ -60,6 +60,13 @@ export function renderAccessNav() {
   if (builderButton) builderButton.hidden = isAthleteMode();
 }
 
+// A coach's Settings ("My team"): the active workspace is a team or the private coaching one. Only what a coach works with is
+// offered; the server still decides every request (hiding a tab is not the protection).
+export const COACH_SETTINGS_SECTIONS = ["athletes", "joinLinks", "presets", "icons"];
+export function isCoachSettings() {
+  return ["team", "private_coach"].includes(state.currentUser?.activeWorkspace?.type);
+}
+
 export function renderLibraryNav() {
   renderAccessNav();
   // A coach who loses Settings access lands on Home (K1b, D1: the weekly
@@ -72,8 +79,9 @@ export function renderLibraryNav() {
     const scope = button.dataset.templateScope || "";
     const programLibrarySection = button.dataset.programLibrarySection || "";
     const isHiddenScope = tab === "templates" && scope && button.classList.contains("sidebar-subnav-button") && !visibleTemplateScopes().includes(scope);
-    button.hidden = isHiddenScope;
     const organizationSection = button.dataset.organizationSection || "";
+    const isHiddenOrganizationSection = tab === "organization" && button.classList.contains("sidebar-subnav-button") && isCoachSettings() && !COACH_SETTINGS_SECTIONS.includes(organizationSection);
+    button.hidden = isHiddenScope || isHiddenOrganizationSection;
     const isTemplateTab = tab === "templates" && state.activeTab === "templates";
     const isTemplateScope = isTemplateTab && scope && state.programLibrarySection !== "requests" && scope === state.templateScope;
     const isProgramLibrarySection = isTemplateTab && programLibrarySection && programLibrarySection === state.programLibrarySection;
@@ -137,6 +145,14 @@ export function ensureTemplateScopeIsVisible() {
 }
 
 export function renderSettingsNavHtml(data = {}, section = state.organization.section || "overview") {
+  if (isCoachSettings()) {
+    const labels = { athletes: "Athletes", joinLinks: "Join links", presets: "Tags & Presets", icons: "Icons" };
+    return `
+    <nav class="settings-tabs" aria-label="Settings sections">
+      ${COACH_SETTINGS_SECTIONS.map((value) => `<button class="settings-tab ${section === value ? "is-active" : ""}" type="button" data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
+    </nav>
+  `;
+  }
   const items = [
     ["overview", "Overview"],
     ["clubs", "Clubs"],
