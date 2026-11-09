@@ -124,7 +124,7 @@ function serveGroups(groups, status = 200) {
 const flush = () => new Promise((r) => setTimeout(r, 5));
 
 test("4. the screen: groups, filters, details, empty and error states, escaping, and the tab only for a platform admin", async () => {
-  const calls = serveGroups(GROUPS);
+  let calls = serveGroups(GROUPS);
   state.appHealth = D.emptyAppHealth();
   const renders = [];
   const render = () => renders.push(renderAppHealthPanelHtml());
@@ -133,7 +133,9 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   let html = renderAppHealthPanelHtml();
   assert.match(html, /\/api\/athletes\/:id\/plans/);
   assert.match(html, /14× · 3 people/);
-  assert.match(html, /internal_error · 500/);
+  assert.match(html, /Server error \(internal_error · 500\)/);
+  assert.match(html, /3 kinds of errors · 17 times · most recent first/);
+  assert.match(html, /Since 08\.11\.2026/);
   assert.ok(!/stack|renderImports@app\.js/.test(html), "the details are folded until a group is opened");
   assert.ok(!html.includes("<img src=x"), "a stored word is escaped");
   // details
@@ -149,7 +151,7 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   // filters
   await handleAppHealthAction({ dataset: { action: "app-health-role", role: "platform_admin" } }, { render });
   html = renderAppHealthPanelHtml();
-  const listOf = (h) => h.split('class="app-health-list"')[1] || "";
+  const listOf = (h) => h.split('class="app-health-list')[1] || "";
   assert.match(listOf(html), /training-load/); assert.ok(!/\/api\/athletes/.test(listOf(html)));
   await handleAppHealthAction({ dataset: { action: "app-health-role", role: "all" } }, { render });
   await handleAppHealthAction({ dataset: { action: "app-health-where", where: "/api/athletes/:id/plans" } }, { render });
@@ -157,6 +159,16 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   assert.match(listOf(html), /14×/); assert.ok(!/training-load/.test(listOf(html)));
   await handleAppHealthAction({ dataset: { action: "app-health-role", role: "none" } }, { render });
   assert.match(renderAppHealthPanelHtml(), /No errors match these filters\./);
+  assert.match(renderAppHealthPanelHtml(), /Showing groups where at least one affected person is Signed out\. The counts cover everyone in the group\./);
+  await handleAppHealthAction({ dataset: { action: "app-health-clear" } }, { render });
+  assert.equal(state.appHealth.role, "all"); assert.equal(state.appHealth.where, "all");
+  assert.match(listOf(renderAppHealthPanelHtml()), /14×/, "Clear filters brings the groups back");
+  // a place that has no group in the new period stops being a filter
+  state.appHealth.where = "/api/athletes/:id/plans";
+  serveGroups([GROUPS[1]]);
+  await D.loadAppHealth(render);
+  assert.equal(state.appHealth.where, "all");
+  calls = serveGroups(GROUPS); await D.loadAppHealth(render);
   // period reads again
   await handleAppHealthAction({ dataset: { action: "app-health-days", days: "30" } }, { render });
   assert.equal(calls.at(-1), "/api/app-errors/groups?days=30");

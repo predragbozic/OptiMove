@@ -22,6 +22,8 @@ export async function loadAppHealth(render) {
     const answer = await api(`/api/app-errors/groups?days=${encodeURIComponent(h.days)}`);
     if (h.generation !== generation) return;
     h.groups = Array.isArray(answer?.groups) ? answer.groups : [];
+    // A place that has no group in the new period is no longer a filter anyone can see or clear.
+    if (h.where !== "all" && !whereOptions(h.groups).includes(h.where)) h.where = "all";
   } catch (error) {
     if (h.generation !== generation) return;
     h.groups = null;

@@ -14,6 +14,7 @@ export async function handleAppHealthAction(action, { render }) {
     await loadAppHealth(render);
     return true;
   }
+  if (type === "app-health-clear") { h.role = "all"; h.where = "all"; h.selected = ""; render(); return true; }
   if (type === "app-health-role") { h.role = action.dataset.role || "all"; h.selected = ""; render(); return true; }
   if (type === "app-health-where") { h.where = action.dataset.where || "all"; h.selected = ""; render(); return true; }
   if (type === "app-health-open") {
