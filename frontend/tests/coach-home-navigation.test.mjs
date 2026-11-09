@@ -197,8 +197,24 @@ test("platform administration Home lists the clubs, each opening in Settings; no
   assert.match(html, /1 team · 12 athletes/);
   assert.match(html, /2 teams · 1 athlete</);
   assert.doesNotMatch(html, /<b>Club<\/b>/, "a club name is escaped");
-  assert.doesNotMatch(html, /No coaching workspaces available/);
-  assert.match(renderCoachHomeHtml({ rows: [], user, clubs: [] }), /No coaching workspaces available/);
+  assert.doesNotMatch(html, /No coaching workspaces available|No clubs yet/);
+  assert.match(renderCoachHomeHtml({ rows: [], user, clubs: [] }), /No clubs yet/);
+  // A failed read is never shown as "no clubs": the message and the same retry as the coach's Home.
+  const failed = renderCoachHomeHtml({ rows: [], user, clubs: [], error: "Clubs could not be loaded." });
+  assert.match(failed, /Clubs could not be loaded\./);
+  assert.match(failed, /data-action="coach-home-retry"/);
+  assert.doesNotMatch(failed, /No clubs yet/);
+});
+
+test("a failed clubs-summary read becomes the error state with a retry, never an empty list", async () => {
+  state.currentUser.activeWorkspace = { type: "platform" };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({}), text: async () => "{}" });
+  try {
+    let rendered;
+    await loadCoachHome({ renderCoachHome: (data) => { rendered = data; } });
+    assert.deepEqual(rendered, { rows: [], error: "Clubs could not be loaded.", clubs: [] });
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("platformHomeClubs keeps only well-formed rows and coerces the counts", async () => {
@@ -216,11 +232,12 @@ test("platform administration Home is untouched by the empty and error states", 
   assert.match(html, /class="coach-home-workspaces"/);
   assert.doesNotMatch(html, /coach-home-state|No athletes in this workspace yet|coach-home-retry|home-add-athlete/);
   const errored = renderCoachHomeHtml({ rows: [], error: "x", user });
-  assert.match(errored, /<p class="builder-error" role="alert">x<\/p>/);
+  assert.match(errored, /<div role="alert"><p class="builder-error">x<\/p>/);
   assert.match(errored, /class="coach-home-workspaces"/);
-  assert.doesNotMatch(errored, /coach-home-state|coach-home-retry/);
+  assert.doesNotMatch(errored, /coach-home-state/);
+  assert.match(errored, /coach-home-retry/);
   const none = renderCoachHomeHtml({ rows: [], user: { activeWorkspace: { type: "platform" }, availableWorkspaces: [] } });
-  assert.match(none, /No coaching workspaces available/);
+  assert.match(none, /No clubs yet/);
   assert.doesNotMatch(none, /coach-home-state/);
 });
 

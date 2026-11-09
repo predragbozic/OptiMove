@@ -49,13 +49,12 @@ export async function loadCoachHome({ setLoading, renderCoachHome, forceRefresh 
   if (state.currentUser?.activeWorkspace?.type === "platform") {
     // The platform admin's Home lists the clubs from the light summary read (never the whole organization); a failed read
     // leaves the page without the list.
-    let clubs = [];
     try {
-      clubs = platformHomeClubs(await api("/api/organization/clubs-summary"));
+      return renderCoachHome({ rows: [], error: "", clubs: platformHomeClubs(await api("/api/organization/clubs-summary")) });
     } catch {
-      clubs = [];
+      // A failed read is never shown as "no clubs": the page says so and offers the same retry as the coach's Home.
+      return renderCoachHome({ rows: [], error: "Clubs could not be loaded.", clubs: [] });
     }
-    return renderCoachHome({ rows: [], error: "", clubs });
   }
   const contextKey = coachHomeContextKey();
   await loadCachedView({

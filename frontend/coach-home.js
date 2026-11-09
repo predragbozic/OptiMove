@@ -362,7 +362,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, 
       ? `${renderAthletePanel("plan", rows)}${renderAthletePanel("load", rows)}${renderCoachHomeDayHtml({ rows, home, today })}`
       : renderEmptyStateHtml();
   const body = platform
-    ? `${error ? `<p class="builder-error" role="alert">${escapeHtml(error)}</p>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length ? "" : `<p class="muted">No coaching workspaces available.</p>`}`
+    ? `${error ? `<div role="alert"><p class="builder-error">${escapeHtml(error)}</p><button class="plain-button coach-home-state-button" type="button" data-action="coach-home-retry">Try again</button></div>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length || error ? "" : `<p class="muted">No clubs yet.</p>`}`
     : `<div class="coach-home-grid">${athleteCards}${renderCoachHomeExercisesHtml(home.exercises)}${renderCoachHomeProgramsHtml(home.programs)}</div>
     ${!error && rows.length && picker.mode ? renderPickerDialog(coachHomePickerRows(rows, picker, home, today), picker, today) : ""}`;
   return `<section class="content-section coach-home">
