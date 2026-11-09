@@ -292,7 +292,7 @@ export function blockedByMapping(bundle, error, { activationSet = [], unactivate
     session: sessionSummary(bundle, null), counts: {}, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [],
     unmappedSourceFields: 0, unactivatedSourceMetrics: [...unactivated], unactivatedSourceMetricCount: unactivated.length,
   };
-  return { preview, previewHash: hashOf(preview, [], activationSet), summary: null };
+  return { preview, previewHash: hashOf(preview, [], activationSet), summary: null, invalidExclusions: [] };
 }
 
 // Tests hold the check-time preview right after it took the team lock (to
@@ -347,7 +347,18 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
 // approval compares previewHash with the approved one and commits only if
 // they are equal. `summary` is the importer's own result (null when nothing
 // was run). The plan is built only now, after the locks (J17 step 7).
-export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId }) {
+//
+// J20-B: `excludedAthleteIds` (canonical, sorted GPEXE ids, validated by the
+// caller) are athletes the coach leaves out of this import. An importable
+// athlete in the set is not imported (nothing of it is written) and is listed
+// as notImported with the code left_out_by_coach; an id that is not an athlete
+// of the session, or that the preview leaves out anyway, is returned in
+// `invalidExclusions` and changes nothing (the approval answers preview_changed,
+// the subset preview 400 invalid_exclusion). With an empty set this function
+// is byte for byte what it was.
+export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId, excludedAthleteIds = [] }) {
+  const excluded = new Set(excludedAthleteIds);
+  const invalidExclusions = [];
   const activationSet = mapping?.activationSet ?? [];
   const unactivated = mapping?.unactivated ?? [];
   let gates;
@@ -388,7 +399,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     gpexeRowsByAthlete.get(id).push(row);
   }
 
-  const importable = plan.participants.filter((p) => links.has(p.gpexeAthleteId) && teamAthletes.includes(links.get(p.gpexeAthleteId)));
+  const importable = plan.participants.filter((p) => links.has(p.gpexeAthleteId) && teamAthletes.includes(links.get(p.gpexeAthleteId)) && !excluded.has(p.gpexeAthleteId));
   const externalIds = plan.participants.flatMap((p) => p.results.map((r) => r.externalId));
   const before = await currentState(client, ownerTeamId, externalIds);
 
@@ -484,6 +495,12 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     else if (!athleteId) entry.notImported = { code: "athlete_not_linked", message: "This GPEXE athlete is not linked to an OptiMove athlete of the team." };
     else if (!teamAthletes.includes(athleteId)) entry.notImported = { code: "athlete_not_in_team", message: "The linked OptiMove athlete is no longer an active member of the team." };
     else if (blocked) entry.notImported = { code: "session_blocked", message: "The whole session is blocked; see the reason above." };
+    if (excluded.has(gpexeAthleteId)) {
+      // Only an athlete the import would otherwise write can be left out; a left-out athlete is
+      // never an anomaly, a missing link or a blocked session (those are reasons of their own).
+      if (entry.notImported) invalidExclusions.push(gpexeAthleteId);
+      else entry.notImported = { code: "left_out_by_coach", message: "You chose to leave this athlete out of this import." };
+    }
     if (entry.notImported) counts.athletesNotImported += 1;
 
     if (participant) {
@@ -615,5 +632,6 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   // set (J17 step 11): the approval recomputes it under the same locks and
   // refuses if anything differs.
   const state = [...before.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, s]) => [id, s.currentOccasionId, s.contentHash]);
-  return { preview, previewHash: hashOf(preview, state, activationSet), summary };
+  for (const id of excluded) if (!gpexeRowsByAthlete.has(id)) invalidExclusions.push(id);
+  return { preview, previewHash: hashOf(preview, state, activationSet), summary, invalidExclusions: [...new Set(invalidExclusions)].sort((a, b) => Number(a) - Number(b)) };
 }

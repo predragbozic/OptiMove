@@ -74,17 +74,31 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds } = error.details || {};
         // The precise reason of a source-connection refusal names connection
         // and server configuration facts: an administrator of the team's club
         // or of the platform gets it; a coach gets the stable code and the
         // sentence to contact an administrator (the F3c2e contract).
         const adminViewer = adminViewerOf(req);
+        // J20-B: a refused subset approval carries the recomputed subset preview in the body only, projected for this request's
+        // audience by getCandidate like every other preview; it was never stored.
+        let subsetBody = null;
+        if (subsetPreview && typeof subsetHash === "string" && req.gpexeTeamAccess && UUID.test(String(req.params.candidateId))) {
+          try {
+            const projected = await service.getCandidate(req.gpexeTeamAccess.teamId, req.params.candidateId, {
+              audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subsetPreview,
+            });
+            if (projected) subsetBody = { excludedAthleteIds: Array.isArray(excludedAthleteIds) ? excludedAthleteIds : [], subsetHash, preview: projected.preview, athletes: projected.athletes };
+          } catch (readError) {
+            console.error(`[gpexe] reading the subset preview of ${req.params.candidateId} for a refusal failed: ${service.formatDbError(readError)}`);
+          }
+        }
         const message = typeof reason === "string" && !adminViewer ? "The team's source connection cannot be used right now; contact an administrator. Nothing was read." : error.message;
         return res.status(error.status).json({
           error: error.code, message,
           ...(typeof reason === "string" && adminViewer ? { reason } : {}),
           ...(reviewAgain ? { reviewAgain } : {}),
+          ...(subsetBody ? { subset: subsetBody } : {}),
           // A count only (J17 section 8.2, D11): never the changes themselves.
           ...(Number.isInteger(changesToImported) && changesToImported >= 0 ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
@@ -249,6 +263,7 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   if (!UUID.test(req.params.candidateId)) return notFound(res);
   const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
     userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges, expectedClubId: access.clubId,
+    excludedAthleteIds: req.body?.excludedAthleteIds, subsetHash: req.body?.subsetHash,
   });
   // The import is committed. Reading the candidate afterwards is only a
   // convenience; if it fails, the answer still says the import happened.
@@ -278,6 +293,25 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
   const access = await teamAccess(req, res);
   if (!access) return;
   if (!UUID.test(req.params.candidateId)) return notFound(res);
+  // J20-B: with excludedAthleteIds this is the SUBSET preview - it stores nothing (service.previewCandidateSubset).
+  if (req.body && req.body.excludedAthleteIds !== undefined) {
+    const unknown = Object.keys(req.body).filter((key) => key !== "excludedAthleteIds");
+    if (unknown.length) return res.status(400).json({ error: "invalid_body", message: "The body must be { excludedAthleteIds: [...] } or empty." });
+    const subset = await service.previewCandidateSubset(access.teamId, req.params.candidateId, {
+      userId: req.user.id, excludedAthleteIds: req.body.excludedAthleteIds, expectedClubId: access.clubId,
+    });
+    const projected = await service.getCandidate(access.teamId, req.params.candidateId, {
+      audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subset.preview,
+    });
+    if (!projected) return notFound(res);
+    return res.json({
+      subset: {
+        excludedAthleteIds: subset.excludedAthleteIds, previewHash: subset.fullHash, subsetHash: subset.subsetHash,
+        preview: projected.preview, athletes: projected.athletes,
+      },
+      importSwitch: service.applySwitchInfo(),
+    });
+  }
   await service.recomputeCandidatePreview(access.teamId, req.params.candidateId, { userId: req.user.id, expectedClubId: access.clubId });
   // The update is committed. Reading the candidate afterwards is only the
   // answer's convenience: if it fails, the answer still says it was stored.

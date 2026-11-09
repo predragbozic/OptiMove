@@ -191,11 +191,19 @@ check holds the team lock → bounded `try_again` with the stored columns unchan
   request, expects `409 already_imported`, and reads the same exclusion from `getApproval`. If the content changes, the new candidate's review offers the stored exclusion set as the
   default, and an athlete imported earlier cannot be excluded (the existing rule).
 * **Roster observations.** An athlete left out by the coach with a real GPEXE record gets **no** "No usable device record" observation (that is
-  for a record the importer cannot use). On the roster such an athlete is "recorded by source" without values; J20-C's states are **not offered**
-  for them (the bulk absence refuses an athlete with a source record, 5a3b), and the J20 *No data* row covers only
-  `teamAthletesWithoutGpexeRecord`. **Discovery proof required before O3 is asked:** a disposable-database test that imports with
-  `excluded=[a3]`, runs a new check of the unchanged bundle, and shows no pending candidate offering a3 and the roster state of a3; the owner is
-  told the result with the question.
+  for a record the importer cannot use). On the roster such an athlete has **no source values**, so the roster reads them as "Unknown / needs a state",
+  exactly like an athlete without a GPEXE record: **`left_out_by_coach` does not protect the athlete from a roster decision, and J20-C's states ARE
+  offered for them** (the *Rukovodilac*'s planning decision of 2026-11-09, a minor change of this contract, after the discovery proof below). The J20
+  *No data* row (`teamAthletesWithoutGpexeRecord`) stays the athletes without a GPEXE row; a left-out athlete is a row of the review's own athletes. J20-C
+  carries the test (a left-out athlete is offered the states and the bulk absence accepts them).
+* **Discovery proof (2026-11-09; run by the main session; SIMULATED, said so to the owner).** `excludedAthleteIds` did not exist yet, so the state after an
+  exclusion was reproduced on a disposable database: an import with athlete a3 **not linked** (a1 and a2 imported, a3 left out), then a3 linked, then a
+  new check of the **unchanged** bundle. Result: the check saw 1 session, `new 0 · changed 0 · unchanged 1`; the one candidate stays `imported`, **no pending
+  candidate offers a3**; the roster of the activity (memberships from before the session day) reads A01 and A02 *Measured* (11 values each) and A03 and A04
+  *Unknown* with 0 values, `needsState 2`. Without membership periods from before the session day the measured athletes are listed "recorded outside
+  the roster" and a3 is not on it (the known risk "rosters before athletes were added"). The data state is the one `excluded=[a3]` leaves; it proves the
+  behaviour after the import, not the new route, which the J20-B suite tests (`backend/tests/gpexe-subset-import-j20b.test.mjs`, test 2 reads the same roster
+  through the real subset approval).
 * **Recompute and rollback.** The subset approval has no request key of its own; a lost COMMIT is resolved by the existing bounded COMMIT and
   `resolveUncertainCommit`, which is **extended to return the recorded `excluded_athlete_ids` and `subset_hash`**; a test through the real route proves a lost COMMIT of a subset approval never answers "nothing was imported". The answer after an error never says "nothing was imported" once the COMMIT was sent.
 * **Determinism.** The subset hash is computed over the canonical sorted set; a test proves that the same set gives the same hash across runs
@@ -309,6 +317,27 @@ row must leave room for it). The owner's requirements (2026-11-09, relayed by th
 
 Every part: the packet of `CLAUDE.md` (goal, acceptance, diff, tests with real counts); a part that touches a migration, the approval or
 a roster write also needs the owner's order naming the migration and the *Rukovodilac*'s preflight (standing order).
+
+### 9.1 J20-B as built (migration v59; the pull request that adds this section)
+
+* **Migration v59** (`migrations_v2/202611091100_training_load_v59_import_approval_subset.sql`): `gpexe_import_approvals` gains `excluded_athlete_ids text[] NOT NULL
+  DEFAULT '{}'` and `subset_hash text`; three CHECKs (at most 60 ids; the hash exactly when the set is not empty; its format); the trigger function
+  `validate_gpexe_import_approval` is replaced (md5 precondition of v33's body `1b4cc435…`, md5 of the new body `febf8070…`) and also checks that the set is canonical
+  ids, sorted numerically, unique, one dimension, no NULL element. The append-only trigger makes both columns write-once. Runbook files:
+  `docs/runbooks/import-approval-subset-v59-{preflight,postcheck,rollback}.sql`; the rollback refuses once any approval has a non-empty set or a hash.
+* **Service.** `previewLocked` takes `excludedAthleteIds`: an importable athlete in the set is not imported and is listed `notImported.code = "left_out_by_coach"`;
+  an id that is not an athlete of the session or that the preview leaves out anyway comes back in `invalidExclusions`. `approveCandidate` takes `excludedAthleteIds` and
+  `subsetHash` (the format codes `invalid_excluded_athlete` / `invalid_subset_hash` / `subset_hash_without_exclusion` before any connection is taken; then, under the candidate row lock and before the team lock, the set is checked against the stored preview: `invalid_exclusion` (also for an athlete whose results were imported before), `no_importable_athlete`; and again against the athletes recomputed under the lock, where a difference is `409 preview_changed`). A subset approval compares
+  `subsetHash` with the preview recomputed WITH the set and never calls `storeRefreshedPreview`; the approval row keeps the candidate's `preview_hash`. `resolveUncertainCommit`
+  returns the recorded set and hash. `POST …/candidates/:id/preview` with `{ excludedAthleteIds }` is the subset preview: approver right (403 `not_an_approver` otherwise), the
+  approval's lock order, 9-0 bounds, one per user and team per interval, a rollback at the end, nothing stored; its answer and a refused subset approval's body carry the preview
+  through `getCandidate` (`previewOverride`), the only place a preview is projected for an audience. The batch refuses the field (a 400 unknown field).
+* **Screen.** A *Leave out* box on each Importable / Participation-only row for a viewer who may approve (a column on a wide table; a line in the phone card; no line on a row that
+  has nothing to leave out). With ticks, the Import button is replaced by *Review without them*; after the review the button names the athletes it will import and sends the
+  reviewed set with its hash. A change of the set drops the review. An unconfirmed answer is checked, never resent; the recorded set is shown and compared with what was chosen. An
+  imported session marks its left-out athletes *Left out by you*.
+* **Not built.** The default exclusion set offered by the review of a *changed* candidate (5.1 says the stored set is the default); an unconfirmed subset approval keeps its set across a reopened review instead (the review is made again).
+* **Evidence.** `gpexe-subset-import-j20b.test.mjs` (backend, disposable: 16 tests), `gpexe-imports-leave-out-j20b.actions.test.mjs` (frontend, 8 tests), e2e scenario 10 (1280 and 390 px).
 
 ## 10. Not in J20
 

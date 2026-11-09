@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount } from "./gpexe-import-view.js";
+import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds } from "./gpexe-import-view.js";
 import { state } from "./state.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
@@ -11,6 +11,8 @@ import {
   refreshGpexeStatus,
   reloadGpexeSourceAthletes,
   approveGpexeCandidate,
+  reviewGpexeSubset,
+  setGpexeLeaveOut,
   backFromTeamMappingConfirm,
   batchSelectableList,
   calendarFiltered,
@@ -142,9 +144,34 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (gx.detail) gx.detail.acceptChanges = Boolean(action.checked);
     return true;
   }
+  // J20-B: "Leave out" on a row. Fired by click and by change on the same checkbox: idempotent. A re-render replaces the box, so
+  // the focus goes back to the same athlete's checkbox.
+  if (type === "training-load-gpexe-leave-out") {
+    const id = action.dataset.gpexeAthleteId;
+    if (!id || !leaveOutOffered(gx.detail?.candidate, gx.detail, gx.status)) return true;
+    if (setGpexeLeaveOut(id, Boolean(action.checked))) {
+      renderTrainingLoad();
+      const again = globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-leave-out"][data-gpexe-athlete-id="${id}"]`);
+      again?.focus?.();
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-subset-review") {
+    const candidate = gx.detail?.candidate;
+    // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
+    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && (gx.detail.leaveOut || []).length > 0;
+    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
+    const ids = leaveOutIds(candidate, gx.detail);
+    if (!ids.length) return true;
+    await reviewGpexeSubset(ids, renderTrainingLoad);
+    return true;
+  }
   if (type === "training-load-gpexe-approve") {
     const candidate = gx.detail?.candidate;
     if (!candidate) return true;
+    // J20-B: with athletes left out only the reviewed subset is approved - never the whole session behind their backs.
+    const leave = leaveOutIds(candidate, gx.detail);
+    if (leave.length && !(gx.detail.subset?.status === "ready" && sameIds(gx.detail.subset.ids, leave))) return true;
     const changes = candidate.changesToImported || 0;
     if (changes && !gx.detail.acceptChanges) {
       gx.detail.outcome = { kind: "refused", error: { code: "changes_need_acceptance", status: 0, data: null } };
@@ -156,8 +183,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // not confirm or no longer found (v33) - the server would refuse it too.
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
-    const athletes = importableAthleteCount(candidate.preview);
-    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
+    const athletes = leave.length ? importableAthleteCount(gx.detail.subset.preview) : importableAthleteCount(candidate.preview);
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
     return true;

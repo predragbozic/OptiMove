@@ -1473,12 +1473,15 @@ function approvalView(row) {
     basis: row.approval_basis,
     changesToImported: row.changes_to_imported,
     changesAccepted: row.changes_accepted,
+    // J20-B: who was left out of this import (GPEXE ids; [] = nobody) and the hash of the subset preview.
+    excludedAthleteIds: row.excluded_athlete_ids ?? [],
+    subsetHash: row.subset_hash ?? null,
     import: { eventId: row.metric_event_id, activityId: row.activity_id, importBatchId: row.import_batch_id, counts: row.import_counts },
   };
 }
 
 const APPROVAL_COLUMNS = `id, candidate_id, approved_at, approved_by_user_id, approval_basis, changes_to_imported, changes_accepted,
-  metric_event_id, activity_id, import_batch_id, import_counts`;
+  metric_event_id, activity_id, import_batch_id, import_counts, excluded_athlete_ids, subset_hash`;
 
 // One approval of the team, by id: what "was it imported?" is checked
 // against when an approval's outcome is uncertain.
@@ -1490,13 +1493,17 @@ export async function getApproval(teamId, approvalId) {
 // audience: the request's level (J17 section 6.1; missing is "other").
 // namesClubVariables: R17's predicate, asked with the stored preview only when
 // the level is "other" (a function, so it runs lazily), or a boolean.
-export async function getCandidate(teamId, candidateId, { audience, namesClubVariables = false } = {}) {
+//
+// J20-B: `previewOverride` is a preview computed for this candidate and not stored (the subset preview, or the one a refused
+// subset approval carries). It goes through the SAME projection as the stored one - this is the only place a preview is
+// projected for an audience - and nothing is read from or written to the candidate's stored preview.
+export async function getCandidate(teamId, candidateId, { audience, namesClubVariables = false, previewOverride = undefined } = {}) {
   if (candidateReadFault) await candidateReadFault(candidateId);
   const row = (await query(`select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
   if (!row) return null;
   const level = normalizeImportAudience(audience);
   const summary = candidateSummary(row, level);
-  const stored = summary.snapshot.available ? row.preview : null;
+  const stored = summary.snapshot.available ? (previewOverride ?? row.preview) : null;
   const names = level === "other" && stored
     ? (typeof namesClubVariables === "function" ? await namesClubVariables(stored) : namesClubVariables === true)
     : false;
@@ -1921,14 +1928,17 @@ async function approvalIsCommitted(approvalId, teamId, ms) {
       await withinBound(fault, left());
     }
     const answer = client.query({
-      text: `select 1 from training_load.gpexe_import_approvals a
+      text: `select a.excluded_athlete_ids, a.subset_hash from training_load.gpexe_import_approvals a
                join training_load.gpexe_import_candidates c on c.id = a.candidate_id
               where a.id = $1 and a.owner_team_id = $2 and c.status = 'imported'`,
       values: [approvalId, teamId],
       query_timeout: left(),
     });
     answer.catch(() => {});
-    return (await withinBound(answer, left())).rowCount === 1;
+    // J20-B: the recorded set and subset hash come back with the proof, so the answer after a lost COMMIT
+    // names what was really left out (null = not found).
+    const found = await withinBound(answer, left());
+    return found.rowCount === 1 ? { excludedAthleteIds: found.rows[0].excluded_athlete_ids, subsetHash: found.rows[0].subset_hash } : null;
   } catch (error) {
     broken = true;
     throw error;
@@ -1954,13 +1964,19 @@ function withinBound(promise, ms) {
 // answers 409 already_imported).
 async function resolveUncertainCommit(teamId, candidateId, { approvalId, result, commitError }) {
   console.error(`[gpexe] approval ${approvalId} of candidate ${candidateId}: the COMMIT was not confirmed (${formatDbError(commitError)}); checking whether it is in the database`);
-  let found = false;
+  let found = null;
   try {
     found = await approvalIsCommitted(approvalId, teamId, uncertainCommitCheckTimeoutMs);
   } catch (error) {
     console.error(`[gpexe] checking approval ${approvalId} after an unconfirmed COMMIT failed: ${formatDbError(error)}`);
   }
-  if (found) return { ...result, commitConfirmation: "verified_after_commit_error" };
+  if (found) {
+    return {
+      ...result,
+      commitConfirmation: "verified_after_commit_error",
+      approval: { ...result.approval, excludedAthleteIds: found.excludedAthleteIds, subsetHash: found.subsetHash },
+    };
+  }
   throw refusal(503, "import_outcome_unknown",
     "The database did not confirm the import, and it could not be verified yet. It may or may not have been imported; do not assume either. Check the candidate or the approval before doing anything else.",
     {
@@ -1987,8 +2003,8 @@ function refusal(status, code, message, details) {
   return error;
 }
 
-function previewChanged(teamId, candidateId, message) {
-  return refusal(409, "preview_changed", message, { reviewAgain: reviewAgain(teamId, candidateId) });
+function previewChanged(teamId, candidateId, message, extra = {}) {
+  return refusal(409, "preview_changed", message, { reviewAgain: reviewAgain(teamId, candidateId), ...extra });
 }
 
 // The preview recomputed under the approval's locks differs from the one
@@ -2335,9 +2351,55 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
 // route's own try_again sentence, with what was (not) done.
 const APPROVAL_TRY_AGAIN = "Another check, import or change of this team was running, or the server was busy. Nothing was imported; try again in a moment.";
 
-export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined }) {
+// J20-B: the set of athletes left out of an import, in its one canonical form (canonical GPEXE ids,
+// de-duplicated, sorted numerically, at most MAX_EXCLUDED), or a 400. Nothing about the set is
+// ever ignored: garbage must not change a hash. `undefined` and [] are the same (nobody left out).
+export const MAX_EXCLUDED_ATHLETES = 60;
+export function canonicalExcludedAthleteIds(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must be a list of GPEXE athlete ids.");
+  if (value.length > MAX_EXCLUDED_ATHLETES) throw refusal(400, "invalid_excluded_athlete", `At most ${MAX_EXCLUDED_ATHLETES} athletes can be left out of one import.`);
+  for (const id of value) {
+    if (typeof id !== "string" || !isCanonicalGpexeAthleteId(id)) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must hold only GPEXE athlete ids.");
+  }
+  return [...new Set(value)].sort((a, b) => Number(a) - Number(b));
+}
+
+// The exclusion checked against the candidate's own stored preview: an id that is not an athlete of the
+// session is invalid_excluded_athlete; one the preview already leaves out is invalid_exclusion (the client
+// has the wrong screen); leaving out every athlete the import would write is no_importable_athlete.
+function checkExclusionAgainstPreview(preview, excluded) {
+  if (!excluded.length) return;
+  const byId = new Map((preview?.athletes ?? []).map((a) => [String(a.gpexeAthleteId), a]));
+  for (const id of excluded) {
+    if (!byId.has(id)) throw refusal(400, "invalid_excluded_athlete", "A GPEXE athlete you chose to leave out is not an athlete of this session.");
+  }
+  for (const id of excluded) {
+    if (byId.get(id).notImported) throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out is already left out of this import.");
+  }
+  // An athlete whose results were imported earlier cannot be left out: the earlier results would be left behind (the writer refuses
+  // that) and a change to them could not be accepted without them. Only an athlete whose every result is new (`created`) can go.
+  for (const id of excluded) {
+    if ((byId.get(id).results ?? []).some((r) => r.outcome && r.outcome !== "created" && r.outcome !== "not_imported")) {
+      throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out was imported before; it can't be left out of a later version of this session.");
+    }
+  }
+  const remaining = [...byId.values()].filter((a) => !a.notImported && !excluded.includes(String(a.gpexeAthleteId)));
+  if (!remaining.length) throw refusal(409, "no_importable_athlete", "Leaving these athletes out would leave nobody to import.");
+}
+
+export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined, excludedAthleteIds = undefined, subsetHash = undefined }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
+  }
+  // J20-B: the set and its hash travel together. Checked before any connection is taken.
+  const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
+  const subset = excluded.length > 0;
+  if (subset && (typeof subsetHash !== "string" || !HASH.test(subsetHash))) {
+    throw refusal(400, "invalid_subset_hash", "subsetHash must be the hash of the subset preview you reviewed.");
+  }
+  if (!subset && subsetHash !== undefined && subsetHash !== null) {
+    throw refusal(400, "subset_hash_without_exclusion", "subsetHash is only sent together with excludedAthleteIds.");
   }
   if (acceptChanges !== undefined && typeof acceptChanges !== "boolean") {
     throw refusal(400, "invalid_accept_changes", "acceptChanges must be true or false.");
@@ -2405,6 +2467,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       throw previewChanged(teamId, candidateId, "The preview was recomputed after you reviewed it; review the candidate again.");
     }
     if (row.preview?.status === "no_changes") throw refusal(409, "nothing_to_import", "This candidate would write nothing.");
+    checkExclusionAgainstPreview(row.preview, excluded);
     const changesToImported = row.preview?.changesToImported?.length ?? 0;
     if (changesToImported > 0 && acceptChanges !== true) {
       throw refusal(409, "changes_need_acceptance",
@@ -2429,7 +2492,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
     if (!binding) {
       const blocked = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
-      refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
+      // J20-B: a subset approval never stores a refreshed preview (the full hash is the candidate's; the next full review recomputes it).
+      if (!subset) refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
       throw previewChanged(teamId, candidateId, "This session can no longer be imported through the team's source binding; nothing was imported. Review the candidate again.");
     }
     // Steps 4-6: the activations, the registry locks and their re-check, the
@@ -2473,11 +2537,25 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // Steps 7-11: the plan, the classification and the import, inside the
     // preview (previewLocked); a block there is a blocked preview, refused at
     // step 12 below as a changed preview.
-    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId });
+    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
     if (approvalObserver) await approvalObserver({ client, candidateId, freshPreviewHash: fresh.previewHash });
 
-    // Step 12: the hash compared again.
-    if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
+    // Step 12: the hash compared again. A full approval compares the candidate's hash and, if it differs,
+    // stores the recomputed preview for the next review (as before). A subset approval compares the SUBSET
+    // hash against the preview recomputed with the set, re-validates the set against the athletes recomputed
+    // under the lock (an id that disappeared or became left-out is a changed preview, not a validation
+    // error), and NEVER stores anything: the list, the batch and other coaches rely on the stored full preview.
+    if (subset && fresh.preview.status === "no_changes" && !fresh.invalidExclusions.length) {
+      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
+    }
+    if (subset) {
+      if (fresh.invalidExclusions.length || fresh.previewHash !== subsetHash || fresh.preview.status !== "ready" || !fresh.summary
+          || (fresh.preview.changesToImported?.length ?? 0) !== changesToImported) {
+        // The recomputed subset preview travels in the body only (the route projects it for the audience); it is never stored.
+        throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.",
+          { subsetPreview: fresh.preview, subsetHash: fresh.previewHash, excludedAthleteIds: excluded });
+      }
+    } else if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
       refreshed = { expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash };
       throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.");
     }
@@ -2487,10 +2565,12 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const approval = (await client.query(
       `insert into training_load.gpexe_import_approvals
          (candidate_id, owner_team_id, gpexe_team_session_id, bundle_hash, preview_hash, approved_by_user_id, approval_basis,
-          approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, activity_id, import_batch_id, import_counts)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id, approved_at`,
+          approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, activity_id, import_batch_id, import_counts,
+          excluded_athlete_ids, subset_hash)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning id, approved_at`,
       [candidateId, teamId, row.gpexe_team_session_id, row.bundle_hash, previewHash, userId, right.basis, right.grant_id,
-        changesToImported, changesToImported > 0, summary.eventId, summary.activityId, summary.importBatchId, summary.counts],
+        changesToImported, changesToImported > 0, summary.eventId, summary.activityId, summary.importBatchId, summary.counts,
+        excluded, subset ? subsetHash : null],
     )).rows[0];
     await client.query(
       `update training_load.gpexe_import_candidates
@@ -2511,7 +2591,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const result = {
       outcome: "imported",
       commitConfirmation: "confirmed",
-      approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported },
+      approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported, excludedAthleteIds: excluded, subsetHash: subset ? subsetHash : null },
       import: { eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts },
     };
     // Switch condition 2: the deferred trigger and constraint work runs now,
@@ -2788,6 +2868,161 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
       client.removeListener("error", onClientError);
       client.release(commitUncertain || sessionLost ? true : undefined);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// J20-B: the preview of a subset (J20 section 5.1) - stores nothing at all
+// ---------------------------------------------------------------------------
+// The preview of the candidate with `excludedAthleteIds` left out, for the
+// deliberate Review step that precedes a subset approval. Its audience is the
+// approval's (the approver's right, O4), not the team's: a subset preview
+// exists only to be approved. It takes the approval's own lock order (candidate
+// row FOR UPDATE, then the team's import lock, then the binding and the mapping
+// context) under the 9-0 bounds, runs the import inside the transaction and ROLLS
+// EVERYTHING BACK - there is no compare-and-set and nothing of the candidate row
+// changes, so the stored full preview and its hash stay byte for byte as they
+// were (the list, the batch and other coaches rely on them). A lost answer is
+// harmless: there is nothing to confirm. Throttled per user and team.
+export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, expectedClubId = undefined }) {
+  const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
+  if (!excluded.length) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
+  // Its own in-flight set (a member without the approver right must not hold the slot of A1's recompute), and the interval slot is
+  // taken only once the approver right is confirmed (a refused request does not use it up).
+  if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
+    throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
+  }
+  const key = `subset:${teamId}:${userId}`;
+  const last = recomputeSeen.get(key);
+  if (last !== undefined && Date.now() - last < recomputeMinIntervalMs) {
+    throw refusal(409, "try_again", "The review was updated a moment ago; try again in a few seconds.");
+  }
+  const takeSlot = () => {
+    recomputeSeen.delete(key);
+    recomputeSeen.set(key, Date.now());
+    if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
+  };
+  // The in-flight slot is taken only once the approver right is confirmed (see takeSlot below), so a member without the right never holds it.
+  let held = false;
+  const holdSlot = () => {
+    if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
+      throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
+    }
+    subsetInFlight.add(String(teamId));
+    held = true;
+    takeSlot();
+  };
+  try {
+    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot: holdSlot });
+  } finally {
+    if (held) subsetInFlight.delete(String(teamId));
+  }
+}
+
+const subsetInFlight = new Set();
+async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot }) {
+  const client = await pool.connect();
+  let sessionLost = false;
+  const onClientError = () => { sessionLost = true; };
+  client.on("error", onClientError);
+  try {
+    await client.query("begin isolation level read committed");
+    await setImportTransactionBounds(client);
+    const unlocked = await canApproveGpexeImport({ query: (text, params) => client.query(text, params) }, userId, teamId);
+    if (!unlocked.hasRight) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    takeSlot();
+    const row = (await client.query(
+      `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
+              superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect, import_undone_at
+         from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2 for update`,
+      [candidateId, teamId],
+    )).rows[0];
+    if (!row) throw refusal(404, "notFound", "Not found.");
+    if (row.status === "imported") throw refusal(409, row.import_undone_at ? "import_undone" : "already_imported", row.import_undone_at
+      ? "The import of this session was undone; find new sessions again to review it."
+      : "This candidate has already been imported.");
+    if (row.status === "superseded") {
+      if (row.superseded_by_candidate_id) {
+        throw refusal(409, "superseded_by_newer_data", "GPEXE has newer data for this session; review the newer candidate.",
+          { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
+      }
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
+    if (row.status === "blocked") throw refusal(409, "blocked", "This session is blocked; the preview names the reason and the step that lifts it.");
+    if (!(await candidateActionable(client, row, teamId))) {
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
+    if (!snapshotState(row).available || row.raw_bundle == null) {
+      throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; press \"Check now\" again.");
+    }
+    checkExclusionAgainstPreview(row.preview, excluded);
+
+    await lockTeamForImport(client, teamId);
+    await lockApprovalTeam(client, teamId, expectedClubId);
+    const lastCheck = (await client.query(
+      `select source_path, source_binding_id from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`,
+      [row.last_seen_check_id, teamId],
+    )).rows[0];
+    const bindingId = lastCheck?.source_path === "source_connection" && lastCheck.source_binding_id ? String(lastCheck.source_binding_id) : null;
+    const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
+    let fresh;
+    if (!binding) {
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+    } else {
+      let mapping;
+      try {
+        let gates = null;
+        try {
+          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+        } catch (error) {
+          if (!(error instanceof GpexeMappingError)) throw error;
+        }
+        mapping = gates
+          ? await prepareImportMapping(client, { teamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId })
+          : { block: null, rows: [], activationSet: [], unactivated: [], binding, connection: null };
+      } catch (error) {
+        if (error instanceof ImportMappingChangedError) {
+          throw previewChanged(teamId, candidateId, "The team's mappings changed while the review was read; try again.");
+        }
+        throw error;
+      }
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+    }
+    // A set that leaves the session blocked (an athlete imported earlier, a mapping that changed) is refused here with its own code,
+    // never handed to the coach as a review that can only fail at the approval.
+    if (fresh.preview.status === "blocked") {
+      throw refusal(409, "subset_blocked", "This session can't be imported right now; nothing was changed. Update the review and choose again.");
+    }
+    if (fresh.preview.status === "no_changes") {
+      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
+    }
+    // The set re-validated against the athletes recomputed under the lock.
+    if (fresh.invalidExclusions.length) {
+      throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out cannot be left out of this import.");
+    }
+    const result = {
+      excludedAthleteIds: excluded,
+      // The candidate's stored full hash: what the approval sends as previewHash (the route names it).
+      fullHash: row.preview_hash,
+      subsetHash: fresh.previewHash,
+      preview: fresh.preview,
+    };
+    await client.query("rollback");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof GpexeImportServiceError) throw error;
+    if (error instanceof ApprovalTeamGoneError) throw refusal(404, "notFound", "Not found.");
+    if (isImportWaitError(error) || sessionLost || isSessionEndedError(error)) {
+      if (!isImportWaitError(error)) sessionLost = true;
+      console.error(`[gpexe] subset preview of candidate ${candidateId} stopped (${error?.code ?? "connection"}); nothing was changed`);
+      throw refusal(409, "try_again", "Another check, import or change of this team was running, or the server was busy. Nothing was changed; try again in a moment.");
+    }
+    console.error(`[gpexe] subset preview of candidate ${candidateId} failed: ${formatDbError(error)}`);
+    throw refusal(500, "internal_error", "The review could not be read on the server; nothing was changed.");
+  } finally {
+    client.removeListener("error", onClientError);
+    client.release(sessionLost ? true : undefined);
   }
 }
 
