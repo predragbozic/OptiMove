@@ -1940,11 +1940,15 @@ const ROW_STATUS = Object.freeze({
   needs_link: { label: "Needs a link", note: "Not imported now. Link this GPEXE athlete (open its row under Details by athlete), then find new sessions again.", counts: false },
   blocked: { label: "Blocks the session", note: "The whole session waits until this is fixed.", counts: false },
   not_imported: { label: "Not imported", note: "", counts: false },
+  nothing_new: { label: "Nothing new", note: "Already in OptiMove; nothing new to import.", counts: false },
   no_record: { label: "No GPEXE record", note: "No GPS record in this session; nothing is written.", counts: false },
 });
 
+// Only an outcome that writes counts: created, supplemented, corrected. An
+// unchanged result, one kept aside for review and a stale resend write nothing.
+const WRITING_OUTCOMES = new Set(["created", "supplemented", "corrected"]);
 function valuesToImport(a) {
-  return (a.results || []).filter((r) => r.outcome !== "not_imported").reduce((n, r) => n + (r.values || []).filter((v) => v.value !== null && v.value !== undefined).length, 0);
+  return (a.results || []).filter((r) => WRITING_OUTCOMES.has(r.outcome)).reduce((n, r) => n + (r.values || []).filter((v) => v.value !== null && v.value !== undefined).length, 0);
 }
 
 function reviewRowStatus(a, preview) {
@@ -1952,7 +1956,10 @@ function reviewRowStatus(a, preview) {
   if (a.notImported?.code === "athlete_not_linked") return "needs_link";
   if (a.notImported) return "not_imported";
   if (isV3(preview) && a.allValuesLeftOut === true) return "participation";
-  return valuesToImport(a) > 0 ? "importable" : "participation";
+  if (valuesToImport(a) > 0) return "importable";
+  // Results exist but none writes (already imported, kept aside, stale): nothing new.
+  if ((a.results || []).some((r) => r.outcome !== "not_imported")) return "nothing_new";
+  return "participation";
 }
 
 // The number Approve names: the athletes the approval imports (Importable and
@@ -1986,7 +1993,7 @@ function renderReviewTableHtml(preview, c) {
   });
   for (const t of noRecord) rows.push({ name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, values: "-", changes: 0 });
   // Rows that need attention come first; the server's order is kept inside a group.
-  const ORDER = ["blocked", "needs_link", "not_imported", "importable", "participation", "no_record"];
+  const ORDER = ["blocked", "needs_link", "not_imported", "importable", "participation", "nothing_new", "no_record"];
   rows.sort((x, y) => ORDER.indexOf(x.status) - ORDER.indexOf(y.status));
   const n = importableAthleteCount(preview);
   const partOnly = rows.filter((r) => r.status === "participation").length;
@@ -2001,9 +2008,9 @@ function renderReviewTableHtml(preview, c) {
           ${rows.map((r) => `
             <tr class="gpexe-review-row is-${r.status}" role="row">
               <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
-              <td data-label="Status" role="cell"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : r.status === "no_record" ? "" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+              <td data-label="Status" role="cell"><span class="gpexe-badge ${r.status === "importable" || r.status === "participation" ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" ? "" : "is-blocked"}">${escapeHtml(r.label)}</span>${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
               <td data-label="Values" role="cell">${escapeHtml(r.values)}</td>
-              <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("You accept the change next to the import button.")}` : ""}</td>
+              <td data-label="What happens" role="cell">${escapeHtml(r.note)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}</td>
             </tr>`).join("")}
         </tbody>
       </table></div>

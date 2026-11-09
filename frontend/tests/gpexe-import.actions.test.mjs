@@ -282,7 +282,7 @@ test("GPEXE imports: the review shows participation and GPS apart, a left-out va
   assert.match(html, /<details class="gpexe-tech">[\s\S]*Distance = TotDist \(gpexe_total_distance\)/);
   assert.match(html, /<td>Distance<\/td><td>3,000 m<\/td>/);
   assert.match(html, /GPEXE athlete \d+/);
-  assert.match(html, /Not imported: This GPEXE athlete is not linked/);
+  assert.match(html, /<summary>[\s\S]*?Not imported: This GPEXE athlete is not linked/, "the per-athlete summary keeps its own sentence");
   assert.match(html, /Session review \(\d+ athletes\)/);
   assert.match(html, /<th scope="row" data-label="Athlete" role="rowheader">Bo Example<\/th>\s*<td data-label="Status" role="cell"><span class="gpexe-badge ">No GPEXE record<\/span>/);
   assert.match(html, /Bo Example/);
@@ -2558,7 +2558,7 @@ test("J20-A2: a change to an already imported result shows in that athlete's row
   const html = renderTrainingLoadCoachHtml();
   const ana = html.slice(html.indexOf("Ana Example</th>"), html.indexOf("</tr>", html.indexOf("Ana Example</th>")));
   assert.match(ana, /Changes 1 imported result/);
-  assert.match(ana, /You accept the change next to the import button\./);
+  assert.match(ana, /The change must be accepted before the import\./);
   assert.match(html, /<input type="checkbox" data-gpexe-accept/);
   assert.ok(html.indexOf("data-gpexe-accept") > html.indexOf('class="gpexe-review-table"'));
 });
@@ -2587,4 +2587,17 @@ test("J20-A2: every date the review shows is DD.MM.YYYY", async () => {
   const dialog = renderTrainingLoadCoachHtml();
   const review = dialog.slice(dialog.indexOf('role="dialog"'));
   assert.ok(!/\b\d{4}-\d{2}-\d{2}\b/.test(review.replace(/data-[a-z-]+="[^"]*"/g, "")), "no ISO date in the visible review");
+});
+
+test("J20-A2: an athlete whose results all write nothing (unchanged) is 'Nothing new', not Importable, and is not counted", async () => {
+  resetState();
+  const d = candidateDetail();
+  const a105 = { gpexeAthleteId: "105", athleteId: "ath-3", participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null }, notImported: null, blocksSession: false, skippedValues: [],
+    results: [{ externalId: "athlete_session:5:full", level: "full", drillIndex: null, outcome: "unchanged", values: [{ ...V3_DISTANCE, previous: "3000", change: "same" }] }] };
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...d, athletes: { ...d.athletes, "ath-3": { name: "Cy Example" } }, preview: { ...d.preview, athletes: [...d.preview.athletes, a105] } } } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.ok(reviewRows(html).some((r) => r.status === "nothing_new" && r.name === "Cy Example"));
+  assert.match(html, />Import 1 athlete<\/button>/);
 });
