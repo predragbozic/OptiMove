@@ -591,6 +591,30 @@ rest (v58 `app_error_events` at the time), and the app starts on that database w
 - **Rules**: no real GPEXE, no Render, no production data, no screenshot of a real
   person; a flow asserts on text and state, not on pixels.
 
+**T3, first slice (as built, 2026-11-09).** `e2e/` (its own `package.json`, Playwright 1.56.1 and `pg`; never a dependency of `backend/` or `frontend/`)
+builds a **world** per test file and runs the real application on it:
+
+* **The world** (`e2e/lib/world.mjs`, `seed.mjs`): a disposable `optimove_tests_e2e_world_*` database from the committed legacy-schema snapshot
+  (step 0) plus the real migration runner to the last migration, synthetic data (two clubs, three teams, 12 invented athletes) and one demo
+  account per role with a random throwaway password and a session token - `platform_admin`, `club_admin`, `team_coach`, `other_team_coach`
+  (another club's coach, for isolation checks) and `athlete`. The real server (`backend/src/server.js`) is started on a free port with that
+  database; `stop()` ends it and drops the database. Nothing touches a persistent database (the `disposable-db.mjs` rules apply), no real GPEXE,
+  no Render, no production data.
+* **Run it yourself, one command each (repository root):**
+  * once: `npm run e2e:install` (installs `e2e/` and the Chromium that Playwright needs; needs `DATABASE_URL` for a local PostgreSQL only at run time);
+  * the whole app with demo accounts: `DATABASE_URL=postgres://user:pass@localhost:5432/postgres npm run e2e:demo` - prints the address, one login per
+    role and runs until Ctrl-C (which drops the database); `-- --json` also prints the session tokens, `-- --server-log` shows the server's log;
+  * the scenarios: `DATABASE_URL=... npm run test:e2e` (the runner's kind `e2e`, 10 minutes per file, the same cleanup audit as the other disposable kinds).
+* **Runner:** `e2e` is a project and a kind of `scripts/test-runner.mjs` (database rules of the `disposable` kind, preset `e2e`); a file is
+  `e2e/tests/*.test.mjs`.
+* **Scenario 4, Data configuration by role** (`e2e/tests/role-visibility.test.mjs`, 6 tests, about 10 s): a team coach has the Data configuration tab
+  and is offered only Variables, Domains and Categories (at 1280 and 390 px); the coach reads `variables` and `classification` and gets the identical
+  404 for `fields`, `mappings`, `conversions`, `activations`, `source-instances`, `targets`, the source connections and a route that does not
+  exist; another club's coach gets the same; a platform administrator sees every card and every read; an athlete has no Training Load. Mutation
+  evidence: putting the coach in the platform workspace fails three of the six. Authorization follows the **active workspace**, so a platform role
+  held while the team workspace is active changes nothing (that is the product's rule, not a gap).
+* **Not yet built:** scenarios 1, 3 and 6 (waiting for their definitions), the fake GPEXE host, a CI job, the Builder flow on a phone.
+
 ### 8.3 Candidates for later consolidation (not removed in T1)
 
 Files that set up the same world and assert overlapping behaviours. Each is kept in T1;

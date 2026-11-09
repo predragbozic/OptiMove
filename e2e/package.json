@@ -1,0 +1,16 @@
+{
+  "name": "optimove-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "T3: browser flows against the real server on a disposable database. Playwright lives here only - never in backend/ or frontend/.",
+  "scripts": {
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}
