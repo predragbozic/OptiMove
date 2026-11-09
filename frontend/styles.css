@@ -23202,3 +23202,87 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 @media (prefers-reduced-motion: reduce) {
   .om-tabs { scroll-behavior: auto; }
 }
+
+/* ==========================================================================
+   Design PR2: the page header (top bar) of the coach / admin shell.
+   Scoped to the shell (not the athlete app, not the sign-in screen). Visual only.
+   - the context label above the title in sentence case, as its text is written;
+   - the workspace switcher in sentence case at 14 px, a bordered control when it opens a menu;
+   - "Online" on a computer is a dot and a word, not a wide pill; other states keep a pill
+     in their own color (the phone keeps PR U4's dot, 640 px and below);
+   - on a phone every header control is a 44 px target.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .topbar #contextLabel {
+  margin: 0 0 var(--om-space-1);
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+  font-weight: var(--om-weight-semibold);
+  letter-spacing: 0;
+  text-transform: none;
+}
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+  min-height: 40px;
+  padding: var(--om-space-2) var(--om-space-3);
+  border: 1px solid transparent;
+  color: var(--text);
+  font-size: var(--om-text-sm);
+  font-weight: var(--om-weight-semibold);
+  text-transform: none;
+}
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[data-action="workspace-toggle"] {
+  border-color: var(--line-strong);
+  background: var(--om-surface-raised);
+}
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[data-action="workspace-toggle"]:hover,
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--om-accent-strong);
+}
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="error"] {
+  background: var(--om-danger-soft);
+  color: var(--danger);
+}
+
+@media (min-width: 641px) {
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--om-space-2);
+    min-width: 0;
+    padding: var(--om-space-2) var(--om-space-1);
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--om-text-sm);
+    font-weight: var(--om-weight-semibold);
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"]::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #157a52;
+  }
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions {
+    grid-template-columns: 44px minmax(0, 1fr) repeat(3, 44px);
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions > .plain-button,
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+    min-height: 44px;
+    padding-inline: var(--om-space-2);
+    font-size: 13px;
+  }
+}
