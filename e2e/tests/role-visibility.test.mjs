@@ -114,6 +114,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     try {
       const tabs = await openSettings(admin.page);
       for (const t of ["Overview", "Clubs", "Teams", "Users"]) assert.ok(tabs.includes(t), `the club admin keeps ${t}`);
+      // The club admin reaches the team's athletes through the club membership the application always creates with the team's.
+      assert.match((await admin.page.locator(".organization-view").innerText()).replace(/\s+/g, " "), /12 athletes/i, "the club admin sees the team's 12 athletes");
       assert.deepEqual(admin.pageErrors, []);
     } finally {
       await admin.context.close();
