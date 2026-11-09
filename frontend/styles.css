@@ -23208,8 +23208,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
    Scoped to the shell (not the athlete app, not the sign-in screen). Visual only.
    - the context label above the title in sentence case, as its text is written;
    - the workspace switcher in sentence case at 14 px, a bordered control when it opens a menu;
-   - "Online" on a computer is a dot and a word, not a wide pill; every other state keeps
-     its pill as it was (the phone keeps PR U4's dot, 640 px and below);
+   - the status pill is left as U4 set it (a pill on a computer, a dot on a phone);
    - on a phone every header control is a 44 px target.
    ========================================================================== */
 body:not(.athlete-mode):not(.login-mode) .topbar #contextLabel {
@@ -23242,27 +23241,6 @@ body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[aria-expanded
 body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-@media (min-width: 641px) {
-  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--om-space-2);
-    min-width: 0;
-    padding: var(--om-space-2) var(--om-space-1);
-    background: transparent;
-    color: var(--muted);
-    font-size: var(--om-text-sm);
-    font-weight: var(--om-weight-semibold);
-  }
-  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"]::before {
-    content: "";
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #157a52;
-  }
 }
 
 @media (max-width: 760px) {

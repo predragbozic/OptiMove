@@ -25,12 +25,8 @@ test("the context label and the workspace switcher are in sentence case", () => 
   assert.match(rule(`${S} .topbar .workspace-toggle`), /text-transform: none;/);
 });
 
-test("Online on a computer is a dot and a word, and only above the phone's 640 px", () => {
-  const at = pr2.indexOf(`${S} .topbar-actions .status-pill[data-state="ok"] {`);
-  assert.ok(at > pr2.indexOf("@media (min-width: 641px)"));
-  assert.ok(at < pr2.indexOf("@media (max-width: 760px)"));
-  assert.match(pr2, /status-pill\[data-state="ok"\]::before \{\n\s*content: "";/);
-  assert.doesNotMatch(pr2, /status-pill\[data-state="(busy|error|info)"\]/);
+test("the status pill is left as U4 set it (the e2e header-status test pins it)", () => {
+  assert.doesNotMatch(pr2, /status-pill/);
 });
 
 test("on a phone every header control is a 44 px target", () => {
