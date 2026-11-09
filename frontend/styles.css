@@ -22868,3 +22868,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 /* A coach's Settings hero ("My team"): one column, long names and emails wrap. */
 .organization-hero-coach { grid-template-columns: minmax(0, 1fr); }
 .organization-hero-coach :is(h3, p) { overflow-wrap: anywhere; }
+
+/* The platform admin's Home: the clubs list. */
+.coach-home-clubs h3 { margin: 20px 0 0; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.coach-home-clubs .coach-home-workspaces { margin-top: 8px; }
