@@ -37,9 +37,25 @@ export function invalidateCoachHomeCache() {
   invalidateCacheNamespace(COACH_HOME_DAYS_NAMESPACE);
 }
 
+// The clubs-summary answer reduced to the rows the Home shows (id, name and the two counts).
+export function platformHomeClubs(data) {
+  const clubs = Array.isArray(data?.clubs) ? data.clubs : [];
+  return clubs
+    .filter((club) => club && typeof club.id === "string" && club.id)
+    .map((club) => ({ id: club.id, name: String(club.name || "Club"), teamCount: Number(club.teamCount) || 0, athleteCount: Number(club.athleteCount) || 0 }));
+}
+
 export async function loadCoachHome({ setLoading, renderCoachHome, forceRefresh = false } = {}) {
   if (state.currentUser?.activeWorkspace?.type === "platform") {
-    return renderCoachHome({ rows: [], error: "" });
+    // The platform admin's Home lists the clubs from the light summary read (never the whole organization); a failed read
+    // leaves the page without the list.
+    let clubs = [];
+    try {
+      clubs = platformHomeClubs(await api("/api/organization/clubs-summary"));
+    } catch {
+      clubs = [];
+    }
+    return renderCoachHome({ rows: [], error: "", clubs });
   }
   const contextKey = coachHomeContextKey();
   await loadCachedView({

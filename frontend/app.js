@@ -1944,6 +1944,26 @@ async function handleGlobalClick(event) {
       await loadActiveTab();
     }
   }
+  if (action.dataset.action === "home-open-club") {
+    // The platform admin's Home: open one club in Settings (the club selected there).
+    if (state.activeTab !== "organization") pushAppHistory();
+    state.activeTab = "organization";
+    state.organization.section = "athletes";
+    state.organization.selectedClubId = action.dataset.clubId || "";
+    state.organization.selectedTeamId = "";
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    state.navStack = [];
+    state.athletesExpanded = false;
+    state.weekSelectorOpen = false;
+    state.openWeekCalendarOnLoad = false;
+    collapseRailAfterNav();
+    renderAthleteListState();
+    renderTabs();
+    renderLibraryNav();
+    await loadActiveTab();
+    return;
+  }
   if (action.dataset.action === "home-add-athlete") {
     if (state.activeTab !== "organization") pushAppHistory();
     state.activeTab = "organization";
@@ -2356,12 +2376,12 @@ async function openTrainingLoadFromCalendar({ activityId, date }) {
   renderTrainingLoad();
 }
 
-function renderCoachHome({ rows, error }) {
+function renderCoachHome({ rows, error, clubs = [] }) {
   coachHomeRows = rows || [];
   // A redraw (the athlete list opening, a background refresh) keeps every
   // strip where the coach left it and the focus where it was.
   const view = captureCoachHomeView(els.content.querySelector(".coach-home"));
-  els.content.innerHTML = renderCoachHomeHtml({ rows: coachHomeRows, error, user: state.currentUser, picker: coachHomePicker, home: state.coachHome });
+  els.content.innerHTML = renderCoachHomeHtml({ rows: coachHomeRows, error, user: state.currentUser, picker: coachHomePicker, home: state.coachHome, clubs });
   const home = els.content.querySelector(".coach-home");
   restoreCoachHomeView(home, view);
   bindCoachHomeCarousels(home, { onNearEnd: loadMoreCoachHomeOnNearEnd });

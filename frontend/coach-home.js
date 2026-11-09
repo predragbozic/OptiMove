@@ -334,7 +334,23 @@ function renderErrorStateHtml(error) {
       </div>`;
 }
 
-export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, home = emptyCoachHomeState(), today = localDateIso() }) {
+function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+// The platform admin's Home: the clubs, each opening in Settings.
+function renderPlatformClubsHtml(clubs) {
+  return `<section class="coach-home-clubs" aria-labelledby="coachHomeClubsTitle">
+    <h3 id="coachHomeClubsTitle">Clubs</h3>
+    <ul class="coach-home-workspaces coach-home-club-list">${clubs.map((club) => `<li>
+      <button class="coach-home-workspace" type="button" data-action="home-open-club" data-club-id="${escapeAttr(club.id)}">
+        <span class="coach-home-workspace-label"><strong>${escapeHtml(club.name)}</strong><small>${escapeHtml(`${plural(club.teamCount, "team")} · ${plural(club.athleteCount, "athlete")}`)}</small></span>
+        ${ICON_CHEVRON_RIGHT}
+      </button></li>`).join("")}</ul>
+  </section>`;
+}
+
+export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, home = emptyCoachHomeState(), today = localDateIso(), clubs = [] }) {
   const workspace = user?.activeWorkspace;
   const platform = workspace?.type === "platform";
   const workspaces = (user?.availableWorkspaces || []).filter((entry) => entry.type !== "platform");
@@ -346,7 +362,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, 
       ? `${renderAthletePanel("plan", rows)}${renderAthletePanel("load", rows)}${renderCoachHomeDayHtml({ rows, home, today })}`
       : renderEmptyStateHtml();
   const body = platform
-    ? `${error ? `<p class="builder-error" role="alert">${escapeHtml(error)}</p>` : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : `<p class="muted">No coaching workspaces available.</p>`}`
+    ? `${error ? `<p class="builder-error" role="alert">${escapeHtml(error)}</p>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length ? "" : `<p class="muted">No coaching workspaces available.</p>`}`
     : `<div class="coach-home-grid">${athleteCards}${renderCoachHomeExercisesHtml(home.exercises)}${renderCoachHomeProgramsHtml(home.programs)}</div>
     ${!error && rows.length && picker.mode ? renderPickerDialog(coachHomePickerRows(rows, picker, home, today), picker, today) : ""}`;
   return `<section class="content-section coach-home">

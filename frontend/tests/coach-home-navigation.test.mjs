@@ -100,11 +100,17 @@ test("admin Home nests available teams under their club and keeps other teams in
 test("admin Home avoids fetching all athletes", async () => {
   state.currentUser.activeWorkspace = { type: "platform" };
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = () => assert.fail("Must not load a combined roster");
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (!/\/api\/organization\/clubs-summary$/.test(String(url))) assert.fail(`Must not load a combined roster (${url})`);
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ clubs: [{ id: "c1", name: "Alpha", teamCount: 2, athleteCount: 14 }] }), text: async () => "" };
+  };
   try {
     let rendered;
     await loadCoachHome({ renderCoachHome: (data) => { rendered = data; } });
-    assert.deepEqual(rendered, { rows: [], error: "" });
+    assert.deepEqual(rendered, { rows: [], error: "", clubs: [{ id: "c1", name: "Alpha", teamCount: 2, athleteCount: 14 }] });
+    assert.equal(calls.length, 1, "only the light summary is read");
   } finally { globalThis.fetch = originalFetch; }
 });
 test("picker searches names and IDs case-insensitively and uses the chosen destination", () => {
@@ -181,6 +187,27 @@ test("Try again re-runs loadCoachHome with forceRefresh in app.js - never a page
   const block = source.slice(start, source.indexOf("return;", start));
   assert.match(block, /await loadCoachHome\(\{\s*forceRefresh:\s*true\s*\}\)/);
   assert.doesNotMatch(block, /location\.(reload|assign|replace)|fetch\(/);
+});
+
+test("platform administration Home lists the clubs, each opening in Settings; none falls back to the old sentence", () => {
+  const user = { activeWorkspace: { type: "platform" }, availableWorkspaces: [] };
+  const clubs = [{ id: "c1", name: "Alpha <b>Club</b>", teamCount: 1, athleteCount: 12 }, { id: "c2", name: "Beta", teamCount: 2, athleteCount: 1 }];
+  const html = renderCoachHomeHtml({ rows: [], user, clubs });
+  assert.match(html, /data-action="home-open-club" data-club-id="c1"/);
+  assert.match(html, /1 team · 12 athletes/);
+  assert.match(html, /2 teams · 1 athlete</);
+  assert.doesNotMatch(html, /<b>Club<\/b>/, "a club name is escaped");
+  assert.doesNotMatch(html, /No coaching workspaces available/);
+  assert.match(renderCoachHomeHtml({ rows: [], user, clubs: [] }), /No coaching workspaces available/);
+});
+
+test("platformHomeClubs keeps only well-formed rows and coerces the counts", async () => {
+  const { platformHomeClubs } = await import("../coach-home-data.js");
+  assert.deepEqual(platformHomeClubs({ clubs: [{ id: "a", name: "Alpha", teamCount: 2, athleteCount: "3" }, { name: "no id" }, null, { id: "b", teamCount: "x" }] }), [
+    { id: "a", name: "Alpha", teamCount: 2, athleteCount: 3 },
+    { id: "b", name: "Club", teamCount: 0, athleteCount: 0 },
+  ]);
+  assert.deepEqual(platformHomeClubs(null), []);
 });
 
 test("platform administration Home is untouched by the empty and error states", () => {
