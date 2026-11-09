@@ -10879,7 +10879,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 }
 
-/* ============================================================
+/* =====================================================
    Tests module (Phase 2 - WELLNESS)
    ============================================================ */
 
@@ -22892,3 +22892,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     background: #157a52;
   }
 }
+=======
+/* The platform admin's Home: the clubs list. */
+.coach-home-clubs h3 { margin: 20px 0 0; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.coach-home-clubs .coach-home-workspaces { margin-top: 8px; }

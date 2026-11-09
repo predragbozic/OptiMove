@@ -122,3 +122,23 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     }
   });
 }
+
+for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone]]) {
+  test(`4g. (${label}) the platform admin's Home lists the clubs with their counts and a club opens in Settings`, async () => {
+    const admin = await openAs(browser, world, "platform_admin", width);
+    try {
+      await admin.page.waitForSelector('[data-action="home-open-club"]', { timeout: 20_000 });
+      const text = (await admin.page.locator(".coach-home").innerText()).replace(/\s+/g, " ");
+      assert.match(text, /Example Club/i);
+      assert.match(text, /Other Club/i);
+      assert.match(text, /2 teams · 12 athletes/i, "Example Club: First team and U19 team, 12 athletes");
+      assert.doesNotMatch(text, /no coaching workspaces available/i);
+      await admin.page.locator('[data-action="home-open-club"]', { hasText: "Example Club" }).click();
+      await admin.page.waitForSelector(".organization-view", { timeout: 20_000 });
+      assert.match((await admin.page.locator(".organization-view").innerText()).replace(/\s+/g, " "), /example club/i, "Settings shows the chosen club");
+      assert.deepEqual(admin.pageErrors, [], "no uncaught page error");
+    } finally {
+      await admin.context.close();
+    }
+  });
+}
