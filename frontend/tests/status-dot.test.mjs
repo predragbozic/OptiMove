@@ -35,9 +35,10 @@ test("the phone rule turns only the ok state into a dot of at least 10 px; deskt
   const height = Number(rule[1].match(/height:\s*(\d+)px/)[1]);
   assert.ok(width >= 10 && height >= 10, `the dot is ${width}x${height}`);
   assert.match(rule[1], /font-size:\s*0/);
-  // The rule sits inside the max-width 760px block, never at top level, and no other state is selected.
+  assert.match(rule[1], /pointer-events:\s*none/, "the dot never takes a tap");
+  // The rule sits inside the max-width 760px block, never at top level (and not in the 641-760 px block, where Sign out sits in the corner), and no other state is selected.
   const at = css.indexOf('.topbar-actions .status-pill[data-state="ok"]');
-  const block = css.lastIndexOf("@media (max-width: 760px)", at);
-  assert.ok(block > 0 && css.indexOf("\n}\n", block) > at, "inside @media (max-width: 760px)");
+  const block = css.lastIndexOf("@media (max-width: 640px)", at);
+  assert.ok(block > 0 && css.indexOf("\n}\n", block) > at, "inside @media (max-width: 640px)");
   assert.doesNotMatch(css, /status-pill\[data-state="(busy|error|info)"\]/);
 });
