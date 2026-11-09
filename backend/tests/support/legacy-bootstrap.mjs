@@ -18,16 +18,17 @@ import pg from "pg";
 import { migrationIdentity, sha256OfBuffer, RUNNER_VERSION } from "../../src/migrate.js";
 import { splitStatements } from "../../../tools/legacy-schema/sql-split.mjs";
 import { describe } from "../../../tools/legacy-schema/classify.mjs";
-import { assertDisposableDatabaseName } from "./disposable-db.mjs";
+import { assertDisposableDatabaseName, parseServerUrl } from "./disposable-db.mjs";
 
 export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrationsRoot, lastMigration, replaySeeds = true }) {
   assertDisposableDatabaseName(new URL(databaseUrl).pathname.slice(1));
+  parseServerUrl(databaseUrl); // a loopback server, none of the forbidden markers
   const files = fs.readdirSync(migrationsRoot).filter((f) => f.endsWith(".sql")).sort();
   const at = files.indexOf(lastMigration);
   if (at === -1) throw new Error(`the last migration ${lastMigration} is not in ${migrationsRoot}`);
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
-  const replayed = { files: 0, statements: 0 };
+  const replayed = { files: 0, statements: 0, skippedUnreplayable: 0 };
   try {
     await client.query(snapshotSql);
     for (const file of files.slice(0, at + 1)) {
@@ -38,6 +39,8 @@ export async function bootstrapLegacySnapshot({ databaseUrl, snapshotSql, migrat
         [migrationIdentity(migrationsRoot, abs), sha256OfBuffer(buffer), RUNNER_VERSION],
       );
       if (!replaySeeds) continue;
+      // DO blocks and SELECT calls may seed rows too; they are not replayed and are counted.
+      replayed.skippedUnreplayable += splitStatements(buffer.toString("utf8")).statements.filter((s) => /^(?:do|select)\s/i.test(s.text.trim())).length;
       const data = splitStatements(buffer.toString("utf8")).statements.filter((s) => describe(s.text).kind === "data" && !/^(?:copy|truncate)\b/i.test(s.text.trim()));
       if (data.length) replayed.files += 1;
       for (const s of data) {

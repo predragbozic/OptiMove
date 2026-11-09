@@ -99,7 +99,7 @@ export function generateSnapshot({ dumpText, inventory, lastMigration }) {
     }
     if (["other-create", "other-alter"].includes(d.kind) && ENVIRONMENT_STATEMENT.test(s.text.trim().replace(/\s+/g, " "))) { drop("environment"); continue; }
     if (["other-create", "other-alter"].includes(d.kind)) {
-      warnings.push(`line ${s.line}: a statement of kind ${d.kind} (${s.text.split(/\s+/).slice(0, 3).join(" ").toLowerCase()}) was dropped; check that nothing in the application depends on it`);
+      warnings.push(`line ${s.line}: a statement of kind ${d.kind} was dropped; check that nothing in the application depends on it`);
       drop(d.kind);
       continue;
     }
@@ -132,7 +132,7 @@ export function generateSnapshot({ dumpText, inventory, lastMigration }) {
         continue;
       case "alter-table":
         if (d.action === "owner") { drop("owner"); continue; }
-        if (d.action === "rls" && /disable\s+trigger|enable\s+(?:replica|always)\s+trigger/i.test(d.rest)) warnings.push(`line ${s.line}: a trigger state (${d.rest.slice(0, 40)}) is kept - check it`);
+        if (d.action === "rls" && /disable\s+trigger|enable\s+(?:replica|always)\s+trigger/i.test(d.rest)) warnings.push(`line ${s.line}: a trigger enable/disable state is kept - check it`);
         kept.push(s.text); keptLines.push(s.line);
         continue;
       default:

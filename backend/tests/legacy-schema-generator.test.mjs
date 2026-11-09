@@ -88,8 +88,8 @@ test("4a. warnings really appear: an unrecognised statement, a kept statement th
   const text = report.warnings.join("\n");
   assert.match(text, /not recognised/);
   assert.match(text, /refers to auth, extensions/);
-  assert.match(text, /kind other-create \(create rule r1\)/);
-  assert.match(text, /trigger state/);
+  assert.match(text, /kind other-create was dropped/);
+  assert.match(text, /trigger enable\/disable state/);
   assert.equal(generate(dumpText.replace(/\n/g, "\r\n")).sql, generate().sql);
 });
 
@@ -111,6 +111,16 @@ test("5. the output is deterministic and carries the hash of its input and its o
   assert.match(a.sql, /^-- OptiMove legacy schema snapshot \(GENERATED/);
 });
 
+test("6b. secret assignments are caught in the other spellings: a type with parentheses, other names, dollar quotes and concatenation", () => {
+  const bad = [
+    "CREATE FUNCTION public.f() RETURNS text LANGUAGE plpgsql AS $$ declare v_signing_key varchar(64) := 'abcd1234'; begin return 1; end $$;\n",
+    "CREATE FUNCTION public.f() RETURNS text LANGUAGE plpgsql AS $$ declare salt text := 'abcd1234'; begin return 1; end $$;\n",
+    "CREATE TABLE public.t (a text DEFAULT $$hunter2secret$$ || 'x', secret_x text DEFAULT 'ab' || 'cd1234');\n",
+  ];
+  for (const injected of bad) assert.throws(() => generate(`${dumpText}\n${injected}`), (e) => e instanceof GeneratorRefusal && e.findings.length > 0, injected.slice(0, 60));
+  generate(`${dumpText}\nCREATE TABLE public.ok1 (a uuid DEFAULT '00000000-0000-0000-0000-000000000000');\n`);
+});
+
 test("6. the scanner refuses data and every secret-shaped text, names rule and line, and never repeats the text", () => {
   const cases = {
     "data-block": "COPY public.users (id) FROM stdin;\n1\n\\.\n",
@@ -121,6 +131,8 @@ test("6. the scanner refuses data and every secret-shaped text, names rule and l
     "aws-access-key": "CREATE TABLE public.t (a text DEFAULT 'AKIAABCDEFGHIJKLMNOP');\n",
     "email-address": "CREATE TABLE public.t (a text DEFAULT 'someone@example.com');\n",
     "literal-secret-assignment": "CREATE FUNCTION public.f() RETURNS text LANGUAGE plpgsql AS $$ declare v_jwt_secret text := 'abcd1234'; begin return v_jwt_secret; end $$;\n",
+    "secret-function-argument": "CREATE FUNCTION public.g() RETURNS text LANGUAGE sql AS 'select hmac(x, ''abcd1234'', ''sha256'')';\n",
+    "uuid-literal": "CREATE TABLE public.t (a uuid DEFAULT '3f2b8c1e-1a2b-4c3d-8e9f-0a1b2c3d4e5f');\n",
     "long-random-literal": "CREATE TABLE public.t (a text DEFAULT 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8');\n",
     "hash-shape": "CREATE TABLE public.t (a text DEFAULT '$2b$12$abcdefghijklmnopqrstuv');\n",
     url: "CREATE TABLE public.t (a text DEFAULT 'https://hooks.example/path/abc');\n",

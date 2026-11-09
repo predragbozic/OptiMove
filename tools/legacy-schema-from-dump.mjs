@@ -42,7 +42,8 @@ for (let i = 0; i < args.length; i += 1) {
 }
 if (!input || !lastMigration) usage(2);
 
-if (path.resolve(out) === path.resolve(input) || path.resolve(`${out}.sha256`) === path.resolve(input)) {
+const real = (f) => { try { return fs.realpathSync(f); } catch { return path.resolve(f); } };
+if ([out, `${out}.sha256`].some((t) => real(t) === real(input) || path.join(real(path.dirname(t)), path.basename(t)) === real(input))) {
   process.stderr.write("--out must not be the input file\n");
   process.exit(2);
 }
@@ -75,9 +76,20 @@ if (check) {
   process.stdout.write(same ? "up to date\n" : "DIFFERS from the generated snapshot\n");
   process.exit(same ? 0 : 1);
 }
+for (const target of [out, hashFile]) {
+  // Never overwrite a file that this tool did not write.
+  if (fs.existsSync(target)) {
+    const head = fs.readFileSync(target, "utf8").slice(0, 80);
+    const ours = target === out ? head.startsWith("-- OptiMove legacy schema snapshot") : /^[0-9a-f]{64}  /.test(head);
+    if (!ours) { process.stderr.write(`${path.basename(target)} exists and is not a file of this tool: refusing to overwrite it\n`); process.exit(2); }
+  }
+}
 fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, result.sql);
-fs.writeFileSync(hashFile, hashLine);
+for (const [target, content] of [[out, result.sql], [hashFile, hashLine]]) {
+  const tmp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, target);
+}
 if (json) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
 else {
   const r = result.report;
