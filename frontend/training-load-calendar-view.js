@@ -771,7 +771,7 @@ export function renderTrainingLoadCalendarHtml() {
           <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-choose-activity">Cancel</button>
         </div>
       ` : ""}
-      <p class="tl-calendar-subtitle muted">Canonical training activities recorded each day.</p>
+      <p class="tl-calendar-subtitle muted">Training sessions recorded each day.</p>
       ${renderCalendarNavHeaderHtml(nav)}
       ${nav.monthMode ? renderCalendarMonthGridHtml(nav) : renderCalendarStripHtml(nav)}
       ${nav.monthMode && nav.monthLoading ? `<p class="muted training-load-stale-banner tl-calendar-loading" role="status">Loading month&hellip;</p>` : ""}

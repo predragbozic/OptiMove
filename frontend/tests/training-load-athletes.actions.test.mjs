@@ -169,7 +169,7 @@ test("opening an athlete fetches their canonical activities for the shared week 
   assert.match(calendarCalls[0].url, /dateFrom=2026-09-07/, "uses the shared week, not an independent one");
 
   const html = renderTrainingLoadResultsHtml();
-  assert.match(html, /Canonical activities this week/);
+  assert.match(html, /Sessions this week/);
   assert.match(html, /Morning Strength/);
   assert.match(html, /data-action="training-load-results-view-activity-in-calendar" data-activity-id="act-1"/);
 });
