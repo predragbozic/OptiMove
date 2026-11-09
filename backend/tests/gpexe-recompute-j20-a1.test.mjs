@@ -207,6 +207,15 @@ test("2. nothing but the candidate's derived columns is written; an imported can
   const c = await candidateRow(t);
   await linkThird(t);
   const before = (await q(`select * from training_load.gpexe_import_candidates where id = $1`, [c.id]))[0];
+  const writeTables = async () => ({
+    instances: await q(`select id, source_host_key, source_instance_key, state from training_load.metric_source_connections where owner_team_id = $1 order by id`, [t.teamId]),
+    counts: (await q(
+      `select (select count(*) from training_load.metric_events where owner_team_id = $1) as events,
+              (select count(*) from training_load.metric_source_identities si join training_load.metric_source_connections c on c.id = si.source_connection_id where c.owner_team_id = $1) as identities,
+              (select count(*) from training_load.metric_source_connections where owner_team_id = $1) as connections,
+              (select count(*) from training.activities where owner_team_id = $1) as activities`, [t.teamId]))[0],
+  });
+  const tablesBefore = await writeTables();
   const r = await recompute(t, c.id);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const after = (await q(`select * from training_load.gpexe_import_candidates where id = $1`, [c.id]))[0];
@@ -214,6 +223,7 @@ test("2. nothing but the candidate's derived columns is written; an imported can
   assert.deepEqual(changed, ["preview", "preview_computed_at", "preview_hash"].filter((k) => changed.includes(k)).sort(), `only derived columns changed: ${changed}`);
   assert.ok(changed.includes("preview") && changed.includes("preview_hash"));
   assert.equal(await valueCount(t.teamId), 0, "no value is written by the rolled-back import");
+  assert.deepEqual(await writeTables(), tablesBefore, "no source instance, key, event, identity or activity survives the rolled-back import");
   assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_approvals where owner_team_id = $1`, [t.teamId]))[0].n, 0, "no approval");
   const approved = await approve(t, c.id, after.preview_hash);
   assert.equal(approved.status, 200, JSON.stringify(approved.body));
@@ -232,7 +242,10 @@ test("3. the identical 404 for an unknown candidate, another team's candidate an
   const foreign = await recompute(other, c.id);
   const stranger = await recompute(t, c.id, outsider.cookie);
   const malformed = await api(`/gpexe/teams/${t.teamId}/candidates/not-a-uuid/preview`, { method: "POST", cookie: t.coach.cookie, body: {} });
-  for (const x of [unknown, foreign, stranger, malformed]) assert.equal(x.status, 404);
+  for (const x of [unknown, foreign, stranger, malformed]) {
+    assert.equal(x.status, 404);
+    assert.equal(x.headers.get("cache-control"), "no-store", "every answer, the 404s included, is no-store");
+  }
   assert.equal(unknown.text, foreign.text);
   assert.equal(unknown.text, stranger.text);
   assert.equal(unknown.text, malformed.text);
@@ -283,6 +296,11 @@ test("4. the SQL order of the route: candidate FOR UPDATE, then the team lock, t
   assert.ok(store > teamLock, "the compare-and-set comes after both locks, on this connection");
   assert.ok(commit > store, "COMMIT last");
   assert.ok(!log.some((s) => s.includes("lock_gpexe_import_approver")), "the approver-rights lock (6b) is not taken");
+  const savepoint = at((s) => s.startsWith("savepoint j20_recompute_preview"));
+  const firstMappingLock = log.findIndex((s) => /order by id for share/.test(s));
+  assert.ok(firstMappingLock > teamLock, "the mapping registry locks were taken (the world has activations)");
+  assert.ok(savepoint > teamLock && savepoint < firstMappingLock, "the savepoint is opened BEFORE the mapping preparation, so its T7 key write is rolled back with the import");
+  assert.ok(at((s) => s.startsWith("rollback to savepoint j20_recompute_preview")) < store, "the import is rolled back before the compare-and-set");
 });
 
 test("5. a recompute and an approval of the same candidate: no deadlock, no 500; the approval waits for the recompute and then answers preview_changed", async () => {
@@ -299,7 +317,13 @@ test("5. a recompute and an approval of the same candidate: no deadlock, no 500;
   await reached;
   // The recompute holds the candidate row and the team lock; the approval of the OLD hash starts now.
   const approving = approve(t, c.id, c.preview_hash);
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  // Wait until the approval is really blocked on a lock in the database (no sleep as proof).
+  let blocked = 0;
+  for (let i = 0; i < 200 && !blocked; i += 1) {
+    blocked = Number((await q(`select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid()`))[0].count);
+    if (!blocked) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(blocked >= 1, "the approval is waiting for the candidate row held by the recompute");
   service.setRecomputeObserverForTests(null);
   release();
   const [r, a] = await Promise.all([recomputing, approving]);
@@ -418,4 +442,61 @@ test("9. a compare-and-set that matches no row (the stored hash moved under the 
   const after = await candidateRow(t);
   assert.equal(after.preview_hash, c.preview_hash, "the whole transaction was rolled back, including the observer's change");
   assert.equal(after.preview_computed_at.getTime(), c.preview_computed_at.getTime());
+});
+
+test("10. a candidate whose stored hash is NULL can be recomputed (the compare-and-set is null-safe)", async () => {
+  const t = await team();
+  await check(t);
+  const c = await candidateRow(t);
+  await linkThird(t);
+  await q(`update training_load.gpexe_import_candidates set preview_hash = null where id = $1`, [c.id]);
+  const r = await recompute(t, c.id);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.match((await candidateRow(t)).preview_hash, /^[0-9a-f]{64}$/);
+});
+
+test("11. one recompute per team in flight: a second call answers try_again at once, before taking a connection; another team is not blocked", async () => {
+  const t = await team();
+  const other = await team();
+  await check(t);
+  await check(other);
+  const c = await candidateRow(t);
+  const oc = await candidateRow(other);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let atGate;
+  const reached = new Promise((resolve) => { atGate = resolve; });
+  let first = true;
+  service.setRecomputeObserverForTests(async () => { if (first) { first = false; atGate(); await gate; } });
+  const running = recompute(t, c.id);
+  await reached;
+  const startedAt = Date.now();
+  const second = await recompute(t, c.id);
+  assert.equal(second.status, 409, JSON.stringify(second.body));
+  assert.equal(second.body.error, "try_again");
+  assert.ok(Date.now() - startedAt < 2000, "answered at once, not after waiting for a lock");
+  const otherTeam = await recompute(other, oc.id);
+  assert.equal(otherTeam.status, 200, "another team is not blocked: " + JSON.stringify(otherTeam.body));
+  release();
+  assert.equal((await running).status, 200);
+  service.setRecomputeObserverForTests(null);
+  assert.equal((await recompute(t, c.id)).status, 200, "free again");
+});
+
+test("12. a failed read of the candidate AFTER the commit still answers 200 with candidateReadError (never 'not carried out'); the update is stored", async () => {
+  const t = await team();
+  await check(t);
+  const c = await candidateRow(t);
+  await linkThird(t);
+  service.setCandidateReadFaultForTests(async () => { throw new Error("read failed"); });
+  let r;
+  try {
+    r = await recompute(t, c.id);
+  } finally {
+    service.setCandidateReadFaultForTests(null);
+  }
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.candidate, null);
+  assert.equal(r.body.candidateReadError.error, "candidate_read_failed");
+  assert.notEqual((await candidateRow(t)).preview_hash, c.preview_hash, "stored");
 });

@@ -2612,12 +2612,29 @@ async function storeRefreshedPreviewOn(client, candidateId, { expectedPreviewHas
   return (await client.query(
     `update training_load.gpexe_import_candidates
         set preview = $3, preview_hash = $4, preview_computed_at = now(), status = $5
-      where id = $1 and preview_hash = $2 and status in ('pending', 'blocked') and raw_bundle is not null`,
+      where id = $1 and preview_hash is not distinct from $2 and status in ('pending', 'blocked') and raw_bundle is not null`,
     [candidateId, expectedPreviewHash, preview, previewHash, preview.status === "blocked" ? "blocked" : "pending"],
   )).rowCount;
 }
 
+// One recompute per team in flight per instance: a team manager who is not an
+// approver cannot queue N of them on the candidate row and the team lock (the
+// pool and the approvers' waits). Answered before a connection is taken.
+const recomputeInFlight = new Set();
+
 export async function recomputeCandidatePreview(teamId, candidateId, { userId, expectedClubId = undefined }) {
+  if (recomputeInFlight.has(String(teamId))) {
+    throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
+  }
+  recomputeInFlight.add(String(teamId));
+  try {
+    return await recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expectedClubId });
+  } finally {
+    recomputeInFlight.delete(String(teamId));
+  }
+}
+
+async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expectedClubId = undefined }) {
   const client = await pool.connect();
   let commitSent = false;
   let commitUncertain = false;
@@ -2639,7 +2656,7 @@ export async function recomputeCandidatePreview(teamId, candidateId, { userId, e
     const linkSet = (await client.query(
       `select md5(coalesce(string_agg(id::text || ':' || coalesce(unlinked_at::text, ''), ',' order by id), '')) as fingerprint
          from training_load.gpexe_athlete_links where owner_team_id = $1`, [teamId])).rows[0].fingerprint;
-    const key = `${userId}:${candidateId}:${early.preview_hash}:${linkSet}`;
+    const key = `${candidateId}:${early.preview_hash}:${linkSet}`;
     const nowMs = Date.now();
     const last = recomputeSeen.get(key);
     if (last !== undefined && nowMs - last < recomputeMinIntervalMs) {
@@ -2685,7 +2702,14 @@ export async function recomputeCandidatePreview(teamId, candidateId, { userId, e
     // (the approval commits them; a check rolls everything back). Here the
     // transaction commits the candidate's derived columns only, so the import
     // runs inside a savepoint of our own and is rolled back to it before the
-    // compare-and-set.
+    // compare-and-set. The savepoint is opened BEFORE prepareImportMapping,
+    // which writes the Metrics Core source instance's T7 keys (insert or
+    // update of metric_source_connections) the first time a team is mapped:
+    // those writes must not survive a recompute (nothing but the candidate's
+    // derived columns is stored). The price: rolling back to a savepoint
+    // releases the locks taken after it, so the registry locks are NOT held
+    // through the compare-and-set. The stored preview is advisory; the
+    // approval recomputes under its own locks and is authoritative (J20 5.0).
     await client.query("savepoint j20_recompute_preview");
     if (!binding) {
       fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
@@ -2744,6 +2768,7 @@ export async function recomputeCandidatePreview(teamId, candidateId, { userId, e
           { reviewAgain: reviewAgain(teamId, candidateId) });
       }
     }
+    recomputeSeen.delete(key);
     recomputeSeen.set(key, Date.now());
     if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
     return { previewHash: fresh.previewHash, previousPreviewHash: row.preview_hash };

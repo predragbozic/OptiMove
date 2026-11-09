@@ -274,14 +274,30 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
 // answer is GET candidate's projection. Stores only the candidate's derived
 // columns (compare-and-set, same transaction); see service.recomputeCandidatePreview.
 router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const access = await teamAccess(req, res);
   if (!access) return;
   if (!UUID.test(req.params.candidateId)) return notFound(res);
-  res.setHeader("Cache-Control", "no-store");
   await service.recomputeCandidatePreview(access.teamId, req.params.candidateId, { userId: req.user.id, expectedClubId: access.clubId });
-  const candidate = await service.getCandidate(access.teamId, req.params.candidateId, {
-    audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
-  });
+  // The update is committed. Reading the candidate afterwards is only the
+  // answer's convenience: if it fails, the answer still says it was stored.
+  let candidate = null;
+  try {
+    candidate = await service.getCandidate(access.teamId, req.params.candidateId, {
+      audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
+    });
+  } catch (error) {
+    console.error(`[gpexe] reading candidate ${req.params.candidateId} after its review update failed: ${service.formatDbError(error)}`);
+    return res.json({
+      candidate: null,
+      importSwitch: service.applySwitchInfo(),
+      candidateReadError: {
+        error: "candidate_read_failed",
+        message: "The review was updated; only reading the candidate afterwards failed. Open the candidate again to see it.",
+        candidateHref: `/api/training-load/gpexe/teams/${access.teamId}/candidates/${req.params.candidateId}`,
+      },
+    });
+  }
   if (!candidate) return notFound(res);
   res.json({ candidate, importSwitch: service.applySwitchInfo() });
 }));
