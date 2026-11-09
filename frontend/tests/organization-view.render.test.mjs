@@ -252,3 +252,18 @@ test("the team edit form shows the club as text and offers no club choice", () =
   assert.ok(!html.includes("Club Two"), "no other club is offered");
   assert.ok(html.includes('name="name"') && html.includes('name="shortName"'), "the other fields stay editable");
 });
+
+test("the browser's count line uses the singular for one: '1 team', '1 club', '1 athlete in team'", () => {
+  resetOrganizationState();
+  const clubId = "club-1";
+  const teamId = "team-1";
+  const one = baseAthlete({ id: "a1", name: "Only Athlete", has_active_access: true, memberships: [{ id: "m1", membershipType: "team", status: "active", clubId, clubName: "Club One", teamId, teamName: "Team One" }] });
+  const data = { isPlatformAdmin: true, clubs: [{ id: clubId, name: "Club One" }], teams: [{ id: teamId, club_id: clubId, club_name: "Club One", name: "Team One" }], athletes: [one], users: [] };
+  const overview = renderOrganizationBrowser(data);
+  assert.match(overview, /1 club - 1 team - 1 athlete</);
+  assert.doesNotMatch(overview, /1 teams|1 clubs|1 athletes/);
+  state.organization.selectedClubId = clubId;
+  assert.match(renderOrganizationBrowser(data), /1 team - 1 athlete</);
+  state.organization.selectedTeamId = teamId;
+  assert.match(renderOrganizationBrowser(data), /1 athlete in team</);
+});
