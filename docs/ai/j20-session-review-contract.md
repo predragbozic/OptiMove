@@ -57,8 +57,8 @@ The row kinds are derived from the preview's **real** codes (`ATHLETE_ANOMALY`, 
 
 | Row kind (preview fact) | What the row shows | The action on the row |
 |---|---|---|
-| Importable (no `notImported`) | values, chip "Will be imported" | *Leave out* (J20-B; the only kind that can be excluded) |
-| Participation only (`allValuesLeftOut`: kept, every mapped value left out) | note "no values could be imported" | none; counts in N (his participation is written), may be excluded |
+| Importable (no `notImported`), including the *Participation only* sub-kind below | values, chip "Will be imported" | *Leave out* (J20-B; *Importable* rows, the participation-only sub-kind included, are the only ones that can be excluded) |
+| *Participation only* (a sub-kind of Importable: `allValuesLeftOut`, kept with every mapped value left out) | note "no values could be imported" | *Leave out*; counts in N (his participation is written) |
 | Imported with some values left out (`skippedValues`) | values plus a note per left-out value and its reason | none (the athlete is still imported) |
 | Not linked (`notImported: athlete_not_linked`) | identification by audience (section 4), values, chip "Not linked" | *Link to…* (chooser of the team's active athletes not yet linked; same-name athletes cannot be chosen; nothing preselected; U3's suggestion first). Already left out by the importer: no *Leave out* |
 | Not in the team (`athlete_not_in_team`) | chip "Not in this team" | none |
@@ -108,13 +108,16 @@ full check). The route writes **no durable row except the candidate's own derive
 compare-and-set answers `409 preview_changed` with the current stored one. Sequence values are consumed by the rolled-back import. The list, U6a's batch
 hash and other coaches see the new hash (a batch then gets `preview_changed`, which is safe).
 
-**Sequence and lock order (explicit, to avoid inverting against an approval, whose order is candidate row → team lock).** Read the candidate unlocked
-for authorization only → `BEGIN` (READ COMMITTED) → `setImportTransactionBounds` (`lock_timeout` 5 s, `statement_timeout` 10 s,
-`idle_in_transaction_session_timeout` 10 s) → team import lock → `lockApprovalTeam` → re-read the candidate **under the team lock without a row lock**
-(status pending/blocked, actionable, snapshot state, bundle; an approval holds the team lock to its COMMIT, so this read is consistent) → binding from
+**Sequence and lock order: the approval's, exactly (candidate row, then team).** `approveCandidate` locks the candidate `FOR UPDATE` first and the
+team import lock second, so this route does the same; the compare-and-set `UPDATE` of the candidate would otherwise take the row lock while the team
+lock is held (team → candidate), the inverse of an approval, and the two would deadlock (`40P01`). Read the candidate unlocked for authorization only →
+`BEGIN` (READ COMMITTED) → `setImportTransactionBounds` (`lock_timeout` 5 s, `statement_timeout` 10 s, `idle_in_transaction_session_timeout` 10 s) →
+**candidate `FOR UPDATE`** (status pending/blocked, actionable, snapshot state, bundle) → team import lock → `lockApprovalTeam` → binding from
 `last_seen_check_id` as approval step 3 (a missing binding yields the blocked `mapping_not_usable` preview) → mapping registry locks → the preview
-(rolled-back real import) → compare-and-set store → `COMMIT`. It does **not** take the approver-rights lock (6b): the right is checked unlocked and
-nothing but derived columns is written. `409 try_again` / `check_preview_busy` when a lock is not free. **Total budget:** the route has a wall-clock
+(rolled-back real import, in a savepoint) → the compare-and-set `UPDATE` of the candidate, **in the same transaction** → `COMMIT`. There is no window
+in which the stored preview is older than what the route returned. It does **not** take the approver-rights lock (6b): the right is checked unlocked
+and nothing but derived columns is written. A recompute waits behind an approval up to its `lock_timeout` and answers `409 try_again`. `409 try_again` /
+`check_preview_busy` when a lock is not free. **Total budget:** the route has a wall-clock
 bound like the approval (client-side bound with the connection released with an error on timeout), because the per-statement bounds do not bound the
 whole transaction; it holds the team lock for the length of the preview (seconds for a session with drills), during which a check start, a link write,
 a roster command and an approval wait up to their own lock bounds. The screen does not call it while a check of the team is running.
