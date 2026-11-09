@@ -3,8 +3,11 @@
 // no network); every other request goes where it would have gone. Nothing here changes the application's code,
 // its host allowlist or its catalog.
 import { createFakeSource } from "../../backend/tests/support/gpexe-fake-source.mjs";
+import { importsBundles } from "./imports-fixture.mjs";
 
 const fake = createFakeSource();
 for (const id of (process.env.E2E_FAKE_VISIBLE_TEAMS || "").split(",").filter(Boolean)) fake.show(id);
+// The Imports scenario: the sessions of GPEXE team 7001 (E2E_FAKE_SESSIONS=imports).
+if (process.env.E2E_FAKE_SESSIONS === "imports") fake.serve("7001", importsBundles(7001));
 const realFetch = globalThis.fetch;
 globalThis.fetch = (url, init) => (String(url).startsWith("https://server3.gpexe.com/") ? fake.fetchImpl(url, init) : realFetch(url, init));

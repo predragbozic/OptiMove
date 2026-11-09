@@ -632,11 +632,21 @@ builds a **world** per test file and runs the real application on it:
     the platform admin sees the tab and the group, with the role *Coach*; club admin, coach and athlete have no tab and `GET /api/app-errors/groups`
     is the identical 404 of an unknown route; no answer or section carries an e-mail, a name or a user id (the page header shows the signed-in viewer
     only).
+  * **7, the Imports flow through the UI** (`imports-review.test.mjs`, one world per width): the fake source serves two sessions of GPEXE team 7001
+    (`e2e/lib/imports-fixture.mjs`, `E2E_FAKE_SESSIONS=imports`; the world then also sets the server's `GPEXE_IMPORT_APPLY_ENABLED`); `imports-setup.mjs`
+    prepares it through the real routes (approved pair, connect, bind, the team's import switch, the three activated system mappings through the backend
+    helpers - the activation runs in a child process because those helpers load the services against `DATABASE_URL` - the athlete links and one check).
+    The coach opens the session that has an unlinked athlete (*athletes_not_linked*), sees its row marked *Needs a link*, presses Link with nothing chosen
+    (nothing sent), chooses an athlete (still nothing sent: the confirmation comes first), confirms, and the review recomputes: the row is no longer
+    *Needs a link*, the preview hash moved and the athlete is mapped; the coach has no Import button. A platform administrator then opens the same review,
+    sees *Import 3 athletes* and imports: the candidate is `imported`, three participants, nine results (the whole session and two drills each) and every
+    written value has its source provenance. Mutations: leaving the team's import switch off, and asserting another athlete than the one linked, both
+    fail the test.
   * Mutation evidence: putting the coach in the platform workspace fails three of scenario 4; making the other club's admin an admin of our club fails
     1c, 1d and 3b. Authorization follows the **active workspace**, so a platform role held while the team workspace is active changes nothing (the
     product's rule, not a gap).
   * Accounts: `platform_admin`, `club_admin`, `team_coach`, `other_team_coach` (another club's coach), `other_club_admin` and `athlete`.
-* **Not yet built:** a CI job, 360 / 375 px, the Builder flow on a phone, driving Create and Test / Bind through the forms (Connect is driven through its form).
+* **Not yet built:** a CI job, roster decisions on a team session, 360 / 375 px, the Builder flow on a phone, driving Create and Test / Bind through the forms (Connect is driven through its form).
 
 ### 8.3 Candidates for later consolidation (not removed in T1)
 
