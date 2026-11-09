@@ -22736,3 +22736,11 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     font-size: 0.8rem;
   }
 }
+.gpexe-review-rows td[data-label="Values"] {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .gpexe-review-rows td[data-label="Values"] {
+    white-space: normal;
+  }
+}
