@@ -622,7 +622,7 @@ builds a **world** per test file and runs the real application on it:
     the password and the token are in no page, address or answer; the platform admin sees the same state; a coach, the other club's admin and coach
     and an athlete get the identical 404 for the connection and the list, and no coach or athlete has the tab. The fake source is the backend tests'
     `createFakeSource()` preloaded into the **server process only** (`e2e/lib/fake-source-preload.mjs`, `node --import`): it answers the one approved
-    host `https://server3.gpexe.com/`, nothing else; the application's allowlist and catalog are untouched. The stored credential's key ring is a
+    host `https://server3.gpexe.com/`, nothing else; the application's allowlist and catalog are untouched. `e2e/tests/preload-isolation.test.mjs` proves by a static read of every tracked file that no file outside `e2e/` names the preload or its `E2E_FAKE_VISIBLE_TEAMS` key, that `start`, `dev` and `build` carry no `--import` / `--require` / `NODE_OPTIONS`, that `backend/src` never reads `NODE_OPTIONS` or imports a path from the environment, and that only `world.mjs` references the preload, behind the `fakeSource` option. The stored credential's key ring is a
     throwaway generated per run.
   * **4, Data configuration by role** (`role-visibility.test.mjs`): a team coach has the Data configuration tab and is offered only Variables, Domains
     and Categories; the coach reads `variables` and `classification` and gets the identical 404 for `fields`, `mappings`, `conversions`,
