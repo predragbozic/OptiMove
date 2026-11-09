@@ -273,6 +273,20 @@ function adminTechHtml(entries, extra = "") {
   return maskGpexeIds() ? techHtml(entries, extra) : "";
 }
 
+// The session review's technical lines: an administrator reads them; a coach
+// reads one sentence instead and never a code, a server message or a step.
+const COACH_TECH_NOTE = "Your administrator can see the technical details of this session.";
+function reviewTechHtml(entries, extra = "") {
+  if (maskGpexeIds()) return techHtml(entries, extra);
+  return entries.some(([, v]) => v !== undefined && v !== null && v !== "") ? `<p class="muted gpexe-admin-note">${COACH_TECH_NOTE}</p>` : "";
+}
+function reviewErrorTech(error) {
+  if (!error) return "";
+  return reviewTechHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
+}
+// "(give them the Technical details)" only where the reader has them.
+const giveTech = () => (maskGpexeIds() ? " (give them the Technical details)" : "");
+
 function errorTech(error) {
   if (!error) return "";
   return techHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
@@ -1683,10 +1697,10 @@ function blockedCoachText(c) {
     return { reason: "No athlete in this session can be imported.", step: "Link the athletes to OptiMove athletes or fix their data in GPEXE, then find new sessions." };
   }
   if (code === "source_data_inconsistent") {
-    return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: "Find new sessions again later. If it stays like this, ask a platform admin (give them the Technical details)." };
+    return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: `Find new sessions again later. If it stays like this, ask a platform admin${giveTech()}.` };
   }
   // conflicts_with_existing_data, other, or no code at all.
-  return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: "Ask a platform admin to look at it (give them the Technical details)." };
+  return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: `Ask a platform admin to look at it${giveTech()}.` };
 }
 
 function renderBlockedHtml(preview, c) {
@@ -1698,7 +1712,7 @@ function renderBlockedHtml(preview, c) {
       <p><strong>${text.excluded ? "Not imported." : "Can't be imported yet."}</strong> ${escapeHtml(text.reason)}</p>
       <p><strong>What to do:</strong> ${escapeHtml(text.step)}</p>
       ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
-      ${techHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
+      ${reviewTechHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
     </div>
   `;
 }
@@ -2039,16 +2053,16 @@ function renderOutcomeHtml(detail) {
   if (o.kind === "unknown") {
     const verified = o.verified;
     if (verified === "imported") {
-      return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>${errorTech(o.error)}</div>`;
+      return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>${reviewErrorTech(o.error)}</div>`;
     }
     return `
       <div class="gpexe-unknown" role="alert">
         <p><strong>We can't tell yet whether this session was imported.</strong> Don't enter the data by hand and don't assume either way - check the result first.</p>
         ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Approving again is safe: the server never imports the same session twice.</p>` : ""}
         ${verified === "still_unknown" ? `<p>Still not clear. Check again in a moment.</p>` : ""}
-        ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> Ask a platform admin to check this import (give them the Technical details). Until then, don't enter the data by hand.</p>` : ""}
+        ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> Ask a platform admin to check this import${giveTech()}. Until then, don't enter the data by hand.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : verified ? "Check again" : "Check the result"}</button>
-        ${techHtml([["HTTP status", o.error?.status || "no answer"], ["Code", o.error?.code], ["Server message", o.error?.message], ["Approval id", o.verify?.approvalId], ["Check error", o.verifyError ? `${o.verifyError.status || "no answer"} ${o.verifyError.code || ""}`.trim() : undefined]])}
+        ${reviewTechHtml([["HTTP status", o.error?.status || "no answer"], ["Code", o.error?.code], ["Server message", o.error?.message], ["Approval id", o.verify?.approvalId], ["Check error", o.verifyError ? `${o.verifyError.status || "no answer"} ${o.verifyError.code || ""}`.trim() : undefined]])}
       </div>
     `;
   }
@@ -2056,14 +2070,14 @@ function renderOutcomeHtml(detail) {
   // Another approval (or an earlier, unconfirmed one) got there first: the
   // session is in OptiMove - a final, successful outcome.
   if (code === "already_imported") {
-    return `<div class="gpexe-success" role="status"><p><strong>Already imported.</strong> Nothing more was written.</p>${errorTech(o.error)}</div>`;
+    return `<div class="gpexe-success" role="status"><p><strong>Already imported.</strong> Nothing more was written.</p>${reviewErrorTech(o.error)}</div>`;
   }
   const reviewAgain = o.error?.data?.reviewAgain;
   return `
     <div class="gpexe-refused" role="alert">
       <p>${escapeHtml(REFUSAL_TEXT[code] || (o.error?.status === 404 ? "Not imported: this session is not available." : "Not imported: the server refused the approval."))}</p>
       ${reviewAgain?.candidateId ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(reviewAgain.candidateId)}">Review again</button>` : ""}
-      ${errorTech(o.error)}
+      ${reviewErrorTech(o.error)}
     </div>
   `;
 }

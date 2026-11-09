@@ -94,6 +94,7 @@ function render() {
 }
 
 function resetState(workspace = { type: "club", scopeId: "club-1" }) {
+  adminViewOn = false;
   clearAllViewCache();
   state.currentUser = { id: "coach-1", activeWorkspace: workspace };
   state.trainingLoad = emptyTrainingLoadState();
@@ -103,7 +104,10 @@ function resetState(workspace = { type: "club", scopeId: "club-1" }) {
   renders = 0;
 }
 
-function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: "980" }, lastCheck = null, identityAdmin = false } = {}) {
+// A test that reads the administrator's Technical details calls adminView(); resetState() ends it.
+let adminViewOn = false;
+function adminView() { adminViewOn = true; }
+function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: "980" }, lastCheck = null, identityAdmin = adminViewOn } = {}) {
   return {
     settings,
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
@@ -440,6 +444,7 @@ test("approve: a declined confirmation sends nothing; without changes no acceptC
 
 test("approve: 409 preview_changed says nothing was imported and offers to review again, which reloads the candidate", async () => {
   resetState();
+  adminView();
   let detailLoads = 0;
   installFetchMock(gpexeServer({
     teamStatus: { [TEAM_A]: { enabled: true } },
@@ -464,6 +469,7 @@ test("approve: after a 503 import_outcome_unknown, approval 404 + candidate pend
   const verify = { candidateId: "cand-1", candidateHref: "/c", approvalId: "appr-9", approvalHref: "/a", imported: "...", notImported: "...", retry: "..." };
   for (const scenario of ["pending", "imported"]) {
     resetState();
+  adminView();
     let approvals = 0;
     installFetchMock(gpexeServer({
       teamStatus: { [TEAM_A]: { enabled: true } },
@@ -806,6 +812,7 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
 
 test("blocked steps speak to the coach: no field names or runbook paths in the main text, the server's wording only in Technical details", async () => {
   resetState();
+  adminView();
   const serverStep = 'Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.';
   installFetchMock(gpexeServer({
     onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({
@@ -825,6 +832,7 @@ test("blocked steps speak to the coach: no field names or runbook paths in the m
 
 test("a failed outcome check is listed in Technical details", async () => {
   resetState();
+  adminView();
   installFetchMock(gpexeServer({
     teamStatus: { [TEAM_A]: { enabled: true } },
     onApprove: () => ({ status: 503, body: { error: "import_outcome_unknown", message: "...", verify: { candidateId: "cand-1", approvalId: "appr-3", candidateHref: "/c", approvalHref: "/a" } } }),
@@ -856,6 +864,7 @@ test("blocked sessions: the coach reads why and what to do; the server's message
   ];
   for (const k of cases) {
     resetState();
+  adminView();
     installFetchMock(gpexeServer({
       onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: blockedSummary(k.code, { label: "GPEXE OFFICIAL MATCH 2026-09-16T17:00:00", sessionType: k.session?.categoryName || null }) }),
         preview: { ...candidateDetail().preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: k.session || {}, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } }),
@@ -906,6 +915,7 @@ test("data setup (9-B): an administrator reads each mapping block's precise sent
   const steps = {};
   for (const [code, message] of Object.entries(SETUP_BLOCKS)) {
     resetState();
+  adminView();
     installFetchMock(setupServer(code, `${message} [server]`));
     await openImports();
     let html = renderTrainingLoadCoachHtml();
@@ -1855,6 +1865,7 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
 
 test("Imports: every kind of row is sorted into its bucket from the list answer alone - zero detail reads, and no raw code on the screen", async () => {
   resetState();
+  adminView();
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
@@ -2600,4 +2611,46 @@ test("J20-A2: an athlete whose results all write nothing (unchanged) is 'Nothing
   const html = renderTrainingLoadCoachHtml();
   assert.ok(reviewRows(html).some((r) => r.status === "nothing_new" && r.name === "Cy Example"));
   assert.match(html, />Import 1 athlete<\/button>/);
+});
+
+test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows no code, server message, step or id - one sentence says the administrator has them; an administrator sees them as before", async () => {
+  const blocked = { code: "other", message: "Server says no (athlete 104).", resolution: [{ action: "relink_athlete", step: "do it" }] };
+  const sentence = "Your administrator can see the technical details of this session.";
+  for (const admin of [false, true]) {
+    resetState();
+    if (admin) adminView();
+    installFetchMock(gpexeServer({
+      teamStatus: { [TEAM_A]: { enabled: true } },
+      onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({ blocked }) } }),
+      onApprove: () => ({ status: 409, body: { error: "preview_changed", message: "Changed; nothing was imported." } }),
+    }));
+    await openImports();
+    await openCandidate();
+    const blockedView = renderTrainingLoadCoachHtml();
+    const dialog = blockedView.slice(blockedView.indexOf('role="dialog"'));
+    if (admin) {
+      assert.match(dialog, /<dt>Server message<\/dt>/);
+      assert.match(dialog, /give them the Technical details/);
+    } else {
+      assert.ok(!/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/.test(dialog), `nothing technical for a coach: ${(dialog.match(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) || [])[0]} near ${dialog.slice(Math.max(0, dialog.search(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) - 150), dialog.search(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) + 60)}`);
+      assert.ok(dialog.includes(sentence), "the one sentence instead");
+    }
+  }
+  // An approval outcome in the same dialog follows the same rule.
+  for (const admin of [false, true]) {
+    resetState();
+    if (admin) adminView();
+    installFetchMock(gpexeServer({
+      teamStatus: { [TEAM_A]: { enabled: true } },
+      onCandidate: () => ({ status: 200, body: { candidate: candidateDetail() } }),
+      onApprove: () => ({ status: 409, body: { error: "preview_changed", message: "Changed; nothing was imported." } }),
+    }));
+    await openImports();
+    await openCandidate();
+    await approve();
+    const html = renderTrainingLoadCoachHtml();
+    const dialog = html.slice(html.indexOf('role="dialog"'));
+    if (admin) assert.match(dialog, /<dd>preview_changed<\/dd>/);
+    else assert.ok(!/preview_changed/.test(dialog) && dialog.includes(sentence), "no code in a coach's outcome");
+  }
 });
