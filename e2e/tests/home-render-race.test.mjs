@@ -36,9 +36,11 @@ for (const [label, width] of [["390 px", WIDTHS.phone], ["1280 px", WIDTHS.deskt
       assert.ok(heldCount >= 1, "Home asked for its roster");
       await page.evaluate(() => document.querySelector('.rail-button[data-library-tab="organization"]').click());
       await page.waitForSelector(".organization-view", { timeout: 20_000 });
+      // Home's answer arrives now and must really reach the page, or the checks below would prove nothing.
+      const lateAnswer = page.waitForResponse((r) => r.url().includes("/api/athletes/today"), { timeout: 20_000 });
       release();
-      // Home's answer arrives now; give it time to (not) paint.
-      await page.waitForResponse((r) => r.url().includes("/api/athletes/today"), { timeout: 20_000 }).catch(() => {});
+      const late = await lateAnswer;
+      assert.ok(late.status() >= 200, `the held roster answer reached the page (${late.status()})`);
       await page.waitForTimeout(1000);
       assert.equal(await page.locator("#screenTitle").textContent(), "Settings");
       assert.equal(await page.locator(".organization-view").count(), 1, "Settings is still on screen");
