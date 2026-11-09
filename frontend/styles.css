@@ -23209,7 +23209,10 @@ div.metric-mappings-flow:not(.metric-variables-head) {
    - the context label above the title in sentence case, as its text is written;
    - the workspace switcher in sentence case at 14 px, a bordered control when it opens a menu;
    - the status pill is left as U4 set it (a pill on a computer, a dot on a phone);
-   - on a phone every header control is a 44 px target.
+   - on a phone every header control is a 44 px target, and the switcher's text is 13 px there
+     (14 px elsewhere) so "Team · <name>" still fits at 360-390 px;
+   - on a touch screen wider than a phone the switcher is a 44 px target too; the hover colours
+     apply only to a mouse, so a tap never leaves it looking open.
    ========================================================================== */
 body:not(.athlete-mode):not(.login-mode) .topbar #contextLabel {
   margin: 0 0 var(--om-space-1);
@@ -23232,30 +23235,42 @@ body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[data-action="
   border-color: var(--line-strong);
   background: var(--om-surface-raised);
 }
-body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[data-action="workspace-toggle"]:hover,
 body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[aria-expanded="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--om-accent-strong);
 }
+@media (hover: hover) {
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle[data-action="workspace-toggle"]:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--om-accent-strong);
+  }
+}
 body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+  box-shadow: var(--om-focus-ring);
+}
+@media (pointer: coarse) {
+  body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+    min-height: var(--om-tap-target);
+  }
 }
 
 @media (max-width: 760px) {
   body:not(.athlete-mode):not(.login-mode) .topbar-actions {
-    grid-template-columns: 44px minmax(0, 1fr) repeat(3, 44px);
+    grid-template-columns: var(--om-tap-target) minmax(0, 1fr) repeat(3, var(--om-tap-target));
   }
   body:not(.athlete-mode):not(.login-mode) .topbar-actions > .plain-button,
   body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
   body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle {
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
+    width: var(--om-tap-target);
+    min-width: var(--om-tap-target);
+    min-height: var(--om-tap-target);
   }
   body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
-    min-height: 44px;
+    min-height: var(--om-tap-target);
     padding-inline: var(--om-space-2);
     font-size: 13px;
   }

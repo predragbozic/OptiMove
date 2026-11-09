@@ -2813,7 +2813,7 @@ async function handleContentClick(event) {
       state.trainingLoad.filter.clubIds = [];
       state.trainingLoad.filter.teamIds = [];
       state.selectedAthleteId = row.athleteId;
-      els.context.textContent = "Training Load";
+      els.context.textContent = "Training load";
       els.title.textContent = row.athlete;
       els.toolbar.innerHTML = "";
       renderAthleteList();
