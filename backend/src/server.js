@@ -36,6 +36,8 @@ import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
+import { appErrorsRouter } from "./routes/appErrors.js";
+import { recordServerError, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -67,6 +69,8 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
+// An error report is tiny: refuse a larger declared body before it is parsed.
+app.use("/api/app-errors", (req, res, next) => (Number(req.headers["content-length"] || 0) > 4096 ? res.status(413).json({ error: "body_too_large" }) : next()));
 app.use(express.json());
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);
@@ -91,6 +95,7 @@ const mediaUploads = createMediaUploadService({pool,storage:mediaStorage,store:c
 app.use('/api/media', createMediaStorageRouter({ service: mediaStorage, uploads: mediaUploads, access: createMediaAccessService({pool,store:createR2UploadStore()}) }));
 app.use('/api/admin/media', createMediaStorageRouter({ service: mediaStorage, admin: true, uploads: mediaUploads, driveCopies }));
 
+app.use("/api/app-errors", requireAuth, appErrorsRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/athletes", requireAuth, athletesRouter);
 app.use("/api/athlete-home", requireAuth, athleteHomeRouter);
@@ -248,6 +253,8 @@ app.use((error, req, res, next) => {
   if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:Boolean(error.retryable),details:error.details});
   console.error(error);
   const status = Number(error.status || error.statusCode || 500);
+  // A sanitized record of a 5xx (route pattern, code, status, function@file names; never the message or the request).
+  if (!error.skipAppErrorRecord) recordServerError(req, error, status);
   res.status(status).json({
     error: status >= 500 ? "Internal server error" : error.message,
     message: status >= 500 && isProduction ? "Something went wrong." : error.message,
@@ -279,6 +286,7 @@ if (isMainModule) {
   // is for an external scheduler, and an expired snapshot is treated as gone
   // even before it is purged.
   startGpexeRetentionSchedule();
+  startAppErrorRetentionSchedule();
 }
 
 export { app };
