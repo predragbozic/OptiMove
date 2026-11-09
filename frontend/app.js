@@ -286,6 +286,7 @@ import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspace
 import { buildContextKey, clearAllViewCache, dedupeRequest, loadCachedView, setCacheData, setCacheError } from "./view-cache.js";
 import { createContentSwipe } from "./content-swipe.js";
 import { installExerciseHeaderReveal } from "./exercise-header-reveal.js";
+import { revealActiveTab } from "./om-tabs.js";
 
 let inboxPollId = null;
 // The Exercise Library's top bar and search row brought back by a pull up
@@ -3194,6 +3195,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       role,
       scope,
     });
+    // The Settings tab row scrolls sideways when it does not fit: keep the active tab in view.
+    revealActiveTab(els.content);
   };
 
   await loadCachedView({

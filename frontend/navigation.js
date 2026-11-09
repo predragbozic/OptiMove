@@ -148,8 +148,8 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
   if (isCoachSettings()) {
     const labels = { athletes: "Athletes", joinLinks: "Join links", presets: "Tags & Presets", icons: "Icons" };
     return `
-    <nav class="settings-tabs" aria-label="Settings sections">
-      ${COACH_SETTINGS_SECTIONS.map((value) => `<button class="settings-tab ${section === value ? "is-active" : ""}" type="button" data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
+    <nav class="settings-tabs om-tabs" aria-label="Settings sections">
+      ${COACH_SETTINGS_SECTIONS.map((value) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
     </nav>
   `;
   }
@@ -184,8 +184,8 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ...(data.isPlatformAdmin ? [["appHealth", "App health"]] : []),
   ];
   return `
-    <nav class="settings-tabs" aria-label="Settings sections">
-      ${items.map(([value, label]) => `<button class="settings-tab ${section === value ? "is-active" : ""}" type="button" data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")}
+    <nav class="settings-tabs om-tabs" aria-label="Settings sections">
+      ${items.map(([value, label]) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")}
     </nav>
   `;
 }
