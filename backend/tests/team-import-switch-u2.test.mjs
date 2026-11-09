@@ -646,7 +646,7 @@ const approverMd5 = async (client) => (await client.query(`select md5(p.prosrc) 
 
 test("12. migration v56: the preflight passes on v54, the post-check on v56, the rollback refuses with any recorded fact and otherwise restores v54 exactly, and the migration applies again", async () => {
   // v57 (U5) sorts after v56; this rehearsal is about v56 being the last migration, so it stops there.
-  const UPTO_V56 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const UPTO_V56 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v57")));
   const withoutV56 = UPTO_V56.filter((m) => !m.includes("v56"));
   const rb = await createDb2({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u2rb", migrations: withoutV56 });
   const client = new pg.Client({ connectionString: rb.url });
