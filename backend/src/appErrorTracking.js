@@ -5,14 +5,16 @@
 // a stack signature of function@file names, a 12-hex hash of the user id, a release commit. Free text (an error
 // message, a request body, a query string, a name, an e-mail, a token, a content string) has no column.
 import crypto from "node:crypto";
-import { pool } from "./db.js";
-import { isPoolCheckoutTimeout } from "./db.js";
+import { isPoolCheckoutTimeout, pool } from "./db.js";
 import { isPlatformAdministrator } from "./authz.js";
 
 export const RETENTION_DAYS = 30;
 export const REPEAT_WINDOW = "1 hour";
 export const MAX_REPORT_BYTES = 4096;
 export const MAX_ROWS_PER_USER_WINDOW = 100;
+export const MAX_ROWS_WITHOUT_USER_WINDOW = 200;
+const MAX_IN_FLIGHT = 10;
+const DEDUPE_MS = 60_000;
 const PER_USER_PER_MINUTE = 20;
 const PURGE_BATCH = 5000;
 const PURGE_INTERVAL_HOURS = 6;
@@ -50,7 +52,10 @@ export function normalizeRoute(value) {
 export function stackSignatureFromError(error) {
   const stack = typeof error?.stack === "string" ? error.stack : "";
   const frames = [];
-  for (const line of stack.split("\n").slice(1)) {
+  // The header ("Name: message") spans as many lines as the message does: skip all of them, so a message that contains a line
+  // looking like a frame is never read as one.
+  const headerLines = String(error?.message ?? "").split("\n").length;
+  for (const line of stack.split("\n").slice(headerLines)) {
     const m = line.match(/^\s*at\s+(?:async\s+)?(?:([^\s(]+)\s+)?\(?(?:file:\/\/)?([^():]+?)(?::\d+)?(?::\d+)?\)?\s*$/);
     if (!m) continue;
     const file = m[2];
@@ -64,10 +69,13 @@ export function stackSignatureFromError(error) {
   return cleanStackSignature(frames.join(" > "));
 }
 
+// The grammar fn@file( > fn@file){0,3}: function and file names only. A sentence, an e-mail address or an error message
+// does not match and is refused (it can still be encoded as fn@file by a hostile client; the column is a bounded shape).
+const STACK_FRAME = "[A-Za-z0-9_$.]{1,40}@[A-Za-z0-9_.-]{1,40}";
+const STACK_SIGNATURE = new RegExp(`^${STACK_FRAME}( > ${STACK_FRAME}){0,3}$`);
 export function cleanStackSignature(value) {
-  if (typeof value !== "string") return null;
-  const cleaned = value.replace(/[^A-Za-z0-9_.@:/ >-]/g, "").trim().slice(0, 200);
-  return cleaned || null;
+  if (typeof value !== "string" || value.length > 200) return null;
+  return STACK_SIGNATURE.test(value) ? value : null;
 }
 
 export function fingerprintOf({ source, where, action, code, status, stackSignature }) {
@@ -100,7 +108,8 @@ export function sanitizeClientReport(body) {
   if (status != null && !(Number.isInteger(status) && status >= 100 && status <= 599)) return null;
   if (stackSig != null && typeof stackSig !== "string") return null;
   if (release != null && typeof release !== "string") return null;
-  const stackSignature = cleanStackSignature(stackSig);
+  const stackSignature = stackSig == null ? null : cleanStackSignature(stackSig);
+  if (stackSig != null && stackSignature === null) return null;
   return { source: "client", screen, routeTemplate: null, action: action ?? null, code, status: status ?? null, stackSignature, release: releaseOf(release) };
 }
 
@@ -111,7 +120,7 @@ export function allowReport(userId, nowMs = Date.now()) {
   const minute = Math.floor(nowMs / 60000);
   const b = buckets.get(key);
   if (!b || b.minute !== minute) {
-    if (buckets.size > 5000) buckets.clear();
+    if (buckets.size > 5000) for (const [key2, v] of buckets) if (v.minute !== minute) buckets.delete(key2);
     buckets.set(key, { minute, n: 1 });
     return true;
   }
@@ -142,10 +151,9 @@ export async function writeEvent(event, { executor = pool } = {}) {
     );
     let outcome = "counted";
     if (!bumped.rowCount) {
-      const recent = hash
-        ? (await client.query(`select count(*)::int as n from public.app_error_events where user_hash = $1 and first_seen_at > now() - interval '${REPEAT_WINDOW}'`, [hash])).rows[0].n
-        : 0;
-      if (recent >= MAX_ROWS_PER_USER_WINDOW) {
+      const recent = (await client.query(
+        `select count(*)::int as n from public.app_error_events where user_hash is not distinct from $1 and first_seen_at > now() - interval '${REPEAT_WINDOW}'`, [hash])).rows[0].n;
+      if (recent >= (hash ? MAX_ROWS_PER_USER_WINDOW : MAX_ROWS_WITHOUT_USER_WINDOW)) {
         outcome = "dropped";
       } else {
         await client.query(
@@ -171,16 +179,38 @@ export async function recordClientError(req, report) {
   return writeEvent({ ...report, role: roleOf(req.authz), userHash: userHash(req.user?.id) });
 }
 
+const recentServer = new Map();
+let inFlight = 0;
+export function resetServerDedupeForTests() { recentServer.clear(); inFlight = 0; }
+
 // A server error from the global handler: fire and forget, never throws, never touches the response. Only 5xx; only
 // the route pattern, a code from a closed shape, the status and a function@file signature - never the message.
-export function recordServerError(req, error, status) {
+export function recordServerError(req, error, status, { executor = pool } = {}) {
   try {
     if (!(status >= 500) || isPoolCheckoutTimeout(error)) return;
-    const route = req.route?.path != null ? `${req.baseUrl || ""}${req.route.path}` : req.originalUrl || req.url || "";
-    const routeTemplate = normalizeRoute(typeof route === "string" ? route : "") || "/unknown";
+    // The pattern is the route's own (code-defined). The mount prefix is lost by the time an error handler runs (baseUrl is
+    // empty), so it is taken from the URL's leading segments, those before the segments the route's pattern covers, with the
+    // usual id replacement. A request that matched no route (or whose pattern is not a plain string) is "/unmatched", never its URL.
+    let routeTemplate = "/unmatched";
+    if (typeof req.route?.path === "string") {
+      const urlSegs = String(req.originalUrl || req.url || "").split("?")[0].split("/").filter(Boolean);
+      const routeSegs = req.route.path.split("/").filter(Boolean);
+      const prefix = urlSegs.slice(0, Math.max(0, urlSegs.length - routeSegs.length));
+      routeTemplate = normalizeRoute(`/${[...prefix, ...routeSegs].join("/")}`) || "/unmatched";
+    }
     const rawCode = typeof error?.code === "string" ? error.code.toLowerCase() : "";
     const code = WORD.test(rawCode) ? rawCode : "internal_error";
-    writeEvent({ source: "server", screen: null, routeTemplate, action: null, code, status, stackSignature: stackSignatureFromError(error), role: roleOf(req.authz), userHash: userHash(req.user?.id), release: releaseOf(null) })
+    const event = { source: "server", screen: null, routeTemplate, action: null, code, status, stackSignature: stackSignatureFromError(error), role: roleOf(req.authz), userHash: userHash(req.user?.id), release: releaseOf(null) };
+    // A 5xx storm must not become a second storm on the pool: an in-memory repeat filter and a bound on writes in flight.
+    const fp = fingerprintOf({ source: "server", where: routeTemplate, action: null, code, status, stackSignature: event.stackSignature });
+    const key = `${event.userHash || "none"}:${fp}`;
+    const now = Date.now();
+    if (recentServer.size > 2000) for (const [k2, t] of recentServer) if (now - t > DEDUPE_MS) recentServer.delete(k2);
+    if (now - (recentServer.get(key) ?? 0) < DEDUPE_MS || inFlight >= MAX_IN_FLIGHT) return;
+    recentServer.set(key, now);
+    inFlight += 1;
+    writeEvent(event, { executor })
+      .finally(() => { inFlight -= 1; })
       .catch((e) => console.error(`[app-errors] not recorded: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`));
   } catch (e) {
     console.error(`[app-errors] not recorded: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`);

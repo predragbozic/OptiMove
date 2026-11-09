@@ -5,7 +5,9 @@
 -- store a name, an e-mail, a request body, a query string, a token, a content string or a message a source returned:
 --   * screen / action / error_code - lower-case words (a-z 0-9 _ . -), at most 60 characters;
 --   * route_template - a route pattern with ids already replaced by :id, no query string;
---   * stack_signature - function@file names only (no line, no message), at most 200 characters, a fixed character set;
+--   * stack_signature - the grammar fn@file( > fn@file){0,3} (function and file names only, no line, no message), at most 200 characters.
+--     The grammar removes the accidental path (an error message put in the field is refused); it cannot stop a writer that
+--     deliberately encodes words as fn@file, so the column is a bounded shape, not a proof of "no text";
 --   * user_hash - 12 hex characters of a one-way hash of the user id, never the id;
 --   * release_commit - 7 to 40 hex characters.
 -- One row is one (user, fingerprint) pair inside a one-hour window: the same user repeating the same error raises
@@ -41,7 +43,7 @@ create table public.app_error_events (
   constraint app_error_events_role_known check (role in ('platform_admin', 'coach', 'athlete', 'user', 'none')),
   constraint app_error_events_release_shape check (release_commit is null or release_commit ~ '^[0-9a-f]{7,40}$'),
   constraint app_error_events_user_hash_shape check (user_hash is null or user_hash ~ '^[0-9a-f]{12}$'),
-  constraint app_error_events_stack_shape check (stack_signature is null or (length(stack_signature) <= 200 and stack_signature ~ '^[A-Za-z0-9_.@:/ >-]+$')),
+  constraint app_error_events_stack_shape check (stack_signature is null or (length(stack_signature) <= 200 and stack_signature ~ '^[A-Za-z0-9_$.]{1,40}@[A-Za-z0-9_.-]{1,40}( > [A-Za-z0-9_$.]{1,40}@[A-Za-z0-9_.-]{1,40}){0,3}$')),
   constraint app_error_events_repeat_positive check (repeat_count >= 1),
   constraint app_error_events_times_ordered check (last_seen_at >= first_seen_at),
   constraint app_error_events_where_known check (
@@ -76,9 +78,26 @@ begin
   if new.repeat_count < old.repeat_count then
     raise exception 'app_error_events: repeat_count never decreases' using errcode = '23514';
   end if;
+  if new.last_seen_at < old.last_seen_at or new.last_seen_at > clock_timestamp() + interval '1 minute' then
+    raise exception 'app_error_events: last_seen_at never moves back and never into the future' using errcode = '23514';
+  end if;
   return new;
 end
 $$;
+
+-- A raw INSERT or UPDATE cannot put a time in the future (it would defeat the 30-day purge) and last_seen_at never moves back.
+create function public.app_error_events_guard_insert() returns trigger
+language plpgsql as $$
+begin
+  if new.first_seen_at > clock_timestamp() + interval '1 minute' or new.last_seen_at > clock_timestamp() + interval '1 minute' then
+    raise exception 'app_error_events: a time in the future is refused' using errcode = '23514';
+  end if;
+  return new;
+end
+$$;
+
+create trigger app_error_events_guard_insert before insert on public.app_error_events
+  for each row execute function public.app_error_events_guard_insert();
 
 create trigger app_error_events_guard_update before update on public.app_error_events
   for each row execute function public.app_error_events_guard_update();
@@ -93,3 +112,14 @@ $$;
 
 create trigger app_error_events_refuse_truncate before truncate on public.app_error_events
   for each statement execute function public.app_error_events_refuse_truncate();
+
+-- The table is for the application's own role only: nobody reaches it through a public data API.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'revoke all on public.app_error_events from anon';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'revoke all on public.app_error_events from authenticated';
+  end if;
+end $$;

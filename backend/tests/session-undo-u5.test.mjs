@@ -33,7 +33,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v57")) + 1) }); // v57 is this suite's last migration (its post-check expects it)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -828,7 +828,7 @@ async function catalogOf(client) {
 }
 
 test("20. migration v57: the preflight passes on v56, the post-check on v57, the rollback restores v56 exactly (catalog identical) and refuses once an undo exists, and the migration applies again", async () => {
-  const withoutV57 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const withoutV57 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v57")));
   const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u5rb", migrations: withoutV57 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
@@ -838,7 +838,7 @@ test("20. migration v57: the preflight passes on v56, the post-check on v57, the
     assert.ok(pre.length >= 18, `the preflight returned its booleans (${pre.length})`);
     assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok on a v56 database");
     v56Catalog = await catalogOf(client);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((x) => x.includes("v57")) + 1));
     const post = await booleansOf(client, fs.readFileSync(RUNBOOK("session-undo-v57-postcheck.sql"), "utf8"));
     assert.ok(post.length >= 18, `the post-check returned its booleans (${post.length})`);
     assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok on a v57 database");
@@ -854,7 +854,7 @@ test("20. migration v57: the preflight passes on v56, the post-check on v57, the
     await client.query(fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8"));
     assert.deepEqual(await catalogOf(client), v56Catalog, "the rollback restores the v56 catalog exactly");
     assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 0);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((x) => x.includes("v57")) + 1));
     assert.deepEqual(await catalogOf(client), v57Catalog, "re-applied: the same catalog");
   } finally {
     await client.end();
@@ -893,7 +893,7 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
 });
 
 test("22. the md5 gate: the migration refuses to run when an original body it copies has changed", async () => {
-  const withoutV57 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v57"));
+  const withoutV57 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v57")));
   const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "u5gate", migrations: withoutV57 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
@@ -909,7 +909,7 @@ test("22. the md5 gate: the migration refuses to run when an original body it co
       await client.query(original);
     }
     assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 0);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((x) => x.includes("v57")) + 1));
     assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 1);
   } finally {
     await client.end();

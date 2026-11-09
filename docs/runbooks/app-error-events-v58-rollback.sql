@@ -7,7 +7,7 @@
 -- table: the writes fail quietly, but the code must go first); and the owner approved this database specifically
 -- (.claude/rules/database-safety.md).
 --
--- It drops the table (with every sanitized error row: they are telemetry, not a decision), its two functions and removes the
+-- It drops the table (with every sanitized error row: they are telemetry, not a decision), its three functions and removes the
 -- v58 record. It changes no other row. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
 --   * v58 is not recorded, or any later migrations_v2 migration is.
@@ -30,6 +30,7 @@ begin
 end $$;
 
 drop table public.app_error_events;
+drop function public.app_error_events_guard_insert();
 drop function public.app_error_events_guard_update();
 drop function public.app_error_events_refuse_truncate();
 delete from public.schema_migrations where migration_name = 'migrations_v2/202611091000_app_error_events.sql';

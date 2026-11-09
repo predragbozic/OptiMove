@@ -21,7 +21,7 @@ appErrorsRouter.post("/", async (req, res, next) => {
     return res.status(204).end();
   } catch (error) {
     // A failed record must never become a second error report; the generic handler answers 5xx without a message.
-    error.skipAppErrorRecord = true;
+    if (error && typeof error === "object") { try { error.skipAppErrorRecord = true; } catch { /* a frozen error is passed on as it is */ } }
     return next(error);
   }
 });

@@ -69,8 +69,8 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
-// An error report is tiny: refuse a larger declared body before it is parsed.
-app.use("/api/app-errors", (req, res, next) => (Number(req.headers["content-length"] || 0) > 4096 ? res.status(413).json({ error: "body_too_large" }) : next()));
+// An error report is tiny: this route parses at most 4 KB (a larger body is 413 body_too_large from the error handler); the global parser then skips an already parsed body.
+app.use("/api/app-errors", express.json({ limit: "4kb" }));
 app.use(express.json());
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);

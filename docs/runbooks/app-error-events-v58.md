@@ -20,7 +20,7 @@ by a CHECK in the table, so a buggy writer cannot store free text.
 | `role` | `platform_admin`, `coach`, `athlete`, `user`, `none`; derived by the server from the session, never from the report |
 | `release_commit` | 7 to 40 hex characters (the browser may send its build; anything else is replaced by the server's commit) |
 | `user_hash` | 12 hex characters of `sha256('app-error-user:' || user id)`; never the id, never a name or e-mail |
-| `stack_signature` | `function@file` names joined by ` > `, at most four frames, no line numbers, no message, at most 200 characters |
+| `stack_signature` | the grammar `fn@file( > fn@file){0,3}` (function and file names, no line numbers, no message), at most 200 characters; a browser report whose `stackSig` does not match is refused (`400`). The grammar removes the accidental path (an error message in the field); it cannot stop a hostile client that encodes words as `fn@file`, so the column is a bounded shape, not a proof of "no text" |
 | `fingerprint` | sha256 of source, screen or route, action, code, status and the signature |
 | `repeat_count`, `first_seen_at`, `last_seen_at` | counters; the only columns that ever change |
 
@@ -31,8 +31,7 @@ code only and never changes the answer.
 ## Routes (`/api/app-errors`, sign-in required)
 
 * `POST /` one browser report: exactly the keys `screen`, `action`, `code`, `status`, `stackSig`, `release`, each in its closed
-  shape, or `400 invalid_error_report` (nothing stored, the answer never repeats the report). A declared body over 4 KB is `413`
-  before it is parsed; `429` after 20 reports a minute from one user; success is an empty `204`.
+  shape, or `400 invalid_error_report` (nothing stored, the answer never repeats the report). The route parses at most 4 KB (`413 body_too_large` beyond it); `429` after 20 reports a minute from one user; success is an empty `204`.
 * `GET /groups?days=1..30` for an active platform admin: the errors grouped by fingerprint (occurrences, distinct users, first and
   last seen, latest release, roles). Anyone else gets the same 404 as an unknown route.
 
@@ -40,7 +39,8 @@ code only and never changes the answer.
 
 The same user repeating the same fingerprint inside one hour raises `repeat_count` on the existing row (one transaction under an
 advisory lock per user and fingerprint, so concurrent reports count instead of duplicating). A user's new rows are capped at
-100 per hour; a report over the cap is dropped silently.
+100 per hour, and rows with no user (a server error before sign-in) at 200 per hour in all; a report over the cap is dropped silently.
+A server error repeating the same fingerprint within a minute is dropped in memory before it reaches the database, and at most 10 server-error writes are in flight at once.
 
 ## Retention
 
@@ -59,7 +59,7 @@ start (after 60 s) and every 6 hours (`startAppErrorRetentionSchedule`). A row i
 ## Rollback
 
 `app-error-events-v58-rollback.sql`: one transaction, refuses while the migrator runs, when v58 is not recorded, or when a later
-migration is applied; otherwise drops the table (the rows are telemetry) and its two functions and removes the record. The
+migration is applied; otherwise drops the table (the rows are telemetry) and its three functions and removes the record. The
 deployed commit must no longer contain the migration file or import `appErrorTracking.js` first. Rehearsed in test 7 of the suite.
 
 ## Limits and notes
@@ -69,5 +69,8 @@ deployed commit must no longer contain the migration file or import `appErrorTra
 * The in-memory rate limit is per server process.
 * The Supabase Data API is off for this project (checked at the v38 deploy), so the new table is not exposed through it; the table
   has no row-level security, like the v36 and v38 tables.
-* `route_template` for a server error comes from the Express route pattern; an error before routing is recorded from the URL with
-  ids replaced.
+* `route_template` for a server error comes from the Express route pattern; a request that matched no route is recorded as
+  `/unmatched`, never by its URL.
+* v58 revokes every privilege on the table from `anon` and `authenticated` (when those roles exist), so a Supabase data API could
+  not read it even if it were switched on for `public`; the post-check asserts it.
+* The table's triggers also refuse a time in the future (a raw write could otherwise defeat the purge) and a `last_seen_at` that moves back.

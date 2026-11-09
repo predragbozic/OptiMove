@@ -65,15 +65,18 @@ test("1. sanitizers keep closed shapes only", () => {
   const err = new Error(`failed for ${SECRET} body={"password":"hunter2"}`);
   const sig = M.stackSignatureFromError(err);
   assert.ok(!/hunter2|example|password|\d+:\d+/.test(sig || ""), sig);
-  assert.match(sig || "", /^[A-Za-z0-9_.@:/ >-]+$/);
-  assert.ok(!/[;'\n]/.test(M.cleanStackSignature("a b\nc'; drop table x;--")));
+  assert.match(sig || "", /^[A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}( > [A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}){0,3}$/);
+  assert.ok(!/secret/.test(M.stackSignatureFromError(new Error("x\n    at secret-ana-example (file.js:1:1)")) || ""), "a message line that looks like a frame is not read as one");
+  assert.equal(M.cleanStackSignature("a b\nc'; drop table x;--"), null);
+  for (const bad of ["ana.example@example.invalid reset token abc for Ana Example", "Error: boom", "a@b > ", "fn@file > fn@file > fn@file > fn@file > fn@file", "x".repeat(300)]) assert.equal(M.cleanStackSignature(bad), null, bad);
+  assert.equal(M.cleanStackSignature("render@view.js > start@app.js"), "render@view.js > start@app.js");
   const a = M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 500, stackSignature: "f@a.js" });
   assert.equal(a, M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 500, stackSignature: "f@a.js" }));
   assert.notEqual(a, M.fingerprintOf({ source: "client", where: "home", action: "x", code: "c", status: 501, stackSignature: "f@a.js" }));
   assert.match(M.userHash("u-1"), /^[0-9a-f]{12}$/);
   assert.equal(M.userHash(null), null);
   assert.ok(M.sanitizeClientReport(GOOD));
-  for (const bad of [null, [], "x", { ...GOOD, extra: 1 }, { ...GOOD, screen: "Training Load" }, { ...GOOD, screen: SECRET }, { ...GOOD, code: "Error: boom" }, { ...GOOD, action: "a".repeat(61) }, { ...GOOD, status: 99 }, { ...GOOD, status: "500" }, { ...GOOD, stackSig: 5 }, { screen: "home" }, { ...GOOD, message: "boom" }, { ...GOOD, url: "/x?token=1" }, { ...GOOD, release: 7 }]) {
+  for (const bad of [null, [], "x", { ...GOOD, extra: 1 }, { ...GOOD, screen: "Training Load" }, { ...GOOD, screen: SECRET }, { ...GOOD, code: "Error: boom" }, { ...GOOD, action: "a".repeat(61) }, { ...GOOD, status: 99 }, { ...GOOD, status: "500" }, { ...GOOD, stackSig: 5 }, { screen: "home" }, { ...GOOD, message: "boom" }, { ...GOOD, url: "/x?token=1" }, { ...GOOD, release: 7 }, { ...GOOD, stackSig: "ana.example@example.invalid reset token abc123 for Ana Example" }, { ...GOOD, stackSig: "Cannot read properties of undefined" }]) {
     assert.equal(M.sanitizeClientReport(bad), null, JSON.stringify(bad));
   }
   assert.equal(M.sanitizeClientReport({ ...GOOD, release: "not-a-commit" }).release === "not-a-commit", false, "a non-hex release is replaced, never stored");
@@ -82,15 +85,19 @@ test("1. sanitizers keep closed shapes only", () => {
 test("2. the table refuses free text, and only the count and the last-seen time change", async () => {
   const ok = { fp: "a".repeat(64) };
   const ins = (over = {}) => {
+    if (over.first_seen_at) return k.query(`insert into public.app_error_events (fingerprint, source, screen, error_code, role, first_seen_at, last_seen_at) values ($1,'client','home','js_error','coach',$2,$2)`, [ok.fp, over.first_seen_at]);
     const v = { fingerprint: ok.fp, source: "client", screen: "home", route_template: null, action: null, error_code: "js_error", http_status: null, role: "coach", release_commit: null, user_hash: null, stack_signature: null, ...over };
     return k.query(`insert into public.app_error_events (fingerprint, source, screen, route_template, action, error_code, http_status, role, release_commit, user_hash, stack_signature) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [v.fingerprint, v.source, v.screen, v.route_template, v.action, v.error_code, v.http_status, v.role, v.release_commit, v.user_hash, v.stack_signature]);
   };
   await ins();
-  for (const over of [{ error_code: SECRET }, { error_code: "Error: boom" }, { screen: "Ana Example" }, { action: "x y" }, { route_template: "/x?token=1" }, { route_template: "x" }, { stack_signature: "boom\nstack" }, { stack_signature: "a'b" }, { user_hash: "user@example" }, { user_hash: "a".repeat(13) }, { release_commit: "main" }, { role: "admin" }, { source: "browser" }, { fingerprint: "xyz" }, { http_status: 700 }, { source: "server", screen: "home", route_template: "/api/x" }, { source: "client", screen: null }]) {
+  for (const over of [{ error_code: SECRET }, { error_code: "Error: boom" }, { screen: "Ana Example" }, { action: "x y" }, { route_template: "/x?token=1" }, { route_template: "x" }, { stack_signature: "boom\nstack" }, { stack_signature: "a'b" }, { stack_signature: 'ana.example@example.invalid reset token abc123' }, { stack_signature: 'Cannot read properties of undefined' }, { first_seen_at: new Date(Date.now() + 86400000).toISOString() }, { user_hash: "user@example" }, { user_hash: "a".repeat(13) }, { release_commit: "main" }, { role: "admin" }, { source: "browser" }, { fingerprint: "xyz" }, { http_status: 700 }, { source: "server", screen: "home", route_template: "/api/x" }, { source: "client", screen: null }]) {
     await assert.rejects(ins(over), (e) => e.code === "23514", JSON.stringify(over));
   }
   await assert.rejects(k.query(`update public.app_error_events set error_code = 'other'`), (e) => e.code === "23514");
   await assert.rejects(k.query(`update public.app_error_events set repeat_count = 0`), (e) => e.code === "23514");
+  await assert.rejects(k.query(`update public.app_error_events set last_seen_at = now() + interval '1 day'`), (e) => e.code === "23514", "a future last_seen_at would defeat the purge");
+  await k.query(`insert into public.app_error_events (fingerprint, source, screen, error_code, role, first_seen_at, last_seen_at) values ($1,'client','home','js_error','coach', now() - interval '2 hours', now() - interval '1 hour')`, ["d".repeat(64)]);
+  await assert.rejects(k.query(`update public.app_error_events set last_seen_at = now() - interval '90 minutes' where fingerprint = $1`, ["d".repeat(64)]), (e) => e.code === "23514", "last_seen_at never moves back");
   await k.query(`update public.app_error_events set repeat_count = repeat_count + 1, last_seen_at = now()`);
   await assert.rejects(k.query(`truncate public.app_error_events`), (e) => e.code === "23514");
   await k.query(`delete from public.app_error_events`);
@@ -169,8 +176,9 @@ test("4. the read route: platform admin only; everyone else the unknown-route 40
 
 test("5. a server error is recorded without its message; the purge deletes only old rows", async () => {
   await k.query(`delete from public.app_error_events`);
+  M.resetServerDedupeForTests();
   const err = Object.assign(new Error(`password=hunter2 for ${SECRET}`), { code: "XX000" });
-  const req = { baseUrl: "/api/athletes", route: { path: "/:athleteId/plans" }, originalUrl: `/api/athletes/${crypto.randomUUID()}/plans?token=zzz`, user: { id: crypto.randomUUID() }, authz: null };
+  const req = { baseUrl: "", route: { path: "/:athleteId/plans" }, originalUrl: `/api/athletes/${crypto.randomUUID()}/plans?token=zzz`, user: { id: crypto.randomUUID() }, authz: null };
   M.recordServerError(req, err, 500);
   M.recordServerError(req, err, 404); // not a 5xx
   M.recordServerError({ ...req, route: undefined }, Object.assign(new Error("x"), { code: "Not A Word" }), 502);
@@ -184,13 +192,65 @@ test("5. a server error is recorded without its message; the purge deletes only 
   assert.equal(a.http_status, 500);
   assert.ok(!JSON.stringify(a).match(/hunter2|example|token|zzz/));
   const b = all.find((r) => r.error_code === "internal_error");
-  assert.equal(b.route_template, "/api/athletes/:id/plans");
+  assert.equal(b.route_template, "/unmatched", "a request that matched no route is never recorded by its URL");
+  assert.ok(!all.some((r) => /athletes|token|zzz/.test(String(r.stack_signature)) && /token|zzz/.test(JSON.stringify(r))));
+  M.resetServerDedupeForTests();
+  const dup = { ...req, route: { path: "/dup" }, baseUrl: "", originalUrl: "/api/x/dup" };
+  M.recordServerError(dup, err, 500);
+  M.recordServerError(dup, err, 500);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await rows()).filter((r) => r.route_template === "/api/x/dup").length, 1, "a repeat inside the window does not reach the database again");
+  await k.query(`delete from public.app_error_events where route_template = '/api/x/dup'`);
   // purge
   await k.query(`insert into public.app_error_events (fingerprint, source, screen, error_code, role, first_seen_at, last_seen_at) values ($1,'client','home','js_error','coach', now() - interval '40 days', now() - interval '35 days')`, ["b".repeat(64)]);
   await k.query(`insert into public.app_error_events (fingerprint, source, screen, error_code, role, first_seen_at, last_seen_at) values ($1,'client','home','js_error','coach', now() - interval '40 days', now() - interval '2 days')`, ["c".repeat(64)]);
   const purged = await M.purgeAppErrorEvents();
   assert.equal(purged, 1);
   assert.equal((await rows()).length, 3);
+});
+
+test("5a. a 5xx storm: the same error reaches the database once, and writes in flight are bounded", async () => {
+  M.resetServerDedupeForTests();
+  let connects = 0;
+  const stub = { connect: async () => { connects += 1; return new Promise(() => {}); } };
+  const e = Object.assign(new Error("x"), { code: "XX000" });
+  const same = { baseUrl: "", route: { path: "/same" }, originalUrl: "/api/y/same", user: null, authz: null };
+  for (let i = 0; i < 300; i += 1) M.recordServerError(same, e, 500, { executor: stub });
+  assert.equal(connects, 1, "300 identical errors open one connection");
+  for (let i = 0; i < 300; i += 1) M.recordServerError({ ...same, route: { path: `/r${i}` } }, e, 500, { executor: stub });
+  assert.ok(connects <= 10, `distinct errors are bounded in flight (${connects})`);
+  M.resetServerDedupeForTests();
+});
+
+test("5c. through a real route: a 5xx answers the generic body and one sanitized row is stored", async () => {
+  await k.query(`delete from public.app_error_events`);
+  M.resetServerDedupeForTests();
+  const admin = await user("Boom Example", { platform: true });
+  const { pool } = await import("../src/db.js");
+  const realQuery = pool.query.bind(pool);
+  pool.query = (text, ...rest) => (typeof text === "string" && text.includes("from public.app_error_events") && text.includes("array_agg")
+    ? Promise.reject(new Error(`boom ${SECRET} password=hunter2`)) : realQuery(text, ...rest));
+  let res;
+  try { res = await call("/api/app-errors/groups", { cookie: admin.cookie }); } finally { pool.query = realQuery; }
+  assert.equal(res.status, 500);
+  assert.equal(res.body.error, "Internal server error", "the answer is the handler's own, unchanged by the recording (outside production the handler has always echoed the message)");
+  let stored = [];
+  for (let i = 0; i < 50 && !stored.length; i += 1) { await new Promise((r) => setTimeout(r, 50)); stored = await rows(); }
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].source, "server");
+  assert.equal(stored[0].route_template, "/api/app-errors/groups");
+  assert.equal(stored[0].http_status, 500);
+  assert.equal(stored[0].role, "platform_admin");
+  assert.ok(!/boom|example|hunter2/.test(JSON.stringify(stored[0])));
+  await k.query(`delete from public.app_error_events`);
+});
+
+test("5b. events without a user are capped too", async () => {
+  await k.query(`delete from public.app_error_events`);
+  let stored = 0;
+  for (let i = 0; i < 205; i += 1) if ((await M.writeEvent({ source: "client", screen: "home", action: `n${i}`, code: "js_error", role: "none", userHash: null })) === "stored") stored += 1;
+  assert.equal(stored, 200);
+  await k.query(`delete from public.app_error_events`);
 });
 
 test("6. the global handler records 5xx through recordServerError and a refused report never loops", async () => {
@@ -210,11 +270,12 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   const MIG = "migrations_v2/202611091000_app_error_events.sql";
   const blocks = (sql) => sql.split(/^-- \d+\./m).slice(1).map((b) => b.split("\n").slice(1).filter((l) => !l.startsWith("--")).join("\n").trim()).filter(Boolean);
   const post = blocks(await fs.readFile(new URL("app-error-events-v58-postcheck.sql", dir), "utf8"));
-  assert.equal(post.length, 5);
+  assert.equal(post.length, 6);
   const r1 = (await k.query(post[0])).rows[0];
   assert.deepEqual([r1.recorded_once, r1.is_last], [true, true]);
   const r2 = (await k.query(post[1])).rows[0];
   assert.deepEqual(Object.values(r2), [true, true, true, true]);
+  assert.equal((await k.query(post[4])).rows[0].ok, true);
   assert.equal((await k.query(post[2])).rows[0].ok, true);
   const pre = blocks(await fs.readFile(new URL("app-error-events-v58-preflight.sql", dir), "utf8"));
   assert.equal(pre.length, 5);
