@@ -23,3 +23,8 @@ frontend/_qa-source-connections.html
 # Browser-QA harness of the exercise media upload and the on-device video preparation (session-local, never shipped)
 frontend/_qa-media-harness.html
 frontend/_qa-media-harness.js
+
+# Raw schema-only dump text handed to tools/legacy-schema-from-dump.mjs must never be committed.
+/schema.sql
+/*.schema.sql
+/*-schema-only.sql

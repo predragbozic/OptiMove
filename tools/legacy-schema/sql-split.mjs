@@ -14,20 +14,22 @@ export function splitStatements(text) {
   const n = text.length;
   let i = 0;
   let cur = "";
+  let open = false; // whether cur holds anything but whitespace
   let line = 1;
   let startLine = 1;
   const flush = () => {
     const t = cur.trim();
     if (t) statements.push({ text: t, line: startLine });
     cur = "";
+    open = false;
   };
-  const begin = () => { if (!cur.trim()) startLine = line; };
+  const begin = () => { if (!open) { startLine = line; open = true; } };
   while (i < n) {
     const c = text[i];
     const two = text.slice(i, i + 2);
     if (c === "\n") { cur += c; line += 1; i += 1; continue; }
     // psql meta-command: a line starting with a backslash while no statement is open
-    if (c === "\\" && !cur.trim() && (i === 0 || text[i - 1] === "\n")) {
+    if (c === "\\" && !open && (i === 0 || text[i - 1] === "\n")) {
       const end = text.indexOf("\n", i);
       const stop = end === -1 ? n : end;
       metaLines.push({ text: text.slice(i, stop), line });
@@ -89,6 +91,7 @@ export function splitStatements(text) {
     }
     if (c === ";") {
       cur += ";";
+      open = true;
       const t = cur.trim();
       if (/^copy\s/i.test(t) && /\sfrom\s+stdin\s*;$/i.test(t)) {
         // A data block: everything up to a line holding only `\.`
@@ -99,13 +102,14 @@ export function splitStatements(text) {
         line += (text.slice(i + 1, stop).match(/\n/g) || []).length;
         i = stop;
         cur = "";
+        open = false;
         continue;
       }
       flush();
       i += 1;
       continue;
     }
-    begin();
+    if (c !== " " && c !== "\t" && c !== "\r") begin();
     cur += c;
     i += 1;
   }

@@ -44,7 +44,15 @@ ALTER SCHEMA plans OWNER TO postgres;
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+CREATE SCHEMA extensions;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+
+--
+-- Name: pg_graphql; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pg_graphql WITH SCHEMA graphql;
 
 --
 -- Name: uid(); Type: FUNCTION; Schema: auth; Owner: supabase_admin

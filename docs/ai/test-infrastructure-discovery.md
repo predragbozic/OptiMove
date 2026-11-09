@@ -511,28 +511,44 @@ the baseline, so a new failure is visible before review.
 
 ### 8.1a Step 0 of T3: the legacy-schema generator (as built, 2026-11-09)
 
-The `shared` kind and the sign-in need the legacy tables that no `migrations_v2` file creates. The decision (the *Rukovodilac*, option c) is a
-snapshot **generated offline from the schema of the owner's existing verified production dump**, never read from a database.
+The `shared` kind and the sign-in need the legacy tables that no `migrations_v2` file creates, and `migrations_v2` also changes legacy tables.
+The decision (the *Rukovodilac*, option c, with the four changes of 2026-11-09) is a snapshot **generated offline from the schema of the owner's
+existing verified production dump**, never read from a database, that is **the whole application schema as the dump has it** (nothing is
+subtracted by parsing the migrations).
 
 * **The owner's one command**, run once on the owner's computer from the verified dump (it reads the dump, writes a text file):
-  `pg_restore --schema-only -f schema.sql <the verified dump>`. The owner hands `schema.sql` to the *Rukovodilac*, who runs the tool.
-* **The tool:** `node tools/legacy-schema-from-dump.mjs schema.sql` (files `tools/legacy-schema/*.mjs`). It reads that one SQL text and
-  `migrations_v2/`, opens **no database and no network connection and runs no other program** (a test pins the imports), and writes
-  `backend/tests/support/legacy-schema.sql` and `.sha256`. `--check` compares an existing snapshot with a fresh generation.
-* **What it keeps:** the objects the migrations do not create. The inventory is read from the migrations themselves (schemas, tables,
-  sequences, types, views, functions, indexes, triggers, and the columns and constraints a migration adds to a legacy table, which are
-  removed from the legacy `CREATE TABLE` and `ADD CONSTRAINT`). **What it drops:** owners, grants, comments, extensions, row-level security and
-  policies, publications, the platform's own schemas (`auth`, `storage`, `extensions`, `graphql*`, `realtime`, `vault`, `pgsodium`, ...),
-  `\restrict` lines and the dump's session settings (it writes its own fixed preamble).
-* **The scanner refuses to write** (exit 1, nothing on disk) on a data block or `INSERT`, a JWT, a connection string with a password, a
-  private key, an AWS key, an e-mail address, a role password, a secret assignment, a long random literal or a password hash. It reports rule
-  and line number, never the text. A false positive fails closed.
-* **What it cannot undo, and says so:** a migration that changes a legacy definition in place (`alter column`, `drop constraint`, `validate`)
-  and the `DO` blocks it cannot analyse are listed as WARNINGS. The proof that nothing was missed is the catalog comparison below, run on the real
-  snapshot: apply it to a fresh PostgreSQL, apply `migrations_v2` on top, and compare the catalog with the production catalog the owner's own
-  post-checks already describe. The first real run is the *Rukovodilac*'s review of the generated file before it is committed.
-* **Tests (synthetic dump and a miniature migrations directory in `backend/tests/fixtures/legacy-schema`):**
-  `legacy-schema-generator.test.mjs` (10, unit) and `legacy-schema-bootstrap.test.mjs` (2, disposable PostgreSQL), with mutation evidence.
+  `pg_restore --schema-only -f schema.sql <the verified dump>`. The owner hands `schema.sql` to the *Rukovodilac*, who runs the tool. The
+  raw `schema.sql` is never committed (`.gitignore`); only the generated snapshot is, after the *Rukovodilac*'s local review of it.
+* **The tool:** `node tools/legacy-schema-from-dump.mjs schema.sql --last-migration <the last migrations_v2 file the dump contains>`
+  (files `tools/legacy-schema/*.mjs`). It reads that one SQL text and `migrations_v2/`, opens **no database and no network connection and runs
+  no other program** (a test pins the imports), and writes `backend/tests/support/legacy-schema.sql` and `.sha256`. `--check` compares an
+  existing snapshot with a fresh generation. The last migration is **proved, not trusted**: every table a migration up to it creates must be in
+  the dump (unless a later migration drops it) and no table of a later migration may be; otherwise the tool refuses.
+* **What it keeps:** every application schema of the dump, structure only - tables, sequences, types, views, functions, indexes, triggers,
+  constraints, row-level-security flags, policies that do not call a platform function, and the extensions of a stock PostgreSQL
+  (`pgcrypto`, `uuid-ossp`, `citext`, `pg_trgm`, `btree_gist`, `unaccent`) with an empty `extensions` schema so that defaults like
+  `extensions.uuid_generate_v4()` still resolve. **What it drops:** owners, grants, comments, other extensions, publications, default
+  privileges, roles, the platform's own schemas (`auth`, `storage`, `graphql*`, `realtime`, `vault`, `pgsodium`, ...), `\restrict` lines
+  and the dump's session settings (it writes its own fixed preamble). CRLF input gives the same bytes.
+* **Warnings, never silent:** an unrecognised statement, a dropped statement of a kind that may matter (rule, collation, operator, cast,
+  foreign table), a trigger state, a kept statement that names a platform or extension schema (it may not apply), a migration that changes a
+  legacy definition in place and the `DO` blocks of the migrations (the tool cannot analyse them), and the dropped extensions.
+* **The scanner refuses to write** (exit 1, nothing on disk) on a data block or `INSERT`, a JWT, a URL, a connection string with a
+  password, an IPv4 address, a private key, an AWS key, an e-mail address, a role password, a secret assignment (`jwt_secret text :=
+  '...'`), a long random literal, a password hash or a line over 20,000 characters. It reports rule and **dump** line number, never the
+  text. A false positive fails closed; the exemption is the *Rukovodilac*'s decision after reading the output.
+* **The bootstrap** (`backend/tests/support/legacy-bootstrap.mjs`): applies the snapshot, writes one `schema_migrations` row for every
+  migration up to the dump's last one (named as the runner names it, with the sha256 of the repository file), replays the `INSERT` /
+  `UPDATE` / `DELETE` statements of those migrations (the repository's own seed rows), and the **real runner** (`migrate.js`) then applies the
+  migrations after the dump's last one and refuses a file that drifted. Rows that only the production database had (the legacy baseline's
+  reference data) are not in a schema-only dump and are not invented: **the first T3 task is to run the app on the bootstrapped database and
+  list what it reads as reference data**, then add a small synthetic seed for exactly that.
+* **Tests:** `legacy-schema-generator.test.mjs` (11, unit, a synthetic dump and a miniature migrations directory in
+  `backend/tests/fixtures/legacy-schema`) and `legacy-schema-bootstrap.test.mjs` (2, disposable PostgreSQL): a database at migration K is
+  dumped with the real `pg_dump`, the snapshot of that dump plus the real runner for the later migrations gives **the same catalog (columns,
+  constraints, indexes, triggers, functions, views, sequences, enums, row-level security, policies) and the same seed row counts** as the
+  database the existing path builds. CHECK constraints are compared through a normalisation, because a dump and restore deparse them
+  differently (the known note on v32). Mutation evidence for the key guards.
 
 ### 8.2 T3 — Playwright (plan only; nothing installed in T1)
 

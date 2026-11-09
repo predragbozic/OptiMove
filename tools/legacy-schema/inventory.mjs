@@ -7,6 +7,9 @@ import { describe } from "./classify.mjs";
 
 const key = (kind, schema, name) => `${kind}:${schema}.${name}`;
 
+// Used by the generator only to PROVE which migrations a dump already contains:
+// it never removes anything from the snapshot (the snapshot is the whole
+// application schema of the dump, see generate.mjs).
 export function buildInventory(migrationsDir) {
   const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort();
   const inv = {
@@ -20,21 +23,34 @@ export function buildInventory(migrationsDir) {
     addedConstraints: new Map(), // schema.table -> Set(constraint name)
     alterations: [],             // changes to a legacy definition the tool cannot undo: reported, never silent
     unanalysed: [],              // DO blocks and anything else that may change objects
+    perFile: [],                 // [{ file, tables: ["schema.name"] }] in order
+    dropped: new Set(),          // "schema.name" of any table a migration drops
   };
   const created = [];
   const alters = [];
   for (const f of files) {
     const { statements } = splitStatements(fs.readFileSync(path.join(migrationsDir, f), "utf8"));
+    const entry = { file: f, tables: [] };
+    inv.perFile.push(entry);
     for (const s of statements) {
+      const drop = /^drop\s+table\s+(?:if\s+exists\s+)?([\w".]+)/i.exec(s.text.trim());
+      if (drop) {
+        const n = drop[1].replace(/"/g, "").toLowerCase();
+        inv.dropped.add(n.includes(".") ? n : `public.${n}`);
+      }
       const d = describe(s.text);
       const where = `${f}:${s.line}`;
       if (d.kind === "schema") inv.schemas.add(d.name);
-      else if (["table", "sequence", "type", "view", "function"].includes(d.kind)) { inv.objects.add(key(d.kind, d.schema, d.name)); created.push(d); }
+      else if (["table", "sequence", "type", "view", "function"].includes(d.kind)) {
+        inv.objects.add(key(d.kind, d.schema, d.name));
+        created.push(d);
+        if (d.kind === "table") entry.tables.push(`${d.schema}.${d.name}`);
+      }
       else if (d.kind === "index") inv.indexes.add(`${d.schema}.${d.name}`);
       else if (d.kind === "trigger") inv.triggers.add(`${d.schema}.${d.table}:${d.name}`);
       else if (d.kind === "policy") inv.policies.add(`${d.schema}.${d.table}:${d.name}`);
       else if (d.kind === "alter-table") alters.push({ d, where });
-      else if (d.kind === "other-dml" && /^do\s/i.test(s.text.trim())) inv.unanalysed.push(`${where} DO block`);
+      else if (d.kind === "other-dml" && /^do\s/i.test(s.text.trim())) inv.unanalysed.push(`${where} DO block: ${s.text.replace(/\s+/g, " ").slice(0, 60)}`);
     }
   }
   const createdTables = new Set([...inv.objects].filter((o) => o.startsWith("table:")).map((o) => o.slice(6)));

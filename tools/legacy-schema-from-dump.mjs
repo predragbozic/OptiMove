@@ -2,7 +2,7 @@
 // Generates backend/tests/support/legacy-schema.sql from a schema-only dump.
 //
 //   pg_restore --schema-only -f schema.sql <the verified production dump>   (the owner, once)
-//   node tools/legacy-schema-from-dump.mjs schema.sql
+//   node tools/legacy-schema-from-dump.mjs schema.sql --last-migration <the last migration file the dump contains>
 //
 // Offline by construction: it reads two things - the SQL text file named on the
 // command line and the migrations directory - and writes two files. It opens no
@@ -18,7 +18,7 @@ import { generateSnapshot, GeneratorRefusal } from "./legacy-schema/generate.mjs
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function usage(code) {
-  process.stderr.write("usage: node tools/legacy-schema-from-dump.mjs <schema.sql> [--migrations-dir DIR] [--out FILE] [--check] [--json]\n");
+  process.stderr.write("usage: node tools/legacy-schema-from-dump.mjs <schema.sql> --last-migration <file.sql> [--migrations-dir DIR] [--out FILE] [--check] [--json]\n");
   process.exit(code);
 }
 
@@ -26,11 +26,13 @@ const args = process.argv.slice(2);
 let input = null;
 let migrationsDir = path.join(root, "migrations_v2");
 let out = path.join(root, "backend/tests/support/legacy-schema.sql");
+let lastMigration = null;
 let check = false;
 let json = false;
 for (let i = 0; i < args.length; i += 1) {
   const a = args[i];
   if (a === "--migrations-dir") migrationsDir = path.resolve(args[++i] ?? usage(2));
+  else if (a === "--last-migration") lastMigration = args[++i] ?? usage(2);
   else if (a === "--out") out = path.resolve(args[++i] ?? usage(2));
   else if (a === "--check") check = true;
   else if (a === "--json") json = true;
@@ -38,16 +40,27 @@ for (let i = 0; i < args.length; i += 1) {
   else if (input === null) input = a;
   else usage(2);
 }
-if (!input) usage(2);
+if (!input || !lastMigration) usage(2);
 
+if (path.resolve(out) === path.resolve(input) || path.resolve(`${out}.sha256`) === path.resolve(input)) {
+  process.stderr.write("--out must not be the input file\n");
+  process.exit(2);
+}
+for (const target of [out, `${out}.sha256`]) {
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+    process.stderr.write(`${path.basename(target)} is a symbolic link: refusing to write through it\n`);
+    process.exit(2);
+  }
+}
 let result;
 try {
   const dumpText = fs.readFileSync(path.resolve(input), "utf8");
-  result = generateSnapshot({ dumpText, inventory: buildInventory(migrationsDir) });
+  if (dumpText.includes("\u0000") || !/\bcreate\s+(?:table|schema)\b/i.test(dumpText)) throw new Error("the input is not the text of a schema-only dump (binary, or no CREATE statement)");
+  result = generateSnapshot({ dumpText, inventory: buildInventory(migrationsDir), lastMigration });
 } catch (error) {
   if (error instanceof GeneratorRefusal) {
     process.stderr.write(`${error.message}\n`);
-    for (const f of error.findings.slice(0, 50)) process.stderr.write(`  ${f.rule} at line ${f.line}\n`);
+    for (const f of error.findings.slice(0, 50)) process.stderr.write(`  ${f.rule}${f.line ? ` at ${f.in === "header" ? "header" : "dump"} line ${f.line}` : ""}${f.detail ? ` (${f.detail})` : ""}\n`);
     process.stderr.write("nothing was written\n");
     process.exit(1);
   }
@@ -69,8 +82,8 @@ if (json) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
 else {
   const r = result.report;
   process.stdout.write(`wrote ${path.relative(root, out)} (sha256 ${result.sha256})\n`);
-  process.stdout.write(`statements ${r.statements}, kept ${r.kept}, legacy tables ${r.legacyTables.length}\n`);
+  process.stdout.write(`last migration in the dump: ${r.lastMigration} (${r.migrationsInDump} files)\n`);
+  process.stdout.write(`statements ${r.statements}, kept ${r.kept}, tables ${r.tables.length}, extensions kept: ${r.keptExtensions.join(", ") || "none"}\n`);
   process.stdout.write(`dropped: ${Object.entries(r.dropped).map(([k, v]) => `${k} ${v}`).join(", ")}\n`);
-  if (r.strippedColumns.length) process.stdout.write(`columns left to the migrations: ${r.strippedColumns.join(", ")}\n`);
   for (const w of r.warnings) process.stdout.write(`WARNING ${w}\n`);
 }
