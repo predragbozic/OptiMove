@@ -322,7 +322,7 @@ a roster write also needs the owner's order naming the migration and the *Rukovo
 
 * **Migration v59** (`migrations_v2/202611091100_training_load_v59_import_approval_subset.sql`): `gpexe_import_approvals` gains `excluded_athlete_ids text[] NOT NULL
   DEFAULT '{}'` and `subset_hash text`; three CHECKs (at most 60 ids; the hash exactly when the set is not empty; its format); the trigger function
-  `validate_gpexe_import_approval` is replaced (md5 precondition of v33's body `1b4cc435…`, md5 of the new body `b27b0872…`) and also checks that the set is canonical
+  `validate_gpexe_import_approval` is replaced (md5 precondition of v33's body `1b4cc435…`, md5 of the new body `febf8070…`) and also checks that the set is canonical
   ids, sorted numerically, unique, one dimension, no NULL element. The append-only trigger makes both columns write-once. Runbook files:
   `docs/runbooks/import-approval-subset-v59-{preflight,postcheck,rollback}.sql`; the rollback refuses once any approval has a non-empty set or a hash.
 * **Service.** `previewLocked` takes `excludedAthleteIds`: an importable athlete in the set is not imported and is listed `notImported.code = "left_out_by_coach"`;

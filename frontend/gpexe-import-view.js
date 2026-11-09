@@ -2118,7 +2118,9 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
 
 // The "Leave out" cell of a row the import would write. The accessible name carries the athlete, so a screen reader hears who.
 function leaveOutCellHtml(r, lo) {
-  const imports = r.a && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId;
+  // An athlete whose results were imported before (any result that is not new) cannot be left out: the server refuses it, so no box.
+  const newOnly = (r.a?.results || []).every((x) => !x.outcome || x.outcome === "created" || x.outcome === "not_imported");
+  const imports = r.a && newOnly && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId;
   // A row the import would not write has nothing to leave out: an empty cell on a wide table, no line at all in the phone cards.
   if (!imports) return `<td role="cell" class="gpexe-leave-out-cell is-empty" aria-hidden="true"></td>`;
   const id = String(r.a.gpexeAthleteId);
@@ -2271,7 +2273,7 @@ const SUBSET_ERROR_TEXT = {
   invalid_exclusion: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
   invalid_excluded_athlete: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
   nothing_to_import: "The athletes that remain have nothing new to import.",
-  subset_blocked: "Leaving these athletes out would block the session. Choose again, or import the whole session.",
+  subset_blocked: "This session can't be imported right now. Update the review, then choose again.",
   not_an_approver: "You may not approve imports for this team.",
 };
 

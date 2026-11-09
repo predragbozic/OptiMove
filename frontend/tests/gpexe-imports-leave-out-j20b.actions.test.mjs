@@ -302,9 +302,16 @@ test("10. an unconfirmed subset approval keeps its set across a closed and reope
   assert.ok(last.body.subsetHash);
 });
 
+test("12. an athlete with a result imported before (not only new ones) has no Leave out box: the server refuses it, so the screen never offers it", async () => {
+  await openReview();
+  const c = gx().detail.candidate;
+  c.preview.athletes[1].results.push({ ...c.preview.athletes[1].results[0], externalId: "athlete_session:102:drill:0", level: "drill", drillIndex: 0, outcome: "unchanged" });
+  assert.deepEqual(boxes().map((b) => b[0]), ["101", "103"], "athlete 102 has an earlier imported result: no box");
+});
+
 test("11. a refused set that would block the session gets its own sentence", async () => {
   await openReview({ onSubset: async () => ({ status: 409, body: { error: "subset_blocked", message: "x" } }) });
   await tick("103");
   await act("training-load-gpexe-subset-review");
-  assert.match(html(), /Leaving these athletes out would block the session\. Choose again, or import the whole session\./);
+  assert.match(html(), /This session can(?:'|&#039;)t be imported right now\. Update the review, then choose again\./);
 });

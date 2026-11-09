@@ -2902,11 +2902,20 @@ export async function previewCandidateSubset(teamId, candidateId, { userId, excl
     recomputeSeen.set(key, Date.now());
     if (recomputeSeen.size > 500) recomputeSeen.delete(recomputeSeen.keys().next().value);
   };
-  subsetInFlight.add(String(teamId));
+  // The in-flight slot is taken only once the approver right is confirmed (see takeSlot below), so a member without the right never holds it.
+  let held = false;
+  const holdSlot = () => {
+    if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
+      throw refusal(409, "try_again", "The review of this team is being updated right now; try again in a moment.");
+    }
+    subsetInFlight.add(String(teamId));
+    held = true;
+    takeSlot();
+  };
   try {
-    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot });
+    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot: holdSlot });
   } finally {
-    subsetInFlight.delete(String(teamId));
+    if (held) subsetInFlight.delete(String(teamId));
   }
 }
 
@@ -2982,7 +2991,10 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
     // A set that leaves the session blocked (an athlete imported earlier, a mapping that changed) is refused here with its own code,
     // never handed to the coach as a review that can only fail at the approval.
     if (fresh.preview.status === "blocked") {
-      throw refusal(409, "subset_blocked", "Leaving these athletes out would block the session; nothing was changed.");
+      throw refusal(409, "subset_blocked", "This session can't be imported right now; nothing was changed. Update the review and choose again.");
+    }
+    if (fresh.preview.status === "no_changes") {
+      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
     }
     // The set re-validated against the athletes recomputed under the lock.
     if (fresh.invalidExclusions.length) {
