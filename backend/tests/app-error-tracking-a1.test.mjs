@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
-import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 let db, k, server, base, T, M;
@@ -34,7 +34,7 @@ const rows = async () => (await k.query(`select * from public.app_error_events o
 const GOOD = { screen: "training-load", action: "open-imports", code: "js_error", stackSig: "renderImports@gpexe-import-view.js > start@app.js" };
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("import_approval_subset")) });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();

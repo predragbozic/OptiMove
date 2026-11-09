@@ -33,7 +33,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v57")) + 1) }); // v57 is this suite's last migration (its post-check expects it)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) }); // everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -868,6 +868,10 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   const rollback = fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8");
   const before = await catalogOf(admin);
   const c = await newClient();
+  // v59 (and later) are applied on this database, which the v57 rollback refuses first; the checks below are about its own refusals, so the
+  // later records are hidden for the test and put back at the end.
+  await c.query(`create temp table u5_saved_migrations as select * from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > $1`.replace("$1", `'${V57}'`));
+  await c.query(`delete from public.schema_migrations where migration_name in (select migration_name from u5_saved_migrations)`);
   try {
     // 1. an undo exists
     const u = await undo(team, s);
@@ -889,7 +893,10 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
     await assert.rejects(c.query(rollback), /body in force of training_load\.session_undo_scope is not v57's/);
     await c.query("rollback");
     assert.deepEqual((await catalogOf(c)).functions, (await catalogOf(admin)).functions, "the replaced bodies were rolled back");
-  } finally { await c.end(); }
+  } finally {
+    await c.query(`insert into public.schema_migrations select * from u5_saved_migrations`).catch(() => {});
+    await c.end();
+  }
 });
 
 test("22. the md5 gate: the migration refuses to run when an original body it copies has changed", async () => {
