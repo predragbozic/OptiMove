@@ -73,6 +73,5 @@ deployed commit must no longer contain the migration file or import `appErrorTra
   has no row-level security, like the v36 and v38 tables.
 * `route_template` for a server error comes from the Express route pattern; a request that matched no route is recorded as
   `/unmatched`, never by its URL.
-* v58 revokes every privilege on the table from `anon` and `authenticated` (when those roles exist), so a Supabase data API could
-  not read it even if it were switched on for `public`; the post-check asserts it.
+* Row-level security is on with no policy, nothing is granted to PUBLIC (table and trigger functions), and every privilege on the table is revoked from `anon` and `authenticated` (when those roles exist), so a Supabase data API could not read it even if it were switched on for `public`; the post-check asserts all of it. The application's own role owns the table and is not subject to the row-level security.
 * The table's triggers also refuse a time in the future (a raw write could otherwise defeat the purge) and a `last_seen_at` that moves back.

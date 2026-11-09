@@ -23,5 +23,10 @@ select count(*) as rows_total, coalesce(sum(repeat_count), 0) as occurrences, mi
 -- 5. Nobody but the application's own role can read the table through a data API (v58 revokes anon and authenticated).
 select not exists (select 1 from pg_roles r where r.rolname in ('anon', 'authenticated') and has_table_privilege(r.rolname, 'public.app_error_events', 'SELECT')) as ok;
 
--- 6. Nothing is stuck.
+-- 6. Row-level security is on, and PUBLIC holds no privilege on the table or on its three trigger functions.
+select (select relrowsecurity from pg_class where oid = 'public.app_error_events'::regclass) as rls_on,
+       not exists (select 1 from pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a where c.oid = 'public.app_error_events'::regclass and a.grantee = 0) as table_not_public,
+       not exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where p.pronamespace = 'public'::regnamespace and p.proname like 'app_error_events\_%' and a.grantee = 0) as functions_not_public;
+
+-- 7. Nothing is stuck.
 select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx;

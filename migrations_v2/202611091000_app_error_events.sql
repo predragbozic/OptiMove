@@ -113,7 +113,15 @@ $$;
 create trigger app_error_events_refuse_truncate before truncate on public.app_error_events
   for each statement execute function public.app_error_events_refuse_truncate();
 
--- The table is for the application's own role only: nobody reaches it through a public data API.
+-- The table belongs to the application's own role only. Row-level security is on with no policy (the owner, the role the application and
+-- the migrator share, is not subject to it; any other role sees nothing), nothing is granted to PUBLIC, and the trigger functions are
+-- not executable by PUBLIC (a trigger needs EXECUTE only when it is created). anon / authenticated, where those roles exist
+-- (Supabase), lose every privilege on the table, whatever default privileges gave them.
+alter table public.app_error_events enable row level security;
+revoke all on public.app_error_events from public;
+revoke execute on function public.app_error_events_guard_update() from public;
+revoke execute on function public.app_error_events_guard_insert() from public;
+revoke execute on function public.app_error_events_refuse_truncate() from public;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
