@@ -35,3 +35,18 @@ export async function api(context, world, path) {
   const res = await context.request.get(`${world.baseUrl}${path}`);
   return res.status();
 }
+
+// Settings from the main navigation (a phone opens the menu first); returns the tab labels.
+export async function openSettings(page) {
+  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
+  if (await toggle.isVisible().catch(() => false)) await toggle.click();
+  await page.getByText("Settings", { exact: true }).first().click();
+  await page.waitForSelector(".settings-tabs");
+  return page.$$eval(".settings-tabs button", (e) => e.map((x) => x.textContent.trim()));
+}
+
+export async function request(context, world, path, { method = "GET", body } = {}) {
+  const res = await context.request.fetch(`${world.baseUrl}${path}`, { method, ...(body === undefined ? {} : { data: body }) });
+  const text = await res.text();
+  return { status: res.status(), text };
+}
