@@ -35,8 +35,16 @@ test("the Program Library's selects look like its inputs, and a phone gets 44 px
   assert.match(block, /\.program-filter-panel select \{\n\s+height: 42px;[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?font: inherit;/);
   const phone = block.slice(block.indexOf("@media (max-width: 760px)"));
   assert.ok(phone.length > 30);
-  for (const sel of [".program-filter-panel input,", ".program-filter-panel select,", ".program-paid-filter,", "#exerciseSearch,", ".exercise-filter-strip .builder-text-input {"]) assert.ok(phone.includes(sel), sel);
-  assert.match(phone, /\.exercise-filter-strip \.builder-text-input \{\n\s+min-height: var\(--om-tap-target\);\n\s+font-size: 16px;/);
+  for (const sel of ['.program-filter-panel input:not([type="checkbox"]),', ".program-filter-panel select,", ".program-paid-filter,", "#exerciseSearch,", ".exercise-filter-strip:not(.builder-filter-strip) .builder-text-input {"]) assert.ok(phone.includes(sel), sel);
+  assert.match(phone, /\.exercise-filter-strip:not\(\.builder-filter-strip\) \.builder-text-input \{\n\s+min-height: var\(--om-tap-target\);\n\s+font-size: 16px;/);
+  // The rule's selector list, checked against the real markup of both filter strips: the Builder's
+  // "More filters" panel (builder-section.js) is out of scope and must not match.
+  const first = phone.indexOf("{");
+  const selector = phone.slice(first + 1, phone.indexOf("{", first + 1)).trim();
+  const host = html('<div class="exercise-filter-strip builder-filter-strip"><select class="builder-text-input"></select></div><div class="exercise-filter-strip"><select class="builder-text-input"></select></div>');
+  const [builder, library] = host.querySelectorAll("select");
+  assert.equal(builder.matches(selector), false, "the Builder's filter fields are not changed");
+  assert.equal(library.matches(selector), true, "the library's filter fields are");
 });
 
 test("the cards use the .om-card border, radius and surface", () => {
@@ -53,7 +61,7 @@ test("on a phone every action of an exercise card is a 44 px touch target, and D
   }));
   const actions = host.querySelector(".exercise-card .exercise-card-actions");
   assert.ok(actions.querySelector('.text-action[data-action="exercise-delete"]'), "the selector matches the real card");
-  assert.match(block, /\.exercise-card-actions \[data-action="exercise-delete"\] \{\n\s+color: var\(--danger\);/);
+  assert.match(block, /\.exercise-card-actions \[data-action="exercise-delete"\],\n\.exercise-view-menu-item\[data-action="exercise-delete"\] \{\n\s+color: var\(--danger\);/);
   const phone = block.slice(block.indexOf("@media (max-width: 760px)"));
-  assert.match(phone, /\.exercise-card-actions \.text-action \{\n\s+display: inline-flex;\n\s+align-items: center;\n\s+min-height: var\(--om-tap-target\);/);
+  assert.match(phone, /\.exercise-card-actions \.text-action \{\n\s+display: inline-flex;\n\s+align-items: center;\n\s+justify-content: center;\n\s+min-width: var\(--om-tap-target\);\n\s+min-height: var\(--om-tap-target\);/);
 });

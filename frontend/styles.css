@@ -23540,7 +23540,8 @@ p.coach-home-library-note.muted:not([role="status"]) {
   border-radius: var(--om-radius-lg);
   background: var(--om-surface-raised);
 }
-.exercise-card-actions [data-action="exercise-delete"] {
+.exercise-card-actions [data-action="exercise-delete"],
+.exercise-view-menu-item[data-action="exercise-delete"] {
   color: var(--danger);
 }
 /* The program card's information button: a 44 px touch area around the 28 px circle. */
@@ -23550,11 +23551,11 @@ p.coach-home-library-note.muted:not([role="status"]) {
   inset: -8px;
 }
 @media (max-width: 760px) {
-  .program-filter-panel input,
+  .program-filter-panel input:not([type="checkbox"]),
   .program-filter-panel select,
   .program-paid-filter,
   #exerciseSearch,
-  .exercise-filter-strip .builder-text-input {
+  .exercise-filter-strip:not(.builder-filter-strip) .builder-text-input {
     min-height: var(--om-tap-target);
     font-size: 16px;
   }
@@ -23564,6 +23565,8 @@ p.coach-home-library-note.muted:not([role="status"]) {
   .exercise-card-actions .text-action {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    min-width: var(--om-tap-target);
     min-height: var(--om-tap-target);
     padding: 0 var(--om-space-2);
   }
