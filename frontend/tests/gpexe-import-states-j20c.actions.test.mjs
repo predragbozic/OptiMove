@@ -34,6 +34,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+const { setImportStatesBoundForTests } = await import("../gpexe-import-states-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -94,10 +95,11 @@ function detailOf(c) {
 const approvalView = (ids = []) => ({ id: APPROVAL, candidateId: "cand-1", excludedAthleteIds: ids, subsetHash: null, import: { eventId: "ev-1", activityId: ACTIVITY, counts: {} } });
 const imported = (ids = []) => ({ status: 200, body: { outcome: "imported", commitConfirmation: "confirmed", approval: { id: APPROVAL, excludedAthleteIds: ids }, import: { activityId: ACTIVITY, counts: { results: 3, values: 3 } } } });
 
-function server({ canApprove = true, candidate = row(), onApprove, onStates, roster, onSubset } = {}) {
+function server({ canApprove = true, candidate = row(), onApprove, onStates, roster, onSubset, rosterFail } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     if (call.url === `/api/training-activity/${ACTIVITY}/roster`) {
+      if (rosterFail && rosterFail()) return { status: 503, body: { error: "database_busy" } };
       return { status: 200, body: { athletes: (roster || [NOREC1, NOREC2, A1, A2, A3]).map((id) => ({ athleteId: id, group: [A1, A2, A3].includes(id) ? "done" : "needs_state" })) } };
     }
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
@@ -165,7 +167,7 @@ test("2. a choice is kept in the browser (ids, kinds and reasons only); the butt
   await choose(NOREC2, "did_not_participate:illness");
   const saved = [...store.values()][0];
   assert.doesNotMatch(saved, /Example/, "no name is kept");
-  assert.match(html(), /Then saves 2 attendance states\./);
+  assert.match(html(), /After the import, OptiMove also saves 2 attendance states\./);
   await act("training-load-gpexe-approve");
   assert.match(confirmAsked[0], /Then it saves 2 attendance states\./);
 });
@@ -220,7 +222,7 @@ test("6. a refusal the server answered (the attendance changed): not saved; Save
   await choose(NOREC1, "participated_no_values");
   await act("training-load-gpexe-approve");
   await flush();
-  assert.match(html(), /1 attendance state was not saved: the attendance changed meanwhile\. Nothing else changed; the import is done\./);
+  assert.match(html(), /1 attendance state was not saved: the attendance changed meanwhile\. Nothing was written; the import is done\./);
   const rosterReads = () => fetchCalls.filter((c) => c.url.endsWith("/roster")).length;
   const before = rosterReads();
   await act("training-load-gpexe-states-again");
@@ -270,8 +272,8 @@ test("9. a reload: the choice and its key survive; a reopened imported session s
   responder = server({ candidate: { ...row(), status: "imported" }, onStates: async (call) => okStates(call) });
   await act("training-load-section", { section: "imports" });
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
-  assert.match(html(), /1 attendance state is not saved yet\./);
-  await act("training-load-gpexe-states-check");
+  assert.match(html(), /1 attendance state you chose is not saved yet\./);
+  await act("training-load-gpexe-states-again");
   assert.equal(statesCalls().length, 1);
   assert.equal(statesCalls()[0].body.requestKey, JSON.parse(kept[0][1]).groups["participated_no_values|"].requestKey);
 });
@@ -282,4 +284,140 @@ test("10. a ticked Leave out row gets a chooser too (the left-out athlete may ge
   assert.ok(choosers().includes(A2));
   await act("training-load-gpexe-leave-out", { gpexeAthleteId: "102" }, { checked: false });
   assert.ok(!choosers().includes(A2));
+});
+
+test("11. (F1) a failed roster read: nothing is sent, the text says so (never 'can't tell'), and Save them reads the roster again and sends", async () => {
+  let r = 0;
+  await openReview({ rosterFail: () => ++r === 1 });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 0);
+  assert.match(html(), /1 attendance state you chose is not saved yet\. The session(?:&#039;)s roster could not be read; nothing was sent\./);
+  assert.doesNotMatch(html(), /can&#039;t tell/);
+  await act("training-load-gpexe-states-again");
+  assert.equal(statesCalls().length, 1);
+  assert.match(html(), /1 attendance state saved\./);
+});
+
+test("12. (F2) a reload while a states request is in flight: never 'not saved'; Check the result sends the same body and key", async () => {
+  let first = true;
+  setImportStatesBoundForTests(300);
+  await openReview({ onStates: () => (first ? new Promise(() => {}) : null) });
+  await choose(NOREC1, "participated_no_values");
+  const pending = act("training-load-gpexe-approve");
+  for (let i = 0; i < 5; i += 1) await flush();
+  assert.equal(statesCalls().length, 1, "the request is in flight");
+  const kept = [...store.entries()];
+  first = false;
+  resetState();
+  store.clear();
+  for (const [k, v] of kept) store.set(k, v);
+  approvalRecord = approvalView();
+  responder = server({ candidate: { ...row(), status: "imported" }, onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.doesNotMatch(html(), /not saved/);
+  assert.match(html(), /We can&#039;t tell yet whether 1 attendance state was saved/);
+  await act("training-load-gpexe-states-check");
+  const calls = statesCalls();
+  assert.equal(calls.length, 1, "after the reset only the resend is counted");
+  assert.deepEqual(calls[0].body, JSON.parse(kept[0][1]).groups["participated_no_values|"].body);
+  setImportStatesBoundForTests(null);
+  void pending;
+});
+
+test("13. (F3) an unknown send, then a refusal the server gives before its replay check (404, 403): never 'not saved', no body rebuilt, the Roster tab named", async () => {
+  for (const refusal of [{ status: 404, body: { error: "notFound" } }, { status: 403, body: { error: "not_a_team_coach", message: "" } }]) {
+    let n = 0;
+    await openReview({ onStates: async () => (++n === 1 ? { throws: true } : refusal) });
+    await choose(NOREC1, "participated_no_values");
+    await act("training-load-gpexe-approve");
+    await flush();
+    await act("training-load-gpexe-states-check");
+    const page = html();
+    assert.doesNotMatch(page, /not saved/, refusal.body.error);
+    assert.match(page, /it can&#039;t be checked from here\. Look at the session&#039;s Roster tab\./);
+    assert.doesNotMatch(page, /training-load-gpexe-states-again/);
+    const calls = statesCalls();
+    assert.deepEqual(calls[1].body, calls[0].body, "the same body: never rebuilt for a key that may be saved");
+  }
+});
+
+test("14. (F4) a choice on a Leave out row that was unticked before the import is neither sent nor counted", async () => {
+  await openReview({ roster: [NOREC1, NOREC2, A2] });
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "102" }, { checked: true });
+  await choose(A2, "participated_no_values");
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "102" }, { checked: false });
+  await choose(NOREC1, "participated_no_values");
+  assert.match(html(), /After the import, OptiMove also saves 1 attendance state\./);
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.deepEqual(statesCalls()[0].body.athletes, [{ athleteId: NOREC1, expectedDecisionId: null }]);
+  assert.doesNotMatch(html(), /already had a state/);
+});
+
+test("15. (F5) after a refusal that carries names and notes, the stored states hold no name, note or server message", async () => {
+  await openReview({ onStates: async () => ({ status: 409, body: { error: "bulk_conflict", message: "Nothing was saved: some athletes changed.", failed: [{ athleteId: NOREC1, error: "decision_changed", current: { decision: { decidedBy: { name: "Coach Zed" }, note: "knee" } } }] } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  const stored = [...store.values()].join(" ");
+  assert.ok(stored.length > 0);
+  assert.doesNotMatch(stored, /Coach Zed|knee|some athletes changed|Example/);
+});
+
+test("16. (F6) states chosen, then the session imported elsewhere (no keys were made): the reopened session says they were not saved", async () => {
+  await openReview();
+  await choose(NOREC1, "participated_no_values");
+  const kept = [...store.entries()];
+  resetState();
+  for (const [k, v] of kept) store.set(k, v);
+  approvalRecord = approvalView();
+  responder = server({ candidate: { ...row(), status: "imported" }, onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.match(html(), /1 attendance state you chose was not saved with this import\. Set it in the session&#039;s Roster tab\./);
+  assert.equal(statesCalls().length, 0);
+});
+
+test("17. (F7) a refusal that a retry cannot fix (unknown_reason, the import undone): no Save them again, a sentence per case", async () => {
+  await openReview({ onStates: async () => ({ status: 400, body: { error: "unknown_reason", message: "" } }) });
+  await choose(NOREC1, "did_not_participate:illness");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.doesNotMatch(html(), /training-load-gpexe-states-again/);
+  assert.match(html(), /1 attendance state was not saved\. Nothing was written; set it in the session&#039;s Roster tab\./);
+  await openReview({ onStates: async () => ({ status: 409, body: { error: "import_undone", message: "" } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.match(html(), /The import was undone, so its attendance states were not saved\./);
+});
+
+test("18. (F8) once every state is saved the stored item is removed; a hung request ends as 'can't tell yet' at the client bound", async () => {
+  await openReview();
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(store.size, 0);
+  assert.match(html(), /1 attendance state saved\./);
+  setImportStatesBoundForTests(5);
+  try {
+    responder = null;
+    await openReview({ onStates: () => new Promise(() => {}) });
+    globalThis.fetch = ((orig) => async (url, options = {}) => {
+      if (String(url).endsWith("/states")) {
+        fetchCalls.push({ url, method: options.method, body: JSON.parse(options.body) });
+        return new Promise((_, reject) => options.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+      }
+      return orig(url, options);
+    })(globalThis.fetch);
+    await choose(NOREC1, "participated_no_values");
+    await act("training-load-gpexe-approve");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.match(html(), /We can&#039;t tell yet whether 1 attendance state was saved/);
+  } finally {
+    setImportStatesBoundForTests(null);
+  }
 });

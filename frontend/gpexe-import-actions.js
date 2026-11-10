@@ -4,7 +4,7 @@
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
 import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
-import { chooseState, chosenStateCount, prepareStateKeys, retryRefusedStates, saveImportStates } from "./gpexe-import-states-data.js";
+import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
@@ -199,11 +199,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (chooseState(gx.detail, action.dataset.athleteId, action.value)) renderTrainingLoad();
     return true;
   }
-  // J20-C: Check the result repeats the same requests with the same keys; Save them again prepares the refused ones again.
+  // J20-C: Check the result repeats the same requests with the same keys; Save them (again) prepares the not sent and refused ones.
   if (type === "training-load-gpexe-states-check" || type === "training-load-gpexe-states-again") {
     const approval = importedApprovalOf(gx.detail);
     if (!approval) return true;
-    if (type === "training-load-gpexe-states-again") retryRefusedStates(gx.detail);
+    if (type === "training-load-gpexe-states-again") retryStates(gx.detail);
     await saveImportStates(gx.detail, approval, renderTrainingLoad);
     return true;
   }
