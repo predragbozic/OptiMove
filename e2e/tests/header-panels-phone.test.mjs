@@ -66,25 +66,58 @@ for (const width of [360, 390, 600]) {
   });
 }
 
-test("(390 px, a phone) the closed menu drawer is hidden and takes no focus; opened it is visible and usable, closed again it is hidden", async () => {
-  const { context, page, pageErrors } = await openPhone(390);
-  try {
-    const drawer = () => page.evaluate(() => {
-      const sidebar = document.querySelector(".sidebar");
-      const link = sidebar.querySelector("button, a[href]");
-      link.focus();
-      return { visibility: getComputedStyle(sidebar).visibility, focusedInside: sidebar.contains(document.activeElement) };
-    });
-    assert.deepEqual(await drawer(), { visibility: "hidden", focusedInside: false }, "closed: hidden, nothing inside can take focus");
-    await page.locator("#mobileNavToggle").click();
-    await page.waitForTimeout(300);
-    assert.deepEqual(await drawer(), { visibility: "visible", focusedInside: true }, "open: visible and focusable");
-    await page.locator("#mobileNavToggle").click().catch(() => page.keyboard.press("Escape"));
-    await page.waitForTimeout(400);
-    assert.equal((await drawer()).visibility, "hidden", "closed again: hidden after the fade");
-    assert.deepEqual(pageErrors, []);
-  } finally { await context.close(); }
-});
+// The closed drawer is hidden (no focus, not in the accessibility tree) for a coach and an athlete alike; Escape
+// closes it and gives focus back to the menu button.
+for (const role of ["team_coach", "athlete"]) {
+  test(`(390 px, a phone, ${role}) the closed menu drawer is hidden and takes no focus; opened it is usable; Escape closes it and focus returns to the menu button`, async () => {
+    const account = world.accounts.find((a) => a.role === role);
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+    try {
+      await page.goto(world.baseUrl);
+      await page.locator("#mobileNavToggle").waitFor({ state: "visible", timeout: 20_000 });
+      if (role === "athlete") {
+        await page.waitForFunction(() => document.body.classList.contains("athlete-mode"), null, { timeout: 20_000 });
+        await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
+      }
+      const drawer = () => page.evaluate(() => {
+        const sidebar = document.querySelector(".sidebar");
+        const link = sidebar.querySelector("button, a[href]");
+        link.focus();
+        return { visibility: getComputedStyle(sidebar).visibility, focusedInside: sidebar.contains(document.activeElement) };
+      });
+      // A role query sees only what the accessibility tree holds: the drawer's buttons, by their names.
+      const drawerButtonsInTree = () => page.locator(".sidebar").getByRole("button").count();
+      assert.deepEqual(await drawer(), { visibility: "hidden", focusedInside: false }, "closed: hidden, nothing inside can take focus");
+      assert.equal(await drawerButtonsInTree(), 0, "closed: none of its buttons is in the accessibility tree");
+
+      await page.locator("#mobileNavToggle").click();
+      await page.waitForFunction(() => getComputedStyle(document.querySelector(".sidebar")).visibility === "visible", null, { timeout: 5_000 });
+      assert.deepEqual(await drawer(), { visibility: "visible", focusedInside: true }, "open: visible and focusable");
+      assert.ok(await drawerButtonsInTree() > 0, "open: its buttons are in the accessibility tree");
+      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "true");
+
+      // Focus is inside the drawer (on its first control); Escape closes it.
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.body.classList.contains("mobile-nav-open") && getComputedStyle(document.querySelector(".sidebar")).visibility === "hidden", null, { timeout: 5_000 });
+      assert.equal(await page.evaluate(() => document.activeElement?.id), "mobileNavToggle", "focus returns to the menu button");
+      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "false");
+      assert.equal(await drawerButtonsInTree(), 0, "closed again: out of the accessibility tree");
+
+      // Closed with focus outside the drawer (the backdrop), focus is not moved to the menu button.
+      await page.locator("#mobileNavToggle").click();
+      await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+      await page.evaluate(() => { document.activeElement?.blur?.(); document.body.focus(); });
+      await page.locator("#mobileNavBackdrop").dispatchEvent("click");
+      await page.waitForFunction(() => !document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+      assert.notEqual(await page.evaluate(() => document.activeElement?.id), "mobileNavToggle", "focus outside the drawer stays where it was");
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
 
 for (const width of [360, 390]) {
   test(`(${width} px, a phone) no header popup makes the page wider than the screen`, async () => {

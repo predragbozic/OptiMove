@@ -1760,8 +1760,12 @@ function toggleMobileNav() {
 
 function closeMobileNav() {
   if (!state.mobileNavOpen) return;
+  // A closed drawer is hidden on a phone (styles.css), so focus left inside it would sit on a hidden control:
+  // it goes back to the menu button that opened the drawer.
+  const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
+  if (focusInDrawer && els.mobileNavToggle?.offsetParent) els.mobileNavToggle.focus({ preventScroll: true });
 }
 
 function collapseRailAfterNav() {
