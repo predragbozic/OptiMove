@@ -24607,3 +24607,235 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch-custo
     font-size: 16px;
   }
 }
+
+/* ==========================================================================
+   Design: the Builder's program bar (B3). Exit, Save and Discard were 32 px
+   icons (Discard 42 x 40). They stay icons (the owner's decision), now 44 px,
+   named by a short aria-label, and each shows its description (its
+   aria-description, which starts with that name) in a styled tooltip: on a
+   computer on hover and on keyboard focus, on a phone after a long press,
+   which does not run the action (builder-bar-tooltip.js). There is no title,
+   so the browser's own tooltip never shows as well. The plan's state ("draft") is a
+   chip. The two identical "i" buttons of the outline say what they open
+   ("Program example", "Session example"); a weekly plan's "Copy from another
+   plan" beside them is 44 px too. No data-* or name changed.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 10px;
+  position: relative;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The tooltip: the button's description, drawn under it. */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action::after {
+  content: attr(aria-description);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  box-sizing: border-box; /* the padding counts inside max-width, even hidden */
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button:hover::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button:hover::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action:hover::after {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button.is-tooltip-open::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button.is-tooltip-open::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action.is-tooltip-open::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Escape closes it until the pointer or focus leaves (builder-bar-tooltip.js). */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button.is-tooltip-dismissed::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button.is-tooltip-dismissed::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action.is-tooltip-dismissed::after {
+  opacity: 0;
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .plain-button::after {
+    transition: none;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  color: var(--danger, #a23b3b);
+}
+
+/* A visible focus ring (the shared .plain-button ring is a faint shadow). */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .plain-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .plain-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+
+/* The plan's state as a chip: a dot and its word. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--muted, #667085);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* The dot marks a draft (a draft or an edit draft) only. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip.is-draft::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c98a1c;
+}
+
+/* The outline's example buttons: their words beside the "i". */
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 12px 0 8px;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button .button-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-icon-action {
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+
+/* A phone: the bar sits at the left, so its tooltips open to the right; the
+   outline's heading lets its example buttons wrap under it. */
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  /* 44 px icons; a button grows when its handler writes a word into it
+     ("Saving…" while a save runs). */
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+    width: auto;
+    min-width: var(--om-tap-target);
+    padding: 0 10px;
+  }
+
+  /* The tooltip hangs under the whole bar, from its left edge and never wider
+     than it, so a long description stays on the screen. */
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+    position: relative;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+    position: static;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action::after {
+    right: auto;
+    left: 0;
+    max-width: 100%;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading {
+    flex-wrap: wrap;
+    row-gap: var(--om-space-2);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading > .builder-outline-info-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    width: 100%;
+    margin-left: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+    height: auto;
+    justify-content: flex-start;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.2;
+  }
+}

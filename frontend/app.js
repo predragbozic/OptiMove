@@ -120,6 +120,7 @@ import {
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
+import { installBuilderBarTooltip } from "./builder-bar-tooltip.js";
 import { dropBuilderLibraryDrag, endBuilderLibraryDrag, endStaleBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
 import { dropVariableDrag, endVariableDrag, leaveVariableDrag, overVariableDrag, startVariableDrag } from "./data-config-drag.js";
 import { dropBlocked, dropVariableOnCategory } from "./metric-classification-drag.js";
@@ -304,6 +305,9 @@ let athleteRosterPending = true;
 init();
 
 async function init() {
+  // B3: a long press on a Builder bar icon shows its tooltip and does not run it (a window capture listener, so it
+  // stops the click before the app's own listeners, whichever is installed first).
+  installBuilderBarTooltip();
   bindEvents();
   // From here the menu button has its own listener; earlier taps were counted by index.html / athlete.html and
   // are replayed below, once the signed-in shell is shown (never into a sign-in or invite screen).
