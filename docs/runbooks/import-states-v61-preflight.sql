@@ -8,9 +8,10 @@ select (select max(migration_name) from public.schema_migrations where migration
        not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611101200_training_load_v61_import_states_approval.sql') as v61_absent;
 
 -- 2. The guard v61 replaces is v60's (md5 of prosrc) and the trigger runs it; the migration refuses to run otherwise.
-select md5(p.prosrc) as actual_md5, md5(p.prosrc) = 'b80d37661ee1b9dc021b6d08b8e74993' as ok
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'training' and p.proname = 'protect_activity_roster_request_v60';
+-- (A missing function reads ok = false, never as no row.)
+select coalesce((select md5(p.prosrc) = 'b80d37661ee1b9dc021b6d08b8e74993'
+                   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'training' and p.proname = 'protect_activity_roster_request_v60'), false) as ok;
 select count(*) = 1 as ok
   from pg_trigger t join pg_proc p on p.oid = t.tgfoid
  where t.tgname = 'activity_roster_requests_protect' and not t.tgisinternal and t.tgenabled = 'O'

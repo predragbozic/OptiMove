@@ -243,14 +243,17 @@ and should not wait for them. If the first months show friction, B is a later ch
 * **Migration v61** (`migrations_v2/202611101200_training_load_v61_import_states_approval.sql`): `activity_roster_requests.origin_approval_id`
   (a foreign key to the approvals; CHECK `origin = 'import'` exactly when set); `training_load.import_states_window()` = **30 minutes**, the one
   place the window lives; the request guard (`protect_activity_roster_request_v61`, md5 gate on v60's) checks the NAMED approval: same team,
-  same user, same session, `approved_at <= created_at <= approved_at + window`, its candidate not undone, and every decision of the request
+  same user, same session, `approved_at <= now() <= approved_at + window` (the server's time), its candidate not undone, and every decision of the request
   on the session's roster (`training.activity_roster`).
 * **Route**: `POST /api/training-load/gpexe/teams/:teamId/approvals/:approvalId/states`, the roster bulk body (`requestKey`, `kind`,
   `reasonKey`, `note`, `athletes` 1-60). `teamAccess` first; the approval must be the caller's own on this team (anything else, a missing
   one and a malformed id are the identical 404); then the roster bulk command (`activityRosterCommands.decideImportStates`) with its own
   locks and rights, checked at the time of this request (an approver who lost the right meanwhile gets the 404; the import stands). Inside
   its transaction, after the requestKey replay: `409 import_undone`, `409 import_states_window_closed` (the window read from the database
-  function). The canonical body (and so the request hash) carries `origin: "import"` and the approval id: a key used on the plain bulk
+  function). After an undo the activity is gone, so the answer is the identical 404 (`409 roster_not_applicable` for a request that
+  raced the undo). The import's right and the roster's are two contracts, but in every reachable workspace they agree: a club or team
+  workspace exists only for a holder of its role (`workspace.js`), and a platform admin decides on rosters from the platform workspace
+  (tested: a platform admin who asks for a club workspace without that club's role works from the platform workspace). The canonical body (and so the request hash) carries `origin: "import"` and the approval id: a key used on the plain bulk
   route is `request_key_reused` here and the other way round. A saved request replays its answer even after the window. A plain roster
   request is written exactly as before (it does not name the new column).
 * **Athletes**: the bulk command's own rules hold (not on the roster -> `not_on_roster`, measured values -> `measured_record_exists`); an

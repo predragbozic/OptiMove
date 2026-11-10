@@ -275,6 +275,8 @@ const needingState = async (team, s) => (await rosterOf(team, s)).athletes.filte
 
 const sliceTo = (needle) => GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes(needle)) + 1);
 const withoutV61 = () => GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v61_import_states")));
+// The request read the session before it waited for the undo; after the undo it has no participant left (v44's gate).
+const EXPECT_AFTER_UNDO = [409, "roster_not_applicable"];
 const statesPath = (team, approvalId) => `/teams/${team.teamId}/approvals/${approvalId}/states`;
 const states = (team, s, athleteIds, { cookie = team.padmin.cookie, requestKey = key(), kind = "participated_no_values", reasonKey, approvalId = s.approvalId, expected = {} } = {}) =>
   api(statesPath(team, approvalId), {
@@ -369,6 +371,7 @@ test("3. who: another user (the coach, the club admin), another team's approval,
     [team.padmin.cookie, crypto.randomUUID()], [team.padmin.cookie, "not-a-uuid"]]) {
     const r = await states(team, s, [x], { cookie, approvalId });
     assert.equal(r.status, 404, `${approvalId} ${r.text}`);
+    assert.equal(r.headers.get("cache-control"), "no-store", "every answer, the 404 included");
     bodies.push(r.text);
   }
   assert.equal(new Set(bodies).size, 1, "byte-identical 404 bodies");
@@ -403,16 +406,20 @@ test("5. the window: after it a new key is 409 import_states_window_closed (noth
   const late = await states(team, s, [y]);
   assert.deepEqual([late.status, late.body.error], [409, "import_states_window_closed"], late.text);
   const sameBodyNewKey = await states(team, s, [x], { expected: {} });
-  assert.equal(sameBodyNewKey.status, 409, "the same body with a new key after the window");
+  assert.deepEqual([sameBodyNewKey.status, sameBodyNewKey.body.error], [409, "import_states_window_closed"], "the same body with a new key after the window");
   const replay = await states(team, s, [x], { requestKey });
   assert.equal(replay.status, 200, replay.text);
   assert.deepEqual(replay.body, first.body);
   assert.equal((await importRequests(s.activityId)).length, 1);
   await assert.rejects(rawImportRequest(team, s, [y]), (e) => e.code === "23514" && /outside the import states window/.test(e.message));
-  // Inside the window but before the approval: refused too.
+  // A writer that backdates created_at into the window is still measured by the server's time.
+  const inside = (await admin.query(`select (approved_at + interval '1 minute')::text t from training_load.gpexe_import_approvals where id = $1`, [s.approvalId])).rows[0].t;
+  await assert.rejects(rawImportRequest(team, s, [y], { createdAt: inside }), (e) => e.code === "23514" && /outside the import states window/.test(e.message));
+  // Before the approval (an approval moved into the future): refused too.
   const t2 = await importSession(team, 9707, { hour: 10 });
   const [z] = await needingState(team, t2);
-  await assert.rejects(rawImportRequest(team, t2, [z], { createdAt: "2020-01-01T00:00:00Z" }), (e) => e.code === "23514" && /outside the import states window/.test(e.message));
+  await ageApproval(t2.approvalId, -10);
+  await assert.rejects(rawImportRequest(team, t2, [z]), (e) => e.code === "23514" && /outside the import states window/.test(e.message));
 });
 
 test("6. the athletes: a left-out athlete (a subset import) gets a state; an athlete with measured values does not; one off the roster is refused by the route and by the database", async () => {
@@ -437,7 +444,22 @@ test("6. the athletes: a left-out athlete (a subset import) gets a state; an ath
   await admin.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2027-01-01T00:00:00Z')`, [late, team.clubId, team.teamId]);
   const off = await states(team, s, [late]);
   assert.deepEqual([off.status, off.body.error, off.body.failed?.[0]?.error], [409, "bulk_conflict", "not_on_roster"], off.text);
-  await assert.rejects(rawImportRequest(team, s, [late]), (e) => e.code === "23514" || e.code === "P0001", "the database refuses an import-origin state off the roster");
+  // The database: the decision trigger (v25) refuses it first; v61's own rule is proven with that trigger off for one rolled-back write.
+  await assert.rejects(rawImportRequest(team, s, [late]), (e) => e.code === "P0001" && /not on the roster/.test(e.message));
+  await admin.query("begin");
+  try {
+    await admin.query("alter table training.activity_athlete_decisions disable trigger activity_athlete_decisions_check");
+    const requestId = crypto.randomUUID();
+    await admin.query(
+      `insert into training.activity_athlete_decisions (activity_id, athlete_id, owner_team_id, request_id, decision_kind, decided_by_user_id, decided_by_basis)
+       values ($1, $2, $3, $4, 'participated_no_values', $5, 'platform_admin')`, [s.activityId, late, team.teamId, requestId, team.padmin.id]);
+    await assert.rejects(admin.query(
+      `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin, origin_approval_id)
+       values ($1, $2, gen_random_uuid(), repeat('a', 64), 'decide_bulk', $3, '{}'::jsonb, 'import', $4)`, [requestId, s.activityId, team.padmin.id, s.approvalId]),
+      (e) => e.code === "23514" && /origin import names an athlete who is not on the roster/.test(e.message));
+  } finally {
+    await admin.query("rollback");
+  }
   assert.equal((await importRequests(s.activityId)).length, 1);
 });
 
@@ -529,12 +551,29 @@ test("10. lock order the other way: an undo in flight holds the lock; the states
     assert.equal(settled, false, "the states request waits for the undo's team lock");
     await c.query("commit");
     const answer = await st;
-    assert.ok([404, 409].includes(answer.status), answer.text);
+    assert.deepEqual([answer.status, answer.body.error], EXPECT_AFTER_UNDO, answer.text);
     assert.ok(!/40P01|deadlock/i.test(answer.text));
   } finally {
     await c.end();
   }
   assert.deepEqual(await rosterRows(s.activityId), { decisions: 0, requests: 0, completions: 0, completionLog: 0 });
+  // After the undo, a new request: the session is gone, the identical 404.
+  const after = await states(team, s, [x]);
+  assert.deepEqual([after.status, after.body.error], [404, "notFound"], after.text);
+});
+
+test("14. the import's right and the roster's agree in every reachable workspace: a platform admin who asks for a club workspace without that club's role works from the platform workspace, imports and saves the states", async () => {
+  const team = await setupTeam();
+  await setWorkspace(team.padmin.id, "club", team.clubId);
+  try {
+    const s = await importSession(team, 9716);
+    const [x] = await needingState(team, s);
+    const r = await states(team, s, [x]);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.decisions[0].decidedBy.basis, "platform_admin");
+  } finally {
+    await setWorkspace(team.padmin.id, "platform", null);
+  }
 });
 
 test("11. the body is the roster bulk's: no athletes, 61 athletes, a duplicate and a bad key are 400; a later kind is 409 kind_not_available; nothing written", async () => {
@@ -619,7 +658,7 @@ test("12. migration v61: the preflight passes on v60, the post-check on v61, the
   const before = await catalogOf(admin);
   const c = await newClient();
   try {
-    await assert.rejects(c.query(fs.readFileSync(RUNBOOK("import-states-v61-rollback.sql"), "utf8")), /an import-origin roster request exists|later migrations are applied/);
+    await assert.rejects(c.query(fs.readFileSync(RUNBOOK("import-states-v61-rollback.sql"), "utf8")), /v61 rollback refused: an import-origin roster request exists/);
     await c.query("rollback").catch(() => {});
   } finally {
     await c.end();

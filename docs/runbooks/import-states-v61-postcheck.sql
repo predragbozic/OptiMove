@@ -6,12 +6,13 @@ select count(*) = 1 as recorded_once,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') = 'migrations_v2/202611101200_training_load_v61_import_states_approval.sql' as is_last
   from public.schema_migrations where migration_name = 'migrations_v2/202611101200_training_load_v61_import_states_approval.sql';
 
--- 2. The v61 bodies are in force (md5 of prosrc); v60's guard stays in place for the rollback.
-select n.nspname || '.' || p.proname as fn, md5(p.prosrc) as actual_md5, md5(p.prosrc) = e.m as ok
-  from (values ('training', 'protect_activity_roster_request_v61', 'a6dbe02dc1adf558b4d4c8794878bd6d'),
+-- 2. The v61 bodies are in force (md5 of prosrc); v60's guard stays in place for the rollback. One row per expected
+--    function: a missing one reads ok = false.
+select e.s || '.' || e.f as fn, md5(p.prosrc) as actual_md5, coalesce(md5(p.prosrc) = e.m, false) as ok
+  from (values ('training', 'protect_activity_roster_request_v61', 'd5de0d3419ff4f78bf194418351ad21b'),
                ('training_load', 'import_states_window', '66c9abcdc147d7e2adbccd413377f21c'),
                ('training', 'protect_activity_roster_request_v60', 'b80d37661ee1b9dc021b6d08b8e74993')) e(s, f, m)
-  join pg_namespace n on n.nspname = e.s join pg_proc p on p.pronamespace = n.oid and p.proname = e.f
+  left join pg_namespace n on n.nspname = e.s left join pg_proc p on p.pronamespace = n.oid and p.proname = e.f
  order by 1;
 
 -- 3. The window is 30 minutes.

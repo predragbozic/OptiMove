@@ -376,13 +376,14 @@ router.get("/teams/:teamId/approvals/:approvalId", handle(async (req, res) => {
 // this request in the workspace the team access was resolved in (one resolution per request). Stable codes only: a
 // database message is logged, never sent. Another user's approval, another team's and a missing one are the same 404.
 router.post("/teams/:teamId/approvals/:approvalId/states", async (req, res, next) => {
+  // Every answer, the 404 included, is no-store.
+  res.set("Cache-Control", "no-store");
   try {
     const access = await teamAccess(req, res);
     if (!access) return;
     if (!UUID.test(req.params.approvalId)) return notFound(res);
     const ctx = { userId: req.user.id, authz: req.authz, workspace: access.workspace };
     const outcome = await decideImportStates(ctx, access.teamId, req.params.approvalId, req.body);
-    res.set("Cache-Control", "no-store");
     res.status(outcome.status).json(outcome.body);
   } catch (error) {
     if (error instanceof RosterError) {

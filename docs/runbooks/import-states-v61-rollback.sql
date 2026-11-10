@@ -39,7 +39,7 @@ begin
     raise exception 'v61 rollback refused: later migrations are applied';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'training' and p.proname = 'protect_activity_roster_request_v61') is distinct from 'a6dbe02dc1adf558b4d4c8794878bd6d'
+       where n.nspname = 'training' and p.proname = 'protect_activity_roster_request_v61') is distinct from 'd5de0d3419ff4f78bf194418351ad21b'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where n.nspname = 'training_load' and p.proname = 'import_states_window') is distinct from '66c9abcdc147d7e2adbccd413377f21c'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace

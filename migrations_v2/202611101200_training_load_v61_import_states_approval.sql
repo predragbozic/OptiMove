@@ -11,7 +11,8 @@
 --      2026-11-10). The route reads it from here; nothing else holds the number.
 --   3. The request guard (a new function; the trigger is re-pointed, v60's function stays for the rollback) keeps every
 --      v60 rule and, for an import-origin request, checks the NAMED approval: the same team, the same user, the same session
---      (its event linked to an activity of the request's alias set), approved_at <= created_at <= approved_at + the window,
+--      (its event linked to an activity of the request's alias set), approved_at <= now() <= approved_at + the window (the
+--      server's time, never a created_at the writer could set),
 --      its candidate not undone (v57); and every decision the request wrote (they are inserted before it, the FK is deferred)
 --      names an athlete on the session's roster (training.activity_roster). An athlete the coach left out of the import
 --      (v59's excluded_athlete_ids) is on the roster and may get a state; one who is not on the roster may not. Refusals are
@@ -49,6 +50,8 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 1. The approval an import-origin request belongs to
 -- ---------------------------------------------------------------------------
+-- No index on the column: the approvals are append-only (v23), so the foreign key is never checked from their side by a
+-- delete or an update, and nothing reads the requests by approval.
 alter table training.activity_roster_requests
   add column origin_approval_id uuid references training_load.gpexe_import_approvals(id) on delete restrict,
   add constraint activity_roster_requests_origin_approval_check check ((origin = 'import') = (origin_approval_id is not null));
@@ -106,7 +109,8 @@ begin
     if v_appr.import_undone_at is not null then
       raise exception 'activity_roster_requests: origin import names an undone import' using errcode = '23514';
     end if;
-    if new.created_at < v_appr.approved_at or new.created_at > v_appr.approved_at + training_load.import_states_window() then
+    -- The server's time (the transaction's start, the same now() the route reads), never the writer's created_at.
+    if now() < v_appr.approved_at or now() > v_appr.approved_at + training_load.import_states_window() then
       raise exception 'activity_roster_requests: origin import is outside the import states window' using errcode = '23514';
     end if;
     if exists (
