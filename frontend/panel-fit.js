@@ -1,11 +1,11 @@
 // Design (header panels): the notifications and messages panels hang from their own button in the
-// header (position: absolute; right: 0 for both, left: 0 for notifications on a phone). On a narrow
-// window that put them past the edge: the 760 px messages panel was cut off on the left between
-// 761 and about 940 px, and the notifications panel ran off the right edge of a phone (at 600 px it
-// even widened the page). This keeps an open panel inside the window: it is moved sideways (and
-// narrowed only if it is wider than the window) with the CSS `translate` property, which no other
-// rule of these panels uses. A full-screen panel (position: fixed, messages on a phone) is left
-// alone, and so is the athlete's app (not part of this change).
+// header (position: absolute; right: 0 - on a coach's phone too, so a panel can only spill past the
+// left edge, which never widens the page). On a narrow window that used to put them past an edge: the
+// 760 px messages panel was cut off on the left between 761 and about 940 px, and the notifications
+// panel ran off the right edge of a phone. This keeps an open panel inside the window: it is moved
+// sideways (and narrowed only if it is wider than the window) with the CSS `translate` property,
+// which no other rule of these panels uses. A full-screen panel (position: fixed, messages on a
+// phone) is left alone, and so is the athlete's app (not part of this change).
 const MARGIN = 8;
 
 export function fitPanelToViewport(panel, { margin = MARGIN, view = globalThis } = {}) {
