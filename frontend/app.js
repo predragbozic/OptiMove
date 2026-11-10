@@ -2799,6 +2799,11 @@ async function handleContentClick(event) {
     renderCoachHome({ rows: coachHomeRows, error: "" });
     return;
   }
+  // An empty day on Home: plan it in the Calendar.
+  if (type === "coach-home-plan-session") {
+    openCentralCalendarFromRail();
+    return;
+  }
   if (type === "coach-home-picker-close") {
     closeCoachHomePicker();
     return;
