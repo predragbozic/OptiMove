@@ -86,7 +86,8 @@ test("a selected club's list and a selected team's table keep the badge and the 
   const member = athlete({ memberships: [{ status: "active", clubId: "club-1", teamId: "team-1" }] });
   const withOrg = (isPlatformAdmin) => ({ isPlatformAdmin, clubs: [{ id: "club-1", name: "Demo Club" }], teams: [{ id: "team-1", club_id: "club-1", name: "Demo Team" }], athletes: [member] });
   for (const pick of [{ selectedClubId: "club-1" }, { selectedClubId: "club-1", selectedTeamId: "team-1" }]) for (const isPlatformAdmin of [true, false]) {
-    reset("teams");
+    // S2: a selected club's roster is in Clubs, a selected team's in Teams.
+    reset(pick.selectedTeamId ? "teams" : "clubs");
     Object.assign(state.organization, pick);
     const html = renderOrganizationBrowser(withOrg(isPlatformAdmin));
     const where = `${pick.selectedTeamId ? "team" : "club"}, ${isPlatformAdmin ? "platform admin" : "other"}`;
