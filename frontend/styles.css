@@ -16877,6 +16877,34 @@ p.muted.gpexe-source-fields {
 .gpexe-undo .gpexe-button {
   min-height: 44px;
 }
+.gpexe-undo-later-list {
+  margin: 4px 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+  /* Up to 60 rows: the list scrolls inside the warning, so the checkbox and the button stay near on a phone. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.gpexe-undo-later-list:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+/* The later changes' own confirmation: a 44 px row, the box 22 px (the gpexe-accept pattern). */
+.gpexe-undo-later-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-weight: 600;
+}
+.gpexe-undo-later-confirm input {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
 .gpexe-accept {
   display: flex;
   align-items: flex-start;

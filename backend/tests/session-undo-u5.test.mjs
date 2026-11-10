@@ -409,7 +409,7 @@ test("7. a pending candidate and a superseded one cannot be undone", async () =>
   assert.deepEqual(await allRowCounts(), rowsBefore);
 });
 
-test("8. refusals: coach roster work, a calendar link, a hand-corrected value - each names what to do, nothing is removed, every protection is intact", async () => {
+test("8. coach roster work after the import (v60, O1): the undo asks for a confirmation of the listed changes and removes nothing without it", async () => {
   const team = await setupTeam();
   const s = await importSession(team, 9109);
   const rowsBefore = await allRowCounts();
@@ -427,9 +427,9 @@ test("8. refusals: coach roster work, a calendar link, a hand-corrected value - 
   assert.equal(put.status, 200, await put.text());
   const afterRoster = await allRowCounts();
   const blockedRoster = await undo(team, s);
-  assert.deepEqual([blockedRoster.status, blockedRoster.body.error], [409, "roster_decisions_exist"]);
-  assert.ok(blockedRoster.body.rosterWork.decisions >= 1);
-  assert.match(blockedRoster.body.message, /roster/);
+  assert.deepEqual([blockedRoster.status, blockedRoster.body.error], [409, "roster_work_needs_confirmation"]);
+  assert.ok(blockedRoster.body.rosterWork.laterWork.decisions >= 1);
+  assert.match(blockedRoster.body.message, /attendance/);
   assert.deepEqual(await allRowCounts(), afterRoster);
   assert.notDeepEqual(afterRoster, rowsBefore, "the coach's decision is real data");
   assert.equal((await counts(team.teamId)).events, 1);
@@ -866,16 +866,19 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   const team = await setupTeam();
   const s = await importSession(team, 9130);
   const rollback = fs.readFileSync(RUNBOOK("session-undo-v57-rollback.sql"), "utf8");
-  const before = await catalogOf(admin);
   const c = await newClient();
+  // 1. an undo exists. It is made while v60 is in force (the service calls v60's function); then v60 is rolled back for real (its
+  // own rollback, rehearsed in session-undo-roster-o1.test.mjs), so the v57 rollback below meets v57's bodies, and v60 is applied
+  // again at the end.
+  const u = await undo(team, s);
+  assert.equal(u.status, 200, u.text);
+  await c.query(fs.readFileSync(RUNBOOK("undo-roster-work-v60-rollback.sql"), "utf8"));
+  const before = await catalogOf(admin);
   // v59 (and later) are applied on this database, which the v57 rollback refuses first; the checks below are about its own refusals, so the
   // later records are hidden for the test and put back at the end.
   await c.query(`create temp table u5_saved_migrations as select * from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > $1`.replace("$1", `'${V57}'`));
   await c.query(`delete from public.schema_migrations where migration_name in (select migration_name from u5_saved_migrations)`);
   try {
-    // 1. an undo exists
-    const u = await undo(team, s);
-    assert.equal(u.status, 200, u.text);
     await assert.rejects(c.query(rollback), /v57 rollback refused: an undo was made/);
     await c.query("rollback").catch(() => {});
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V57])).rows[0].n, 1);
@@ -896,7 +899,9 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   } finally {
     await c.query(`insert into public.schema_migrations select * from u5_saved_migrations`).catch(() => {});
     await c.end();
+    await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")));
   }
+  assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name like '%v60%'`)).rows[0].n, 1, "v60 is in force again");
 });
 
 test("22. the md5 gate: the migration refuses to run when an original body it copies has changed", async () => {

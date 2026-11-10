@@ -34,7 +34,7 @@ const rows = async () => (await k.query(`select * from public.app_error_events o
 const GOOD = { screen: "training-load", action: "open-imports", code: "js_error", stackSig: "renderImports@gpexe-import-view.js > start@app.js" };
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("import_approval_subset")) });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1) }); // up to v58 (v58 must be the last migration here; v59 and later are left out)
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
