@@ -25,8 +25,10 @@ test("Overview is a summary: one heading and a tile per section, no list", () =>
   reset("overview");
   const html = renderOrganizationBrowser(data);
   assert.deepEqual(h2(html), ["All accessible organization"]);
+  assert.ok(html.includes('aria-label="1 user"><strong>1</strong><span>User</span>'), "one is singular");
+  assert.ok(html.includes('aria-label="2 clubs"><strong>2</strong><span>Clubs</span>'));
   for (const [section, count] of [["users", 1], ["clubs", 2], ["teams", 1], ["athletes", 1]]) {
-    assert.match(html, new RegExp(`data-action="organization-section" data-section="${section}"><strong>${count}</strong>`));
+    assert.match(html, new RegExp(`data-action="organization-section" data-section="${section}" aria-label="${count} [a-z]+"><strong>${count}</strong><span>[A-Z][a-z]+</span>`));
   }
   for (const action of ["organization-select-club", "organization-select-team", "organization-edit", "organization-manage-account-open", "organization-athlete-login-open"]) {
     assert.ok(!has(html, action), `Overview draws no list (${action})`);
@@ -62,4 +64,23 @@ test("a selected club opens its teams and roster in Clubs; a selected team its r
   assert.deepEqual(h2(html), ["Demo Team"]);
   assert.ok(html.includes("Team roster") && has(html, "organization-toggle-assign-athlete") && has(html, "organization-clear-selection"));
   assert.ok(!has(html, "organization-select-club"));
+});
+
+test("review fixes: Users' own controls sit in the section heading; Clubs with a team is headed by the team; Athletes keeps its name", () => {
+  reset("users", { showDisabledUsers: false });
+  const users = { ...data, users: [...data.users, { id: "u2", name: "Gone Demo", email: "gone@example.invalid", loginActive: false, roles: [] }] };
+  let html = renderOrganizationBrowser(users);
+  const head = html.slice(html.indexOf('class="organization-browser-head"'), html.indexOf('class="organization-lists'));
+  assert.match(head, /data-action="organization-toggle-disabled-users">Show disabled \(1\)</, "Show disabled is in the heading");
+  assert.ok(!html.includes('class="organization-list-head"'), "the Users list has no head of its own");
+  reset("clubs", { selectedClubId: "c1", selectedTeamId: "t1" });
+  html = renderOrganizationBrowser(data);
+  assert.deepEqual(h2(html), ["Demo Team"]);
+  assert.ok(html.includes("1 athlete in team"));
+  reset("teams", { selectedClubId: "c1", selectedTeamId: "t1" });
+  assert.ok(renderOrganizationBrowser(data).includes('<p class="eyebrow">Teams - Demo Club</p>'), "a list narrowed to one club says so");
+  reset("athletes", { selectedClubId: "c1" });
+  assert.deepEqual(h2(renderOrganizationBrowser(data)), ["Athletes - Demo Club"]);
+  reset("athletes", { selectedClubId: "c1", selectedTeamId: "t1" });
+  assert.deepEqual(h2(renderOrganizationBrowser(data)), ["Athletes - Demo Team"]);
 });

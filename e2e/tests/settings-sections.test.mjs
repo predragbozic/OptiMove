@@ -57,6 +57,8 @@ for (const [role, width] of [["platform_admin", 1280], ["club_admin", 390]]) tes
       v = await view(page);
       assert.deepEqual(v.h2, [e.title], section);
       assert.ok(v.actions.includes(e.own), `${section} keeps ${e.own}`);
+      // The platform admin's Select (application blocks) is in the Users heading, 44 px.
+      if (section === "users" && role === "platform_admin") assert.ok(v.actions.includes("organization-user-select-mode"), "Users keeps Select");
       assert.deepEqual(v.small, [], section);
       assert.equal(v.overflow, 0, section);
     }
