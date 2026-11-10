@@ -18,12 +18,28 @@ test("the bar's buttons keep their actions and names and gain their word; the st
   assert.match(bar, /data-action="builder-cancel" aria-label="Exit"[^>]*>\$\{ICON_DOOR_EXIT\}<span class="builder-bar-label">Exit<\/span><\/button>/);
   assert.match(bar, /data-action="builder-submit-plan" aria-label="\$\{saveLabel\}"[^>]*>\$\{ICON_CHECK\}<span class="builder-bar-label">\$\{saveLabel\}<\/span><\/button>/);
   assert.match(bar, /data-action="builder-discard-current-draft" aria-label="Discard changes"[^>]*>\$\{ICON_X\}<span class="builder-bar-label">Discard<\/span><\/button>/);
-  assert.match(bar, /<span class="item-badge builder-status-chip">/);
+  assert.match(bar, /<span class="item-badge builder-status-chip\$\{/);
 });
 
 test("the outline's two example buttons say what they open", () => {
-  assert.match(view, /data-info="program" aria-label="Program structure example"><span class="button-icon">i<\/span><span class="builder-info-label">Program example<\/span><\/button>/);
-  assert.match(view, /data-info="session" aria-label="Session structure example"><span class="button-icon">i<\/span><span class="builder-info-label">Session example<\/span><\/button>/);
+  assert.match(view, /data-info="program" aria-label="Program example"><span class="button-icon" aria-hidden="true">i<\/span><span class="builder-info-label">Program example<\/span><\/button>/);
+  assert.match(view, /data-info="session" aria-label="Session example"><span class="button-icon" aria-hidden="true">i<\/span><span class="builder-info-label">Session example<\/span><\/button>/);
+});
+
+test("every button that shows a word has that word in its accessible name (label in name)", () => {
+  const labelled = [...view.matchAll(/aria-label="([^"]+)"[^>]*>(?:(?!<\/button>).)*?<span class="(?:builder-bar-label|builder-info-label)">([^<]+)<\/span><\/button>/g)];
+  assert.ok(labelled.length >= 5, labelled.length);
+  for (const [, name, word] of labelled) {
+    const shown = word === "${saveLabel}" ? "Save" : word;
+    const accessible = name === "${saveLabel}" ? "Save" : name;
+    assert.ok(accessible.toLowerCase().includes(shown.toLowerCase()), `"${accessible}" contains "${shown}"`);
+  }
+});
+
+test("the chip's dot marks a draft only", () => {
+  assert.match(view, /builder-status-chip\$\{isEditDraft \|\| \(draft\.plan\.status \|\| "draft"\) === "draft" \? " is-draft" : ""\}/);
+  assert.match(rules, /\.builder-status-chip\.is-draft::before \{/);
+  assert.ok(!/text-transform: capitalize/.test(rules), "the state keeps its own case");
 });
 
 test("every rule is the coach's Builder bar or outline heading", () => {

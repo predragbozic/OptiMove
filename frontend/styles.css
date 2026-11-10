@@ -24271,6 +24271,7 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
    ========================================================================== */
 body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--om-space-2);
 }
 
@@ -24286,12 +24287,20 @@ body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.d
   height: var(--om-tap-target);
   min-height: var(--om-tap-target);
   padding: 0 14px 0 12px;
+  position: relative;
   font-size: var(--om-text-sm);
   font-weight: 600;
 }
 
 body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
   color: var(--danger, #a23b3b);
+}
+
+/* A visible focus ring (the shared .plain-button ring is a faint shadow). */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .plain-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .plain-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
 }
 
 body:not(.athlete-mode):not(.login-mode) .builder-bar-label {
@@ -24311,10 +24320,10 @@ body:not(.athlete-mode):not(.login-mode) .builder-status-chip {
   color: var(--muted, #667085);
   font-size: 12px;
   font-weight: 700;
-  text-transform: capitalize;
 }
 
-body:not(.athlete-mode):not(.login-mode) .builder-status-chip::before {
+/* The dot marks a draft (a draft or an edit draft) only. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip.is-draft::before {
   content: "";
   width: 7px;
   height: 7px;
@@ -24366,11 +24375,19 @@ body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-
    still their names; the outline's heading lets its example buttons wrap
    under it. */
 @media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  /* 44 px icons; a button grows when its handler writes a word into it
+     ("Saving…" while a save runs). */
   body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
   body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
   body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
-    width: var(--om-tap-target);
-    padding: 0;
+    width: auto;
+    min-width: var(--om-tap-target);
+    padding: 0 10px;
   }
 
   body:not(.athlete-mode):not(.login-mode) .builder-bar-label {

@@ -1387,10 +1387,10 @@ export async function handleBuilderDraftAction(action, handlers) {
     // tell a slow save from a swallowed click.
     if (action.disabled) return true;
     action.disabled = true;
-    // Captured as innerHTML, not textContent: this button is icon-only (no
-    // text label), so a plain textContent restore would replace the icon
-    // SVG with an empty text node and leave the button permanently blank
-    // after a failed save - innerHTML round-trips the actual icon markup.
+    // Captured as innerHTML, not textContent: the button holds an icon and
+    // its .builder-bar-label word (B3), so a plain textContent restore would
+    // drop the icon SVG and the label's markup after a failed save -
+    // innerHTML round-trips both.
     const originalHTML = action.innerHTML;
     action.textContent = "Saving…";
     try {

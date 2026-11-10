@@ -585,7 +585,7 @@ function renderBuilderInner() {
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions">
-          <span class="item-badge builder-status-chip">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
+          <span class="item-badge builder-status-chip${isEditDraft || (draft.plan.status || "draft") === "draft" ? " is-draft" : ""}">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
           <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit" title="Exit and keep this draft for later.">${ICON_DOOR_EXIT}<span class="builder-bar-label">Exit</span></button>
           ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" title="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}<span class="builder-bar-label">${saveLabel}</span></button>` : `<span class="builder-finished-label">Saved</span>`}
@@ -602,8 +602,8 @@ function renderBuilderInner() {
           <div class="section-heading">
             <div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div>
             <div class="builder-outline-info-buttons">
-              ${isWeekly ? renderImportBlockIconButton() : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span><span class="builder-info-label">Program example</span></button>`}
-              <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span><span class="builder-info-label">Session example</span></button>
+              ${isWeekly ? renderImportBlockIconButton() : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Program example</span></button>`}
+              <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Session example</span></button>
             </div>
           </div>
           ${draft.blocks.length || !isWeekly ? `

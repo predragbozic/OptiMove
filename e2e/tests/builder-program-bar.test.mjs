@@ -56,6 +56,8 @@ for (const width of [1280, 768]) {
       }
       const info = await examples(page);
       assert.deepEqual(info.map((i) => i.text), ["i Program example", "i Session example"]);
+      // Their visible words are their names (voice control: "click Program example").
+      for (const name of ["Program example", "Session example"]) assert.equal(await page.getByRole("button", { name, exact: true }).count(), 1, name);
       for (const { text, h } of info) assert.ok(h >= 44, `${text}: ${h}`);
       assert.equal(await page.locator(".builder-program-actions .builder-status-chip").count(), 1);
       assert.ok(await overflow(page) <= 0, "no horizontal overflow");
@@ -81,3 +83,30 @@ for (const width of [390, 360]) {
     } finally { await context.close(); }
   });
 }
+
+test("(360 px, a phone) while a save runs, \"Saving…\" fits its button and the page stays as wide as the screen", async () => {
+  const { context, page, pageErrors } = await openBar(360);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  try {
+    // The save waits here; the test then answers it with an error, so the plan stays a draft.
+    await page.route(/\/api\/builder\/plans\/[^/]+\/submit/, async (route) => { await held; await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "test stop" }) }); });
+    page.on("dialog", (dialog) => dialog.accept().catch(() => {}));
+    await page.locator('.builder-program-actions [data-action="builder-submit-plan"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-action="builder-submit-plan"]')?.textContent.includes("Saving"), null, { timeout: 10_000 });
+    const box = await page.evaluate(() => {
+      const button = document.querySelector('[data-action="builder-submit-plan"]');
+      return { scroll: button.scrollWidth, client: button.clientWidth, height: Math.round(button.getBoundingClientRect().height) };
+    });
+    assert.ok(box.scroll <= box.client + 1, JSON.stringify(box));
+    assert.ok(box.height >= 44, JSON.stringify(box));
+    assert.ok(await overflow(page) <= 0, "no horizontal overflow");
+    release();
+    await page.waitForFunction(() => !document.querySelector('[data-action="builder-submit-plan"]')?.textContent.includes("Saving"), null, { timeout: 10_000 });
+    assert.equal(await page.locator('.builder-program-actions [data-action="builder-submit-plan"] .builder-bar-label').count(), 1, "the icon and its word come back");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    release();
+    await context.close();
+  }
+});
