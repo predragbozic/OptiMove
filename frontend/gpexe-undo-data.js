@@ -178,8 +178,8 @@ async function settle(undo, generation, body, render) {
       undo.laterConfirmed = false;
       undo.laterNote = info.code === "roster_work_changed"
         ? "Attendance changed since you opened this. Nothing was removed. The list below now shows the current changes; tick the box again to remove them too."
-        : "Nothing was removed. Tick the box to remove the later changes too.";
-      undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : (info.message || "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again.");
+        : "Nothing was removed. Tick the box, then press Undo this import again.";
+      undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : "The session's attendance changed since you reviewed it. Review the undo again.";
       undo.rereadPreview = true;
       undo.step = "ready";
     } else if (isDefiniteRefusal(info) && info.code === "try_again") {

@@ -471,6 +471,8 @@ test("5. the list in the answer and the log is bounded at 60 while the counts an
   const log = (await admin.query(`select roster_work_removed r from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].r;
   assert.equal(log.later.decisions, 61);
   assert.equal(log.later_list.length, 60);
+  assert.equal(done.body.undo.rosterWork.laterWork.changes, null, "the answer never passes the list's length off as the count");
+  assert.equal(done.body.undo.rosterWork.laterWork.decisions, 61);
 });
 
 test("6. a change between the preview and the confirmed undo: roster_work_changed, nothing removed; the new preview's fingerprint undoes", async () => {

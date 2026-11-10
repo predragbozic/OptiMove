@@ -160,10 +160,12 @@ function rosterShape(importWritten, later, list, fingerprint, changes) {
   const laterTotal = total(later);
   return {
     importWritten: { ...importWritten, total: total(importWritten) },
-    laterWork: { ...later, total: laterTotal, changes: Number.isInteger(changes) && changes >= 0 ? changes : listItems(list).length, list: listItems(list), fingerprint: laterTotal > 0 && typeof fingerprint === "string" ? fingerprint : null },
+    laterWork: { ...later, total: laterTotal, changes: Number.isInteger(changes) && changes >= 0 ? changes : null, list: listItems(list), fingerprint: laterTotal > 0 && typeof fingerprint === "string" ? fingerprint : null },
   };
 }
-// The function's rosterWork (refusal detail) and the deletion log's roster_work_removed, in one API shape.
+// The function's rosterWork (refusal detail) and the deletion log's roster_work_removed, in one API shape. Only the scope
+// (the preview and a refusal) carries the server's count of later changes; the log does not store it, so an undo's answer
+// and its replay carry changes: null rather than a count capped at the list's 60.
 function rosterFromScope(work) {
   return rosterShape(counts(work?.importWritten), counts(work?.laterWork), work?.laterWork?.list, work?.laterWork?.fingerprint, work?.laterWork?.changes);
 }
@@ -237,7 +239,8 @@ export async function undoPreview(teamId, candidateId, { userId }) {
         row = (await client.query(sql, [userId, teamId, candidateId, fingerprint])).rows[0];
       }
       const shaped = shapeResult(row);
-      // The scope's own counts (with the server's count of later changes), computed under the same lock as the rerun.
+      // The scope's own counts (with the server's count of later changes). Rolling back to the savepoint releases the team
+      // lock, so the rerun takes it again and checks this same fingerprint under it: a change in between is roster_work_changed.
       if (scopeWork) shaped.rosterWork = rosterFromScope(scopeWork);
       return { ...shaped, wouldOfferAgain: Boolean(row.new_candidate_id), needsRosterConfirmation: shaped.rosterWork.laterWork.total > 0 };
     }, { keep: false });
