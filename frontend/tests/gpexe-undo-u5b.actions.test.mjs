@@ -40,7 +40,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests, inboxBucket, candidateGroup, isImportUndone, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
-const { undoReasonProblem, UNDO_REASON_MAX, normalizeUndoReason, handleUndoReasonInput } = await import("../gpexe-undo-data.js");
+const { undoReasonProblem, UNDO_REASON_MAX, normalizeUndoReason, handleUndoReasonInput, sendUndo } = await import("../gpexe-undo-data.js");
 const { confirmLeaveTrainingLoad } = await import("../training-load-actions.js");
 const { guideSteps } = await import("../gpexe-guide-steps.js");
 const { removedSummary } = await import("../gpexe-undo-view.js");
@@ -743,4 +743,20 @@ test("23. the change count is the server's: past the 60 listed it says how many 
 test("24. the removed summary names the attendance states too", async () => {
   const { removedSummary } = await import("../gpexe-undo-view.js");
   assert.equal(removedSummary({ metric_event_participants: 2, activity_athlete_decisions: 3 }), "2 athletes' records, 3 attendance states");
+});
+
+test("25. sendUndo itself keeps each problem in its own place: a missing tick is the checkbox's, never the reason field's; nothing is sent", async () => {
+  setup({ preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: later(1) }) } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const sent = await sendUndo("Wrong link", () => {}, { laterConfirmed: false });
+  assert.equal(sent, false);
+  assert.equal(gx().undo.reasonProblem, "");
+  assert.match(gx().undo.laterProblem, /Remove these later changes too/);
+  assert.equal(undoCalls().length, 0);
+  const noReason = await sendUndo("", () => {}, { laterConfirmed: false });
+  assert.equal(noReason, false);
+  assert.match(gx().undo.reasonProblem, /Write why/);
+  assert.equal(gx().undo.laterProblem, "", "the reason comes first; the tick is asked once the reason is right");
 });

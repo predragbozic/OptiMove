@@ -466,13 +466,21 @@ test("5. the list in the answer and the log is bounded at 60 while the counts an
   assert.equal(later.decisions, 61);
   assert.equal(later.list.length, 60);
   assert.equal(later.changes, 61, "the count covers the rows past the list");
-  const done = await undoWith(team, s, { fingerprint: later.fingerprint });
+  // A change past the listed 60 still moves the fingerprint: the old one is refused, nothing removed.
+  const r62 = await rosterChange(team, s, x, { kind: "participated_no_values", expectedDecisionId: current });
+  assert.equal(r62.status, 200, JSON.stringify(r62.body));
+  const stale = await undoWith(team, s, { fingerprint: later.fingerprint });
+  assert.deepEqual([stale.status, stale.body.error], [409, "roster_work_changed"], stale.text);
+  assert.equal((await rosterRows(s.activityId)).decisions, 62);
+  const fresh = (await preview(team, s)).body.undoPreview.rosterWork.laterWork;
+  assert.notEqual(fresh.fingerprint, later.fingerprint);
+  const done = await undoWith(team, s, { fingerprint: fresh.fingerprint });
   assert.equal(done.status, 200, done.text);
   const log = (await admin.query(`select roster_work_removed r from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].r;
-  assert.equal(log.later.decisions, 61);
+  assert.equal(log.later.decisions, 62);
   assert.equal(log.later_list.length, 60);
   assert.equal(done.body.undo.rosterWork.laterWork.changes, null, "the answer never passes the list's length off as the count");
-  assert.equal(done.body.undo.rosterWork.laterWork.decisions, 61);
+  assert.equal(done.body.undo.rosterWork.laterWork.decisions, 62);
 });
 
 test("6. a change between the preview and the confirmed undo: roster_work_changed, nothing removed; the new preview's fingerprint undoes", async () => {
