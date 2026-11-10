@@ -23938,8 +23938,8 @@ body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input {
    Design: the Builder's fields (B2). A session's four fields (name, time of
    day, phase, time) sat in one flex row where the later .builder-text-input
    rule (width: 100%) overrode their compact widths, so each shrank to about
-   64 px ("Warm", "Tin", "Bet"). They are three rows now: the name, then time
-   of day and time, then the phase. Block name and the cover image URL are
+   64 px ("Warm", "Tin", "Bet"). They are two rows now: the name and time of
+   day, then the phase and the time. Block name and the cover image URL are
    16 px (iOS zooms below that), the titles and the cover URL 44 px tall,
    and the cover URL looks like a field. Names,
    data-* attributes and the forms are unchanged.
@@ -23947,11 +23947,14 @@ body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input {
 body:not(.athlete-mode):not(.login-mode) .builder-session-actions > .builder-session-time-inline {
   flex: 1 1 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* Two rows, not three: the session row is sticky (it stays at the top while
+     its tree scrolls), so every row of fields costs screen. The second
+     column is a little narrower: it holds the shorter texts (time of day,
+     the time), the first the phase ("Before training"). */
+  grid-template-columns: minmax(0, 1.17fr) minmax(0, 1fr);
   grid-template-areas:
-    "name name"
-    "ampm time"
-    "phase phase";
+    "name ampm"
+    "phase time";
   gap: var(--om-space-2);
 }
 
@@ -23964,6 +23967,12 @@ body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > .builder
   width: 100%;
   min-height: var(--om-tap-target);
   font-size: 16px;
+}
+
+/* The two selects: less inner padding, so their texts fit the narrow cards. */
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > select.builder-text-input {
+  padding-left: 8px;
+  padding-right: 2px;
 }
 
 body:not(.athlete-mode):not(.login-mode) .builder-block-title-input,
@@ -23981,4 +23990,16 @@ body:not(.athlete-mode):not(.login-mode) .builder-plan-cover-input {
   border-color: var(--line, #dfe4e8);
   background: #fff;
   font-size: 16px;
+}
+
+/* The frame above outranks the field's own hover and focus rules (whose
+   focus has no outline), so they come back at the same rank. */
+body:not(.athlete-mode):not(.login-mode) .builder-plan-cover-input:hover {
+  border-color: #b9c0c9;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-plan-cover-input:focus {
+  border-color: var(--accent);
+  color: inherit;
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, .12);
 }

@@ -35,6 +35,18 @@ async function makeProgram(context, name) {
   return { planId: plan.id, sessionId, sectionId };
 }
 
+// The section repaints after a save: read a box only once it exists and has stopped moving.
+async function stableBox(page, locator) {
+  let last = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const box = await locator.boundingBox().catch(() => null);
+    if (box && last && box.x === last.x && box.y === last.y && box.height === last.height) return box;
+    last = box;
+    await page.waitForTimeout(50);
+  }
+  throw new Error("the element never settled");
+}
+
 async function sectionItems(context, ids) {
   const state = await call(context, `/api/builder/plans/${ids.planId}`);
   const section = state.blocks[0].sessions[0].nodes.find((n) => n.id === ids.sectionId);
@@ -78,8 +90,14 @@ test("(1280 px) an item field saves 500 ms after typing, a session field on chan
     // An item field saves itself 500 ms after the last key, with no blur.
     const sets = page.locator(`.builder-section-added .builder-item[data-item-id="${before[0].id}"] [name=sets]`).filter({ visible: true }).first();
     await sets.click();
+    const saved = page.waitForRequest((req) => /\/api\/builder\/items\/[^/?]+(\?|$)/.test(req.url()) && req.method() === "PATCH", { timeout: 5000 });
     await sets.pressSequentially("4");
-    await page.waitForTimeout(1500);
+    const typedAt = Date.now();
+    await saved;
+    const waited = Date.now() - typedAt;
+    // The item autosave waits 500 ms after the last key: not at once, and not much later.
+    assert.ok(waited >= 350 && waited <= 1500, `the item was saved ${waited} ms after the last key`);
+    await page.waitForTimeout(500);
     const typed = await sectionItems(context, ids);
     assert.equal(typed.find((i) => i.id === before[0].id).sets, "4", "the item's sets were saved by the 500 ms autosave");
 
@@ -87,12 +105,12 @@ test("(1280 px) an item field saves 500 ms after typing, a session field on chan
     const grip = page.locator(`.builder-section-added [data-builder-item-drag][data-item-id="${before[0].id}"]`).filter({ visible: true }).first();
     const second = page.locator(`.builder-section-added .builder-item[data-item-id="${before[1].id}"]`).filter({ visible: true }).first();
     const first = page.locator(`.builder-section-added .builder-item[data-item-id="${before[0].id}"]`).filter({ visible: true }).first();
-    const g = await grip.boundingBox();
-    const f = await first.boundingBox();
-    const s = await second.boundingBox();
+    const g = await stableBox(page, grip);
+    const f = await stableBox(page, first);
+    const s = await stableBox(page, second);
     // The drop place follows the dragged item's own middle: move it just past the second item's middle.
     const distance = (s.y + s.height / 2) - (f.y + f.height / 2) + 8;
-    const moved = page.waitForResponse((res) => /\/api\/builder\/items\/[^/]+\/move/.test(res.url()) && res.request().method() === "POST");
+    const moved = page.waitForResponse((res) => /\/api\/builder\/items\/[^/]+\/move/.test(res.url()) && res.request().method() === "POST").catch((error) => ({ status: () => `none (${error.message.split("\n")[0]})` }));
     await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
     await page.mouse.down();
     for (let step = 1; step <= 12; step += 1) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + (distance * step) / 12);
@@ -119,14 +137,14 @@ test("(390 px) a touch drag of the grip reorders the section", async () => {
     await grip.waitFor();
     const second = page.locator(`[data-drag-item][data-item-id="${before[1].id}"]`).filter({ visible: true }).first();
     const first = page.locator(`[data-drag-item][data-item-id="${before[0].id}"]`).filter({ visible: true }).first();
-    const g = await grip.boundingBox();
-    const f = await first.boundingBox();
-    const s = await second.boundingBox();
+    const g = await stableBox(page, grip);
+    const f = await stableBox(page, first);
+    const s = await stableBox(page, second);
     const cdp = await context.newCDPSession(page);
     const x = g.x + g.width / 2;
     const y0 = g.y + g.height / 2;
     const y1 = y0 + (s.y + s.height / 2) - (f.y + f.height / 2) + 8;
-    const moved = page.waitForResponse((res) => /\/api\/builder\/items\/[^/]+\/move/.test(res.url()) && res.request().method() === "POST");
+    const moved = page.waitForResponse((res) => /\/api\/builder\/items\/[^/]+\/move/.test(res.url()) && res.request().method() === "POST").catch((error) => ({ status: () => `none (${error.message.split("\n")[0]})` }));
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: y0 }] });
     for (let step = 1; step <= 12; step += 1) {
       await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y0 + ((y1 - y0) * step) / 12 }] });

@@ -1,4 +1,4 @@
-// Design B2: the Builder's fields. A session's four fields are laid out by their names in three rows
+// Design B2: the Builder's fields. A session's four fields are laid out by their names in two rows
 // (no field cut to a few letters), every field is 16 px (iOS zooms below that) and 44 px tall, and the
 // cover image URL looks like a field. Names, data-* attributes and forms are untouched (the markup
 // test below reads the real render).
@@ -22,9 +22,9 @@ test("every rule of the B2 block is a coach's (scoped like the other design bloc
   for (const sel of selectors) assert.ok(sel.startsWith("body:not(.athlete-mode):not(.login-mode) "), sel);
 });
 
-test("a session's four fields: three rows placed by field name, each 44 px and 16 px", () => {
+test("a session's four fields: two rows placed by field name, each 44 px and 16 px", () => {
   const b = block();
-  assert.match(b, /\.builder-session-time-inline \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\);[^}]*"name name"\s*"ampm time"\s*"phase phase"/);
+  assert.match(b, /\.builder-session-time-inline \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1\.17fr\) minmax\(0, 1fr\);[^}]*"name ampm"\s*"phase time"/);
   for (const [field, area] of [["name", "name"], ["amPm", "ampm"], ["bta", "phase"], ["time", "time"]]) {
     assert.match(b, new RegExp(`\\.builder-session-time-inline > \\[name="${field}"\\] \\{ grid-area: ${area}; \\}`), field);
   }
@@ -44,5 +44,7 @@ test("Block name and the cover image URL are 16 px, the titles and the cover URL
   const b = block();
   assert.match(b, /\.builder-block-title-input \{\s*font-size: 16px;/);
   assert.match(b, /\.builder-block-title-input,\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-plan-title-input \{\s*min-height: var\(--om-tap-target\);/);
+  assert.match(b, /\.builder-plan-cover-input:focus \{[^}]*border-color: var\(--accent\);[^}]*box-shadow:/, "a visible focus frame (the field has no outline)");
+  assert.match(b, /\.builder-plan-cover-input:hover \{[^}]*border-color:/);
   assert.match(b, /\.builder-plan-cover-input \{[^}]*min-height: var\(--om-tap-target\);[^}]*border-color: var\(--line, #dfe4e8\);[^}]*background: #fff;[^}]*font-size: 16px;/);
 });
