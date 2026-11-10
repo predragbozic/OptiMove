@@ -1168,7 +1168,7 @@ function renderJoinLinksSection(data) {
   const applications = data.joinApplications || [];
   const pendingCount = applications.filter((app) => app.status === "pending").length;
   return `
-    <section class="organization-browser">
+    <section class="organization-join-links">
     ${renderSectionHead("Join links", `${countLabel(links.length, "join link")} - ${pendingCount} pending ${pendingCount === 1 ? "request" : "requests"}`, renderOrganizationAddToggle(data))}
     ${renderOrganizationAddForm(data)}
     <section class="organization-lists organization-lists-browser">

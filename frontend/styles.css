@@ -25082,3 +25082,9 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-f
     width: auto;
   }
 }
+
+/* Join links: its heading, the open form and its two lists, spaced like a section (S3). */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-links {
+  display: grid;
+  gap: 12px;
+}
