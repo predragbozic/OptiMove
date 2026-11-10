@@ -592,7 +592,8 @@ function renderEmptyHtml(cal, scope) {
     </div>`;
 }
 
-function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—" } = {}) {
+function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—", emptyAction = "" } = {}) {
+  if (!items.length && emptyAction) return `<div class="om-empty cc-day-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyText)}</p><div class="om-empty__actions">${emptyAction}</div></div>`;
   if (!items.length) return `<p class="cc-day-empty">${escapeHtml(emptyText)}</p>`;
   return items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey, today })).join("");
 }
@@ -706,8 +707,8 @@ function renderDayTeamsHtml(items, cal, teams) {
 // The cards with a time or a slot, then the ones with neither under "No time"
 // (K2a-2): the untimed cards move from the server's place for them (first)
 // to the end; each part keeps the server's order (plan section 8).
-function renderDayListCardsHtml(items, teams, openKey, today, emptyText) {
-  if (!items.length) return `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, openKey, today, { emptyText })}</div>`;
+function renderDayListCardsHtml(items, teams, openKey, today, emptyText, emptyAction = "") {
+  if (!items.length) return `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, openKey, today, { emptyText, emptyAction })}</div>`;
   const untimed = items.filter((item) => !item.startTime && !item.slot);
   const timed = items.filter((item) => item.startTime || item.slot);
   return `${timed.length ? `<div class="cc-day-cards">${renderDayCardsHtml(timed, teams, openKey, today)}</div>` : ""}
@@ -716,11 +717,14 @@ function renderDayListCardsHtml(items, teams, openKey, today, emptyText) {
 
 function renderSelectedDayListHtml(date, byDate, cal, teams, today, { heading = true } = {}) {
   const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
-  const emptyText = centralCalendarFiltersActive(cal.filters) ? "Nothing matches these filters on this day." : "Nothing on this day.";
+  const filtered = centralCalendarFiltersActive(cal.filters);
+  const emptyText = filtered ? "Nothing matches these filters on this day." : "Nothing on this day.";
+  // A filtered empty day offers the one way back: the same Clear filters as the filter bar.
+  const emptyAction = filtered ? `<button type="button" class="om-btn cc-clear-filters" data-action="central-calendar-clear-filters">Clear filters</button>` : "";
   return `<section class="cc-day-list" aria-label="${escapeAttr(centralCalendarLongDate(date))}">
       ${heading ? `<h4 class="cc-day-title">${escapeHtml(centralCalendarLongDate(date))}${date === today ? ` <span class="cc-day-today-tag">Today</span>` : ""}</h4>` : ""}
       ${renderDayTeamsHtml(items, cal, teams)}
-      ${renderDayListCardsHtml(items, teams, cal.panel.key, today, emptyText)}
+      ${renderDayListCardsHtml(items, teams, cal.panel.key, today, emptyText, emptyAction)}
     </section>`;
 }
 
