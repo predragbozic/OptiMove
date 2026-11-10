@@ -11,12 +11,13 @@ let browser;
 before(async () => { world = await startWorld(); browser = await launch(); });
 after(async () => { await browser?.close(); await world?.stop(); });
 
-async function signedOut(width, path) {
+async function signedOut(width, path, onResponse) {
   const phone = width < 600;
   const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, isMobile: phone, hasTouch: phone });
   const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(String(e)));
+  if (onResponse) page.on("response", onResponse);
   await page.goto(world.baseUrl + path);
   await page.locator(".login-form").first().waitFor();
   return { context, page, pageErrors };
@@ -27,7 +28,7 @@ const card = () => {
   const vis = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
   const small = [...form.querySelectorAll("button, a[href], input")].filter(vis).filter((e) => e.getBoundingClientRect().height < 43.5).map((e) => e.textContent.trim() || e.name);
   const logo = getComputedStyle(form, "::before");
-  const main = form.querySelector(":scope > .plain-button");
+  const main = form.querySelector(":scope > .plain-button, :scope > form > .plain-button:not(.compact-button)");
   return {
     small,
     logo: logo.backgroundImage.includes("brand-logo") && parseFloat(logo.height) === 48,
@@ -38,11 +39,20 @@ const card = () => {
 };
 
 for (const width of [390, 1280]) {
-  for (const [path, mainText] of [["/", "Sign in"], ["/forgot-password", "Send reset link"], ["/reset-password?token=not-a-token", null]]) {
+  for (const [path, mainText] of [
+    ["/", "Sign in"],
+    ["/forgot-password", "Send reset link"],
+    ["/reset-password?token=not-a-token", null],
+    ["/verify-email?token=not-a-token", "Send new confirmation email"],
+    ["/join?token=not-a-token", null],
+    ["/invite?token=not-a-token", null],
+  ]) {
     test(`(${width} px) ${path}: logo, accent main action and 44 px controls`, async () => {
-      const { context, page, pageErrors } = await signedOut(width, path);
+      const logo = [];
+      const { context, page, pageErrors } = await signedOut(width, path, (r) => { if (r.url().includes("brand-logo")) logo.push(r.status()); });
       try {
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(500);
+        assert.ok(logo.length > 0 && logo.every((s) => s === 200 || s === 304), `the logo loads (${logo})`);
         const c = await page.evaluate(card);
         assert.deepEqual(c.small, [], "nothing under 44 px");
         assert.ok(c.logo, "the app's logo");

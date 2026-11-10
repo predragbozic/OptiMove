@@ -24,7 +24,7 @@ test("L1 is scoped to the sign-in screens and uses only the app's existing logo"
 test("L1: 44 px fields, buttons and links; the card's own main action is the accent button", () => {
   assert.match(l1, /input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\) \{\n  min-height: var\(--om-tap-target\);/);
   assert.match(l1, /\.login-form \.plain-button \{[^}]*min-height: var\(--om-tap-target\);/);
-  assert.match(l1, /\.login-form > \.plain-button:not\(\.compact-button\) \{\n  border-color: var\(--accent\);\n  background: var\(--accent\);\n  color: #fff;/);
+  assert.match(l1, /\.login-form > \.plain-button:not\(\.compact-button\),\nbody\.login-mode \.login-form > form > \.plain-button:not\(\.compact-button\) \{\n  border-color: var\(--accent\);\n  background: var\(--accent\);\n  color: #fff;/);
   assert.match(l1, /\.login-form \.muted > a \{[^}]*min-height: var\(--om-tap-target\);/);
 });
 
