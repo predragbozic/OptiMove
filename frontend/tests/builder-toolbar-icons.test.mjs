@@ -37,7 +37,8 @@ test("builder-structure.js exports ICON_DOOR_EXIT - a door+arrow icon, not a bar
 test("Exit keeps the draft for later in both editing modes", () => {
   const toolbar = sliceToolbar();
   assert.match(toolbar, /class="plain-button icon-button builder-exit-button"/);
-  assert.match(toolbar, /\$\{ICON_DOOR_EXIT\}<\/button>/);
+  // B3 (owner's Builder plan, 2026-11-10): the icon carries its word, visible on a computer and hidden on a phone.
+  assert.match(toolbar, /\$\{ICON_DOOR_EXIT\}<span class="builder-bar-label">Exit<\/span><\/button>/);
   assert.match(toolbar, /aria-label="Exit"/);
   assert.match(toolbar, /Exit and keep this draft for later\./);
 });
@@ -49,11 +50,13 @@ test("there is no separate Cancel button or passive Saved indicator anymore - Ex
   assert.doesNotMatch(toolbar, />Cancel<\/span>/);
 });
 
-test("the Finish button is icon-only (no text label) but keeps its tooltip wording and the isEditDraft-aware saveLabel", () => {
+// B3 (owner's Builder plan, 2026-11-10) replaced "icon-only": the Save button shows its word on a computer (a
+// .builder-bar-label span the phone layout hides), keeping its tooltip wording and the isEditDraft-aware saveLabel.
+test("the Finish button carries its word in .builder-bar-label and keeps its tooltip wording and the isEditDraft-aware saveLabel", () => {
   const toolbar = sliceToolbar();
   assert.match(toolbar, /class="plain-button icon-button builder-finish-button"/);
   assert.match(toolbar, /aria-label="\$\{saveLabel\}"/);
-  assert.match(toolbar, /\$\{ICON_CHECK\}<\/button>/);
+  assert.match(toolbar, /\$\{ICON_CHECK\}<span class="builder-bar-label">\$\{saveLabel\}<\/span><\/button>/);
   assert.doesNotMatch(toolbar, /<span>\$\{saveLabel\}<\/span>/);
 });
 

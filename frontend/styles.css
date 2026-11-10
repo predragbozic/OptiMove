@@ -24259,3 +24259,146 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
     column-gap: var(--om-space-1);
   }
 }
+
+/* ==========================================================================
+   Design: the Builder's program bar (B3). Exit, Save and Discard were 32 px
+   icons (Discard 42 x 40) with no word: on a computer they are 44 px buttons
+   with their word, on a phone 44 px icons (the word stays their accessible
+   name through aria-label). The plan's state ("draft") is a chip. The two
+   identical "i" buttons of the outline say what they open ("Program example",
+   "Session example"); a weekly plan's "Copy from another plan" beside them is
+   44 px too. No data-* or name changed.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+  flex-wrap: wrap;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 14px 0 12px;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  color: var(--danger, #a23b3b);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-bar-label {
+  white-space: nowrap;
+}
+
+/* The plan's state as a chip: a dot and its word. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--muted, #667085);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c98a1c;
+}
+
+/* The outline's example buttons: their words beside the "i". */
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 12px 0 8px;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button .button-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-icon-action {
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+
+/* A phone: the bar's three buttons are icons (44 px), their words hidden but
+   still their names; the outline's heading lets its example buttons wrap
+   under it. */
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+    width: var(--om-tap-target);
+    padding: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-bar-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading {
+    flex-wrap: wrap;
+    row-gap: var(--om-space-2);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading > .builder-outline-info-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    width: 100%;
+    margin-left: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+    height: auto;
+    justify-content: flex-start;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.2;
+  }
+}
