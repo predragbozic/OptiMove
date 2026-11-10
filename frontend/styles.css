@@ -24058,3 +24058,22 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
   justify-items: start;
   gap: var(--om-space-2);
 }
+
+/* ==========================================================================
+   Design: the closed menu drawer on a coach's phone (≤760 px). It was only
+   transparent (opacity: 0; pointer-events: none), so its links stayed in the
+   tab order and the accessibility tree, and it could hold a page wider than
+   the screen (see the notifications fix above). Closed, it is now hidden;
+   visibility switches after the 140 ms fade, so the fade stays.
+   ========================================================================== */
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode):not(.mobile-nav-open) .sidebar {
+    visibility: hidden !important;
+    transition: opacity 140ms ease, transform 140ms ease, visibility 0s linear 140ms !important;
+  }
+
+  body.mobile-nav-open:not(.athlete-mode):not(.login-mode) .sidebar {
+    visibility: visible !important;
+    transition: opacity 140ms ease, transform 140ms ease, visibility 0s linear 0s !important;
+  }
+}
