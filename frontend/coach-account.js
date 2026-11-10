@@ -11,7 +11,7 @@ import { escapeHtml } from "./utils.js";
 // athlete profile record a coach doesn't have.
 export function renderCoachAccountHtml(currentUser, emailChangeStatus) {
   return `
-    <section class="content-section athlete-simple-view">
+    <section class="content-section athlete-simple-view coach-account-view">
       <section class="panel athlete-settings-card">
         <div>
           <p class="eyebrow">Account</p>
