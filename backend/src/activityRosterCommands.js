@@ -252,7 +252,10 @@ function completionFromRow(row) {
   return row ? { status: row.status, revision: row.revision } : { status: "not_complete", revision: 0 };
 }
 
-async function runRosterCommand(ctx, activityId, { requestKey, canonical }, apply) {
+// `origin` (J20-C, v61): an import's own states name the approval they belong to ({ origin: "import", approvalId }); every
+// other command is a plain roster request. The origin is part of the canonical body, so a key used on one route is
+// request_key_reused on the other.
+async function runRosterCommand(ctx, activityId, { requestKey, canonical }, apply, origin = null) {
   const hash = requestHash(canonical);
   const operation = canonical.operation;
   const client = await pool.connect();
@@ -336,11 +339,21 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     };
     const result = await apply(cmd, canonical);
 
-    await client.query(
-      `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
-      [requestId, canonicalId, requestKey, hash, operation, ctx.userId, JSON.stringify(result)],
-    );
+    // A plain roster request is written as before (origin takes its DEFAULT 'roster'); only an import's states name
+    // their origin and approval (v61).
+    if (origin) {
+      await client.query(
+        `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin, origin_approval_id)
+         values ($1, $2, $3, $4, $5, $6, $7, 'import', $8)`,
+        [requestId, canonicalId, requestKey, hash, operation, ctx.userId, JSON.stringify(result), origin.approvalId],
+      );
+    } else {
+      await client.query(
+        `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [requestId, canonicalId, requestKey, hash, operation, ctx.userId, JSON.stringify(result)],
+      );
+    }
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation, canonicalId });
     commitSent = true;
     const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
@@ -533,31 +546,64 @@ export function clearAthleteDecision(ctx, activityId, athleteId, body) {
   return runRosterCommand(ctx, activityId, validated, (cmd, canonical) => applySingle(cmd, canonical, "cleared"));
 }
 
+// One kind and reason for 1 to 60 athletes: every athlete is checked first, any refusal refuses the whole request.
+async function applyBulk(cmd, canonical) {
+  if (LATER_KINDS.has(canonical.kind)) throw conflict("kind_not_available", "Manual values and estimates come later.");
+  if (!(await reasonIsActive(cmd.client, canonical.reasonKey))) throw bad("unknown_reason", "Unknown reason.");
+  // Every athlete is checked; any refusal refuses the whole request and
+  // names every athlete that failed, with its current state.
+  const failed = [];
+  for (const entry of canonical.athletes) {
+    const athlete = athleteById(cmd.snap, entry.athleteId);
+    const refusal = decisionRefusal(athlete, canonical.kind, entry.expectedDecisionId);
+    if (refusal) failed.push({ athleteId: entry.athleteId, error: refusal, ...(athlete ? { current: currentStateView(athlete) } : {}) });
+  }
+  if (failed.length) throw conflict("bulk_conflict", "Nothing was saved: some athletes changed.", { failed });
+  await cmd.persistInputChanged();
+  const rows = canonical.athletes.map((entry) => ({
+    athleteId: entry.athleteId, newId: crypto.randomUUID(), currentDecisions: athleteById(cmd.snap, entry.athleteId).currentDecisions,
+  }));
+  const written = await writeDecisions(cmd, rows, { kind: canonical.kind, reasonKey: canonical.reasonKey, note: canonical.note });
+  return {
+    decisions: written.map(decisionView),
+    athletes: canonical.athletes.map((e) => athleteById(cmd.snap, e.athleteId)).filter(Boolean).map(publicAthlete),
+    completion: cmd.snap.completion,
+  };
+}
+
 export function decideAthletesBulk(ctx, activityId, body) {
   const validated = validateBulk(body);
-  return runRosterCommand(ctx, activityId, validated, async (cmd, canonical) => {
-    if (LATER_KINDS.has(canonical.kind)) throw conflict("kind_not_available", "Manual values and estimates come later.");
-    if (!(await reasonIsActive(cmd.client, canonical.reasonKey))) throw bad("unknown_reason", "Unknown reason.");
-    // Every athlete is checked; any refusal refuses the whole request and
-    // names every athlete that failed, with its current state.
-    const failed = [];
-    for (const entry of canonical.athletes) {
-      const athlete = athleteById(cmd.snap, entry.athleteId);
-      const refusal = decisionRefusal(athlete, canonical.kind, entry.expectedDecisionId);
-      if (refusal) failed.push({ athleteId: entry.athleteId, error: refusal, ...(athlete ? { current: currentStateView(athlete) } : {}) });
-    }
-    if (failed.length) throw conflict("bulk_conflict", "Nothing was saved: some athletes changed.", { failed });
-    await cmd.persistInputChanged();
-    const rows = canonical.athletes.map((entry) => ({
-      athleteId: entry.athleteId, newId: crypto.randomUUID(), currentDecisions: athleteById(cmd.snap, entry.athleteId).currentDecisions,
-    }));
-    const written = await writeDecisions(cmd, rows, { kind: canonical.kind, reasonKey: canonical.reasonKey, note: canonical.note });
-    return {
-      decisions: written.map(decisionView),
-      athletes: canonical.athletes.map((e) => athleteById(cmd.snap, e.athleteId)).filter(Boolean).map(publicAthlete),
-      completion: cmd.snap.completion,
-    };
-  });
+  return runRosterCommand(ctx, activityId, validated, applyBulk);
+}
+
+// J20-C (v61): the attendance states an import writes, right after its approval and by the same user. The same bulk
+// command, bound to the approval (origin 'import', origin_approval_id): the undo removes them as the import's own (v60).
+// The approval is the caller's own on this team (anything else is the identical 404); its session's roster rights are
+// checked as for any roster command, at the time of this request. A saved request replays its answer even after the
+// window (the replay comes before these checks); a new one after the window, or on an undone import, is refused.
+export async function decideImportStates(ctx, teamId, approvalId, body) {
+  const validated = validateBulk(body);
+  if (!isUuid(approvalId)) throw notFound();
+  const approvalKey = approvalId.toLowerCase();
+  const approval = (await pool.query(
+    `select a.activity_id, a.approved_by_user_id from training_load.gpexe_import_approvals a where a.id = $1 and a.owner_team_id = $2`,
+    [approvalKey, teamId],
+  )).rows[0];
+  if (!approval || !approval.activity_id || String(approval.approved_by_user_id) !== String(ctx.userId)) throw notFound();
+  const canonical = { ...validated.canonical, origin: "import", approvalId: approvalKey };
+  return runRosterCommand(ctx, String(approval.activity_id), { requestKey: validated.requestKey, canonical }, async (cmd, c) => {
+    if (String(cmd.teamId) !== String(teamId)) throw notFound();
+    const state = (await cmd.client.query(
+      `select now() > a.approved_at + training_load.import_states_window() as closed, c.import_undone_at is not null as undone
+         from training_load.gpexe_import_approvals a join training_load.gpexe_import_candidates c on c.id = a.candidate_id
+        where a.id = $1`,
+      [approvalKey],
+    )).rows[0];
+    if (!state) throw notFound();
+    if (state.undone) throw conflict("import_undone", "This import was undone. Nothing was saved.");
+    if (state.closed) throw conflict("import_states_window_closed", "The time to save states with the import has passed. Set them in the Roster tab.");
+    return applyBulk(cmd, c);
+  }, { approvalId: approvalKey });
 }
 
 // ---------------------------------------------------------------------------

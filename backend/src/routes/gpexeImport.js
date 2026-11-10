@@ -12,6 +12,8 @@ import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
 import * as teamSwitch from "../teamImportSwitchService.js";
 import * as sessionUndo from "../gpexeSessionUndoService.js";
+import { decideImportStates } from "../activityRosterCommands.js";
+import { RosterError } from "../activityRoster.js";
 
 const router = Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -368,6 +370,35 @@ router.get("/teams/:teamId/approvals/:approvalId", handle(async (req, res) => {
   if (!approval) return notFound(res);
   res.json({ approval });
 }));
+
+// J20-C (v61): the attendance states of an import, saved right after its approval by the same user (the roster bulk
+// command bound to the approval; see activityRosterCommands.decideImportStates). The roster rights are checked again for
+// this request in the workspace the team access was resolved in (one resolution per request). Stable codes only: a
+// database message is logged, never sent. Another user's approval, another team's and a missing one are the same 404.
+router.post("/teams/:teamId/approvals/:approvalId/states", async (req, res, next) => {
+  try {
+    const access = await teamAccess(req, res);
+    if (!access) return;
+    if (!UUID.test(req.params.approvalId)) return notFound(res);
+    const ctx = { userId: req.user.id, authz: req.authz, workspace: access.workspace };
+    const outcome = await decideImportStates(ctx, access.teamId, req.params.approvalId, req.body);
+    res.set("Cache-Control", "no-store");
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    if (error instanceof RosterError) {
+      if (error.status === 404) return notFound(res);
+      return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
+    }
+    if (isPoolCheckoutTimeout(error)) {
+      console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+      return res.status(503).json({ error: "roster_busy", message: "The session is being changed. Try again." });
+    }
+    console.error(`[gpexe] import states failed: ${error?.code ?? ""} ${error?.message}`);
+    // Everything that reaches here failed before the COMMIT (an unknown COMMIT outcome is a RosterError 503).
+    if (!res.headersSent) res.status(500).json({ error: "internal_error", message: "Nothing was saved. Try again." });
+    else next(error);
+  }
+});
 
 // The team's source athletes, once each, from stored data only (phase 3a):
 // for a whole-team linking screen. Same readers as the candidates; nothing
