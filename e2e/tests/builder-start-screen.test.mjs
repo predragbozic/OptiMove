@@ -36,7 +36,7 @@ async function openStart(width) {
   return opened;
 }
 
-for (const width of [1280, 768, 390, 360]) {
+for (const width of [1280, 768, 700, 390, 360]) {
   test(`(${width} px) every control of "Continue where you left off" is at least 44 px`, async () => {
     const { context, page, pageErrors } = await openStart(width);
     try {
@@ -47,9 +47,11 @@ for (const width of [1280, 768, 390, 360]) {
         assert.ok(controls.some((c) => c.action === action), `${action} is on screen`);
       }
       for (const { action, w, h } of controls) assert.ok(w >= 44 && h >= 44, `${action}: ${w}x${h}`);
-      if (width < 600) {
+      if (width <= 760) {
         const share = await page.evaluate(() => [...document.querySelectorAll(".builder-draft-row")].map((row) => row.querySelector(".builder-draft-info").getBoundingClientRect().width / row.getBoundingClientRect().width));
         for (const s of share) assert.ok(s > 0.6, `the name has ${Math.round(s * 100)} % of its row`);
+        const fill = await page.evaluate(() => { const pn = document.querySelector(".builder-drafts-panel"); return pn.getBoundingClientRect().width / pn.parentElement.getBoundingClientRect().width; });
+        assert.ok(fill > 0.98, `the drafts panel fills ${Math.round(fill * 100)} % of its column`);
       }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 0, "no horizontal overflow");
       assert.deepEqual(pageErrors, []);

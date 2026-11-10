@@ -24292,6 +24292,12 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-b
   gap: var(--om-space-2);
 }
 
+/* The name takes the row's free space (a short name no longer floats in
+   the middle of its row). */
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-info {
+  flex: 1 1 auto;
+}
+
 body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-actions .plain-button,
 body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard {
   min-height: var(--om-tap-target);
@@ -24302,16 +24308,16 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-di
   align-items: center;
   justify-content: center;
   padding: 0 14px;
-  border: 1px solid #f3c6c2;
+  border: 1px solid var(--danger);
   border-radius: 8px;
-  background: var(--surface, #fff);
-  color: var(--danger, #a23b3b);
+  background: var(--surface);
+  color: var(--danger);
   font-size: var(--om-text-sm);
   font-weight: 700;
 }
 
-body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard:hover {
-  background: #fdf1f0;
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard:not(:disabled):hover {
+  background: var(--om-danger-soft);
 }
 
 body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard:focus-visible,
@@ -24322,8 +24328,16 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
   outline-offset: 2px;
 }
 
-/* A phone: the check box and the name side by side, the actions below them. */
-@media (max-width: 560px) {
+/* A phone or a narrow tablet: the check box and the name side by side, the
+   actions below them. */
+@media (max-width: 760px) {
+  /* The panel sizes to its content; the rows below no longer give it a
+     width of their own, so it fills its column instead. */
+  body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
   body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -24335,6 +24349,6 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--om-space-2);
+    gap: var(--om-space-3);
   }
 }

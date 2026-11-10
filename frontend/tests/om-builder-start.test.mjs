@@ -20,13 +20,19 @@ test("both Discards are buttons with their actions unchanged", () => {
 test("every rule is the drafts panel's own (the shared check box keeps its size elsewhere)", () => {
   const selectors = [...rules.matchAll(/([^{};]+)\{/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith("@")).flatMap((s) => s.split(",")).map((s) => s.trim());
   assert.ok(selectors.length >= 12, selectors.length);
-  for (const selector of selectors) assert.ok(selector.startsWith("body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel "), selector);
+  for (const selector of selectors) assert.match(selector, /^body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-drafts-panel( |$)/, selector);
 });
 
 test("44 px controls; on a phone a draft's actions take their own row", () => {
   assert.match(rules, /\.builder-drafts-toggle \{\s*min-height: var\(--om-tap-target\);/);
   assert.match(rules, /\.checkbox-toggle-all \{\s*width: var\(--om-tap-target\);\s*height: var\(--om-tap-target\);/);
   assert.match(rules, /\.builder-draft-discard \{\s*min-height: var\(--om-tap-target\);/);
-  const phone = rules.slice(rules.indexOf("@media (max-width: 560px)"));
+  const phone = rules.slice(rules.indexOf("@media (max-width: 760px)"));
   assert.match(phone, /\.builder-draft-actions \{\s*grid-column: 1 \/ -1;/);
+});
+
+test("the red button uses the shared colours (no hex in the block) and keeps its disabled look under the pointer", () => {
+  assert.ok(!/#[0-9a-f]{3,6}\b/i.test(rules.replace(/var\([^)]*\)/g, "")), "no hard-coded colour");
+  assert.match(rules, /\.builder-draft-discard \{[\s\S]*?border: 1px solid var\(--danger\);/);
+  assert.match(rules, /\.builder-draft-discard:not\(:disabled\):hover \{\s*background: var\(--om-danger-soft\);/);
 });
