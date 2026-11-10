@@ -11,7 +11,10 @@ const { renderAppHealthPanelHtml, APP_HEALTH_GROUP_CAP } = await import("../app-
 const { renderProgramAccessRequests } = await import("../organization-view.js");
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-const pr4 = css.slice(css.indexOf("Design PR4: Settings"));
+// The PR4 block only: it ends where the next design block starts.
+const pr4Start = css.indexOf("Design PR4: Settings");
+const pr4End = css.indexOf("\n/* =====", pr4Start);
+const pr4 = css.slice(pr4Start, pr4End > 0 ? pr4End : undefined);
 const view = readFileSync(new URL("../organization-view.js", import.meta.url), "utf8");
 
 const group = (i, occurrences = 1) => ({ fingerprint: String(i).padStart(64, "0"), source: "server", screen: null, routeTemplate: "/api/x", action: null, code: "internal_error", status: 500, release: "abc", stackSignature: null, occurrences, users: 1, firstSeenAt: "2026-11-09T10:00:00Z", lastSeenAt: "2026-11-09T10:00:00Z", roles: ["coach"] });
