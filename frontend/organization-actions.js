@@ -325,6 +325,12 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  // S3: the Users add panel's tabs (New account, Give access, Athlete login).
+  if (type === "organization-user-form-tab") {
+    state.organization.userFormTab = action.dataset.userFormTab || "";
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
   if (type === "organization-toggle-add-form") {
     state.organization.addFormOpen = !state.organization.addFormOpen;
     void renderOrganizationPanel({ refresh: false });

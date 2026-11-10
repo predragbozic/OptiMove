@@ -260,7 +260,8 @@ test("the browser's count line uses the singular for one: '1 team', '1 club', '1
   const one = baseAthlete({ id: "a1", name: "Only Athlete", has_active_access: true, memberships: [{ id: "m1", membershipType: "team", status: "active", clubId, clubName: "Club One", teamId, teamName: "Team One" }] });
   const data = { isPlatformAdmin: true, clubs: [{ id: clubId, name: "Club One" }], teams: [{ id: teamId, club_id: clubId, club_name: "Club One", name: "Team One" }], athletes: [one], users: [] };
   const overview = renderOrganizationBrowser(data);
-  assert.match(overview, /1 club - 1 team - 1 athlete</);
+  // S2 (the manager's decision of 2026-11-10): with no selection the Athletes heading counts its own list only.
+  assert.match(overview, />1 athlete</);
   assert.doesNotMatch(overview, /1 teams|1 clubs|1 athletes/);
   state.organization.selectedClubId = clubId;
   assert.match(renderOrganizationBrowser(data), /1 team - 1 athlete</);
