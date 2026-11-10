@@ -1,5 +1,5 @@
 // Scenario 11 (O1 of J20, migration v60): a platform administrator undoes an imported session that carries roster work of both
-// kinds - two attendance states the import flow set (origin 'import', written here the way J20-C's states route will) and a
+// kinds - two attendance states the import flow set (origin 'import', through J20-C's states route) and a
 // coach's later change in the Roster tab. The undo section shows the two warnings apart; the undo is not sent until the later
 // changes' own box is ticked; then every roster row of the session is gone and the deletion log records both kinds.
 // Invented data only; 1280 and 390 px; screenshots go to E2E_SHOT_DIR when it is set.
@@ -30,22 +30,15 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const detail = (await setup.call("platform_admin", "GET", `${G}/teams/${setup.teamId}/candidates/${c.id}`)).body.candidate;
       const approved = await setup.call("platform_admin", "POST", `${G}/teams/${setup.teamId}/candidates/${c.id}/approve`, { previewHash: detail.previewHash, acceptChanges: false });
       assert.equal(approved.status, 200, JSON.stringify(approved.body).slice(0, 200));
-      const approval = (await db.query(`select approved_by_user_id, activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [c.id])).rows[0];
+      const approval = (await db.query(`select id, approved_by_user_id, activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [c.id])).rows[0];
       const activityId = approval.activity_id;
       const roster = (await setup.call("team_coach", "GET", `/api/training-activity/${activityId}/roster`)).body;
       const needing = roster.athletes.filter((a) => a.group === "needs_state").map((a) => a.athleteId);
       assert.ok(needing.length >= 3, `athletes without device data: ${needing.length}`);
-      // The import flow's states (J20-C): one request with origin 'import' by the approving administrator.
-      const requestId = crypto.randomUUID();
-      await db.query("begin");
-      await db.query(
-        `insert into training.activity_athlete_decisions (activity_id, athlete_id, owner_team_id, request_id, decision_kind, decided_by_user_id, decided_by_basis)
-         select $1, x, $2, $3, 'participated_no_values', $4, 'platform_admin' from unnest($5::uuid[]) x`,
-        [activityId, setup.teamId, requestId, approval.approved_by_user_id, needing.slice(0, 2)]);
-      await db.query(
-        `insert into training.activity_roster_requests (id, activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin)
-         values ($1, $2, gen_random_uuid(), repeat('a', 64), 'decide_bulk', $3, '{}'::jsonb, 'import')`, [requestId, activityId, approval.approved_by_user_id]);
-      await db.query("commit");
+      // The import flow's states (J20-C, v61): saved by the approving administrator through the states route, bound to the approval.
+      const states = await setup.call("platform_admin", "POST", `${G}/teams/${setup.teamId}/approvals/${approval.id}/states`,
+        { requestKey: crypto.randomUUID(), kind: "participated_no_values", athletes: needing.slice(0, 2).map((athleteId) => ({ athleteId, expectedDecisionId: null })) });
+      assert.equal(states.status, 200, JSON.stringify(states.body).slice(0, 200));
       // The coach's later change in the Roster tab.
       const later = await setup.call("team_coach", "PUT", `/api/training-activity/${activityId}/roster/${needing[2]}/decision`,
         { kind: "did_not_participate", reasonKey: "illness", expectedDecisionId: null, requestKey: crypto.randomUUID() });
