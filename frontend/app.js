@@ -305,6 +305,9 @@ init();
 
 async function init() {
   bindEvents();
+  // From here the menu button has its own listener; earlier taps were counted by index.html / athlete.html and
+  // are replayed below, once the signed-in shell is shown (never into a sign-in or invite screen).
+  window.__omMenuBound = true;
   // Option A (A2): a signed-in browser reports its own errors, in a closed shape and without any text of them.
   installAppErrorCapture({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
@@ -355,6 +358,9 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
+  // The signed-in shell: a menu tap made before app.js was bound opens the menu now (an even count leaves it closed).
+  if ((window.__omEarlyMenuTaps || 0) % 2 === 1) toggleMobileNav();
+  window.__omEarlyMenuTaps = 0;
   applyDefaultInitialTab();
   ensureBackGuard();
   void loadNotifications({ silent: true });

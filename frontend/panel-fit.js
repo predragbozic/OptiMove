@@ -5,7 +5,8 @@
 // panel ran off the right edge of a phone. This keeps an open panel inside the window: it is moved
 // sideways (and narrowed only if it is wider than the window) with the CSS `translate` property,
 // which no other rule of these panels uses. A full-screen panel (position: fixed, messages on a
-// phone) is left alone, and so is the athlete's app (not part of this change).
+// phone) is left alone. The athlete's app is fitted the same way (its header panels hang from the same
+// buttons).
 const MARGIN = 8;
 
 export function fitPanelToViewport(panel, { margin = MARGIN, view = globalThis } = {}) {
@@ -17,7 +18,6 @@ export function fitPanelToViewport(panel, { margin = MARGIN, view = globalThis }
   panel.style.maxWidth = "";
   if (panel.hidden) return;
   const doc = view.document;
-  if (doc?.body?.classList?.contains("athlete-mode")) return;
   if (view.getComputedStyle?.(panel).position === "fixed") return;
   const width = doc?.documentElement?.clientWidth || view.innerWidth;
   if (!width) return;

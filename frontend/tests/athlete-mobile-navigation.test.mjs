@@ -146,12 +146,12 @@ test("athlete-view.js: the identity row falls back to initials (not a broken <im
   assert.match(body, /avatar-fallback athlete-settings-identity-avatar/);
 });
 
-test("styles.css: .athlete-settings-identity is hidden by default (desktop) and only made sticky inside the mobile @media block, stacked directly under the topbar's own ~57px height", () => {
+test("styles.css: .athlete-settings-identity is hidden by default (desktop) and only made sticky inside the mobile @media block, stacked directly under the topbar's own height (61 px with its 44 px controls, owner 2026-11-10; 57 px before)", () => {
   const baseBlock = cssBlock(cssSource, ".athlete-settings-identity {");
   assert.match(baseBlock, /display:\s*none;/);
   const mobileRule = cssBlockLast(cssSource, ".athlete-settings-identity {");
   assert.match(mobileRule, /position:\s*sticky;/);
-  assert.match(mobileRule, /top:\s*calc\(57px \+ env\(safe-area-inset-top, 0px\)\);/);
+  assert.match(mobileRule, /top:\s*calc\(var\(--athlete-topbar-height, 61px\) \+ env\(safe-area-inset-top, 0px\)\);/);
 });
 
 test("styles.css: the big existing .athlete-settings-card hero is never made sticky - only the new compact identity row is", () => {
@@ -231,7 +231,7 @@ test("styles.css: .week-nav-wrap is display: contents on mobile so .week-nav-pan
 test("styles.css: .week-nav-panel sticks at the same offset as the Settings identity row (directly under the topbar), only on mobile", () => {
   const block = cssBlock(cssSource, ".athlete-mode .week-nav-panel {");
   assert.match(block, /position:\s*sticky;/);
-  assert.match(block, /top:\s*calc\(57px \+ env\(safe-area-inset-top, 0px\)\);/);
+  assert.match(block, /top:\s*calc\(var\(--athlete-topbar-height, 61px\) \+ env\(safe-area-inset-top, 0px\)\);/);
 });
 
 test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (not left in normal flow, which rendered it near the top of the page - disconnected from wherever the nav row was actually pinned once scrolled) - found live: opening the calendar while scrolled down left the athlete unsure it had opened at all", () => {
