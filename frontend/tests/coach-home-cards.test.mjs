@@ -562,3 +562,41 @@ test("app.js: a library title opens the library the menu's way, an exercise or a
   assert.match(block("els.libraryTabs.forEach((button) => {", 200), /openLibraryTab\(button\.dataset\)/);
   assert.match(block("function loadMoreCoachHomeOnNearEnd(track) {", 200), /track === "exercises" && !state\.coachHome\.exercises\.moreError\)/, "after a failed page only Try again loads it again");
 });
+
+// PR5 (owner, 2026-11-10): one Athletes card whose switch picks where an athlete opens.
+test("the Athletes switch keeps a known mode, redraws once, says where a tap goes and keeps focus on the pressed tab", () => {
+  mount();
+  const calls = [];
+  const change = (section, appended) => { calls.push(section); onChange(section, appended); };
+  assert.equal(state.coachHome.athletesMode, "plan");
+  assert.match(content.querySelector(".coach-home-athletes-hint").textContent, /open their weekly plan/);
+  content.querySelector('.coach-home-athletes-tab[data-mode="load"]').focus();
+  actions.handleCoachHomeAction(fakeAction({ action: "coach-home-athletes-mode", mode: "load" }), { root: content, onChange: change });
+  assert.equal(state.coachHome.athletesMode, "load");
+  assert.deepEqual(calls, ["athletes"], "one redraw of the Athletes card only");
+  assert.equal(document.activeElement?.dataset.mode, "load", "focus stays on the pressed tab after the redraw");
+  assert.equal(document.activeElement?.getAttribute("aria-pressed"), "true");
+  assert.ok([...content.querySelectorAll('.coach-home-athletes [data-action="coach-home-open-athlete"]')].every((button) => button.dataset.mode === "load"));
+  assert.equal(content.querySelector('.coach-home-athletes [data-action="coach-home-picker-open"]').dataset.mode, "load");
+  assert.match(content.querySelector(".coach-home-athletes-hint").textContent, /open their training load/);
+  // The same mode again changes nothing; an unknown mode falls back to the plan.
+  actions.handleCoachHomeAction(fakeAction({ action: "coach-home-athletes-mode", mode: "load" }), { root: content, onChange: change });
+  assert.deepEqual(calls, ["athletes"]);
+  actions.handleCoachHomeAction(fakeAction({ action: "coach-home-athletes-mode", mode: "x" }), { root: content, onChange: change });
+  assert.equal(state.coachHome.athletesMode, "plan");
+  assert.deepEqual(calls, ["athletes", "athletes"]);
+});
+
+test("Plan a session is offered on an empty day from today on, carrying that day, never on a past day", () => {
+  const today = localDateIso();
+  const empty = [{ ...roster[1] }];
+  const at = (selected, dayRows) => {
+    const home = { ...emptyCoachHomeState(), calendar: { selected, cursor: selected, expanded: false }, day: { date: selected, loading: false, error: "", rows: dayRows } };
+    content.innerHTML = renderCoachHomeHtml({ rows: empty, user: state.currentUser, home, today });
+    return content.querySelector('[data-action="coach-home-plan-session"]');
+  };
+  assert.equal(at(today, empty)?.dataset.date, today, "today");
+  const future = addDaysIso(today, 3);
+  assert.equal(at(future, empty)?.dataset.date, future, "a later day");
+  assert.equal(at(addDaysIso(today, -2), empty), null, "no planning in the past");
+});

@@ -2799,6 +2799,17 @@ async function handleContentClick(event) {
     renderCoachHome({ rows: coachHomeRows, error: "" });
     return;
   }
+  // An empty day on Home: plan it in the Calendar.
+  if (type === "coach-home-plan-session") {
+    // The Calendar opens on the chosen day (its anchor and selected day); its read seeds them only when empty.
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "") ? action.dataset.date : "";
+    if (date) {
+      state.centralCalendar.anchor = date;
+      state.centralCalendar.selectedDate = date;
+    }
+    openCentralCalendarFromRail();
+    return;
+  }
   if (type === "coach-home-picker-close") {
     closeCoachHomePicker();
     return;

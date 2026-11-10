@@ -24003,3 +24003,58 @@ body:not(.athlete-mode):not(.login-mode) .builder-plan-cover-input:focus {
   color: inherit;
   box-shadow: 0 0 0 3px rgba(31, 111, 104, .12);
 }
+
+/* ==========================================================================
+   Design: a coach's Home (PR5, the owner's choice of 2026-11-10). Today on
+   top, then one Athletes card whose switch picks Training plan or Training
+   load, then the two libraries side by side on a computer.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .coach-home-grid > .coach-home-athletes {
+  grid-column: 1 / -1;
+}
+
+/* A two-option switch shows both options at every width: two equal columns,
+   never the .om-tabs sideways scroll (a label may wrap instead). */
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow-x: visible;
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tabs .coach-home-athletes-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--om-space-2);
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-hint {
+  margin: var(--om-space-2) 0;
+  font-size: var(--om-text-sm);
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tab .coach-home-panel-icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* Each mode keeps its own colour, whichever is chosen (the card carries the
+   chosen mode's class for the older per-card rules). */
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes .coach-home-panel-title .coach-home-panel-icon,
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tab-plan .coach-home-panel-icon {
+  color: var(--accent);
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tab-load .coach-home-panel-icon {
+  color: #934c65;
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--om-space-2);
+}
