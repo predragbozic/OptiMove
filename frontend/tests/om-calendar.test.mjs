@@ -50,10 +50,11 @@ test("a title breaks a word only when it must; pills stay on one line; nothing s
   const of = (sel) => all.find((r) => r.selectors.includes(sel))?.body || "";
   assert.match(of(".cc-week .cc-card-title"), /overflow-wrap: break-word;/);
   assert.doesNotMatch(wrap, /overflow-wrap: anywhere/);
+  // A status or a team name is never cut: it wraps between words only.
   for (const sel of [".cc-week .cc-team-pill-name", ".cc-week .cc-card-meta .cc-badge"]) {
-    assert.match(of(sel), /white-space: nowrap;/, sel);
-    assert.match(of(sel), /text-overflow: ellipsis;/, sel);
-    assert.match(of(sel), /overflow: hidden;/, sel);
+    assert.match(of(sel), /overflow-wrap: break-word;/, sel);
+    assert.match(of(sel), /white-space: normal;/, sel);
+    assert.doesNotMatch(of(sel), /nowrap|ellipsis/, sel);
   }
   // Without these three tracks a one-line pill or a long word widens the card past its column
   // (seen in the browser at 900 px: the card body's track was 82 px inside a 73 px body).
@@ -61,4 +62,8 @@ test("a title breaks a word only when it must; pills stay on one line; nothing s
     assert.match(of(sel), /grid-template-columns: minmax\(0, 1fr\);/, sel);
   }
   assert.match(of(".cc-layout-medium .cc-week .cc-card-title"), /font-size: var\(--om-text-sm\);/);
+  // A tablet's column and badge give back the room the longest status word needs (checked in the
+  // browser at 900 px with "Awaiting attendance": two lines, broken only between the words).
+  assert.match(of(".cc-layout-medium .cc-week .cc-day-column"), /padding-inline: 4px;/);
+  assert.match(of(".cc-layout-medium .cc-week .cc-card-meta .cc-badge"), /padding-inline: 4px;/);
 });

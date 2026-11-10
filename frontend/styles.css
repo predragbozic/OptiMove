@@ -23608,8 +23608,10 @@ p.coach-home-library-note.muted:not([role="status"]) {
      letter (anywhere). The column, its card list and a card's body take exactly the width they
      are given (minmax(0, 1fr)), so a long word or a one-line pill never widens a card past its
      column.
-   - The team pill and the status pill stay on one line, cut with "…" if they must.
-   - A tablet's card spends less of its width on spacing, and its title is a step smaller.
+   - The team pill and the status pill wrap between words, never inside one ("Awaiting /
+     attendance", "First / team"): the status is what a coach acts on and is never cut.
+   - A tablet's column and card spend less of their width on spacing (the longest status word,
+     "attendance", then fits a badge line), and its title is a step smaller.
    ===================================================== */
 .cc-week .cc-day-column,
 .cc-week .cc-day-cards,
@@ -23621,10 +23623,8 @@ p.coach-home-library-note.muted:not([role="status"]) {
 }
 .cc-week .cc-team-pill-name,
 .cc-week .cc-card-meta .cc-badge {
-  overflow: hidden;
-  overflow-wrap: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 .cc-layout-medium .cc-week .cc-card {
   gap: 6px;
@@ -23634,4 +23634,10 @@ p.coach-home-library-note.muted:not([role="status"]) {
 }
 .cc-layout-medium .cc-week .cc-card-title {
   font-size: var(--om-text-sm);
+}
+.cc-layout-medium .cc-week .cc-card-meta .cc-badge {
+  padding-inline: 4px;
+}
+.cc-layout-medium .cc-week .cc-day-column {
+  padding-inline: 4px;
 }
