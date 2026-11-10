@@ -25088,3 +25088,123 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-l
   display: grid;
   gap: 12px;
 }
+
+/* ==========================================================================
+   Design: Settings dialog frame (S4). Manage account, Athlete account,
+   Invite and Edit club / team / athlete share one frame: a head that stays
+   put while the body scrolls (title, subtitle, a 44 px close icon), and a
+   saving dialog's footer that stays at the bottom. Manage account's groups
+   are cards whose rows read "name, state" on the left and the action on the
+   right; its one destructive switch, the login, comes last.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) :is(.organization-manage-account-modal, .organization-edit-modal, .organization-invite-modal) {
+  padding-top: 0;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -16px var(--om-space-1);
+  padding: var(--om-space-4) 16px var(--om-space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head h3 {
+  margin: 2px 0 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head .organization-dialog-close {
+  flex: 0 0 auto;
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-close .builder-icon-svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* A saving dialog's footer stays at the bottom while the fields scroll. */
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer {
+  position: sticky;
+  bottom: -16px;
+  z-index: 1;
+  margin: 0 -16px -16px;
+  padding: var(--om-space-3) 16px var(--om-space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+/* Edit athlete: the profile and the library access are two parts, each under its own heading with its own save. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part h4 {
+  margin: 0;
+  font-size: var(--om-text-md, 16px);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part + .organization-dialog-part {
+  margin-top: var(--om-space-4);
+  padding-top: var(--om-space-4);
+  border-top: 1px solid var(--line-strong);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part .organization-dialog-footer {
+  margin-bottom: 0;
+}
+
+/* Manage account: each group is a card; a row is "name, state" on the left and the action on the right. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section {
+  padding: var(--om-space-3) var(--om-space-4);
+  border: 1px solid var(--om-border-subtle, var(--line));
+  border-radius: var(--om-radius-md, var(--radius));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section:first-of-type {
+  padding-top: var(--om-space-3);
+  border-top: 1px solid var(--om-border-subtle, var(--line));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row {
+  justify-content: space-between;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-width: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row .plain-button,
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row :is(.plain-button, select) {
+  min-height: var(--om-tap-target);
+}
+
+/* The login switch, the one destructive account action, is the last card, marked as such. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+/* Only the profile's footer stays at the bottom; the library access is saved at the end of its own part (a second
+   sticky footer would show its save under the profile). */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form .organization-dialog-footer {
+  position: static;
+  margin: 0;
+  padding: var(--om-space-3) 0 0;
+}

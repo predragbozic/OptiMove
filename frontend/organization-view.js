@@ -31,6 +31,29 @@ export const ICON_ADD_ATHLETE = `
   </svg>
 `;
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
+const ICON_CLOSE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>`;
+
+// S4: one frame for Settings dialogs. The head stays put while the body scrolls: an eyebrow, the title, an optional
+// subtitle and a 44 px close icon.
+function renderDialogHead({ eyebrow = "", title, subtitle = "", closeAction }) {
+  return `
+        <div class="builder-modal-head organization-dialog-head">
+          <div>${eyebrow ? `<p class="eyebrow">${eyebrow}</p>` : ""}<h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="muted">${escapeHtml(subtitle)}</p>` : ""}</div>
+          <button class="plain-button icon-button organization-dialog-close" type="button" data-action="${closeAction}" aria-label="Close">${ICON_CLOSE}</button>
+        </div>`;
+}
+
+// A saving dialog's footer: what went wrong, then Cancel (closes the dialog) and the one primary action. It stays at
+// the bottom of the dialog while the fields scroll.
+function dialogFormFooter(submitLabel, closeAction) {
+  return `
+      <p class="builder-error" aria-live="polite"></p>
+      <div class="organization-form-footer organization-dialog-footer">
+        <button class="plain-button" type="button" data-action="${closeAction}">Cancel</button>
+        <button class="plain-button data-sources-primary" type="submit">${escapeHtml(submitLabel)}</button>
+      </div>`;
+}
+
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
 const ICON_ARCHIVE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="3.5" y="4" width="17" height="4.5" rx="1"></rect><path d="M4.5 8.5v9a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-9"></path><path d="M10 13h4"></path></svg>`;
 
@@ -1074,10 +1097,7 @@ function renderAthleteInviteModal(athletes) {
     <div class="exercise-tag-overlay">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-invite-close" aria-label="Close invite"></button>
       <section class="panel exercise-tag-modal organization-invite-modal" role="dialog" aria-modal="true" aria-label="Athlete invite">
-        <div class="builder-modal-head">
-          <div><p class="eyebrow">Athlete invite${contextLabel ? ` · ${escapeHtml(contextLabel)}` : ""}</p><h3>${escapeHtml(athlete.name || "Athlete")}</h3></div>
-          <button class="plain-button icon-button" type="button" data-action="organization-invite-close" aria-label="Close"><span class="button-icon">x</span></button>
-        </div>
+${renderDialogHead({ eyebrow: `Athlete invite${contextLabel ? ` · ${escapeHtml(contextLabel)}` : ""}`, title: athlete.name || "Athlete", closeAction: "organization-invite-close" })}
         <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
         ${body}
       </section>
@@ -1467,8 +1487,7 @@ function renderManageAccountRoleSection({ eyebrow, label, active, canManage, use
     <section class="manage-account-section">
       <p class="eyebrow">${escapeHtml(eyebrow)}</p>
       <div class="manage-account-row">
-        <strong>${escapeHtml(label)}</strong>
-        <span class="user-status-badge ${active ? "is-active" : "is-inactive"}">${active ? "Active" : "Not assigned"}</span>
+        <span class="manage-account-state"><strong>${escapeHtml(label)}</strong><span class="user-status-badge ${active ? "is-active" : "is-inactive"}">${active ? "Active" : "Not assigned"}</span></span>
         ${canManage ? `
           <button class="plain-button compact-button ${active ? "danger-button" : ""}" type="button" data-action="organization-global-role-toggle" data-user-id="${escapeAttr(userId)}" data-role="${escapeAttr(role)}" data-next-active="${active ? "false" : "true"}" ${state.organizationUserManage.pending ? "disabled" : ""}>${active ? removeLabel : grantLabel}</button>
         ` : ""}
@@ -1490,9 +1509,9 @@ function renderManageAccountScopedRoleRow({ label, sublabel, roleValue, isActive
   const manageableRole = roleValue === "club_admin" || roleValue === "team_coach";
   return `
     <div class="manage-account-row">
-      <span>${escapeHtml(label)}${sublabel ? ` <small>${escapeHtml(sublabel)}</small>` : ""}</span>
+      <span class="manage-account-state"><span>${escapeHtml(label)}${sublabel ? ` <small>${escapeHtml(sublabel)}</small>` : ""}</span>
       <span class="muted">${escapeHtml(roleLabelText(roleValue))}</span>
-      <span class="user-status-badge ${isActive ? "is-active" : "is-inactive"}">${isActive ? "Active" : "Inactive"}</span>
+      <span class="user-status-badge ${isActive ? "is-active" : "is-inactive"}">${isActive ? "Active" : "Inactive"}</span></span>
       ${manageableRole && isActive && canManage ? `
         <button class="plain-button compact-button danger-button" type="button" data-action="${removeAction}" ${removeDataAttrs} ${state.organizationUserManage.pending ? "disabled" : ""}>Remove role</button>
       ` : ""}
@@ -1577,23 +1596,8 @@ export function renderManageAccountModal(data) {
     <div class="exercise-tag-overlay" role="presentation">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-manage-account-close" aria-label="Close manage account"></button>
       <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="Manage account">
-        <div class="builder-modal-head">
-          <div><p class="eyebrow">Account</p><h3>${escapeHtml(row.name || row.email || "User")}</h3><p class="muted">${escapeHtml(row.email || "")}</p></div>
-          <button class="plain-button icon-button" type="button" data-action="organization-manage-account-close" aria-label="Close"><span class="button-icon">x</span></button>
-        </div>
+${renderDialogHead({ eyebrow: "Account", title: row.name || row.email || "User", subtitle: row.email || "", closeAction: "organization-manage-account-close" })}
         ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
-        <section class="manage-account-section">
-          <p class="eyebrow">Account status</p>
-          <div class="manage-account-row">
-            <span class="user-status-badge ${loginActive ? "is-active" : "is-disabled"}">${loginActive ? "Active login" : "Login disabled"}</span>
-            ${isSelf
-              ? `<span class="muted">You can't disable your own login.</span>`
-              : row.canManageLogin === true
-                ? `<button class="plain-button compact-button ${loginActive ? "danger-button" : ""}" type="button" data-action="organization-user-login-toggle" data-user-id="${escapeAttr(row.id)}" data-next-active="${loginActive ? "false" : "true"}" ${pending ? "disabled" : ""}>${loginActive ? "Disable login" : "Enable login"}</button>`
-                : `<span class="muted">You don't have permission to change this login.</span>`}
-          </div>
-          <p class="muted">Roles, athlete profile, memberships, and history are not changed by disabling or enabling this login.</p>
-        </section>
         ${renderManageAccountRoleSection({
           eyebrow: "Platform access",
           label: "Platform administrator",
@@ -1620,6 +1624,19 @@ export function renderManageAccountModal(data) {
         <section class="manage-account-section">
           <p class="eyebrow">Athlete profile</p>
           <p>${row.isAthlete === true ? "Athlete profile linked" : "No athlete profile linked"}</p>
+        </section>
+        ${/* S4: the account's one destructive switch, its login, comes last. */ ""}
+        <section class="manage-account-section manage-account-danger">
+          <p class="eyebrow">Account status</p>
+          <div class="manage-account-row">
+            <span class="manage-account-state"><strong>Login</strong><span class="user-status-badge ${loginActive ? "is-active" : "is-disabled"}">${loginActive ? "Active login" : "Login disabled"}</span></span>
+            ${isSelf
+              ? `<span class="muted">You can't disable your own login.</span>`
+              : row.canManageLogin === true
+                ? `<button class="plain-button compact-button ${loginActive ? "danger-button" : ""}" type="button" data-action="organization-user-login-toggle" data-user-id="${escapeAttr(row.id)}" data-next-active="${loginActive ? "false" : "true"}" ${pending ? "disabled" : ""}>${loginActive ? "Disable login" : "Enable login"}</button>`
+                : `<span class="muted">You don't have permission to change this login.</span>`}
+          </div>
+          <p class="muted">Roles, athlete profile, memberships, and history are not changed by disabling or enabling this login.</p>
         </section>
       </section>
     </div>
@@ -1649,15 +1666,11 @@ export function renderAthleteAccountModal(data) {
   // "login": the login switch alone, drawn from the athlete row (no request); anything else is the platform admin's
   // full account dialog.
   const limited = manage.scope === "login";
-  const close = `<button class="plain-button icon-button" type="button" data-action="organization-athlete-account-close" aria-label="Close"><span class="button-icon">x</span></button>`;
   return `
     <div class="exercise-tag-overlay" role="presentation">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-athlete-account-close" aria-label="Close athlete account"></button>
       <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="${limited ? "Athlete login" : "Athlete account"}">
-        <div class="builder-modal-head">
-          <div><p class="eyebrow">${limited ? "Login" : "Account (platform admin)"}</p><h3>${escapeHtml(title)}</h3></div>
-          ${close}
-        </div>
+${renderDialogHead({ eyebrow: limited ? "Login" : "Account (platform admin)", title, closeAction: "organization-athlete-account-close" })}
         ${limited
           ? `${manage.error ? `<p class="builder-error">${escapeHtml(manage.error)}</p>` : ""}${manage.message ? `<p class="builder-success" role="status">${escapeHtml(manage.message)}</p>` : ""}${renderAthleteLoginSwitchSection(athlete, manage)}`
           : manage.loading && !manage.data ? `<p class="muted">Loading account...</p>` : manage.data ? renderAthleteAccountModalBody(manage, athlete) : `<p class="builder-error">${escapeHtml(manage.error || "Could not load this account.")}</p>`}
@@ -1813,10 +1826,7 @@ export function renderOrganizationEditModal(data) {
     <div class="exercise-tag-overlay">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-edit-close" aria-label="Close editor"></button>
       <section class="panel exercise-tag-modal organization-edit-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
-        <div class="builder-modal-head">
-          <div><p class="eyebrow">Organization</p><h3>${escapeHtml(title)}</h3></div>
-          <button class="plain-button icon-button" type="button" data-action="organization-edit-close" aria-label="Close"><span class="button-icon">x</span></button>
-        </div>
+${renderDialogHead({ eyebrow: "Organization", title, subtitle: row.name || row.full_name || "", closeAction: "organization-edit-close" })}
         ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : `${renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}${renderAthleteLibraryAccessForm(row)}`}
       </section>
     </div>
@@ -1830,8 +1840,7 @@ function renderOrganizationClubEditForm(row) {
       <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>
       <div class="organization-form-row"><label class="search-field"><span>City</span><input name="city" value="${escapeAttr(row.city || "")}"></label><label class="search-field"><span>Country</span><input name="country" value="${escapeAttr(row.country || "")}"></label></div>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Save changes</button>
+${dialogFormFooter("Save changes", "organization-edit-close")}
     </form>
   `;
 }
@@ -1846,8 +1855,7 @@ function renderOrganizationTeamEditForm(row, clubs) {
       <label class="search-field"><span>Team name</span><input name="name" required value="${escapeAttr(row.name || "")}"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Save changes</button>
+${dialogFormFooter("Save changes", "organization-edit-close")}
     </form>
   `;
 }
@@ -1871,7 +1879,8 @@ function renderOrganizationAthleteEditForm(row, clubs, teams) {
   const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
   const teamOptions = teams.map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
   return `
-    <form class="organization-form" data-organization-form="edit-athlete" data-organization-edit-id="${escapeAttr(row.id)}">
+    <form class="organization-form organization-dialog-part" data-organization-form="edit-athlete" data-organization-edit-id="${escapeAttr(row.id)}">
+      <div><h4>Profile</h4><p class="muted">Name, ID, picture, language, club and team. Saved with Save changes below.</p></div>
       <label class="search-field"><span>Athlete name</span><input name="fullName" required value="${escapeAttr(row.name || "")}"></label>
       <label class="search-field"><span>External ID</span><input name="athleteId" value="${escapeAttr(row.athlete_id || row.source_external_id || "")}"></label>
       <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" value="${escapeAttr(row.image_url || "")}"></label>
@@ -1880,17 +1889,16 @@ function renderOrganizationAthleteEditForm(row, clubs, teams) {
         ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: row.club_id, placeholder: "Type club name", includeEmpty: "No club", extraSelectAttrs: "data-organization-club-select" })}
         ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, value: row.team_id, placeholder: "Type team name", includeEmpty: "No team", extraSelectAttrs: "data-organization-team-select" })}
       </div>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Save changes</button>
+${dialogFormFooter("Save changes", "organization-edit-close")}
     </form>
   `;
 }
 
 function renderAthleteLibraryAccessForm(row) {
   return `
-    <form class="organization-form athlete-access-form" data-organization-form="athleteLibraryAccess" data-athlete-id="${escapeAttr(row.id)}">
+    <form class="organization-form athlete-access-form organization-dialog-part" data-organization-form="athleteLibraryAccess" data-athlete-id="${escapeAttr(row.id)}">
+      <div><h4>Library access</h4><p class="muted">What this athlete can browse and who they can contact in the athlete app. Saved on its own with Save library access below; it does not change the profile.</p></div>
       <div>
-        <p class="eyebrow">Athlete library access</p>
         <h3>Visible program libraries</h3>
         <p class="muted">Control what this athlete can browse from Program Library. Assigned weekly and specific programs stay visible as before.</p>
       </div>
@@ -1931,7 +1939,9 @@ function renderAthleteLibraryAccessForm(row) {
         ${renderAccessCheckbox("requireApproval", "Require approval", row.require_approval !== false)}
       </div>
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button compact-button" type="submit">Save library access</button>
+      <div class="organization-form-footer organization-dialog-footer">
+        <button class="plain-button data-sources-primary" type="submit">Save library access</button>
+      </div>
     </form>
   `;
 }
