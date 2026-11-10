@@ -520,7 +520,7 @@ function renderFiltersHtml(cal, counts, teams) {
 
 // The view and week-layout switches are icon buttons (owner, 2026-10-30) in
 // the app's own icon-tab pattern - TRAINING_LOAD_TAB_ICONS
-// (training-load-view.js) and TESTS_TAB_ICONS (tests-view.js): 24 x 24
+// (training-load-view.js): 24 x 24
 // strokes in the text colour, local path data, the name in aria-label and
 // title. Time grid is the icon library's clock and Day its calendar-event
 // square (icon-library.js); Month, Week and List are drawn on the same
