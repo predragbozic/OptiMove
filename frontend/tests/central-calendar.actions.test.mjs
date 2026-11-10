@@ -915,6 +915,20 @@ test("8f. the short type line of an event: the type word and the count, never a 
   for (const item of ITEMS) assert.equal(view.centralCalendarShortKindLabel(item), view.centralCalendarKindLabel(item), item.key);
 });
 
+test("8g. the week-column wrapping rules reach the rendered card (title, status badge, team pill)", async () => {
+  installFetchMock(okResponder());
+  await loadCentralCalendar({ render });
+  const doc = dom();
+  assert.ok(doc.querySelector(".cc-week > .cc-day-column > .cc-day-cards > .cc-card > .cc-card-body"), "column, card list and card body");
+  assert.ok(doc.querySelector(".cc-week .cc-card .cc-card-title"));
+  assert.ok([...doc.querySelectorAll(".cc-week .cc-card .cc-card-meta .cc-badge")].some((b) => /^Awaiting /.test(b.textContent)), "an Awaiting status badge in the card's meta");
+  assert.ok(doc.querySelector(".cc-week .cc-card .cc-team-pill .cc-team-pill-name"));
+  // A tablet render puts them under .cc-layout-medium as well.
+  layout = "medium";
+  render();
+  assert.ok(dom().querySelector(".central-calendar.cc-layout-medium .cc-week .cc-card .cc-card-title"));
+});
+
 test("8d. the loading state paints the toolbar at once and the grid area says so", async () => {
   const pending = [];
   installFetchMock((call) => new Promise((resolve) => { pending.push({ call, resolve }); }));
