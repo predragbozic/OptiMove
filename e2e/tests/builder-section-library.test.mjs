@@ -40,6 +40,9 @@ async function sectionCount(context, ids) {
 }
 
 async function openSection(page) {
+  // Below 761 px the navigation is behind the menu button.
+  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
+  if (await toggle.isVisible().catch(() => false)) await toggle.click();
   await page.locator('[data-library-tab="builder"]').first().click();
   await page.getByText("Continue where you left off").first().click();
   await page.getByRole("button", { name: "Continue", exact: true }).first().click();
@@ -171,3 +174,51 @@ test("(1280 px, mouse) a click at the corner of Favourite, Mark, Tags and Add wo
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+// B5b: the library toolbar with a mouse - the Tile / Big / List switches and "Add custom exercise" are 44 px, the
+// switcher and the search field share their top, and the button still opens its form. A short window keeps the
+// phone toolbar (44 px icon switches and the "+ Add custom exercise" link).
+// A touch tablet: a context of its own (openAs gives touch only to a phone width).
+async function openTouch(width, height) {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true });
+  await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await page.goto(world.baseUrl);
+  await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+  return { context, page, pageErrors };
+}
+
+for (const [width, height, touch] of [[1280, 900, false], [800, 900, false], [700, 900, false], [1024, 768, true], [1024, 500, false]]) {
+  test(`(${width} x ${height}, ${touch ? "touch" : "mouse"}) the library toolbar: 44 px switches and Add custom exercise, tops lined up`, async () => {
+    const { context, page, pageErrors } = touch ? await openTouch(width, height) : await openAs(browser, world, "team_coach", width);
+    try {
+      if (!touch) await page.setViewportSize({ width, height });
+      if (touch) assert.ok(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), "the tablet is a coarse pointer");
+      await makeProgram(context, `Toolbar ${width}x${height}`);
+      await openSection(page);
+      const out = await page.evaluate(() => {
+        const shown = (e) => e.getBoundingClientRect().width > 0;
+        const box = (e) => e.getBoundingClientRect();
+        return {
+          overflow: document.documentElement.scrollWidth - window.innerWidth,
+          switches: [...document.querySelectorAll(".builder-library-toolbar .exercise-view-button")].filter(shown).map((e) => Math.round(box(e).height)),
+          tops: [".builder-library-toolbar .builder-exercise-search input", ".builder-library-toolbar .exercise-view-switcher"].map((q) => Math.round(box(document.querySelector(q)).top)),
+          custom: [...document.querySelectorAll('[data-action="builder-open-custom-exercise"]')].filter(shown).map((e) => ({ big: e.classList.contains("builder-custom-exercise-button"), h: Math.round(box(e).height) })),
+        };
+      });
+      assert.equal(out.overflow, 0, "no horizontal overflow");
+      assert.equal(out.switches.length, 3, "three view switches");
+      for (const h of out.switches) assert.equal(h, 44, "a 44 px switch");
+      assert.equal(out.tops[0], out.tops[1], "the search field and the switcher share their top");
+      assert.equal(out.custom.length, 1, "one Add custom exercise is shown");
+      assert.equal(out.custom[0].big, height > 520, height > 520 ? "the big button" : "the short window's link");
+      assert.ok(out.custom[0].h >= 44, `Add custom exercise is ${out.custom[0].h} px tall`);
+      await page.locator('[data-action="builder-open-custom-exercise"]:visible').first().click();
+      await page.getByRole("heading", { name: "Add custom exercise" }).waitFor();
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}

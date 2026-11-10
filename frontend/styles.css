@@ -24436,3 +24436,41 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     }
   }
 }
+
+/* ==========================================================================
+   Design: the section editor's library toolbar (B5b). With a mouse the
+   Tile / Big / List switches were 32 px, and the big "Add custom exercise"
+   button was 36 px on every screen that shows it. Both are now 44 px. A
+   phone or a short window (the max-width 560 / max-height 520 rules above)
+   already shows 44 px icon switches and the "+ Add custom exercise" link
+   instead, so neither query reaches it. Only the Builder: the Exercise
+   Library's own switches are not touched.
+   ========================================================================== */
+@media (pointer: fine) and (min-width: 761px) and (min-height: 521px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .exercise-view-button {
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-3);
+  }
+}
+
+@media (min-width: 561px) and (min-height: 521px) {
+  /* The switches are 44 px here with any pointer (this block, the max-width
+     760 and the pointer: coarse rules): the switcher (a 1 px frame) and the
+     search field are both 48 px, so the row's tops line up. */
+  body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .exercise-view-switcher {
+    padding: 1px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .builder-exercise-search input {
+    height: 48px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-section-library .builder-custom-exercise-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-3);
+    font-size: var(--om-text-sm);
+  }
+}
