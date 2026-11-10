@@ -874,27 +874,45 @@ test("8c2. a Day view and a phone week emptied by filters offer Clear filters in
 
 test("8e. a card's type line carries its whole text as a tooltip; only a wide week column clamps it", async () => {
   const CLAMP = ".cc-layout-wide .cc-week > .cc-day-column .cc-card-kind";
-  installFetchMock(okResponder());
+  const event = baseItem({ key: "event:ev-1", kind: "event", date: DAY(0), title: "Strength and speed", eventTypeLabel: "Team training", startTime: "09:00", athleteCount: 12, expects: [], status: "none", links: { activityIds: [] } });
+  installFetchMock(okResponder({ items: [...ITEMS, event] }));
   await loadCentralCalendar({ render });
   const kinds = [...dom().querySelectorAll(".cc-week .cc-card .cc-card-kind")];
   assert.ok(kinds.length > 0, "the wide week renders cards");
   for (const kind of kinds) {
-    assert.equal(kind.getAttribute("title"), kind.textContent);
+    assert.equal(kind.getAttribute("title"), view.centralCalendarKindLabel(kind.closest(".cc-card").dataset.key === "event:ev-1" ? event : ITEMS.find((i) => i.key === kind.closest(".cc-card").dataset.key)));
     assert.ok(kind.matches(CLAMP), "a wide week column clamps the type line");
   }
+  // A wide week column shows an event's type word without "Event ·"; the tooltip keeps it all.
+  const eventKind = dom().querySelector('.cc-card[data-key="event:ev-1"] .cc-card-kind');
+  assert.equal(eventKind.textContent, "Team training · 12 athletes");
+  assert.equal(eventKind.getAttribute("title"), "Event · Team training · 12 athletes");
+  // Another kind keeps its own word, which tells it apart.
+  const planned = dom().querySelector('.cc-card[data-key="planned:batch-1"] .cc-card-kind');
+  assert.equal(planned.textContent, planned.getAttribute("title"));
   // The time grid keeps its own rule (the type line hidden) and is never inside a week column.
   await act({ action: "central-calendar-mode", mode: "grid" });
   const grid = [...dom().querySelectorAll(".cc-timegrid .cc-card-kind")];
   assert.ok(grid.length > 0, "the time grid renders cards");
   assert.ok(grid.every((kind) => !kind.matches(CLAMP)));
   await act({ action: "central-calendar-mode", mode: "list" });
-  // A tablet's narrower columns keep the whole text.
+  // A tablet's narrower columns keep the whole text, the event's included.
   layout = "medium";
   render();
   assert.ok(dom().querySelector(".central-calendar.cc-layout-medium"));
   const medium = [...dom().querySelectorAll(".cc-week .cc-card-kind")];
   assert.ok(medium.length > 0, "the tablet week renders cards");
-  assert.ok(medium.every((kind) => !kind.matches(CLAMP)));
+  assert.ok(medium.every((kind) => !kind.matches(CLAMP) && kind.textContent === kind.getAttribute("title")));
+});
+
+test("8f. the short type line of an event: the type word and the count, never a bare prefix", () => {
+  const ev = (over) => ({ kind: "event", title: "Strength and speed", eventTypeLabel: "Team training", athleteCount: 12, ...over });
+  assert.equal(view.centralCalendarShortKindLabel(ev()), "Team training · 12 athletes");
+  assert.equal(view.centralCalendarShortKindLabel(ev({ athleteCount: 0 })), "Team training");
+  assert.equal(view.centralCalendarShortKindLabel(ev({ title: "Team training" })), "12 athletes", "a title that is the type word leaves the count");
+  assert.equal(view.centralCalendarShortKindLabel(ev({ title: "Team training", athleteCount: 0 })), "Event", "nothing else leaves the kind");
+  assert.equal(view.centralCalendarKindLabel(ev()), "Event · Team training · 12 athletes", "the whole label is unchanged");
+  for (const item of ITEMS) assert.equal(view.centralCalendarShortKindLabel(item), view.centralCalendarKindLabel(item), item.key);
 });
 
 test("8d. the loading state paints the toolbar at once and the grid area says so", async () => {
