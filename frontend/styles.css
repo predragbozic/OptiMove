@@ -25263,15 +25263,11 @@ body:not(.athlete-mode):not(.login-mode) .topbar-actions .sign-out-button {
 
 /* ==========================================================================
    Design S6 (Settings): App health's period, role and place chips are 44 px on
-   every width (on a phone they already were). Calendar settings hides the
-   "Add …" button while its own form is open (it stays in the page, disabled):
-   a greyed primary above the form read as a second, dead action.
+   every width (on a phone they already were). (Calendar settings' "Add …"
+   button is hidden while its own form is open by the hidden attribute alone:
+   the global [hidden] rule hides it.)
    ========================================================================== */
 body:not(.athlete-mode):not(.login-mode) .app-health-chip {
   min-height: var(--om-tap-target);
-}
-
-body:not(.athlete-mode):not(.login-mode) .cs-section-head [data-action="calendar-settings-new"][hidden] {
-  display: none;
 }
 /* End of design S6 (Settings). */

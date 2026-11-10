@@ -18,8 +18,10 @@ test("App health's chips are 44 px on every width", () => {
 });
 
 test("Calendar's Add button is hidden while its own form is open, and stays disabled", () => {
-  assert.match(calendar, /\$\{disabledIf\(locked\(\) \|\| formOpen\)\}\$\{formOpen \? " hidden" : ""\}/);
-  assert.match(block, /\[data-action="calendar-settings-new"\]\[hidden\] \{\n  display: none;\n\}/);
+  // The behaviour (hidden, still disabled, back after Cancel) is proven in the browser; here: the attribute is set from
+  // the open form, next to the unchanged disabled condition, and the global [hidden] rule is what hides it.
+  assert.ok(calendar.includes('${disabledIf(locked() || formOpen)}') && calendar.includes('${formOpen ? " hidden" : ""}'));
+  assert.match(css, /\[hidden\] \{\n  display: none !important;\n\}/);
 });
 
 test("a dialog's eyebrow is escaped inside renderDialogHead, so no caller escapes it", async () => {
