@@ -3,6 +3,7 @@ import { els } from "./dom.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { imageSources } from "./media.js";
+import { fitPanelToViewport } from "./panel-fit.js";
 
 // feature/mobile-messages-fullscreen: below this width Messages becomes a
 // true fullscreen app-level screen (list, then thread) instead of the
@@ -72,6 +73,7 @@ export function renderMessages() {
       newThread.scrollTop = newThread.scrollHeight;
     }
   }
+  fitPanelToViewport(els.messagePanel);
   wireComposer();
 }
 
