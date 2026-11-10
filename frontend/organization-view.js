@@ -200,10 +200,11 @@ export function normalizeOrganizationSelection(data) {
   if (selectedTeam?.club_id && !state.organization.selectedClubId) state.organization.selectedClubId = selectedTeam.club_id;
 }
 
+// bare: the section's own list, whose heading (title and count) is the section's; the card then has no head of its own.
 function renderOrganizationSelectableList(title, rows, type, selectedId, options = {}) {
   return `
     <section class="panel organization-list-card">
-      <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
+      ${options.bare ? "" : `<div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>`}
       <div class="organization-list">
         ${rows.length ? rows.map((row) => renderOrganizationSelectableRow(row, type, selectedId, options)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
       </div>
@@ -286,33 +287,64 @@ export function renderOrganizationBrowser(data) {
     : state.organization.selectedClubId
       ? activeAthletes.filter((athlete) => hasActiveMembership(athlete, { clubId: state.organization.selectedClubId }))
       : activeAthletes;
-  return `
-    <section class="organization-browser">
+  // S2 (the Settings plan): one section, one list. Each section draws its own list under one heading with its count;
+  // Overview is the summary that links to them. A selected club or team still opens its detail (its teams, its roster).
+  const coach = isCoachSettings();
+  const showAll = state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : "";
+  const head = (title, count, actions = "", eyebrow = "") => `
       <div class="organization-browser-head">
         <div>
-          ${isCoachSettings() ? "" : `<p class="eyebrow">Organization browser</p>`}
-          <h3>${escapeHtml(isCoachSettings() ? "Athletes" : (selectedTeam?.name || selectedClub?.name || "All accessible organization"))}</h3>
-          <p class="muted">${escapeHtml(isCoachSettings() ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`)}</p>
+          ${eyebrow ? `<p class="eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
+          <h2 class="organization-section-title">${escapeHtml(title)}</h2>
+          <p class="muted">${escapeHtml(count)}</p>
         </div>
-        <div class="organization-browser-actions">
-          ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
-          ${section === "teams" && archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : ""}
-          ${section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : ""}
-          ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
-        </div>
-      </div>
+        ${actions.trim() ? `<div class="organization-browser-actions">${actions}</div>` : ""}
+      </div>`;
+  const athletesBlock = () => (selectedTeam
+    ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
+    : selectedClub
+      ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
+      : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin, bare: true }));
+  const activeUserCount = (data.users || []).filter((row) => row.loginActive !== false).length;
+  let body;
+  if (section === "overview" && !coach) {
+    const tiles = [
+      ["users", "Users", activeUserCount],
+      ["clubs", "Clubs", clubs.length],
+      ["teams", "Teams", teams.length],
+      ["athletes", "Athletes", activeAthletes.length],
+    ];
+    body = `${head("All accessible organization", `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`, "", "Organization browser")}
+      <nav class="organization-section-summary" aria-label="Organization summary">
+        ${tiles.map(([value, label, count]) => `<button class="organization-section-summary-tile" type="button" data-action="organization-section" data-section="${value}"><strong>${count}</strong><span>${label}</span></button>`).join("")}
+      </nav>`;
+  } else if (section === "users") {
+    body = `${head("Users", countLabel(activeUserCount, "active user"))}
+      <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>`;
+  } else if (section === "clubs") {
+    body = `${head(selectedClub?.name || "Clubs", selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(clubs.length, "club"), showAll)}
       <section class="organization-lists organization-lists-browser">
-        ${section === "overview" || section === "users" ? renderOrganizationUsersSection(data) : ""}
-        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
-        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
-        ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes"
-          ? selectedTeam
-            ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
-            : selectedClub
-              ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
-              : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin })
-          : ""}
-      </section>
+        ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId, { bare: true })}
+        ${selectedClub ? renderOrganizationSelectableList(`Teams - ${selectedClub.name}`, visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
+        ${selectedClub ? athletesBlock() : ""}
+      </section>`;
+  } else if (section === "teams") {
+    const archived = archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : "";
+    body = `${head(selectedTeam?.name || (selectedClub ? `Teams - ${selectedClub.name}` : "Teams"), selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : countLabel(visibleTeams.length, "team"), `${archived}${showAll}`)}
+      <section class="organization-lists organization-lists-browser">
+        ${renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team), bare: true })}
+        ${selectedTeam ? athletesBlock() : ""}
+      </section>`;
+  } else {
+    // Athletes (the coach's only list): the whole list, or the selected club's or team's roster.
+    const access = section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : "";
+    const archived = section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : "";
+    body = `${head(coach ? "Athletes" : (selectedTeam?.name || selectedClub?.name || "Athletes"), coach ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`, `${access}${archived}${coach ? "" : showAll}`)}
+      <section class="organization-lists organization-lists-browser">${athletesBlock()}</section>`;
+  }
+  return `
+    <section class="organization-browser">
+      ${body}
       ${section === "teams" && state.organization.showArchivedTeams && archivedTeamsOffered(data, isPlatformAdmin) ? renderArchivedTeamsList(data.archivedTeams) : ""}
       ${section === "athletes" && !selectedClub && !selectedTeam && state.organization.showArchivedAthletes ? renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
@@ -1304,7 +1336,7 @@ function renderOrganizationUserRow(row, selection = null) {
   `;
 }
 
-function renderOrganizationUsersSection(data) {
+function renderOrganizationUsersSection(data, { bare = false } = {}) {
   const allUsers = data.users || [];
   const disabledUsers = allUsers.filter((row) => row.loginActive === false);
   const activeUsers = allUsers.filter((row) => row.loginActive !== false);
@@ -1315,12 +1347,12 @@ function renderOrganizationUsersSection(data) {
   const selection = manages && state.organizationUserSelection?.active ? state.organizationUserSelection : null;
   return `
     <section class="panel organization-list-card">
-      <div class="organization-list-head">
-        <p class="eyebrow">Users</p>
-        <strong>${activeUsers.length}</strong>
+      ${bare && !disabledUsers.length && !manages ? "" : `<div class="organization-list-head">
+        ${bare ? "" : `<p class="eyebrow">Users</p>
+        <strong>${activeUsers.length}</strong>`}
         ${disabledUsers.length ? `<button class="text-action" type="button" data-action="organization-toggle-disabled-users">${showDisabled ? "Hide disabled" : `Show disabled (${disabledUsers.length})`}</button>` : ""}
         ${manages ? `<button class="plain-button compact-button organization-user-select-button" type="button" data-action="organization-user-select-mode" title="${selection ? "Stop selecting" : "Select accounts to grant them application blocks"}">${selection ? "Done" : "Select"}</button>` : ""}
-      </div>
+      </div>`}
       <div class="organization-list">
         ${visibleUsers.length ? visibleUsers.map((row) => renderOrganizationUserRow(row, selection)).join("") : `<p class="muted">No users yet.</p>`}
       </div>
@@ -1657,10 +1689,10 @@ function formatExpiryLabel(expiresAt) {
   }
 }
 
-function renderOrganizationList(title, rows, type, { isPlatformAdmin = false } = {}) {
+function renderOrganizationList(title, rows, type, { isPlatformAdmin = false, bare = false } = {}) {
   return `
     <section class="panel organization-list-card" data-athlete-filter-scope>
-      <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
+      ${bare ? "" : `<div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>`}
       ${type === "athlete" ? renderAthleteFilter("settings-athletes", rows) : ""}
       <div class="organization-list">
         ${rows.length ? rows.map((row) => renderOrganizationRowV2(row, type, { isPlatformAdmin })).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
