@@ -102,7 +102,8 @@ function handle(fn) {
           // A count only (J17 section 8.2, D11): never the changes themselves.
           ...(Number.isInteger(changesToImported) && changesToImported >= 0 ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
-          // U5: counts only (what blocks the undo, or that the same request may be repeated).
+          // U5 / v60: the roster work an undo would remove (counts, and the bounded list of later changes for a platform
+          // admin, the only audience of the undo routes), or that the same request may be repeated.
           ...(rosterWork && typeof rosterWork === "object" ? { rosterWork } : {}),
           ...(Number.isInteger(calendarLinks) ? { calendarLinks } : {}),
           ...(retrySameRequest === true ? { retrySameRequest: true } : {}),
@@ -474,6 +475,8 @@ router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (
   const expected = body.expected && typeof body.expected === "object" ? body.expected : {};
   res.json({ undo: await sessionUndo.undoImport(access.teamId, req.params.candidateId, {
     userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
+    // v60 (O1): later roster changes are removed only with this confirmation of exactly the listed ones.
+    confirmLaterRosterWork: body.confirmLaterRosterWork, laterRosterFingerprint: body.laterRosterFingerprint,
   }) });
 }));
 

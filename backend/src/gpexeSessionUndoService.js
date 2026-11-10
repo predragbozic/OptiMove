@@ -12,6 +12,11 @@
 //     awaited at most 15 s and once sent the answer never says "nothing was removed": an unanswered one is
 //     `503 outcome_unknown`, and repeating the same request returns the saved outcome.
 // The first version is for an active platform admin only (J19-U5 section 9, Q1); the route decides the audience.
+//
+// v60 (O1 of J20): the undo also removes the session's roster work. What the import itself wrote (requests with origin
+// 'import') never blocks; LATER roster work (the Roster tab) is removed only with confirmLaterRosterWork and the
+// fingerprint of exactly the list the administrator saw (laterRosterFingerprint); the function compares it under the
+// team's import lock. The preview names both, so the screen can show two separate warnings.
 import { pool } from "./db.js";
 import { GpexeImportServiceError } from "./gpexeImportService.js";
 import { buildCandidatePreview } from "./gpexeImportPreview.js";
@@ -50,7 +55,8 @@ const SENTENCES = {
   shared_activity: [409, "This session's activity also holds data from another source, so it cannot be removed here."],
   other_event_link: [409, "This session's activity is also linked to another event, so it cannot be removed here."],
   entangled_activity: [409, "This session's activity was merged or moved, so it cannot be removed here."],
-  roster_decisions_exist: [409, "A coach has already worked on this session's roster (states, requests or completion). That work has to be dealt with before the import can be undone."],
+  roster_work_needs_confirmation: [409, "Coaches changed this session's attendance after the import. Confirm that these later changes are removed too, then undo again."],
+  roster_work_changed: [409, "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again."],
   calendar_link_exists: [409, "This session is attached to a calendar event. Remove it from the calendar event first, then undo the import."],
   manual_write_request_exists: [409, "A manual entry refers to this session's data, so it cannot be removed here."],
   referenced_elsewhere: [409, "Other records still refer to this session's data. Nothing was removed."],
@@ -70,9 +76,9 @@ function mapDatabaseError(error) {
     const known = SENTENCES[code];
     if (!known) return refusal(409, "undo_refused", "The undo was refused; nothing was changed.");
     const details = {};
-    if (code === "roster_decisions_exist") {
+    if (code === "roster_work_needs_confirmation" || code === "roster_work_changed") {
       const work = parseDetail(error.detail);
-      if (work) details.rosterWork = work;
+      if (work) details.rosterWork = rosterFromScope(work);
     }
     // The constraint that stopped the removal is for the server log only (an administrator's support trail), never the answer.
     if (code === "referenced_elsewhere") console.error(`[gpexe] undo refused: referenced elsewhere (${String(error.detail || "unknown").slice(0, 120)})`);
@@ -135,6 +141,66 @@ async function inTransaction(fn, { keep }) {
   }
 }
 
+const COUNT_KEYS = ["decisions", "requests", "completions", "completionLog"];
+function counts(source, snake = false) {
+  const out = {};
+  for (const k of COUNT_KEYS) {
+    const v = source?.[snake && k === "completionLog" ? "completion_log" : k];
+    out[k] = Number.isInteger(v) && v >= 0 ? v : 0;
+  }
+  return out;
+}
+const total = (c) => COUNT_KEYS.reduce((n, k) => n + c[k], 0);
+function listItems(list) {
+  return (Array.isArray(list) ? list : []).slice(0, 60).map((i) => ({
+    athleteId: i?.athlete ?? null, kind: i?.kind ?? null, reasonCode: i?.reason_code ?? null, byUserId: i?.by ?? null, at: i?.at ?? null,
+  }));
+}
+function rosterShape(importWritten, later, list, fingerprint) {
+  const laterTotal = total(later);
+  return {
+    importWritten: { ...importWritten, total: total(importWritten) },
+    laterWork: { ...later, total: laterTotal, list: listItems(list), fingerprint: laterTotal > 0 && typeof fingerprint === "string" ? fingerprint : null },
+  };
+}
+// The function's rosterWork (refusal detail) and the deletion log's roster_work_removed, in one API shape.
+function rosterFromScope(work) {
+  return rosterShape(counts(work?.importWritten), counts(work?.laterWork), work?.laterWork?.list, work?.laterWork?.fingerprint);
+}
+function rosterFromLog(removed) {
+  if (!removed || typeof removed !== "object") return rosterShape(counts(null), counts(null), [], null);
+  return rosterShape(counts(removed.import_written, true), counts(removed.later, true), removed.later_list, removed.later_fingerprint);
+}
+
+// Names for the listed later changes (at most 60 athletes and users) and the reasons' labels: the administrator sees who,
+// whom and why, never only ids or codes.
+async function withNames(roster) {
+  const list = roster?.laterWork?.list ?? [];
+  if (!list.length) return roster;
+  const athleteIds = [...new Set(list.map((i) => i.athleteId).filter((x) => typeof x === "string" && UUID.test(x)))];
+  const userIds = [...new Set(list.map((i) => i.byUserId).filter((x) => typeof x === "string" && UUID.test(x)))];
+  const reasonKeys = [...new Set(list.map((i) => i.reasonCode).filter((x) => typeof x === "string"))];
+  try {
+    const [athletes, users, reasons] = await Promise.all([
+      athleteIds.length ? pool.query(`select id, coalesce(nullif(display_name, ''), full_name) as name from public.athletes where id = any($1::uuid[])`, [athleteIds]) : { rows: [] },
+      userIds.length ? pool.query(`select id, coalesce(nullif(display_name, ''), full_name) as name from public.users where id = any($1::uuid[])`, [userIds]) : { rows: [] },
+      reasonKeys.length ? pool.query(`select key, label from training.participation_reasons where key = any($1::text[])`, [reasonKeys]) : { rows: [] },
+    ]);
+    const rl = new Map(reasons.rows.map((r) => [r.key, r.label]));
+    const an = new Map(athletes.rows.map((r) => [String(r.id), r.name]));
+    const un = new Map(users.rows.map((r) => [String(r.id), r.name]));
+    roster.laterWork.list = list.map((i) => ({
+      ...i,
+      athleteName: i.athleteId ? an.get(i.athleteId) ?? null : null,
+      byName: i.byUserId ? un.get(i.byUserId) ?? null : null,
+      reasonLabel: i.reasonCode ? rl.get(i.reasonCode) ?? null : null,
+    }));
+  } catch {
+    // Names are a help; the ids and the counts stay.
+  }
+  return roster;
+}
+
 function shapeResult(row) {
   return {
     eventId: row.event_id,
@@ -144,34 +210,58 @@ function shapeResult(row) {
     newCandidateId: row.new_candidate_id ?? null,
     // Every candidate the undo marked undone: the requested one and any other approved version of the session (one event).
     undoneCandidateIds: row.undone_candidate_ids ?? [],
+    rosterWork: rosterFromLog(row.roster_work_removed),
   };
 }
 
 // The read-only scope: what the undo would remove, or the refusal it would raise. Nothing is kept.
 export async function undoPreview(teamId, candidateId, { userId }) {
+  let preview;
   try {
-    return await inTransaction(async (client) => {
+    preview = await inTransaction(async (client) => {
       if (previewFault) await previewFault(client);
-      const row = (await client.query(
-        `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null)`,
-        [userId, teamId, candidateId],
-      )).rows[0];
-      return { ...shapeResult(row), wouldOfferAgain: Boolean(row.new_candidate_id) };
+      const sql = `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4, $5)`;
+      let row;
+      await client.query("savepoint undo_preview");
+      try {
+        row = (await client.query(sql, [userId, teamId, candidateId, false, null])).rows[0];
+      } catch (error) {
+        // Later roster work asks for a confirmation: run the same undo once more, confirmed with the fingerprint the
+        // function itself reported, so the preview shows everything it would remove (still rolled back).
+        if (!(error?.code === "55000" && String(error.message) === "session_undo:roster_work_needs_confirmation")) throw error;
+        const fingerprint = parseDetail(error.detail)?.laterWork?.fingerprint;
+        await client.query("rollback to savepoint undo_preview");
+        row = (await client.query(sql, [userId, teamId, candidateId, true, fingerprint ?? null])).rows[0];
+      }
+      const shaped = shapeResult(row);
+      return { ...shaped, wouldOfferAgain: Boolean(row.new_candidate_id), needsRosterConfirmation: shaped.rosterWork.laterWork.total > 0 };
     }, { keep: false });
   } catch (error) {
     const mapped = mapDatabaseError(error);
+    if (mapped?.details?.rosterWork) await withNames(mapped.details.rosterWork);
     if (mapped) throw mapped;
     throw error;
   }
+  await withNames(preview.rosterWork);
+  return preview;
 }
 
-function checkBody({ requestKey, reason, expectedEventId }) {
+function checkBody({ requestKey, reason, expectedEventId, confirmLaterRosterWork, laterRosterFingerprint }) {
   if (typeof requestKey !== "string" || !UUID.test(requestKey)) throw refusal(400, "invalid_request", "requestKey must be a UUID chosen for this one undo.");
   if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) {
     throw refusal(400, "invalid_request", "A reason of 1 to 500 characters without control characters is required.");
   }
   if (expectedEventId !== undefined && expectedEventId !== null && (typeof expectedEventId !== "string" || !UUID.test(expectedEventId))) {
     throw refusal(400, "invalid_request", "expected.eventId must be a UUID.");
+  }
+  if (confirmLaterRosterWork !== undefined && confirmLaterRosterWork !== null && typeof confirmLaterRosterWork !== "boolean") {
+    throw refusal(400, "invalid_request", "confirmLaterRosterWork must be true or false.");
+  }
+  if (confirmLaterRosterWork === true && (typeof laterRosterFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(laterRosterFingerprint))) {
+    throw refusal(400, "invalid_request", "A confirmation carries the fingerprint of the later roster changes it confirms.");
+  }
+  if (confirmLaterRosterWork !== true && laterRosterFingerprint !== undefined && laterRosterFingerprint !== null) {
+    throw refusal(400, "invalid_request", "laterRosterFingerprint is sent only with confirmLaterRosterWork.");
   }
 }
 
@@ -214,20 +304,23 @@ async function refreshOfferedPreview(teamId, candidateId, userId) {
   }
 }
 
-export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null }) {
-  checkBody({ requestKey, reason, expectedEventId });
+export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null, confirmLaterRosterWork = false, laterRosterFingerprint = null }) {
+  checkBody({ requestKey, reason, expectedEventId, confirmLaterRosterWork, laterRosterFingerprint });
+  const confirm = confirmLaterRosterWork === true;
   let row;
   try {
     row = await inTransaction(async (client) => (await client.query(
-      `select * from training_load.undo_imported_session($1, $2, $3, $4, $5, $6)`,
-      [userId, teamId, candidateId, requestKey, reason, expectedEventId],
+      `select * from training_load.undo_imported_session($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [userId, teamId, candidateId, requestKey, reason, expectedEventId, confirm, confirm ? laterRosterFingerprint : null],
     )).rows[0], { keep: true });
   } catch (error) {
     const mapped = mapDatabaseError(error);
+    if (mapped?.details?.rosterWork) await withNames(mapped.details.rosterWork);
     if (mapped) throw mapped;
     throw error;
   }
   const result = { ...shapeResult(row), replayed: row.replayed === true, offeredAgain: Boolean(row.new_candidate_id), previewReady: false };
+  await withNames(result.rosterWork);
   if (row.new_candidate_id) {
     // Also on a replay: a first call whose recomputation failed gets another try, and the answer says whether the
     // offered candidate has its preview now (without one it cannot be approved; the next search recomputes it).
