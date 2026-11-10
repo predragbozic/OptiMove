@@ -24912,6 +24912,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-login-switch .plain-button {
 }
 
 @media (max-width: 760px) {
+  /* On a phone the actions start at the left, under or beside the name: right-aligned, the team table's actions sat
+     past the visible part of its scrolling table. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions {
+    justify-content: flex-start;
+  }
+
   /* On a phone the actions take the whole width under the label's line. */
   body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-link-row > .organization-row-actions {
     grid-column: 1 / -1;

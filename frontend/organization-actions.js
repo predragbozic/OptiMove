@@ -944,16 +944,25 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     manage.pending = true;
     manage.error = "";
     manage.message = "";
+    // The dialog's other actions are off while the write is in flight.
+    void renderOrganizationPanel({ refresh: false });
+    let saved = false;
     try {
       await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/login-status`, {
         method: "PUT",
         body: JSON.stringify({ active: nextActive }),
       });
+      saved = true;
       manage.message = nextActive ? "Login enabled." : "Login disabled.";
-      await loadAthletes();
-      if (manage.open && manage.scope === "full" && manage.userId) await loadAthleteAccount(manage.userId, { renderOrganizationPanel });
     } catch (error) {
       manage.error = error?.message || "Could not update login status.";
+    }
+    // Read the state again after a write and after a failure alike: a failed answer may still have been applied.
+    try {
+      await loadAthletes();
+      if (manage.open && manage.scope === "full" && manage.userId) await loadAthleteAccount(manage.userId, { renderOrganizationPanel });
+    } catch {
+      if (saved) manage.message += " The list may be out of date; reload to see it.";
     } finally {
       manage.pending = false;
       action.disabled = false;

@@ -802,7 +802,7 @@ function athleteAccountButtonHtml(athlete, isPlatformAdmin) {
     return `<button class="plain-button compact-button" type="button" data-action="organization-athlete-account-open" data-athlete-id="${escapeAttr(athlete.id)}" data-user-id="${escapeAttr(athlete.user_id)}">Account</button>`;
   }
   if (athlete.login_is_multi_role) return "";
-  return `<button class="plain-button compact-button" type="button" data-action="organization-athlete-login-open" data-athlete-id="${escapeAttr(athlete.id)}">Login</button>`;
+  return `<button class="plain-button compact-button" type="button" data-action="organization-athlete-login-open" data-athlete-id="${escapeAttr(athlete.id)}">Manage login</button>`;
 }
 
 // The Invite trigger is only ever offered when the CURRENT active workspace
@@ -1597,7 +1597,7 @@ function renderAthleteLoginSwitchSection(athlete, manage) {
         <span class="user-status-badge ${active ? "is-active" : "is-disabled"}">${active ? "Active login" : "Login disabled"}</span>
         <button class="plain-button compact-button ${active ? "danger-button" : ""}" type="button" data-action="organization-toggle-athlete-login" data-athlete-id="${escapeAttr(id)}" data-current-active="${active ? "true" : "false"}" data-athlete-name="${escapeAttr(athlete?.name || athlete?.full_name || "this athlete")}" ${manage.pending ? "disabled" : ""}>${active ? "Disable login" : "Enable login"}</button>
       </div>
-      <p class="muted">${active ? "A disabled login can't sign in to the athlete app until it is enabled again." : "Enabling lets this athlete sign in again with their existing email and password."} Roles, memberships and history are not changed.</p>
+      <p class="muted">${active ? "Disabling stops this athlete signing in to the athlete app until it is enabled again." : "Enabling lets this athlete sign in again with their existing email and password."} Roles, memberships and history are not changed.</p>
     </section>
   `;
 }
@@ -1607,10 +1607,10 @@ function renderAthleteAccountModalBody(manage, athlete) {
   const pending = manage.pending;
   return `
     ${manage.error ? `<p class="builder-error">${escapeHtml(manage.error)}</p>` : ""}
-    ${manage.message ? `<p class="builder-success">${escapeHtml(manage.message)}</p>` : ""}
+    ${manage.message ? `<p class="builder-success" role="status">${escapeHtml(manage.message)}</p>` : ""}
     ${renderAthleteLoginSwitchSection(athlete, manage)}
     <section class="manage-account-section">
-      <p class="eyebrow">Login email</p>
+      <p class="eyebrow">Email and password</p>
       <p class="account-current-email"><span>Login email</span> <strong>${escapeHtml(account.email || "")}</strong></p>
       <div class="manage-account-row">
         <button class="text-action" type="button" data-action="organization-athlete-account-password-reset" ${account.loginActive && !pending ? "" : "disabled"} title="${account.loginActive ? "Email this account a password reset link" : "This login is disabled"}">Send password reset</button>

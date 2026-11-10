@@ -1,6 +1,6 @@
 // Settings rows (design S5) in a real browser. An athlete's login state is a plain badge: a tap on it changes nothing.
 // The switch is in a dialog behind the row's button: "Account" for a platform admin (the full account dialog),
-// "Login" for a club admin and a team coach (the switch alone). Disabling asks first; declining sends nothing;
+// "Manage login" for a club admin and a team coach (the switch alone). Disabling asks first; declining sends nothing;
 // enabling does not ask. Every row control is 44 px and nothing overflows. A join link's label has its own line on a
 // phone. The demo athlete with a login is "Ana Example"; each test leaves her login enabled again.
 import { after, before, test } from "node:test";
@@ -38,7 +38,7 @@ async function rowSizes(page) {
   }, ATHLETE);
 }
 
-for (const [role, width, button] of [["platform_admin", 1280, "Account"], ["club_admin", 390, "Login"], ["team_coach", 390, "Login"]]) {
+for (const [role, width, button] of [["platform_admin", 1280, "Account"], ["club_admin", 390, "Manage login"], ["team_coach", 390, "Manage login"]]) {
   test(`(${role}, ${width} px) the login state is a badge; "${button}" holds the switch, disabling asks first`, async () => {
     const { context, page, pageErrors } = await openAs(browser, world, role, width);
     try {
@@ -128,6 +128,31 @@ for (const width of [1280, 390]) test(`(club_admin, ${width} px) a join link's l
     else assert.ok(out.labelBeside, "on a computer the label is beside the actions");
     for (const h of out.buttons) assert.ok(h >= 44, `an action is ${h} px`);
     assert.equal(out.overflow, 0);
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+// A selected team's roster is a table that scrolls sideways on a phone (as before S5): the row's dialog button stays
+// inside its row, scrolls into view, is 44 px and opens the switch (code and mobile review of S5).
+for (const [role, button] of [["club_admin", "Manage login"], ["platform_admin", "Account"]]) test(`(${role}, 390 px) a team's roster reaches "${button}"`, async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, role, 390);
+  try {
+    await openSection(page, "teams");
+    await page.locator('main.workspace [data-action="organization-select-team"]:visible').first().click();
+    const row = page.locator("main.workspace .organization-table-row").filter({ hasText: ATHLETE }).first();
+    await row.waitFor();
+    const open = row.getByRole("button", { name: button, exact: true });
+    const rowBox = await row.boundingBox();
+    let box = await open.boundingBox();
+    assert.ok(box.x + box.width <= rowBox.x + rowBox.width + 1, `"${button}" stays inside its row`);
+    await open.scrollIntoViewIfNeeded();
+    box = await open.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= 390, `"${button}" scrolls into view (${Math.round(box.x)}..${Math.round(box.x + box.width)})`);
+    assert.ok(box.height >= 44, `"${button}" is ${box.height} px`);
+    assert.equal(await row.locator('[data-action="organization-toggle-athlete-login"]').count(), 0, "no switch on the row");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
+    await open.click();
+    await page.getByRole("dialog").getByRole("button", { name: "Disable login", exact: true }).waitFor();
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });

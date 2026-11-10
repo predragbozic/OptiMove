@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 // S5 (the Settings plan, the owner's GO of 2026-11-10): an athlete's login state is a plain badge, not a button that
 // switches the login on a tap. The switch is in a dialog behind the row's button: "Account" for a platform admin (the
-// full account dialog, which stays the platform admin's only), "Login" for everyone else who could switch it from the
+// full account dialog, which stays the platform admin's only), "Manage login" for everyone else who could switch it from the
 // row before (the switch alone). Browser proof: e2e/tests/settings-athlete-login.test.mjs.
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 const { renderOrganizationBrowser } = await import("../organization-view.js");
@@ -37,7 +37,7 @@ test("the platform admin opens the Account dialog; everyone else who could switc
   assert.ok(!html.includes('data-action="organization-athlete-login-open"'));
   reset();
   html = renderOrganizationBrowser(data([athlete()], false));
-  assert.match(html, /data-action="organization-athlete-login-open" data-athlete-id="athlete-1">Login<\/button>/);
+  assert.match(html, /data-action="organization-athlete-login-open" data-athlete-id="athlete-1">Manage login<\/button>/);
   assert.ok(!html.includes('data-action="organization-athlete-account-open"'), "Account stays the platform admin's");
   // A multi-role login can't be switched from an athlete, and an athlete with no login has nothing to switch.
   for (const row of [athlete({ login_is_multi_role: true }), athlete({ user_id: null, login_active: null })]) {
@@ -78,4 +78,21 @@ test("the S5 block: badge colours from tokens, 44 px row controls, a join link's
   assert.match(block, /\.organization-row-actions \.plain-button,\s*[^{]*\.organization-row-actions \.text-action \{\s*min-height: var\(--om-tap-target\);/);
   assert.match(block, /\.organization-join-link-row > \.organization-row-main \{\s*display: block;/);
   assert.match(block, /\.organization-row-main \{\s*min-height: var\(--om-tap-target\);/);
+});
+
+// The row is drawn by three renderers: the flat list (above), a selected club's list and a selected team's table. Each
+// keeps the badge and the dialog button for each viewer (code review of S5).
+test("a selected club's list and a selected team's table keep the badge and the dialog button", () => {
+  const member = athlete({ memberships: [{ status: "active", clubId: "club-1", teamId: "team-1" }] });
+  const withOrg = (isPlatformAdmin) => ({ isPlatformAdmin, clubs: [{ id: "club-1", name: "Demo Club" }], teams: [{ id: "team-1", club_id: "club-1", name: "Demo Team" }], athletes: [member] });
+  for (const pick of [{ selectedClubId: "club-1" }, { selectedClubId: "club-1", selectedTeamId: "team-1" }]) for (const isPlatformAdmin of [true, false]) {
+    reset("teams");
+    Object.assign(state.organization, pick);
+    const html = renderOrganizationBrowser(withOrg(isPlatformAdmin));
+    const where = `${pick.selectedTeamId ? "team" : "club"}, ${isPlatformAdmin ? "platform admin" : "other"}`;
+    assert.ok(html.includes(pick.selectedTeamId ? "organization-table-row" : "Demo Club"), where);
+    assert.match(html, /<span class="athlete-login-status is-active">Login active<\/span>/, where);
+    assert.ok(!html.includes('data-action="organization-toggle-athlete-login"'), `${where}: no switch on the row`);
+    assert.ok(html.includes(isPlatformAdmin ? 'data-action="organization-athlete-account-open"' : 'data-action="organization-athlete-login-open"'), `${where}: the dialog button`);
+  }
 });
