@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { els } from "./dom.js";
 import { openMessageConversation } from "./messages.js";
+import { fitPanelToViewport } from "./panel-fit.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -31,6 +32,7 @@ export function renderNotifications() {
     count.hidden = !state.notifications.unreadCount;
   }
   els.notificationPanel.innerHTML = renderNotificationPanelHtml();
+  fitPanelToViewport(els.notificationPanel);
 }
 
 // Dashboards UX H4: notification rows that open another screen. Before any of
