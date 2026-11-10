@@ -270,18 +270,20 @@ and should not wait for them. If the first months show friction, B is a later ch
   session and a viewer who may approve). With the chooser on, the *No data* rows count under *Needs a person*.
 * **The reasons**: `GET …/candidates/:id` also answers `participationReasons` (the active keys and labels of
   `training.participation_reasons`, the list the roster read offers), because the states are chosen before the session's activity exists.
-* **Kept in the browser**: the choices (athlete id, kind, reason key) and one requestKey per kind and reason, in `sessionStorage` per team and
-  candidate, never a name; the keys are made when the coach confirms the import, before anything is sent.
+* **Kept in the browser**: the choices (athlete id, kind, reason key) and one requestKey per kind and reason, in `sessionStorage` per signed-in
+  user, team and candidate, never a name; another sign-in in the same tab starts empty. A reason key is taken only from the catalog the review
+  loaded and in the catalog's key shape; anything else is dropped when read back. The keys are made when the coach confirms the import,
+  before anything is sent.
 * **After a confirmed import** (the approval's answer, or *Check the result* finding it): the roster is read, and one
   `POST …/approvals/:approvalId/states` per group is sent for the athletes the roster still lists as needing a state (an athlete who got a
   state in the Roster tab meanwhile is kept and named). Outcomes per group: saved; not saved (a refusal the server answered: *Save them
   again* reads the roster again and sends with the same key, since nothing was written); not confirmed (*Check the result* repeats exactly
   the same request); after the window or an undo, "set them in the session's Roster tab" with no retry. A reopened imported session with
   states not saved yet offers *Save them*. A line above the button names the states ("After the import, OptiMove also saves N attendance
-  states.") and so does the question. An import refused for certain (nothing imported) drops the keys made at the confirm, so the choices
+  states.") and so does the question. An import refused for certain (nothing imported; not `already_imported`, which keeps them for *Save them*) drops the keys made at the confirm, so the choices
   can change again; while keys exist (the import in flight, imported, or its outcome unknown) no enabled chooser is drawn. A group
   refused for certain is a first send again, so a later refusal of it reads as not saved, never "can't be checked".
-* **Evidence**: `frontend/tests/gpexe-import-states-j20c.actions.test.mjs` (20 tests), two J20-A2 tests of `gpexe-import.actions.test.mjs`
+* **Evidence**: `frontend/tests/gpexe-import-states-j20c.actions.test.mjs` (24 tests), two J20-A2 tests of `gpexe-import.actions.test.mjs`
   updated for the *Needs a person* count, backend `import-states-j20c.test.mjs` test 15 (the reasons), e2e scenario 12
   (`e2e/tests/imports-states.test.mjs`, 1280 and 390 px); e2e scenario 10 (`imports-leave-out.test.mjs`) now opens "N athletes are
   fine" first, since the rows without a GPEXE record count under *Needs a person*.

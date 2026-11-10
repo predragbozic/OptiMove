@@ -31,26 +31,40 @@ const g = () => state.trainingLoad.gpexe;
 let boundMs = STATES_BOUND_MS;
 export function setImportStatesBoundForTests(ms) { boundMs = ms ?? STATES_BOUND_MS; }
 
-function storeKey(teamId, candidateId) {
-  return `${STORE_PREFIX}${teamId}.${candidateId}`;
+// The catalog's own key shape (v25: training.participation_reasons.key).
+const REASON_KEY = /^[a-z][a-z0-9_]{1,40}$/;
+const reasonOk = (k) => typeof k === "string" && REASON_KEY.test(k);
+
+// Scoped to the signed-in user as well: another sign-in in the same tab never sees, or sends, someone else's choices and keys.
+function storeKey(userId, teamId, candidateId) {
+  return `${STORE_PREFIX}${userId}.${teamId}.${candidateId}`;
 }
+const userOf = () => {
+  const id = String(state.currentUser?.id || "");
+  return /^[A-Za-z0-9-]{1,64}$/.test(id) ? id : null;
+};
 
 function cleanBody(body) {
   if (!body || typeof body !== "object" || !UUID.test(String(body.requestKey || ""))) return null;
   const athletes = (Array.isArray(body.athletes) ? body.athletes : []).filter((a) => UUID.test(String(a?.athleteId || ""))).map((a) => ({ athleteId: a.athleteId, expectedDecisionId: null }));
   if (!athletes.length || !STATE_KINDS.includes(body.kind)) return null;
-  return { requestKey: body.requestKey, kind: body.kind, ...(body.reasonKey ? { reasonKey: String(body.reasonKey) } : {}), athletes };
+  if (body.kind === "did_not_participate" ? !reasonOk(body.reasonKey) : body.reasonKey) return null;
+  return { requestKey: body.requestKey, kind: body.kind, ...(body.reasonKey ? { reasonKey: body.reasonKey } : {}), athletes };
 }
 
 // The allowlist that is stored and the one that is read back: the same shape both ways.
 function storable(s) {
   const choices = {};
   for (const [id, c] of Object.entries(s.choices || {})) {
-    if (UUID.test(id) && c && STATE_KINDS.includes(c.kind)) choices[id] = { kind: c.kind, reasonKey: c.kind === "did_not_participate" ? String(c.reasonKey || "") || null : null };
+    if (!UUID.test(id) || !c || !STATE_KINDS.includes(c.kind)) continue;
+    if (c.kind === "did_not_participate" && !reasonOk(c.reasonKey)) continue;
+    choices[id] = { kind: c.kind, reasonKey: c.kind === "did_not_participate" ? c.reasonKey : null };
   }
   const groups = {};
   for (const [k, v] of Object.entries(s.groups || {})) {
     if (!v || !UUID.test(String(v.requestKey || ""))) continue;
+    const [gk, gr = ""] = String(k).split("|");
+    if (k.split("|").length !== 2 || !STATE_KINDS.includes(gk) || (gk === "did_not_participate" ? !reasonOk(gr) : gr)) continue;
     groups[k] = {
       requestKey: v.requestKey,
       status: STATUSES.has(v.status) ? v.status : "pending",
@@ -65,22 +79,24 @@ function storable(s) {
   return { choices, groups };
 }
 
-function readStore(teamId, candidateId) {
+function readStore(userId, teamId, candidateId) {
+  if (!userId) return { choices: {}, groups: {} };
   try {
-    const raw = globalThis.sessionStorage?.getItem(storeKey(teamId, candidateId));
+    const raw = globalThis.sessionStorage?.getItem(storeKey(userId, teamId, candidateId));
     return storable(raw ? JSON.parse(raw) : {});
   } catch {
     return { choices: {}, groups: {} };
   }
 }
 
-function writeStore(teamId, candidateId, s) {
+function writeStore(userId, teamId, candidateId, s) {
+  if (!userId) return;
   try {
     const kept = storable(s);
     const groups = Object.values(kept.groups);
     // Settled (every group saved or final): nothing is left to do with it in a later visit; the screen keeps it in memory.
-    if (groups.length && groups.every((x) => x.status === "saved" || x.status === "final")) globalThis.sessionStorage?.removeItem(storeKey(teamId, candidateId));
-    else globalThis.sessionStorage?.setItem(storeKey(teamId, candidateId), JSON.stringify(kept));
+    if (groups.length && groups.every((x) => x.status === "saved" || x.status === "final")) globalThis.sessionStorage?.removeItem(storeKey(userId, teamId, candidateId));
+    else globalThis.sessionStorage?.setItem(storeKey(userId, teamId, candidateId), JSON.stringify(kept));
   } catch {
     // A browser without storage keeps the choices for this page only.
   }
@@ -89,13 +105,13 @@ function writeStore(teamId, candidateId, s) {
 // The detail's states, read once per open review. teamId is fixed with them.
 export function statesOf(detail, gx = g()) {
   if (!detail?.id || !gx.teamId) return { choices: {}, groups: {} };
-  if (!detail.states) detail.states = { ...readStore(gx.teamId, detail.id), teamId: gx.teamId };
+  if (!detail.states) { const userId = userOf(); detail.states = { ...readStore(userId, gx.teamId, detail.id), teamId: gx.teamId, userId }; }
   return detail.states;
 }
 
 function persist(detail) {
   const s = detail?.states;
-  if (detail?.id && s?.teamId) writeStore(s.teamId, detail.id, s);
+  if (detail?.id && s?.teamId) writeStore(s.userId, s.teamId, detail.id, s);
 }
 
 // "" (no state), "participated_no_values", or "did_not_participate:<reasonKey>".
@@ -113,8 +129,12 @@ export function chooseState(detail, athleteId, value) {
   const v = String(value || "");
   if (!v) delete s.choices[athleteId];
   else if (v === "participated_no_values") s.choices[athleteId] = { kind: v, reasonKey: null };
-  else if (v.startsWith("did_not_participate:") && v.length > "did_not_participate:".length) s.choices[athleteId] = { kind: "did_not_participate", reasonKey: v.slice("did_not_participate:".length) };
-  else return false;
+  else if (v.startsWith("did_not_participate:")) {
+    // Only a reason of the catalog this review loaded (the server checks it again: unknown_reason).
+    const reasonKey = v.slice("did_not_participate:".length);
+    if (!reasonOk(reasonKey) || !(detail.participationReasons || []).some((x) => x?.key === reasonKey)) return false;
+    s.choices[athleteId] = { kind: "did_not_participate", reasonKey };
+  } else return false;
   persist(detail);
   return true;
 }

@@ -460,3 +460,73 @@ test("20. after a certain refusal the next send is a first send again: a later r
   assert.match(html(), /not saved\. Nothing was written/);
   assert.doesNotMatch(html(), /can&#039;t be checked from here/);
 });
+
+test("21. already_imported (the import exists) keeps the keys: the reopened review offers Save them, with the same key", async () => {
+  let key = null;
+  await openReview({ onApprove: async () => {
+    key = Object.values(gx().detail.states.groups)[0]?.requestKey;
+    approvalRecord = approvalView();
+    responder = server({ candidate: { ...row(), status: "imported" }, onStates: async (call) => okStates(call) });
+    return { status: 409, body: { error: "already_imported", message: "" } };
+  } });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.ok(key, "keys were made at the confirm");
+  assert.deepEqual(Object.values(gx().detail.states.groups).map((x) => x.requestKey), [key], "kept, not dropped");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.match(html(), /data-action="training-load-gpexe-states-again">Save them</);
+  await act("training-load-gpexe-states-again");
+  assert.equal(statesCalls().length, 1);
+  assert.equal(statesCalls()[0].body.requestKey, key);
+});
+
+test("22. keys restored after a reload (no outcome in memory) lock the chooser: it is drawn disabled and a change is not taken", async () => {
+  const k = "c0c0c0c0-0000-4000-8000-000000000001";
+  resetState();
+  store.clear();
+  store.set(`optimove.gpexe.importStates.v1.coach-1.${TEAM_A}.cand-1`, JSON.stringify({ choices: { [NOREC1]: { kind: "participated_no_values" } },
+    groups: { "participated_no_values|": { requestKey: k, status: "pending", athleteIds: [NOREC1] } } }));
+  approvalRecord = null;
+  responder = server({ onApprove: async () => imported(), onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  await act("training-load-gpexe-review-filter", { filter: "all" });
+  assert.match(html(), new RegExp(`data-athlete-id="${NOREC1}" aria-label="[^"]*" disabled`));
+  await choose(NOREC1, "did_not_participate:illness");
+  assert.equal(gx().detail.states.choices[NOREC1].kind, "participated_no_values");
+});
+
+test("23. the stored choices belong to the signed-in user: another user in the same tab starts empty and never sends them", async () => {
+  await openReview();
+  await choose(NOREC1, "participated_no_values");
+  assert.equal(store.size, 1);
+  assert.match([...store.keys()][0], /\.coach-1\./);
+  const kept = [...store.entries()];
+  resetState();
+  for (const [k, v] of kept) store.set(k, v);
+  state.currentUser = { id: "coach-2", activeWorkspace: { type: "team", scopeId: TEAM_A } };
+  responder = server({ onApprove: async () => imported(), onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.deepEqual(gx().detail.states.choices, {});
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 0);
+});
+
+test("24. a reason the loaded catalog does not hold (or not in the catalog's key shape) is not taken, and a stored one is dropped on read", async () => {
+  await openReview();
+  await choose(NOREC1, "did_not_participate:retired");
+  await choose(NOREC2, "did_not_participate:a|b");
+  assert.deepEqual(gx().detail.states.choices, {});
+  resetState();
+  store.clear();
+  store.set(`optimove.gpexe.importStates.v1.coach-1.${TEAM_A}.cand-1`, JSON.stringify({ choices: { [NOREC1]: { kind: "did_not_participate", reasonKey: "A|b" } },
+    groups: { "did_not_participate|A|b": { requestKey: "c0c0c0c0-0000-4000-8000-000000000002", status: "pending", athleteIds: [NOREC1] } } }));
+  responder = server({ onApprove: async () => imported(), onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.deepEqual(gx().detail.states.choices, {});
+  assert.deepEqual(gx().detail.states.groups, {});
+});

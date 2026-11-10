@@ -521,8 +521,9 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     const info = errorInfo(error);
     if (isDefiniteRefusal(info)) {
       detail.outcome = { kind: "refused", error: info };
-      // J20-C: nothing was imported, so the attendance keys made at the confirm are dropped and the choices can change again.
-      discardStateKeys(detail);
+      // J20-C: nothing was imported, so the attendance keys made at the confirm are dropped and the choices can change again -
+      // except for already_imported (the import exists: a retry after an unknown outcome), whose keys can still be saved.
+      if (info.code !== "already_imported") discardStateKeys(detail);
       // The subset review belongs to a world that moved: it is made again, never reused.
       if (subset) detail.subset = null;
       // The candidate may have moved on (imported by someone else, blocked,

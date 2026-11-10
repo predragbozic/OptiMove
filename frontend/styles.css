@@ -22915,13 +22915,16 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   max-width: 22rem;
   font-weight: 400;
   /* The Import bar sticks to the dialog's bottom: a focused chooser in the last rows is scrolled clear of it. */
-  scroll-margin-bottom: 160px;
+  scroll-margin-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
 }
+/* Fixed once the import is confirmed (or in flight): visibly not a control that still takes a change. */
+.gpexe-state-choice .gpexe-select:disabled { opacity: 0.6; cursor: not-allowed; }
 .gpexe-states-outcome {
   display: grid;
   gap: 8px;
   margin-top: 8px;
 }
+.gpexe-states-outcome p { overflow-wrap: anywhere; }
 .gpexe-leave-out {
   display: inline-flex;
   align-items: center;
