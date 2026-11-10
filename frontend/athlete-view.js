@@ -69,7 +69,7 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
 
   return `
     <div class="athlete-toolbar-row">
-      <section class="athlete-hero" aria-label="Selected athlete">
+      <section class="athlete-hero ${isAthleteMode ? "" : "athlete-hero-compact"}" aria-label="Selected athlete">
         ${imageMarkup}
         ${athleteDetailsMarkup}
       </section>

@@ -48,3 +48,11 @@ export function revealActiveTab(root) {
     row.addEventListener?.("scroll", () => markFade(row), { passive: true });
   });
 }
+
+// A shared .om-tabs row whose buttons are the app's own .tab buttons (the coach's athlete header,
+// design A2): the current one says aria-current="page", every other one carries no aria-current.
+export function markCurrentTab(tab, active) {
+  if (!tab?.classList?.contains("om-tab")) return;
+  if (active) tab.setAttribute("aria-current", "page");
+  else tab.removeAttribute("aria-current");
+}

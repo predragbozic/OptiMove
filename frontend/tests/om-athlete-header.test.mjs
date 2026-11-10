@@ -9,6 +9,7 @@ const dom = new JSDOM("<!doctype html><body></body>");
 globalThis.document = dom.window.document;
 globalThis.window = dom.window;
 const { renderAthleteHeaderToolbarHtml } = await import("../athlete-view.js");
+const { markCurrentTab } = await import("../om-tabs.js");
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
@@ -37,11 +38,32 @@ test("the athlete's own header is unchanged (icons, the My program eyebrow, no c
   assert.equal(host.querySelectorAll(".athlete-tabs .tab.tab-with-icon svg").length, 2);
 });
 
-test("renderTabs marks the current .om-tab with aria-current, and only .om-tab buttons", () => {
-  const body = app.slice(app.indexOf("function renderTabs() {"), app.indexOf("function renderTabs() {") + 900);
-  assert.match(body, /tab\.classList\.toggle\("is-active", active\);/);
-  assert.match(body, /if \(tab\.classList\.contains\("om-tab"\)\) tab\.toggleAttribute\("aria-current", active\);/);
-  assert.match(body, /if \(tab\.classList\.contains\("om-tab"\) && active\) tab\.setAttribute\("aria-current", "page"\);/);
+test("markCurrentTab moves aria-current=page to the current .om-tab and never touches another .tab", () => {
+  const host = html(renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode: false })
+    + '<button class="tab" data-tab="weekly">Plain</button>');
+  const all = [...host.querySelectorAll(".tab")];
+  const select = (current) => all.forEach((tab) => markCurrentTab(tab, tab.dataset.tab === current));
+  const weekly = host.querySelector('.om-tab[data-tab="weekly"]');
+  const programs = host.querySelector('.om-tab[data-tab="programs"]');
+  const plain = host.querySelector(".tab:not(.om-tab)");
+  select("weekly");
+  assert.equal(weekly.getAttribute("aria-current"), "page");
+  assert.equal(programs.hasAttribute("aria-current"), false);
+  select("programs");
+  assert.equal(programs.getAttribute("aria-current"), "page");
+  assert.equal(weekly.hasAttribute("aria-current"), false);
+  assert.equal(plain.hasAttribute("aria-current"), false);
+});
+
+test("renderTabs uses markCurrentTab and reveals the toolbar's tab row (it is outside #content)", () => {
+  const body = app.slice(app.indexOf("function renderTabs() {"), app.indexOf("function renderTabs() {") + 1200);
+  assert.match(body, /tab\.classList\.toggle\("is-active", active\);\n(?:\s*\/\/[^\n]*\n)?\s+markCurrentTab\(tab, active\);/);
+  assert.match(body, /revealActiveTab\(els\.toolbar\);/);
+});
+
+test("the athlete's own header markup is byte for byte the base one (its hero class included)", () => {
+  const markup = renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode: true });
+  assert.ok(markup.includes('<section class="athlete-hero " aria-label="Selected athlete">'));
 });
 
 test("the A2 block is scoped to the coach's row and outranks the older coach rules", () => {

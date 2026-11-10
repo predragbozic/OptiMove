@@ -23756,6 +23756,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-hero-co
 }
 body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-tabs.om-tabs {
   flex: 1 1 auto;
+  gap: 0 var(--om-space-1);
   margin: 0;
 }
 body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-tabs .om-tab {
