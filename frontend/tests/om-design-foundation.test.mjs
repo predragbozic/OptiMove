@@ -169,3 +169,17 @@ test("PR1 tokens never redefine a token or switch on an existing var() fallback"
   // The two names that collided stay undefined, so the Imports rules keep their own fallbacks.
   for (const old of ["--success", "--warning"]) assert.doesNotMatch(css, new RegExp(`\\n\\s*${old}:`));
 });
+
+test("revealActiveTab gives a row one scroll listener, however often it is revealed again", () => {
+  const r = row({ width: 200, scrollWidth: 400, active: { offset: 300, width: 80 } });
+  const added = [];
+  r.addEventListener = (type) => added.push(type);
+  revealActiveTab(root(r));
+  revealActiveTab(root(r));
+  revealActiveTab(root(r));
+  assert.deepEqual(added, ["scroll"]);
+  const fresh = row({ width: 200, scrollWidth: 400, active: { offset: 0, width: 80 } });
+  fresh.addEventListener = (type) => added.push(type);
+  revealActiveTab(root(fresh));
+  assert.deepEqual(added, ["scroll", "scroll"]);
+});

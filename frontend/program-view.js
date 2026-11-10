@@ -52,7 +52,7 @@ export function renderDayEntryHtml(day, makeNode) {
     <article class="calendar-day ${isToday ? "is-today" : ""}" data-date="${escapeAttr(day.date)}">
       <div class="calendar-day-head">
         <span class="calendar-weekday">${escapeHtml(formatWeekday(day.date))}</span>
-        <span class="calendar-date">${escapeHtml(formatDayMonth(day.date))}${isToday ? " · Today" : ""}</span>
+        <span class="calendar-date">${escapeHtml(formatDayMonth(day.date))}${isToday ? `<span class="calendar-today-label"> · Today</span>` : ""}</span>
       </div>
       ${day.dayNote ? `<div class="calendar-note">${escapeHtml(day.dayNote)}</div>` : ""}
       <div class="calendar-events">
@@ -131,6 +131,28 @@ export function renderProgramDayCardHtml(node, makeNode) {
   `;
 }
 
+// Brings the chosen day of a week into view. A grid that scrolls sideways (the athlete's app) gets
+// trailing space so even Sunday can sit at the left edge. A week laid out without a sideways scroll
+// (a coach's week, design A3: cards that wrap on a computer, a list on a phone) gets none - it would
+// only squeeze the days - and the day is brought into view where it is.
+export function scrollWeekToDay(grid, date) {
+  if (!grid) return;
+  const day = grid.querySelector(`[data-date="${date}"]`);
+  const view = grid.ownerDocument?.defaultView;
+  if (view?.getComputedStyle(grid).overflowX === "visible") {
+    grid.style.paddingRight = "";
+    day?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    return;
+  }
+  if (!day) {
+    grid.scrollTo({ left: 0, behavior: "smooth" });
+    return;
+  }
+  const trailingSpace = Math.max(0, grid.clientWidth - day.offsetWidth);
+  grid.style.paddingRight = `${trailingSpace}px`;
+  grid.scrollTo({ left: Math.max(0, day.offsetLeft - grid.offsetLeft), behavior: "smooth" });
+}
+
 export function renderWeeklyRootHtml({
   activeWeek,
   copyPlanModal,
@@ -139,13 +161,17 @@ export function renderWeeklyRootHtml({
   weekSelectorMarkup,
 }) {
   const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
+  // A coach's phone shows the short form (design A3); the athlete's app keeps the full one.
+  const sameYear = String(activeWeek.weekStart).slice(0, 4) === String(activeWeek.weekEnd).slice(0, 4);
+  const weekRangeShort = sameYear ? `${formatDayMonth(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}` : weekRange;
   return `
     <div class="content-section">
       <div class="week-nav-wrap">
       <section class="week-nav-panel">
         <button class="plain-button week-arrow-button" data-action="week-prev" aria-label="Previous week">‹</button>
         <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${Boolean(weekSelectorMarkup)}" aria-label="Choose weekly plan date">
-          <strong>${escapeHtml(weekRange)}</strong>
+          <strong class="week-range-full">${escapeHtml(weekRange)}</strong>
+          <strong class="week-range-short" aria-hidden="true">${escapeHtml(weekRangeShort)}</strong>
         </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" aria-label="Next week">›</button>

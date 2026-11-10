@@ -24,13 +24,17 @@ export const DETAIL_SWIPE = Object.freeze({ minDistance: 120, minWidthShare: 0.3
 // A scroll position that moved by less than this is a rounding, not a scroll.
 const SCROLL_TOLERANCE = 2;
 
-// Where a swipe may start. The media viewer, calendars, the week picker and
+// Where a swipe may start. The media viewer, calendars, a week that scrolls sideways, the week picker and
 // lists that scroll sideways keep the finger for themselves, and so does a
 // dialog over the detail (the editor, its frame slider included; tags; a
 // Builder modal): a drag in it never moves or closes the exercise behind.
 export function isSwipeArea(target, { mediaOpen = false } = {}) {
   if (mediaOpen) return false;
-  if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar, .exercise-sibling-strip")) return false;
+  if (target.closest(".week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar, .exercise-sibling-strip")) return false;
+  // A week keeps the finger only while it scrolls sideways (the athlete's app); a coach's week on a
+  // phone is a list (design A3), and a sideways swipe over it changes the week like anywhere else.
+  const week = target.closest(".calendar-grid");
+  if (week && week.scrollWidth > week.clientWidth + 1) return false;
   if (target.closest(".exercise-editor-overlay, .exercise-tag-overlay, .builder-modal-overlay")) return false;
   return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
 }
