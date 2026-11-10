@@ -23641,3 +23641,61 @@ p.coach-home-library-note.muted:not([role="status"]) {
 .cc-layout-medium .cc-week .cc-day-column {
   padding-inline: 4px;
 }
+
+/* =====================================================
+   Design: the coach's Account page (coach-account.js; the athlete's own settings, which share
+   these forms, are not touched).
+   - Only the first card carries the "Account" eyebrow (sentence case); each form card is named
+     by its title.
+   - The cards use the .om-card border, radius and surface.
+   - Each form's one action is a primary button: on a computer it fits its label instead of
+     spanning the card; on a phone it spans the card.
+   - On a phone every field and button is a 44 px touch target, and every field has 16 px text.
+   ===================================================== */
+.coach-account-view > .athlete-settings-card:not(:first-child) .eyebrow {
+  display: none;
+}
+.coach-account-view .eyebrow {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.coach-account-view .athlete-settings-card {
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+  background: var(--om-surface-raised);
+}
+.coach-account-view .organization-form button[type="submit"] {
+  justify-self: start;
+  min-width: 180px;
+  padding: 0 var(--om-space-5);
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+@media (hover: hover) {
+  .coach-account-view .organization-form button[type="submit"]:hover:not(:disabled) {
+    border-color: var(--om-accent-strong);
+    background: var(--om-accent-strong);
+  }
+}
+/* Off, but legible: one muted look, not also the .plain-button:disabled 0.45 opacity. */
+.coach-account-view .organization-form button[type="submit"]:disabled {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  opacity: 1;
+}
+@media (max-width: 760px) {
+  .coach-account-view input:not([type="checkbox"]):not([type="radio"]),
+  .coach-account-view select,
+  .coach-account-view button {
+    min-height: var(--om-tap-target);
+  }
+  .coach-account-view input:not([type="checkbox"]):not([type="radio"]),
+  .coach-account-view select {
+    font-size: 16px;
+  }
+  .coach-account-view .organization-form button[type="submit"] {
+    justify-self: stretch;
+  }
+}
