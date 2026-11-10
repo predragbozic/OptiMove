@@ -23,7 +23,7 @@ const header = (page) => page.evaluate(() => {
   };
 });
 
-for (const role of ["platform_admin", "club_admin", "team_coach"]) for (const width of [1280, 1024, 800, 390]) test(`(${role}, ${width} px) every header control is 44 px; the Online pill is unchanged`, async () => {
+for (const role of ["platform_admin", "club_admin", "team_coach"]) for (const width of [1280, 1024, 800, 761, 390]) test(`(${role}, ${width} px) every header control is 44 px; the Online pill is unchanged`, async () => {
   const { context, page, pageErrors } = await openAs(browser, world, role, width);
   try {
     await page.waitForFunction(() => document.querySelector("#apiStatus")?.textContent === "Online", null, { timeout: 20_000 });
@@ -31,6 +31,7 @@ for (const role of ["platform_admin", "club_admin", "team_coach"]) for (const wi
     assert.ok(h.switcher[1] >= 44, `the switcher is ${h.switcher[1]} px tall`);
     for (const key of ["notifications", "messages", "signOut"]) assert.deepEqual(h[key], [44, 44], key);
     if (width > 760) assert.deepEqual(h.pill, [104, 31], "the Online pill keeps its size");
+    else assert.deepEqual(h.pill, [12, 12], "the Online dot keeps its size on a phone");
     assert.equal(h.overflow, 0);
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
