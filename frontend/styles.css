@@ -23650,7 +23650,7 @@ p.coach-home-library-note.muted:not([role="status"]) {
    - The cards use the .om-card border, radius and surface.
    - Each form's one action is a primary button: on a computer it fits its label instead of
      spanning the card; on a phone it spans the card.
-   - On a phone every field and button is a 44 px touch target.
+   - On a phone every field and button is a 44 px touch target, and every field has 16 px text.
    ===================================================== */
 .coach-account-view > .athlete-settings-card:not(:first-child) .eyebrow {
   display: none;
@@ -23672,20 +23672,28 @@ p.coach-home-library-note.muted:not([role="status"]) {
   background: var(--accent);
   color: #fff;
 }
-.coach-account-view .organization-form button[type="submit"]:hover {
-  border-color: var(--om-accent-strong);
-  background: var(--om-accent-strong);
+@media (hover: hover) {
+  .coach-account-view .organization-form button[type="submit"]:hover:not(:disabled) {
+    border-color: var(--om-accent-strong);
+    background: var(--om-accent-strong);
+  }
 }
+/* Off, but legible: one muted look, not also the .plain-button:disabled 0.45 opacity. */
 .coach-account-view .organization-form button[type="submit"]:disabled {
   border-color: var(--line);
   background: var(--surface-soft);
   color: var(--muted);
+  opacity: 1;
 }
 @media (max-width: 760px) {
   .coach-account-view input:not([type="checkbox"]):not([type="radio"]),
   .coach-account-view select,
   .coach-account-view button {
     min-height: var(--om-tap-target);
+  }
+  .coach-account-view input:not([type="checkbox"]):not([type="radio"]),
+  .coach-account-view select {
+    font-size: 16px;
   }
   .coach-account-view .organization-form button[type="submit"] {
     justify-self: stretch;

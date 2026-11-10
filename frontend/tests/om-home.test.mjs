@@ -8,7 +8,10 @@ const { renderCoachHomeHtml } = await import("../coach-home.js");
 const { renderWorkspaceScopeCard } = await import("../organization-view.js");
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-const pr3 = css.slice(css.indexOf("Design PR3: Home for the three roles"));
+// The PR3 block only: it ends where the next design block starts.
+const pr3Start = css.indexOf("Design PR3: Home for the three roles");
+const pr3End = css.indexOf("\n/* =====", pr3Start);
+const pr3 = css.slice(pr3Start, pr3End > 0 ? pr3End : undefined);
 const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 test("U1b: the scope card says where and in which role, in plain words, from the active workspace", () => {
