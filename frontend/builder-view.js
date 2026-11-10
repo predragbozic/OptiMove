@@ -165,7 +165,7 @@ function renderBuilderDraftsPanel() {
               </button>
               <span class="muted">Select all</span>
             </div>
-            ${selectedCount ? `<button class="text-action danger-action" type="button" data-action="builder-discard-selected-drafts">Discard selected (${selectedCount})</button>` : ""}
+            ${selectedCount ? `<button class="plain-button builder-draft-discard danger-action" type="button" data-action="builder-discard-selected-drafts">Discard selected (${selectedCount})</button>` : ""}
           </div>
           <div class="builder-drafts-list">
             ${drafts.map((item) => {
@@ -186,7 +186,7 @@ function renderBuilderDraftsPanel() {
                   </div>
                   <div class="builder-draft-actions">
                     <button class="plain-button" type="button" data-action="builder-open-draft" data-plan-id="${escapeAttr(item.openPlanId)}">Continue</button>
-                    <button class="text-action danger-action" type="button" data-action="builder-discard-draft" data-plan-ids="${escapeAttr((item.planIds || []).join(","))}">Discard</button>
+                    <button class="plain-button builder-draft-discard danger-action" type="button" data-action="builder-discard-draft" data-plan-ids="${escapeAttr((item.planIds || []).join(","))}">Discard</button>
                   </div>
                 </div>
               `;
