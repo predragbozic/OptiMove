@@ -23901,19 +23901,22 @@ body:not(.athlete-mode):not(.login-mode) .message-panel .message-thread {
 }
 
 body:not(.athlete-mode):not(.login-mode) .message-panel .message-bubble p {
+  word-break: break-word; /* older WebKit, before overflow-wrap: anywhere (Safari 15.4) */
   overflow-wrap: anywhere;
 }
 
 body:not(.athlete-mode):not(.login-mode) .notification-panel-head .compact-button,
 body:not(.athlete-mode):not(.login-mode) .message-panel .notification-panel-head .plain-button,
-body:not(.athlete-mode):not(.login-mode) .message-panel .message-send-button {
+body:not(.athlete-mode):not(.login-mode) .message-panel .message-send-button,
+body:not(.athlete-mode):not(.login-mode) .notification-panel .notification-actions .compact-button,
+body:not(.athlete-mode):not(.login-mode) .message-panel .message-thread-menu-item,
+body:not(.athlete-mode):not(.login-mode) .message-hide-confirm-modal .exit-confirm-actions .plain-button {
   min-width: var(--om-tap-target);
   min-height: var(--om-tap-target);
 }
 
 body:not(.athlete-mode):not(.login-mode) .message-panel .message-search input,
-body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input,
-body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose textarea {
+body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input {
   min-height: var(--om-tap-target);
   font-size: 16px;
 }

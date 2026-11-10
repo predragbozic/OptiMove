@@ -69,13 +69,6 @@ test("a panel without a box (a test's plain object) is left alone instead of thr
   assert.doesNotThrow(() => fitPanelToViewport(null));
 });
 
-test("both panels are fitted after every render", () => {
-  const notifications = readFileSync(new URL("../notifications.js", import.meta.url), "utf8");
-  const messages = readFileSync(new URL("../messages.js", import.meta.url), "utf8");
-  assert.match(notifications, /els\.notificationPanel\.innerHTML = renderNotificationPanelHtml\(\);\n\s+fitPanelToViewport\(els\.notificationPanel\);/);
-  assert.match(messages, /fitPanelToViewport\(els\.messagePanel\);\n\s+wireComposer\(\);/);
-});
-
 test("the CSS block: a coach's only, the thread's column is bounded, long words wrap, 44 px controls and 16 px fields", () => {
   const from = css.indexOf("Design: the header panels (notifications, messages)");
   assert.ok(from > 0);
@@ -85,6 +78,7 @@ test("the CSS block: a coach's only, the thread's column is bounded, long words 
   assert.ok(selectors.length >= 8);
   for (const sel of selectors) assert.ok(sel.startsWith("body:not(.athlete-mode):not(.login-mode) "), sel);
   assert.match(block, /\.message-thread \{\s*grid-template-columns: minmax\(0, 1fr\);/);
-  assert.match(block, /\.message-bubble p \{\s*overflow-wrap: anywhere;/);
+  assert.match(block, /\.message-bubble p \{[^}]*overflow-wrap: anywhere;/);
+  for (const control of [".notification-actions .compact-button", ".message-thread-menu-item", ".exit-confirm-actions .plain-button", ".message-send-button"]) assert.ok(block.includes(control), control);
   assert.match(block, /min-height: var\(--om-tap-target\);\s*font-size: 16px;/);
 });

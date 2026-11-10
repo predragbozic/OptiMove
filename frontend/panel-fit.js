@@ -10,6 +10,9 @@ const MARGIN = 8;
 
 export function fitPanelToViewport(panel, { margin = MARGIN, view = globalThis } = {}) {
   if (!panel?.style || typeof panel.getBoundingClientRect !== "function") return;
+  // Installed on every path, a skipped one included: messages opened full-screen on an upright phone
+  // must still be fitted when the phone is turned sideways (761 px and wider).
+  installResize(view);
   panel.style.translate = "";
   panel.style.maxWidth = "";
   if (panel.hidden) return;
@@ -27,10 +30,9 @@ export function fitPanelToViewport(panel, { margin = MARGIN, view = globalThis }
   if (box.right > width - margin) shift = width - margin - box.right;
   if (box.left + shift < margin) shift = margin - box.left;
   if (Math.abs(shift) >= 1) panel.style.translate = `${Math.round(shift)}px 0`;
-  installResize(view);
 }
 
-// One window listener, installed on the first fit: a rotation or a resized window fits every open
+// One window listener, installed on the first call: a rotation or a resized window fits every open
 // panel again.
 let resizeInstalled = false;
 function installResize(view) {
