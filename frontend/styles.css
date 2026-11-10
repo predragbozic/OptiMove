@@ -3074,14 +3074,11 @@ input:focus {
   color: var(--text);
 }
 
-/* The Tests module's Today/Schedule/Results/Test Library tabs carry icons
-   (TESTS_TAB_ICONS, tests-view.js) - the generic .tab.is-active solid fill
-   reads as a heavy, mismatched green block next to Builder's own icon
-   marking elsewhere in the app. Scoped to .tests-section-tabs, same
-   precedent as .athlete-tabs .tab-with-icon.is-active above, so no other
-   .tab.is-active usage is affected. Colors match Builder's own active
-   tint/border (.builder-node-button.is-active, styles.css) for uniformity -
-   the icon's stroke uses currentColor, so this tints icon + label together. */
+/* The athlete's Tests tabs (Today/Upcoming/History): a light tint instead of
+   the generic .tab.is-active solid fill. Scoped to .tests-section-tabs, so no
+   other .tab.is-active usage is affected. Colors match Builder's own active
+   tint/border (.builder-node-button.is-active). The coach's Tests tabs are an
+   .om-tabs row and do not use this rule. */
 .tests-section-tabs .tab.is-active {
   border-color: #287e77;
   background: #e7f5f2;
@@ -10885,27 +10882,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
 .tests-section-tabs {
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-}
-
-.tests-section-tabs-icon .tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 64px;
-  padding: 8px 6px;
-  font-size: 12px;
-}
-
-.tests-tab-icon {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .tests-shell {
@@ -23483,4 +23459,49 @@ p.coach-home-library-note.muted:not([role="status"]) {
   border-radius: var(--om-radius-md);
   background: var(--om-info-soft);
   color: var(--om-info);
+}
+
+/* =====================================================
+   Design: the Tests module's coach tabs use the shared tab row (.om-tabs), the same as
+   Settings, instead of the full-width icon cards. The athlete's tabs are unchanged.
+   ===================================================== */
+.tests-section-tabs.om-tabs {
+  margin-bottom: var(--om-space-3);
+}
+
+/* Design: on a phone every control in a Settings row and list header is a 44 px touch target
+   (it was 36-42 px).
+   Buttons grow to 44 px. The Invite and + Add links are taller but keep their look. The Active
+   pill keeps its size (in a row and in a team's athlete table), and an invisible area around it
+   takes the touch. */
+@media (max-width: 760px) {
+  .organization-view .organization-row-main {
+    min-height: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .plain-button,
+  .organization-view .organization-browser-actions .plain-button,
+  .organization-view .organization-list-head .plain-button,
+  .organization-view .organization-row-actions .text-action,
+  .organization-view .organization-browser-actions .text-action,
+  .organization-view .tag-chip-head .text-action {
+    min-height: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .icon-button {
+    min-width: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .text-action,
+  .organization-view .organization-browser-actions .text-action,
+  .organization-view .tag-chip-head .text-action {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--om-space-2);
+  }
+  .organization-view .athlete-login-toggle {
+    position: relative;
+  }
+  .organization-view .athlete-login-toggle::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--om-tap-target) - 100%) / -2) -4px;
+  }
 }
