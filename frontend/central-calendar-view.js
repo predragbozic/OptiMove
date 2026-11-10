@@ -619,7 +619,7 @@ function dayHeadHtml(date, today, count, { button = true } = {}) {
 
 // Week as columns (medium and wide): the server's order inside each day. A wide column shows the
 // short type line (centralCalendarShortKindLabel).
-function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "wide") {
+function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "") {
   const columns = days.map((date) => {
     const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
     return `<section class="cc-day-column${date === today ? " is-today" : ""}" aria-label="${escapeAttr(centralCalendarLongDate(date))}">

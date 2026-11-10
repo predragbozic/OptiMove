@@ -226,13 +226,16 @@ beforeEach(() => {
 
 // --- 1. The card ---------------------------------------------------------------
 
-test("1a. an event card: its type's icon, Event · type, the time span, the place, the team pill and the status pill", async () => {
+test("1a. an event card: its type's icon, its type (Event · type as the tooltip), the time span, the place, the team pill and the status pill", async () => {
   installFetchMock(server());
   await loadCentralCalendar({ render });
   const card = dom().querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"]`);
   assert.ok(card, "the event is a card of its day");
   assert.ok(card.classList.contains("cc-card-event"));
-  assert.equal(card.querySelector(".cc-card-kind").textContent, "Event · Match · 18 athletes");
+  // A wide week column shows the type word without "Event ·" (the manager's decision, 2026-11-10);
+  // the whole label stays the tooltip and the card's aria-label (below).
+  assert.equal(card.querySelector(".cc-card-kind").textContent, "Match · 18 athletes");
+  assert.equal(card.querySelector(".cc-card-kind").getAttribute("title"), "Event · Match · 18 athletes");
   assert.equal(card.querySelector(".cc-card-when").textContent, "15:00–17:00");
   assert.equal(card.querySelector(".cc-card-place").textContent, "City stadium");
   assert.equal(card.querySelector(".cc-team-pill .cc-team-pill-name").textContent, "U17");
