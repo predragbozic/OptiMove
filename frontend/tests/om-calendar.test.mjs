@@ -32,3 +32,33 @@ test("in a wide week column the type line is clamped to one line without widenin
   assert.doesNotMatch(rule.body, /white-space: nowrap/);
   // Which rendered cards it reaches is checked on the real render: central-calendar.actions test 8e.
 });
+
+// Design: no mid-word breaks in the week columns (a tablet's columns are about 100 px).
+const wrapFrom = css.indexOf("Design: no mid-word breaks in the calendar's week columns");
+const wrapEnd = css.indexOf("\n/* =====", wrapFrom + 10);
+const wrap = css.slice(css.lastIndexOf("/*", wrapFrom), wrapEnd > 0 ? wrapEnd : undefined);
+
+test("the week-column wrapping block reaches the week columns only (never the phone's day list or the time grid)", () => {
+  assert.ok(wrapFrom > 0);
+  const all = rules(wrap);
+  assert.ok(all.length >= 5);
+  for (const rule of all) for (const sel of rule.selectors) assert.match(sel, /^(\.cc-layout-medium )?\.cc-week /, sel);
+});
+
+test("a title breaks a word only when it must; pills stay on one line; nothing sizes a card past its column", () => {
+  const all = rules(wrap);
+  const of = (sel) => all.find((r) => r.selectors.includes(sel))?.body || "";
+  assert.match(of(".cc-week .cc-card-title"), /overflow-wrap: break-word;/);
+  assert.doesNotMatch(wrap, /overflow-wrap: anywhere/);
+  for (const sel of [".cc-week .cc-team-pill-name", ".cc-week .cc-card-meta .cc-badge"]) {
+    assert.match(of(sel), /white-space: nowrap;/, sel);
+    assert.match(of(sel), /text-overflow: ellipsis;/, sel);
+    assert.match(of(sel), /overflow: hidden;/, sel);
+  }
+  // Without these three tracks a one-line pill or a long word widens the card past its column
+  // (seen in the browser at 900 px: the card body's track was 82 px inside a 73 px body).
+  for (const sel of [".cc-week .cc-day-column", ".cc-week .cc-day-cards", ".cc-week .cc-card-body"]) {
+    assert.match(of(sel), /grid-template-columns: minmax\(0, 1fr\);/, sel);
+  }
+  assert.match(of(".cc-layout-medium .cc-week .cc-card-title"), /font-size: var\(--om-text-sm\);/);
+});

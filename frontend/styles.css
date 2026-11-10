@@ -23601,3 +23601,37 @@ p.coach-home-library-note.muted:not([role="status"]) {
   -webkit-line-clamp: 1;
   line-clamp: 1;
 }
+
+/* =====================================================
+   Design: no mid-word breaks in the calendar's week columns (a tablet's columns are about 100 px).
+   - A card's title breaks a word only when the word alone does not fit (break-word), not at any
+     letter (anywhere). The column, its card list and a card's body take exactly the width they
+     are given (minmax(0, 1fr)), so a long word or a one-line pill never widens a card past its
+     column.
+   - The team pill and the status pill stay on one line, cut with "…" if they must.
+   - A tablet's card spends less of its width on spacing, and its title is a step smaller.
+   ===================================================== */
+.cc-week .cc-day-column,
+.cc-week .cc-day-cards,
+.cc-week .cc-card-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+.cc-week .cc-card-title {
+  overflow-wrap: break-word;
+}
+.cc-week .cc-team-pill-name,
+.cc-week .cc-card-meta .cc-badge {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-layout-medium .cc-week .cc-card {
+  gap: 6px;
+}
+.cc-layout-medium .cc-week .cc-card-body {
+  padding-right: 6px;
+}
+.cc-layout-medium .cc-week .cc-card-title {
+  font-size: var(--om-text-sm);
+}
