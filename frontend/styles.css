@@ -24013,14 +24013,27 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-grid > .coach-home-athletes
   grid-column: 1 / -1;
 }
 
+/* A two-option switch shows both options at every width: two equal columns,
+   never the .om-tabs sideways scroll (a label may wrap instead). */
 body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tabs {
-  margin-bottom: var(--om-space-2);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow-x: visible;
 }
 
 body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tabs .coach-home-athletes-tab {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--om-space-2);
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-hint {
+  margin: var(--om-space-2) 0;
+  font-size: var(--om-text-sm);
 }
 
 body:not(.athlete-mode):not(.login-mode) .coach-home-athletes-tab .coach-home-panel-icon {

@@ -72,8 +72,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const athleteWeek = page.waitForResponse((r) => r.url().includes("/api/training-load/calendar") && r.url().includes("athleteIds="), { timeout: 20_000 });
       await loadAthlete.click();
       await page.waitForSelector('[data-action="training-load-section"]', { timeout: 20_000 });
-      await athleteWeek;
-      await page.waitForTimeout(300);
+      // The answer's body read in full, then two frames: the render that follows it has run.
+      await (await athleteWeek).finished();
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal((await page.textContent("#screenTitle")).trim(), loadName);
 
       // Back on Home the switch still says Training load (kept in memory, no new request).
@@ -87,24 +88,27 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
   });
 }
 
-test("(390 px) an empty day offers Plan a session, which opens the Calendar", async () => {
+test("(390 px) an empty later day offers Plan a session, which opens the Calendar on that day", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);
   try {
     await page.waitForSelector(".coach-home-day", { timeout: 20_000 });
-    // Choose a day with no session: the first calendar day without a training marker.
-    const found = await page.evaluate(() => {
-      const empty = [...document.querySelectorAll('.coach-home-cal-day:not(.has-training):not(.is-outside)')];
-      const day = empty.find((button) => button.getBoundingClientRect().width > 0) || empty[0];
-      day?.click();
-      return Boolean(day);
-    });
-    assert.ok(found, "the calendar shows a day with no session");
+    // Choose a later day of the shown week with no session (a past day offers no planning).
+    const today = await page.evaluate(() => document.querySelector(".coach-home-cal-day.is-today")?.dataset.date);
+    const chosen = await page.evaluate((todayIso) => {
+      const days = [...document.querySelectorAll(".coach-home-cal-day:not(.has-training)")]
+        .filter((button) => button.dataset.date > todayIso && button.getBoundingClientRect().width > 0);
+      days[0]?.click();
+      return days[0]?.dataset.date || "";
+    }, today);
+    assert.ok(chosen, "the week shows a later day with no session");
+    await page.waitForSelector(`[data-action="coach-home-plan-session"][data-date="${chosen}"]`, { timeout: 10_000 });
     const plan = page.locator('[data-action="coach-home-plan-session"]');
     await plan.waitFor({ timeout: 10_000 });
     const box = await plan.boundingBox();
     assert.ok(box.height >= 44, `Plan a session is at least 44 px tall (${box.height})`);
     await plan.click();
     await page.waitForSelector(".central-calendar", { timeout: 20_000 });
+    await page.waitForSelector(`[data-action="central-calendar-select-day"][data-date="${chosen}"][aria-pressed="true"]`, { timeout: 20_000 });
     assert.equal(await page.locator(".coach-home-day").count(), 0, "Home left for the Calendar");
     assert.deepEqual(pageErrors, []);
   } finally {

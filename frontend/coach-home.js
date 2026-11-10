@@ -144,8 +144,8 @@ function renderCarousel(track, label, itemsHtml, { previousLabel, nextLabel, tra
 // as they did with two cards. The choice is kept in memory
 // (state.coachHome.athletesMode).
 export const COACH_HOME_ATHLETE_MODES = {
-  plan: { title: "Training plan", icon: "calendar" },
-  load: { title: "Training load", icon: "load" },
+  plan: { title: "Training plan", icon: "calendar", opens: "their weekly plan" },
+  load: { title: "Training load", icon: "load", opens: "their training load" },
 };
 
 export function coachHomeAthletesMode(home = emptyCoachHomeState()) {
@@ -154,7 +154,7 @@ export function coachHomeAthletesMode(home = emptyCoachHomeState()) {
 
 export function renderCoachHomeAthletesHtml(rows, mode = "plan") {
   const current = mode === "load" ? "load" : "plan";
-  const { title } = COACH_HOME_ATHLETE_MODES[current];
+  const { title, opens } = COACH_HOME_ATHLETE_MODES[current];
   const items = sortAthletes(rows).map((row) => `<li><button class="coach-home-strip-item coach-home-strip-athlete" type="button" data-action="coach-home-open-athlete" data-mode="${current}" data-athlete-id="${escapeAttr(row.athleteId)}" data-athlete-uuid="${escapeAttr(row.athleteUuid || "")}" aria-label="${escapeAttr(`${row.athlete}, ${title}`)}">
         ${renderAthleteAvatar(row, "coach-home-avatar coach-home-strip-avatar", { lazy: true })}
         <span class="coach-home-strip-label">${escapeHtml(row.athlete)}</span>
@@ -163,9 +163,10 @@ export function renderCoachHomeAthletesHtml(rows, mode = "plan") {
   return `<section class="coach-home-panel coach-home-athletes coach-home-panel-${current}" data-coach-home-section="athletes" aria-labelledby="coachHomeAthletesTitle">
       <header class="coach-home-panel-head">
         <h3 class="coach-home-panel-title" id="coachHomeAthletesTitle">${renderMenuIcon("athletes")}<span>Athletes</span></h3>
-        <button class="plain-button coach-home-search-button" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="${current}" aria-label="Search athletes for ${title}">${ICON_SEARCH}<span>Search</span></button>
+        <button class="plain-button coach-home-search-button" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="${current}" aria-label="Search athletes to open ${opens}">${ICON_SEARCH}<span>Search</span></button>
       </header>
-      <div class="om-tabs coach-home-athletes-tabs" role="group" aria-label="Show athletes for">${tabs}</div>
+      <div class="om-tabs coach-home-athletes-tabs" role="group" aria-label="Open athletes in">${tabs}</div>
+      <p class="muted coach-home-athletes-hint">Tap an athlete to open ${opens}.</p>
       ${renderCarousel(current, `Athletes for ${title}`, items, { previousLabel: `Previous athletes for ${title}`, nextLabel: `Next athletes for ${title}` })}
     </section>`;
 }
@@ -227,7 +228,7 @@ function renderDayListHtml(day, today) {
   if (!training.length) {
     return `<div class="coach-home-day-note coach-home-day-empty">
           <p class="muted">${day.isToday ? "No athletes have a session scheduled today." : "No athletes have a session scheduled on this day."}</p>
-          <button class="plain-button coach-home-inline-button coach-home-plan-session" type="button" data-action="coach-home-plan-session" data-date="${escapeAttr(day.date)}">Plan a session</button>
+          ${day.date >= localDateIso() ? `<button class="plain-button coach-home-inline-button coach-home-plan-session" type="button" data-action="coach-home-plan-session" data-date="${escapeAttr(day.date)}">Plan a session</button>` : ""}
         </div>`;
   }
   // One markup, two layouts (styles.css): a list beside the calendar on a
