@@ -234,6 +234,18 @@ export function centralCalendarKindLabel(item) {
   return "";
 }
 
+// The card's type line in a wide week column (the manager's decision, 2026-11-10): an event shows
+// its type word and count without the "Event ·" prefix ("Team training · 12 athletes"); a title
+// that already is the type word leaves the count, and nothing at all leaves "Event". Every other
+// kind keeps its own word, which is what tells it apart. The whole label stays the card's title.
+export function centralCalendarShortKindLabel(item) {
+  if (item?.kind !== "event") return centralCalendarKindLabel(item);
+  const word = eventKindWord(item);
+  const count = Number(item.athleteCount) || 0;
+  const parts = [item.title && item.title !== word ? word : "", count ? athleteCountLabel(count) : ""].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "Event";
+}
+
 // "Day 2 of 3" on each day's card of a multi-day event (D22); "" otherwise.
 export function centralCalendarSpanLabel(item) {
   const span = item?.span;
@@ -418,7 +430,7 @@ function eventPlaceText(item) {
   return item.location || "";
 }
 
-export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "" } = {}) {
+export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "", shortKind = false } = {}) {
   const when = centralCalendarWhenLabel(item);
   const count = centralCalendarCountLabel(item);
   const span = centralCalendarSpanLabel(item);
@@ -431,7 +443,7 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
       <span class="cc-card-stripe" aria-hidden="true"></span>
       <span class="cc-card-body">
-        <span class="cc-card-top">${itemIconHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
+        <span class="cc-card-top">${itemIconHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
         ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
@@ -592,10 +604,10 @@ function renderEmptyHtml(cal, scope) {
     </div>`;
 }
 
-function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—", emptyAction = "" } = {}) {
+function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—", emptyAction = "", shortKind = false } = {}) {
   if (!items.length && emptyAction) return `<div class="om-empty cc-day-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyText)}</p><div class="om-empty__actions">${emptyAction}</div></div>`;
   if (!items.length) return `<p class="cc-day-empty">${escapeHtml(emptyText)}</p>`;
-  return items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey, today })).join("");
+  return items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey, today, shortKind })).join("");
 }
 
 function dayHeadHtml(date, today, count, { button = true } = {}) {
@@ -605,13 +617,14 @@ function dayHeadHtml(date, today, count, { button = true } = {}) {
   return `<button type="button" class="cc-day-head" data-action="central-calendar-open-day" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(`Open ${label}`)}">${inner}</button>`;
 }
 
-// Week as columns (medium and wide): the server's order inside each day.
-function renderWeekColumnsHtml(days, byDate, cal, teams, today) {
+// Week as columns (medium and wide): the server's order inside each day. A wide column shows the
+// short type line (centralCalendarShortKindLabel).
+function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "") {
   const columns = days.map((date) => {
     const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
     return `<section class="cc-day-column${date === today ? " is-today" : ""}" aria-label="${escapeAttr(centralCalendarLongDate(date))}">
         ${dayHeadHtml(date, today, items.length)}
-        <div class="cc-day-cards">${renderDayCardsHtml(items, teams, cal.panel.key, today)}</div>
+        <div class="cc-day-cards">${renderDayCardsHtml(items, teams, cal.panel.key, today, { shortKind: layout === "wide" })}</div>
       </section>`;
   });
   return `<div class="cc-week" role="group" aria-label="Week of ${escapeAttr(shortDate(days[0], { year: true }))}">${columns.join("")}</div>`;
@@ -783,7 +796,7 @@ function renderBodyHtml(cal, layout, today) {
     return renderStripHtml(days, byDate, cal, today, teams) + renderSelectedDayListHtml(selected, byDate, cal, teams, today);
   }
   const grid = layout === "wide" && cal.weekMode === "grid";
-  return (grid ? renderWeekGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+  return (grid ? renderWeekGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
 }
 
 // `roster` maps an athlete UUID to the rail roster's athlete_id, the id the
