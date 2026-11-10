@@ -65,3 +65,49 @@ for (const width of [360, 390, 600]) {
     } finally { await context.close(); }
   });
 }
+
+test("(390 px, a phone) the closed menu drawer is hidden and takes no focus; opened it is visible and usable, closed again it is hidden", async () => {
+  const { context, page, pageErrors } = await openPhone(390);
+  try {
+    const drawer = () => page.evaluate(() => {
+      const sidebar = document.querySelector(".sidebar");
+      const link = sidebar.querySelector("button, a[href]");
+      link.focus();
+      return { visibility: getComputedStyle(sidebar).visibility, focusedInside: sidebar.contains(document.activeElement) };
+    });
+    assert.deepEqual(await drawer(), { visibility: "hidden", focusedInside: false }, "closed: hidden, nothing inside can take focus");
+    await page.locator("#mobileNavToggle").click();
+    await page.waitForTimeout(300);
+    assert.deepEqual(await drawer(), { visibility: "visible", focusedInside: true }, "open: visible and focusable");
+    await page.locator("#mobileNavToggle").click().catch(() => page.keyboard.press("Escape"));
+    await page.waitForTimeout(400);
+    assert.equal((await drawer()).visibility, "hidden", "closed again: hidden after the fade");
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+for (const width of [360, 390]) {
+  test(`(${width} px, a phone) no header popup makes the page wider than the screen`, async () => {
+    const { context, page, pageErrors } = await openPhone(width);
+    try {
+      for (const selector of ["#mobileNavToggle", ".topbar [aria-label^='Workspace']", "#notificationToggle", "#messageToggle"]) {
+        await page.goto(world.baseUrl);
+        await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+        await page.evaluate(() => {
+          window.__widest = 0;
+          const start = performance.now();
+          const sample = () => {
+            window.__widest = Math.max(window.__widest, document.documentElement.scrollWidth, innerWidth);
+            if (performance.now() - start < 1800) requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        });
+        await page.locator(selector).first().click();
+        await page.waitForTimeout(1900);
+        const widest = await page.evaluate(() => window.__widest);
+        assert.equal(widest, width, `${selector}: the page reached ${widest} px`);
+      }
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
