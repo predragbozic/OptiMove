@@ -2508,6 +2508,9 @@ async function loadTrainingLoad() {
 }
 
 function renderTrainingLoad() {
+  // A paint that lands after an await (a read finishing, a section load) must not draw Training Load over the
+  // screen the coach went to meanwhile (Back to Home while Training Load was loading drew it under the Home title).
+  if (state.activeTab !== "training-load") return;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   if (state.trainingLoad.section === "analysis") {
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
