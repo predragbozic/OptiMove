@@ -2181,12 +2181,12 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
   const fine = rows.filter((r) => !PROBLEM_KIND[r.status]);
   const counts = { needs: 0, not_linked: 0, no_data: 0, review: 0, all: rows.length };
   for (const r of problem) counts[PROBLEM_KIND[r.status]] += 1;
-  // No action exists for a team athlete without a GPEXE record until the attendance states (J20-C): they stay
-  // visible under their own chip and under All, but are not "a person to act on".
-  counts.needs = counts.not_linked + counts.review;
+  // A team athlete without a GPEXE record is "a person to act on" where the attendance chooser is offered (J20-C); otherwise
+  // they stay visible under their own chip and under All only.
+  counts.needs = counts.not_linked + counts.review + (lo.states ? counts.no_data : 0);
   const gx = state.trainingLoad.gpexe;
   let filter = REVIEW_CHIPS.some(([k]) => k === gx.reviewFilter) && (counts[gx.reviewFilter] > 0 || gx.reviewFilter === "all") ? gx.reviewFilter : (counts.needs ? "needs" : "all");
-  const shown = filter === "all" ? problem : problem.filter((r) => (filter === "needs" ? PROBLEM_KIND[r.status] !== "no_data" : PROBLEM_KIND[r.status] === filter));
+  const shown = filter === "all" ? problem : problem.filter((r) => (filter === "needs" ? (lo.states || PROBLEM_KIND[r.status] !== "no_data") : PROBLEM_KIND[r.status] === filter));
   const n = importableAthleteCount(preview);
   const partOnly = rows.filter((r) => r.status === "participation").length;
   const needLink = counts.not_linked;

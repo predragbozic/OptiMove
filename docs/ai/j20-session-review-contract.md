@@ -263,8 +263,24 @@ and should not wait for them. If the first months show friction, B is a later ch
   left-out / measured / off-roster athletes, the database's own rules, a lost COMMIT answer replayed once, both lock orders with the undo,
   the body, the migration's preflight / post-check / rollback / re-apply and md5 gate). The O1 and U5 suites pin v60 as their last
   migration.
-* **Part b** (the frontend: choosing states on the review's *No data* and *Left out* rows, saved after a confirmed import, one requestKey
-  per kind and reason kept across a reload) is the next pull request, merged only after part a.
+
+**As built (J20-C part b: the screen; frontend, plus one read).**
+* **Where**: an *Attendance* chooser (No state yet / Participated · no device data / Did not participate · reason) under the note of every
+  row without a GPEXE record and of every row the coach ticks *Leave out*, under the same conditions as *Leave out* (a pending, confirmed
+  session and a viewer who may approve). With the chooser on, the *No data* rows count under *Needs a person*.
+* **The reasons**: `GET …/candidates/:id` also answers `participationReasons` (the active keys and labels of
+  `training.participation_reasons`, the list the roster read offers), because the states are chosen before the session's activity exists.
+* **Kept in the browser**: the choices (athlete id, kind, reason key) and one requestKey per kind and reason, in `sessionStorage` per team and
+  candidate, never a name; the keys are made when the coach confirms the import, before anything is sent.
+* **After a confirmed import** (the approval's answer, or *Check the result* finding it): the roster is read, and one
+  `POST …/approvals/:approvalId/states` per group is sent for the athletes the roster still lists as needing a state (an athlete who got a
+  state in the Roster tab meanwhile is kept and named). Outcomes per group: saved; not saved (a refusal the server answered: *Save them
+  again* reads the roster again and sends with the same key, since nothing was written); not confirmed (*Check the result* repeats exactly
+  the same request); after the window or an undo, "set them in the session's Roster tab" with no retry. A reopened imported session with
+  states not saved yet offers *Save them*. The button names the states ("Then saves N attendance states.") and so does the question.
+* **Evidence**: `frontend/tests/gpexe-import-states-j20c.actions.test.mjs` (10 tests), two J20-A2 tests of `gpexe-import.actions.test.mjs`
+  updated for the *Needs a person* count, backend `import-states-j20c.test.mjs` test 15 (the reasons), e2e scenario 12
+  (`e2e/tests/imports-states.test.mjs`, 1280 and 390 px).
 
 ### 5.3 The undo (U5) and roster decisions — decided (O1, extended variant b)
 

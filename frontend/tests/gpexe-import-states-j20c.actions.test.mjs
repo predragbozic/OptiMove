@@ -149,8 +149,10 @@ test("1. the chooser sits on the rows without a GPEXE record (with the reasons, 
   assert.match(page, /aria-label="Attendance for Dee &lt;b&gt;Example&lt;\/b&gt;"/);
   await choose(NOREC1, "participated_no_values");
   assert.equal(statesCalls().length, 0);
+  assert.match(page, /data-filter="needs"[^>]*aria-pressed="true">Needs a person <span class="gpexe-chip-count">2<\/span>/, "with the chooser the no-data rows need a person");
   await openReview({ canApprove: false });
   assert.deepEqual(choosers(), []);
+  assert.ok(!/data-filter="needs"/.test(html()), "without the chooser they do not");
 });
 
 test("2. a choice is kept in the browser (ids, kinds and reasons only); the button and the question name the states; the keys exist before the approval is sent", async () => {

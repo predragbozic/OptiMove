@@ -2736,8 +2736,9 @@ test("J20-A2 M1/H2: chips with counts (Needs a person by default), the three val
   await openImports();
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
-  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">1<\/span>/);
-  assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["needs_link"], "the default view holds only what needs a person - never the no-data rows");
+  // J20-C: a viewer who may approve chooses attendance on the no-data rows, so they are people to act on too.
+  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">3<\/span>/);
+  assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["needs_link", "no_record", "no_record"], "the default view holds what needs a person - with the attendance chooser, the no-data rows too");
   assert.match(html, /data-filter="not_linked"[^>]*aria-pressed="false">Not linked <span class="gpexe-chip-count">1<\/span>/);
   assert.match(html, /data-filter="no_data"[^>]*>No data <span class="gpexe-chip-count">2<\/span>/);
   assert.match(html, /data-filter="all"[^>]*>All <span class="gpexe-chip-count">4<\/span>/);
@@ -2817,16 +2818,16 @@ test("J20-A2 (code review): the question before an import counts what the button
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "approving stays off");
 });
 
-test("J20-A2: with nobody that needs a person the default chip is All and the no-data rows are visible", async () => {
+test("J20-A2 / J20-C: with nobody to link, the no-data rows are what needs a person (their attendance chooser) and are visible by default", async () => {
   resetState();
   const d = candidateDetail();
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, athletes: [d.preview.athletes[0]] } } } }) }));
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /data-filter="all"[^>]*aria-pressed="true">All /);
-  assert.ok(!/data-filter="needs"/.test(html), "no 'Needs a person' chip when it would be empty");
+  assert.match(html, /data-filter="needs"[^>]*aria-pressed="true">Needs a person <span class="gpexe-chip-count">1<\/span>/);
   assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["no_record"]);
+  assert.match(html, /data-action="training-load-gpexe-state"/, "the no-data row carries the attendance chooser");
 });
 
 // ---- J20-A2 follow-up: U3's suggested pair in the row's chooser, the sticky Approve bar, the light link box.
