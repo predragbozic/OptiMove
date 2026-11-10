@@ -286,7 +286,7 @@ import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspace
 import { buildContextKey, clearAllViewCache, dedupeRequest, loadCachedView, setCacheData, setCacheError } from "./view-cache.js";
 import { createContentSwipe } from "./content-swipe.js";
 import { installExerciseHeaderReveal } from "./exercise-header-reveal.js";
-import { revealActiveTab } from "./om-tabs.js";
+import { markCurrentTab, revealActiveTab } from "./om-tabs.js";
 
 let inboxPollId = null;
 // The Exercise Library's top bar and search row brought back by a pull up
@@ -3084,7 +3084,15 @@ function renderTabs() {
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
-  tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.activeTab));
+  tabs.forEach((tab) => {
+    const active = tab.dataset.tab === state.activeTab;
+    tab.classList.toggle("is-active", active);
+    // A shared .om-tabs row (the coach's athlete header) also says which tab is current.
+    markCurrentTab(tab, active);
+  });
+  // ...and on a phone brings the current tab into view and marks the faded edge (the row lives in
+  // the toolbar, outside #content, so the content's own call never reaches it).
+  revealActiveTab(els.toolbar);
   // Every navigation path away from the Programs tab (every tab/library-tab/
   // athlete-tab click handler, roughly a dozen call sites) already calls
   // renderTabs() right after resetting state.selectedProgramId - this is

@@ -23722,3 +23722,46 @@ p.coach-home-library-note.muted:not([role="status"]) {
     font-size: 16px;
   }
 }
+
+/* =====================================================
+   Design: a coach's athlete header (A2). The athlete's picture, small and round, beside the shared
+   tab row (.om-tabs) "Weekly plans | Specific programs"; the athlete's name is the page's title.
+   Scoped to the coach's row (.athlete-toolbar-coach) and written with the body:not(.athlete-mode)
+   prefix of the older coach rules it replaces, so it outranks them; the athlete's own app is not
+   touched.
+   ===================================================== */
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-row.athlete-toolbar-coach {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-3);
+  min-width: 0;
+}
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-hero-compact {
+  display: flex;
+  grid-template-columns: none;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-hero-compact .athlete-hero-image,
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-hero-compact .athlete-hero-fallback {
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  border-radius: 50%;
+  font-size: var(--om-text-sm);
+}
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-tabs.om-tabs {
+  flex: 1 1 auto;
+  gap: 0 var(--om-space-1);
+  margin: 0;
+}
+body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-coach .athlete-tabs .om-tab {
+  min-height: var(--om-tap-target);
+  padding: var(--om-space-2) var(--om-space-3);
+  font-size: var(--om-text-sm);
+  line-height: normal;
+}

@@ -24,6 +24,15 @@ function sliceFunction(source, name, windowSize = 900) {
   return source.slice(start, start + windowSize);
 }
 
+// Design A2: a coach's header is a text .om-tabs row (tests/om-athlete-header.test.mjs); the icon
+// tabs below are the athlete's own header, the part of the function after its coach branch.
+function athleteModeHeaderSource() {
+  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 3000);
+  const from = body.indexOf("if (!isAthleteMode) {");
+  assert.ok(from > 0, "the coach branch comes first");
+  return body.slice(body.indexOf("\n  return `", from + 1));
+}
+
 // === Icons present, reused from the same source as Home Quick actions ===
 
 test("athlete-view.js imports ICON_CALENDAR and ICON_SPECIFIC_PROGRAMS from athlete-home.js instead of declaring its own SVG constants for them", () => {
@@ -32,12 +41,12 @@ test("athlete-view.js imports ICON_CALENDAR and ICON_SPECIFIC_PROGRAMS from athl
 });
 
 test("renderAthleteHeaderToolbarHtml's Weekly plans tab embeds the ${ICON_CALENDAR} template placeholder, not inline SVG markup", () => {
-  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 1200);
+  const body = athleteModeHeaderSource();
   assert.match(body, /data-tab="weekly">\s*\$\{ICON_CALENDAR\}\s*<span>Weekly plans<\/span>/);
 });
 
 test("renderAthleteHeaderToolbarHtml's Specific programs tab embeds the ${ICON_SPECIFIC_PROGRAMS} template placeholder", () => {
-  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 1200);
+  const body = athleteModeHeaderSource();
   assert.match(body, /data-tab="programs">\s*\$\{ICON_SPECIFIC_PROGRAMS\}\s*<span>Specific programs<\/span>/);
 });
 
@@ -62,13 +71,13 @@ test("both reused icons are aria-hidden in their own definition, so every consum
 });
 
 test("neither toolbar tab button carries a competing aria-label - the visible text span is the only accessible name", () => {
-  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 1200);
+  const body = athleteModeHeaderSource();
   assert.ok(!/data-tab="weekly"[^>]*aria-label/.test(body));
   assert.ok(!/data-tab="programs"[^>]*aria-label/.test(body));
 });
 
 test("both tabs carry the tab-with-icon class consistently", () => {
-  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 1200);
+  const body = athleteModeHeaderSource();
   assert.match(body, /class="tab tab-with-icon" data-tab="weekly">/);
   assert.match(body, /class="tab tab-with-icon" data-tab="programs">/);
 });
@@ -129,15 +138,15 @@ test("week-prev/week-next still call moveWeek and never touch openWeekCalendarOn
 // === Specific programs tab still switches to the programs view exactly as before ===
 
 test("the Specific programs tab keeps its plain data-tab=\"programs\" wiring - same [data-tab] click path as Weekly plans, just with an icon added", () => {
-  const body = sliceFunction(athleteViewSource, "renderAthleteHeaderToolbarHtml", 1200);
+  const body = athleteModeHeaderSource();
   assert.match(body, /<button class="tab tab-with-icon" data-tab="programs">/);
 });
 
 // === Active tab stays clearly marked ===
 
 test("renderTabs()'s active-tab logic (toggling is-active by dataset.tab === state.activeTab) is untouched - unaffected by the icon markup added inside the button", () => {
-  const body = sliceFunction(appJsSource(), "renderTabs", 400);
-  assert.match(body, /tab\.classList\.toggle\("is-active", tab\.dataset\.tab === state\.activeTab\)/);
+  const body = sliceFunction(appJsSource(), "renderTabs", 700);
+  assert.match(body, /const active = tab\.dataset\.tab === state\.activeTab;\n\s+tab\.classList\.toggle\("is-active", active\);/);
 });
 
 test("styles.css: .tab.is-active styling still exists, applying regardless of whether the tab has an icon", () => {
