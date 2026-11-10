@@ -295,6 +295,10 @@ let exerciseHeaderReveal = null;
 let coachHomeRows = [];
 let coachHomePicker = { mode: "", query: "" };
 let workspaceRosterGeneration = 0;
+// True until a roster has been read for the current workspace (the first load, a workspace
+// switch in flight, a failed read): the athlete list then stays blank and never says
+// "No athletes here" about a roster it has not seen.
+let athleteRosterPending = true;
 
 init();
 
@@ -2232,6 +2236,7 @@ async function loadAthletes() {
   try {
     const data = await api("/api/admin/athletes");
     state.athletes = data.adminRows || [];
+    athleteRosterPending = false;
     // organization-actions.js reuses this same function as its post-mutation
     // athlete-roster reload (create/archive/restore athlete, coach/team/club
     // relationship archive/restore - see handleOrganizationAction's
@@ -3274,7 +3279,6 @@ async function onWorkspaceChanged() {
     renderAthleteList();
   } catch (error) {
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
-    athleteRosterPending = false;
     renderError(error);
     return;
   }
@@ -3333,9 +3337,6 @@ async function renderAfterOrganizationAccessChange({ refresh = false } = {}) {
   if (state.activeTab === "athlete-library") return renderTemplateLibrary(state.lastTemplates || []);
   return renderCurrentNode();
 }
-
-// True while a workspace switch waits for its roster (renderAthleteListHtml then draws nothing).
-let athleteRosterPending = false;
 
 function renderAthleteList() {
   const search = els.athleteSearch.value.trim().toLowerCase();

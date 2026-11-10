@@ -24,11 +24,17 @@ test("an empty list says why: a search with no match, or a workspace with no ath
   assert.doesNotMatch(searched.textContent, /No athletes here/);
 });
 
-test("while a workspace switch waits for its roster the list stays blank (no empty-state flash)", () => {
+test("until a roster is read (first load, a switch, a failed read) the list stays blank, never the empty state", () => {
   assert.equal(renderAthleteListHtml([], null, { pending: true }), "");
   assert.notEqual(renderAthleteListHtml([row()], null, { pending: true }), "", "rows are drawn as soon as they exist");
   assert.match(app, /athleteRosterPending = true;\n  renderAthleteList\(\);/);
-  assert.equal((app.match(/^ +athleteRosterPending = false;/gm) || []).length, 2, "cleared on the answer and on a failure");
+  // The flag starts pending (declared with the module state, before init() runs) and is cleared
+  // only right after a roster was read: the first load and a switch's answer. A failed read leaves
+  // it pending, so the list stays blank and the error says why.
+  assert.ok(app.indexOf("let athleteRosterPending = true;") > 0 && app.indexOf("let athleteRosterPending = true;") < app.indexOf("\ninit();"), "declared before init() runs");
+  const clears = [...app.matchAll(/^ +athleteRosterPending = false;/gm)].map((m) => app.slice(Math.max(0, m.index - 120), m.index));
+  assert.equal(clears.length, 2, "cleared on the two successful reads only");
+  assert.ok(clears.every((before) => /state\.athletes = (data|roster)\.adminRows \|\| \[\];\n\s*$/.test(before)), "each right after a roster was read");
   assert.match(app, /renderAthleteListHtml\(athletes, state\.selectedAthleteId, \{ searching: Boolean\(search\), pending: athleteRosterPending \}\)/);
 });
 
