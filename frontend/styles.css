@@ -24156,6 +24156,8 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
 @media (pointer: coarse), (max-width: 760px) {
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-block-head-actions .builder-icon-action,
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-quick-add-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-inline-add-actions .builder-icon-action,
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-icon-action,
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-node-move-icon,
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-section-preview-trigger,
@@ -24167,10 +24169,19 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
   }
 
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger {
+    --builder-level-w: 27px;
+    --builder-level-h: 24px;
     min-width: var(--om-tap-target);
     min-height: var(--om-tap-target);
     align-items: center;
     justify-content: center;
+  }
+
+  /* The "+" badge sat on the icon's corner (-4 px); in the bigger box it is
+     placed from the centred icon's corner, not the box's. */
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger .builder-add-node-plus {
+    right: calc((100% - var(--builder-level-w)) / 2 - 4px);
+    bottom: calc((100% - var(--builder-level-h)) / 2 - 4px);
   }
 
   body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-button,
@@ -24203,6 +24214,28 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
     min-height: 32px;
     align-items: center;
     justify-content: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger .builder-add-node-plus {
+    right: calc((100% - 27px) / 2 - 4px);
+    bottom: calc((100% - 24px) / 2 - 4px);
+  }
+}
+
+/* The smaller level icon of phones (24 x 21 px under 560 px). */
+@media (max-width: 560px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger {
+    --builder-level-w: 24px;
+    --builder-level-h: 21px;
+  }
+}
+
+/* A short touch screen (a phone on its side): the session row no longer
+   sticks. Its fields and 44 px actions took over half of a 390 px high
+   screen while the tree scrolled under it. */
+@media (pointer: coarse) and (max-height: 500px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-row {
+    position: static;
   }
 }
 

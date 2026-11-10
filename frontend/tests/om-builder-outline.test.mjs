@@ -23,7 +23,7 @@ test("the block exists and every selector is the coach's Builder outline (.build
 test("on a touch screen or a phone the outline's actions and rows are 44 px; their rows wrap", () => {
   const touch = rules.slice(rules.indexOf("@media (pointer: coarse), (max-width: 760px)"), rules.indexOf("@media (pointer: fine) and (min-width: 761px)"));
   assert.ok(touch.length > 100);
-  for (const target of [".builder-block-head-actions .builder-icon-action", ".builder-session-actions .builder-icon-action", ".builder-node-row-actions .builder-icon-action", ".builder-node-row-actions .builder-node-move-icon", ".builder-section-preview-trigger", ".builder-add-session-trigger", ".builder-add-node-trigger", ".builder-node-button", ".builder-session"]) {
+  for (const target of [".builder-block-head-actions .builder-icon-action", ".builder-session-actions .builder-icon-action", ".builder-session-quick-add-actions .builder-icon-action", ".builder-inline-add-actions .builder-icon-action", ".builder-node-row-actions .builder-icon-action", ".builder-node-row-actions .builder-node-move-icon", ".builder-section-preview-trigger", ".builder-add-session-trigger", ".builder-add-node-trigger", ".builder-node-button", ".builder-session"]) {
     assert.ok(touch.includes(target), target);
   }
   assert.match(touch, /width: var\(--om-tap-target\);\s*height: var\(--om-tap-target\);\s*min-width: var\(--om-tap-target\);\s*min-height: var\(--om-tap-target\);/);
@@ -43,4 +43,15 @@ test("the narrowest phones give the session's selects 24 px back without changin
   assert.match(narrow, /\.builder-block-grid \.builder-session-actions \{\s*padding-left: 0;\s*padding-right: 0;/);
   assert.match(narrow, /column-gap: var\(--om-space-1\);/);
   assert.ok(!/grid-template-(columns|areas)/.test(narrow), "B2's columns and areas stay B2's");
+});
+
+test("the add badge stays on its icon's corner in the bigger box (touch, computer and the smaller phone icon)", () => {
+  assert.match(rules, /\.builder-add-node-trigger \.builder-add-node-plus \{\s*right: calc\(\(100% - var\(--builder-level-w\)\) \/ 2 - 4px\);\s*bottom: calc\(\(100% - var\(--builder-level-h\)\) \/ 2 - 4px\);/);
+  assert.match(rules, /--builder-level-w: 27px;\s*--builder-level-h: 24px;/);
+  assert.match(rules, /@media \(max-width: 560px\) \{[^}]*--builder-level-w: 24px;\s*--builder-level-h: 21px;/);
+  assert.match(rules, /right: calc\(\(100% - 27px\) \/ 2 - 4px\);\s*bottom: calc\(\(100% - 24px\) \/ 2 - 4px\);/);
+});
+
+test("on a short touch screen (a phone on its side) the session row does not stick", () => {
+  assert.match(rules, /@media \(pointer: coarse\) and \(max-height: 500px\) \{\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-block-grid \.builder-session-row \{\s*position: static;/);
 });
