@@ -23933,3 +23933,52 @@ body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input {
     right: 0;
   }
 }
+
+/* ==========================================================================
+   Design: the Builder's fields (B2). A session's four fields (name, time of
+   day, phase, time) sat in one flex row where the later .builder-text-input
+   rule (width: 100%) overrode their compact widths, so each shrank to about
+   64 px ("Warm", "Tin", "Bet"). They are three rows now: the name, then time
+   of day and time, then the phase. Block name and the cover image URL are
+   16 px (iOS zooms below that), the titles and the cover URL 44 px tall,
+   and the cover URL looks like a field. Names,
+   data-* attributes and the forms are unchanged.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .builder-session-actions > .builder-session-time-inline {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "name name"
+    "ampm time"
+    "phase phase";
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > [name="name"] { grid-area: name; }
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > [name="amPm"] { grid-area: ampm; }
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > [name="bta"] { grid-area: phase; }
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > [name="time"] { grid-area: time; }
+
+body:not(.athlete-mode):not(.login-mode) .builder-session-time-inline > .builder-text-input {
+  width: 100%;
+  min-height: var(--om-tap-target);
+  font-size: 16px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-block-title-input,
+body:not(.athlete-mode):not(.login-mode) .builder-plan-title-input {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-block-title-input {
+  font-size: 16px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-plan-cover-input {
+  height: auto;
+  min-height: var(--om-tap-target);
+  border-color: var(--line, #dfe4e8);
+  background: #fff;
+  font-size: 16px;
+}
