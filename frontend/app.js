@@ -247,6 +247,7 @@ import {
   renderProgramRootHtml,
   renderProgramToolbarHtml,
   renderWeeklyRootHtml,
+  scrollWeekToDay,
   renderWeekCalendarDayHtml,
 } from "./program-view.js";
 import {
@@ -3548,16 +3549,7 @@ function renderWeekCalendarDay(day, activeWeek, selectedDate) {
 }
 
 function scrollCalendarToDate(date) {
-  const grid = els.content.querySelector(".calendar-grid");
-  if (!grid) return;
-  const day = grid.querySelector(`[data-date="${date}"]`);
-  if (!day) {
-    grid.scrollTo({ left: 0, behavior: "smooth" });
-    return;
-  }
-  const trailingSpace = Math.max(0, grid.clientWidth - day.offsetWidth);
-  grid.style.paddingRight = `${trailingSpace}px`;
-  grid.scrollTo({ left: Math.max(0, day.offsetLeft - grid.offsetLeft), behavior: "smooth" });
+  scrollWeekToDay(els.content.querySelector(".calendar-grid"), date);
 }
 
 function renderProgramToolbar(programs) {
