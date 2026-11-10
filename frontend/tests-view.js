@@ -296,7 +296,7 @@ function formatWeekRangeLabel(weekStart, weekEnd) {
 // `days` is ALREADY the tab-appropriate filtered array (see each tab's own
 // wrapper below) - this shell itself has no per-tab filtering logic at
 // all, so it can't drift out of sync with whichever rule each tab applies.
-function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, headerExtra = "" }) {
+function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, emptyAgendaAction = "", headerExtra = "" }) {
   const todayIso = testsWeeklyTodayIso();
   const selectedDay = days.find((d) => d.date === selectedDate) || days[0];
   return `
@@ -320,7 +320,9 @@ function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate
           // agenda's own "sessions sorted by time" requirement shouldn't
           // silently depend on that never changing upstream).
           ? selectedDay.sessions.slice().sort((a, b) => (a.opensTime || "").localeCompare(b.opensTime || "")).map((session) => renderSessionRow(session, selectedDay.date)).join("")
-          : `<p class="muted tests-empty">${escapeHtml(emptyAgendaText)}</p>`}
+          : emptyAgendaAction
+            ? `<div class="om-empty tests-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyAgendaText)}</p><div class="om-empty__actions">${emptyAgendaAction}</div></div>`
+            : `<p class="muted tests-empty">${escapeHtml(emptyAgendaText)}</p>`}
       </div>
     </div>
   `;
@@ -424,6 +426,8 @@ export function renderCoachTodayWeeklyHtml() {
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
     emptyAgendaText: "Nothing scheduled for this day.",
+    // The coach's next step from an empty day: the Schedule tab, where tests are planned.
+    emptyAgendaAction: `<button class="om-btn" type="button" data-action="tests-section" data-section="schedule">Open Schedule</button>`,
     renderSessionRow: (session, date) => {
       const status = weeklySessionStatusInfo(session);
       const who = testsWeeklyRecipientLabel(session.targetSummary);
