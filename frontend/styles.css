@@ -24144,3 +24144,118 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
     min-height: var(--om-tap-target);
   }
 }
+
+/* ==========================================================================
+   Design: the Builder outline's touch targets (B1). The outline's actions
+   (a block's copy and delete, a session's delete and add, a node's add,
+   move, copy, delete and preview, adding a session) were 24-28 px and its
+   rows 39-43 px. On a touch screen or a phone they are 44 px, with the same
+   icons in the middle; their rows wrap instead of squeezing. A computer keeps
+   the dense outline, at 32 px at least. Markup, data-* and names unchanged.
+   ========================================================================== */
+@media (pointer: coarse), (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-block-head-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-quick-add-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-inline-add-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-node-move-icon,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-section-preview-trigger,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-session-trigger {
+    width: var(--om-tap-target);
+    height: var(--om-tap-target);
+    min-width: var(--om-tap-target);
+    min-height: var(--om-tap-target);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger {
+    --builder-level-w: 27px;
+    --builder-level-h: 24px;
+    min-width: var(--om-tap-target);
+    min-height: var(--om-tap-target);
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* The "+" badge sat on the icon's corner (-4 px); in the bigger box it is
+     placed from the centred icon's corner, not the box's. */
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger .builder-add-node-plus {
+    right: calc((100% - var(--builder-level-w)) / 2 - 4px);
+    bottom: calc((100% - var(--builder-level-h)) / 2 - 4px);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session {
+    min-height: var(--om-tap-target);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-move-actions,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-triggers {
+    flex-wrap: wrap;
+    gap: var(--om-space-1, 4px);
+  }
+}
+
+@media (pointer: fine) and (min-width: 761px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-block-head-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-icon-action,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-node-row-actions .builder-node-move-icon,
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-section-preview-trigger {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger {
+    min-width: 32px;
+    min-height: 32px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger .builder-add-node-plus {
+    right: calc((100% - 27px) / 2 - 4px);
+    bottom: calc((100% - 24px) / 2 - 4px);
+  }
+}
+
+/* The smaller level icon of phones (24 x 21 px under 560 px). */
+@media (max-width: 560px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-add-node-trigger {
+    --builder-level-w: 24px;
+    --builder-level-h: 21px;
+  }
+}
+
+/* A short touch screen (a phone on its side): the session row no longer
+   sticks. Its fields and 44 px actions took over half of a 390 px high
+   screen while the tree scrolled under it. */
+@media (pointer: coarse) and (max-height: 500px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-row {
+    position: static;
+  }
+}
+
+/* The narrowest phones (≤380 px): the session's two selects lost their last
+   letters ("Time of da", "Before trainin"), at 360 px the row is 262 px wide
+   for about 273 px of text, padding and arrows. The block card and the
+   session's own side padding give the row 24 px back, and the fields' gap is
+   4 px; B2's two rows and columns are unchanged. */
+@media (max-width: 380px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid > .builder-block {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-block-grid .builder-session-actions {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-session-actions > .builder-session-time-inline {
+    column-gap: var(--om-space-1);
+  }
+}
