@@ -40,3 +40,23 @@ test("the card markup is unchanged: draggable and every data-* stay", () => {
     assert.match(exercises, new RegExp(`data-action="${action}" data-exercise-id="`), action);
   }
 });
+
+// B5b: the library toolbar. The Builder's view switches (with a mouse) and the big "Add custom exercise" button are
+// 44 px; phones and short windows keep their own rules; the Exercise Library's switches are not touched.
+const startB = css.lastIndexOf("/* =====", css.indexOf("Design: the section editor's library toolbar (B5b)"));
+const endB = css.indexOf("\n/* =====", startB + 10);
+const toolbar = css.slice(startB, endB < 0 ? undefined : endB).replace(/\/\*[\s\S]*?\*\//g, "");
+
+test("B5b: the switches and Add custom exercise are 44 px, only in the Builder and only where the big controls show", () => {
+  assert.ok(startB > 0, "the B5b block exists");
+  assert.match(toolbar, /@media \(pointer: fine\) and \(min-width: 761px\) and \(min-height: 521px\) \{/);
+  assert.match(toolbar, /@media \(min-width: 561px\) and \(min-height: 521px\) \{/);
+  assert.match(toolbar, /\.builder-library-toolbar \.exercise-view-button \{[^}]*min-height: var\(--om-tap-target\);/);
+  assert.match(toolbar, /\.builder-library-toolbar \.exercise-view-switcher \{[^}]*padding: 1px;/);
+  assert.match(toolbar, /\.builder-library-toolbar \.builder-exercise-search input \{[^}]*height: 48px;/);
+  assert.match(toolbar, /\.builder-section-library \.builder-custom-exercise-button \{[^}]*min-height: var\(--om-tap-target\);[^}]*font-size: var\(--om-text-sm\);/);
+  const selectors = [...toolbar.matchAll(/([^{};]+)\{/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith("@")).flatMap((s) => s.split(",")).map((s) => s.trim());
+  assert.equal(selectors.length, 4);
+  for (const selector of selectors) assert.match(selector, /^body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-(library-toolbar|section-library) \./, selector);
+  assert.ok(!/#[0-9a-f]{3,8}\b/i.test(toolbar), "no literal colour");
+});

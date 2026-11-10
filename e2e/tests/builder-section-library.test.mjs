@@ -171,3 +171,37 @@ test("(1280 px, mouse) a click at the corner of Favourite, Mark, Tags and Add wo
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+// B5b: the library toolbar with a mouse - the Tile / Big / List switches and "Add custom exercise" are 44 px, the
+// switcher and the search field share their top, and the button still opens its form. A short window keeps the
+// phone toolbar (44 px icon switches and the "+ Add custom exercise" link).
+for (const [width, height] of [[1280, 900], [800, 900], [1024, 500]]) {
+  test(`(${width} x ${height}, mouse) the library toolbar: 44 px switches and Add custom exercise, tops lined up`, async () => {
+    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
+    try {
+      await page.setViewportSize({ width, height });
+      await makeProgram(context, `Toolbar ${width}x${height}`);
+      await openSection(page);
+      const out = await page.evaluate(() => {
+        const shown = (e) => e.getBoundingClientRect().width > 0;
+        const box = (e) => e.getBoundingClientRect();
+        return {
+          overflow: document.documentElement.scrollWidth - window.innerWidth,
+          switches: [...document.querySelectorAll(".builder-library-toolbar .exercise-view-button")].filter(shown).map((e) => Math.round(box(e).height)),
+          tops: [".builder-library-toolbar .builder-exercise-search input", ".builder-library-toolbar .exercise-view-switcher"].map((q) => Math.round(box(document.querySelector(q)).top)),
+          custom: [...document.querySelectorAll('[data-action="builder-open-custom-exercise"]')].filter(shown).map((e) => ({ big: e.classList.contains("builder-custom-exercise-button"), h: Math.round(box(e).height) })),
+        };
+      });
+      assert.equal(out.overflow, 0, "no horizontal overflow");
+      assert.equal(out.switches.length, 3, "three view switches");
+      for (const h of out.switches) assert.equal(h, 44, "a 44 px switch");
+      assert.equal(out.tops[0], out.tops[1], "the search field and the switcher share their top");
+      assert.equal(out.custom.length, 1, "one Add custom exercise is shown");
+      assert.equal(out.custom[0].big, height > 520, height > 520 ? "the big button" : "the short window's link");
+      assert.ok(out.custom[0].h >= 44, `Add custom exercise is ${out.custom[0].h} px tall`);
+      await page.locator('[data-action="builder-open-custom-exercise"]:visible').first().click();
+      await page.getByRole("heading", { name: "Add custom exercise" }).waitFor();
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
