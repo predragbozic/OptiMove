@@ -295,6 +295,10 @@ let exerciseHeaderReveal = null;
 let coachHomeRows = [];
 let coachHomePicker = { mode: "", query: "" };
 let workspaceRosterGeneration = 0;
+// True until a roster has been read for the current workspace (the first load, a workspace
+// switch in flight, a failed read): the athlete list then stays blank and never says
+// "No athletes here" about a roster it has not seen.
+let athleteRosterPending = true;
 
 init();
 
@@ -2232,6 +2236,7 @@ async function loadAthletes() {
   try {
     const data = await api("/api/admin/athletes");
     state.athletes = data.adminRows || [];
+    athleteRosterPending = false;
     // organization-actions.js reuses this same function as its post-mutation
     // athlete-roster reload (create/archive/restore athlete, coach/team/club
     // relationship archive/restore - see handleOrganizationAction's
@@ -3251,6 +3256,8 @@ async function onWorkspaceChanged() {
   resetCalendarSettingsForWorkspaceChange();
   state.athletes = [];
   state.selectedAthleteId = null;
+  // The new workspace's roster is on its way: the list stays blank, never "No athletes here".
+  athleteRosterPending = true;
   renderAthleteList();
   if (state.activeTab === "weekly" || state.activeTab === "programs") state.activeTab = "coach-home";
   // Correction: a workspace switch changes WHICH athletes' data Training
@@ -3268,6 +3275,7 @@ async function onWorkspaceChanged() {
     const roster = await api("/api/admin/athletes");
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
     state.athletes = roster.adminRows || [];
+    athleteRosterPending = false;
     renderAthleteList();
   } catch (error) {
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
@@ -3335,7 +3343,7 @@ function renderAthleteList() {
   const filteredAthletes = state.athletes.filter((athlete) => athleteMatches(athlete, search));
   const athletes = filteredAthletes;
 
-  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId);
+  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending });
 
   renderAthleteListState();
 
