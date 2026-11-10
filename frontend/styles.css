@@ -24259,3 +24259,82 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
     column-gap: var(--om-space-1);
   }
 }
+
+/* ==========================================================================
+   Design: the Builder's start screen (B4). "Continue where you left off",
+   its check boxes, Continue and Discard were 15-40 px; Discard and "Discard
+   selected" were 12 px red words. Now every control is 44 px and both
+   Discards are quiet red buttons. On a phone a draft's actions take their
+   own row under its name, which no longer squeezes into a narrow column.
+   Only the drafts panel: .checkbox-toggle-all is shared with other lists.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-toggle {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .checkbox-toggle-all {
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  flex: 0 0 auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-athlete-select-all {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-bulk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-actions .plain-button,
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid #f3c6c2;
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--danger, #a23b3b);
+  font-size: var(--om-text-sm);
+  font-weight: 700;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard:hover {
+  background: #fdf1f0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-discard:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-actions .plain-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .checkbox-toggle-all:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-toggle:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+
+/* A phone: the check box and the name side by side, the actions below them. */
+@media (max-width: 560px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: var(--om-space-2) var(--om-space-3, 12px);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-draft-actions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--om-space-2);
+  }
+}
