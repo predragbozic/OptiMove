@@ -408,8 +408,9 @@ export const IMPORT_SOURCES = [{ key: "gpexe", name: "GPEXE" }];
 function renderImportSettingsHtml(gx) {
   const panel = renderTeamSwitchPanelHtml(gx);
   if (!panel) return "";
-  const open = Boolean(gx.teamSwitch?.error || gx.teamSwitch?.notice || gx.teamSwitch?.busy);
-  return `<details class="gpexe-panel imports-settings" ${open ? "open" : ""}><summary>Import settings</summary>${panel}</details>`;
+  // Kept across repaints the way the calendar is (app.js "toggle"): a search polls every 2 s and would fold it otherwise.
+  const open = gx.settingsOpen === true || Boolean(gx.teamSwitch?.error || gx.teamSwitch?.notice || gx.teamSwitch?.busy);
+  return `<details class="gpexe-panel imports-settings" data-rendered-open="${open ? "1" : "0"}" ${open ? "open" : ""}><summary>Import settings</summary>${panel}</details>`;
 }
 
 export function renderGpexeImportsHtml() {
@@ -509,16 +510,17 @@ function renderSourceCardHtml(source, gx, status) {
           <button type="button" class="${daily.n ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
         </div>` : ""}
       </div>
+      ${connected ? renderDailyStripHtml(gx, daily.ready, status) : ""}
       ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       ${connected ? `
         <details class="imports-dates" ${dated ? "open" : ""}>
           <summary>Choose dates</summary>
           <div class="imports-dates-fields">
-            <label class="gpexe-date"><span>From (DD.MM.YYYY)</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
-            <label class="gpexe-date"><span>To (DD.MM.YYYY)</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
+            <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
+            <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
           </div>
         </details>
-        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated)) : "Without dates, the last 14 days are searched (at most 31)."} Finding sessions does not import anything.</p>
+        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."} Finding sessions does not import anything.</p>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
@@ -757,7 +759,6 @@ function renderBucketsHtml(gx, status) {
   // there needs a server-side count; recorded under Separate tasks).
   const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
   return `
-    ${renderDailyStripHtml(gx, all.filter((c) => inboxBucket(c, gx) === "ready"), all.filter((c) => inboxBucket(c, gx) === "attention"), status)}
     ${attention.length ? `
       <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
         <div class="gpexe-panel-head"><h3>Needs attention (${attention.length})</h3></div>
@@ -866,14 +867,13 @@ function dailyImportState(gx, status = gx.status) {
 }
 
 // The notes that belong to the main button: sessions that stay for the next batch, ones that must be opened, why importing is not offered.
-function renderDailyStripHtml(gx, ready, attention, status = gx.status) {
+function renderDailyStripHtml(gx, ready, status = gx.status) {
   if (!ready.length) return "";
   const d = dailyImportState(gx, status);
   const notes = [];
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
-  if (gx.calendar?.day && d.n) notes.push(`${d.label} imports all ${plural(d.pickable.length, "ready session", "ready sessions")}, not only those of the day you picked.`);
-  if (d.reviewOnly) notes.push(d.reviewOnly);
+  if (gx.calendar?.day && d.n) notes.push(`${d.label} takes ready sessions of every date, not only of the day you picked.`);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
 }
@@ -1154,9 +1154,12 @@ function retryButtonHtml(gx) {
   return `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>`;
 }
 
-// U6a: the daily screen has no list of linked athletes - it lives on the Link athletes screen only. What stays here is the way in to that
-// screen, the one fact that needs a word, and the failure of the athletes read (with its retry) or of a link change.
+// U6a: the daily screen has no list of linked athletes - it lives on the Link athletes screen. What stays here is the way in to that
+// screen, the one fact that needs a word, and the failure of the athletes read (with its retry) or of a link change. While Link athletes
+// is off (the athletes read failed or has not arrived), the links are listed here with Unlink, as before U6a: a wrong link can always go.
 function renderLinksHtml(gx) {
+  const links = gx.links || [];
+  const usable = Boolean(gx.sourceAthletes && !gx.sourceAthletesError);
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
   const inactive = (gx.sourceAthletes || []).filter((a) => a.status === "linked_inactive").length;
   const facts = [];
@@ -1164,20 +1167,30 @@ function renderLinksHtml(gx) {
   return `
     <section class="gpexe-panel" aria-label="Athlete links">
       <div class="gpexe-panel-head imports-links-head">
-        <h3>Athletes</h3>
-        <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
+        <h3>GPEXE athletes</h3>
+        <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${usable ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
       </div>
       ${facts.length ? `<p class="imports-links-facts">${escapeHtml(facts.join(" · "))}.</p>` : ""}
       ${gx.sourceAthletesError ? `
         <div class="gpexe-warning imports-links-unavailable" role="status">
           <p>${gx.sourceAthletes
             ? "The list of GPEXE athletes could not be refreshed, so it may be out of date. Link athletes is off until it is read again; the sessions and the search still work."
-            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions and the search still work."}</p>
+            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work."}</p>
           ${retryButtonHtml(gx)}
           ${errorTech(gx.sourceAthletesError)}
         </div>
       ` : ""}
       ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
+      ${!usable && links.length ? `
+        <ul class="gpexe-link-list">
+          ${links.map((l) => `
+            <li>
+              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? gpexeSideText(l.gpexeAthleteId) : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</div>
+              <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
+            </li>
+          `).join("")}
+        </ul>
+      ` : ""}
     </section>
   `;
 }

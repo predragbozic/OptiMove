@@ -203,7 +203,7 @@ test("8. the guide folds when everything is done and Show setup reopens it; a va
     candidates: [{ id: "c1", status: "imported", gpexeTeamSessionId: "1", sessionStartedAt: "2026-09-14T16:08:12Z", sessionLabel: "S", candidateStatus: "imported" }],
   });
   await open();
-  assert.match(guideHtml(), /GPEXE is set up/);
+  assert.match(guideHtml(), /GPEXE is set up <span aria-hidden="true">\u2713<\/span>/, "U6a: the check mark is not read aloud");
   await act("training-load-gpexe-guide-toggle");
   assert.match(guideHtml(), /Set up GPEXE imports/);
   assert.match(guideHtml(), /Hide setup/);

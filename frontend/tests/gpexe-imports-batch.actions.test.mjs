@@ -944,7 +944,7 @@ test("J19 U1: while a day filter is active the daily line says its counts are fo
   await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
   const page = html();
   assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
-  assert.match(page, /Import 3 ready imports all 3 ready sessions, not only those of the day you picked\./, "the button says it is for all dates");
+  assert.match(page, /Import 3 ready takes ready sessions of every date, not only of the day you picked\./, "the button says it is for all dates");
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   await act("training-load-gpexe-import-ready");
   assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");
@@ -960,5 +960,6 @@ test("J19 U1: a ready session that cannot be chosen is named under the button; r
   await openImports();
   const page = html();
   assert.ok(!/training-load-gpexe-import-ready/.test(page));
-  assert.match(page.slice(page.indexOf("imports-daily"), page.indexOf("imports-daily") + 900), /Review only/);
+  assert.match(page, /<p class="imports-bucket-note">Review only/, "U6a: the review-only reason is said once, under Ready to import");
+  assert.ok(!/class="imports-daily"/.test(page), "and not repeated under the bar");
 });

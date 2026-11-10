@@ -1407,6 +1407,11 @@ export function calendarToggled(open) {
   g().calendar.open = Boolean(open);
 }
 
+// U6a: the folded "Import settings" card was opened or folded by the person (its own "toggle" event, app.js); kept for the next repaint.
+export function importSettingsToggled(open) {
+  g().settingsOpen = Boolean(open);
+}
+
 // Leaving the page (reload, close, another site) while an import is running
 // or an outcome is not confirmed would lose the only local view of that
 // outcome: the browser is asked to warn first. Never while nothing is

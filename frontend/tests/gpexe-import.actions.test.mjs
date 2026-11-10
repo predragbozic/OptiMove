@@ -2310,12 +2310,12 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
   assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
   assert.ok(state.trainingLoad.gpexe.links.length > 0, "the links are still loaded");
-  assert.ok(!/<strong>Ana Example<\/strong>/.test(html), "U6a: and not listed on the daily screen");
+  assert.match(html, /<strong>Ana Example<\/strong>[\s\S]*?data-action="training-load-gpexe-unlink"/, "U6a: while Link athletes is off, the links are listed here with Unlink");
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the ready session is listed; nothing about linking replaces it");
   assert.ok(!/class="gpexe-next"/.test(html), "no second line about the next step");
   // 3: Link athletes is off, and the coach reads why - in the coach's words.
   assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
-  assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions and the search still work\./);
+  assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions, the search and the links below still work\./);
   assert.match(html, /data-action="training-load-gpexe-sources-retry" >Try again<\/button>/);
   assert.ok(!/No GPEXE athlete has been seen yet/.test(html), "a failed read is not 'nothing seen'");
   assert.ok(!/internal_error|boom/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "the code only under Technical details");

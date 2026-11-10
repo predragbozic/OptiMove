@@ -87,7 +87,7 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
+import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled } from "./gpexe-import-data.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -554,11 +554,13 @@ function bindEvents() {
       activityRosterDisclosureToggled(panel);
       return;
     }
-    if (!panel?.classList?.contains("imports-calendar")) return;
+    const settings = panel?.classList?.contains("imports-settings");
+    if (!settings && !panel?.classList?.contains("imports-calendar")) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
-    importsCalendarToggled(panel.open);
+    if (settings) importSettingsToggled(panel.open);
+    else importsCalendarToggled(panel.open);
   }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
