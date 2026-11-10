@@ -74,9 +74,11 @@ test("the CSS block: a coach's only, the thread's column is bounded, long words 
   assert.ok(from > 0);
   const end = css.indexOf("\n/* =====", from + 10);
   const block = css.slice(css.lastIndexOf("/*", from), end > 0 ? end : undefined).replace(/\/\*[\s\S]*?\*\//g, "");
-  const selectors = [...block.matchAll(/([^{}]+)\{/g)].flatMap((m) => m[1].split(",").map((s) => s.trim())).filter(Boolean);
+  const selectors = [...block.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim()).filter((s) => s && !s.startsWith("@")).flatMap((s) => s.split(",").map((x) => x.trim())).filter(Boolean);
   assert.ok(selectors.length >= 8);
   for (const sel of selectors) assert.ok(sel.startsWith("body:not(.athlete-mode):not(.login-mode) "), sel);
+  // A phone hangs the notifications panel from the bell's right edge: spilling past the right edge widened the page.
+  assert.match(block, /@media \(max-width: 640px\) \{\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.notification-panel \{\s*left: auto;\s*right: 0;/);
   assert.match(block, /\.message-thread \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(block, /\.message-bubble p \{[^}]*overflow-wrap: anywhere;/);
   for (const control of [".notification-actions .compact-button", ".message-thread-menu-item", ".exit-confirm-actions .plain-button", ".message-send-button"]) assert.ok(block.includes(control), control);

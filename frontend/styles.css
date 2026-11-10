@@ -23920,3 +23920,16 @@ body:not(.athlete-mode):not(.login-mode) .message-panel .message-compose input {
   min-height: var(--om-tap-target);
   font-size: 16px;
 }
+
+/* A phone (the ≤640 px rule hangs the notifications panel from the bell's
+   left edge): hang it from the bell's right edge instead. Spilling past the
+   left edge never widens the page; spilling past the right edge did - mobile
+   Chrome widened the layout viewport for one frame, and the closed menu
+   drawer (fixed, right: 10px, only transparent) then held the page that wide.
+   panel-fit.js moves the panel into the screen either way. */
+@media (max-width: 640px) {
+  body:not(.athlete-mode):not(.login-mode) .notification-panel {
+    left: auto;
+    right: 0;
+  }
+}
