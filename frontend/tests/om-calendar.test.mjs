@@ -2,7 +2,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { JSDOM } from "jsdom";
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const from = css.indexOf("Design: the calendar uses the shared tokens.");
@@ -24,15 +23,12 @@ test("columns, month cells, cards and the Filters button take the .om-card borde
   for (const sel of [".cc-day-column", ".cc-month-cell"]) assert.match(of(sel), /border-radius: var\(--om-radius-lg\);/, sel);
 });
 
-test("in a week column the type line is clamped to one line without widening the card", () => {
-  const rule = rules(block).find((r) => r.selectors.includes(".cc-week .cc-card-kind"));
+test("in a wide week column the type line is clamped to one line without widening the card", () => {
+  const rule = rules(block).find((r) => r.selectors.includes(".cc-layout-wide .cc-week > .cc-day-column .cc-card-kind"));
   assert.ok(rule);
   assert.match(rule.body, /-webkit-line-clamp: 1;/);
   assert.match(rule.body, /min-width: 0;/);
   // nowrap would make the card as wide as the whole line and push the title out of its column.
   assert.doesNotMatch(rule.body, /white-space: nowrap/);
-  // The selector reaches the week columns only, never the phone's day list or the time grid.
-  const dom = new JSDOM('<div class="cc-week"><span class="cc-card-kind" id="a"></span></div><div class="cc-day-list"><span class="cc-card-kind" id="b"></span></div>');
-  assert.equal(dom.window.document.querySelector("#a").matches(".cc-week .cc-card-kind"), true);
-  assert.equal(dom.window.document.querySelector("#b").matches(".cc-week .cc-card-kind"), false);
+  // Which rendered cards it reaches is checked on the real render: central-calendar.actions test 8e.
 });

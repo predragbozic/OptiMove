@@ -23577,9 +23577,11 @@ p.coach-home-library-note.muted:not([role="status"]) {
    - The day columns, the month cells, the cards and the Filters button take the .om-card border
      colour; a day column and a month cell take its radius. Today, an open card and hover keep
      their own (more specific) colours.
-   - In a week column the card's type line ("Event · Team training · 12 athletes") is one line,
-     cut with "…" (the whole text is its tooltip and the event's detail), so the title stays on
-     the card's second line instead of under three or four wrapped lines.
+   - In a wide week column the card's type line ("Event · Team training · 12 athletes") is one
+     line of its own, cut with "…" (the whole text is its tooltip, the card's aria-label and the
+     event's detail), so the title comes right after the time and that line instead of under
+     three or four wrapped lines. A tablet's narrower columns, the phone's day list and the time
+     grid keep the whole text.
    ===================================================== */
 .cc-day-column,
 .cc-month-cell {
@@ -23590,7 +23592,7 @@ p.coach-home-library-note.muted:not([role="status"]) {
 .cc-filters-toggle {
   border-color: var(--om-border-subtle);
 }
-.cc-week .cc-card-kind {
+.cc-layout-wide .cc-week > .cc-day-column .cc-card-kind {
   display: -webkit-box;
   flex: 1 1 100%;
   min-width: 0;
