@@ -1,7 +1,7 @@
 // Imports: the undo of one imported session, as the review of an imported session shows it (J19-U5b).
 // Data and rules: gpexe-undo-data.js. The server's sentences are shown as they are; the codes stay under Technical details.
 import { isImportUndone } from "./gpexe-import-data.js";
-import { UNDO_REASON_MAX, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
+import { UNDO_REASON_MAX, laterChangeCount, laterRosterWork, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -18,6 +18,51 @@ export function removedSummary(counts) {
   return parts.join(", ");
 }
 
+const KIND_WORDS = Object.freeze({
+  participated_no_values: "Participated · no device data",
+  did_not_participate: "Did not participate",
+  cleared: "State removed",
+  complete: "Session marked complete",
+  reopen: "Session reopened",
+});
+
+// Day and time on the person's clock, DD.MM.YYYY HH:MM.
+function fmtWhen(value) {
+  const d = new Date(value);
+  if (!value || Number.isNaN(d.getTime())) return "";
+  const two = (n) => String(n).padStart(2, "0");
+  return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+// The attendance states the import itself set: removed with it, no question of their own.
+function importStatesHtml(rosterWork) {
+  const n = Number(rosterWork?.importWritten?.decisions) || 0;
+  if (n <= 0) return "";
+  return `<p class="gpexe-warning" role="note">${escapeHtml(`${plural(n, "attendance state", "attendance states")} set at import will be removed with it.`)}</p>`;
+}
+
+// Later attendance changes (the Roster tab): listed, with their own confirmation.
+function laterWorkHtml(u, { disabled }) {
+  const later = laterRosterWork(u);
+  if (!later) return "";
+  const list = Array.isArray(later.list) ? later.list : [];
+  const changes = laterChangeCount(later);
+  const rows = list.map((i) => {
+    const who = i.athleteId ? (i.athleteName || "An athlete") : "The session";
+    const what = [KIND_WORDS[i.kind] || "Changed", i.reasonLabel || ""].filter(Boolean).join(" · ");
+    const by = [i.byName ? `by ${i.byName}` : "", fmtWhen(i.at)].filter(Boolean).join(", ");
+    return `<li><strong>${escapeHtml(who)}</strong>: ${escapeHtml(what)}${by ? ` <span class="muted">(${escapeHtml(by)})</span>` : ""}</li>`;
+  }).join("");
+  const more = changes > list.length ? `<p class="muted">${escapeHtml(`and ${changes - list.length} more.`)}</p>` : "";
+  return `
+    <div class="gpexe-warning gpexe-undo-later" role="note">
+      <p><strong>${escapeHtml(`Coaches changed attendance after the import: ${plural(changes, "change", "changes")}.`)}</strong> They are removed too if you undo.</p>
+      <ul class="gpexe-undo-later-list">${rows}</ul>
+      ${more}
+      <label class="gpexe-undo-later-confirm"><input type="checkbox" data-gpexe-undo-later-confirm ${u.laterConfirmed ? "checked" : ""} ${disabled ? "disabled" : ""}> Remove these later changes too</label>
+    </div>`;
+}
+
 function techHtml(entries) {
   const rows = entries.filter(([, v]) => v !== undefined && v !== null && v !== "");
   if (!rows.length) return "";
@@ -32,24 +77,18 @@ function errorTech(error) {
 // A refusal the function raised for a reason the person can act on: its own sentence, plus the counts it carries (never the records themselves).
 function refusalHtml(error) {
   if (error?.status === 404) return `<p class="gpexe-refused" role="alert">This session is not available for an undo.</p>${errorTech(error)}`;
-  const work = error?.data?.rosterWork;
   const calendar = error?.data?.calendarLinks;
   const extra = [];
-  if (work && typeof work === "object") {
-    const bits = Object.entries(work).filter(([, v]) => Number.isInteger(v) && v > 0).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`);
-    if (bits.length) extra.push(`Roster work found: ${bits.join(", ")}.`);
-  }
   if (Number.isInteger(calendar) && calendar > 0) extra.push(`${plural(calendar, "calendar event is", "calendar events are")} attached.`);
   return `
     <div class="gpexe-refused" role="alert">
       <p><strong>Nothing was removed.</strong> ${escapeHtml(error?.message || "The undo was refused.")}</p>
       ${extra.length ? `<p class="muted">${escapeHtml(extra.join(" "))}</p>` : ""}
-      ${error?.data?.error === "roster_decisions_exist" ? `<p class="muted">Ask the coach to remove those roster decisions first, then undo the import. If that is not possible, this session can't be undone here yet.</p>` : ""}
     </div>
     ${errorTech(error)}`;
 }
 
-function scopeHtml(u) {
+function scopeHtml(u, { disabled = false } = {}) {
   const p = u.preview || {};
   const summary = removedSummary(p.removedCounts);
   const versions = Array.isArray(p.undoneCandidateIds) ? p.undoneCandidateIds.length : 1;
@@ -57,6 +96,8 @@ function scopeHtml(u) {
     <p>This removes from OptiMove: ${summary ? escapeHtml(summary) : "this session's results and activity"}.</p>
     <p><strong>This can't be undone here.</strong> To get the data back, import the session again.</p>
     ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> Undoing removes all ${versions} imports together.</p>` : ""}
+    ${importStatesHtml(p.rosterWork)}
+    ${laterWorkHtml(u, { disabled })}
     <p class="muted">${p.wouldOfferAgain
       ? "Afterwards the session is offered again for review, so you can import it under the corrected athlete links."
       : "Afterwards the session is not offered again right away. Find new sessions to bring it back for review."}</p>`;
@@ -119,7 +160,7 @@ export function renderUndoHtml(c, gx) {
   // ready / sending: the scope, then the reason and the explicit button.
   const sending = u.step === "sending";
   return sectionHtml(`
-    ${scopeHtml(u)}
+    ${scopeHtml(u, { disabled: sending })}
     ${u.refusalNote ? `<p class="gpexe-error" role="alert"><strong>Nothing was removed.</strong> ${escapeHtml(u.refusalNote)}</p>` : ""}
     <label class="gpexe-undo-reason">Why is this import undone? (required)
       <textarea data-gpexe-undo-reason maxlength="${UNDO_REASON_MAX}" rows="3" ${sending ? "disabled" : ""}>${escapeHtml(u.reason || "")}</textarea>

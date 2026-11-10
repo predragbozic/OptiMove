@@ -57,7 +57,7 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { cancelUndo, checkUndo, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -207,16 +207,21 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // Keep what was typed even when the question is refused locally.
     u.reason = reason;
     // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
-    const problem = undoReasonProblem(reason);
+    const laterBox = globalThis.document?.querySelector?.("[data-gpexe-undo-later-confirm]");
+    if (laterBox) u.laterConfirmed = laterBox.checked === true;
+    const problem = undoReasonProblem(reason) || undoLaterProblem(u, u.laterConfirmed);
     if (problem) {
       u.reasonProblem = problem;
       renderTrainingLoad();
       return true;
     }
     const label = gx.detail?.candidate?.label || "this session";
+    const later = laterRosterWork(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
     const total = Number(u.preview?.removedTotal) || 0;
-    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}? This can't be undone here; to get the data back, import the session again.`;
+    const changes = laterChangeCount(later);
+    const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
+    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}?${laterText} This can't be undone here; to get the data back, import the session again.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);

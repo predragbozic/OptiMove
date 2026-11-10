@@ -27,7 +27,13 @@ globalThis.fetch = async (url, options = {}) => {
 
 // The textarea the person types in: the action reads it by its data attribute when the button is pressed.
 let typedReason = "";
-globalThis.document.querySelector = (selector) => (selector === "[data-gpexe-undo-reason]" ? { value: typedReason } : null);
+// v60 (O1): the later roster changes' own checkbox, present only when the screen shows it (laterBox null = not on the screen).
+let laterBox = null;
+globalThis.document.querySelector = (selector) => {
+  if (selector === "[data-gpexe-undo-reason]") return { value: typedReason };
+  if (selector === "[data-gpexe-undo-later-confirm]") return laterBox;
+  return null;
+};
 
 const { handleTrainingLoadAction } = await import("../training-load-actions.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
@@ -61,6 +67,7 @@ function resetState() {
   confirmAnswer = true;
   confirmAsked = [];
   typedReason = "";
+  laterBox = null;
 }
 
 function status({ admin = true, identityAdmin = admin } = {}) {
@@ -338,7 +345,7 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   setup({
     undo: () => {
       n += 1;
-      if (n === 1) return { status: 409, body: { error: "roster_decisions_exist", message: "A coach has already worked on this session's roster.", rosterWork: { decisions: 3, completion: 1 } } };
+      if (n === 1) return { status: 409, body: { error: "calendar_link_exists", message: "This session is attached to a calendar event. Remove it from the calendar event first, then undo the import.", calendarLinks: 2 } };
       performUndo();
       return { status: 200, body: { undo: okUndo() } };
     },
@@ -350,10 +357,10 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   await act("training-load-gpexe-undo-confirm");
   let s = undoSection();
   assert.match(s, /Nothing was removed\./);
-  assert.match(s, /A coach has already worked on this session&#039;s roster\./);
-  assert.match(s, /Roster work found: 3 decisions, 1 completion\./);
-  assert.doesNotMatch(outsideTech(s), /roster_decisions_exist/);
-  assert.match(s, /roster_decisions_exist/, "the code is under Technical details");
+  assert.match(s, /This session is attached to a calendar event\./);
+  assert.match(s, /2 calendar events are attached\./);
+  assert.doesNotMatch(outsideTech(s), /calendar_link_exists/);
+  assert.match(s, /calendar_link_exists/, "the code is under Technical details");
   assert.equal(gx().undo.step, "refused");
   const firstKey = undoCalls()[0].body.requestKey;
   await act("training-load-gpexe-undo-cancel");
@@ -576,4 +583,133 @@ test("17. what is typed is kept when the dialog is painted again", async () => {
   assert.equal(handled, true);
   assert.equal(handleUndoReasonInput({ matches: () => false, value: "x" }), false);
   assert.match(html(), />Typed so far<\/textarea>/);
+});
+
+// ---------------------------------------------------------------------------
+// v60 (O1 of J20): the roster work an undo removes
+// ---------------------------------------------------------------------------
+const FP = "f".repeat(64);
+const FP2 = "e".repeat(64);
+const COACH = "dddddddd-0000-4000-8000-000000000001";
+const later = (n = 1, fingerprint = FP) => ({
+  decisions: n, requests: n, completions: 1, completionLog: n, total: 2 * n + 1, fingerprint,
+  list: Array.from({ length: n }, (_, i) => ({ athleteId: `aaaa000${i}-0000-4000-8000-000000000001`, athleteName: `Athlete <${i}>`, kind: "did_not_participate", reasonCode: "illness", reasonLabel: "Illness", byUserId: COACH, byName: "Coach Example", at: "2026-11-09T08:05:00Z" })),
+});
+const importWritten = (n) => ({ decisions: n, requests: n ? 1 : 0, completions: n ? 1 : 0, completionLog: n ? 1 : 0, total: n ? n + 3 : 0 });
+const scopeWith = (rosterWork) => ({ ...SCOPE, rosterWork, needsRosterConfirmation: rosterWork.laterWork.total > 0 });
+const noLater = { decisions: 0, requests: 0, completions: 0, completionLog: 0, total: 0, list: [], fingerprint: null };
+
+test("18. states the import set: one warning with the count, no checkbox, and the undo sends no confirmation", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(5), laterWork: noLater }) } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo() } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const s = undoSection();
+  assert.match(s, /5 attendance states set at import will be removed with it\./);
+  assert.doesNotMatch(s, /data-gpexe-undo-later-confirm/);
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 1);
+  assert.equal(undoCalls()[0].body.confirmLaterRosterWork, undefined);
+  assert.equal(undoCalls()[0].body.laterRosterFingerprint, undefined);
+});
+
+test("19. later changes: a second, separate warning lists them (names escaped, DD.MM.YYYY); nothing is asked or sent until their own box is ticked; then the fingerprint goes with the request", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(2), laterWork: later(1) }) } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo() } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  let s = undoSection();
+  assert.match(s, /2 attendance states set at import will be removed with it\./);
+  assert.match(s, /Coaches changed attendance after the import: 1 change\./);
+  assert.match(s, /Athlete &lt;0&gt;/, "a name is escaped");
+  assert.doesNotMatch(s, /Athlete <0>/);
+  assert.match(s, /Did not participate · Illness/);
+  assert.match(s, /by Coach Example, \d{2}\.11\.2026 \d{2}:\d{2}/);
+  assert.match(s, /data-gpexe-undo-later-confirm/);
+  assert.doesNotMatch(s, /aaaa0000-0000|dddddddd-0000|illness"/, "no ids or codes on the screen");
+  typedReason = "Wrong link";
+  laterBox = { checked: false };
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(confirmAsked.length, 0, "no question without the tick");
+  assert.equal(undoCalls().length, 0);
+  assert.match(undoSection(), /Tick the box to confirm that the later attendance changes are removed too\./);
+  laterBox = { checked: true };
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(confirmAsked.length, 1);
+  assert.match(confirmAsked[0], /This also removes 1 later attendance change made in the Roster tab\./);
+  assert.equal(undoCalls().length, 1);
+  assert.equal(undoCalls()[0].body.confirmLaterRosterWork, true);
+  assert.equal(undoCalls()[0].body.laterRosterFingerprint, FP);
+  assert.match(undoSection(), /Import undone\./);
+});
+
+test("20. the list changed meanwhile (roster_work_changed): nothing removed, the new list is shown unticked, and the next attempt sends the new fingerprint with a new key", async () => {
+  let n = 0;
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: later(1) }) } }),
+    undo: () => {
+      n += 1;
+      if (n === 1) return { status: 409, body: { error: "roster_work_changed", message: "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again.", rosterWork: { importWritten: importWritten(0), laterWork: later(2, FP2) } } };
+      performUndo();
+      return { status: 200, body: { undo: okUndo() } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  laterBox = { checked: true };
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "ready");
+  assert.equal(gx().undo.laterConfirmed, false);
+  let s = undoSection();
+  assert.match(s, /Nothing was removed\./);
+  assert.match(s, /Coaches changed attendance after the import: 2 changes\./);
+  assert.doesNotMatch(s, /data-gpexe-undo-later-confirm checked/, "the new list is not ticked");
+  const firstKey = undoCalls()[0].body.requestKey;
+  laterBox = { checked: true };
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls().length, 2);
+  assert.equal(undoCalls()[1].body.laterRosterFingerprint, FP2);
+  assert.notEqual(undoCalls()[1].body.requestKey, firstKey);
+});
+
+test("21. a lost answer of a confirmed undo: Check the result repeats exactly the confirmed request (key, reason, fingerprint)", async () => {
+  let n = 0;
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: later(1) }) } }),
+    undo: () => {
+      n += 1;
+      if (n === 1) return { status: 503, body: { error: "outcome_unknown", message: "not confirmed" } };
+      performUndo();
+      return { status: 200, body: { undo: okUndo({ replayed: true }) } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  laterBox = { checked: true };
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(gx().undo.step, "unknown");
+  await act("training-load-gpexe-undo-check");
+  assert.equal(undoCalls().length, 2);
+  assert.deepEqual(undoCalls()[1].body, undoCalls()[0].body);
+  assert.equal(undoCalls()[1].body.laterRosterFingerprint, FP);
+});
+
+test("22. the checkbox's state is kept across a repaint", async () => {
+  setup({ preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: later(1) }) } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  assert.equal(handleUndoReasonInput({ matches: (sel) => sel === "[data-gpexe-undo-later-confirm]", checked: true }), true);
+  assert.match(html(), /data-gpexe-undo-later-confirm checked/);
 });
