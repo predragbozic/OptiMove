@@ -32,7 +32,9 @@ Files beside this runbook: `import-states-v61-preflight.sql`, `-postcheck.sql`, 
   import-origin request exists already.
 * It takes a short `ACCESS EXCLUSIVE` lock on `training.activity_roster_requests` (`ALTER TABLE`, and the trigger re-point), and the new
   foreign key takes `SHARE ROW EXCLUSIVE` on `training_load.gpexe_import_approvals`, so an import approval in flight and the migration
-  wait for each other briefly. Run the
+  wait for each other briefly.
+* The foreign key also means a plain `TRUNCATE training_load.gpexe_import_approvals` is refused by PostgreSQL's foreign-key rule before
+  the table's own append-only trigger; `TRUNCATE ... CASCADE` still reaches that trigger. Either way nothing is removed. Run the
   preflight at a quiet moment (no roster command, undo or check in flight); run the post-check after the deploy.
 * v61 needs v60 in force (the `origin` column); it is deployed after v60's deploy and post-check.
 
