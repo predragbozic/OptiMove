@@ -872,6 +872,31 @@ test("8c2. a Day view and a phone week emptied by filters offer Clear filters in
   assert.equal(dom().querySelector(".cc-day-empty [data-action=\"central-calendar-clear-filters\"]"), null);
 });
 
+test("8e. a card's type line carries its whole text as a tooltip; only a wide week column clamps it", async () => {
+  const CLAMP = ".cc-layout-wide .cc-week > .cc-day-column .cc-card-kind";
+  installFetchMock(okResponder());
+  await loadCentralCalendar({ render });
+  const kinds = [...dom().querySelectorAll(".cc-week .cc-card .cc-card-kind")];
+  assert.ok(kinds.length > 0, "the wide week renders cards");
+  for (const kind of kinds) {
+    assert.equal(kind.getAttribute("title"), kind.textContent);
+    assert.ok(kind.matches(CLAMP), "a wide week column clamps the type line");
+  }
+  // The time grid keeps its own rule (the type line hidden) and is never inside a week column.
+  await act({ action: "central-calendar-mode", mode: "grid" });
+  const grid = [...dom().querySelectorAll(".cc-timegrid .cc-card-kind")];
+  assert.ok(grid.length > 0, "the time grid renders cards");
+  assert.ok(grid.every((kind) => !kind.matches(CLAMP)));
+  await act({ action: "central-calendar-mode", mode: "list" });
+  // A tablet's narrower columns keep the whole text.
+  layout = "medium";
+  render();
+  assert.ok(dom().querySelector(".central-calendar.cc-layout-medium"));
+  const medium = [...dom().querySelectorAll(".cc-week .cc-card-kind")];
+  assert.ok(medium.length > 0, "the tablet week renders cards");
+  assert.ok(medium.every((kind) => !kind.matches(CLAMP)));
+});
+
 test("8d. the loading state paints the toolbar at once and the grid area says so", async () => {
   const pending = [];
   installFetchMock((call) => new Promise((resolve) => { pending.push({ call, resolve }); }));
