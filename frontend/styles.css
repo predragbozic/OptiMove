@@ -24401,6 +24401,7 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
 
   body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle:focus-visible {
     outline: none;
+    box-shadow: none;
   }
 
   body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle:focus-visible::before {
@@ -24420,5 +24421,18 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     min-height: var(--om-tap-target);
     padding: 0 var(--om-space-3);
     font-size: var(--om-text-sm);
+  }
+
+  /* A short window keeps the compact tile (the max-height 520 rules above):
+     its Add is a 22 px "+" and its row sits inside the card. */
+  @media (max-height: 520px) {
+    body:not(.athlete-mode):not(.login-mode) .builder-exercise-view.is-tile .builder-exercise-add {
+      padding: 0;
+      font-size: 22px;
+    }
+
+    body:not(.athlete-mode):not(.login-mode) .builder-exercise-view.is-tile .builder-exercise-mini-actions {
+      margin: var(--om-space-1) 0 0;
+    }
   }
 }

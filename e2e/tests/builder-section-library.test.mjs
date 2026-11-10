@@ -103,6 +103,33 @@ for (const width of [1280, 1024, 800]) {
   });
 }
 
+test("(1024 x 500, mouse) a short window keeps the compact tile: a 22 px \"+\" Add, 44 px targets, nothing overflows", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 1024);
+  try {
+    await page.setViewportSize({ width: 1024, height: 500 });
+    await makeProgram(context, "Library short window");
+    await openSection(page);
+    await setView(page, "tile");
+    const out = await measure(page);
+    assert.equal(out.overflow, 0, "no horizontal overflow");
+    for (const c of out.cards) {
+      for (const key of ["favorite", "mark"]) assert.deepEqual(c[key], { w: 44, h: 44 }, `${key} is 44 x 44`);
+      assert.ok(c.add.h >= 44 && c.add.w >= 44, `Add is ${c.add.w} x ${c.add.h}`);
+    }
+    const compact = await page.evaluate(() => [...document.querySelectorAll(".builder-section-library .builder-exercise-result")].map((c) => ({
+      over: c.scrollWidth - c.clientWidth,
+      addFont: getComputedStyle(c.querySelector('[data-action="builder-pick-exercise"]')).fontSize,
+      rowInside: c.querySelector(".builder-exercise-mini-actions").getBoundingClientRect().left >= c.getBoundingClientRect().left,
+    })));
+    for (const c of compact) {
+      assert.equal(c.over, 0, "the card does not overflow");
+      assert.equal(c.addFont, "22px", "the compact Add is a 22 px +");
+      assert.ok(c.rowInside, "the actions row starts inside the card");
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
 test("(1280 px, mouse) a click at the corner of Favourite, Mark, Tags and Add works; a mouse drag of a card adds it", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 1280);
   try {

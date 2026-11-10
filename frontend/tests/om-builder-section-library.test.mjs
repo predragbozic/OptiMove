@@ -17,7 +17,7 @@ test("the block applies only to a computer with a mouse, and only to the library
   assert.match(block, /@media \(pointer: fine\) and \(min-width: 761px\) \{/);
   const selectors = [...block.matchAll(/([^{};]+)\{/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith("@")).flatMap((s) => s.split(",")).map((s) => s.trim());
   assert.ok(selectors.length >= 8, selectors.length);
-  for (const selector of selectors) assert.match(selector, /^body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-exercise-view \./, selector);
+  for (const selector of selectors) assert.match(selector, /^body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-exercise-view(\.is-tile)? \./, selector);
   assert.ok(!/#[0-9a-f]{3,8}\b/i.test(block), "colours come from the shared tokens");
 });
 
@@ -27,6 +27,11 @@ test("Favourite, Mark, Tags and Add take the 44 px target; Favourite and Mark ke
   assert.match(block, /\.builder-exercise-mini-actions \.text-action \{[^}]*min-height: var\(--om-tap-target\);[^}]*font-size: var\(--om-text-sm\);/);
   assert.match(block, /\.builder-exercise-add \{[^}]*min-height: var\(--om-tap-target\);/);
   assert.match(block, /\.builder-mini-toggle:focus-visible::before \{[^}]*outline: 2px solid var\(--accent\);/);
+  assert.match(block, /\.builder-mini-toggle:focus-visible \{[^}]*box-shadow: none;/, "one focus ring, on the frame");
+});
+
+test("a short window keeps the compact tile's 22 px \"+\" Add", () => {
+  assert.match(block, /@media \(max-height: 520px\) \{\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.builder-exercise-view\.is-tile \.builder-exercise-add \{[^}]*padding: 0;[^}]*font-size: 22px;/);
 });
 
 test("the card markup is unchanged: draggable and every data-* stay", () => {
