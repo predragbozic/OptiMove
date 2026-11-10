@@ -25260,3 +25260,14 @@ body:not(.athlete-mode):not(.login-mode) .topbar-actions .sign-out-button {
   min-height: var(--om-tap-target);
 }
 /* End of design S6 (shell). */
+
+/* ==========================================================================
+   Design S6 (Settings): App health's period, role and place chips are 44 px on
+   every width (on a phone they already were). (Calendar settings' "Add …"
+   button is hidden while its own form is open by the hidden attribute alone:
+   the global [hidden] rule hides it.)
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .app-health-chip {
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (Settings). */

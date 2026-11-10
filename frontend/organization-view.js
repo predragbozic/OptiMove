@@ -38,7 +38,7 @@ const ICON_CLOSE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidde
 function renderDialogHead({ eyebrow = "", title, subtitle = "", badge = "", closeAction }) {
   return `
         <div class="builder-modal-head organization-dialog-head">
-          <div>${eyebrow ? `<p class="eyebrow">${eyebrow}</p>` : ""}<h3>${escapeHtml(title)}</h3>${subtitle && subtitle !== title ? `<p class="muted">${escapeHtml(subtitle)}</p>` : ""}${badge}</div>
+          <div>${eyebrow ? `<p class="eyebrow">${escapeHtml(eyebrow)}</p>` : ""}<h3>${escapeHtml(title)}</h3>${subtitle && subtitle !== title ? `<p class="muted">${escapeHtml(subtitle)}</p>` : ""}${badge}</div>
           <button class="plain-button icon-button organization-dialog-close" type="button" data-action="${closeAction}" aria-label="Close">${ICON_CLOSE}</button>
         </div>`;
 }
@@ -1097,7 +1097,7 @@ function renderAthleteInviteModal(athletes) {
     <div class="exercise-tag-overlay">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-invite-close" aria-label="Close invite"></button>
       <section class="panel exercise-tag-modal organization-invite-modal" role="dialog" aria-modal="true" aria-label="Athlete invite">
-${renderDialogHead({ eyebrow: `Athlete invite${contextLabel ? ` · ${escapeHtml(contextLabel)}` : ""}`, title: athlete.name || "Athlete", closeAction: "organization-invite-close" })}
+${renderDialogHead({ eyebrow: `Athlete invite${contextLabel ? ` · ${contextLabel}` : ""}`, title: athlete.name || "Athlete", closeAction: "organization-invite-close" })}
         <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
         ${body}
       </section>

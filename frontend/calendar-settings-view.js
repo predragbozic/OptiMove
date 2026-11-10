@@ -171,7 +171,7 @@ function sectionHead(id, title, intro, addKind, addLabel, d) {
         <h4 id="${id}">${escapeHtml(title)}</h4>
         <p class="muted">${escapeHtml(intro)}</p>
       </div>
-      ${addKind ? `<button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-new" data-kind="${addKind}"${disabledIf(locked() || formOpen)}>${escapeHtml(addLabel)}</button>` : ""}
+      ${addKind ? `<button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-new" data-kind="${addKind}"${disabledIf(locked() || formOpen)}${formOpen ? " hidden" : ""}>${escapeHtml(addLabel)}</button>` : ""}
     </div>`;
 }
 
