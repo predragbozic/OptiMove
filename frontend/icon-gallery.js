@@ -117,6 +117,19 @@ function show(g, feedback) {
   }
 }
 
+// A chip tapped from deep in the list (on a phone the chips stay at the top while
+// the page scrolls) brings the start of the new result, its count line, just
+// under the chips, so the tap shows its result and not the end of a short list.
+function revealList() {
+  const root = globalThis.document?.querySelector?.("[data-icon-gallery]");
+  const chips = root?.querySelector?.("[data-icon-gallery-chips]");
+  const count = root?.querySelector?.("[data-icon-gallery-count]");
+  if (!chips?.getBoundingClientRect || !count?.getBoundingClientRect || typeof globalThis.scrollBy !== "function") return;
+  const sticky = globalThis.getComputedStyle?.(chips)?.position === "sticky";
+  const gap = count.getBoundingClientRect().top - (sticky ? chips.getBoundingClientRect().height : 0);
+  if (gap < 0) globalThis.scrollBy(0, gap);
+}
+
 export async function handleIconGalleryAction(action) {
   const type = action.dataset.action || "";
   if (!type.startsWith("icon-gallery-")) return false;
@@ -127,6 +140,7 @@ export async function handleIconGalleryAction(action) {
     g.category = id;
     g.feedback = null;
     paint(g);
+    revealList();
     globalThis.document?.querySelector?.(`[data-icon-gallery] [data-icon-category="${id}"]`)?.focus?.();
     return true;
   }
