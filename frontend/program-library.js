@@ -340,19 +340,21 @@ export function renderProgramScopeTabsHtml({ scopes = [], activeScope = "my", sc
   });
   if (showRequests && !scopes.includes("my_programs")) buttons.push(renderProgramRequestsScopeButton(activeSection, requestCount));
   return `
-    <div class="program-scope-tabs" role="group" aria-label="Program library scope">
+    <nav class="program-scope-tabs om-tabs" aria-label="Program library scope">
       ${buttons.join("")}
-    </div>
+    </nav>
   `;
 }
 
 function renderProgramRequestsScopeButton(activeSection, requestCount) {
   const count = Number(requestCount || 0);
-  return `<button class="program-scope-button ${activeSection === "requests" ? "is-active" : ""}" type="button" data-action="program-library-section" data-program-library-section="requests">Requests${count ? ` (${count})` : ""}</button>`;
+  const active = activeSection === "requests";
+  return `<button class="program-scope-button om-tab ${active ? "is-active" : ""}" type="button"${active ? ' aria-current="page"' : ""} data-action="program-library-section" data-program-library-section="requests">Requests${count ? ` (${count})` : ""}</button>`;
 }
 
 function renderTemplateScopeButton(value, label, activeScope, activeSection = "programs") {
-  return `<button class="program-scope-button ${activeSection === "programs" && activeScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
+  const active = activeSection === "programs" && activeScope === value;
+  return `<button class="program-scope-button om-tab ${active ? "is-active" : ""}" type="button"${active ? ' aria-current="page"' : ""} data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
 }
 
 export function renderProgramInfoModal(programInfo) {
