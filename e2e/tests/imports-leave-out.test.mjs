@@ -38,6 +38,10 @@ test(`10. (${label}) the administrator leaves one athlete out, reviews the impor
         await admin.page.locator('[data-action="training-load-gpexe-open"]').first().click();
       });
       await admin.page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
+      // J20-C: the rows without a GPEXE record now need a person (an attendance choice), so the importable rows sit under
+      // "N athletes are fine", which the screen tells the coach to open.
+      const fine = admin.page.locator(".gpexe-detail details.gpexe-fine", { has: admin.page.locator("summary", { hasText: /athletes? (?:is|are) fine$/ }) }).first();
+      if (!(await fine.evaluate((el) => el.open))) await fine.locator("summary").click();
       const boxes = admin.page.locator('[data-action="training-load-gpexe-leave-out"]');
       assert.equal(await boxes.count(), 3, "a Leave out box on each importable row");
       assert.match((await admin.page.locator('[data-action="training-load-gpexe-approve"]').first().textContent()).trim(), /^Import 3 athletes$/);

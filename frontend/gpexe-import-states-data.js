@@ -216,9 +216,9 @@ export async function saveImportStates(detail, approval, render) {
           s.groups[k] = { ...s.groups[k], status: "unknown", code: answeredRefusal(error) ? info.code : null };
         } else if (RETRYABLE.has(info.code)) {
           // Nothing was written; the key stays free and the next try reads the roster again.
-          s.groups[k] = { ...s.groups[k], status: "refused", body: null, code: info.code };
+          s.groups[k] = { ...s.groups[k], status: "refused", body: null, sentOnce: false, code: info.code };
         } else {
-          s.groups[k] = { ...s.groups[k], status: "final", body: null, code: info.code || (error?.status === 404 ? "notFound" : "refused") };
+          s.groups[k] = { ...s.groups[k], status: "final", body: null, sentOnce: false, code: info.code || (error?.status === 404 ? "notFound" : "refused") };
         }
       } finally {
         clearTimeout(timer);
@@ -253,6 +253,20 @@ export function statesSummary(detail) {
     final: by("final"),
     groups,
   };
+}
+
+// The import was refused for certain (nothing imported): its prepared keys are dropped - they were never sent, since states follow
+// only a confirmed import - so the coach's choices can change again and a later confirm makes keys for what is chosen then.
+export function discardStateKeys(detail) {
+  const s = detail?.states;
+  if (!s || s.saving || Object.values(s.groups || {}).some((v) => v.sentOnce || v.body)) return;
+  s.groups = {};
+  persist(detail);
+}
+
+// Whether a change of a choice would still count (no keys made yet).
+export function statesLockedOf(detail) {
+  return Object.keys(statesOf(detail).groups).length > 0;
 }
 
 // "Save them" / "Save them again": the groups that were not sent, or were refused for certain, are prepared again (same key).

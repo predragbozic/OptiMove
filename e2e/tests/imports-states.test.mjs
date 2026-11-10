@@ -43,7 +43,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.ok(fontSize >= 16, `16 px text, no zoom on focus (${fontSize})`);
         await chooser.selectOption("participated_no_values");
         assert.deepEqual(posts, [], "a choice sends nothing");
-        await admin.page.waitForFunction(() => /Then saves 1 attendance state\./.test(document.body.innerText), null, { timeout: 10_000 });
+        await admin.page.waitForFunction(() => /After the import, OptiMove also saves 1 attendance state\./.test(document.body.innerText), null, { timeout: 10_000 });
         await shot(admin.page, `states-1-chosen-${width}`);
         await admin.page.click('[data-action="training-load-gpexe-approve"]');
         await admin.page.waitForFunction(() => /1 attendance state saved\./.test(document.body.innerText), null, { timeout: 30_000 });

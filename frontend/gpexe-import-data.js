@@ -11,7 +11,7 @@ import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
 import { emptyGuideState, loadGuide } from "./gpexe-guide-data.js";
-import { saveImportStates, statesOf } from "./gpexe-import-states-data.js";
+import { discardStateKeys, saveImportStates, statesOf } from "./gpexe-import-states-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
 export const CHECK_POLL_MS = 2_000;
@@ -521,6 +521,8 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     const info = errorInfo(error);
     if (isDefiniteRefusal(info)) {
       detail.outcome = { kind: "refused", error: info };
+      // J20-C: nothing was imported, so the attendance keys made at the confirm are dropped and the choices can change again.
+      discardStateKeys(detail);
       // The subset review belongs to a world that moved: it is made again, never reused.
       if (subset) detail.subset = null;
       // The candidate may have moved on (imported by someone else, blocked,

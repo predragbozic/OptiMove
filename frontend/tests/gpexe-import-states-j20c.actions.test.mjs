@@ -403,6 +403,7 @@ test("18. (F8) once every state is saved the stored item is removed; a hung requ
   assert.equal(store.size, 0);
   assert.match(html(), /1 attendance state saved\./);
   setImportStatesBoundForTests(5);
+  const realFetch = globalThis.fetch;
   try {
     responder = null;
     await openReview({ onStates: () => new Promise(() => {}) });
@@ -418,6 +419,44 @@ test("18. (F8) once every state is saved the stored item is removed; a hung requ
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.match(html(), /We can&#039;t tell yet whether 1 attendance state was saved/);
   } finally {
+    globalThis.fetch = realFetch;
     setImportStatesBoundForTests(null);
   }
+});
+
+test("19. (NEW-1) an import refused for certain frees the choices: the changed choice is what is sent; while keys exist the chooser is disabled", async () => {
+  let n = 0;
+  await openReview({ onApprove: async () => (++n === 1 ? { status: 409, body: { error: "preview_changed", message: "" } } : imported()) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 0);
+  await choose(NOREC1, "did_not_participate:illness");
+  assert.deepEqual(gx().detail.states.choices[NOREC1], { kind: "did_not_participate", reasonKey: "illness" }, "the change is taken");
+  assert.deepEqual(gx().detail.states.groups, {}, "no keys after a certain refusal");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 1);
+  assert.equal(statesCalls()[0].body.kind, "did_not_participate");
+  assert.equal(statesCalls()[0].body.reasonKey, "illness");
+  // An unknown import outcome keeps the keys: the chooser is disabled, a change is not taken.
+  await openReview({ onApprove: async () => ({ status: 503, body: { error: "import_outcome_unknown" } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.ok(Object.keys(gx().detail.states.groups).length > 0);
+  assert.doesNotMatch(html(), /data-action="training-load-gpexe-state" data-athlete-id="[^"]+" aria-label="[^"]*" >/, "no enabled chooser");
+  await choose(NOREC2, "participated_no_values");
+  assert.equal(gx().detail.states.choices[NOREC2], undefined, "a change is not taken while keys exist");
+});
+
+test("20. after a certain refusal the next send is a first send again: a later refusal reads as not saved, never 'can't be checked'", async () => {
+  let n = 0;
+  await openReview({ onStates: async () => (++n === 1 ? { status: 409, body: { error: "bulk_conflict", message: "", failed: [] } } : { status: 403, body: { error: "not_a_team_coach", message: "" } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  await act("training-load-gpexe-states-again");
+  assert.match(html(), /not saved\. Nothing was written/);
+  assert.doesNotMatch(html(), /can&#039;t be checked from here/);
 });

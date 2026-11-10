@@ -277,10 +277,14 @@ and should not wait for them. If the first months show friction, B is a later ch
   state in the Roster tab meanwhile is kept and named). Outcomes per group: saved; not saved (a refusal the server answered: *Save them
   again* reads the roster again and sends with the same key, since nothing was written); not confirmed (*Check the result* repeats exactly
   the same request); after the window or an undo, "set them in the session's Roster tab" with no retry. A reopened imported session with
-  states not saved yet offers *Save them*. The button names the states ("Then saves N attendance states.") and so does the question.
-* **Evidence**: `frontend/tests/gpexe-import-states-j20c.actions.test.mjs` (10 tests), two J20-A2 tests of `gpexe-import.actions.test.mjs`
+  states not saved yet offers *Save them*. A line above the button names the states ("After the import, OptiMove also saves N attendance
+  states.") and so does the question. An import refused for certain (nothing imported) drops the keys made at the confirm, so the choices
+  can change again; while keys exist (the import in flight, imported, or its outcome unknown) no enabled chooser is drawn. A group
+  refused for certain is a first send again, so a later refusal of it reads as not saved, never "can't be checked".
+* **Evidence**: `frontend/tests/gpexe-import-states-j20c.actions.test.mjs` (20 tests), two J20-A2 tests of `gpexe-import.actions.test.mjs`
   updated for the *Needs a person* count, backend `import-states-j20c.test.mjs` test 15 (the reasons), e2e scenario 12
-  (`e2e/tests/imports-states.test.mjs`, 1280 and 390 px).
+  (`e2e/tests/imports-states.test.mjs`, 1280 and 390 px); e2e scenario 10 (`imports-leave-out.test.mjs`) now opens "N athletes are
+  fine" first, since the rows without a GPEXE record count under *Needs a person*.
 
 ### 5.3 The undo (U5) and roster decisions — decided (O1, extended variant b)
 

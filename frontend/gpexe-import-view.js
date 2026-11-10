@@ -14,7 +14,7 @@
 // imported"). Main messages are written for the coach; the API's codes are
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
-import { choiceValue, chosenStateCount, statesSummary } from "./gpexe-import-states-data.js";
+import { choiceValue, chosenStateCount, statesLockedOf, statesSummary } from "./gpexe-import-states-data.js";
 import { renderGuideHtml } from "./gpexe-guide-view.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
@@ -2176,7 +2176,9 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
   lo.states = statesOffered(c, detail);
   lo.detail = detail;
   lo.reasons = detail?.participationReasons || [];
-  lo.statesLocked = !!detail?.approving;
+  // A choice is fixed once its keys are made (the import is in flight, imported, or its outcome unknown): never an enabled select
+  // whose change would be ignored.
+  lo.statesLocked = !!detail?.approving || statesLockedOf(detail);
   const problem = rows.filter((r) => PROBLEM_KIND[r.status]);
   const fine = rows.filter((r) => !PROBLEM_KIND[r.status]);
   const counts = { needs: 0, not_linked: 0, no_data: 0, review: 0, all: rows.length };
@@ -2202,7 +2204,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
       <p class="muted">${n ? `${plural(n - Math.min(n, leaveOutIds(c, detail).length), "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}${leaveOutIds(c, detail).length ? `, ${leaveOutIds(c, detail).length} left out` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
       ${updating}${updateError}
       ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
-      ${lo.states && rows.some((r) => r.status === "no_record") ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
+      ${lo.states && stateAthleteIds(c, detail).length ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
       <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
       ${shown.length ? reviewTableOf(shown, c, choices, lo) : ""}
       ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices, lo)}</details>` : ""}
@@ -2387,7 +2389,7 @@ function statesOutcomeHtml(detail) {
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-states-check">Check the result</button></div>`);
   }
   if (unknownChecked.length) {
-    parts.push(`<div class="gpexe-unknown" role="alert"><p>${escapeHtml(`We can't tell whether ${plural(n(unknownChecked), "attendance state was", "attendance states were")} saved, and it can't be checked from here. Look at the session's Roster tab.`)}</p></div>`);
+    parts.push(`<div class="gpexe-unknown" role="alert"><p>${escapeHtml(`We can't tell whether ${plural(n(unknownChecked), "attendance state was", "attendance states were")} saved, and it can't be checked from here. Look at the session's Roster tab. The import itself is done.`)}</p></div>`);
   }
   const notSent = [...s.unread, ...s.pending];
   if (notSent.length) {
@@ -2397,7 +2399,9 @@ function statesOutcomeHtml(detail) {
   }
   if (s.refused.length) {
     const busy = s.refused.every((x) => x.code === "try_again" || x.code === "roster_busy");
-    parts.push(`<div class="gpexe-refused" role="alert"><p>${escapeHtml(`${plural(n(s.refused), "attendance state was", "attendance states were")} not saved: ${busy ? "the server was busy" : "the attendance changed meanwhile"}. Nothing was written; the import is done.`)}</p>
+    const changed = s.refused.every((x) => x.code === "bulk_conflict" || x.code === "decision_changed");
+    const why = busy ? ": the server was busy" : changed ? ": the attendance changed meanwhile" : " this time";
+    parts.push(`<div class="gpexe-refused" role="alert"><p>${escapeHtml(`${plural(n(s.refused), "attendance state was", "attendance states were")} not saved${why}. Nothing was written; the import is done.`)}</p>
       <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-states-again">Save them again</button></div>`);
   }
   if (s.final.length) parts.push(`<p class="gpexe-warning" role="note">${escapeHtml(statesFinalText(s.final))}</p>`);
