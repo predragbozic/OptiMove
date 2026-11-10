@@ -872,6 +872,14 @@ test("8c2. a Day view and a phone week emptied by filters offer Clear filters in
   assert.equal(dom().querySelector(".cc-day-empty [data-action=\"central-calendar-clear-filters\"]"), null);
 });
 
+test("8e. a card's type line carries its whole text as a tooltip (a week column shows it on one line)", async () => {
+  installFetchMock(okResponder());
+  await loadCentralCalendar({ render });
+  const kinds = [...dom().querySelectorAll(".cc-week .cc-card .cc-card-kind")];
+  assert.ok(kinds.length > 0, "the wide week renders cards");
+  for (const kind of kinds) assert.equal(kind.getAttribute("title"), kind.textContent);
+});
+
 test("8d. the loading state paints the toolbar at once and the grid area says so", async () => {
   const pending = [];
   installFetchMock((call) => new Promise((resolve) => { pending.push({ call, resolve }); }));

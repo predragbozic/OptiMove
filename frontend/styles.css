@@ -23571,3 +23571,31 @@ p.coach-home-library-note.muted:not([role="status"]) {
     padding: 0 var(--om-space-2);
   }
 }
+
+/* =====================================================
+   Design: the calendar uses the shared tokens.
+   - The day columns, the month cells, the cards and the Filters button take the .om-card border
+     colour; a day column and a month cell take its radius. Today, an open card and hover keep
+     their own (more specific) colours.
+   - In a week column the card's type line ("Event · Team training · 12 athletes") is one line,
+     cut with "…" (the whole text is its tooltip and the event's detail), so the title stays on
+     the card's second line instead of under three or four wrapped lines.
+   ===================================================== */
+.cc-day-column,
+.cc-month-cell {
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+}
+.cc-card,
+.cc-filters-toggle {
+  border-color: var(--om-border-subtle);
+}
+.cc-week .cc-card-kind {
+  display: -webkit-box;
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
