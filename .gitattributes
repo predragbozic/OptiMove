@@ -49,3 +49,5 @@ docs/runbooks/club-mapping-transitions-v52*.sql text eol=lf
 # post-check compare them by md5; new files only, same reason.
 docs/runbooks/system-variables-club-v53*.sql text eol=lf
 docs/runbooks/gpexe-import-check.sql text eol=lf
+# O1 of J20 (v60): the rollback restores v57's undo and scope bodies verbatim, compared by md5; new files only, same reason.
+docs/runbooks/undo-roster-work-v60*.sql text eol=lf
