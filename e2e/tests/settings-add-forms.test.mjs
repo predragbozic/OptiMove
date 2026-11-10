@@ -50,13 +50,16 @@ for (const [role, width] of [["platform_admin", 1280], ["club_admin", 390]]) tes
       assert.deepEqual(m.font, [], `${section}: 16 px fields on a phone`);
       assert.equal(m.overflow, 0, section);
       if (section === "users") {
+        // What was typed in one tab is kept after visiting another.
+        await page.locator('main.workspace form[data-organization-form="user"] input[name="email"]').fill("new.coach@example.invalid");
         for (const [tab, forms] of [["Give access", ["clubRole", "teamRole"]], ["Athlete login", ["athleteLogin"]], ["New account", ["user"]]]) {
           await page.getByRole("tab", { name: tab, exact: true }).click();
           await page.locator(`main.workspace form[data-organization-form="${forms[0]}"]`).waitFor();
-          const shown = await page.$$eval("main.workspace .organization-add-panel form[data-organization-form]", (f) => f.map((x) => x.dataset.organizationForm));
+          const shown = await page.$$eval("main.workspace .organization-add-panel form[data-organization-form]", (f) => f.filter((x) => x.getBoundingClientRect().width > 0).map((x) => x.dataset.organizationForm));
           assert.deepEqual(shown, forms, tab);
           assert.deepEqual((await measure(page, width)).small, [], `${tab}: 44 px`);
         }
+        assert.equal(await page.locator('main.workspace form[data-organization-form="user"] input[name="email"]').inputValue(), "new.coach@example.invalid");
       }
       // Cancel closes the form.
       await page.locator("main.workspace .organization-add-panel").getByRole("button", { name: "Cancel", exact: true }).first().click();

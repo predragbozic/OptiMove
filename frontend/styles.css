@@ -25073,6 +25073,9 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-f
   body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer > .plain-button {
     flex: 1 1 0;
     width: auto;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.25;
   }
 
   body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle {

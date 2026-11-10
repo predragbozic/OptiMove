@@ -203,13 +203,14 @@ function renderOrganizationUserForms(data) {
   ];
   if (!tabs.length) return "";
   const current = tabs.some(([value]) => value === state.organization.userFormTab) ? state.organization.userFormTab : tabs[0][0];
-  const body = current === "account" ? renderOrganizationUserForm() : renderOrganizationRoleForms(data, current);
+  // Every tab's forms are drawn, the others hidden: switching tabs keeps what was typed in another one.
+  const bodyOf = (value) => (value === "account" ? renderOrganizationUserForm() : renderOrganizationRoleForms(data, value));
   return `
     <div class="panel organization-user-forms">
       ${tabs.length > 1 ? `<div class="organization-user-form-tabs om-tabs" role="tablist" aria-label="Add or give access">
-        ${tabs.map(([value, label]) => `<button class="om-tab ${value === current ? "is-active" : ""}" type="button" role="tab" aria-selected="${value === current}" data-action="organization-user-form-tab" data-user-form-tab="${value}">${label}</button>`).join("")}
+        ${tabs.map(([value, label]) => `<button class="om-tab ${value === current ? "is-active" : ""}" type="button" role="tab" id="organization-user-form-tab-${value}" aria-controls="organization-user-form-panel-${value}" aria-selected="${value === current}" data-action="organization-user-form-tab" data-user-form-tab="${value}">${label}</button>`).join("")}
       </div>` : ""}
-      <div role="${tabs.length > 1 ? "tabpanel" : "group"}">${body}</div>
+      ${tabs.map(([value]) => `<div id="organization-user-form-panel-${value}" role="${tabs.length > 1 ? "tabpanel" : "group"}" data-user-form-panel="${value}"${tabs.length > 1 ? ` aria-labelledby="organization-user-form-tab-${value}"` : ""}${value === current ? "" : " hidden"}>${bodyOf(value)}</div>`).join("")}
     </div>`;
 }
 
@@ -222,7 +223,7 @@ function renderOrganizationUserForm() {
   ];
   return `
     <form class="panel organization-form" data-organization-form="user">
-      <div><p class="eyebrow">Access</p><h3>Add user account</h3></div>
+      <h3>New account</h3>
       <label class="search-field"><span>Full name</span><input name="fullName" placeholder="Name"></label>
       <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
       <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
@@ -1093,7 +1094,7 @@ function renderAthleteInviteModal(athletes) {
 function renderJoinLinkCreateFormHtml() {
   return `
     <form class="panel organization-form" data-organization-form="joinLink">
-      <div><p class="eyebrow">Join link</p><h3>Create join link</h3></div>
+      <h3>Create join link</h3>
       <label class="search-field"><span>Label</span><input name="label" placeholder="e.g. Fall tryouts"></label>
       <label class="search-field"><span>Expires in (days)</span><input name="expiresInDays" type="number" min="1" max="30" value="7" required></label>
       <label class="search-field"><span>Max members (optional)</span><input name="maxUses" type="number" min="1" max="500" placeholder="Unlimited"></label>
@@ -1191,7 +1192,7 @@ function renderJoinLinksSection(data) {
 function renderOrganizationClubForm() {
   return `
     <form class="panel organization-form" data-organization-form="club">
-      <div><p class="eyebrow">Platform</p><h3>Add club</h3></div>
+      <h3>Add club</h3>
       <label class="search-field"><span>Club name</span><input name="name" required placeholder="e.g. FK Borac"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. Borac"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" placeholder="https://..."></label>
@@ -1208,7 +1209,7 @@ function renderOrganizationTeamForm(clubs) {
   const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
   return `
     <form class="panel organization-form" data-organization-form="team">
-      <div><p class="eyebrow">Club</p><h3>Add team</h3></div>
+      <h3>Add team</h3>
       ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, required: true, placeholder: "Type club name" })}
       <label class="search-field"><span>Team name</span><input name="name" required placeholder="e.g. First team"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. U19"></label>
@@ -1223,7 +1224,7 @@ function renderOrganizationAthleteForm(clubs, teams) {
   const teamOptions = teams.map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
   return `
     <form class="panel organization-form" data-organization-form="athlete">
-      <div><p class="eyebrow">Athletes</p><h3>Add athlete</h3></div>
+      <h3>Add athlete</h3>
       <label class="search-field"><span>Athlete name</span><input name="fullName" required placeholder="First and last name"></label>
       <label class="search-field"><span>External ID</span><input name="athleteId" placeholder="Optional old ID"></label>
       <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>

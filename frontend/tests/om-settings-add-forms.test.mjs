@@ -54,23 +54,35 @@ test("Users: one panel with New account, Give access and Athlete login; a tab sh
   let html = panel();
   const tabs = [...html.matchAll(/data-action="organization-user-form-tab" data-user-form-tab="([^"]+)">([^<]+)</g)].map((m) => `${m[1]}:${m[2]}`);
   assert.deepEqual(tabs, ["account:New account", "access:Give access", "athleteLogin:Athlete login"]);
-  assert.ok(html.includes('data-organization-form="user"') && !html.includes('data-organization-form="clubRole"'));
+  // Each tab's forms sit in their own panel; only the current one is shown (the others are hidden, so what was typed
+  // in them is kept).
+  const shown = (h) => {
+    const out = {};
+    for (const part of h.split('data-user-form-panel="').slice(1)) {
+      const name = part.slice(0, part.indexOf('"'));
+      const tag = part.slice(0, part.indexOf(">"));
+      out[name] = { hidden: / hidden$/.test(tag), forms: [...part.matchAll(/data-organization-form="([^"]+)"/g)].map((f) => f[1]) };
+    }
+    return out;
+  };
+  let p = shown(html);
+  assert.deepEqual(Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.forms])), { account: ["user"], access: ["clubRole", "teamRole"], athleteLogin: ["athleteLogin"] });
+  assert.deepEqual(Object.entries(p).filter(([, v]) => !v.hidden).map(([k]) => k), ["account"]);
   const render = async () => {};
-  for (const [tab, forms, not] of [["access", ["clubRole", "teamRole"], ["user", "athleteLogin"]], ["athleteLogin", ["athleteLogin"], ["user", "clubRole", "teamRole"]], ["account", ["user"], ["clubRole", "athleteLogin"]]]) {
+  for (const tab of ["access", "athleteLogin", "account"]) {
     assert.equal(await handleOrganizationAction({ dataset: { action: "organization-user-form-tab", userFormTab: tab } }, { renderOrganizationPanel: render }), true);
     html = panel();
-    for (const f of forms) assert.ok(html.includes(`data-organization-form="${f}"`), `${tab} shows ${f}`);
-    for (const f of not) assert.ok(!html.includes(`data-organization-form="${f}"`), `${tab} hides ${f}`);
-    assert.match(html, new RegExp(`aria-selected="true" data-action="organization-user-form-tab" data-user-form-tab="${tab}"`));
+    p = shown(html);
+    assert.deepEqual(Object.entries(p).filter(([, v]) => !v.hidden).map(([k]) => k), [tab], `${tab} is the only panel shown`);
+    assert.match(html, new RegExp(`id="organization-user-form-tab-${tab}" aria-controls="organization-user-form-panel-${tab}" aria-selected="true"`));
   }
-  // Give access holds two forms and one Cancel.
-  state.organization.userFormTab = "access";
-  html = panel();
-  assert.equal(html.match(/>Cancel<\/button>/g).length, 1);
+  // Give access holds two forms and one Cancel (one Cancel per tab panel: three in all).
+  assert.equal(html.match(/>Cancel<\/button>/g).length, 3);
   // Without a new-account right, the panel starts on Give access.
   reset("users", { addFormOpen: true });
   html = renderOrganizationPanelHtml({ currentUser: state.currentUser, data: { ...data, canCreateUser: false }, error: "", role: "ADMIN", scope: "" });
   assert.ok(!html.includes('data-user-form-tab="account"') && html.includes('data-organization-form="clubRole"'));
+  assert.ok(!html.includes('data-organization-form="user"'), "no New account form without that right");
 });
 
 test("Cancel closes the form", async () => {
