@@ -55,13 +55,21 @@ test("a panel wider than the window is narrowed to it, then placed at the margin
   assert.ok(box.left >= 8 && box.right <= 292, JSON.stringify(box));
 });
 
-test("a panel that fits, a hidden one, a full-screen one and the athlete's app are left as they are (stale shifts cleared)", () => {
-  for (const options of [{ left: 600, boxWidth: 360, width: 1280 }, { left: -144, boxWidth: 736, width: 768, hidden: true }, { left: -144, boxWidth: 736, width: 768, position: "fixed" }, { left: -144, boxWidth: 736, width: 768, athlete: true }]) {
+test("a panel that fits, a hidden one and a full-screen one are left as they are (stale shifts cleared)", () => {
+  for (const options of [{ left: 600, boxWidth: 360, width: 1280 }, { left: -144, boxWidth: 736, width: 768, hidden: true }, { left: -144, boxWidth: 736, width: 768, position: "fixed" }]) {
     const { panel, view } = world(options);
     fitPanelToViewport(panel, { view });
     assert.equal(panel.style.translate, "", JSON.stringify(options));
     assert.equal(panel.style.maxWidth, "", JSON.stringify(options));
   }
+});
+
+// The athlete's app (owner, 2026-11-10): its header panels hang from the same buttons and are fitted the same way.
+test("the athlete's app is fitted too: a notifications panel past the right edge of a phone moves in", () => {
+  const { panel, view } = world({ width: 390, left: 244, boxWidth: 314, athlete: true });
+  fitPanelToViewport(panel, { view });
+  assert.equal(panel.style.translate, "-176px 0");
+  assert.equal(panel.getBoundingClientRect().right, 382);
 });
 
 test("a panel without a box (a test's plain object) is left alone instead of throwing", () => {

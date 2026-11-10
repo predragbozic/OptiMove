@@ -305,6 +305,10 @@ init();
 
 async function init() {
   bindEvents();
+  // Taps on the menu button before this module was bound (index.html / athlete.html count them): replay them now.
+  window.__omMenuBound = true;
+  if ((window.__omEarlyMenuTaps || 0) % 2 === 1) toggleMobileNav();
+  window.__omEarlyMenuTaps = 0;
   // Option A (A2): a signed-in browser reports its own errors, in a closed shape and without any text of them.
   installAppErrorCapture({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
