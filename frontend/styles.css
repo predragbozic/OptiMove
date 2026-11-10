@@ -25241,3 +25241,22 @@ body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-acces
   padding: var(--om-space-3) 0 var(--om-space-4);
   border-top: 0;
 }
+
+/* ==========================================================================
+   Design S6 (shell): the header's controls are 44 px on a computer too. The
+   workspace switcher, Notifications, Messages and Sign out were 40 px above
+   the phone breakpoint (on a phone they already were 44). The "Online" status
+   pill is left as U4 set it.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .sign-out-button {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (shell). */
