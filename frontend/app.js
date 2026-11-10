@@ -305,6 +305,9 @@ init();
 
 async function init() {
   bindEvents();
+  // From here the menu button has its own listener; earlier taps were counted by index.html / athlete.html and
+  // are replayed below, once the signed-in shell is shown (never into a sign-in or invite screen).
+  window.__omMenuBound = true;
   // Option A (A2): a signed-in browser reports its own errors, in a closed shape and without any text of them.
   installAppErrorCapture({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
@@ -355,6 +358,9 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
+  // The signed-in shell: a menu tap made before app.js was bound opens the menu now (an even count leaves it closed).
+  if ((window.__omEarlyMenuTaps || 0) % 2 === 1) toggleMobileNav();
+  window.__omEarlyMenuTaps = 0;
   applyDefaultInitialTab();
   ensureBackGuard();
   void loadNotifications({ silent: true });
@@ -1760,8 +1766,12 @@ function toggleMobileNav() {
 
 function closeMobileNav() {
   if (!state.mobileNavOpen) return;
+  // A closed drawer is hidden on a phone (styles.css), so focus left inside it would sit on a hidden control:
+  // it goes back to the menu button that opened the drawer.
+  const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
+  if (focusInDrawer && els.mobileNavToggle?.offsetParent) els.mobileNavToggle.focus({ preventScroll: true });
 }
 
 function collapseRailAfterNav() {
@@ -2508,6 +2518,9 @@ async function loadTrainingLoad() {
 }
 
 function renderTrainingLoad() {
+  // A paint that lands after an await (a read finishing, a section load) must not draw Training Load over the
+  // screen the coach went to meanwhile (Back to Home while Training Load was loading drew it under the Home title).
+  if (state.activeTab !== "training-load") return;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   if (state.trainingLoad.section === "analysis") {
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
@@ -2797,6 +2810,17 @@ async function handleContentClick(event) {
     const mode = ["load", "day"].includes(action.dataset.mode) ? action.dataset.mode : "plan";
     coachHomePicker = { mode, date: mode === "day" ? action.dataset.date || "" : "", query: "" };
     renderCoachHome({ rows: coachHomeRows, error: "" });
+    return;
+  }
+  // An empty day on Home: plan it in the Calendar.
+  if (type === "coach-home-plan-session") {
+    // The Calendar opens on the chosen day (its anchor and selected day); its read seeds them only when empty.
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "") ? action.dataset.date : "";
+    if (date) {
+      state.centralCalendar.anchor = date;
+      state.centralCalendar.selectedDate = date;
+    }
+    openCentralCalendarFromRail();
     return;
   }
   if (type === "coach-home-picker-close") {

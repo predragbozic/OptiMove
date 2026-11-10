@@ -13,6 +13,7 @@ import { escapeAttr, escapeHtml, localDateIso, monthLabel, monthWeeksIso, progra
 export const COACH_HOME_MENU_ICONS = {
   calendar: `<rect x="4" y="5" width="16" height="15" rx="2"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 10h16"></path><path d="M8 14h.01"></path><path d="M12 14h.01"></path><path d="M16 14h.01"></path><path d="M8 17h.01"></path><path d="M12 17h.01"></path><path d="M16 17h.01"></path>`,
   load: `<circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path>`,
+  athletes: `<path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19"></path><circle cx="10" cy="7" r="3"></circle><path d="M20 19v-1.2a3 3 0 0 0-2.2-2.9"></path><path d="M17 4.3a3 3 0 0 1 0 5.4"></path>`,
   exercises: `<path d="M6 7v10"></path><path d="M18 7v10"></path><path d="M3 9v6"></path><path d="M21 9v6"></path><path d="M6 12h12"></path>`,
   programs: `<path d="M2.5 8.5l9.5-6 9.5 6"></path><path d="M3.5 9h17"></path><path d="M5.8 9.6v8.4"></path><path d="M18.2 9.6v8.4"></path><path d="M9 10c1.2-.7 2-.7 3 0 1-.7 1.8-.7 3 0v7.4c-1.2-.7-2-.7-3 0-1-.7-1.8-.7-3 0z"></path><path d="M3 20h18"></path>`,
 };
@@ -136,20 +137,37 @@ function renderCarousel(track, label, itemsHtml, { previousLabel, nextLabel, tra
     </div>`;
 }
 
-function renderAthletePanel(mode, rows) {
-  const plan = mode === "plan";
-  const title = plan ? "Training plan" : "Training load";
-  const titleId = plan ? "coachHomePlanTitle" : "coachHomeLoadTitle";
-  const items = sortAthletes(rows).map((row) => `<li><button class="coach-home-strip-item coach-home-strip-athlete" type="button" data-action="coach-home-open-athlete" data-mode="${mode}" data-athlete-id="${escapeAttr(row.athleteId)}" data-athlete-uuid="${escapeAttr(row.athleteUuid || "")}" aria-label="${escapeAttr(`${row.athlete}, ${title}`)}">
+// The two ways into an athlete from Home (PR5, the owner's choice of
+// 2026-11-10): one Athletes card whose switch picks the weekly plan or the
+// training load. The strip, its Search and every athlete keep the mode's own
+// track and data-mode, so the picker, the arrows and opening an athlete work
+// as they did with two cards. The choice is kept in memory
+// (state.coachHome.athletesMode).
+export const COACH_HOME_ATHLETE_MODES = {
+  plan: { title: "Training plan", icon: "calendar", opens: "their weekly plan" },
+  load: { title: "Training load", icon: "load", opens: "their training load" },
+};
+
+export function coachHomeAthletesMode(home = emptyCoachHomeState()) {
+  return home?.athletesMode === "load" ? "load" : "plan";
+}
+
+export function renderCoachHomeAthletesHtml(rows, mode = "plan") {
+  const current = mode === "load" ? "load" : "plan";
+  const { title, opens } = COACH_HOME_ATHLETE_MODES[current];
+  const items = sortAthletes(rows).map((row) => `<li><button class="coach-home-strip-item coach-home-strip-athlete" type="button" data-action="coach-home-open-athlete" data-mode="${current}" data-athlete-id="${escapeAttr(row.athleteId)}" data-athlete-uuid="${escapeAttr(row.athleteUuid || "")}" aria-label="${escapeAttr(`${row.athlete}, ${title}`)}">
         ${renderAthleteAvatar(row, "coach-home-avatar coach-home-strip-avatar", { lazy: true })}
         <span class="coach-home-strip-label">${escapeHtml(row.athlete)}</span>
       </button></li>`).join("");
-  return `<section class="coach-home-panel coach-home-panel-${mode}" aria-labelledby="${titleId}">
+  const tabs = Object.entries(COACH_HOME_ATHLETE_MODES).map(([key, entry]) => `<button class="om-tab coach-home-athletes-tab coach-home-athletes-tab-${key}${key === current ? " is-active" : ""}" type="button" data-action="coach-home-athletes-mode" data-mode="${key}" aria-pressed="${key === current}">${renderMenuIcon(entry.icon)}<span>${entry.title}</span></button>`).join("");
+  return `<section class="coach-home-panel coach-home-athletes coach-home-panel-${current}" data-coach-home-section="athletes" aria-labelledby="coachHomeAthletesTitle">
       <header class="coach-home-panel-head">
-        <h3 class="coach-home-panel-title" id="${titleId}">${renderMenuIcon(plan ? "calendar" : "load")}<span>${title}</span></h3>
-        <button class="plain-button coach-home-search-button" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="${mode}" aria-label="Search athletes for ${title}">${ICON_SEARCH}<span>Search</span></button>
+        <h3 class="coach-home-panel-title" id="coachHomeAthletesTitle">${renderMenuIcon("athletes")}<span>Athletes</span></h3>
+        <button class="plain-button coach-home-search-button" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="${current}" aria-label="Search athletes to open ${opens}">${ICON_SEARCH}<span>Search</span></button>
       </header>
-      ${renderCarousel(mode, `Athletes for ${title}`, items, { previousLabel: `Previous athletes for ${title}`, nextLabel: `Next athletes for ${title}` })}
+      <div class="om-tabs coach-home-athletes-tabs" role="group" aria-label="Open athletes in">${tabs}</div>
+      <p class="muted coach-home-athletes-hint">Tap an athlete to open ${opens}.</p>
+      ${renderCarousel(current, `Athletes for ${title}`, items, { previousLabel: `Previous athletes for ${title}`, nextLabel: `Next athletes for ${title}` })}
     </section>`;
 }
 
@@ -207,7 +225,12 @@ function renderDayListHtml(day, today) {
         </div>`;
   }
   const training = sortAthletes(day.rows.filter((row) => row.hasTrainingToday));
-  if (!training.length) return `<p class="muted coach-home-day-note">${day.isToday ? "No athletes have a session scheduled today." : "No athletes have a session scheduled on this day."}</p>`;
+  if (!training.length) {
+    return `<div class="coach-home-day-note coach-home-day-empty">
+          <p class="muted">${day.isToday ? "No athletes have a session scheduled today." : "No athletes have a session scheduled on this day."}</p>
+          ${day.date >= localDateIso() ? `<button class="plain-button coach-home-inline-button coach-home-plan-session" type="button" data-action="coach-home-plan-session" data-date="${escapeAttr(day.date)}">Plan a session</button>` : ""}
+        </div>`;
+  }
   // One markup, two layouts (styles.css): a list beside the calendar on a
   // computer, the first COACH_HOME_DAY_LIST_LIMIT of them; on a phone a
   // strip under the calendar, every one of them, paged like the other
@@ -360,7 +383,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {}, 
   const athleteCards = error
     ? renderErrorStateHtml(error)
     : rows.length
-      ? `${renderAthletePanel("plan", rows)}${renderAthletePanel("load", rows)}${renderCoachHomeDayHtml({ rows, home, today })}`
+      ? `${renderCoachHomeDayHtml({ rows, home, today })}${renderCoachHomeAthletesHtml(rows, coachHomeAthletesMode(home))}`
       : renderEmptyStateHtml();
   const body = platform
     ? `${error ? `<div role="alert"><p class="builder-error">${escapeHtml(error)}</p><button class="plain-button coach-home-state-button" type="button" data-action="coach-home-retry">Try again</button></div>` : ""}${clubs.length ? renderPlatformClubsHtml(clubs) : ""}${workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : clubs.length || error ? "" : `<p class="muted coach-home-empty">No clubs yet.</p>`}`

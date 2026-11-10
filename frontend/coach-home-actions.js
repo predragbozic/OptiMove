@@ -1,6 +1,8 @@
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
+  coachHomeAthletesMode,
+  renderCoachHomeAthletesHtml,
   renderCoachHomeDayHtml,
   renderCoachHomeExerciseItemsHtml,
   renderCoachHomeExerciseMoreHtml,
@@ -135,6 +137,9 @@ function replaceSection(root, name, html, { onNearEnd, fallbackFocus = "" } = {}
 // calendar and its list), "exercises", "programs", or "exercises-more" (a
 // further page appended to the exercise strip without redrawing it).
 export function renderCoachHomeSection(root, section, { rows = [], appended = [], onNearEnd } = {}) {
+  if (section === "athletes") {
+    return replaceSection(root, "athletes", renderCoachHomeAthletesHtml(rows, coachHomeAthletesMode(state.coachHome)), { fallbackFocus: '.coach-home-athletes-tab[aria-pressed="true"]' });
+  }
   if (section === "day") {
     return replaceSection(root, "day", renderCoachHomeDayHtml({ rows, home: state.coachHome }), { fallbackFocus: ".coach-home-cal-day.is-selected" });
   }
@@ -204,6 +209,14 @@ export function handleCoachHomeAction(action, { root, onChange } = {}) {
   const type = action?.dataset?.action;
   if (type === "coach-home-scroll") {
     if (action.getAttribute("aria-disabled") !== "true") scrollCoachHomeTrack(root, action.dataset.track, Number(action.dataset.direction) < 0 ? -1 : 1);
+    return true;
+  }
+  if (type === "coach-home-athletes-mode") {
+    const mode = action.dataset.mode === "load" ? "load" : "plan";
+    if (state.coachHome.athletesMode !== mode) {
+      state.coachHome = { ...state.coachHome, athletesMode: mode };
+      onChange?.("athletes");
+    }
     return true;
   }
   if (type === "coach-home-day-select") {

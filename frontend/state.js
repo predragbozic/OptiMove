@@ -39,6 +39,8 @@ export const emptyCoachHomeState = () => ({
   days: { from: "", to: "", counts: {}, error: "" },
   exercises: { items: [], hasMore: false, loaded: false, loading: false, loadingMore: false, error: "", moreError: "" },
   programs: { items: [], loaded: false, loading: false, error: "" },
+  // The Athletes card's switch (PR5): "plan" or "load", kept for the session.
+  athletesMode: "plan",
 });
 
 // Settings -> Calendar (K2b-1c, docs/ai/central-calendar-k2b-plan.md

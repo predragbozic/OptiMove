@@ -9,6 +9,15 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
     <link rel="stylesheet" href="/styles.css?v=20260722-2">
+    <script>
+      // The menu button is drawn by this HTML before app.js (a module with many imports) has bound it, so an early
+      // tap did nothing. Count taps until app.js takes over; it replays them (an odd count opens the menu).
+      window.__omEarlyMenuTaps = 0;
+      document.addEventListener("click", function (event) {
+        if (window.__omMenuBound) return;
+        if (event.target && event.target.closest && event.target.closest("#mobileNavToggle")) window.__omEarlyMenuTaps += 1;
+      }, true);
+    </script>
   </head>
   <body class="athlete-mode">
     <div class="app-shell">

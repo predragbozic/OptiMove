@@ -14,23 +14,36 @@ beforeEach(() => { state.currentUser = { id: "coach", activeWorkspace: { type: "
 // are cards with every athlete in a strip under them (one tap opens that
 // athlete there), the searchable list stays one Search away, and the old
 // Today row became the day card with its calendar.
-test("Home shows Training plan and Training load cards, each with every athlete in an alphabetical strip, and the day card", () => {
-  const { doc, close } = parse(renderCoachHomeHtml({ rows: [rows[1], rows[0]], user: state.currentUser }));
+test("Home shows one Athletes card with a Training plan / Training load switch, every athlete in an alphabetical strip, and the day card first", async () => {
+  const { coachHomeAthletesMode } = await import("../coach-home.js");
   for (const [mode, title] of [["plan", "Training plan"], ["load", "Training load"]]) {
-    const panel = doc.querySelector(`.coach-home-panel-${mode}`);
-    assert.ok(panel, `${title} card`);
-    assert.match(panel.querySelector("h3").textContent, new RegExp(title));
+    const home = { ...state.coachHome, athletesMode: mode };
+    assert.equal(coachHomeAthletesMode(home), mode);
+    const { doc, close } = parse(renderCoachHomeHtml({ rows: [rows[1], rows[0]], user: state.currentUser, home }));
+    const cards = doc.querySelectorAll('[data-coach-home-section="athletes"]');
+    assert.equal(cards.length, 1, "one Athletes card, not one card per mode");
+    const panel = cards[0];
+    assert.ok(panel.classList.contains(`coach-home-panel-${mode}`));
+    assert.match(panel.querySelector("h3").textContent, /Athletes/);
+    const tabs = [...panel.querySelectorAll('[data-action="coach-home-athletes-mode"]')];
+    assert.deepEqual(tabs.map((tab) => [tab.dataset.mode, tab.textContent.trim(), tab.getAttribute("aria-pressed")]), [
+      ["plan", "Training plan", String(mode === "plan")],
+      ["load", "Training load", String(mode === "load")],
+    ]);
+    assert.ok(tabs.every((tab) => tab.tagName === "BUTTON" && tab.type === "button"));
     const athletes = [...panel.querySelectorAll('[data-coach-home-track] [data-action="coach-home-open-athlete"]')];
     assert.deepEqual(athletes.map((button) => button.dataset.athleteId), ["17", "18"], "alphabetical, the search list's order");
     assert.ok(athletes.every((button) => button.dataset.mode === mode && button.tagName === "BUTTON"));
     assert.equal(athletes[0].getAttribute("aria-label"), `Ana Test, ${title}`);
-    assert.equal(panel.querySelector('[data-action="coach-home-picker-open"]').dataset.mode, mode, "the searchable list stays available");
+    assert.equal(panel.querySelector('[data-action="coach-home-picker-open"]').dataset.mode, mode, "the searchable list follows the switch");
     const arrows = panel.querySelectorAll('[data-action="coach-home-scroll"]');
     assert.deepEqual([...arrows].map((arrow) => [arrow.dataset.track, arrow.dataset.direction]), [[mode, "-1"], [mode, "1"]]);
+    const order = [...doc.querySelectorAll(".coach-home-grid > [data-coach-home-section]")].map((section) => section.dataset.coachHomeSection);
+    assert.deepEqual(order.slice(0, 2), ["day", "athletes"], "Today first, then Athletes, then the libraries");
+    assert.match(doc.querySelector(".coach-home-day").textContent, /1 \/ 2 athletes training/);
+    assert.equal(doc.querySelector("dialog"), null);
+    close();
   }
-  assert.match(doc.querySelector(".coach-home-day").textContent, /1 \/ 2 athletes training/);
-  assert.equal(doc.querySelector("dialog"), null);
-  close();
 });
 test("every Home card shows the same icon as its item in the main menu", () => {
   const shell = readFileSync(new URL("../index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -41,8 +54,9 @@ test("every Home card shows the same icon as its item in the main menu", () => {
   const { doc, close } = parse(renderCoachHomeHtml({ rows, user: state.currentUser }));
   const cardIcon = (selector) => squash(doc.querySelector(`${selector} .coach-home-panel-icon`)?.innerHTML || "");
   const pairs = [
-    ["the menu's Calendar (the weekly plan)", 'id="calendarToggle"', ".coach-home-panel-plan"],
-    ["Training load", 'data-library-tab="training-load"', ".coach-home-panel-load"],
+    ["the menu's Athletes", 'id="athletesToggle"', ".coach-home-athletes .coach-home-panel-title"],
+    ["the menu's Calendar (the weekly plan)", 'id="calendarToggle"', ".coach-home-athletes-tab-plan"],
+    ["Training load", 'data-library-tab="training-load"', ".coach-home-athletes-tab-load"],
     ["Exercise Library", 'data-library-tab="exercises"', '[data-coach-home-section="exercises"]'],
     ["Program Library", 'data-library-tab="templates" data-template-scope="my_programs" title="Program Library"', '[data-coach-home-section="programs"]'],
   ];
@@ -268,7 +282,7 @@ const busyDay = Array.from({ length: 8 }, (_, index) => ({ athleteId: String(100
 test("every athlete-list trigger declares aria-haspopup=dialog; the day card lists six athletes and offers Show all for the rest", () => {
   const few = parse(renderCoachHomeHtml({ rows, user: state.currentUser }));
   const triggers = few.doc.querySelectorAll('[data-action="coach-home-picker-open"]');
-  assert.deepEqual([...triggers].map((trigger) => trigger.dataset.mode), ["plan", "load"], "the two Search buttons; no Show all for one athlete");
+  assert.deepEqual([...triggers].map((trigger) => trigger.dataset.mode), ["plan"], "the Athletes card's one Search button (it follows the switch); no Show all for one athlete");
   for (const trigger of triggers) {
     assert.equal(trigger.tagName, "BUTTON");
     assert.equal(trigger.getAttribute("aria-haspopup"), "dialog");
