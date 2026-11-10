@@ -275,6 +275,9 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     // only after the requestKey replay below.
     const target = await resolveRosterTarget(client, ctx, activityId, { deferGate: true });
     const teamId = String(target.team.id);
+    // An import's states belong to the team the approval named: a session that moved to another team since is the
+    // identical 404, decided before any lock (never a 403 from the decider lock of a team the caller did not name).
+    if (origin && String(origin.teamId) !== teamId) throw notFound();
     if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
 
     try {
@@ -592,7 +595,6 @@ export async function decideImportStates(ctx, teamId, approvalId, body) {
   if (!approval || !approval.activity_id || String(approval.approved_by_user_id) !== String(ctx.userId)) throw notFound();
   const canonical = { ...validated.canonical, origin: "import", approvalId: approvalKey };
   return runRosterCommand(ctx, String(approval.activity_id), { requestKey: validated.requestKey, canonical }, async (cmd, c) => {
-    if (String(cmd.teamId) !== String(teamId)) throw notFound();
     const state = (await cmd.client.query(
       `select now() > a.approved_at + training_load.import_states_window() as closed, c.import_undone_at is not null as undone
          from training_load.gpexe_import_approvals a join training_load.gpexe_import_candidates c on c.id = a.candidate_id
@@ -603,7 +605,7 @@ export async function decideImportStates(ctx, teamId, approvalId, body) {
     if (state.undone) throw conflict("import_undone", "This import was undone. Nothing was saved.");
     if (state.closed) throw conflict("import_states_window_closed", "The time to save states with the import has passed. Set them in the Roster tab.");
     return applyBulk(cmd, c);
-  }, { approvalId: approvalKey });
+  }, { approvalId: approvalKey, teamId: String(teamId) });
 }
 
 // ---------------------------------------------------------------------------
