@@ -12,10 +12,10 @@ let browser;
 before(async () => { world = await startWorld(); browser = await launch(); });
 after(async () => { await browser?.close(); await world?.stop(); });
 
-async function openAthlete(width, { holdApp = false } = {}) {
+async function openAthlete(width, { holdApp = false, signedIn = true } = {}) {
   const account = world.accounts.find((a) => a.role === "athlete");
   const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true });
-  await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+  if (signedIn) await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
   const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(String(e)));
@@ -26,11 +26,11 @@ async function openAthlete(width, { holdApp = false } = {}) {
   }
   // A held module script also holds DOMContentLoaded, so an early tap only waits for the page to commit.
   await page.goto(`${world.baseUrl}/athlete`, { waitUntil: holdApp ? "commit" : "load" });
-  if (!holdApp) await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
+  if (!holdApp && signedIn) await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
   return { context, page, pageErrors, release };
 }
 
-for (const width of [360, 390]) {
+for (const width of [360, 390, 600, 760]) {
   test(`(${width} px) the athlete's header controls are 44 px and no header panel makes the page wider`, async () => {
     const { context, page, pageErrors } = await openAthlete(width);
     try {
@@ -65,6 +65,22 @@ for (const width of [360, 390]) {
   });
 }
 
+test("(390 px) the sticky row under the athlete's bar (Account) starts where the 44 px bar ends", async () => {
+  const { context, page, pageErrors } = await openAthlete(390);
+  try {
+    await page.getByText("Account", { exact: true }).filter({ visible: true }).first().click();
+    await page.waitForSelector(".athlete-settings-identity", { timeout: 20_000 });
+    const result = await page.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      const bar = document.querySelector(".athlete-topbar").getBoundingClientRect();
+      const row = document.querySelector(".athlete-settings-identity").getBoundingClientRect();
+      return { barBottom: Math.round(bar.bottom), rowTop: Math.round(row.top) };
+    });
+    assert.equal(result.rowTop, result.barBottom, JSON.stringify(result));
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
 test("(390 px) a menu tap made before app.js is ready opens the menu once it is; two taps leave it closed", async () => {
   for (const [taps, expected] of [[1, "true"], [2, "false"]]) {
     const { context, page, pageErrors, release } = await openAthlete(390, { holdApp: true });
@@ -84,5 +100,21 @@ test("(390 px) a menu tap made before app.js is ready opens the menu once it is;
       release();
       await context.close();
     }
+  }
+});
+
+test("(390 px) an early menu tap on a page that becomes the sign-in screen is not carried past it", async () => {
+  const { context, page, pageErrors, release } = await openAthlete(390, { holdApp: true, signedIn: false });
+  try {
+    await page.locator("#mobileNavToggle").waitFor({ state: "visible", timeout: 20_000 });
+    await page.locator("#mobileNavToggle").click();
+    release();
+    await page.waitForSelector("#loginForm", { timeout: 20_000 });
+    assert.equal(await page.evaluate(() => document.body.classList.contains("mobile-nav-open")), false, "no menu state behind the sign-in screen");
+    assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "false");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    release();
+    await context.close();
   }
 });

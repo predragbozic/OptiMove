@@ -9092,14 +9092,15 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 
   /* hotfix/athlete-mobile-navigation: stacks directly under the sticky
-     .athlete-topbar (measured height ~57px including its border) instead
+     .athlete-topbar (--athlete-topbar-height: 61px with its 44 px controls,
+     border included; 57px before them) instead
      of under it - the two form one continuous pinned header while Settings
      content scrolls underneath both. z-index: 40 stays below the topbar's
      45 and the nav drawer/backdrop's 60/55. */
   .athlete-settings-identity {
     display: flex;
     position: sticky;
-    top: calc(57px + env(safe-area-inset-top, 0px));
+    top: calc(var(--athlete-topbar-height, 61px) + env(safe-area-inset-top, 0px));
     z-index: 40;
     padding: 8px calc(10px + env(safe-area-inset-right, 0px)) 8px calc(10px + env(safe-area-inset-left, 0px));
     background: rgba(255, 255, 255, 0.92);
@@ -9130,7 +9131,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
   .athlete-mode .week-nav-panel {
     position: sticky;
-    top: calc(57px + env(safe-area-inset-top, 0px));
+    top: calc(var(--athlete-topbar-height, 61px) + env(safe-area-inset-top, 0px));
     z-index: 40;
     background: rgba(255, 255, 255, 0.92);
     backdrop-filter: blur(8px);
@@ -24092,6 +24093,12 @@ body:not(.athlete-mode):not(.login-mode) .coach-home-day-empty {
    - The header controls are 44 px (they were 38-40 px).
    ========================================================================== */
 @media (max-width: 760px) {
+  /* The bar's height (8 + 44 + 8 px and its 1 px border): the sticky rows under
+     it (Settings' identity, the Weekly plan's week bar) start there. */
+  body.athlete-mode:not(.login-mode) {
+    --athlete-topbar-height: 61px;
+  }
+
   body.athlete-mode.messages-open:not(.login-mode) .athlete-topbar {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;

@@ -22,7 +22,12 @@ test("every rule of the athlete header block is the athlete's own (never the coa
 });
 
 test("Messages full screen drops the bar's blur; notifications hang from the bell's right edge on a phone", () => {
-  assert.match(block, /@media \(max-width: 760px\) \{\s*body\.athlete-mode\.messages-open:not\(\.login-mode\) \.athlete-topbar \{\s*backdrop-filter: none;\s*-webkit-backdrop-filter: none;/);
+  assert.match(block, /body\.athlete-mode\.messages-open:not\(\.login-mode\) \.athlete-topbar \{\s*backdrop-filter: none;\s*-webkit-backdrop-filter: none;/);
+  assert.ok(block.indexOf("messages-open") > block.indexOf("@media (max-width: 760px)"), "inside the ≤760 px block");
+  // The sticky rows under the bar start at its height (61 px with the 44 px controls), never the old 57 px.
+  assert.match(block, /--athlete-topbar-height: 61px;/);
+  assert.equal((css.match(/top: calc\(var\(--athlete-topbar-height, 61px\) \+ env\(safe-area-inset-top, 0px\)\);/g) || []).length, 2);
+  assert.ok(!css.includes("top: calc(57px + env(safe-area-inset-top"), "no row is left at the old 57 px");
   assert.match(block, /@media \(max-width: 640px\) \{\s*body\.athlete-mode:not\(\.login-mode\) \.notification-panel \{\s*left: auto;\s*right: 0;/);
 });
 
@@ -47,6 +52,13 @@ test("both page shells count menu taps made before app.js is bound, and app.js r
     assert.match(html, /closest\("#mobileNavToggle"\)\) window\.__omEarlyMenuTaps \+= 1;/);
   }
   const app = read("app.js");
-  const init = app.slice(app.indexOf("async function init() {"), app.indexOf("async function init() {") + 600);
-  assert.match(init, /bindEvents\(\);\s*\/\/[^\n]*\n\s*window\.__omMenuBound = true;\s*if \(\(window\.__omEarlyMenuTaps \|\| 0\) % 2 === 1\) toggleMobileNav\(\);\s*window\.__omEarlyMenuTaps = 0;/);
+  const init = app.slice(app.indexOf("async function init() {"), app.indexOf("applyDefaultInitialTab();", app.indexOf("async function init() {")) + 30);
+  // Bound right after bindEvents (so no tap is both counted and handled)...
+  assert.match(init, /bindEvents\(\);\s*(\/\/[^\n]*\n\s*)*window\.__omMenuBound = true;/);
+  // ...and replayed only in the signed-in shell: after the no-user branch (the sign-in screen) and the athlete redirect.
+  const replay = init.indexOf("if ((window.__omEarlyMenuTaps || 0) % 2 === 1) toggleMobileNav();");
+  assert.ok(replay > 0, "the replay exists");
+  assert.ok(replay > init.indexOf("if (!state.currentUser) {"), "after the sign-in branch");
+  assert.ok(replay > init.indexOf('window.location.replace("/athlete");'), "after the athlete redirect");
+  assert.ok(replay < init.indexOf("applyDefaultInitialTab();"), "before the first tab is drawn");
 });
