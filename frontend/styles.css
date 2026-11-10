@@ -25271,3 +25271,59 @@ body:not(.athlete-mode):not(.login-mode) .app-health-chip {
   min-height: var(--om-tap-target);
 }
 /* End of design S6 (Settings). */
+
+/* ==========================================================================
+   Design L1: the sign-in screens (sign in, password reset, invite, join,
+   email verification and change, check-in). Each card carries the app's own
+   logo, its one main action is the accent button, and every field, button and
+   text link is 44 px. Presentation only: no text, route or form changes.
+   ========================================================================== */
+body.login-mode .login-form::before {
+  content: "";
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  background: url("./brand-logo.png") center / contain no-repeat;
+}
+
+body.login-mode .login-form input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: var(--om-tap-target);
+}
+
+body.login-mode .login-form .plain-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--om-tap-target);
+  text-decoration: none;
+}
+
+/* The card's one main action (Sign in, Send reset link, Set new password,
+   Back to sign in...); a smaller action inside a nested form stays secondary. */
+body.login-mode .login-form > .plain-button:not(.compact-button) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The card's grid gap spaces its lines; a paragraph's own margin would double it. */
+body.login-mode .login-form > p {
+  margin: 0;
+}
+
+body.login-mode .login-form .muted > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--om-tap-target);
+  color: var(--accent);
+  font-weight: 700;
+}
+/* End of design L1. */
+
+/* ==========================================================================
+   Design C1: the coach directory's Create / Edit my profile is 44 px.
+   ========================================================================== */
+body:not(.login-mode) .coach-directory-head .plain-button {
+  min-height: var(--om-tap-target);
+}
+/* End of design C1. */
