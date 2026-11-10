@@ -40,6 +40,9 @@ async function sectionCount(context, ids) {
 }
 
 async function openSection(page) {
+  // Below 761 px the navigation is behind the menu button.
+  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
+  if (await toggle.isVisible().catch(() => false)) await toggle.click();
   await page.locator('[data-library-tab="builder"]').first().click();
   await page.getByText("Continue where you left off").first().click();
   await page.getByRole("button", { name: "Continue", exact: true }).first().click();
@@ -175,11 +178,25 @@ test("(1280 px, mouse) a click at the corner of Favourite, Mark, Tags and Add wo
 // B5b: the library toolbar with a mouse - the Tile / Big / List switches and "Add custom exercise" are 44 px, the
 // switcher and the search field share their top, and the button still opens its form. A short window keeps the
 // phone toolbar (44 px icon switches and the "+ Add custom exercise" link).
-for (const [width, height] of [[1280, 900], [800, 900], [1024, 500]]) {
-  test(`(${width} x ${height}, mouse) the library toolbar: 44 px switches and Add custom exercise, tops lined up`, async () => {
-    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
+// A touch tablet: a context of its own (openAs gives touch only to a phone width).
+async function openTouch(width, height) {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true });
+  await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await page.goto(world.baseUrl);
+  await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+  return { context, page, pageErrors };
+}
+
+for (const [width, height, touch] of [[1280, 900, false], [800, 900, false], [700, 900, false], [1024, 768, true], [1024, 500, false]]) {
+  test(`(${width} x ${height}, ${touch ? "touch" : "mouse"}) the library toolbar: 44 px switches and Add custom exercise, tops lined up`, async () => {
+    const { context, page, pageErrors } = touch ? await openTouch(width, height) : await openAs(browser, world, "team_coach", width);
     try {
-      await page.setViewportSize({ width, height });
+      if (!touch) await page.setViewportSize({ width, height });
+      if (touch) assert.ok(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), "the tablet is a coarse pointer");
       await makeProgram(context, `Toolbar ${width}x${height}`);
       await openSection(page);
       const out = await page.evaluate(() => {

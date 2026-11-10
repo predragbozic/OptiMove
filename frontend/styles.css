@@ -24447,8 +24447,16 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
    Library's own switches are not touched.
    ========================================================================== */
 @media (pointer: fine) and (min-width: 761px) and (min-height: 521px) {
-  /* The switcher (44 px buttons in a 1 px frame) and the search field are
-     both 48 px, so the row's tops line up. */
+  body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .exercise-view-button {
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-3);
+  }
+}
+
+@media (min-width: 561px) and (min-height: 521px) {
+  /* The switches are 44 px here with any pointer (this block, the max-width
+     760 and the pointer: coarse rules): the switcher (a 1 px frame) and the
+     search field are both 48 px, so the row's tops line up. */
   body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .exercise-view-switcher {
     padding: 1px;
   }
@@ -24457,13 +24465,6 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     height: 48px;
   }
 
-  body:not(.athlete-mode):not(.login-mode) .builder-library-toolbar .exercise-view-button {
-    min-height: var(--om-tap-target);
-    padding: 0 var(--om-space-3);
-  }
-}
-
-@media (min-width: 561px) and (min-height: 521px) {
   body:not(.athlete-mode):not(.login-mode) .builder-section-library .builder-custom-exercise-button {
     display: inline-flex;
     align-items: center;
