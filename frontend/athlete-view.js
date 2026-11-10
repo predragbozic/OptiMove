@@ -10,7 +10,20 @@ function avatarMarkup(athlete) {
   return renderImage(athlete.athlete_image_url, "avatar", initials);
 }
 
-export function renderAthleteListHtml(athletes, selectedAthleteId) {
+// An empty list says why, in the shared empty state: a search that matched nothing, or a
+// workspace with no athletes (a platform administrator's own workspace, a new team). A count of
+// zero is shown quieter than a real count, so the plans an athlete has stand out.
+export function renderAthleteListHtml(athletes, selectedAthleteId, { searching = false, pending = false } = {}) {
+  if (!athletes.length && pending) return "";
+  if (!athletes.length) {
+    return searching
+      ? `<div class="om-empty athlete-list-empty" role="status"><p class="om-empty__title">No athlete matches</p><p class="om-empty__text">Try another name or ID.</p></div>`
+      : `<div class="om-empty athlete-list-empty" role="status"><p class="om-empty__title">No athletes here</p><p class="om-empty__text">This workspace has no athletes. Switch to a club or team workspace, or add athletes in Settings.</p></div>`;
+  }
+  const count = (value, word) => {
+    const n = Number(value) || 0;
+    return `<span${n ? "" : ' class="is-zero"'}>${n} ${word}</span>`;
+  };
   return sortAthletes(athletes).map((athlete) => `
     <button class="athlete-button ${athlete.athlete_id === selectedAthleteId ? "is-active" : ""}" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
       ${avatarMarkup(athlete)}
@@ -18,8 +31,8 @@ export function renderAthleteListHtml(athletes, selectedAthleteId) {
         <span class="athlete-name">${escapeHtml(athlete.athlete)}</span>
         <span class="athlete-meta">ID ${escapeHtml(athlete.athlete_id)}</span>
         <span class="athlete-counts">
-          <span>${athlete.weekly_plan_count || 0} weekly</span>
-          <span>${athlete.program_count || 0} specific</span>
+          ${count(athlete.weekly_plan_count, "weekly")}
+          ${count(athlete.program_count, "specific")}
         </span>
       </span>
     </button>

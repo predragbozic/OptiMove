@@ -3251,6 +3251,8 @@ async function onWorkspaceChanged() {
   resetCalendarSettingsForWorkspaceChange();
   state.athletes = [];
   state.selectedAthleteId = null;
+  // The new workspace's roster is on its way: the list stays blank, never "No athletes here".
+  athleteRosterPending = true;
   renderAthleteList();
   if (state.activeTab === "weekly" || state.activeTab === "programs") state.activeTab = "coach-home";
   // Correction: a workspace switch changes WHICH athletes' data Training
@@ -3268,9 +3270,11 @@ async function onWorkspaceChanged() {
     const roster = await api("/api/admin/athletes");
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
     state.athletes = roster.adminRows || [];
+    athleteRosterPending = false;
     renderAthleteList();
   } catch (error) {
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
+    athleteRosterPending = false;
     renderError(error);
     return;
   }
@@ -3330,12 +3334,15 @@ async function renderAfterOrganizationAccessChange({ refresh = false } = {}) {
   return renderCurrentNode();
 }
 
+// True while a workspace switch waits for its roster (renderAthleteListHtml then draws nothing).
+let athleteRosterPending = false;
+
 function renderAthleteList() {
   const search = els.athleteSearch.value.trim().toLowerCase();
   const filteredAthletes = state.athletes.filter((athlete) => athleteMatches(athlete, search));
   const athletes = filteredAthletes;
 
-  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId);
+  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending });
 
   renderAthleteListState();
 

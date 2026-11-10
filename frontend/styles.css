@@ -23699,3 +23699,26 @@ p.coach-home-library-note.muted:not([role="status"]) {
     justify-self: stretch;
   }
 }
+
+/* =====================================================
+   Design: the athlete list in the rail.
+   - An empty list uses the shared empty state (renderAthleteListHtml says why).
+   - A plan count of zero is quieter than a real count.
+   - On a phone the athlete search is a 44 px field with 16 px text.
+   ===================================================== */
+.athlete-list .athlete-list-empty {
+  margin: var(--om-space-2) 0;
+}
+.athlete-counts span.is-zero {
+  padding-inline: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-weight: var(--om-weight-semibold);
+}
+@media (max-width: 760px) {
+  #athleteSearch {
+    min-height: var(--om-tap-target);
+    font-size: 16px;
+  }
+}
