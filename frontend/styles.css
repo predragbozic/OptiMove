@@ -10887,27 +10887,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
 }
 
-.tests-section-tabs-icon .tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 64px;
-  padding: 8px 6px;
-  font-size: 12px;
-}
-
-.tests-tab-icon {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .tests-shell {
   display: grid;
   gap: 12px;
@@ -23483,4 +23462,45 @@ p.coach-home-library-note.muted:not([role="status"]) {
   border-radius: var(--om-radius-md);
   background: var(--om-info-soft);
   color: var(--om-info);
+}
+
+/* =====================================================
+   Design: the Tests module's coach tabs use the shared tab row (.om-tabs), the same as
+   Settings, instead of the full-width icon cards. The athlete's tabs are unchanged.
+   ===================================================== */
+.tests-section-tabs.om-tabs {
+  margin-bottom: var(--om-space-3);
+}
+
+/* Design: on a phone every control in a Settings row and list header is a 44 px touch target
+   (it was 36-42 px).
+   Buttons grow to 44 px. The Invite and + Add links are taller but keep their look. The Active
+   pill keeps its size, and an invisible area around it takes the touch. */
+@media (max-width: 760px) {
+  .organization-view .organization-row-main {
+    min-height: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .plain-button,
+  .organization-view .organization-browser-actions .plain-button,
+  .organization-view .organization-row-actions .text-action,
+  .organization-view .tag-chip-head .text-action {
+    min-height: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .icon-button {
+    min-width: var(--om-tap-target);
+  }
+  .organization-view .organization-row-actions .text-action,
+  .organization-view .tag-chip-head .text-action {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--om-space-2);
+  }
+  .organization-view .organization-row-actions .athlete-login-toggle {
+    position: relative;
+  }
+  .organization-view .organization-row-actions .athlete-login-toggle::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--om-tap-target) - 100%) / -2) -4px;
+  }
 }
