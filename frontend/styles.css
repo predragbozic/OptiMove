@@ -25136,15 +25136,43 @@ body:not(.athlete-mode):not(.login-mode) .organization-dialog-close .builder-ico
   stroke-linecap: round;
 }
 
-/* A saving dialog's footer stays at the bottom while the fields scroll. */
+/* A saving dialog's footer stays at the bottom while the fields scroll. The edit dialog has no bottom padding of its
+   own (its footer carries it), so the footer sticks at bottom: 0 in every engine; a focused field scrolled into view
+   is kept clear of the footer. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal {
+  padding-bottom: 0;
+  scroll-padding-bottom: 96px;
+  overscroll-behavior: contain;
+}
+
 body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer {
   position: sticky;
-  bottom: -16px;
+  bottom: 0;
   z-index: 1;
-  margin: 0 -16px -16px;
+  margin: 0 -16px;
   padding: var(--om-space-3) 16px var(--om-space-4);
   border-top: 1px solid var(--line);
   background: var(--surface);
+}
+
+/* What went wrong with a save is said in the footer, next to the button that was pressed. */
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error:empty {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-badge {
+  display: inline-flex;
+  margin-top: var(--om-space-1);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form h5 {
+  margin: var(--om-space-2) 0 0;
+  font-size: var(--om-text-sm, 14px);
 }
 
 body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .plain-button {
@@ -25163,9 +25191,6 @@ body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-
   border-top: 1px solid var(--line-strong);
 }
 
-body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part .organization-dialog-footer {
-  margin-bottom: 0;
-}
 
 /* Manage account: each group is a card; a row is "name, state" on the left and the action on the right. */
 body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section {
@@ -25196,8 +25221,15 @@ body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .man
   min-height: var(--om-tap-target);
 }
 
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row select {
+    font-size: 16px;
+  }
+}
+
 /* The login switch, the one destructive account action, is the last card, marked as such. */
 body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-danger {
+  border-color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
 }
 
@@ -25206,5 +25238,6 @@ body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .man
 body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form .organization-dialog-footer {
   position: static;
   margin: 0;
-  padding: var(--om-space-3) 0 0;
+  padding: var(--om-space-3) 0 var(--om-space-4);
+  border-top: 0;
 }

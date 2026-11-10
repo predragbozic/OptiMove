@@ -48,7 +48,7 @@ test("Edit club and team save from the footer: Cancel closes, Save changes is th
   for (const [type, row] of [["club", data.clubs[0]], ["team", data.teams[0]]]) {
     reset();
     state.organizationEditor = { open: true, type, row };
-    assert.match(renderOrganizationEditModal(data), /<div class="organization-form-footer organization-dialog-footer">\s*<button class="plain-button" type="button" data-action="organization-edit-close">Cancel<\/button>\s*<button class="plain-button data-sources-primary" type="submit">Save changes<\/button>/, type);
+    assert.match(renderOrganizationEditModal(data), /<div class="organization-form-footer organization-dialog-footer">\s*<p class="builder-error" aria-live="polite"><\/p>\s*<button class="plain-button" type="button" data-action="organization-edit-close">Cancel<\/button>\s*<button class="plain-button data-sources-primary" type="submit">Save changes<\/button>/, type);
   }
 });
 
@@ -61,7 +61,8 @@ test("Edit athlete is two parts with their own headings and saves: the profile, 
   assert.match(profile, /<h4>Profile<\/h4>/);
   assert.match(profile, />Save changes<\/button>/);
   assert.ok(!profile.includes("Save library access"), "the profile's save is its own");
-  assert.match(library, /<h4>Library access<\/h4><p class="muted">[^<]*does not change the profile/);
+  assert.match(library, /<h4>Library access<\/h4><p class="muted">[^<]*Saved separately with Save library access, which closes this window: save profile changes first\./);
+  assert.ok(!library.includes("<h3>"), "the groups inside it are under its heading (h5), not above it");
   assert.match(library, /<button class="plain-button data-sources-primary" type="submit">Save library access<\/button>/);
   assert.ok(html.indexOf("<h4>Profile</h4>") < html.indexOf("<h4>Library access</h4>"));
 });
@@ -75,4 +76,24 @@ test("Manage account: rows read name and state, then the action; the login switc
   assert.match(html, /manage-account-section manage-account-danger">\s*<p class="eyebrow">Account status<\/p>[\s\S]*?<span class="manage-account-state"><strong>Login<\/strong><span class="user-status-badge is-active">Active login<\/span><\/span>[\s\S]*?>Disable login<\/button>/);
   assert.match(html, /<span class="manage-account-state"><span>Demo Club<\/span>[\s\S]*?Active<\/span><\/span>\s*<button[^>]*data-action="organization-club-role-remove"/);
   assert.match(html, /<span class="manage-account-state"><strong>Platform administrator<\/strong><span class="user-status-badge is-inactive">Not assigned<\/span><\/span>/);
+});
+
+test("review fixes: a save's error is said inside the footer; a disabled login shows in the head; no repeated subtitle", () => {
+  for (const [type, row] of [["club", data.clubs[0]], ["athlete", athlete]]) {
+    reset();
+    state.organizationEditor = { open: true, type, row };
+    const html = renderOrganizationEditModal(data);
+    const footers = [...html.matchAll(/<div class="organization-form-footer organization-dialog-footer">\s*<p class="builder-error"/g)].length;
+    const errors = (html.match(/class="builder-error"/g) || []).length;
+    assert.equal(footers, errors, `${type}: every save error is inside its footer`);
+  }
+  reset();
+  state.organizationUserManage = { open: true, userId: "u2", pending: false, error: "" };
+  const off = renderManageAccountModal({ ...data, users: [{ ...user, loginActive: false }] });
+  const headHtml = off.slice(off.indexOf("organization-dialog-head"), off.indexOf("organization-dialog-close"));
+  assert.match(headHtml, /<span class="user-status-badge is-disabled organization-dialog-badge">Login disabled<\/span>/);
+  assert.ok(!renderManageAccountModal(data).includes("organization-dialog-badge"), "no badge while the login is active");
+  const nameless = renderManageAccountModal({ ...data, users: [{ ...user, name: "" }] });
+  const namelessHead = nameless.slice(nameless.indexOf("organization-dialog-head"), nameless.indexOf("organization-dialog-close"));
+  assert.equal((namelessHead.match(/coach@example\.invalid/g) || []).length, 1, "the email is the title, not repeated as the subtitle");
 });

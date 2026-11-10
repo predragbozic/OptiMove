@@ -65,6 +65,8 @@ for (const [role, width] of [["platform_admin", 1280], ["club_admin", 390]]) tes
       assert.deepEqual(f.close, [44, 44], `${name}: the close icon is 44 px`);
       // Edit club and team: the footer is at the dialog's bottom edge. Edit athlete: its profile's footer is in view
       // (at the bottom while the profile is taller than the dialog, under the profile when it is not).
+      // Edit club and team: the footer is at the bottom edge. Edit athlete: its profile's footer is in view (stuck at
+      // the bottom only when the profile is taller than the dialog: the next test).
       if (saves) assert.ok(f.footerAtBottom !== null && (name === "Edit athlete" || f.footerAtBottom <= 2), `${name}: the footer is in view at the bottom (${f.footerAtBottom})`);
       assert.deepEqual(f.small, [], `${name}: 44 px`);
       assert.deepEqual(f.font, [], `${name}: 16 px fields on a phone`);
@@ -96,6 +98,52 @@ test("(club_admin, 390 px) Edit team saves from the footer, and Manage account s
     await page.locator('main.workspace [data-action="organization-manage-account-open"]').first().click();
     const titles = await page.$$eval('[role="dialog"] .manage-account-section > .eyebrow', (e) => e.map((x) => x.textContent.trim()));
     assert.equal(titles.at(-1), "Account status", titles.join(", "));
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(platform_admin, 390 px) a refused save is said in the footer, in view; Manage account keeps its place after Disable login", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", 390);
+  try {
+    // A short phone: the profile is taller than the dialog, so its footer is stuck at the dialog's bottom edge.
+    await page.setViewportSize({ width: 390, height: 560 });
+    await openSection(page, "athletes");
+    await page.locator('main.workspace .organization-row [data-action="organization-edit"]').first().click();
+    await page.locator(".organization-dialog-head").waitFor();
+    const stuck = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      d.scrollTop = 0;
+      const f = d.querySelector('form[data-organization-form="edit-athlete"] .organization-dialog-footer').getBoundingClientRect();
+      return { scrolls: d.scrollHeight > d.clientHeight, gap: Math.round(d.getBoundingClientRect().bottom - f.bottom) };
+    });
+    assert.ok(stuck.scrolls && stuck.gap >= 0 && stuck.gap <= 2, `the profile footer is stuck at the bottom (${JSON.stringify(stuck)})`);
+    // A refused profile save: the reason shows next to the button that was pressed, with the dialog at its top.
+    await page.route(/\/api\/organization\/athletes\/[^/]+$/, (route) => (route.request().method() === "PUT"
+      ? route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Demo refusal." }) })
+      : route.continue()));
+    await page.locator('[role="dialog"] form[data-organization-form="edit-athlete"] .organization-dialog-footer').getByRole("button", { name: "Save changes", exact: true }).click();
+    const error = page.locator('[role="dialog"] form[data-organization-form="edit-athlete"] .builder-error');
+    await error.filter({ hasText: "Demo refusal." }).waitFor();
+    const inView = await error.evaluate((e) => { const d = e.closest('[role="dialog"]').getBoundingClientRect(); const b = e.getBoundingClientRect(); return b.top >= d.top && b.bottom <= d.bottom; });
+    assert.ok(inView, "the refusal is in view");
+    await page.unroute(/\/api\/organization\/athletes\/[^/]+$/);
+    await page.locator('[role="dialog"] .organization-dialog-close').click();
+
+    // Disable login from the last card: the dialog stays where it was, so its new state is in view.
+    await openSection(page, "users");
+    await page.locator('main.workspace .organization-user-row').filter({ hasText: "Coach Example" }).first().locator('[data-action="organization-manage-account-open"]').click();
+    const dialog = page.locator('[role="dialog"][aria-label="Manage account"]');
+    await dialog.locator(".manage-account-danger").waitFor();
+    await dialog.evaluate((d) => { d.scrollTop = d.scrollHeight; });
+    page.once("dialog", (d) => d.accept());
+    await dialog.locator(".manage-account-danger").getByRole("button", { name: "Disable login", exact: true }).click();
+    await dialog.locator(".manage-account-danger .user-status-badge", { hasText: "Login disabled" }).waitFor();
+    const visible = await dialog.evaluate((d) => { const c = d.querySelector(".manage-account-danger").getBoundingClientRect(); const b = d.getBoundingClientRect(); return c.top < b.bottom && c.bottom > b.top + 60; });
+    assert.ok(visible, "the Account status card is still in view after the repaint");
+    await dialog.locator(".organization-dialog-badge", { hasText: "Login disabled" }).waitFor();
+    page.once("dialog", (d) => d.accept());
+    await dialog.locator(".manage-account-danger").getByRole("button", { name: "Enable login", exact: true }).click();
+    await dialog.locator(".manage-account-danger .user-status-badge", { hasText: "Active login" }).waitFor();
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
