@@ -24839,3 +24839,88 @@ body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-
     line-height: 1.2;
   }
 }
+
+/* ==========================================================================
+   Design: Settings rows (S5). An athlete's "Active" / "Disabled" pill was a
+   button that switched the login on a tap; it is now a plain badge, and the
+   switch sits in the athlete's Account dialog ("Disable login" asks first).
+   Every row keeps one order: the state, the text button (Invite or Account),
+   edit, then archive or delete, all 44 px on every width. A join link's
+   label has its own line on a phone, so its actions no longer squeeze it
+   letter by letter. Club and team rows are 44 px.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status.is-active {
+  background: var(--om-success-soft);
+  color: var(--om-success);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status.is-disabled {
+  background: var(--om-danger-soft);
+  color: var(--danger);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .plain-button,
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .icon-button {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-main {
+  min-height: var(--om-tap-target);
+}
+
+/* A join link has no avatar, but its text block reuses .organization-row-main, a grid of avatar (42 px) and text:
+   the label landed in the avatar's column and wrapped letter by letter. Its text block is a plain block. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-link-row > .organization-row-main {
+  display: block;
+}
+
+/* The Account dialog's login switch: the state, then its button. */
+body:not(.athlete-mode):not(.login-mode) .athlete-login-switch .manage-account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .athlete-login-switch .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  /* On a phone the actions start at the left, under or beside the name: right-aligned, the team table's actions sat
+     past the visible part of its scrolling table. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions {
+    justify-content: flex-start;
+  }
+
+  /* On a phone the actions take the whole width under the label's line. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-link-row > .organization-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
