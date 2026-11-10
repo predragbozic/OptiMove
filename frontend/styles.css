@@ -16883,6 +16883,14 @@ p.muted.gpexe-source-fields {
   display: grid;
   gap: 4px;
   overflow-wrap: anywhere;
+  /* Up to 60 rows: the list scrolls inside the warning, so the checkbox and the button stay near on a phone. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.gpexe-undo-later-list:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 /* The later changes' own confirmation: a 44 px row, the box 22 px (the gpexe-accept pattern). */
 .gpexe-undo-later-confirm {

@@ -15,6 +15,7 @@ export function removedSummary(counts) {
   if (n("metric_values")) parts.push(plural(n("metric_values"), "imported value", "imported values"));
   if (n("metric_event_segments")) parts.push(plural(n("metric_event_segments"), "drill", "drills"));
   if (n("activities")) parts.push(plural(n("activities"), "activity", "activities"));
+  if (n("activity_athlete_decisions")) parts.push(plural(n("activity_athlete_decisions"), "attendance state", "attendance states"));
   return parts.join(", ");
 }
 
@@ -22,8 +23,8 @@ const KIND_WORDS = Object.freeze({
   participated_no_values: "Participated · no device data",
   did_not_participate: "Did not participate",
   cleared: "State removed",
-  complete: "Session marked complete",
-  reopen: "Session reopened",
+  complete: "marked complete",
+  reopen: "reopened",
 });
 
 // Day and time on the person's clock, DD.MM.YYYY HH:MM.
@@ -38,7 +39,7 @@ function fmtWhen(value) {
 function importStatesHtml(rosterWork) {
   const n = Number(rosterWork?.importWritten?.decisions) || 0;
   if (n <= 0) return "";
-  return `<p class="gpexe-warning" role="note">${escapeHtml(`${plural(n, "attendance state", "attendance states")} set at import will be removed with it.`)}</p>`;
+  return `<p class="muted" role="note">${escapeHtml(`The undo also removes the ${plural(n, "attendance state", "attendance states")} the import set.`)}</p>`;
 }
 
 // Later attendance changes (the Roster tab): listed, with their own confirmation.
@@ -48,7 +49,7 @@ function laterWorkHtml(u, { disabled }) {
   const list = Array.isArray(later.list) ? later.list : [];
   const changes = laterChangeCount(later);
   const rows = list.map((i) => {
-    const who = i.athleteId ? (i.athleteName || "An athlete") : "The session";
+    const who = i.athleteId ? (i.athleteName || "An athlete") : "Session";
     const what = [KIND_WORDS[i.kind] || "Changed", i.reasonLabel || ""].filter(Boolean).join(" · ");
     const by = [i.byName ? `by ${i.byName}` : "", fmtWhen(i.at)].filter(Boolean).join(", ");
     return `<li><strong>${escapeHtml(who)}</strong>: ${escapeHtml(what)}${by ? ` <span class="muted">(${escapeHtml(by)})</span>` : ""}</li>`;
@@ -56,10 +57,12 @@ function laterWorkHtml(u, { disabled }) {
   const more = changes > list.length ? `<p class="muted">${escapeHtml(`and ${changes - list.length} more.`)}</p>` : "";
   return `
     <div class="gpexe-warning gpexe-undo-later" role="note">
-      <p><strong>${escapeHtml(`Coaches changed attendance after the import: ${plural(changes, "change", "changes")}.`)}</strong> They are removed too if you undo.</p>
-      <ul class="gpexe-undo-later-list">${rows}</ul>
+      ${u.laterNote ? `<p class="gpexe-error" role="alert">${escapeHtml(u.laterNote)}</p>` : ""}
+      <p><strong>${escapeHtml(`Attendance was changed in the Roster tab after the import: ${plural(changes, "change", "changes")}.`)}</strong> They are removed too if you undo.</p>
+      <ul class="gpexe-undo-later-list" tabindex="0" aria-label="${escapeAttr("Later attendance changes")}">${rows}</ul>
       ${more}
       <label class="gpexe-undo-later-confirm"><input type="checkbox" data-gpexe-undo-later-confirm ${u.laterConfirmed ? "checked" : ""} ${disabled ? "disabled" : ""}> Remove these later changes too</label>
+      ${u.laterProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.laterProblem)}</p>` : ""}
     </div>`;
 }
 

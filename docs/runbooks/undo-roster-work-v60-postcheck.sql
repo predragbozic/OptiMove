@@ -8,22 +8,22 @@ select count(*) = 1 as recorded_once,
 
 -- 2. The v60 bodies are in force (md5 of prosrc).
 select n.nspname || '.' || p.proname as fn, md5(p.prosrc) as actual_md5, md5(p.prosrc) = e.m as ok
-  from (values ('training_load', 'undo_imported_session', '070b5f32846acb65507ca995500174c9'),
+  from (values ('training_load', 'undo_imported_session', '3d78cc86dfa3be3c25d2cb0dc0a858e0'),
                ('training_load', 'session_undo_scope', 'b6f34358816e7ae382f1385b650b95f0'),
-               ('training_load', 'session_undo_roster_work', '7f31a0d7de68c5fcb7713cae5a1104b6'),
+               ('training_load', 'session_undo_roster_work', 'db79c567aaa930460878d000a8211eb3'),
                ('training_load', 'session_undo_roster_log_ok', '6d2426bb475d341aa545ffdb8d25fa8d'),
                ('training_load', 'validate_import_deletion_log_v60', '1c949a5f6a8383724ec1836b0ed3dddd'),
-               ('training', 'protect_activity_roster_request_v60', 'aa2076ca27ad1c3f2e08470211b5fb8a'),
+               ('training', 'protect_activity_roster_request_v60', 'b80d37661ee1b9dc021b6d08b8e74993'),
                ('training', 'check_activity_athlete_decision_v60', 'cb038617f44d1e6028825d73f5048c64'),
                ('training', 'protect_activity_completion_v60', '1bd5b84c90536e4a7802e2ed2c3e7229'),
                ('training', 'protect_activity_completion_log_v60', '310479ead5bac4ba0ada834a6c20543c')) e(s, f, m)
   join pg_namespace n on n.nspname = e.s join pg_proc p on p.pronamespace = n.oid and p.proname = e.f
  order by 1;
 
--- 3. The undo exists once, with eight arguments; v57's six-argument signature is gone.
+-- 3. The undo exists once, with seven arguments; v57's six-argument signature is gone.
 select (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training_load' and p.proname = 'undo_imported_session') = 1 as one_undo,
-       to_regprocedure('training_load.undo_imported_session(uuid,uuid,uuid,uuid,text,uuid,boolean,text)') is not null as eight_arguments,
+       to_regprocedure('training_load.undo_imported_session(uuid,uuid,uuid,uuid,text,uuid,text)') is not null as seven_arguments,
        to_regprocedure('training_load.undo_imported_session(uuid,uuid,uuid,uuid,text,uuid)') is null as six_arguments_gone;
 
 -- 4. The five triggers point at the v60 functions and are enabled; the TRUNCATE and append-only triggers are unchanged.

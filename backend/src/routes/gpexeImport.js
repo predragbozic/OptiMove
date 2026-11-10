@@ -475,8 +475,8 @@ router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (
   const expected = body.expected && typeof body.expected === "object" ? body.expected : {};
   res.json({ undo: await sessionUndo.undoImport(access.teamId, req.params.candidateId, {
     userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
-    // v60 (O1): later roster changes are removed only with this confirmation of exactly the listed ones.
-    confirmLaterRosterWork: body.confirmLaterRosterWork, laterRosterFingerprint: body.laterRosterFingerprint,
+    // v60 (O1): later roster changes are removed only with their fingerprint, the confirmation of exactly the listed ones.
+    laterRosterFingerprint: body.laterRosterFingerprint,
   }) });
 }));
 

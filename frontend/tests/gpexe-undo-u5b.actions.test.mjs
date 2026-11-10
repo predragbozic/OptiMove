@@ -608,13 +608,13 @@ test("18. states the import set: one warning with the count, no checkbox, and th
   await openCandidate("cand-imp");
   await act("training-load-gpexe-undo-open");
   const s = undoSection();
-  assert.match(s, /5 attendance states set at import will be removed with it\./);
+  assert.match(s, /The undo also removes the 5 attendance states the import set\./);
   assert.doesNotMatch(s, /data-gpexe-undo-later-confirm/);
   typedReason = "Wrong link";
   await act("training-load-gpexe-undo-confirm");
   assert.equal(undoCalls().length, 1);
-  assert.equal(undoCalls()[0].body.confirmLaterRosterWork, undefined);
   assert.equal(undoCalls()[0].body.laterRosterFingerprint, undefined);
+  assert.deepEqual(Object.keys(undoCalls()[0].body).sort(), ["expected", "reason", "requestKey"]);
 });
 
 test("19. later changes: a second, separate warning lists them (names escaped, DD.MM.YYYY); nothing is asked or sent until their own box is ticked; then the fingerprint goes with the request", async () => {
@@ -626,8 +626,9 @@ test("19. later changes: a second, separate warning lists them (names escaped, D
   await openCandidate("cand-imp");
   await act("training-load-gpexe-undo-open");
   let s = undoSection();
-  assert.match(s, /2 attendance states set at import will be removed with it\./);
-  assert.match(s, /Coaches changed attendance after the import: 1 change\./);
+  assert.match(s, /The undo also removes the 2 attendance states the import set\./);
+  assert.match(s, /Attendance was changed in the Roster tab after the import: 1 change\./);
+  assert.match(s, /class="gpexe-undo-later-list" tabindex="0" aria-label="Later attendance changes"/, "the scrolling list is reachable by keyboard");
   assert.match(s, /Athlete &lt;0&gt;/, "a name is escaped");
   assert.doesNotMatch(s, /Athlete <0>/);
   assert.match(s, /Did not participate · Illness/);
@@ -639,21 +640,26 @@ test("19. later changes: a second, separate warning lists them (names escaped, D
   await act("training-load-gpexe-undo-confirm");
   assert.equal(confirmAsked.length, 0, "no question without the tick");
   assert.equal(undoCalls().length, 0);
-  assert.match(undoSection(), /Tick the box to confirm that the later attendance changes are removed too\./);
+  s = undoSection();
+  assert.match(s, /Tick &quot;Remove these later changes too&quot; to continue\. Nothing was removed\./);
+  // In its own place, under the checkbox and above the reason field (not under the reason).
+  assert.ok(s.indexOf("Tick &quot;Remove") > s.indexOf("data-gpexe-undo-later-confirm") && s.indexOf("Tick &quot;Remove") < s.indexOf("data-gpexe-undo-reason"));
   laterBox = { checked: true };
   await act("training-load-gpexe-undo-confirm");
   assert.equal(confirmAsked.length, 1);
   assert.match(confirmAsked[0], /This also removes 1 later attendance change made in the Roster tab\./);
   assert.equal(undoCalls().length, 1);
-  assert.equal(undoCalls()[0].body.confirmLaterRosterWork, true);
-  assert.equal(undoCalls()[0].body.laterRosterFingerprint, FP);
+  assert.equal(undoCalls()[0].body.laterRosterFingerprint, FP, "sending the fingerprint is the confirmation");
+  assert.equal(undoCalls()[0].body.confirmLaterRosterWork, undefined);
   assert.match(undoSection(), /Import undone\./);
 });
 
-test("20. the list changed meanwhile (roster_work_changed): nothing removed, the new list is shown unticked, and the next attempt sends the new fingerprint with a new key", async () => {
+test("20. the list changed meanwhile (roster_work_changed): nothing removed, the scope is read again and shown unticked with its note, and the next attempt sends the new fingerprint with a new key", async () => {
   let n = 0;
+  let previews = 0;
   setup({
-    preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: later(1) }) } }),
+    // The server's scope as it is: the first list, then (after the colleague's change) the second.
+    preview: () => { previews += 1; return { status: 200, body: { undoPreview: { ...scopeWith({ importWritten: importWritten(0), laterWork: n ? later(2, FP2) : later(1) }), removedTotal: n ? 99 : 40 } } }; },
     undo: () => {
       n += 1;
       if (n === 1) return { status: 409, body: { error: "roster_work_changed", message: "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again.", rosterWork: { importWritten: importWritten(0), laterWork: later(2, FP2) } } };
@@ -670,8 +676,11 @@ test("20. the list changed meanwhile (roster_work_changed): nothing removed, the
   assert.equal(gx().undo.step, "ready");
   assert.equal(gx().undo.laterConfirmed, false);
   let s = undoSection();
-  assert.match(s, /Nothing was removed\./);
-  assert.match(s, /Coaches changed attendance after the import: 2 changes\./);
+  assert.equal(previews, 2, "the whole scope is read again after the refusal");
+  assert.equal(gx().undo.preview.removedTotal, 99, "the totals moved with it");
+  assert.match(s, /Attendance changed since you opened this\. Nothing was removed\. The list below now shows the current changes; tick the box again to remove them too\./);
+  assert.ok(s.indexOf("Attendance changed since") < s.indexOf("Attendance was changed in the Roster tab"), "the note heads the later block");
+  assert.match(s, /Attendance was changed in the Roster tab after the import: 2 changes\./);
   assert.doesNotMatch(s, /data-gpexe-undo-later-confirm checked/, "the new list is not ticked");
   const firstKey = undoCalls()[0].body.requestKey;
   laterBox = { checked: true };
@@ -712,4 +721,26 @@ test("22. the checkbox's state is kept across a repaint", async () => {
   await act("training-load-gpexe-undo-open");
   assert.equal(handleUndoReasonInput({ matches: (sel) => sel === "[data-gpexe-undo-later-confirm]", checked: true }), true);
   assert.match(html(), /data-gpexe-undo-later-confirm checked/);
+});
+
+test("23. the change count is the server's: past the 60 listed it says how many more; the session's Complete reads as a row of its own", async () => {
+  const big = { ...later(60), changes: 75 };
+  big.list = [{ athleteId: null, kind: "complete", reasonCode: null, byUserId: COACH, byName: "Coach Example", at: "2026-11-09T08:05:00Z" }, ...big.list.slice(0, 59)];
+  setup({ preview: () => ({ status: 200, body: { undoPreview: scopeWith({ importWritten: importWritten(0), laterWork: big }) } }) });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  const s = undoSection();
+  assert.match(s, /after the import: 75 changes\./);
+  assert.match(s, /and 15 more\./);
+  assert.match(s, /<strong>Session<\/strong>: marked complete/);
+  typedReason = "Wrong link";
+  laterBox = { checked: true };
+  await act("training-load-gpexe-undo-confirm");
+  assert.match(confirmAsked[0], /This also removes 75 later attendance changes made in the Roster tab\./);
+});
+
+test("24. the removed summary names the attendance states too", async () => {
+  const { removedSummary } = await import("../gpexe-undo-view.js");
+  assert.equal(removedSummary({ metric_event_participants: 2, activity_athlete_decisions: 3 }), "2 athletes' records, 3 attendance states");
 });

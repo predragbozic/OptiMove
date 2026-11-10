@@ -209,12 +209,15 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
     const laterBox = globalThis.document?.querySelector?.("[data-gpexe-undo-later-confirm]");
     if (laterBox) u.laterConfirmed = laterBox.checked === true;
-    const problem = undoReasonProblem(reason) || undoLaterProblem(u, u.laterConfirmed);
-    if (problem) {
-      u.reasonProblem = problem;
+    const reasonProblem = undoReasonProblem(reason);
+    const laterProblem = reasonProblem ? "" : undoLaterProblem(u, u.laterConfirmed);
+    if (reasonProblem || laterProblem) {
+      u.reasonProblem = reasonProblem;
+      u.laterProblem = laterProblem;
       renderTrainingLoad();
       return true;
     }
+    u.laterProblem = "";
     const label = gx.detail?.candidate?.label || "this session";
     const later = laterRosterWork(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;

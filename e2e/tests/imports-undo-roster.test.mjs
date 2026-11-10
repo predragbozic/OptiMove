@@ -71,8 +71,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await admin.page.waitForSelector("[data-gpexe-undo-later-confirm]", { timeout: 20_000 });
         const section = async () => (await admin.page.locator(".gpexe-undo").innerText()).replace(/\s+/g, " ");
         let text = await section();
-        assert.match(text, /2 attendance states set at import will be removed with it\./);
-        assert.match(text, /Coaches changed attendance after the import: 1 change\./);
+        assert.match(text, /The undo also removes the 2 attendance states the import set\./);
+        assert.match(text, /Attendance was changed in the Roster tab after the import: 1 change\./);
         assert.match(text, /Did not participate · Illness/);
         assert.doesNotMatch(text, /[0-9a-f]{8}-[0-9a-f]{4}-/, "no ids on the screen");
         // Touch target and no horizontal overflow at this width.
@@ -83,7 +83,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
 
         await admin.page.fill("[data-gpexe-undo-reason]", "Wrong athlete link");
         await admin.page.click('[data-action="training-load-gpexe-undo-confirm"]');
-        await admin.page.waitForFunction(() => /Tick the box to confirm/.test(document.body.innerText), null, { timeout: 10_000 });
+        await admin.page.waitForFunction(() => /Remove these later changes too" to continue/.test(document.body.innerText), null, { timeout: 10_000 });
         assert.deepEqual([dialogs.length, undoPosts.length], [0, 0], "nothing is asked or sent without the tick");
 
         await admin.page.check("[data-gpexe-undo-later-confirm]");
@@ -92,7 +92,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.equal(dialogs.length, 1);
         assert.match(dialogs[0], /This also removes 1 later attendance change made in the Roster tab\./);
         assert.equal(undoPosts.length, 1);
-        assert.equal(undoPosts[0].confirmLaterRosterWork, true);
+        assert.equal(undoPosts[0].confirmLaterRosterWork, undefined, "the fingerprint alone is the confirmation");
         assert.match(undoPosts[0].laterRosterFingerprint, /^[0-9a-f]{64}$/);
         await shot(admin.page, `undo-roster-2-done-${width}`);
       } finally {

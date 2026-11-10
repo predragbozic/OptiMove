@@ -14,8 +14,8 @@
 // The first version is for an active platform admin only (J19-U5 section 9, Q1); the route decides the audience.
 //
 // v60 (O1 of J20): the undo also removes the session's roster work. What the import itself wrote (requests with origin
-// 'import') never blocks; LATER roster work (the Roster tab) is removed only with confirmLaterRosterWork and the
-// fingerprint of exactly the list the administrator saw (laterRosterFingerprint); the function compares it under the
+// 'import') never blocks; LATER roster work (the Roster tab) is removed only with the fingerprint of exactly the list
+// the administrator saw (laterRosterFingerprint): sending it IS the confirmation, and the function compares it under the
 // team's import lock. The preview names both, so the screen can show two separate warnings.
 import { pool } from "./db.js";
 import { GpexeImportServiceError } from "./gpexeImportService.js";
@@ -156,16 +156,16 @@ function listItems(list) {
     athleteId: i?.athlete ?? null, kind: i?.kind ?? null, reasonCode: i?.reason_code ?? null, byUserId: i?.by ?? null, at: i?.at ?? null,
   }));
 }
-function rosterShape(importWritten, later, list, fingerprint) {
+function rosterShape(importWritten, later, list, fingerprint, changes) {
   const laterTotal = total(later);
   return {
     importWritten: { ...importWritten, total: total(importWritten) },
-    laterWork: { ...later, total: laterTotal, list: listItems(list), fingerprint: laterTotal > 0 && typeof fingerprint === "string" ? fingerprint : null },
+    laterWork: { ...later, total: laterTotal, changes: Number.isInteger(changes) && changes >= 0 ? changes : listItems(list).length, list: listItems(list), fingerprint: laterTotal > 0 && typeof fingerprint === "string" ? fingerprint : null },
   };
 }
 // The function's rosterWork (refusal detail) and the deletion log's roster_work_removed, in one API shape.
 function rosterFromScope(work) {
-  return rosterShape(counts(work?.importWritten), counts(work?.laterWork), work?.laterWork?.list, work?.laterWork?.fingerprint);
+  return rosterShape(counts(work?.importWritten), counts(work?.laterWork), work?.laterWork?.list, work?.laterWork?.fingerprint, work?.laterWork?.changes);
 }
 function rosterFromLog(removed) {
   if (!removed || typeof removed !== "object") return rosterShape(counts(null), counts(null), [], null);
@@ -220,20 +220,25 @@ export async function undoPreview(teamId, candidateId, { userId }) {
   try {
     preview = await inTransaction(async (client) => {
       if (previewFault) await previewFault(client);
-      const sql = `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4, $5)`;
+      const sql = `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4)`;
       let row;
+      let scopeWork = null;
       await client.query("savepoint undo_preview");
       try {
-        row = (await client.query(sql, [userId, teamId, candidateId, false, null])).rows[0];
+        row = (await client.query(sql, [userId, teamId, candidateId, null])).rows[0];
       } catch (error) {
         // Later roster work asks for a confirmation: run the same undo once more, confirmed with the fingerprint the
         // function itself reported, so the preview shows everything it would remove (still rolled back).
         if (!(error?.code === "55000" && String(error.message) === "session_undo:roster_work_needs_confirmation")) throw error;
-        const fingerprint = parseDetail(error.detail)?.laterWork?.fingerprint;
+        scopeWork = parseDetail(error.detail);
+        const fingerprint = scopeWork?.laterWork?.fingerprint;
         await client.query("rollback to savepoint undo_preview");
-        row = (await client.query(sql, [userId, teamId, candidateId, true, fingerprint ?? null])).rows[0];
+        if (typeof fingerprint !== "string") throw error;
+        row = (await client.query(sql, [userId, teamId, candidateId, fingerprint])).rows[0];
       }
       const shaped = shapeResult(row);
+      // The scope's own counts (with the server's count of later changes), computed under the same lock as the rerun.
+      if (scopeWork) shaped.rosterWork = rosterFromScope(scopeWork);
       return { ...shaped, wouldOfferAgain: Boolean(row.new_candidate_id), needsRosterConfirmation: shaped.rosterWork.laterWork.total > 0 };
     }, { keep: false });
   } catch (error) {
@@ -246,7 +251,7 @@ export async function undoPreview(teamId, candidateId, { userId }) {
   return preview;
 }
 
-function checkBody({ requestKey, reason, expectedEventId, confirmLaterRosterWork, laterRosterFingerprint }) {
+function checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint }) {
   if (typeof requestKey !== "string" || !UUID.test(requestKey)) throw refusal(400, "invalid_request", "requestKey must be a UUID chosen for this one undo.");
   if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) {
     throw refusal(400, "invalid_request", "A reason of 1 to 500 characters without control characters is required.");
@@ -254,14 +259,10 @@ function checkBody({ requestKey, reason, expectedEventId, confirmLaterRosterWork
   if (expectedEventId !== undefined && expectedEventId !== null && (typeof expectedEventId !== "string" || !UUID.test(expectedEventId))) {
     throw refusal(400, "invalid_request", "expected.eventId must be a UUID.");
   }
-  if (confirmLaterRosterWork !== undefined && confirmLaterRosterWork !== null && typeof confirmLaterRosterWork !== "boolean") {
-    throw refusal(400, "invalid_request", "confirmLaterRosterWork must be true or false.");
-  }
-  if (confirmLaterRosterWork === true && (typeof laterRosterFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(laterRosterFingerprint))) {
-    throw refusal(400, "invalid_request", "A confirmation carries the fingerprint of the later roster changes it confirms.");
-  }
-  if (confirmLaterRosterWork !== true && laterRosterFingerprint !== undefined && laterRosterFingerprint !== null) {
-    throw refusal(400, "invalid_request", "laterRosterFingerprint is sent only with confirmLaterRosterWork.");
+  // Sending the fingerprint confirms the later roster changes it names; there is no confirmation without one.
+  if (laterRosterFingerprint !== undefined && laterRosterFingerprint !== null
+      && (typeof laterRosterFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(laterRosterFingerprint))) {
+    throw refusal(400, "invalid_request", "laterRosterFingerprint is the 64-character fingerprint of the later roster changes it confirms.");
   }
 }
 
@@ -304,14 +305,13 @@ async function refreshOfferedPreview(teamId, candidateId, userId) {
   }
 }
 
-export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null, confirmLaterRosterWork = false, laterRosterFingerprint = null }) {
-  checkBody({ requestKey, reason, expectedEventId, confirmLaterRosterWork, laterRosterFingerprint });
-  const confirm = confirmLaterRosterWork === true;
+export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null, laterRosterFingerprint = null }) {
+  checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint });
   let row;
   try {
     row = await inTransaction(async (client) => (await client.query(
-      `select * from training_load.undo_imported_session($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [userId, teamId, candidateId, requestKey, reason, expectedEventId, confirm, confirm ? laterRosterFingerprint : null],
+      `select * from training_load.undo_imported_session($1, $2, $3, $4, $5, $6, $7)`,
+      [userId, teamId, candidateId, requestKey, reason, expectedEventId, laterRosterFingerprint ?? null],
     )).rows[0], { keep: true });
   } catch (error) {
     const mapped = mapDatabaseError(error);

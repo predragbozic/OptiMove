@@ -5,7 +5,7 @@
 -- apply -> rollback -> the v59 catalog exactly (triggers, constraints, columns, every function body) -> re-apply, and every refusal
 -- below). Before it is run anywhere real: a fresh restore-verified backup exists; the deployed commit no longer contains the v60
 -- migration file (otherwise the migrator applies v60 again at the next start); the deployed backend no longer calls the
--- eight-argument function (the commit before v60 calls v57's six-argument one); and the owner approved this database
+-- seven-argument function (the commit before v60 calls v57's six-argument one); and the owner approved this database
 -- specifically (.claude/rules/database-safety.md).
 --
 -- It re-points the five triggers at the original functions (which v60 left in place), puts v57's scope and undo back exactly
@@ -36,12 +36,12 @@ do $$
 declare
   v60 constant text := 'migrations_v2/202611101000_training_load_v60_undo_roster_work.sql';
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', '070b5f32846acb65507ca995500174c9'],
+    ['training_load', 'undo_imported_session', '3d78cc86dfa3be3c25d2cb0dc0a858e0'],
     ['training_load', 'session_undo_scope', 'b6f34358816e7ae382f1385b650b95f0'],
-    ['training_load', 'session_undo_roster_work', '7f31a0d7de68c5fcb7713cae5a1104b6'],
+    ['training_load', 'session_undo_roster_work', 'db79c567aaa930460878d000a8211eb3'],
     ['training_load', 'session_undo_roster_log_ok', '6d2426bb475d341aa545ffdb8d25fa8d'],
     ['training_load', 'validate_import_deletion_log_v60', '1c949a5f6a8383724ec1836b0ed3dddd'],
-    ['training', 'protect_activity_roster_request_v60', 'aa2076ca27ad1c3f2e08470211b5fb8a'],
+    ['training', 'protect_activity_roster_request_v60', 'b80d37661ee1b9dc021b6d08b8e74993'],
     ['training', 'check_activity_athlete_decision_v60', 'cb038617f44d1e6028825d73f5048c64'],
     ['training', 'protect_activity_completion_v60', '1bd5b84c90536e4a7802e2ed2c3e7229'],
     ['training', 'protect_activity_completion_log_v60', '310479ead5bac4ba0ada834a6c20543c']];
@@ -90,7 +90,7 @@ create trigger import_deletion_log_validate
   for each row execute function training_load.validate_import_deletion_log();
 
 -- v57's scope and undo, copied from migrations_v2/202611051000_training_load_v57_session_undo.sql byte for byte.
-drop function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, boolean, text);
+drop function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text);
 
 create or replace function training_load.session_undo_scope(p_event uuid) returns jsonb as $$
 declare

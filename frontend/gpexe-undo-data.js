@@ -130,6 +130,8 @@ export function laterRosterWork(undo) {
 // cover every one even past the list's 60).
 export function laterChangeCount(later) {
   if (!later) return 0;
+  // The server's own count (every later decision and Complete / Reopen, past the list's 60 too).
+  if (Number.isInteger(later.changes) && later.changes >= 0) return later.changes;
   const sessionActs = (Array.isArray(later.list) ? later.list : []).filter((i) => !i?.athleteId).length;
   return (Number(later.decisions) || 0) + sessionActs;
 }
@@ -137,7 +139,7 @@ export function laterChangeCount(later) {
 // Checked before the question: later changes are never removed without their own tick.
 export function undoLaterProblem(undo, confirmed) {
   if (!laterRosterWork(undo)) return "";
-  if (confirmed !== true) return "Tick the box to confirm that the later attendance changes are removed too.";
+  if (confirmed !== true) return "Tick \"Remove these later changes too\" to continue. Nothing was removed.";
   return "";
 }
 
@@ -174,7 +176,11 @@ async function settle(undo, generation, body, render) {
       undo.requestKey = null;
       undo.preview = { ...undo.preview, rosterWork: info.data.rosterWork, needsRosterConfirmation: Number(info.data.rosterWork.laterWork?.total) > 0 };
       undo.laterConfirmed = false;
-      undo.refusalNote = info.message || "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again.";
+      undo.laterNote = info.code === "roster_work_changed"
+        ? "Attendance changed since you opened this. Nothing was removed. The list below now shows the current changes; tick the box again to remove them too."
+        : "Nothing was removed. Tick the box to remove the later changes too.";
+      undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : (info.message || "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again.");
+      undo.rereadPreview = true;
       undo.step = "ready";
     } else if (isDefiniteRefusal(info) && info.code === "try_again") {
       // Nothing was removed and nothing is lost: back to the question with the reason kept.
@@ -193,12 +199,33 @@ async function settle(undo, generation, body, render) {
   if (generation === gx.generation) {
     render();
     scrollUndoIntoView();
+    if (undo.rereadPreview) {
+      // The attendance changed under the question: read the whole scope again (the totals moved with it).
+      undo.rereadPreview = false;
+      await rereadPreview(undo, generation);
+      render();
+    }
     // The session moved on either way: read the list again, and the open review when it is settled.
     if (undo.step === "done" || undo.step === "settled") {
       await refreshReviewedCandidate(undo, generation);
       render();
       void reloadGpexeCandidates(render);
     }
+  }
+}
+
+async function rereadPreview(undo, generation) {
+  const gx = g();
+  try {
+    const { undoPreview } = await api(candidatePath(gx.teamId, undo.id, "/undo-preview"), bounded({}));
+    if (generation === gx.generation && gx.undo === undo && undo.step === "ready" && undoPreview) {
+      const before = undo.preview?.rosterWork?.laterWork?.fingerprint ?? null;
+      undo.preview = undoPreview;
+      // A list that moved again is a new list: the tick never carries over.
+      if ((undoPreview.rosterWork?.laterWork?.fingerprint ?? null) !== before) undo.laterConfirmed = false;
+    }
+  } catch {
+    // The refusal's own scope stays shown; the server compares the list again on the next attempt.
   }
 }
 
@@ -220,14 +247,20 @@ export async function sendUndo(reason, render, { laterConfirmed = undefined } = 
   const undo = gx.undo;
   if (!undo || undo.step !== "ready" || !undo.preview?.eventId) return false;
   if (laterConfirmed !== undefined) undo.laterConfirmed = laterConfirmed === true;
-  const problem = undoReasonProblem(reason) || undoLaterProblem(undo, undo.laterConfirmed);
+  const reasonProblem = undoReasonProblem(reason);
+  const laterProblem = undoLaterProblem(undo, undo.laterConfirmed);
+  const problem = reasonProblem || laterProblem;
   if (problem) {
-    undo.reasonProblem = problem;
+    // Each problem in its own place: the reason's under the field, the tick's under the checkbox.
+    undo.reasonProblem = reasonProblem;
+    undo.laterProblem = reasonProblem ? "" : laterProblem;
     render();
     return false;
   }
   undo.reasonProblem = "";
+  undo.laterProblem = "";
   undo.refusalNote = "";
+  undo.laterNote = "";
   undo.reason = normalizeUndoReason(reason);
   undo.requestKey = undo.requestKey || globalThis.crypto.randomUUID();
   undo.step = "sending";
@@ -236,7 +269,8 @@ export async function sendUndo(reason, render, { laterConfirmed = undefined } = 
   // The body is kept as sent: Check result repeats exactly this request.
   undo.body = {
     requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId },
-    ...(later ? { confirmLaterRosterWork: true, laterRosterFingerprint: later.fingerprint } : {}),
+    // Sending the fingerprint is the confirmation of exactly the listed later changes.
+    ...(later ? { laterRosterFingerprint: later.fingerprint } : {}),
   };
   render();
   await settle(undo, gx.generation, undo.body, render);

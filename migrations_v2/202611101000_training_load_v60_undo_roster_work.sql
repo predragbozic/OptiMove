@@ -18,15 +18,19 @@
 --      the originals' refusals byte for byte; the originals stay in place (the rollback re-points them back).
 --   4. session_undo_scope splits rosterWork into importWritten and laterWork. A row is LATER work unless the request that
 --      wrote it has origin 'import': a decision by its request, a request by itself, a completion log row by its request
---      (a log row without a request - an automatic needs_review - is later work), a completion row when any of its log
---      rows is later work. laterWork carries a list (at most 60: athlete, kind, reason_code, by, at) and a fingerprint
---      (sha256 over every later row's identity, not only the listed ones).
---   5. undo_imported_session (DROP + CREATE, signature with two more parameters, one more result column):
+--      (a log row without a request - an automatic needs_review - is later work; it can only exist after a later roster
+--      complete, which is itself later work), a completion row when any of its log rows is later work. laterWork carries
+--      changes (the coach's later acts: decisions plus complete / reopen requests), a list (at most 60 of those acts:
+--      athlete, kind, reason_code, by, at) and a fingerprint (sha256 over every later row's identity, not only the listed
+--      ones). An import-origin request may only be a decide or decide_bulk (J20-C writes states, nothing else).
+--   5. undo_imported_session (DROP + CREATE, signature with one more parameter, one more result column):
 --        * importWritten never blocks;
---        * laterWork > 0 without p_confirm_later_roster -> 55000 session_undo:roster_work_needs_confirmation (detail: the
+--        * the confirmation IS p_later_roster_fingerprint (not null), so a confirmation without a fingerprint cannot exist;
+--        * laterWork > 0 without a fingerprint -> 55000 session_undo:roster_work_needs_confirmation (detail: the
 --          rosterWork object), nothing removed;
---        * with the confirmation, p_later_roster_fingerprint is compared with the fingerprint computed under the team's
---          import lock (every roster command takes that lock too): another list -> session_undo:roster_work_changed;
+--        * a fingerprint is compared with the one computed under the team's import lock (every roster command takes that
+--          lock too): another list -> session_undo:roster_work_changed; a fingerprint sent while there is no later work at
+--          all is roster_work_changed as well (the list it confirmed is gone);
 --        * the roster rows of the alias set are removed first (decisions -> completion log -> completions -> requests), and
 --          the number removed must be the number the scope counted (roster_work_changed otherwise);
 --        * removed_counts carries the four roster tables; the deletion log row carries roster_work_removed.
@@ -96,6 +100,9 @@ begin
   end if;
   perform training.assert_canonical_team_activity(new.activity_id, null, 'activity_roster_requests');
   if new.origin = 'import' then
+    if new.operation not in ('decide', 'decide_bulk') then
+      raise exception 'activity_roster_requests: origin import is only a decide or decide_bulk' using errcode = '23514';
+    end if;
     select owner_team_id into v_team from training.activities where id = new.activity_id;
     if not exists (
       select 1
@@ -259,6 +266,7 @@ begin
       from training.activity_completions c where c.activity_id = any(p_alias)
   )
   select (select count(*) filter (where not later) from dec)::int as d_imp, (select count(*) filter (where later) from dec)::int as d_later,
+         (select count(*) filter (where origin <> 'import' and operation in ('complete', 'reopen')) from req)::int as acts_later,
          (select count(*) filter (where origin = 'import') from req)::int as r_imp, (select count(*) filter (where origin <> 'import') from req)::int as r_later,
          (select count(*) filter (where not later) from comp)::int as c_imp, (select count(*) filter (where later) from comp)::int as c_later,
          (select count(*) filter (where not later) from lg)::int as l_imp, (select count(*) filter (where later) from lg)::int as l_later,
@@ -287,6 +295,7 @@ begin
                                         'completions', v_later.c_imp, 'completionLog', v_later.l_imp),
     'laterWork', jsonb_build_object('decisions', v_later.d_later, 'requests', v_later.r_later,
                                     'completions', v_later.c_later, 'completionLog', v_later.l_later,
+                                    'changes', v_later.d_later + v_later.acts_later,
                                     'list', v_later.list, 'fingerprint', v_fp));
 end;
 $$ language plpgsql;
@@ -506,13 +515,13 @@ $$ language plpgsql;
 
 
 -- ---------------------------------------------------------------------------
--- 5. The sanctioned undo, with the roster work (DROP + CREATE: two more parameters and one more result column)
+-- 5. The sanctioned undo, with the roster work (DROP + CREATE: one more parameter and one more result column)
 -- ---------------------------------------------------------------------------
 drop function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid);
 
 create function training_load.undo_imported_session(
   p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid default null,
-  p_confirm_later_roster boolean default false, p_later_roster_fingerprint text default null
+  p_later_roster_fingerprint text default null
 ) returns table (
   replayed boolean, event_id uuid, deletion_log_id uuid, removed_counts jsonb, removed_total integer, new_candidate_id uuid,
   undone_candidate_ids uuid[], roster_work_removed jsonb
@@ -546,7 +555,7 @@ declare
   v_status text;
   v_pass integer := 0;
   v_act_before uuid[];
-  v_confirm boolean := coalesce(p_confirm_later_roster, false);
+  v_confirm boolean := p_later_roster_fingerprint is not null;
   v_alias uuid[];
   v_later_total integer;
   v_roster_removed jsonb;
@@ -558,8 +567,8 @@ begin
   if length(v_reason) not between 1 and 500 or v_reason ~ '[[:cntrl:]]' then
     perform training_load.session_undo_refuse('invalid_reason');
   end if;
-  if v_confirm and (p_later_roster_fingerprint is null or p_later_roster_fingerprint !~ '^[0-9a-f]{64}$') then
-    raise exception 'undo_imported_session: a confirmation carries the fingerprint of the later roster work' using errcode = '22023';
+  if v_confirm and p_later_roster_fingerprint !~ '^[0-9a-f]{64}$' then
+    raise exception 'undo_imported_session: the later roster work fingerprint is 64 lowercase hex characters' using errcode = '22023';
   end if;
   -- v57's hash when nothing is confirmed (a v57 request replays unchanged); a confirmation is part of the request.
   v_hash := encode(sha256(convert_to(p_candidate::text || '|' || v_reason || '|' || coalesce(p_expected_event::text, '')
@@ -699,6 +708,9 @@ begin
     if p_later_roster_fingerprint is distinct from v_work -> 'laterWork' ->> 'fingerprint' then
       perform training_load.session_undo_refuse('roster_work_changed', v_work::text);
     end if;
+  elsif v_confirm then
+    -- A fingerprint confirms a list; with no later work at all that list is gone.
+    perform training_load.session_undo_refuse('roster_work_changed', v_work::text);
   end if;
   v_alias := coalesce(array(select jsonb_array_elements_text(v_scope -> 'aliasActivityIds')::uuid), '{}');
   v_part := coalesce(array(select jsonb_array_elements_text(v_scope -> 'participantIds')::uuid), '{}');
@@ -884,5 +896,5 @@ begin
 end;
 $$ language plpgsql;
 
-comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, boolean, text) is
+comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text) is
   'v60: the sanctioned undo of one imported GPEXE session, its roster work included (platform admin only). See migrations_v2/202611101000_training_load_v60_undo_roster_work.sql.';

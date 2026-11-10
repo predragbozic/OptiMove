@@ -241,10 +241,10 @@ async function newClient() {
   await c.connect();
   return c;
 }
-const undoWith = (team, s, { cookie = team.padmin.cookie, requestKey = key(), reason = "wrong athlete link", confirm, fingerprint } = {}) =>
+const undoWith = (team, s, { cookie = team.padmin.cookie, requestKey = key(), reason = "wrong athlete link", fingerprint } = {}) =>
   api(undoPath(team, s.candidateId), {
     method: "POST", cookie,
-    body: { requestKey, reason, expected: { eventId: s.eventId }, ...(confirm === undefined ? {} : { confirmLaterRosterWork: confirm }), ...(fingerprint === undefined ? {} : { laterRosterFingerprint: fingerprint }) },
+    body: { requestKey, reason, expected: { eventId: s.eventId }, ...(fingerprint === undefined ? {} : { laterRosterFingerprint: fingerprint }) },
   });
 const preview = (team, s, cookie = team.padmin.cookie) => api(previewPath(team, s.candidateId), { cookie });
 
@@ -409,11 +409,11 @@ test("3. J20 states and a colleague's later change: refused without the confirma
   assert.equal(plain.body.rosterWork.laterWork.list[0].byName, item.byName);
   assert.deepEqual(await allRowCounts(), rowsBefore, "nothing was removed without the confirmation");
 
-  const stale = await undoWith(team, s, { confirm: true, fingerprint: "0".repeat(64) });
+  const stale = await undoWith(team, s, { fingerprint: "0".repeat(64) });
   assert.deepEqual([stale.status, stale.body.error], [409, "roster_work_changed"], stale.text);
   assert.deepEqual(await allRowCounts(), rowsBefore, "nothing was removed with another fingerprint");
 
-  const done = await undoWith(team, s, { confirm: true, fingerprint: rw.laterWork.fingerprint });
+  const done = await undoWith(team, s, { fingerprint: rw.laterWork.fingerprint });
   assert.equal(done.status, 200, done.text);
   assert.deepEqual(await rosterRows(s.activityId), { decisions: 0, requests: 0, completions: 0, completionLog: 0 });
   assert.equal((await counts(team.teamId)).events, 0);
@@ -443,8 +443,9 @@ test("4. only Roster-tab work: the coach's states are later work (the bounded li
   assert.equal(later.decisions, need.length);
   assert.equal(later.requests, need.length + 1);
   assert.equal(later.list.length, need.length + 1);
+  assert.equal(later.changes, need.length + 1, "the server's change count: every decision and the complete");
   assert.deepEqual(later.list.filter((i) => i.kind === "complete").map((i) => i.athleteId), [null]);
-  const done = await undoWith(team, s, { confirm: true, fingerprint: later.fingerprint });
+  const done = await undoWith(team, s, { fingerprint: later.fingerprint });
   assert.equal(done.status, 200, done.text);
   assert.deepEqual(await rosterRows(s.activityId), { decisions: 0, requests: 0, completions: 0, completionLog: 0 });
 });
@@ -464,7 +465,8 @@ test("5. the list in the answer and the log is bounded at 60 while the counts an
   const later = p.body.undoPreview.rosterWork.laterWork;
   assert.equal(later.decisions, 61);
   assert.equal(later.list.length, 60);
-  const done = await undoWith(team, s, { confirm: true, fingerprint: later.fingerprint });
+  assert.equal(later.changes, 61, "the count covers the rows past the list");
+  const done = await undoWith(team, s, { fingerprint: later.fingerprint });
   assert.equal(done.status, 200, done.text);
   const log = (await admin.query(`select roster_work_removed r from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].r;
   assert.equal(log.later.decisions, 61);
@@ -479,24 +481,33 @@ test("6. a change between the preview and the confirmed undo: roster_work_change
   const first = (await preview(team, s)).body.undoPreview.rosterWork.laterWork.fingerprint;
   assert.equal((await rosterChange(team, s, y, { kind: "participated_no_values" })).status, 200);
   const rowsBefore = await allRowCounts();
-  const r = await undoWith(team, s, { confirm: true, fingerprint: first });
+  const r = await undoWith(team, s, { fingerprint: first });
   assert.deepEqual([r.status, r.body.error], [409, "roster_work_changed"], r.text);
   assert.equal(r.body.rosterWork.laterWork.decisions, 2);
   assert.notEqual(r.body.rosterWork.laterWork.fingerprint, first);
   assert.deepEqual(await allRowCounts(), rowsBefore);
-  const again = await undoWith(team, s, { confirm: true, fingerprint: r.body.rosterWork.laterWork.fingerprint });
+  const again = await undoWith(team, s, { fingerprint: r.body.rosterWork.laterWork.fingerprint });
   assert.equal(again.status, 200, again.text);
 });
 
-test("7. the request body: a confirmation without a fingerprint, a non-boolean confirmation and a fingerprint without the confirmation are 400 before anything is locked", async () => {
+test("7. the request body: a fingerprint that is not 64 lowercase hex is 400 before anything is locked; a fingerprint sent while there is no later work is roster_work_changed, nothing removed", async () => {
   const team = await setupTeam();
   const s = await importSession(team, 9607);
-  for (const body of [{ confirm: true }, { confirm: true, fingerprint: "abc" }, { confirm: "yes", fingerprint: "a".repeat(64) }, { fingerprint: "a".repeat(64) }]) {
-    const r = await undoWith(team, s, body);
-    assert.deepEqual([r.status, r.body.error], [400, "invalid_request"], `${JSON.stringify(body)} ${r.text}`);
+  for (const fingerprint of ["abc", "A".repeat(64), 12, true, { x: 1 }]) {
+    const r = await undoWith(team, s, { fingerprint });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_request"], `${JSON.stringify(fingerprint)} ${r.text}`);
   }
-  // A confirmation where there is no later work is harmless: the undo goes through.
-  const ok = await undoWith(team, s, { confirm: true, fingerprint: "a".repeat(64) });
+  // The confirmation is the fingerprint itself: a list it confirms that is not there (no later work at all) is refused.
+  const before = await rosterRows(s.activityId);
+  const stray = await undoWith(team, s, { fingerprint: "a".repeat(64) });
+  assert.deepEqual([stray.status, stray.body.error], [409, "roster_work_changed"], stray.text);
+  assert.deepEqual(await rosterRows(s.activityId), before);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].n, 0);
+  // The function itself: a fingerprint that is not hex is 22023.
+  await assert.rejects(admin.query(`select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'x', null, 'zz')`,
+    [team.padmin.id, team.teamId, s.candidateId]), (e) => e.code === "22023");
+  // Without a fingerprint the undo of a session without later work goes through.
+  const ok = await undoWith(team, s);
   assert.equal(ok.status, 200, ok.text);
 });
 
@@ -509,9 +520,9 @@ test("8. a replay of a confirmed undo answers the saved outcome with its roster 
   assert.equal((await rosterChange(team, s, y)).status, 200);
   const fp = (await preview(team, s)).body.undoPreview.rosterWork.laterWork.fingerprint;
   const requestKey = key();
-  const first = await undoWith(team, s, { requestKey, confirm: true, fingerprint: fp });
+  const first = await undoWith(team, s, { requestKey, fingerprint: fp });
   assert.equal(first.status, 200, first.text);
-  const replay = await undoWith(team, s, { requestKey, confirm: true, fingerprint: fp });
+  const replay = await undoWith(team, s, { requestKey, fingerprint: fp });
   assert.equal(replay.status, 200, replay.text);
   assert.equal(replay.body.undo.replayed, true);
   assert.deepEqual(replay.body.undo.rosterWork, first.body.undo.rosterWork);
@@ -540,6 +551,13 @@ test("9. origin 'import' is accepted only for an approval of this session by the
   await refused(admin.query(
     `insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin)
      values ($1, gen_random_uuid(), repeat('a', 64), 'decide', $2, '{}'::jsonb, 'import')`, [plain, team.padmin.id]), "an activity without an approval");
+  // only a decide or decide_bulk may be import-origin (J20-C writes states, nothing else)
+  for (const operation of ["complete", "reopen", "clear"]) {
+    await assert.rejects(admin.query(
+      `insert into training.activity_roster_requests (activity_id, request_key, request_hash, operation, performed_by_user_id, result, origin)
+       values ($1, gen_random_uuid(), repeat('a', 64), $2, $3, '{}'::jsonb, 'import')`, [s.activityId, operation, team.padmin.id]),
+      (e) => e.code === "23514" && /only a decide or decide_bulk/.test(e.message), operation);
+  }
   // the right user, after the approval, on this session: accepted
   await writeImportStates(team, s, [y]);
   // the plain route: whatever the body says, the request is 'roster'
@@ -651,7 +669,7 @@ test("13. undo first: a Roster-tab change waits for the undo's team lock and the
   const c = await newClient();
   try {
     await c.query("begin");
-    const r = (await c.query(`select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'o1 order test', $4, true, $5)`,
+    const r = (await c.query(`select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'o1 order test', $4, $5)`,
       [team.padmin.id, team.teamId, s.candidateId, s.eventId, fp])).rows[0];
     assert.equal(r.removed_counts.activity_athlete_decisions, 1);
     let settled = false;
@@ -660,7 +678,9 @@ test("13. undo first: a Roster-tab change waits for the undo's team lock and the
     assert.equal(settled, false, "the roster command waits for the team's import lock");
     await c.query("commit");
     const answer = await change;
-    assert.notEqual(answer.status, 200, JSON.stringify(answer));
+    // The command found the activity before it waited; after the undo's COMMIT the session has no participant left, so
+    // v44's gate answers that it has no roster (a definite refusal, never a write).
+    assert.deepEqual([answer.status, answer.body?.error], [409, "roster_not_applicable"], JSON.stringify(answer));
     assert.ok(!/40P01|deadlock/i.test(JSON.stringify(answer.body)));
   } finally {
     await c.end();
@@ -684,7 +704,7 @@ test("14. roster first: the undo waits for the command's team lock, sees its cha
     const change = rosterChange(team, s, y);
     await inside;
     let settled = false;
-    const u = undoWith(team, s, { confirm: true, fingerprint: fp }).finally(() => { settled = true; });
+    const u = undoWith(team, s, { fingerprint: fp }).finally(() => { settled = true; });
     await sleep(400);
     assert.equal(settled, false, "the undo waits for the roster command's team lock");
     release();
@@ -698,22 +718,22 @@ test("14. roster first: the undo waits for the command's team lock, sees its cha
   }
   assert.equal((await rosterRows(s.activityId)).decisions, 2);
   const fresh = (await preview(team, s)).body.undoPreview.rosterWork.laterWork.fingerprint;
-  assert.equal((await undoWith(team, s, { confirm: true, fingerprint: fresh })).status, 200);
+  assert.equal((await undoWith(team, s, { fingerprint: fresh })).status, 200);
 });
 
 // ---------------------------------------------------------------------------
 // The function, the migration and its runbooks
 // ---------------------------------------------------------------------------
-test("15. the signature: the six-argument v57 function is gone, the eight-argument one is the only one, and the service calls it with eight arguments", async () => {
+test("15. the signature: the six-argument v57 function is gone, the seven-argument one is the only one, and the service calls it with seven arguments", async () => {
   const rows = (await admin.query(
     `select pg_get_function_identity_arguments(p.oid) a from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'training_load' and p.proname = 'undo_imported_session'`)).rows;
-  assert.deepEqual(rows.map((r) => r.a), ["p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid, p_confirm_later_roster boolean, p_later_roster_fingerprint text"]);
+  assert.deepEqual(rows.map((r) => r.a), ["p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid, p_later_roster_fingerprint text"]);
   assert.equal((await admin.query(`select to_regprocedure('training_load.undo_imported_session(uuid,uuid,uuid,uuid,text,uuid)') r`)).rows[0].r, null);
   const source = fs.readFileSync(new URL("../src/gpexeSessionUndoService.js", import.meta.url), "utf8");
   assert.equal(source.split("training_load.undo_imported_session(").length - 1, 2, "two calls");
-  assert.ok(source.includes("undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4, $5)"), "the preview: eight arguments");
-  assert.ok(source.includes("undo_imported_session($1, $2, $3, $4, $5, $6, $7, $8)"), "the undo: eight arguments");
+  assert.ok(source.includes("undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4)"), "the preview: seven arguments");
+  assert.ok(source.includes("undo_imported_session($1, $2, $3, $4, $5, $6, $7)"), "the undo: seven arguments");
 });
 
 async function booleansOf(client, sql) {

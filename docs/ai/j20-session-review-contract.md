@@ -270,26 +270,34 @@ never had an in-app undo: U5 is for an active platform admin only, J19-U5; the s
 `docs/runbooks/undo-roster-work-v60.md`; the *Rukovodilac*'s approved plan of 2026-11-10).**
 * `activity_roster_requests.origin` (`roster` | `import`, DEFAULT `roster`). The database accepts `import` only when an approval of the
   same session (its event linked, by an event link or a participant link, to an activity of the request's alias set) by the same
-  user exists from before the request (`created_at >= approved_at`); otherwise `23514`. The generic roster routes never name the
-  column (tested: a body with `origin` still writes `roster`). J20-C's states route is the only writer of `import` it is meant for.
+  user exists from before the request (`created_at >= approved_at`), and only for a `decide` or `decide_bulk`; otherwise `23514`.
+  The generic roster routes never name the column (tested: a body with `origin` still writes `roster`). J20-C's states route is the
+  only writer of `import` it is meant for. **Obligations left to J20-C** (the reviews of v60): the time window between the approval
+  and the import-origin request is not bounded by v60, so J20-C writes its states in the approval's own flow (right after it, as
+  O2 says) and its tests pin that; an import-origin `complete` / `reopen` / `clear` is refused, so if J20-C ever needs one it widens
+  the rule in its own migration.
 * **Classification** (`training_load.session_undo_roster_work`): a row is later work unless the request that wrote it has origin
   `import`: a decision by its request, a request by itself, a completion log row by its request (a row without a request, an
-  automatic *Needs review*, is later work), a completion row when any of its log rows is. So a coach's change that supersedes an
+  automatic *Needs review*, is later work; it can only exist after a later Complete, which is later work itself, so it never makes a
+  warning on its own), a completion row when any of its log rows is. So a coach's change that supersedes an
   import state, and every later link of that chain, is later work. The later work carries a list (at most 60: athlete, kind,
   reason code, by, at; complete / reopen with no athlete) and a fingerprint (sha256 over every later row's identity, not only the
   listed ones).
-* **The undo** (`undo_imported_session`, DROP + CREATE): what the import wrote never blocks; later work without
-  `p_confirm_later_roster` is `55000 session_undo:roster_work_needs_confirmation` (detail: both blocks), with a fingerprint other than
-  the one computed under the team's import lock it is `roster_work_changed`; nothing is removed in either case. The roster rows of the
+* **The undo** (`undo_imported_session`, DROP + CREATE): what the import wrote never blocks. The confirmation IS the one new
+  (seventh) parameter `p_later_roster_fingerprint text default null` (the *Rukovodilac*'s GO on the plan, 2026-11-10), so a
+  confirmation without a fingerprint cannot exist: later work without it is `55000 session_undo:roster_work_needs_confirmation`
+  (detail: both blocks); a fingerprint other than the one computed under the team's import lock is `roster_work_changed`; a
+  fingerprint sent while there is no later work at all is `roster_work_changed` too (the list it confirmed is gone); nothing is
+  removed in any of these. The roster rows of the
   alias set are removed first (decisions -> completion log -> completions -> requests, then v57's order) and each count must equal the
-  scope's (`roster_work_changed` otherwise). **Deviation from the plan, reported:** eight parameters, not seven - the confirmation
-  (`p_confirm_later_roster boolean`) and its fingerprint (`p_later_roster_fingerprint text`) are two. The request hash is v57's when
+  scope's (`roster_work_changed` otherwise). The request hash is v57's when
   nothing is confirmed. Refusal order: every hard refusal of v57 first, the roster confirmation last.
 * **The log**: `removed_counts` always carries the four roster tables; `import_deletion_log.roster_work_removed` (NULL when no roster row
   went) holds both counts, the later list, the fingerprint and `confirmed_by` (= `deleted_by_user_id` whenever later work went); v21's
   insert guard checks this closed shape (`23514`).
-* **API**: `POST …/undo-import` takes `confirmLaterRosterWork` and `laterRosterFingerprint`; the preview and both refusals carry
-  `rosterWork: { importWritten, laterWork: { …counts, list, fingerprint } }` with the athletes', users' and reasons' names. The undo
+* **API**: `POST …/undo-import` takes `laterRosterFingerprint` (sending it is the confirmation); the preview and both refusals carry
+  `rosterWork: { importWritten, laterWork: { …counts, changes, list, fingerprint } }` (`changes`: the server's count of the coach's
+  later acts, decisions plus Complete / Reopen) with the athletes', users' and reasons' names. The undo
   screen shows the two warnings apart, and the later changes only with their own checkbox.
 * **Locks**: unchanged. A roster command takes its decider rows `FOR SHARE`, then the team's import lock; the undo takes the users and
   role rows `FOR SHARE`, then the same lock. Tested in both orders (`backend/tests/session-undo-roster-o1.test.mjs` 13 and 14).
