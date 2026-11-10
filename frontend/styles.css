@@ -23505,3 +23505,69 @@ p.coach-home-library-note.muted:not([role="status"]) {
     inset: calc((var(--om-tap-target) - 100%) / -2) -4px;
   }
 }
+
+/* =====================================================
+   Design: the Exercise Library and the Program Library.
+   - Program Library: the scope buttons are an .om-tabs row (see program-library.js); the old
+     filled active button had white text on an undefined colour and could not be seen.
+   - Its filter selects look like its inputs; a phone gets 44 px fields with 16 px text, so iOS
+     never zooms into them.
+   - The cards use the .om-card border, radius and surface.
+   - Exercise Library: on a phone every action of a card is a 44 px touch target, and Delete
+     permanently reads as a destructive action.
+   ===================================================== */
+.program-scope-tabs.om-tabs {
+  margin-bottom: var(--om-space-1);
+}
+.program-filter-panel select {
+  height: 42px;
+  padding: 0 var(--om-space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.program-filter-panel select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.14);
+}
+.program-filter-panel,
+.program-library-card,
+.exercise-card {
+  border-color: var(--om-border-subtle);
+  border-radius: var(--om-radius-lg);
+  background: var(--om-surface-raised);
+}
+.exercise-card-actions [data-action="exercise-delete"],
+.exercise-view-menu-item[data-action="exercise-delete"] {
+  color: var(--danger);
+}
+/* The program card's information button: a 44 px touch area around the 28 px circle. */
+.program-library-info-button::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+@media (max-width: 760px) {
+  .program-filter-panel input:not([type="checkbox"]),
+  .program-filter-panel select,
+  .program-paid-filter,
+  #exerciseSearch,
+  .exercise-filter-strip:not(.builder-filter-strip) .builder-text-input {
+    min-height: var(--om-tap-target);
+    font-size: 16px;
+  }
+  .exercise-card-actions {
+    gap: 0 var(--om-space-1);
+  }
+  .exercise-card-actions .text-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--om-tap-target);
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-2);
+  }
+}

@@ -3812,6 +3812,8 @@ function renderTemplateLibrary(templates) {
 
   restoreMetadataFormDraft(keptDraft, document);
   restorePreviewScroll(keptScroll, document);
+  // The scope tabs scroll sideways on a phone: keep the active one in view.
+  revealActiveTab(els.content);
 }
 
 function renderTemplateLibraryResults() {
