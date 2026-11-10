@@ -46,6 +46,7 @@ test("the tooltip is the button's description, shown on hover with a mouse, on k
   // than a bare .is-tooltip-open::after would be.
   assert.match(rules, /\.builder-exit-button:focus-visible::after,[\s\S]*?\.builder-exit-button\.is-tooltip-open::after,\s*[^{]*\.builder-finish-button\.is-tooltip-open::after,\s*[^{]*\.icon-button\.danger-action\.is-tooltip-open::after \{\s*opacity: 1;\s*visibility: visible;/);
   assert.match(rules, /-webkit-touch-callout: none;/);
+  assert.match(rules, /content: attr\(aria-description\);[^}]*box-sizing: border-box;[^}]*width: max-content;/, "the padding counts inside the maximum");
   assert.match(rules, /\.icon-button\.danger-action\.is-tooltip-dismissed::after \{\s*opacity: 0;\s*visibility: hidden;/, "Escape closes it");
   assert.ok(rules.indexOf(".is-tooltip-dismissed::after") > rules.indexOf(":focus-visible::after"), "the dismissal comes after the rules that show it");
   assert.match(read("app.js"), /installBuilderBarTooltip\(\);/);

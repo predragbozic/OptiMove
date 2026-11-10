@@ -24655,6 +24655,7 @@ body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.d
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
+  box-sizing: border-box; /* the padding counts inside max-width, even hidden */
   width: max-content;
   max-width: min(240px, calc(100vw - 32px));
   padding: 6px 10px;

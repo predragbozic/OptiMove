@@ -48,7 +48,7 @@ const tooltip = (page, action) => page.evaluate((name) => {
   // The tooltip hangs from its containing block: the button, or the whole bar on a phone (the button is static).
   const holder = getComputedStyle(button).position === "static" ? button.offsetParent : button;
   const b = holder.getBoundingClientRect();
-  const width = parseFloat(s.width) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight);
+  const width = parseFloat(s.width) + (s.boxSizing === "border-box" ? 0 : parseFloat(s.paddingLeft) + parseFloat(s.paddingRight));
   const left = s.left !== "auto" && s.right === "auto" ? b.left + parseFloat(s.left) : b.right - parseFloat(s.right) - width;
   return { shown: s.visibility === "visible" && parseFloat(s.opacity) > 0.9, text: s.content.replace(/^"|"$/g, ""), description: button.getAttribute("aria-description"), inside: left >= 0 && left + width <= document.documentElement.clientWidth };
 }, action);
@@ -161,6 +161,22 @@ for (const width of [390, 360]) {
     } finally { await context.close(); }
   });
 }
+
+test("(700 px, a narrow window) the bar's hidden and shown tooltips stay inside the page", async () => {
+  const { context, page, pageErrors } = await openBar(700);
+  try {
+    assert.ok(await overflow(page) <= 0, "no horizontal overflow at rest (a hidden tooltip still takes room)");
+    for (const { action } of await bar(page)) {
+      await page.keyboard.press("Shift");
+      await page.locator(`.builder-program-actions [data-action="${action}"]`).focus();
+      await settle(page);
+      const tip = await tooltip(page, action);
+      assert.ok(tip.shown && tip.inside, `${action}: shown and on the screen`);
+      assert.ok(await overflow(page) <= 0, `${action}: no horizontal overflow`);
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
 
 test("(360 px, a phone) while a save runs, \"Saving…\" fits its button and the page stays as wide as the screen", async () => {
   const { context, page, pageErrors } = await openBar(360);
