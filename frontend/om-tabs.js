@@ -30,6 +30,8 @@ function installResize() {
   globalThis.addEventListener("resize", () => refreshTabFades(), { passive: true });
 }
 
+const scrollBound = new WeakSet();
+
 export function revealActiveTab(root) {
   if (!root?.querySelectorAll) return;
   installResize();
@@ -44,8 +46,12 @@ export function revealActiveTab(root) {
       else if (right > row.scrollLeft + row.clientWidth) row.scrollLeft = right - row.clientWidth + 8;
     }
     markFade(row);
-    // The row is new after every repaint (innerHTML), so the listener never piles up.
-    row.addEventListener?.("scroll", () => markFade(row), { passive: true });
+    // One scroll listener per row: a row in #content is new after every repaint, but the coach's
+    // athlete header (in the toolbar) is revealed again on every renderTabs() without one.
+    if (!scrollBound.has(row)) {
+      scrollBound.add(row);
+      row.addEventListener?.("scroll", () => markFade(row), { passive: true });
+    }
   });
 }
 

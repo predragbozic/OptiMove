@@ -23823,6 +23823,10 @@ body:not(.athlete-mode):not(.login-mode) .calendar-date .calendar-today-label {
   }
 
   body:not(.athlete-mode):not(.login-mode) .content-section .calendar-grid .calendar-date {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--om-space-1);
     font-size: 24px;
     line-height: 1.1;
   }
@@ -23869,6 +23873,7 @@ body:not(.athlete-mode):not(.login-mode) .calendar-date .calendar-today-label {
   body:not(.athlete-mode):not(.login-mode) .content-section .calendar-grid .calendar-day {
     min-width: 0;
     overflow-wrap: anywhere;
+    scroll-margin: var(--om-space-3) 0;
   }
 
   body:not(.athlete-mode):not(.login-mode) .content-section .calendar-grid .calendar-day-head {

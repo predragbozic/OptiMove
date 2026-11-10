@@ -197,6 +197,10 @@ test("C4: the program tree and the weeks keep their rule exactly - 86 px, 0.28 p
 
 test("C4: where a swipe may start is unchanged, the strip aside - calendars, the week picker, lists and the media viewer keep the finger", () => {
   const p = mount('<div class="panel"><div class="calendar-grid"><i>1</i></div><div class="week-selector"><i>w</i></div><div class="exercise-list"><i>e</i></div><p class="free">x</p></div><div class="elsewhere">y</div>');
+  // The week scrolls sideways here (the athlete's app).
+  const grid = p.content.querySelector(".calendar-grid");
+  Object.defineProperty(grid, "scrollWidth", { configurable: true, get: () => 1155 });
+  Object.defineProperty(grid, "clientWidth", { configurable: true, get: () => 336 });
   for (const selector of [".calendar-grid i", ".week-selector i", ".exercise-list i", ".elsewhere"]) p.gesture(p.content.querySelector(selector), [300, 400], [150, 400], 100);
   assert.deepEqual(p.swipes, []);
   p.setMediaOpen(true);
@@ -205,6 +209,18 @@ test("C4: where a swipe may start is unchanged, the strip aside - calendars, the
   p.setMediaOpen(false);
   p.gesture(p.content.querySelector(".free"), [300, 400], [150, 400], 100);
   assert.deepEqual(p.swipes, [1]);
+  p.dom.window.close();
+});
+
+test("C4b: a coach's week laid out as a list (design A3, no sideways scroll) lets a sideways swipe change the week", () => {
+  const p = mount('<div class="panel"><div class="calendar-grid"><article><i>1</i></article></div></div>');
+  const grid = p.content.querySelector(".calendar-grid");
+  Object.defineProperty(grid, "scrollWidth", { configurable: true, get: () => 336 });
+  Object.defineProperty(grid, "clientWidth", { configurable: true, get: () => 336 });
+  p.gesture(p.content.querySelector(".calendar-grid i"), [300, 400], [150, 400], 100);
+  assert.deepEqual(p.swipes, [1]);
+  p.gesture(p.content.querySelector(".calendar-grid i"), [180, 650], [180, 150], 120);
+  assert.deepEqual(p.swipes, [1], "a scroll up or down over the list never changes the week");
   p.dom.window.close();
 });
 
