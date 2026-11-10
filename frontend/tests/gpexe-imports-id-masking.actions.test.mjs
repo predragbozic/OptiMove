@@ -177,9 +177,10 @@ for (const role of ["club admin", "platform admin"]) {
     let html = pageHtml();
     // The page's own linked list.
     assertMasked(html, `${role}: Imports page`);
-    assert.match(outsideTech(html), /Name not loaded \(GPEXE athlete 1\)/, "the linked athlete without a stored identity, by its position");
+    // U6a: the linked list left this page (it lives on Link athletes, checked below); the page names no athlete by id.
+    assert.doesNotMatch(outsideTech(html), /GPEXE athletes linked to this team/);
     assert.ok(!/GPEXE: (GPEXE athlete|Name not)/.test(outsideTech(html)), "no doubled GPEXE wording");
-    assertInTech(html, ID.linked, `${role}: Imports page linked list`);
+    assert.ok(!html.includes(ID.linked), `${role}: the daily page no longer lists the linked athletes, so their id is not on it at all`);
 
     // Link athletes: rows, aria-labels, linked side.
     await act("training-load-gpexe-map-open");

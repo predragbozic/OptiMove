@@ -24977,3 +24977,64 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-sectio
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* U6a: the daily Imports screen - one state bar with one main button; the administrator's settings folded. */
+.imports-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.imports-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.imports-lastsearch {
+  overflow-wrap: anywhere;
+}
+.imports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-actions .gpexe-button {
+  min-height: 44px;
+}
+/* A folded card shows that it opens (the flex summary has no marker of its own). */
+.imports-settings > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+.imports-settings > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-settings > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+.imports-settings[open] > summary::after {
+  content: "\25BE";
+}
+.imports-settings {
+  padding-block: 0;
+}
+.imports-settings > .gpexe-panel {
+  border: 0;
+  padding-inline: 0;
+}
+.imports-dates-fields .gpexe-date {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .imports-actions,
+  .imports-actions .gpexe-button {
+    width: 100%;
+  }
+}
