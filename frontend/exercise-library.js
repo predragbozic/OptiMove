@@ -133,11 +133,11 @@ export function renderExerciseSelectionBar(selection, exercises) {
 
 // An empty result is an empty state with one next step: a library with nothing in it offers
 // Add exercise; a search or filter that matches nothing says how to widen it.
-function renderExerciseLibraryEmptyHtml(filtered) {
+function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
   return filtered
     ? `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">No exercises match</p>
-        <p class="om-empty__text">Try other words, or remove a filter or the block above.</p>
+        <p class="om-empty__text">${hasTerm ? "Try other words, or remove a filter or the block above." : "Remove a filter or the block above to see more exercises."}</p>
       </div>`
     : `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">Your exercise library is empty</p>
@@ -167,7 +167,7 @@ export function renderExerciseLibraryHtml(data) {
         ${renderExerciseBrowseControls(search, view)}
       </div>
     </div>
-    ${!exercises.length && !search.lockedPreviews?.length ? renderExerciseLibraryEmptyHtml(Boolean(filterBadges)) : view === "details" ? `
+    ${!exercises.length && !search.lockedPreviews?.length ? renderExerciseLibraryEmptyHtml(Boolean(filterBadges), Boolean(search.term)) : view === "details" ? `
       <div class="exercise-grid">
         ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections, selection)).join("")}
       </div>

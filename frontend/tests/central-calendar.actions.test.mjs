@@ -854,6 +854,24 @@ test("8c. empty states: nothing in the period, or nothing matching the filters w
   assert.equal(doc.querySelectorAll(".cc-card").length, 0);
 });
 
+test("8c2. a Day view and a phone week emptied by filters offer Clear filters in the day list", async () => {
+  installFetchMock(okResponder({ items: ITEMS.filter((item) => item.kind === "planned") }));
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-kind", kind: "test" });
+  await act({ action: "central-calendar-view", view: "day" });
+  let empty = dom().querySelector(".om-empty.cc-day-empty");
+  assert.ok(empty, "the Day view's empty day uses the shared empty state");
+  assert.match(empty.textContent, /Nothing matches these filters on this day/);
+  assert.ok(empty.querySelector('[data-action="central-calendar-clear-filters"]'));
+  layout = "phone";
+  await act({ action: "central-calendar-view", view: "week" });
+  empty = dom().querySelector(".om-empty.cc-day-empty");
+  assert.ok(empty, "the phone week's empty day uses the shared empty state");
+  assert.ok(empty.querySelector('[data-action="central-calendar-clear-filters"]'));
+  await act({ action: "central-calendar-clear-filters" });
+  assert.equal(dom().querySelector(".cc-day-empty [data-action=\"central-calendar-clear-filters\"]"), null);
+});
+
 test("8d. the loading state paints the toolbar at once and the grid area says so", async () => {
   const pending = [];
   installFetchMock((call) => new Promise((resolve) => { pending.push({ call, resolve }); }));

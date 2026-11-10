@@ -25,6 +25,11 @@ test("an empty exercise library offers Add exercise; a search with no match says
   const searched = library({ term: "squat" });
   assert.match(searched, /No exercises match/);
   assert.doesNotMatch(searched, /om-btn--primary/);
+  assert.match(searched, /Try other words/);
+  const filterOnly = library({ filters: { ...emptyExerciseFilters(), favorite: true } });
+  assert.match(filterOnly, /No exercises match/);
+  assert.doesNotMatch(filterOnly, /Try other words/);
+  assert.match(filterOnly, /Remove a filter or the block above/);
   // A result with only locked previews is not "empty".
   assert.doesNotMatch(library({ term: "x", lockedPreviews: [{ name: "A", blockName: "B" }] }), /exercise-library-empty/);
 });
