@@ -24498,8 +24498,19 @@ body:not(.athlete-mode):not(.login-mode) .organization-view select {
   border-radius: var(--radius);
   background-color: var(--surface);
   color: var(--text);
+  padding-right: calc(var(--om-space-3) + 20px); /* room for the native arrow */
   font: inherit;
   font-size: var(--om-text-sm);
+}
+
+/* Data sources already had 16 px selects; a field marked invalid keeps its
+   red border (Calendar settings). */
+body:not(.athlete-mode):not(.login-mode) .organization-view .data-sources select {
+  font-size: 16px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view select[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 body:not(.athlete-mode):not(.login-mode) .organization-view select:focus-visible {
@@ -24523,6 +24534,8 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .plain-button.icon-b
 body:not(.athlete-mode):not(.login-mode) .organization-view .text-action {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: var(--om-tap-target);
   min-height: var(--om-tap-target);
 }
 
@@ -24543,8 +24556,7 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch {
 body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch::after {
   content: "";
   position: absolute;
-  inset: -10px;
-  border-radius: 50%;
+  inset: -10px; /* square, so neighbouring targets tile with no dead corners */
 }
 
 body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch:focus-visible {
@@ -24560,7 +24572,6 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch-custo
   inset: -10px;
   width: var(--om-tap-target);
   height: var(--om-tap-target);
-  border-radius: 50%;
 }
 
 @media (max-width: 760px) {

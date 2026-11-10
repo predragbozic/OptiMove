@@ -22,13 +22,16 @@ test("fields, selects and buttons are 44 px; a select looks like a field and is 
   assert.match(block, /input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="color"\]\):not\(\[type="hidden"\]\),\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.organization-view select \{[^}]*height: var\(--om-tap-target\);/);
   assert.match(block, /\.organization-view select \{[^}]*border: 1px solid var\(--line\);[^}]*border-radius: var\(--radius\);/);
   assert.match(block, /\.organization-view \.plain-button \{[^}]*min-height: var\(--om-tap-target\);/);
-  assert.match(block, /\.organization-view \.text-action \{[^}]*min-height: var\(--om-tap-target\);/);
+  assert.match(block, /\.organization-view \.text-action \{[^}]*min-width: var\(--om-tap-target\);[^}]*min-height: var\(--om-tap-target\);/);
+  assert.match(block, /\.organization-view select\[aria-invalid="true"\] \{\s*border-color: var\(--danger\);/, "an invalid select stays red");
+  assert.match(block, /\.organization-view \.data-sources select \{\s*font-size: 16px;/, "Data sources keeps 16 px");
   assert.match(block, /@media \(max-width: 760px\) \{\s*body:not\(\.athlete-mode\):not\(\.login-mode\) \.organization-view select \{\s*font-size: 16px;/);
 });
 
 test("a swatch is a 28 px circle whose ::after and custom input make a 44 px target", () => {
   assert.match(block, /\.pastel-swatch \{[^}]*box-sizing: border-box;[^}]*width: 28px;[^}]*height: 28px;/);
-  assert.match(block, /\.pastel-swatch::after \{[^}]*position: absolute;[^}]*inset: -10px;/);
+  assert.match(block, /\.pastel-swatch::after \{[^}]*position: absolute;[^}]*inset: -10px;[^}]*\}/);
+  assert.doesNotMatch(block.match(/\.pastel-swatch::after \{[^}]*\}/)[0], /border-radius/, "a square target, so neighbours tile");
   assert.match(block, /\.pastel-swatch-custom input\[type="color"\] \{[^}]*inset: -10px;[^}]*width: var\(--om-tap-target\);/);
   assert.match(block, /\.pastel-palette-options \{[^}]*gap: var\(--om-space-4, 16px\);/);
 });
