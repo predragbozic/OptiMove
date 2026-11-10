@@ -3084,7 +3084,13 @@ function renderTabs() {
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
-  tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.activeTab));
+  tabs.forEach((tab) => {
+    const active = tab.dataset.tab === state.activeTab;
+    tab.classList.toggle("is-active", active);
+    // A shared .om-tabs row (the coach's athlete header) also says which tab is current.
+    if (tab.classList.contains("om-tab")) tab.toggleAttribute("aria-current", active);
+    if (tab.classList.contains("om-tab") && active) tab.setAttribute("aria-current", "page");
+  });
   // Every navigation path away from the Programs tab (every tab/library-tab/
   // athlete-tab click handler, roughly a dozen call sites) already calls
   // renderTabs() right after resetting state.selectedProgramId - this is

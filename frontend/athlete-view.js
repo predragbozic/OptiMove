@@ -50,9 +50,26 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
     </div>
   ` : "";
 
+  // A coach's header (design, A2): the athlete's picture beside the shared tab row (.om-tabs), the
+  // same as Settings and Tests; the name is already the page's title. The buttons keep "tab" (renderTabs
+  // marks the active one by it). The athlete's own app keeps its own header below.
+  if (!isAthleteMode) {
+    return `
+    <div class="athlete-toolbar-row athlete-toolbar-coach">
+      <section class="athlete-hero athlete-hero-compact" aria-label="Selected athlete">
+        ${imageMarkup}
+      </section>
+      <nav class="tabs athlete-tabs om-tabs" aria-label="Athlete views">
+        <button class="tab om-tab" data-tab="weekly">Weekly plans</button>
+        <button class="tab om-tab" data-tab="programs">Specific programs</button>
+      </nav>
+    </div>
+  `;
+  }
+
   return `
     <div class="athlete-toolbar-row">
-      <section class="athlete-hero ${isAthleteMode ? "" : "athlete-hero-compact"}" aria-label="Selected athlete">
+      <section class="athlete-hero" aria-label="Selected athlete">
         ${imageMarkup}
         ${athleteDetailsMarkup}
       </section>
