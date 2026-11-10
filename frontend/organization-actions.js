@@ -445,9 +445,17 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     const athleteId = action.dataset.athleteId || "";
     const userId = action.dataset.userId || "";
     if (!userId) return true;
-    state.athleteAccountManage = { open: true, athleteId, userId, loading: true, data: null, error: "", pending: false };
+    state.athleteAccountManage = { open: true, athleteId, userId, scope: "full", loading: true, data: null, error: "", message: "", pending: false };
     void renderOrganizationPanel({ refresh: false });
     void loadAthleteAccount(userId, { renderOrganizationPanel });
+    return true;
+  }
+  // S5: the login switch alone, for a club admin or a coach. Drawn from the athlete row: no request.
+  if (type === "organization-athlete-login-open") {
+    const athleteId = action.dataset.athleteId || "";
+    if (!athleteId) return true;
+    state.athleteAccountManage = { open: true, athleteId, userId: "", scope: "login", loading: false, data: null, error: "", message: "", pending: false };
+    void renderOrganizationPanel({ refresh: false });
     return true;
   }
   if (type === "organization-athlete-account-close") {
@@ -922,22 +930,34 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     }
     return true;
   }
+  // S5: the switch lives in the athlete's Account dialog. Disabling asks first; the result is said in the dialog.
   if (type === "organization-toggle-athlete-login") {
     const athleteId = action.dataset.athleteId;
     const nextActive = action.dataset.currentActive !== "true";
-    if (!athleteId) return true;
+    const manage = state.athleteAccountManage;
+    if (!athleteId || manage.pending) return true;
+    if (!nextActive) {
+      const name = action.dataset.athleteName || "this athlete";
+      if (!window.confirm(`Disable ${name}'s login? They can't sign in to the athlete app until it is enabled again. Roles, memberships and history are not changed.`)) return true;
+    }
     action.disabled = true;
+    manage.pending = true;
+    manage.error = "";
+    manage.message = "";
     try {
       await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/login-status`, {
         method: "PUT",
         body: JSON.stringify({ active: nextActive }),
       });
+      manage.message = nextActive ? "Login enabled." : "Login disabled.";
       await loadAthletes();
-      if (state.activeTab === "organization") await renderOrganizationPanel();
+      if (manage.open && manage.scope === "full" && manage.userId) await loadAthleteAccount(manage.userId, { renderOrganizationPanel });
     } catch (error) {
-      window.alert(error?.message || "Could not update login status.");
+      manage.error = error?.message || "Could not update login status.";
     } finally {
+      manage.pending = false;
       action.disabled = false;
+      if (state.activeTab === "organization") await renderOrganizationPanel();
     }
     return true;
   }

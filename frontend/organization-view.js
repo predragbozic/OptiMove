@@ -307,9 +307,9 @@ export function renderOrganizationBrowser(data) {
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes"
           ? selectedTeam
-            ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes)
+            ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
             : selectedClub
-              ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes)
+              ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
               : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin })
           : ""}
       </section>
@@ -746,7 +746,7 @@ function renderAssignAthleteToTeamForm(team, visibleAthletes, allAthletes) {
   `;
 }
 
-function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
+function renderTeamAthleteTable(team, teamAthletes, allAthletes, isPlatformAdmin = false) {
   const archivedInTeam = archivedMembershipsFor(allAthletes, { teamId: team.id });
   return `
     <section class="panel organization-list-card organization-team-detail" data-athlete-filter-scope>
@@ -767,7 +767,7 @@ function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
         <div class="organization-table-row organization-table-head" role="row">
           <span>Athlete</span><span>ID</span><span>Login</span><span></span>
         </div>
-        ${teamAthletes.length ? teamAthletes.map((athlete) => renderTeamAthleteRow(athlete, team)).join("") : `<p class="muted organization-empty-row">No athletes assigned to this team yet.</p>`}
+        ${teamAthletes.length ? teamAthletes.map((athlete) => renderTeamAthleteRow(athlete, team, isPlatformAdmin)).join("") : `<p class="muted organization-empty-row">No athletes assigned to this team yet.</p>`}
       </div>
       ${state.organization.showArchivedTeamMembers ? `
         <div class="organization-table organization-archived-athletes" role="table" aria-label="${escapeAttr(team.name)} archived athletes">
@@ -778,20 +778,31 @@ function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
   `;
 }
 
-function renderAthleteLoginToggle(athlete) {
+// The athlete's login state, as a plain badge (S5). Switching the login is in the Account dialog, behind a clear
+// "Disable login" / "Enable login" button and, to disable, a confirmation: a badge that changed an account on a tap
+// was too easy to press by mistake.
+function renderAthleteLoginStatus(athlete) {
   if (!athlete.user_id) return `<span class="athlete-login-status is-none" title="No login yet">No login</span>`;
-  // This account also holds real coach/admin capability - disabling it here
-  // would kill their staff access too, which this control must never do (the
-  // backend independently refuses this regardless of what's rendered here).
+  // This account also holds real coach/admin capability - it can't be disabled from an athlete row (the backend
+  // independently refuses it regardless of what's rendered here).
   if (athlete.login_is_multi_role) {
     return `<span class="athlete-login-status is-multi-role" title="This login also has coach or administrator access - it can't be disabled from here.">Multi-role account</span>`;
   }
   const active = athlete.login_active === true;
-  return `
-    <button class="athlete-login-toggle ${active ? "is-active" : "is-disabled"}" type="button" data-action="organization-toggle-athlete-login" data-athlete-id="${escapeAttr(athlete.id)}" data-current-active="${active ? "true" : "false"}" title="${active ? "Click to disable this login" : "Click to enable this login"}">
-      ${active ? "Active" : "Disabled"}
-    </button>
-  `;
+  return `<span class="athlete-login-status ${active ? "is-active" : "is-disabled"}">${active ? "Login active" : "Login disabled"}</span>`;
+}
+
+// Where an athlete's login is switched (S5). A platform admin keeps the Account button and its full dialog (email,
+// password reset, and now the switch); the Account dialog stays the platform admin's only (its routes are). Everyone
+// else who could switch the login from the row before S5 gets a "Login" button and a dialog with the switch alone,
+// so nobody loses the action.
+function athleteAccountButtonHtml(athlete, isPlatformAdmin) {
+  if (!athlete.user_id) return "";
+  if (isPlatformAdmin) {
+    return `<button class="plain-button compact-button" type="button" data-action="organization-athlete-account-open" data-athlete-id="${escapeAttr(athlete.id)}" data-user-id="${escapeAttr(athlete.user_id)}">Account</button>`;
+  }
+  if (athlete.login_is_multi_role) return "";
+  return `<button class="plain-button compact-button" type="button" data-action="organization-athlete-login-open" data-athlete-id="${escapeAttr(athlete.id)}">Login</button>`;
 }
 
 // The Invite trigger is only ever offered when the CURRENT active workspace
@@ -807,15 +818,16 @@ function inviteTriggerHtml(athlete) {
   return `<button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">${athlete.inviteStatus === "pending" ? "Invite pending" : "Invite"}</button>`;
 }
 
-function renderTeamAthleteRow(athlete, team) {
+function renderTeamAthleteRow(athlete, team, isPlatformAdmin = false) {
   const image = athlete.image_url || "";
   return `
     <div class="organization-table-row" role="row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar" aria-hidden="true">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
-      <span>${renderAthleteLoginToggle(athlete)}</span>
+      <span>${renderAthleteLoginStatus(athlete)}</span>
       <span class="organization-row-actions">
         ${inviteTriggerHtml(athlete)}
+        ${athleteAccountButtonHtml(athlete, isPlatformAdmin)}
         <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
         <button class="plain-button icon-button" type="button" data-action="organization-archive-team-membership" data-team-id="${escapeAttr(team.id)}" data-athlete-id="${escapeAttr(athlete.id)}" aria-label="Remove from team" title="Remove from team - ends only this team membership. Login, history, and any other teams/clubs/coaches are kept, and it can be restored later.">${ICON_ARCHIVE}</button>
       </span>
@@ -839,7 +851,7 @@ function renderArchivedTeamAthleteRow(athlete, team) {
 // A specific club is selected (no team) - "Archive from club" is
 // unambiguous here since the context is exactly which club's membership is
 // being ended, unlike the flat, unfiltered athlete list.
-function renderClubAthleteList(club, clubAthletes, allAthletes) {
+function renderClubAthleteList(club, clubAthletes, allAthletes, isPlatformAdmin = false) {
   const archivedInClub = archivedMembershipsFor(allAthletes, { clubId: club.id }).filter((athlete) => (
     (athlete.memberships || []).some((m) => m.membershipType === "club" && String(m.clubId) === String(club.id) && m.status === "archived")
   ));
@@ -855,7 +867,7 @@ function renderClubAthleteList(club, clubAthletes, allAthletes) {
       </div>
       ${renderAthleteFilter("settings-athletes", [...clubAthletes, ...(state.organization.showArchivedClubMembers ? archivedInClub : [])])}
       <div class="organization-list">
-        ${clubAthletes.length ? clubAthletes.map((athlete) => renderClubAthleteRow(athlete, club)).join("") : `<p class="muted organization-empty-row">No athletes in this club yet.</p>`}
+        ${clubAthletes.length ? clubAthletes.map((athlete) => renderClubAthleteRow(athlete, club, isPlatformAdmin)).join("") : `<p class="muted organization-empty-row">No athletes in this club yet.</p>`}
       </div>
       ${state.organization.showArchivedClubMembers ? `
         <div class="organization-list organization-archived-athletes">
@@ -866,13 +878,14 @@ function renderClubAthleteList(club, clubAthletes, allAthletes) {
   `;
 }
 
-function renderClubAthleteRow(athlete, club) {
+function renderClubAthleteRow(athlete, club, isPlatformAdmin = false) {
   return `
     <article class="organization-row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       ${renderOrganizationRowContent(athlete, "athlete")}
       <span class="organization-row-actions">
-        ${renderAthleteLoginToggle(athlete)}
+        ${renderAthleteLoginStatus(athlete)}
         ${inviteTriggerHtml(athlete)}
+        ${athleteAccountButtonHtml(athlete, isPlatformAdmin)}
         <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
         <button class="plain-button icon-button" type="button" data-action="organization-archive-club-membership" data-club-id="${escapeAttr(club.id)}" data-athlete-id="${escapeAttr(athlete.id)}" aria-label="Archive from club" title="Archive from club - ends this club membership, and any active team memberships within it. Login, history, and other clubs/teams/coaches are kept, and it can be restored later.">${ICON_ARCHIVE}</button>
       </span>
@@ -1017,7 +1030,7 @@ function renderJoinLinkRow(link) {
   const justCreated = state.organizationJoinLinks.justCreatedId === link.id && state.organizationJoinLinks.justCreatedUrl;
   const isDead = link.status === "revoked";
   return `
-    <article class="organization-row">
+    <article class="organization-row organization-join-link-row">
       <div class="organization-row-main" style="flex:1">
         <strong>${escapeHtml(link.label || "Join link")}</strong>
         <p class="muted">${escapeHtml(joinLinkStatusLabel(link.status))} · ${link.approvedUses}${link.maxUses != null ? `/${escapeHtml(String(link.maxUses))}` : ""} used · ${link.pendingCount} pending · expires ${formatInviteDate(link.expiresAt)}</p>
@@ -1547,32 +1560,59 @@ export function renderAthleteAccountModal(data) {
   const manage = state.athleteAccountManage;
   const athlete = (data.athletes || []).find((row) => String(row.id) === String(manage.athleteId));
   const title = athlete?.name || athlete?.full_name || "Athlete account";
+  // "login": the login switch alone, drawn from the athlete row (no request); anything else is the platform admin's
+  // full account dialog.
+  const limited = manage.scope === "login";
   const close = `<button class="plain-button icon-button" type="button" data-action="organization-athlete-account-close" aria-label="Close"><span class="button-icon">x</span></button>`;
   return `
     <div class="exercise-tag-overlay" role="presentation">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-athlete-account-close" aria-label="Close athlete account"></button>
-      <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="Athlete account">
+      <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="${limited ? "Athlete login" : "Athlete account"}">
         <div class="builder-modal-head">
-          <div><p class="eyebrow">Account (platform admin)</p><h3>${escapeHtml(title)}</h3></div>
+          <div><p class="eyebrow">${limited ? "Login" : "Account (platform admin)"}</p><h3>${escapeHtml(title)}</h3></div>
           ${close}
         </div>
-        ${manage.loading && !manage.data ? `<p class="muted">Loading account...</p>` : manage.data ? renderAthleteAccountModalBody(manage) : `<p class="builder-error">${escapeHtml(manage.error || "Could not load this account.")}</p>`}
+        ${limited
+          ? `${manage.error ? `<p class="builder-error">${escapeHtml(manage.error)}</p>` : ""}${manage.message ? `<p class="builder-success" role="status">${escapeHtml(manage.message)}</p>` : ""}${renderAthleteLoginSwitchSection(athlete, manage)}`
+          : manage.loading && !manage.data ? `<p class="muted">Loading account...</p>` : manage.data ? renderAthleteAccountModalBody(manage, athlete) : `<p class="builder-error">${escapeHtml(manage.error || "Could not load this account.")}</p>`}
       </section>
     </div>
   `;
 }
 
-function renderAthleteAccountModalBody(manage) {
+// The login switch (S5): the state, what switching does, and one clear button. Disabling asks first (in the handler).
+// The state is the platform admin's fetched account when there is one, otherwise the athlete row; both are read again
+// after the switch.
+function renderAthleteLoginSwitchSection(athlete, manage) {
+  if (!athlete?.user_id && !manage.data) return `<section class="manage-account-section"><p class="eyebrow">Login</p><p class="muted">This athlete has no login yet.</p></section>`;
+  if (athlete?.login_is_multi_role) {
+    return `<section class="manage-account-section"><p class="eyebrow">Login</p><p class="muted">This login also has coach or administrator access, so it can't be disabled from an athlete. Use Users &gt; Manage account.</p></section>`;
+  }
+  const active = manage.data ? manage.data.loginActive === true : athlete.login_active === true;
+  const id = athlete?.id || manage.athleteId;
+  return `
+    <section class="manage-account-section athlete-login-switch">
+      <p class="eyebrow">Login</p>
+      <div class="manage-account-row">
+        <span class="user-status-badge ${active ? "is-active" : "is-disabled"}">${active ? "Active login" : "Login disabled"}</span>
+        <button class="plain-button compact-button ${active ? "danger-button" : ""}" type="button" data-action="organization-toggle-athlete-login" data-athlete-id="${escapeAttr(id)}" data-current-active="${active ? "true" : "false"}" data-athlete-name="${escapeAttr(athlete?.name || athlete?.full_name || "this athlete")}" ${manage.pending ? "disabled" : ""}>${active ? "Disable login" : "Enable login"}</button>
+      </div>
+      <p class="muted">${active ? "A disabled login can't sign in to the athlete app until it is enabled again." : "Enabling lets this athlete sign in again with their existing email and password."} Roles, memberships and history are not changed.</p>
+    </section>
+  `;
+}
+
+function renderAthleteAccountModalBody(manage, athlete) {
   const account = manage.data;
   const pending = manage.pending;
   return `
     ${manage.error ? `<p class="builder-error">${escapeHtml(manage.error)}</p>` : ""}
     ${manage.message ? `<p class="builder-success">${escapeHtml(manage.message)}</p>` : ""}
+    ${renderAthleteLoginSwitchSection(athlete, manage)}
     <section class="manage-account-section">
-      <p class="eyebrow">Login</p>
+      <p class="eyebrow">Login email</p>
       <p class="account-current-email"><span>Login email</span> <strong>${escapeHtml(account.email || "")}</strong></p>
       <div class="manage-account-row">
-        <span class="user-status-badge ${account.loginActive ? "is-active" : "is-disabled"}">${account.loginActive ? "Active login" : "Login disabled"}</span>
         <button class="text-action" type="button" data-action="organization-athlete-account-password-reset" ${account.loginActive && !pending ? "" : "disabled"} title="${account.loginActive ? "Email this account a password reset link" : "This login is disabled"}">Send password reset</button>
       </div>
     </section>
@@ -1653,9 +1693,9 @@ function renderOrganizationRowV2(row, type, { isPlatformAdmin = false } = {}) {
     <article class="organization-row" ${isAthlete ? athleteFilterAttrs(row, "settings-athletes") : ""}>
       ${renderOrganizationRowContent(row, type)}
       <span class="organization-row-actions">
-        ${isAthlete ? renderAthleteLoginToggle(row) : ""}
+        ${isAthlete ? renderAthleteLoginStatus(row) : ""}
         ${isAthlete ? inviteTriggerHtml(row) : ""}
-        ${isAthlete && isPlatformAdmin && row.user_id ? `<button class="plain-button compact-button" type="button" data-action="organization-athlete-account-open" data-athlete-id="${escapeAttr(row.id)}" data-user-id="${escapeAttr(row.user_id)}">Account</button>` : ""}
+        ${isAthlete ? athleteAccountButtonHtml(row, isPlatformAdmin) : ""}
         ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
         ${isAthlete
           ? renderAthleteArchiveActions(row, isPlatformAdmin)
