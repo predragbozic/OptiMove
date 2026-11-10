@@ -22904,6 +22904,22 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 
 /* J20-B: "Leave out" on a row of the session review, and the subset approval. A 44 px target; the label stays beside the box. */
 .gpexe-leave-out-cell { white-space: nowrap; }
+.gpexe-state-choice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-weight: 600;
+}
+.gpexe-state-choice .gpexe-select {
+  width: 100%;
+  max-width: 22rem;
+  font-weight: 400;
+}
+.gpexe-states-outcome {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
 .gpexe-leave-out {
   display: inline-flex;
   align-items: center;

@@ -1,0 +1,283 @@
+// J20-C part b (docs/ai/j20-session-review-contract.md section 5.2): the attendance states chosen on the Session review's rows,
+// saved right after a confirmed import through POST …/approvals/:approvalId/states. Driven through handleTrainingLoadAction with a
+// fake fetch, like the other Imports suites.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+let confirmAnswer = true;
+let confirmAsked = [];
+globalThis.document = {
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  body: { classList: { contains: () => false } },
+};
+globalThis.window = { confirm: (q) => { confirmAsked.push(q); return confirmAnswer; }, matchMedia: () => ({ matches: false }) };
+const store = new Map();
+globalThis.sessionStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => { store.set(k, String(v)); },
+  removeItem: (k) => { store.delete(k); },
+};
+
+let fetchCalls;
+let responder;
+globalThis.fetch = async (url, options = {}) => {
+  const call = { url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : undefined };
+  fetchCalls.push(call);
+  const result = await responder(call);
+  if (result.throws) throw new TypeError("network");
+  return { ok: result.status < 300, status: result.status, statusText: "", json: async () => { if (result.body === undefined) throw new Error("no json"); return result.body; } };
+};
+
+const { handleTrainingLoadAction } = await import("../training-load-actions.js");
+const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
+const { emptyTrainingLoadState, state } = await import("../state.js");
+const { clearAllViewCache } = await import("../view-cache.js");
+const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+
+setGpexePollDelayForTests(() => Promise.resolve());
+
+const TEAM_A = "aaaaaaaa-0000-4000-8000-000000000001";
+const HASH = "a".repeat(64);
+const APPROVAL = "abababab-0000-4000-8000-000000000001";
+const ACTIVITY = "acacacac-0000-4000-8000-000000000001";
+const A1 = "a1a1a1a1-0000-4000-8000-000000000001";
+const A2 = "a2a2a2a2-0000-4000-8000-000000000002";
+const A3 = "a3a3a3a3-0000-4000-8000-000000000003";
+const NOREC1 = "b1b1b1b1-0000-4000-8000-000000000001";
+const NOREC2 = "b2b2b2b2-0000-4000-8000-000000000002";
+const ATHLETES = [["101", A1, "Ana Example"], ["102", A2, "Bea Example"], ["103", A3, "Cy Example"]];
+const NAMES = { [NOREC1]: "Dee <b>Example</b>", [NOREC2]: "Eve Example" };
+const REASONS = [{ key: "illness", label: "Illness" }, { key: "other", label: "Other <x>" }];
+const ORG = {
+  teams: [{ id: TEAM_A, name: "First Team", club_name: "Club" }],
+  clubs: [],
+  athletes: [...ATHLETES.map(([, id, name]) => ({ id, name, memberships: [{ teamId: TEAM_A, membershipType: "team", status: "active" }] })),
+    ...Object.entries(NAMES).map(([id, name]) => ({ id, name, memberships: [{ teamId: TEAM_A, membershipType: "team", status: "active" }] }))],
+};
+
+const render = () => {};
+function resetState() {
+  clearAllViewCache();
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "team", scopeId: TEAM_A } };
+  state.trainingLoad = emptyTrainingLoadState();
+  fetchCalls = [];
+  confirmAsked = [];
+  confirmAnswer = true;
+}
+function status({ canApprove = true } = {}) {
+  return { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "" }, lastCheck: null,
+    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false }, approvalAvailable: true };
+}
+function row(overrides = {}) {
+  return {
+    id: "cand-1", gpexeTeamSessionId: "9977001", label: "FULL TRAINING 05.10.", sessionStartedAt: "2026-10-05T16:08:12Z",
+    status: "pending", previewStatus: "ready", previewHash: HASH, counts: { created: 3, athletesNotImported: 0 }, changesToImported: 0,
+    firstSeenAt: "2026-10-05T18:00:00Z", lastSeenAt: "2026-10-06T18:00:00Z", importedAt: null, supersededByCandidateId: null, supersededByCheckId: null,
+    snapshot: { available: true, expiresAt: "2026-11-05T00:00:00Z" }, approvalBlockers: [], blockedCode: null, blockedSourceCode: null, sessionType: "FULL TRAINING", reasons: [], ...overrides,
+  };
+}
+function athleteEntry([gid, aid]) {
+  return { gpexeAthleteId: gid, athleteId: aid, participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null }, notImported: null, blocksSession: false,
+    results: [{ externalId: `athlete_session:${gid}:full`, level: "full", drillIndex: null, outcome: "created", values: [{ metricDefinitionId: "def-distance", variableScope: "system", label: "Distance", unit: "m", value: "3000", sourceMetricKey: "athlete_session.total_distance", sourceValue: "3000", sourceUnit: "m", previous: null, change: "new" }] }], skippedValues: [] };
+}
+function previewOf(leftOut = []) {
+  return { version: 3, status: "ready", blocked: null, counts: { created: 3, changesToImported: 0 }, changesToImported: [],
+    athletes: ATHLETES.map((a) => (leftOut.includes(a[0]) ? { ...athleteEntry(a), notImported: { code: "left_out_by_coach", message: "" }, results: [] } : athleteEntry(a))),
+    teamAthletesWithoutGpexeRecord: [{ athleteId: NOREC1 }, { athleteId: NOREC2 }], anomalies: [] };
+}
+let approvalRecord = null;
+function detailOf(c) {
+  const names = { ...Object.fromEntries(ATHLETES.map(([, aid, name]) => [aid, { name }])), ...Object.fromEntries(Object.entries(NAMES).map(([id, name]) => [id, { name }])) };
+  return { ...c, athletes: names, approval: approvalRecord, preview: previewOf(approvalRecord?.excludedAthleteIds || []), helperValues: {} };
+}
+const approvalView = (ids = []) => ({ id: APPROVAL, candidateId: "cand-1", excludedAthleteIds: ids, subsetHash: null, import: { eventId: "ev-1", activityId: ACTIVITY, counts: {} } });
+const imported = (ids = []) => ({ status: 200, body: { outcome: "imported", commitConfirmation: "confirmed", approval: { id: APPROVAL, excludedAthleteIds: ids }, import: { activityId: ACTIVITY, counts: { results: 3, values: 3 } } } });
+
+function server({ canApprove = true, candidate = row(), onApprove, onStates, roster, onSubset } = {}) {
+  return async (call) => {
+    if (call.url === "/api/organization") return { status: 200, body: ORG };
+    if (call.url === `/api/training-activity/${ACTIVITY}/roster`) {
+      return { status: 200, body: { athletes: (roster || [NOREC1, NOREC2, A1, A2, A3]).map((id) => ({ athleteId: id, group: [A1, A2, A3].includes(id) ? "done" : "needs_state" })) } };
+    }
+    const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
+    if (!m) return { status: 404, body: { error: "notFound" } };
+    const [, , rest] = m;
+    if (rest === "/status") return { status: 200, body: status({ canApprove }) };
+    if (rest === "/source-athletes") return { status: 200, body: { athletes: [], units: {}, lastSeenRule: "" } };
+    if (rest === "/athlete-links" && call.method === "GET") return { status: 200, body: { links: [] } };
+    if (rest === "/candidates") return { status: 200, body: { candidates: [candidate] } };
+    if (rest === `/approvals/${APPROVAL}/states`) return onStates(call);
+    if (rest === `/approvals/${APPROVAL}`) return { status: 200, body: { approval: approvalView() } };
+    const sub = rest.match(/^\/candidates\/([^/]+)\/preview$/);
+    if (sub) return onSubset(call);
+    const approve = rest.match(/^\/candidates\/([^/]+)\/approve$/);
+    if (approve) return onApprove(call);
+    const detail = rest.match(/^\/candidates\/([^/?]+)$/);
+    if (detail) return { status: 200, body: { candidate: detailOf(candidate), participationReasons: REASONS } };
+    return { status: 404, body: { error: "notFound" } };
+  };
+}
+
+async function act(action, dataset = {}, extra = {}) {
+  await handleTrainingLoadAction({ dataset: { action, ...dataset }, ...extra }, { renderTrainingLoad: render });
+}
+const html = () => renderTrainingLoadCoachHtml();
+const gx = () => state.trainingLoad.gpexe;
+const choose = (athleteId, value) => act("training-load-gpexe-state", { athleteId }, { value });
+const choosers = (page = html()) => [...page.matchAll(/data-action="training-load-gpexe-state" data-athlete-id="([^"]+)"/g)].map((m) => m[1]);
+const statesCalls = () => fetchCalls.filter((c) => c.url.endsWith("/states"));
+const okStates = (call) => ({ status: 200, body: { decisions: call.body.athletes.map((a) => ({ athleteId: a.athleteId })) } });
+async function openReview(opts = {}) {
+  resetState();
+  store.clear();
+  approvalRecord = null;
+  responder = server({ onApprove: async () => imported(), onStates: async (call) => okStates(call), ...opts });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("1. the chooser sits on the rows without a GPEXE record (with the reasons, escaped) and only for a viewer who may approve; nothing is sent before the import", async () => {
+  await openReview();
+  assert.deepEqual(choosers().sort(), [NOREC1, NOREC2].sort());
+  const page = html();
+  assert.match(page, /Participated · no device data/);
+  assert.match(page, /Did not participate · Illness/);
+  assert.match(page, /Did not participate · Other &lt;x&gt;/);
+  assert.doesNotMatch(page, /Other <x>/);
+  assert.match(page, /aria-label="Attendance for Dee &lt;b&gt;Example&lt;\/b&gt;"/);
+  await choose(NOREC1, "participated_no_values");
+  assert.equal(statesCalls().length, 0);
+  await openReview({ canApprove: false });
+  assert.deepEqual(choosers(), []);
+});
+
+test("2. a choice is kept in the browser (ids, kinds and reasons only); the button and the question name the states; the keys exist before the approval is sent", async () => {
+  await openReview({ onApprove: async () => {
+    const saved = JSON.parse([...store.values()][0]);
+    assert.equal(Object.keys(saved.groups).length, 2, "one key per kind + reason, made before the approval");
+    return imported();
+  } });
+  await choose(NOREC1, "participated_no_values");
+  await choose(NOREC2, "did_not_participate:illness");
+  const saved = [...store.values()][0];
+  assert.doesNotMatch(saved, /Example/, "no name is kept");
+  assert.match(html(), /Then saves 2 attendance states\./);
+  await act("training-load-gpexe-approve");
+  assert.match(confirmAsked[0], /Then it saves 2 attendance states\./);
+});
+
+test("3. after the confirmed import: the roster is read, then one request per group with its own key; the result says how many were saved", async () => {
+  await openReview();
+  await choose(NOREC1, "participated_no_values");
+  await choose(NOREC2, "did_not_participate:illness");
+  await act("training-load-gpexe-approve");
+  await flush();
+  const calls = statesCalls();
+  assert.equal(calls.length, 2);
+  assert.notEqual(calls[0].body.requestKey, calls[1].body.requestKey);
+  const byKind = Object.fromEntries(calls.map((c) => [c.body.kind, c.body]));
+  assert.deepEqual(byKind.participated_no_values.athletes, [{ athleteId: NOREC1, expectedDecisionId: null }]);
+  assert.equal(byKind.participated_no_values.reasonKey, undefined);
+  assert.deepEqual(byKind.did_not_participate.athletes, [{ athleteId: NOREC2, expectedDecisionId: null }]);
+  assert.equal(byKind.did_not_participate.reasonKey, "illness");
+  const rosterRead = fetchCalls.findIndex((c) => c.url.endsWith("/roster"));
+  assert.ok(rosterRead >= 0 && rosterRead < fetchCalls.indexOf(calls[0]), "the roster is read first");
+  assert.match(html(), /2 attendance states saved\./);
+});
+
+test("4. an athlete who got a state in the Roster tab meanwhile is not sent (never overwritten) and is named as kept", async () => {
+  await openReview({ roster: [NOREC2] });
+  await choose(NOREC1, "participated_no_values");
+  await choose(NOREC2, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.deepEqual(statesCalls()[0].body.athletes, [{ athleteId: NOREC2, expectedDecisionId: null }]);
+  assert.match(html(), /1 athlete already had a state from the Roster tab; it was kept\./);
+});
+
+test("5. a lost states answer: never 'not saved'; Check the result repeats exactly the same request with the same key", async () => {
+  let n = 0;
+  await openReview({ onStates: async (call) => (++n === 1 ? { throws: true } : okStates(call)) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.match(html(), /We can&#039;t tell yet whether 1 attendance state was saved\. The import itself is done\./);
+  assert.doesNotMatch(html(), /not saved:/);
+  await act("training-load-gpexe-states-check");
+  const calls = statesCalls();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body, calls[0].body);
+  assert.match(html(), /1 attendance state saved\./);
+});
+
+test("6. a refusal the server answered (the attendance changed): not saved; Save them again reads the roster again and sends with the same key", async () => {
+  let n = 0;
+  await openReview({ onStates: async (call) => (++n === 1 ? { status: 409, body: { error: "bulk_conflict", message: "", failed: [] } } : okStates(call)) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.match(html(), /1 attendance state was not saved: the attendance changed meanwhile\. Nothing else changed; the import is done\./);
+  const rosterReads = () => fetchCalls.filter((c) => c.url.endsWith("/roster")).length;
+  const before = rosterReads();
+  await act("training-load-gpexe-states-again");
+  assert.equal(rosterReads(), before + 1);
+  const calls = statesCalls();
+  assert.equal(calls[1].body.requestKey, calls[0].body.requestKey, "a refused request wrote nothing: its key stays");
+  assert.match(html(), /1 attendance state saved\./);
+});
+
+test("7. after the window (or an undo): not saved with the import, set them in the Roster tab; no retry is offered", async () => {
+  await openReview({ onStates: async () => ({ status: 409, body: { error: "import_states_window_closed", message: "" } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  const page = html();
+  assert.match(page, /1 attendance state was not saved with the import\. Set it in the session&#039;s Roster tab\./);
+  assert.doesNotMatch(page, /training-load-gpexe-states-again|training-load-gpexe-states-check/);
+});
+
+test("8. an import whose answer was lost: no state is sent until Check the result confirms the import; then they follow with the recorded approval", async () => {
+  let candidateNow = row();
+  await openReview({ onApprove: async () => ({ status: 503, body: { error: "import_outcome_unknown", verify: { approvalId: APPROVAL, candidateId: "cand-1" } } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 0);
+  approvalRecord = approvalView();
+  candidateNow = { ...row(), status: "imported" };
+  responder = server({ candidate: candidateNow, onStates: async (call) => okStates(call) });
+  await act("training-load-gpexe-verify");
+  await flush();
+  assert.equal(statesCalls().length, 1);
+  assert.ok(statesCalls()[0].url.includes(`/approvals/${APPROVAL}/states`));
+});
+
+test("9. a reload: the choice and its key survive; a reopened imported session shows the states not saved yet with Save them", async () => {
+  await openReview({ onApprove: async () => ({ status: 200, body: { outcome: "imported", approval: { id: APPROVAL }, import: { counts: {} } } }) });
+  await choose(NOREC1, "participated_no_values");
+  await act("training-load-gpexe-approve");
+  await flush();
+  assert.equal(statesCalls().length, 0, "no activity in the answer: nothing sent");
+  const kept = [...store.entries()];
+  // A reload: new state, the same browser storage.
+  resetState();
+  for (const [k, v] of kept) store.set(k, v);
+  approvalRecord = approvalView();
+  responder = server({ candidate: { ...row(), status: "imported" }, onStates: async (call) => okStates(call) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.match(html(), /1 attendance state is not saved yet\./);
+  await act("training-load-gpexe-states-check");
+  assert.equal(statesCalls().length, 1);
+  assert.equal(statesCalls()[0].body.requestKey, JSON.parse(kept[0][1]).groups["participated_no_values|"].requestKey);
+});
+
+test("10. a ticked Leave out row gets a chooser too (the left-out athlete may get a state); untick removes it", async () => {
+  await openReview();
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "102" }, { checked: true });
+  assert.ok(choosers().includes(A2));
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "102" }, { checked: false });
+  assert.ok(!choosers().includes(A2));
+});
