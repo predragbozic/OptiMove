@@ -1688,7 +1688,7 @@ test("Imports: with no team in the workspace there is one sentence and the exist
   assert.ok(!/workspace-toggle/.test(html), "no button that would open nothing");
 });
 
-test("Imports: the Ready header says 'review only' while importing is switched off, and when the viewer may not approve", async () => {
+test("Imports: the main button's notes say 'review only' while importing is switched off, and when the viewer may not approve (U6a: once, under the button)", async () => {
   for (const [teamStatus, phrase] of [
     [{ enabled: false, canApprove: true }, /Review only - importing waits until it is turned on in this environment\./],
     [{ enabled: true, canApprove: false }, /Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
@@ -1697,15 +1697,15 @@ test("Imports: the Ready header says 'review only' while importing is switched o
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
     await openImports();
     const html = renderTrainingLoadCoachHtml();
-    const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
-    assert.match(ready, phrase);
+    const notes = html.slice(html.indexOf('class="imports-daily"'), html.indexOf("</div>", html.indexOf('class="imports-daily"')));
+    assert.match(notes, phrase);
   }
   // A viewer who may approve, with the switch on: no note at all.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true, canApprove: true } } }));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  assert.ok(!/imports-bucket-note/.test(html), "no review-only note for an approver with the switch on");
+  assert.ok(!/Review only -/.test(html), "no review-only note for an approver with the switch on");
 });
 
 test("Imports: the source card shows the source name, the connection, when sessions were found and one button; ids, statuses and the server's sentence stay under Technical details", async () => {
@@ -1764,16 +1764,19 @@ test("Imports: a failed check shows its own code and message beside its status; 
   assert.match(ok, /<dt>Import switch<\/dt>/);
 });
 
-test("Imports: while importing is off, or the viewer may not approve, the next step never says 'import' - it says review", async () => {
+test("Imports: while importing is off, or the viewer may not approve, the screen never says 'import' - it says review, once, under the main button", async () => {
   for (const [teamStatus, phrase] of [
-    [{ enabled: false, canApprove: true }, /Next step: 1 session can be reviewed\. Importing waits until it is turned on in this environment\./],
-    [{ enabled: true, canApprove: false }, /Next step: 1 session can be reviewed\. An approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
+    [{ enabled: false, canApprove: true }, /<div class="imports-daily"[^>]*><p class="muted">Review only - importing waits until it is turned on in this environment\.<\/p>/],
+    [{ enabled: true, canApprove: false }, /<div class="imports-daily"[^>]*><p class="muted">Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\.<\/p>/],
     [{ enabled: true, canApprove: true }, /<h3>Ready to import \(1\)<\/h3>/],
   ]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
     await openImports();
-    assert.match(renderTrainingLoadCoachHtml(), phrase);
+    const page = renderTrainingLoadCoachHtml();
+    assert.match(page, phrase);
+    assert.ok((page.match(/Review only -/g) || []).length <= 1, "the reason is said once");
+    assert.ok(!/class="gpexe-next"/.test(page));
   }
 });
 

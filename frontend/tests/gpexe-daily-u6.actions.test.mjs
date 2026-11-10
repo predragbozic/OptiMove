@@ -223,6 +223,11 @@ test("U6a-1 5: the notes of the main button sit right under it; with a day filte
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { canApprove: false } }, candidates: [ready(1)] }));
   await openImports();
   const ro = html();
-  const reason = ro.match(/<p class="imports-bucket-note">([^<]+)<\/p>/)[1];
-  assert.equal(ro.split(reason).length - 1, 1, "the review-only reason appears once");
+  assert.equal((ro.match(/[Aa]n approver imports these/g) || []).length, 1, "the review-only reason appears once");
+  // A day filter on a day without a ready session never hides the reason (it is read from the whole list).
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { canApprove: false } }, candidates: [ready(1), ready(2, { previewStatus: "blocked", status: "blocked", blockedCode: "mixed_timezones" })] }));
+  await openImports();
+  await act("training-load-gpexe-cal-day", { day: "2026-09-02" });
+  assert.equal((html().match(/[Aa]n approver imports these/g) || []).length, 1, "said once, with the day filtered");
 });

@@ -689,7 +689,7 @@ function findAgainText(list) {
 }
 
 // Why the Ready sessions cannot be imported right now, or "" when they can.
-// The same sentence heads the Ready bucket, so the coach never reads an
+// U6a: said once, under the state bar's main button, so the coach never reads an
 // import instruction that the next screen refuses.
 function reviewOnlyText(status) {
   const sw = status.importSwitch || {};
@@ -718,7 +718,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after ${stale.length === 1 ? "this review was" : "these reviews were"} made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}${ready.length ? ` ${readyText.replace(/^\w/, (ch) => ch.toUpperCase())} now.` : ""}`;
   // U6a: what the state bar, the Link athletes button and the rows below already say is not repeated here.
   else if (unlinkedAthletes || attention) text = "";
-  else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
+  // The review-only reason is said once, under the main button (renderDailyStripHtml).
   else if (ready.length) text = "";
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   // A failed search is not "nothing found": its reason is in the box above.
@@ -751,7 +751,6 @@ function renderBucketsHtml(gx, status) {
   const out = of("out");
   const imported = of("imported");
   const replaced = list.filter((c) => isHiddenVersion(c, gx));
-  const readyNote = reviewOnlyText(status);
   const pickable = batchAllowed(gx);
   // v33: a withdrawn session is listed only under "Show replaced or no longer
   // found versions" - while the versions are folded away the server lists no
@@ -767,7 +766,6 @@ function renderBucketsHtml(gx, status) {
     ` : ""}
     <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
       <div class="gpexe-panel-head"><h3>Ready to import (${ready.length})</h3></div>
-      ${readyNote && ready.length ? `<p class="imports-bucket-note">${escapeHtml(readyNote)}</p>` : ""}
       ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
       ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
       ${renderSelectBarHtml(gx, ready)}
@@ -874,6 +872,8 @@ function renderDailyStripHtml(gx, ready, status = gx.status) {
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
   if (gx.calendar?.day && d.n) notes.push(`${d.label} takes ready sessions of every date, not only of the day you picked.`);
+  // U6a: the one place the review-only reason is said, from the whole list (a day filter never hides it).
+  if (d.reviewOnly) notes.push(d.reviewOnly);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
 }

@@ -960,6 +960,6 @@ test("J19 U1: a ready session that cannot be chosen is named under the button; r
   await openImports();
   const page = html();
   assert.ok(!/training-load-gpexe-import-ready/.test(page));
-  assert.match(page, /<p class="imports-bucket-note">Review only/, "U6a: the review-only reason is said once, under Ready to import");
-  assert.ok(!/class="imports-daily"/.test(page), "and not repeated under the bar");
+  assert.match(page.slice(page.indexOf("imports-daily"), page.indexOf("imports-daily") + 900), /Review only/, "U6a: the review-only reason is said once, under the main button");
+  assert.equal((page.match(/Review only -/g) || []).length, 1, "and nowhere else");
 });
