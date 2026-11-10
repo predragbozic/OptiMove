@@ -574,6 +574,8 @@ test("19. static: the router sends no unprojected subset preview to the client (
 const RUNBOOK = (name) => new URL(`../../docs/runbooks/${name}`, import.meta.url);
 const V59 = "migrations_v2/202611091100_training_load_v59_import_approval_subset.sql";
 const WITHOUT_V59 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v59")));
+// v59 is no longer the last migration (v60 follows); its own checks run on a database that ends at v59.
+const UP_TO_V59 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v59")) + 1);
 async function booleansOf(client, sql) {
   const out = [];
   for (const res of [].concat(await client.query(sql))) for (const row of res.rows) for (const [k, v] of Object.entries(row)) if (typeof v === "boolean") out.push([k, v]);
@@ -598,7 +600,7 @@ test("13. migration v59: the preflight passes on v57+, the post-check on v59, th
     assert.ok(pre.length >= 12, `the preflight returned its booleans (${pre.length})`);
     assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v59");
     const before = await catalogOf(client);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UP_TO_V59);
     const post = await booleansOf(client, fs.readFileSync(RUNBOOK("import-approval-subset-v59-postcheck.sql"), "utf8"));
     assert.ok(post.length >= 8, `the post-check returned its booleans (${post.length})`);
     assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok on a v59 database");
@@ -610,7 +612,7 @@ test("13. migration v59: the preflight passes on v57+, the post-check on v59, th
     await client.query(fs.readFileSync(RUNBOOK("import-approval-subset-v59-rollback.sql"), "utf8"));
     assert.deepEqual(await catalogOf(client), before, "the rollback restores the earlier catalog exactly");
     assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V59])).rows[0].n, 0);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UP_TO_V59);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
   } finally {
     await client.end();
@@ -627,6 +629,9 @@ test("14. the rollback refuses, changing nothing, once a subset approval exists,
   const before = await catalogOf(admin);
   const c2 = new pg.Client({ connectionString: db.url });
   await c2.connect();
+  // The later migrations (v60) are hidden for this test, which is about v59's own refusals, and put back at the end.
+  await c2.query(`create temp table j20b_saved_migrations as select * from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > '${V59}'`);
+  await c2.query(`delete from public.schema_migrations where migration_name in (select migration_name from j20b_saved_migrations)`);
   try {
     await assert.rejects(c2.query(rollback), /v59 rollback refused: a subset approval exists/);
     await c2.query("rollback").catch(() => {});
@@ -639,6 +644,7 @@ test("14. the rollback refuses, changing nothing, once a subset approval exists,
     await assert.rejects(c2.query(rollback), /is not v59's/);
     await c2.query("rollback");
   } finally {
+    await c2.query(`insert into public.schema_migrations select * from j20b_saved_migrations`).catch(() => {});
     await c2.end();
   }
   assert.deepEqual(await catalogOf(admin), before, "nothing changed");
@@ -651,7 +657,7 @@ test("15. the md5 gate: the migration refuses to run when the trigger function i
   await client.connect();
   try {
     await client.query(`create or replace function training_load.validate_gpexe_import_approval() returns trigger as 'begin return new; end' language plpgsql`);
-    await assert.rejects(applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS), /ABORT while applying .*v59_import_approval_subset.*SQLSTATE 23514/);
+    await assert.rejects(applyGpexeTestMigrations(rb.url, UP_TO_V59), /ABORT while applying .*v59_import_approval_subset.*SQLSTATE 23514/);
     assert.equal((await client.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [V59])).rows[0].n, 0);
     assert.equal((await client.query(`select count(*)::int n from information_schema.columns where table_name = 'gpexe_import_approvals' and column_name = 'excluded_athlete_ids'`)).rows[0].n, 0, "nothing of v59 was applied");
   } finally {
