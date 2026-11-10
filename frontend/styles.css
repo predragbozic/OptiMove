@@ -24352,3 +24352,87 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     gap: var(--om-space-3);
   }
 }
+
+/* ==========================================================================
+   Design: the Builder's section editor on a computer (B5). On a computer
+   with a mouse the exercise library card's Favourite and Mark were 24 px
+   boxes, Tags an 11 px word 14 px tall and Add 34 px. Phones and touch
+   screens already had 44 px (the max-width 760 and pointer: coarse rules
+   above). Now each of them is a 44 px target on a computer too. Favourite
+   and Mark keep a small frame (28 px, drawn by ::before) inside their 44 px
+   button, so a library row grows only a little. The card keeps draggable
+   and every data-* (no markup change).
+   ========================================================================== */
+@media (pointer: fine) and (min-width: 761px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-exercise-mini-actions {
+    gap: 0;
+    margin-top: 0;
+    margin-left: calc(var(--om-space-2) * -1);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle {
+    position: relative;
+    width: var(--om-tap-target);
+    height: var(--om-tap-target);
+    min-width: var(--om-tap-target);
+    min-height: var(--om-tap-target);
+    border-color: transparent;
+    background: transparent;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle::before {
+    content: "";
+    position: absolute;
+    inset: 7px; /* inside the button's 1 px border: a 28 px frame */
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle .builder-icon-svg {
+    position: relative;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle:hover::before {
+    border-color: var(--line-strong);
+    background: var(--surface-soft);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-mini-toggle:focus-visible::before {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-exercise-mini-actions .text-action {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-2);
+    font-size: var(--om-text-sm);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-exercise-view .builder-exercise-add {
+    min-height: var(--om-tap-target);
+    padding: 0 var(--om-space-3);
+    font-size: var(--om-text-sm);
+  }
+
+  /* A short window keeps the compact tile (the max-height 520 rules above):
+     its Add is a 22 px "+" and its row sits inside the card. */
+  @media (max-height: 520px) {
+    body:not(.athlete-mode):not(.login-mode) .builder-exercise-view.is-tile .builder-exercise-add {
+      padding: 0;
+      font-size: 22px;
+    }
+
+    body:not(.athlete-mode):not(.login-mode) .builder-exercise-view.is-tile .builder-exercise-mini-actions {
+      margin: var(--om-space-1) 0 0;
+    }
+  }
+}
