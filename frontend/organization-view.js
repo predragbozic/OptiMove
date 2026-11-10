@@ -129,10 +129,8 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
       ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
-        ${renderOrganizationActions(data)}
         ${renderJoinLinksSection(data)}
       ` : `
-        ${renderOrganizationActions(data)}
         ${renderOrganizationBrowser(data)}
         ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
       `}
@@ -145,7 +143,7 @@ const organizationAddFormConfig = {
   teams: (data) => (data.canCreateTeam ? { icon: ICON_ADD_TEAM, label: "Add team", render: () => renderOrganizationTeamForm(data.clubs) } : null),
   athletes: (data) => (data.canCreateAthlete ? { icon: ICON_ADD_ATHLETE, label: "Add athlete", render: () => renderOrganizationAthleteForm(data.clubs, data.teams) } : null),
   users: (data) => (data.canCreateUser || (data.users || []).length
-    ? { icon: ICON_MANAGE_USERS, label: "Add or manage users", render: () => `${data.canCreateUser ? renderOrganizationUserForm() : ""}${renderOrganizationRoleForms(data)}` }
+    ? { icon: ICON_MANAGE_USERS, label: data.canCreateUser ? "Add user" : "Give access", render: () => renderOrganizationUserForms(data) }
     : null),
   // A join link's context comes from the account's own CURRENT active
   // workspace (private_coach/club/team) - there is no platform-wide join
@@ -157,17 +155,63 @@ const organizationAddFormConfig = {
     : null),
 };
 
-export function renderOrganizationActions(data) {
+// S3: a section's add action is a labelled button on its heading's row; the form opens under the heading, in one
+// column, with Cancel and the filled primary in its footer.
+export function renderOrganizationAddToggle(data) {
   const section = state.organization.section || "overview";
   const config = organizationAddFormConfig[section]?.(data);
   if (!config) return "";
   const isOpen = state.organization.addFormOpen;
+  return `<button class="plain-button organization-add-toggle ${isOpen ? "is-open" : "data-sources-primary"}" type="button" data-action="organization-toggle-add-form" aria-expanded="${isOpen}">${config.icon}<span>${escapeHtml(config.label)}</span></button>`;
+}
+
+export function renderOrganizationAddForm(data) {
+  const section = state.organization.section || "overview";
+  const config = organizationAddFormConfig[section]?.(data);
+  if (!config || !state.organization.addFormOpen) return "";
+  return `<section class="organization-actions organization-add-panel" aria-label="${escapeAttr(config.label)}">${config.render()}</section>`;
+}
+
+// The toggle and its open form together (the pieces each section heading places).
+export function renderOrganizationActions(data) {
+  const toggle = renderOrganizationAddToggle(data);
+  if (!toggle) return "";
   return `
     <section class="organization-actions">
-      <button class="plain-button icon-button organization-add-toggle ${isOpen ? "is-open" : ""}" type="button" data-action="organization-toggle-add-form" aria-expanded="${isOpen}" aria-label="${escapeAttr(config.label)}" title="${escapeAttr(config.label)}">${config.icon}</button>
-      ${isOpen ? config.render() : ""}
+      ${toggle}
+      ${state.organization.addFormOpen ? organizationAddFormConfig[state.organization.section || "overview"](data).render() : ""}
     </section>
   `;
+}
+
+// A form's footer: what went wrong, then Cancel and the form's one primary action.
+function organizationFormFooter(submitLabel, disabled = false, { cancel = true } = {}) {
+  return `
+      <p class="builder-error" aria-live="polite"></p>
+      <div class="organization-form-footer">
+        ${cancel ? `<button class="plain-button" type="button" data-action="organization-toggle-add-form">Cancel</button>` : ""}
+        <button class="plain-button data-sources-primary" type="submit"${disabled ? " disabled" : ""}>${escapeHtml(submitLabel)}</button>
+      </div>`;
+}
+
+// Users: one panel with a tab per kind of form (a new account, access for an existing user, an athlete's login)
+// instead of four floating cards.
+function renderOrganizationUserForms(data) {
+  const tabs = [
+    ...(data.canCreateUser ? [["account", "New account"]] : []),
+    ...((data.users || []).length ? [["access", "Give access"], ["athleteLogin", "Athlete login"]] : []),
+  ];
+  if (!tabs.length) return "";
+  const current = tabs.some(([value]) => value === state.organization.userFormTab) ? state.organization.userFormTab : tabs[0][0];
+  // Every tab's forms are drawn, the others hidden: switching tabs keeps what was typed in another one.
+  const bodyOf = (value) => (value === "account" ? renderOrganizationUserForm() : renderOrganizationRoleForms(data, value));
+  return `
+    <div class="panel organization-user-forms">
+      ${tabs.length > 1 ? `<div class="organization-user-form-tabs om-tabs" role="tablist" aria-label="Add or give access">
+        ${tabs.map(([value, label]) => `<button class="om-tab ${value === current ? "is-active" : ""}" type="button" role="tab" id="organization-user-form-tab-${value}" aria-controls="organization-user-form-panel-${value}" aria-selected="${value === current}" data-action="organization-user-form-tab" data-user-form-tab="${value}">${label}</button>`).join("")}
+      </div>` : ""}
+      ${tabs.map(([value]) => `<div id="organization-user-form-panel-${value}" role="${tabs.length > 1 ? "tabpanel" : "group"}" data-user-form-panel="${value}"${tabs.length > 1 ? ` aria-labelledby="organization-user-form-tab-${value}"` : ""}${value === current ? "" : " hidden"}>${bodyOf(value)}</div>`).join("")}
+    </div>`;
 }
 
 function renderOrganizationUserForm() {
@@ -179,13 +223,12 @@ function renderOrganizationUserForm() {
   ];
   return `
     <form class="panel organization-form" data-organization-form="user">
-      <div><p class="eyebrow">Access</p><h3>Add user account</h3></div>
+      <h3>New account</h3>
       <label class="search-field"><span>Full name</span><input name="fullName" placeholder="Name"></label>
       <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
       <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
       <label class="search-field"><span>Role</span><select name="roleHint">${roles.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add user</button>
+${organizationFormFooter("Add user")}
     </form>
   `;
 }
@@ -256,6 +299,19 @@ function archivedMembershipsFor(athletes, { clubId, teamId } = {}) {
   )));
 }
 
+// A Settings section's heading (S2): its title, its count and its actions on one row.
+function renderSectionHead(title, count, actions = "", eyebrow = "") {
+  return `
+      <div class="organization-browser-head">
+        <div>
+          ${eyebrow ? `<p class="eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
+          <h2 class="organization-section-title">${escapeHtml(title)}</h2>
+          <p class="muted">${escapeHtml(count)}</p>
+        </div>
+        ${actions.trim() ? `<div class="organization-browser-actions">${actions}</div>` : ""}
+      </div>`;
+}
+
 export function renderOrganizationBrowser(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
@@ -291,15 +347,9 @@ export function renderOrganizationBrowser(data) {
   // Overview is the summary that links to them. A selected club or team still opens its detail (its teams, its roster).
   const coach = isCoachSettings();
   const showAll = state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : "";
-  const head = (title, count, actions = "", eyebrow = "") => `
-      <div class="organization-browser-head">
-        <div>
-          ${eyebrow ? `<p class="eyebrow">${escapeHtml(eyebrow)}</p>` : ""}
-          <h2 class="organization-section-title">${escapeHtml(title)}</h2>
-          <p class="muted">${escapeHtml(count)}</p>
-        </div>
-        ${actions.trim() ? `<div class="organization-browser-actions">${actions}</div>` : ""}
-      </div>`;
+  const addToggle = renderOrganizationAddToggle(data);
+  const addForm = renderOrganizationAddForm(data);
+  const head = (title, count, actions = "", eyebrow = "") => `${renderSectionHead(title, count, `${actions}${addToggle}`, eyebrow)}${addForm}`;
   const athletesBlock = () => (selectedTeam
     ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
     : selectedClub
@@ -339,7 +389,7 @@ export function renderOrganizationBrowser(data) {
     // Athletes (the coach's only list): the whole list, or the selected club's or team's roster.
     const access = section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : "";
     const archived = section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : "";
-    body = `${head(coach ? "Athletes" : selectedTeam ? `Athletes - ${selectedTeam.name}` : selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", coach ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`, `${access}${archived}${coach ? "" : showAll}`)}
+    body = `${head(coach ? "Athletes" : selectedTeam ? `Athletes - ${selectedTeam.name}` : selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", coach ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(activeAthletes.length, "athlete"), `${access}${archived}${coach ? "" : showAll}`)}
       <section class="organization-lists organization-lists-browser">${athletesBlock()}</section>`;
   }
   return `
@@ -1044,12 +1094,11 @@ function renderAthleteInviteModal(athletes) {
 function renderJoinLinkCreateFormHtml() {
   return `
     <form class="panel organization-form" data-organization-form="joinLink">
-      <div><p class="eyebrow">Join link</p><h3>Create join link</h3></div>
+      <h3>Create join link</h3>
       <label class="search-field"><span>Label</span><input name="label" placeholder="e.g. Fall tryouts"></label>
       <label class="search-field"><span>Expires in (days)</span><input name="expiresInDays" type="number" min="1" max="30" value="7" required></label>
       <label class="search-field"><span>Max members (optional)</span><input name="maxUses" type="number" min="1" max="500" placeholder="Unlimited"></label>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${state.organizationJoinLinks.pending ? "disabled" : ""}>Create join link</button>
+${organizationFormFooter("Create join link", state.organizationJoinLinks.pending)}
     </form>
   `;
 }
@@ -1119,9 +1168,11 @@ function renderJoinLinksSection(data) {
   const applications = data.joinApplications || [];
   const pendingCount = applications.filter((app) => app.status === "pending").length;
   return `
+    <section class="organization-join-links">
+    ${renderSectionHead("Join links", `${countLabel(links.length, "join link")} - ${pendingCount} pending ${pendingCount === 1 ? "request" : "requests"}`, renderOrganizationAddToggle(data))}
+    ${renderOrganizationAddForm(data)}
     <section class="organization-lists organization-lists-browser">
-      <section class="panel organization-list-card">
-        <div class="organization-list-head"><p class="eyebrow">Join links</p><strong>${links.length}</strong></div>
+      <section class="panel organization-list-card" aria-label="Join links">
         <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationJoinLinks.error || "")}</p>
         <div class="organization-list">
           ${links.length ? links.map(renderJoinLinkRow).join("") : `<p class="muted">No join links yet.</p>`}
@@ -1134,13 +1185,14 @@ function renderJoinLinksSection(data) {
         </div>
       </section>
     </section>
+    </section>
   `;
 }
 
 function renderOrganizationClubForm() {
   return `
     <form class="panel organization-form" data-organization-form="club">
-      <div><p class="eyebrow">Platform</p><h3>Add club</h3></div>
+      <h3>Add club</h3>
       <label class="search-field"><span>Club name</span><input name="name" required placeholder="e.g. FK Borac"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. Borac"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" placeholder="https://..."></label>
@@ -1148,8 +1200,7 @@ function renderOrganizationClubForm() {
         <label class="search-field"><span>City</span><input name="city"></label>
         <label class="search-field"><span>Country</span><input name="country"></label>
       </div>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add club</button>
+${organizationFormFooter("Add club")}
     </form>
   `;
 }
@@ -1158,13 +1209,12 @@ function renderOrganizationTeamForm(clubs) {
   const clubOptions = clubs.map((club) => ({ value: club.id, label: club.name }));
   return `
     <form class="panel organization-form" data-organization-form="team">
-      <div><p class="eyebrow">Club</p><h3>Add team</h3></div>
+      <h3>Add team</h3>
       ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, required: true, placeholder: "Type club name" })}
       <label class="search-field"><span>Team name</span><input name="name" required placeholder="e.g. First team"></label>
       <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. U19"></label>
       <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" placeholder="https://..."></label>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${clubs.length ? "" : "disabled"}>Add team</button>
+${organizationFormFooter("Add team", !clubs.length)}
     </form>
   `;
 }
@@ -1174,7 +1224,7 @@ function renderOrganizationAthleteForm(clubs, teams) {
   const teamOptions = teams.map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
   return `
     <form class="panel organization-form" data-organization-form="athlete">
-      <div><p class="eyebrow">Athletes</p><h3>Add athlete</h3></div>
+      <h3>Add athlete</h3>
       <label class="search-field"><span>Athlete name</span><input name="fullName" required placeholder="First and last name"></label>
       <label class="search-field"><span>External ID</span><input name="athleteId" placeholder="Optional old ID"></label>
       <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
@@ -1182,43 +1232,40 @@ function renderOrganizationAthleteForm(clubs, teams) {
         ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, placeholder: "Type club name", includeEmpty: "No club", extraSelectAttrs: "data-organization-club-select" })}
         ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, placeholder: "Type team name", includeEmpty: "No team", extraSelectAttrs: "data-organization-team-select" })}
       </div>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add athlete</button>
+${organizationFormFooter("Add athlete")}
     </form>
   `;
 }
 
-function renderOrganizationRoleForms(data) {
+function renderOrganizationRoleForms(data, tab = "") {
   const users = data.users || [];
   if (!users.length) return "";
   const userOptions = users.map((user) => ({ value: user.id, label: `${user.name || user.email}${user.email ? ` - ${user.email}` : ""}` }));
   const clubOptions = (data.clubs || []).map((club) => ({ value: club.id, label: club.name }));
   const teamOptions = (data.teams || []).map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
   const athleteOptions = (data.athletes || []).filter((athlete) => athlete.is_active !== false).map((athlete) => ({ value: athlete.id, label: `${athlete.name}${athlete.athlete_id ? ` - ID ${athlete.athlete_id}` : ""}` }));
-  return `
+  const access = `
     <form class="panel organization-form" data-organization-form="clubRole">
       <div><p class="eyebrow">Club access</p><h3>Assign club admin</h3></div>
       ${renderFilterableSelect({ name: "userId", label: "User", options: userOptions, required: true, placeholder: "Type user name or email" })}
       ${renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, required: true, placeholder: "Type club name" })}
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${(data.clubs || []).length ? "" : "disabled"}>Assign club</button>
+${organizationFormFooter("Assign club", !(data.clubs || []).length, { cancel: false })}
     </form>
     <form class="panel organization-form" data-organization-form="teamRole">
       <div><p class="eyebrow">Team access</p><h3>Assign team coach</h3></div>
       ${renderFilterableSelect({ name: "userId", label: "User", options: userOptions, required: true, placeholder: "Type user name or email" })}
       ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, required: true, placeholder: "Type team name" })}
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${(data.teams || []).length ? "" : "disabled"}>Assign team</button>
-    </form>
+${organizationFormFooter("Assign team", !(data.teams || []).length)}
+    </form>`;
+  const athleteLogin = `
     <form class="panel organization-form" data-organization-form="athleteLogin">
       <div><p class="eyebrow">Athlete app</p><h3>Manual athlete login</h3><p class="muted">For normal onboarding, use Invite on the athlete row so the athlete sets their own password.</p></div>
       ${renderFilterableSelect({ name: "athleteId", label: "Athlete", options: athleteOptions, required: true, placeholder: "Type athlete name or ID" })}
       <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
       <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${athleteOptions.length ? "" : "disabled"}>Create login</button>
-    </form>
-  `;
+${organizationFormFooter("Create login", !athleteOptions.length)}
+    </form>`;
+  return tab === "access" ? access : tab === "athleteLogin" ? athleteLogin : `${access}${athleteLogin}`;
 }
 
 // Independent/private coach is intentionally never called "global" in the

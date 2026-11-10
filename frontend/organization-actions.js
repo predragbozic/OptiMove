@@ -325,6 +325,24 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  // S3: the Users add panel's tabs (New account, Give access, Athlete login).
+  if (type === "organization-user-form-tab") {
+    const tab = action.dataset.userFormTab || "";
+    state.organization.userFormTab = tab;
+    // Switch in place (no repaint), so what was typed in another tab is kept.
+    const forms = typeof action.closest === "function" ? action.closest(".organization-user-forms") : null;
+    if (forms) {
+      for (const button of forms.querySelectorAll("[data-user-form-tab]")) {
+        const on = button.dataset.userFormTab === tab;
+        button.classList.toggle("is-active", on);
+        button.setAttribute("aria-selected", String(on));
+      }
+      for (const panel of forms.querySelectorAll("[data-user-form-panel]")) panel.hidden = panel.dataset.userFormPanel !== tab;
+    } else {
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
   if (type === "organization-toggle-add-form") {
     state.organization.addFormOpen = !state.organization.addFormOpen;
     void renderOrganizationPanel({ refresh: false });
