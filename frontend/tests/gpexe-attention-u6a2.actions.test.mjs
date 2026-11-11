@@ -462,7 +462,9 @@ test("15. a stale review asks for no search until updating it failed", async () 
 
 test("16. with nothing ready, the first group's button is the one main action when it is a step the person can take now; otherwise the search or Import N ready stays the main one", async () => {
   const primaries = (page) => (page.match(/class="primary-button gpexe-button"/g) || []).length;
-  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], false], [[notConfirmed(5)], false], [[blocked(2)], false]]) {
+  // IMP1: the Import button lives in the Ready tab, so on the Needs you tab a step the person can take now leads even
+  // when sessions are ready ([ready(1), unlinked(4)] used to keep "Import N ready" as the main action of one screen).
+  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], true], [[notConfirmed(5)], false], [[blocked(2)], false]]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
     await openImports();

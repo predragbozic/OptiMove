@@ -494,14 +494,6 @@ function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   `;
 }
 
-// U6a-2 (D4): "Ready: N" and "Needs you: N", from the whole list (a day picked in the calendar does not change them).
-function renderCountPillsHtml(gx) {
-  const list = gx.candidates || [];
-  const ready = list.filter((c) => inboxBucket(c, gx) === "ready").length;
-  const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
-  return `<span class="imports-pill is-ready">Ready: ${ready}</span>${needs ? `<span class="imports-pill is-needs">Needs you: ${needs}</span>` : ""}`;
-}
-
 // IMP1 (the "GPS Import Flow" sketch): the banner on top - what the last search found and ONE main button. Dates stay a
 // small fold beside it (the search reads them from there); every other fact of the source lives in the Search tab.
 function shortWhen(value) {
@@ -855,7 +847,11 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     // U6a-2: the groups cover the whole list, like the counts; the day filter narrows the other tabs only.
     const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
     const groups = attentionGroups(allAttention, gx);
+    // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
+    const readyCount = all.filter((c) => inboxBucket(c, gx) === "ready").length;
+    const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
     return `
+      ${readyHint}
       ${renderCalendarHtml(gx)}
       ${allAttention.length ? `
         <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
@@ -880,7 +876,7 @@ function renderBucketsHtml(gx, status, tab = "ready") {
         ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
         ${daily.n ? `<div class="imports-import-row"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button></div>` : ""}
         ${renderDailyStripHtml(gx, daily.ready, status)}
-        ${pickable && ready.some((c) => batchSelectable(c, gx)) ? `
+        ${pickable && (ready.some((c) => batchSelectable(c, gx)) || Object.keys(gx.batch?.selected || {}).length > 0) ? `
           <details class="imports-choose" data-rendered-open="${choosing ? "1" : "0"}" ${choosing ? "open" : ""}>
             <summary>Choose sessions</summary>
             ${renderSelectBarHtml(gx, ready)}
@@ -946,7 +942,8 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
 // state bar's button stays the main one.
 const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
 function groupLeads(gx, status) {
-  if (dailyImportState(gx, status).n) return false;
+  // IMP1: on the Needs you tab the Import button is a tab away, so the first group's step leads there either way.
+  if (dailyImportState(gx, status).n && importsTab(gx) !== "attention") return false;
   const first = attentionGroups((gx.candidates || []).filter((c) => inboxBucket(c, gx) === "attention"), gx)[0];
   return Boolean(first && LEADING_GROUPS.has(first.key));
 }
@@ -978,10 +975,10 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   const badge = isUncertain(c, gx)
     ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>`
     : (kind === "hidden" || (kind === "attention" && notConfirmedForImport(c))) ? badgeHtml(c, gx) : "";
-  // IMP1: the row's end says its state the way the sketch does - "Ready", or the one step of its group (the row itself
-  // opens the session, as the group's button does; nothing new is done here).
-  const rowEnd = kind === "ready" && !badge ? `<span class="imports-row-pill is-ready">Ready</span>`
-    : kind === "attention" && ATTENTION_TEXT[group]?.button ? `<span class="imports-row-action" aria-hidden="true">${escapeHtml(ATTENTION_TEXT[group].button)}</span>` : "";
+  // IMP1: a Ready row ends with a "Ready" pill, as in the sketch. A row that needs the person carries no label of its
+  // own: its group already has the one button and the row its step (a label would say the step a third time, and the
+  // "fresh" group's button starts a search, which the row does not).
+  const rowEnd = kind === "ready" && !badge ? `<span class="imports-row-pill is-ready">Ready</span>` : "";
   let box = "";
   if (pick && batchSelectable(c, gx)) {
     const checked = Object.hasOwn(gx.batch.selected, c.id);

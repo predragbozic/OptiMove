@@ -58,6 +58,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           const a = active.getBoundingClientRect();
           return {
             pill: panel.querySelector(".imports-row-pill")?.textContent.trim(),
+            pillRightGap: Math.round(row.getBoundingClientRect().right - panel.querySelector(".imports-row-pill").getBoundingClientRect().right),
             rowHeight: Math.round(row.getBoundingClientRect().height),
             rowBorder: getComputedStyle(row).borderTopWidth,
             importLabel: panel.querySelector('[data-action="training-load-gpexe-import-ready"]')?.textContent.trim(),
@@ -66,15 +67,20 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           };
         });
         assert.equal(ready.pill, "Ready");
+        assert.ok(ready.pillRightGap <= 2, `the Ready pill sits on the right (${ready.pillRightGap} px from the edge)`);
         assert.ok(ready.rowHeight >= 44, `${ready.rowHeight} px row`);
         assert.equal(ready.rowBorder, "0px", "no frame around a row");
         assert.equal(ready.importLabel, "Import 1 ready session");
         assert.notEqual(ready.importBg, "rgba(0, 0, 0, 0)", "the Import button is filled");
         assert.ok(ready.activeInView, "the active tab is in view");
-        // A search repaints the screen every 2 s: the tab stays.
+        // A search repaints the screen every 2 s: the tab stays, and on a phone the tab row keeps where it was scrolled
+        // (Ready is still in view, so nothing needs to move it).
+        const scrolled = await page.evaluate(() => { const row = document.querySelector(".imports-tabs"); row.scrollLeft = 24; return row.scrollLeft; });
         await page.click('[data-action="training-load-gpexe-check"]');
+        await page.waitForSelector('[data-action="training-load-gpexe-check"][disabled]', { timeout: 20_000 }).catch(() => {});
         await page.waitForSelector('[data-action="training-load-gpexe-check"]:not([disabled])', { timeout: 60_000 });
         assert.equal(await page.locator('.imports-tab-panel[data-imports-tab="ready"]').count(), 1, "still on Ready after the search");
+        if (width < 500) assert.equal(await page.evaluate(() => document.querySelector(".imports-tabs").scrollLeft), scrolled, "the tab row kept its place");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
         assert.deepEqual(pageErrors, []);
       } finally { await context.close(); }

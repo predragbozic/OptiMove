@@ -565,6 +565,8 @@ function bindEvents() {
     if (choose) {
       importsChooseToggled(panel.open);
       renderTrainingLoad();
+      // The repaint drew a new fold: the keyboard keeps its place on it.
+      els.content.querySelector(".imports-choose > summary")?.focus({ preventScroll: true });
       return;
     }
     if (settings) importSettingsToggled(panel.open);
@@ -2537,12 +2539,21 @@ function renderTrainingLoad() {
   // A paint that lands after an await (a read finishing, a section load) must not draw Training Load over the
   // screen the coach went to meanwhile (Back to Home while Training Load was loading drew it under the Home title).
   if (state.activeTab !== "training-load") return;
+  // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
+  // brought into view only when it is not.
+  const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
-  // IMP1: the Imports tab row scrolls sideways on a phone; keep the active tab in view.
-  if (state.trainingLoad.section === "imports") revealActiveTab(els.content);
+  if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
   }
+}
+
+// revealActiveTab scrolls the row only when the active tab is out of view (and marks the fades either way).
+function keepImportsTabRow(left) {
+  const row = els.content.querySelector(".imports-tabs");
+  if (row) row.scrollLeft = left;
+  revealActiveTab(els.content);
 }
 
 // Every training-load-* action can fire from either surface it appears on

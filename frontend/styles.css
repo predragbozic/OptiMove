@@ -25957,17 +25957,13 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel > .gpexe-guide {
 }
 
 /* The sketch's main button: filled. The app has no base .primary-button rule, so outside the guide's and the
-   attention groups' own rules it was drawn as the browser's grey default. Only inside Imports. */
+   attention groups' own rules it was drawn as the browser's grey default. Only inside Imports, and only its colours:
+   the size of every button (the review dialog's sticky bar included) stays as each one's own rule sets it. */
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports .primary-button {
-  min-height: var(--om-tap-target);
-  padding: 10px 18px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-color: var(--accent);
   background: var(--accent);
   color: #fff;
-  font: inherit;
   font-weight: 600;
-  cursor: pointer;
 }
 
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports .primary-button:disabled {
@@ -26016,7 +26012,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-dates > summar
   display: inline-flex;
   align-items: center;
   min-height: var(--om-tap-target);
-  color: var(--muted);
+  color: var(--text);
   font-size: var(--om-text-sm);
   cursor: pointer;
 }
@@ -26090,7 +26086,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 12px;
+  gap: 4px 12px;
   width: 100%;
   min-height: var(--om-tap-target);
   margin: 0;
@@ -26109,10 +26105,16 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate:hov
 
 body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate-main {
   display: flex;
-  flex: 1 1 220px;
+  flex: 1 1 160px;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* The state on the right stays on the right, also when it wraps on a narrow phone. */
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-row-pill,
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate > .gpexe-badge {
+  margin-left: auto;
 }
 
 /* The bold line and the state on the right share the first line; the facts and the step follow, grey and small. */
@@ -26129,7 +26131,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate-fac
 body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-candidate-next {
   order: 3;
   flex: 1 0 100%;
-  margin-top: -6px;
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-row-pill {
@@ -26144,23 +26145,47 @@ body:not(.athlete-mode):not(.login-mode) .imports-row-pill {
   white-space: nowrap;
 }
 
-body:not(.athlete-mode):not(.login-mode) .imports-row-action {
-  display: inline-flex;
-  align-items: center;
-  min-height: 36px;
-  padding: 6px 14px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  color: var(--accent);
-  font-size: var(--om-text-sm);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-pick-row {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-pick-row > .gpexe-candidate {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+/* "Choose sessions" reads as a fold, like the other folds of the screen. */
+body:not(.athlete-mode):not(.login-mode) .imports-choose > summary {
+  list-style: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-choose > summary::-webkit-details-marker {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-choose > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-choose[open] > summary::after {
+  content: "\25BE";
+}
+
+/* What waits in the Ready tab, said once on the Needs you tab. */
+body:not(.athlete-mode):not(.login-mode) .imports-ready-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--om-text-sm);
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-import-row {
@@ -26211,6 +26236,17 @@ body:not(.athlete-mode):not(.login-mode) .imports-search .imports-facts {
   body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel,
   body:not(.athlete-mode):not(.login-mode) .imports-tab-panel > .gpexe-guide {
     padding: 16px;
+  }
+
+  /* The calendar's day buttons need the width more than the card needs its margin. */
+  body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar {
+    padding: 2px 8px;
+  }
+
+  /* The day line wraps on a phone: a rounded box, not a pill that would clip its first letters. */
+  body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-cal-filter {
+    padding-left: 14px;
+    border-radius: 14px;
   }
 }
 /* End of design IMP1. */
