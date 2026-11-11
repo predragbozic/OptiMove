@@ -25525,6 +25525,7 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle {
 
 /* The native checkbox (its handler reads .checked) drawn as a switch. */
 body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input {
+  -webkit-appearance: none;
   appearance: none;
   position: relative;
   flex-shrink: 0;
@@ -25533,7 +25534,7 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input {
   min-height: 0;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--muted);
   border-radius: 999px;
   background: var(--surface);
   cursor: pointer;
@@ -25551,6 +25552,12 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::bef
   transition: left 0.12s ease;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+    transition: none;
+  }
+}
+
 body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked {
   border-color: var(--accent);
   background: var(--accent);
@@ -25561,8 +25568,4 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:chec
   background: #fff;
 }
 
-body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 /* End of design T1. */

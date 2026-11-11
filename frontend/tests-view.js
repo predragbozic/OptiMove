@@ -662,7 +662,7 @@ function renderCoachScheduleHtml() {
       <button type="button" class="plain-button" data-action="tests-open-schedule-form">New wellness schedule</button>
       <label class="tests-show-cancelled-toggle">
         <input type="checkbox" role="switch" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
-        <span>Show cancelled</span>
+        <span>Show cancelled schedules</span>
       </label>
     </div>
     ${state.tests.scheduleForm.open ? renderScheduleFormHtml() : ""}

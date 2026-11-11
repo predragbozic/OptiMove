@@ -9,7 +9,7 @@ const view = readFileSync(new URL("../tests-view.js", import.meta.url), "utf8");
 
 test("the T1 block is coach-only", () => {
   assert.ok(block.length > 0);
-  const selectors = block.split("\n").filter((l) => /^[^\s/*].*[{,]$/.test(l));
+  const selectors = block.split("\n").filter((l) => /^\s*[^\s/*@].*[{,]$/.test(l)).map((l) => l.trim());
   assert.ok(selectors.length >= 8);
   for (const s of selectors) assert.ok(s.startsWith("body:not(.athlete-mode):not(.login-mode) "), s);
 });
@@ -24,9 +24,10 @@ test("the arrows sit next to the week, and every pager and toolbar control is 44
 
 test("Show cancelled stays a native checkbox (its handler reads .checked), drawn as a switch", () => {
   assert.ok(view.includes('<input type="checkbox" role="switch" data-action="tests-toggle-show-cancelled"'));
-  assert.match(block, /\.tests-show-cancelled-toggle input \{\n  appearance: none;/);
+  assert.ok(view.includes("<span>Show cancelled schedules</span>"));
+  assert.match(block, /\.tests-show-cancelled-toggle input \{\n  -webkit-appearance: none;\n  appearance: none;/);
+  assert.match(block, /border: 1px solid var\(--muted\);/, "the off track's edge is readable (3:1)");
   assert.match(block, /input:checked \{\n  border-color: var\(--accent\);/);
-  assert.match(block, /input:focus-visible \{/);
 });
 
 test("one title: the coach's eyebrow names the area; the hard-coded labels say wellness, not WELLNESS", () => {

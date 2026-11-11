@@ -55,11 +55,11 @@ for (const width of [390, 1280]) test(`(team_coach, ${width} px) Show cancelled 
     assert.equal(look.appearance, "none", "drawn as a switch, not the native box");
     assert.ok(look.w === 40 && look.h === 24 && look.row >= 44, JSON.stringify(look));
     assert.equal(await sw.isChecked(), false);
-    const reload = page.waitForRequest((r) => r.url().includes("/api/tests/") && r.url().includes("includeCancelled=true"));
+    const reload = page.waitForResponse((r) => r.url().includes("/api/tests/") && r.url().includes("includeCancelled=true"));
     await page.locator(".tests-show-cancelled-toggle").click();
     await reload;
-    await page.waitForTimeout(300);
-    assert.equal(await page.locator('[data-action="tests-toggle-show-cancelled"]').isChecked(), true, "on after a tap on its row");
+    // After the reload the toolbar is drawn again from state: the new switch must still be on.
+    await page.waitForFunction(() => document.querySelector('[data-action="tests-toggle-show-cancelled"]')?.checked === true);
     assert.equal(await page.locator('[data-action="tests-open-schedule-form"]').textContent(), "New wellness schedule");
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
