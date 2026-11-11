@@ -25273,6 +25273,82 @@ body:not(.athlete-mode):not(.login-mode) .app-health-chip {
 /* End of design S6 (Settings). */
 
 /* ==========================================================================
+   Design S7: Icons on a phone. The gallery is a grid of compact tiles (the
+   icon, its name and Copy key) instead of one long list, and the category
+   chips are one row that scrolls sideways and stays at the top while the page
+   scrolls. The search words still find an icon; on a phone they are not
+   repeated on its tile. Read-only, as before.
+   ========================================================================== */
+@media (max-width: 760px) {
+  /* A panel clips its overflow; "clip" (not "hidden") lets the chips stick to the page. */
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery.panel {
+    overflow: clip;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -16px;
+    padding: var(--om-space-2) 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] .icon-picker-chip {
+    flex: 0 0 auto;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: var(--om-space-2);
+  }
+
+  /* A 320 px phone still gets three tiles to a row. */
+  @media (max-width: 359px) {
+    body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--om-space-1);
+    padding: var(--om-space-2);
+    text-align: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-glyph {
+    align-self: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text strong {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text > small {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-refused code {
+    overflow-wrap: anywhere;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .plain-button {
+    width: 100%;
+    padding-inline: var(--om-space-1);
+  }
+}
+/* End of design S7. */
+
+
+/* ==========================================================================
    Design L1: the sign-in screens (sign in, password reset, invite, join,
    email verification and change, check-in). Each card carries the app's own
    logo, its one main action is the accent button, and every field, button and
