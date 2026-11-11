@@ -530,3 +530,36 @@ test("24. a reason the loaded catalog does not hold (or not in the catalog's key
   assert.deepEqual(gx().detail.states.choices, {});
   assert.deepEqual(gx().detail.states.groups, {});
 });
+
+test("25. (INFO 2) leaving between two groups does not send the next one: the review closed, or the team's state replaced, while the first group is in flight", async () => {
+  for (const leave of ["close", "replace"]) {
+    let release;
+    let first = true;
+    await openReview({
+      onStates: async (call) => {
+        if (first) {
+          first = false;
+          await new Promise((resolve) => { release = resolve; });
+        }
+        return okStates(call);
+      },
+    });
+    await choose(NOREC1, "participated_no_values");
+    await choose(NOREC2, "did_not_participate:illness");
+    const approving = act("training-load-gpexe-approve");
+    while (!release) await flush();
+    assert.equal(statesCalls().length, 1, `${leave}: the first group is in flight`);
+    if (leave === "close") {
+      await act("training-load-gpexe-close");
+      assert.equal(gx().detail, null, "the review is closed");
+    } else {
+      // What a workspace switch does: the old object's generation is bumped and the object replaced.
+      state.trainingLoad.gpexe.generation += 1;
+      state.trainingLoad.gpexe = emptyTrainingLoadState().gpexe;
+    }
+    release();
+    await approving;
+    for (let i = 0; i < 5; i += 1) await flush();
+    assert.equal(statesCalls().length, 1, `${leave}: the second group is never sent after leaving`);
+  }
+});

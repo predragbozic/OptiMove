@@ -747,7 +747,10 @@ test("dates are shown on the local clock: day and time from the same clock", asy
   resetState();
   const utcLate = "2026-09-16T22:30:00Z";
   const local = new Date(utcLate);
-  const expected = `${String(local.getDate()).padStart(2, "0")}.${String(local.getMonth() + 1).padStart(2, "0")}.${local.getFullYear()} ${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
+  // U6a-2 (D5): the row reads "Wed 16.09. · <title>" and the time beside it - both from the local clock.
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][local.getDay()];
+  const expected = `${day} ${String(local.getDate()).padStart(2, "0")}.${String(local.getMonth() + 1).padStart(2, "0")}.`;
+  const time = `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
   const base = gpexeServer({});
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ sessionStartedAt: utcLate })] } };
@@ -755,6 +758,7 @@ test("dates are shown on the local clock: day and time from the same clock", asy
   });
   await openImports();
   assert.ok(renderTrainingLoadCoachHtml().includes(expected), expected);
+  assert.ok(renderTrainingLoadCoachHtml().includes(`<span class="muted">${time}</span>`), time);
 });
 
 test("approve: after a lost answer a still-pending candidate is never 'checked: not imported' - the first approval may still be running", async () => {
@@ -998,7 +1002,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   assert.match(imported, /Training E[\s\S]*nothing new/);
   assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</details>"))), "a session with nobody linked is not 'done'");
   const attention = html.slice(html.indexOf("Needs attention (1)"), html.indexOf("Ready to import ("));
-  assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - link the athletes under Link athletes \(below\), then find new sessions\./);
+  assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - open it and link the athletes from their rows\./);
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   assert.ok(!/Up to date/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no 'up to date' group any more");
 });
@@ -1285,8 +1289,9 @@ test("link: after linking the old review can't be approved until a new check, an
   // and the list says what to do.
   await act("training-load-gpexe-close");
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again[^:]*: athlete links changed after this review was made\. The dates are set above\./);
-  assert.match(html, /Needs attention \(1\)[\s\S]*?Find new sessions again \(with dates that include [0-9.]+\) - athlete links changed after this review was made\./, "the stale session is an attention item with its own step");
+  // U6a-2: the "Review out of date" group says it; the row's step is to update the review (no search needed).
+  assert.ok(!/class="gpexe-next"/.test(html), "the groups say it, the next-step line does not repeat it");
+  assert.match(html, /Needs attention \(1\)[\s\S]*?Review out of date[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale session is an attention item with its own step");
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   await openCandidate();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(renderTrainingLoadCoachHtml()));
@@ -1819,11 +1824,10 @@ test("Imports: a stale review after a link change says so on its row, and the da
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Find new sessions again \(with dates that include 14\.09\.2026\) - athlete links changed after this review was made\./);
-  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 14\.09\.2026\): athlete links changed after this review was made\. The dates are set above\./);
-  assert.match(html, /<details class="imports-dates" open>/);
-  assert.match(html, /data-gpexe-field="from" value="2026-09-14"/);
-  assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
+  // U6a-2: the review is updated in place (J20-A1), so no dates are set for it and no search is asked for.
+  assert.match(html, /Athlete links changed after this review was made - open it and update the review\./);
+  assert.ok(!/<details class="imports-dates" open>/.test(html), "a stale review needs no dates");
+  assert.match(html, /data-gpexe-field="from" value=""/);
 });
 
 test("Imports: a team with no connection shows neither the dates nor a search hint - only the one sentence and the Next step", async () => {
@@ -1858,14 +1862,14 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
   assert.ok(!/Training L|Training M|Training G/.test(ready), "none of them is ready");
-  assert.match(html, /Training L[\s\S]*1 recorded athlete is not linked yet - link them under Link athletes \(below\), then find new sessions\./);
+  assert.match(html, /Training L[\s\S]*1 recorded athlete is not linked yet - open it and link them from their rows\./);
   const both = html.slice(html.indexOf('data-candidate-id="c-both"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-both"')));
   assert.match(both, /2 athletes not linked · 1 change to imported results/, "every reason is a fact on the row, in the list's order");
-  assert.match(both, /2 recorded athletes are not linked yet - link them under Link athletes \(below\)/, "the step is the first reason's");
+  assert.match(both, /2 recorded athletes are not linked yet - open it and link them from their rows/, "the step is the first reason's");
   // Some imported, some unlinked: the reasons, never "nobody linked yet".
   const mix = html.slice(html.indexOf('data-candidate-id="c-mix"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-mix"')));
   assert.match(mix, /1 athlete not linked · 1 athlete needs manual review · 1 athlete marked not valid/);
-  assert.match(mix, /1 recorded athlete is not linked yet - link them under Link athletes \(below\), then find new sessions\./);
+  assert.match(mix, /1 recorded athlete is not linked yet - open it and link them from their rows\./);
   assert.ok(!/No linked athlete in this session yet/.test(mix));
   // A list answer without reasons (older server) still keeps such a session
   // out of Ready, from the counts it carries.
@@ -1914,7 +1918,7 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   assert.ok(!/Training replaced/.test(html), "a replaced version is hidden");
   const row = (id) => html.slice(rowIdx(html, id), html.indexOf("</button>", rowIdx(html, id)));
   const step = (id) => row(id).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
-  assert.equal(step("a-link"), "1 recorded athlete is not linked yet - link them under Link athletes (below), then find new sessions.");
+  assert.equal(step("a-link"), "1 recorded athlete is not linked yet - open it and link them from their rows.");
   assert.equal(step("a-team"), "1 linked athlete is no longer in the team - open it to see who.");
   // Two source anomalies share this reason: the row names no single cause.
   assert.equal(step("a-data"), "1 athlete needs manual review - open it to see who and why.");
@@ -1958,23 +1962,14 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
       candidateSummary({ id: "c-old", label: "Training old", sessionStartedAt: "2026-08-01T10:00:00Z", snapshot: { available: false, expiresAt: "2026-08-31T00:00:00Z" } }),
       candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 }, reasons: [{ code: "athletes_not_linked", count: 2 }] }),
+      candidateSummary({ id: "c-late", label: "Training late", sessionStartedAt: "2026-09-14T10:00:00Z", snapshot: { available: false, expiresAt: "2026-10-14T00:00:00Z" } }),
     ] } };
     return base(call);
   });
   await openImports();
   let html = renderTrainingLoadCoachHtml();
-  // The expired session alone sets the dates.
-  assert.match(html, /data-gpexe-field="from" value="2026-08-01"/);
-  assert.match(html, /data-gpexe-field="to" value="2026-08-01"/);
-  assert.match(html, /The dates are set to include the sessions that need finding again \(01\.08\.2026\)\./);
-
-  // After a link change the stale review of 14 Sep joins: 1 Aug - 14 Sep is
-  // 45 days, so the latest 31 are set and the hint says so.
-  await openCandidate("c-left");
-  state.trainingLoad.gpexe.linkConfirm = { gpexeAthleteId: "104", athleteId: "ath-2", athleteName: "Bo Example" };
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
-  html = renderTrainingLoadCoachHtml();
+  // U6a-2: two expired sessions 45 days apart (a stale review no longer sets dates: it is updated in place), so the latest
+  // 31 days are set and the hint says so.
   assert.match(html, /data-gpexe-field="from" value="2026-08-15"/);
   assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
   assert.match(html, /latest 31 days of the sessions that need finding again \(15\.08\.2026 - 14\.09\.2026\); search the earlier ones afterwards\./);
@@ -1991,7 +1986,7 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Find new sessions again: athlete links changed after this review was made\./);
+  assert.match(html, /Athlete links changed after this review was made - open it and update the review\./);
   assert.ok(!/The dates are set above/.test(html), "next step: " + (html.match(/class="gpexe-next"[^>]*>([^<]*)/) || [])[1]);
   assert.ok(!/<details class="imports-dates" open>/.test(html), "hint: " + (html.match(/gpexe-hint">([^<]*)/) || [])[1]);
 });

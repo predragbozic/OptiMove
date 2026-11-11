@@ -6,6 +6,7 @@
 import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
+import { nextInGroup } from "./gpexe-attention-groups.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
   reloadGpexeCandidates,
@@ -123,7 +124,21 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-open") {
-    await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
+    // U6a-2: a session opened from an attention group (its button or one of its rows) steps through that group.
+    await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group: action.dataset.group || "" });
+    return true;
+  }
+  if (type === "training-load-gpexe-group-next") {
+    // U6a-2 (J20 section 8): the next session of the same group, as the list is now. Never while something of this review
+    // must still be seen (the same guards as Close).
+    const detail = gx.detail;
+    if (!detail?.group || detail.approving || detail.verifying || detail.updating || gx.linkBusy || gx.undo?.step === "sending") return true;
+    const next = nextInGroup(detail.group, detail.id, gx.candidates || [], gx);
+    if (!next || next.id === detail.id) return true;
+    const refresh = closeGpexeCandidate();
+    if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    await openGpexeCandidate(next.id, renderTrainingLoad, { group: detail.group });
+    if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-close") {

@@ -207,6 +207,41 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
     the e2e server process (`E2E_BATCH_BUDGET_MS`, `e2e/lib/fake-source-preload.mjs`), three Ready sessions in three
     rounds, three approvals.
 
+### U6a-2 — the daily screen closer to the proposal (the pull request that adds this section; frontend only, no route or migration)
+
+The *Rukovodilac* accepted the alignment table of the "GPS Import Flow" proposal against main `05c08284` on 2026-11-11. U6a-2 takes the rows of that table that need no server change: D2–D8, with D5 without its counts. The rows that need a backend (D1, the D3 total "of M", the D5 counts, S2, S3) and the setup stepper (U6b) are separate pull requests.
+
+- **The sessions that need a person, grouped** (`frontend/gpexe-attention-groups.js`, after PR #408). The order is:
+  - *Result not confirmed*;
+  - *Athletes not linked*;
+  - *Review out of date*;
+  - *Needs a new search*;
+  - *Needs a manual review*;
+  - *Problem in the GPEXE data*.
+
+  Each group has one sentence, a count and ONE button. A group with several sessions keeps them folded; a group of one shows its session.
+- **The group buttons.**
+  - *Needs a new search* finds new sessions for the group's dates.
+  - Every other group's button opens its first session. So does any of its rows.
+- **Stepping through a group** (J20 section 8). A review opened from a group says *Session i of n in "…"* and offers *Next session*.
+  - *Next session* opens the next session of the same group, as the list is now.
+  - It is off, and refused by the handler, while an approval, an update, a link or an undo of the review is in flight.
+- **A review made before a link change** is its own group, *Review out of date*.
+  - Its review updates itself with J20-A1's recompute (*Update the review*), so no new search and no dates are asked for it.
+  - The row says "open it and update the review"; the dates are no longer pre-filled for it.
+- **Rows that list an athlete as not linked** say "open it and link them from their rows" (J20-A2), no longer "under Link athletes (below), then find new sessions".
+- **D2:** *Find new sessions* keeps its name, by the *Rukovodilac*'s decision: the button must not promise an import it does not do. The line "Finding sessions does not import anything; you choose what to import." moves up, right under the state bar.
+- **D3:** while a search runs: "You can leave this page. The search goes on in OptiMove, and the sessions are here when you come back." It is true because the screen resumes polling a running check when it is opened again.
+- **D4:** the state bar counts *Ready: N* and *Needs you: N* from the whole list; a day picked in the calendar does not change them.
+- **D5 (without counts):** a row reads "Tue 03.11. · <the GPEXE name>", with the time beside it, on the local clock. The athlete and drill counts need a backend change and are not here.
+- **D7:**
+  - The confirmation is one question: "Import N sessions into <team>? Their values appear in Training Load at once." It is followed by one note.
+  - After an import that only imported, the result reads "Imported N sessions." with "You can see them in Training Load → Activities." and *Open Activities*.
+  - A mixed result keeps the counts line.
+- **D8:** *mixed_timezones* is a data problem in plain words for everyone: "GPEXE reports this session's GPS units in more than one time zone…", with "Nothing to do for now". The code and the server's text stay in an administrator's Technical details. Policy (b) is its own ★★ pull request.
+- **Guide step 4** is no longer *done* while a session still lists an athlete as not linked (after PR #408). It then points to the *Athletes not linked* group, not to a search.
+- **Tests:** `frontend/tests/gpexe-attention-u6a2.actions.test.mjs` (12 tests); the existing Imports suites follow the texts; the J20-C suite gains test 25, the Nezavisni revizor's INFO 2: leaving between two groups does not send the next one.
+
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
 - As designed in `docs/ai/u2a-club-admin-pair-plan.md` (section 8 records what was built and the decisions): the PUT of a team's settings accepts the active admin of the team's club in that club's workspace; the service re-checks the user, role, club, team and the club's `verified` connection inside its transaction; a club admin writes a first pair only; a GPEXE team already paired anywhere is the neutral `409 pair_not_available` for a club admin; Connect / Test return the whole annotated list to a club admin; *Approve pair* on the Source connections screen (the GPEXE team's name is the main text, an unnamed team cannot be approved).

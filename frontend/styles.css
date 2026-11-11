@@ -25793,3 +25793,85 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   margin-bottom: var(--om-space-2);
 }
 /* End of design T3a. */
+
+/* U6a-2: the count pills in the state bar, the attention groups, the review's place in its group */
+.imports-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+  white-space: nowrap;
+}
+.imports-pill.is-ready {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.imports-pill.is-needs {
+  color: var(--om-warning, #8a5300);
+  background: var(--om-warning-soft, #fdf1dc);
+  border-color: color-mix(in srgb, var(--om-warning, #8a5300) 30%, transparent);
+}
+.imports-attn-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.imports-attn-group:first-of-type {
+  border-top: 0;
+}
+.imports-attn-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.imports-attn-head h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+.imports-attn-count {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+.imports-attn-group > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.imports-attn-actions .gpexe-button {
+  min-height: 44px;
+}
+.imports-attn-sessions > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.imports-group-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.imports-group-nav > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.imports-group-nav .gpexe-button {
+  min-height: 44px;
+}
+.gpexe-leave-note {
+  margin: 0;
+}

@@ -326,7 +326,10 @@ test("7. a search that fails, and one whose answer is lost, change nothing of wh
   await act("training-load-gpexe-check");
   const afterLost = html();
   assert.equal(readySection(afterLost), before);
-  assert.equal(attentionSection(afterLost), attentionBefore);
+  // U6a-2: the group's own search button follows the search like the state bar's (off while a search may still run); the
+  // sessions and their sentences are what must not change.
+  const noGroupButton = (h) => h.replace(/<div class="imports-attn-actions">[\s\S]*?<\/div>/g, "");
+  assert.equal(noGroupButton(attentionSection(afterLost)), noGroupButton(attentionBefore));
   assert.equal(writes().length, 0);
   assert.doesNotMatch(outsideTech(afterLost), CODES);
 });
@@ -337,7 +340,7 @@ test("8. no GPEXE id outside Technical details: the session id of an unconfirmed
   await openImports();
   await act("training-load-gpexe-superseded");
   assert.ok(!outsideTech(html()).includes(MARKER_SESSION), "the list");
-  assert.match(html(), />GPEXE session</, "a label-less session is titled without its id");
+  assert.match(html(), /<strong>[A-Z][a-z]{2} \d{2}\.\d{2}\. · GPEXE session</, "a label-less session is titled without its id");
   for (const id of ["cand-nc", "cand-wd", "cand-old"]) {
     await openCandidate(id);
     assert.ok(!outsideTech(html()).includes(MARKER_SESSION), `the review of ${id}`);
