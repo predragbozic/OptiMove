@@ -1917,9 +1917,6 @@ async function handleGlobalClick(event) {
     if (!confirmLeaveTrainingLoad(nextTab)) return;
     if (state.activeTab !== nextTab) pushAppHistory();
     state.activeTab = nextTab;
-    // U6b: a link into one Settings section (the Imports setup stepper's "Open Source connections"); the section's
-    // own entry read runs in loadActiveTab, and its routes decide again who may see it.
-    if (nextTab === "organization" && tab.dataset.settingsSection) state.organization.section = tab.dataset.settingsSection;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.navStack = [];
@@ -1929,6 +1926,9 @@ async function handleGlobalClick(event) {
     // button (data-action="week-toggle", handleWeeklyAction) and the
     // sidebar's #calendarToggle, both unaffected by this reset.
     if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = false;
+    // U6b: a link into one Settings section (the Imports setup stepper's "Open Source connections"); the section's
+    // own entry read runs in loadActiveTab, and its routes decide again who may see it.
+    if (nextTab === "organization" && tab.dataset.settingsSection) state.organization.section = tab.dataset.settingsSection;
     renderTabs();
     renderLibraryNav();
     loadActiveTab();

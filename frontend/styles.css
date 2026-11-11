@@ -17132,8 +17132,7 @@ p.muted.gpexe-approve-note {
   padding: 0 16px;
 }
 .gpexe-guide .primary-button:hover:not(:disabled) {
-  border-color: var(--om-accent-strong, var(--accent));
-  background: var(--om-accent-strong, var(--accent));
+  filter: brightness(0.92);
 }
 .gpexe-guide .primary-button:disabled {
   opacity: 0.55;
