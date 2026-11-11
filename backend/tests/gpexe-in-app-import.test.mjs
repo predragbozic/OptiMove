@@ -1376,7 +1376,10 @@ test("database: approvals are append-only, re-check the approver, and a candidat
   await refused(insert(team.padmin.id, "platform_admin", null), /duplicate key/);
   await refused(admin.query(`update training_load.gpexe_import_approvals set changes_accepted = true where candidate_id = $1`, [candidate.id]), /append-only/);
   await refused(admin.query(`delete from training_load.gpexe_import_approvals where candidate_id = $1`, [candidate.id]), /append-only/);
-  await refused(admin.query(`truncate training_load.gpexe_import_approvals`), /TRUNCATE refused/);
+  // Since v61 the roster requests reference the approvals, so a plain TRUNCATE is refused by the foreign key first; with
+  // CASCADE it reaches the approvals' own trigger (append-only history).
+  await refused(admin.query(`truncate training_load.gpexe_import_approvals`), /cannot truncate a table referenced in a foreign key constraint/);
+  await refused(admin.query(`truncate training_load.gpexe_import_approvals cascade`), /gpexe_import_approvals keeps history; TRUNCATE refused/);
   await refused(admin.query(`delete from training_load.gpexe_import_candidates where id = $1`, [candidate.id]), /violates foreign key|restrict/i);
 
   // Only a pending candidate: a blocked one is refused even with an approval.
