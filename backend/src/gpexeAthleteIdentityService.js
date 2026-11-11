@@ -520,8 +520,9 @@ async function closeIfStale(executor, requestId) {
 async function replay(row, teamId, ctx, clubId, bindingId) {
   // The same key belongs to one team and one binding: after an Unbind and a
   // new binding an old key answers nothing of the old one.
-  if (String(row.owner_team_id) !== String(teamId) || (bindingId && String(row.binding_id) !== String(bindingId))) throw refusal("request_key_reused");
+  // The right first: a caller without it on this team gets the identical 404, never a code about the key (D3 review).
   if (!(await rightHolds(pool, ctx, clubId, { teamId, teamMode: true }))) throw notAvailable();
+  if (String(row.owner_team_id) !== String(teamId) || (bindingId && String(row.binding_id) !== String(bindingId))) throw refusal("request_key_reused");
   if (row.status === "running" && row.stale) {
     await closeIfStale(pool, row.id);
     throw refusal("identity_load_abandoned", { replayed: true });

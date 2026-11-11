@@ -2,11 +2,6 @@
 // mode `team` (v56). The service holds that right in every phase of the load (the claim, a replay, and FOR SHARE in the
 // finalize), so a switch-off or a move to `pilot` during a load ends it as rights_changed with nothing stored. Everyone else
 // keeps the identical 404; the stored list (GET athlete-identities) stays the administrators'. No migration.
-// U3 (J19): suggested athlete pairs - the matching rule and the read
-// GET /teams/:teamId/athlete-pair-suggestions, on a disposable
-// optimove_tests_gpexe_* database against a fake source (never OPTIMOVE, no
-// real GPEXE request). Plan: docs/ai/u3-suggested-pairs-plan.md.
-// Every name and date below is a made-up marker.
 // Every name and date below is a made-up marker; the suite scans responses,
 // log lines, audit rows and request rows for them.
 import { after, afterEach, before, test } from "node:test";
@@ -14,7 +9,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
-import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import * as cryptoMod from "../src/sourceCredentialCrypto.js";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -252,7 +247,6 @@ const useSource = () => {
   identity.setIdentityFetchForTests(src.fetchImpl);
   return src;
 };
-const athleteCalls = () => src.calls.filter((c) => c.key.startsWith("/rest/v1/athlete/"));
 const CREATE = (club) => ({ ownerScope: "club", ownerClubId: club, hostKey: "server3", accountLabel: "Club account (label only)", credentialKind: "exchanged_token" });
 async function bound(o) {
   src.st.visible.add(Number(o.sourceTeamId));
@@ -263,9 +257,6 @@ async function bound(o) {
   const b = await api(`/sources/gpexe/connections/${c.body.connection.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
   assert.equal(b.status, 201, JSON.stringify(b.body));
   return { conn: c.body.connection, binding: b.body.result.binding };
-}
-async function unbind(o, conn, binding) {
-  return api(`/sources/gpexe/connections/${conn.id}/bindings/${binding.bindingId}/unbind`, { method: "POST", cookie: o.cadmin.cookie, body: { requestKey: crypto.randomUUID(), reason: "test: end the binding", expected: { teamId: binding.teamId, sourceTeamId: binding.sourceTeamId } } });
 }
 // A stored chain without a network check: one check row and one candidate
 // whose preview names the given athletes.
@@ -289,8 +280,6 @@ const load = (o, cookie = o.padmin.cookie, requestKey = crypto.randomUUID()) => 
 const list = (o, cookie = o.padmin.cookie) => api(`/gpexe/teams/${o.teamId}/athlete-identities`, { cookie });
 const rowsOf = (teamId) => q(`select gpexe_athlete_id, display_name, to_char(birth_date, 'YYYY-MM-DD') as birth_date, observed_at, expires_at, binding_id, connection_id, source_team_id from training_load.gpexe_athlete_identities where owner_team_id = $1 order by length(gpexe_athlete_id), gpexe_athlete_id`, [teamId]);
 const requestsOf = (teamId) => q(`select * from training_load.gpexe_athlete_identity_requests where owner_team_id = $1 order by started_at`, [teamId]);
-const connRow = async (id) => (await q(`select state, last_error_code from training_load.source_credential_connections where id = $1`, [id]))[0];
-const auditOf = (id) => q(`select action, outcome, error_code, basis, metadata from training_load.source_connection_audit where connection_id = $1 order by performed_at, id`, [id]);
 async function ready(n = 3, from = 501) {
   const o = await org();
   useSource();
@@ -299,17 +288,7 @@ async function ready(n = 3, from = 501) {
   return { o, ...b };
 }
 
-const sug = (o, cookie) => api(`/gpexe/teams/${o.teamId}/athlete-pair-suggestions`, { cookie });
-async function setAthlete(id, name, dob) { await q(`update public.athletes set full_name = $2, display_name = $2, birth_date = $3 where id = $1`, [id, name, dob]); }
 async function scriptG(id, first, last, birthdate) { src.st.athlete.set(String(id), { body: { id: Number(id), first_name: first, last_name: last, birthdate } }); }
-const KEYS = {
-  top: ["ambiguous", "dateConflicts", "exact", "expiresAt", "snapshotCount", "state"],
-  exact: ["athleteId", "athleteName", "birthDate", "gpexeAthleteId", "gpexeName"],
-  ambiguous: ["birthDate", "candidates", "gpexeAthleteId", "gpexeName"],
-  candidate: ["athleteId", "athleteName"],
-  conflict: ["athleteId", "athleteName", "birthDate", "gpexeAthleteId", "gpexeName"],
-};
-const keys = (x) => Object.keys(x).sort();
 const NOT_FOUND = { error: "notFound" };
 
 
@@ -394,28 +373,84 @@ test("3. the switch moved to pilot while the coach's load reads GPEXE: the final
   assert.equal((await load(o, o.padmin.cookie)).status, 200);
 });
 
-test("4. a switch-off waits for a finalize that holds the switch row (FOR SHARE), and the next coach load sees it off", async () => {
+// A backend of this database waiting on a lock whose query contains `needle` (pg_stat_activity), polled; null if none in time.
+async function waitingOn(needle, timeoutMs = 10_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const row = (await q(
+      `select pid from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike $1 and pid <> pg_backend_pid() limit 1`,
+      [`%${needle}%`],
+    ))[0];
+    if (row) return row.pid;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return null;
+}
+const switchOff = (o) => api(`/gpexe/teams/${o.teamId}/import-switch`, { method: "PUT", cookie: o.padmin.cookie, body: { enabled: false, reason: "test: the switch off" } });
+
+test("4. the finalize first: the real switch writer (the route, v56 set_team_import_switch) waits on the switch row the finalize holds FOR SHARE; the load completes, then the switch is off and the next coach load is the identical 404", async () => {
   const { o } = await ready(2, 831);
   for (const id of ids(831, 2)) await scriptG(id, FIRST, `${LAST}${id}`, DOB(id));
   await teamMode(o, "team", true);
-  const g1 = gate();
+  const hold = gate();
   const reached = gate();
-  identity.setIdentityFinalizeHoldForTests(async () => { reached.release(); await g1.p; });
+  identity.setIdentityFinalizeHoldForTests(async () => { reached.release(); await hold.p; });
   const loading = load(o, o.coach.cookie);
-  let offDone = false;
+  let off;
   try {
     await reached.p;
-    const off = teamMode(o, "team", false).then(() => { offDone = true; });
-    await new Promise((r) => setTimeout(r, 300));
-    assert.equal(offDone, false, "the switch-off waits for the load's finalize");
-    g1.release();
+    off = switchOff(o);
+    assert.ok(await waitingOn("set_team_import_switch"), "the switch writer waits on a lock");
+    hold.release();
     assert.equal((await loading).status, 200, "the load that held the right completes");
-    await off;
+    assert.equal((await off).status, 200, "then the switch-off completes");
   } finally {
     identity.setIdentityFinalizeHoldForTests(null);
-    g1.release();
+    hold.release();
   }
-  assert.equal(offDone, true);
+  assert.equal((await rowsOf(o.teamId)).length, 2);
   const after = await load(o, o.coach.cookie);
   assert.equal(after.status, 404, "after the switch-off the coach's load is the identical 404");
+  assert.deepEqual(after.body, NOT_FOUND);
+});
+
+test("4b. the writer first: v56 set_team_import_switch holds the switch row; the coach's finalize waits on it, then sees the switch off - rights_changed, nothing stored", async () => {
+  const { o } = await ready(2, 841);
+  for (const id of ids(841, 2)) await scriptG(id, FIRST, `${LAST}${id}`, DOB(id));
+  await teamMode(o, "team", true);
+  const writer = new pg.Client({ connectionString: db.url });
+  await writer.connect();
+  try {
+    await writer.query("begin");
+    await writer.query(`select * from training_load.set_team_import_switch($1, $2, false, null, 'test: the writer first')`, [o.padmin.id, o.teamId]);
+    const loading = load(o, o.coach.cookie);
+    assert.ok(await waitingOn("gpexe_team_import_switch"), "the finalize waits on the switch row");
+    await writer.query("commit");
+    const r = await loading;
+    assert.equal(r.status, 404, r.text);
+    assert.deepEqual(r.body, NOT_FOUND);
+  } finally {
+    await writer.query("rollback").catch(() => {});
+    await writer.end();
+  }
+  assert.equal((await rowsOf(o.teamId)).length, 0, "nothing stored");
+  const [req] = await requestsOf(o.teamId);
+  assert.equal(req.status, "failed");
+  assert.equal(req.error_code, "rights_changed");
+});
+
+test("5. a coach's own key from a team-mode team, replayed on another team of theirs that is not in team mode: the identical 404, never a code about the key", async () => {
+  const a = (await ready(2, 851)).o;
+  const b = (await ready(2, 861)).o;
+  for (const id of ids(851, 2)) await scriptG(id, FIRST, `${LAST}${id}`, DOB(id));
+  await teamMode(a, "team", true);
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [a.coach.id, b.teamId]);
+  const key = crypto.randomUUID();
+  assert.equal((await load(a, a.coach.cookie, key)).status, 200);
+  await setWorkspace(a.coach.id, "team", b.teamId);
+  const missing = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities/loads`, { method: "POST", cookie: a.coach.cookie, body: { requestKey: crypto.randomUUID() } });
+  const r = await load(b, a.coach.cookie, key);
+  assert.equal(r.status, 404, r.text);
+  assert.equal(r.text, missing.text, "the identical 404");
+  assert.equal((await requestsOf(b.teamId)).length, 0);
 });
