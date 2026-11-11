@@ -600,6 +600,11 @@ async function markFailed(requestId, code) {
 }
 
 export async function loadIdentities(teamId, { ctx, body }) {
+  // The right first (the Nezavisni revizor's L1 on #494): before the body is read and before any fact of the
+  // connection, so a caller without it on this team - a coach whose team is not in team mode - gets the identical
+  // 404, never invalid_body or source_connection_unavailable. The claim and the finalize check it again.
+  const team0 = (await pool.query(`select club_id from public.teams where id = $1`, [teamId])).rows[0];
+  if (!team0 || !(await rightHolds(pool, ctx, team0.club_id, { teamId, teamMode: true }))) throw notAvailable();
   const requestKey = readBody(body);
   await purgeExpiredIdentities().catch((error) => console.error(`[gpexe-identity] purge before a load failed: ${error?.code ?? ""}`));
 

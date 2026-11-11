@@ -505,3 +505,28 @@ test("6. the precise codes stay with the administrators: a coach's partial load 
     }
   }
 });
+
+test("7. info hiding comes first (the Nezavisni revizor's L1): a coach whose team is not in team mode gets the identical 404 for an invalid body and for an unusable connection, with no request row; in team mode the invalid body is the coach's own 400", async () => {
+  const { o } = await ready(1, 901);
+  const missing = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities/loads`, { method: "POST", cookie: o.coach.cookie, body: { requestKey: crypto.randomUUID() } });
+  const bogus = () => api(`/gpexe/teams/${o.teamId}/athlete-identities/loads`, { method: "POST", cookie: o.coach.cookie, body: { bogus: 1 } });
+  for (const setup of [async () => {}, () => teamMode(o, "pilot", true), () => teamMode(o, "team", false)]) {
+    await setup();
+    const r = await bogus();
+    assert.equal(r.status, 404, r.text);
+    assert.equal(r.text, missing.text, "an invalid body: the identical 404");
+    const saved = process.env.SOURCE_CREDENTIAL_KEYS;
+    delete process.env.SOURCE_CREDENTIAL_KEYS;
+    try {
+      const u = await load(o, o.coach.cookie);
+      assert.equal(u.status, 404, u.text);
+      assert.equal(u.text, missing.text, "an unusable connection: the identical 404");
+    } finally {
+      process.env.SOURCE_CREDENTIAL_KEYS = saved;
+    }
+  }
+  assert.equal((await requestsOf(o.teamId)).length, 0, "no request row");
+  await teamMode(o, "team", true);
+  const own = await bogus();
+  assert.deepEqual([own.status, own.body.error], [400, "invalid_body"], "with the right, the body's own refusal");
+});
