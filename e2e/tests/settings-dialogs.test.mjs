@@ -12,6 +12,26 @@ let browser;
 before(async () => { world = await startWorld(); browser = await launch(); });
 after(async () => { await browser?.close(); await world?.stop(); });
 
+// The organization panel repaints when a /api/organization answer arrives, and a repaint redraws an open dialog's form
+// from the saved data, so text typed just before a late answer is lost (seen: a Save that sent the old name). Typing
+// waits until no organization request has been in flight for a moment.
+function trackOrganizationRequests(page) {
+  let inFlight = 0;
+  let lastChange = Date.now();
+  const isOrg = (r) => r.url().includes("/api/organization");
+  page.on("request", (r) => { if (isOrg(r)) { inFlight += 1; lastChange = Date.now(); } });
+  const done = (r) => { if (isOrg(r)) { inFlight = Math.max(0, inFlight - 1); lastChange = Date.now(); } };
+  page.on("requestfinished", done);
+  page.on("requestfailed", done);
+  return async function settled(quietMs = 400, timeoutMs = 15000) {
+    const start = Date.now();
+    while (inFlight > 0 || Date.now() - lastChange < quietMs) {
+      if (Date.now() - start > timeoutMs) throw new Error(`organization requests did not settle (${inFlight} in flight)`);
+      await page.waitForTimeout(50);
+    }
+  };
+}
+
 async function openSection(page, section) {
   await page.goto(world.baseUrl);
   await page.getByText("Sign out").first().waitFor();
@@ -83,13 +103,17 @@ for (const [role, width] of [["platform_admin", 1280], ["club_admin", 390]]) tes
 
 test("(club_admin, 390 px) Edit team saves from the footer, and Manage account shows the login switch last", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "club_admin", 390);
+  const settled = trackOrganizationRequests(page);
   try {
     await openSection(page, "teams");
     await page.locator('main.workspace [data-action="organization-edit"][data-org-type="team"]').first().click();
     const form = page.locator('[role="dialog"] form[data-organization-form="edit-team"]');
     const name = form.locator('input[name="name"]');
+    await name.waitFor();
+    await settled();
     const before = await name.inputValue();
     await name.fill(`${before} S4`);
+    assert.equal(await name.inputValue(), `${before} S4`, "the typed name is still there when Save is pressed");
     await page.locator('[role="dialog"] .organization-dialog-footer').getByRole("button", { name: "Save changes", exact: true }).click();
     await page.locator('main.workspace [data-action="organization-select-team"]').filter({ hasText: `${before} S4` }).waitFor();
     await page.locator(".organization-dialog-head").waitFor({ state: "detached" });
