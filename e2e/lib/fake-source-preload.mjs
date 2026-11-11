@@ -13,6 +13,8 @@ if (process.env.E2E_FAKE_SESSIONS === "imports") fake.serve("7001", importsBundl
 if (process.env.E2E_FAKE_SESSIONS === "series") fake.serve("7001", seriesBundles(7001));
 // A shorter batch time budget for this server process only (E2E_BATCH_BUDGET_MS), so one click's import goes in several rounds.
 if (process.env.E2E_BATCH_BUDGET_MS !== undefined) {
+  // The same order as server.js: the backend's .env first, then the application's modules.
+  await import("dotenv/config");
   const { setBatchTimeBudgetForTests } = await import("../../backend/src/gpexeImportService.js");
   setBatchTimeBudgetForTests(Number(process.env.E2E_BATCH_BUDGET_MS));
 }

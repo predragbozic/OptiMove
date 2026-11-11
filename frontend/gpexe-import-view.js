@@ -893,15 +893,16 @@ function batchOutcomeText(r) {
   if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
   if (o === "not_attempted" && r.code === "batch_time_budget") {
     const b = state.trainingLoad.gpexe?.batch || {};
-    // U6a-3: while the import goes on, a session it has not reached yet is waiting, not "not tried".
-    if (b.sending && !b.stopRequested) return { cls: "is-skipped", text: "Waiting: it will be imported automatically." };
-    const why = b.stopRequested || b.stopReason === "stop" ? "Not imported: you stopped the import."
+    // U6a-3: while the import goes on, every such row belongs to the request in flight: never "not saved" before its answer.
+    if (b.sending) return { cls: "is-skipped", text: b.stopRequested ? "Being imported now - the result follows." : "Waiting: it will be imported automatically." };
+    const why = b.stopReason === "stop" ? "Not imported: you stopped the import."
+      : b.stopReason === "person" ? "Not imported: the import stopped at a session that needs you."
       : b.stopReason === "left" ? "Not imported: the import stopped when you left Imports."
       : b.stopReason === "cap" ? "Not imported yet: the import stops after 30 rounds."
       : "Not imported yet: time ran out.";
     return { cls: "is-skipped", text: `${why} Nothing was saved for this session - import it again from the Ready list.` };
   }
-  if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
+  if (o === "not_attempted") return { cls: "is-skipped", text: "Not imported: the import stopped before this session. Nothing was saved - import it again from the Ready list." };
   const code = r.code;
   if (code === "preview_changed") return { cls: "is-refused", text: "Session changed - review it again.", open: r.reviewAgain?.candidateId || r.candidateId, openLabel: "Review again" };
   if (code === "changes_need_acceptance") return { cls: "is-refused", text: "Open and review the changes individually.", open: r.candidateId, openLabel: "Open" };
@@ -1090,7 +1091,7 @@ function renderBatchResultsHtml(gx) {
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
     ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
-    ${(b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
+    ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}
     <div class="gpexe-link-actions imports-batch-actions">
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-done" ${b.sending ? "disabled" : ""}>Done</button>

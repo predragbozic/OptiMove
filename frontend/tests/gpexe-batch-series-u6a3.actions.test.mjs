@@ -198,7 +198,7 @@ test("U6a-3 3: a busy server (try_again) ends the import after its round: the se
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
   assert.equal(seen.length, 1, "no second request");
-  assert.match(dialog(), /Not tried because the batch stopped\./);
+  assert.match(dialog(), /Not imported: the import stopped before this session\./);
   assert.deepEqual(Object.keys(gx().batch.selected).sort(), ["cand-2", "cand-3", "cand-4", "cand-5", "cand-6"], "the busy one and the untried stay ticked");
 });
 
@@ -420,6 +420,9 @@ test("U6a-3 14: while the import goes on, the dialog says 'Importing sessions', 
   assert.match(page, /Stop after the current sessions/);
   assert.match(page, /2 of 6 sessions handled - 2 imported so far\./);
   assert.ok(!/Waiting: it will be imported/.test(afterStop), "after Stop no row says it will be imported");
+  assert.ok(!/Nothing was saved|Not imported/.test(afterStop), "a session in the request in flight is never called not saved");
+  assert.match(afterStop, /Being imported now - the result follows\./);
+  assert.ok(!/Imported sessions are listed under Imported below/.test(during), "that note waits for the end");
   assert.match(afterStop, /Stopping - the sessions being imported right now finish first/);
   assert.equal(seen.length, 2);
   assert.match(dialog(), /Not imported: you stopped the import\./);
@@ -452,4 +455,16 @@ test("U6a-3 16: a team change is refused while an import of several sessions run
   assert.equal(gx().teamId, team, "the team stays");
   assert.equal(seen.length, 2);
   assert.equal(gx().batch.summary.imported, 6);
+});
+
+test("U6a-3 17: a series that stops at a session that needs a person says so for the sessions it did not reach", async () => {
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([[done(1), { candidateId: "cand-2", outcome: "refused", code: "preview_changed" }, budget(3), budget(4), budget(5), budget(6)]], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.equal(seen.length, 1);
+  assert.equal(gx().batch.stopReason, "person");
+  assert.match(dialog(), /Not imported: the import stopped at a session that needs you\./);
 });

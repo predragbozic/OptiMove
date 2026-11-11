@@ -358,7 +358,7 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   assert.match(d, /FULL TRAINING 4<\/strong>[\s\S]*?Open and review the changes individually\.<\/span><button [^>]*data-candidate-id="cand-4">Open</);
   assert.match(d, /FULL TRAINING 5<\/strong>[\s\S]*?Not imported: it is not ready any more - see its row under Needs attention\./);
   assert.match(d, /FULL TRAINING 6<\/strong>[\s\S]*?Import result not confirmed - check it before doing anything else\.[^<]*<\/span><button [^>]*data-candidate-id="cand-6">Check result</);
-  assert.match(d, /FULL TRAINING 7<\/strong>[\s\S]*?Not tried because the batch stopped\./);
+  assert.match(d, /FULL TRAINING 7<\/strong>[\s\S]*?Not imported: the import stopped before this session\./);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/failed|nothing was imported/i.test(open), "never 'failed' or 'nothing imported'");
   assert.ok(!/preview_changed|import_outcome_unknown|not_ready|appr-6/.test(open), "codes and ids only under Technical details");

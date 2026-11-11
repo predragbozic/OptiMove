@@ -1339,7 +1339,7 @@ export async function sendBatch(render) {
       const decided = results.length - waiting.length;
       const stop = !waiting.length || decided <= 0 || gx.batch.stopRequested || left() || results.some((r) => needsPerson(r) || r.outcome === "import_outcome_unknown");
       if (stop) {
-        if (waiting.length) gx.batch.stopReason = gx.batch.stopRequested ? "stop" : left() ? "left" : decided <= 0 ? "budget" : "";
+        if (waiting.length) gx.batch.stopReason = gx.batch.stopRequested ? "stop" : left() ? "left" : decided <= 0 ? "budget" : "person";
         break;
       }
       if (round + 1 >= BATCH_MAX_ROUNDS) {
