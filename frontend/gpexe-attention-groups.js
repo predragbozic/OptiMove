@@ -81,11 +81,12 @@ export function nextInGroup(detail, list, gx) {
 }
 
 // Something of the open review must still be seen: an approval or its check, an update, a link, an undo in flight or
-// not confirmed, attendance states being saved or not confirmed (J20-C). Next session waits for it, like Close.
+// not confirmed, attendance states being saved, or sent and still offering Check the result (J20-C). Next session waits
+// for it. A states group "can't be checked from here" (unknown with a code) offers nothing more and does not hold it.
 export function reviewMustStay(gx, detail = gx?.detail) {
   if (!detail) return false;
   if (detail.approving || detail.verifying || detail.updating || gx.linkBusy || undoBusy(gx)) return true;
   const st = detail.states;
   if (st?.saving) return true;
-  return Object.values(st?.groups || {}).some((v) => v.status === "sent" || v.status === "unknown");
+  return Object.values(st?.groups || {}).some((v) => v.status === "sent" || (v.status === "unknown" && !v.code));
 }

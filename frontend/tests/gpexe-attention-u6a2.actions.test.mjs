@@ -203,7 +203,7 @@ test("3. (J20 section 8) the group's button opens its first session; the review 
   await act("training-load-gpexe-group-next");
   assert.equal(gx().detail.id, "cand-8");
   page = html();
-  assert.match(page, /That was the last session in &quot;Athletes not linked&quot;\./);
+  assert.match(page, /This is the last session in &quot;Athletes not linked&quot;\./);
   assert.ok(!/training-load-gpexe-group-next/.test(page), "the last one offers no Next");
   assert.match(page, /class="imports-group-nav"[\s\S]*?data-action="training-load-gpexe-close" >Back to Imports</);
   // A session opened from the plain list (no group) shows no group line.
@@ -243,6 +243,9 @@ test("4. Next session is off while something of the review must still be seen (a
     gx().linkBusy = false;
     gx().undo = null;
   }
+  // A states group that can't be checked from here (unknown with a code) offers nothing more and does not hold it.
+  gx().detail.states = { ...original, saving: false, groups: { a: { status: "unknown", code: "try_again" } } };
+  assert.match(html(), /data-action="training-load-gpexe-group-next" >Next session</);
   // Saved states do not hold it.
   gx().detail.states = { ...(original || {}), saving: false, groups: { a: { status: "saved" } } };
   assert.match(html(), /data-action="training-load-gpexe-group-next" >Next session</);
@@ -437,7 +440,7 @@ test("15. a stale review asks for no search until updating it failed", async () 
   gx().linkCheckStartedAt = "2026-09-25T09:00:00Z";
   await act("training-load-gpexe-open", { candidateId: "cand-1", group: "stale" });
   const note = () => (html().match(/<p class="gpexe-warning gpexe-approve-note"[\s\S]*?<\/p>/) || [""])[0];
-  assert.match(note(), /Update the review; approving waits until then\./);
+  assert.match(note(), /Approving waits until the review is updated\./);
   assert.ok(!/find new sessions/i.test(note()));
   gx().detail.updateError = { status: 503, code: "try_again" };
   assert.match(note(), /Update the review again, or close it and find new sessions \(with dates that include 01\.09\.2026\)/);
@@ -456,4 +459,18 @@ test("16. with nothing ready, the first group's button is the one main action wh
     if (groupMain) assert.equal(findBtn, "plain");
     assert.equal(primaries(page.slice(0, page.indexOf('aria-label="Ready to import"'))), 1, "one main action");
   }
+});
+
+test("17. Back to Imports at the end of a group waits for what the dialog's Close waits for, and nothing more", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [unlinked(4), unlinked(6)] }));
+  await openImports();
+  await act("training-load-gpexe-open", { candidateId: "cand-6", group: "unlinked" });
+  const back = () => html().match(/data-action="training-load-gpexe-close" (disabled)?>Back to Imports</)[1] || "";
+  assert.match(html(), /This is the last session in &quot;Athletes not linked&quot;\./);
+  assert.equal(back(), "");
+  gx().detail.states = { ...(gx().detail.states || { choices: {} }), saving: true, groups: {} };
+  assert.equal(back(), "", "states being saved do not hold Close (they stop with it, J20-C test 25)");
+  gx().detail.approving = true;
+  assert.equal(back(), "disabled");
 });

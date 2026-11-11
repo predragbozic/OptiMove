@@ -832,7 +832,7 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
     const dated = datesNeededFor(gx.candidates || [], gx);
     const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
     const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
-    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : grp.button)}</button>`;
+    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
   } else {
     button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
   }
@@ -1727,7 +1727,9 @@ function renderGroupNavHtml(gx, detail) {
   if (!title || at < 0 || ids.length < 2) return "";
   const next = nextInGroup(detail, gx.candidates || [], gx);
   const busy = reviewMustStay(gx, detail);
-  if (!next) return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`That was the last session in "${title}".`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-close" ${busy ? "disabled" : ""}>Back to Imports</button></div>`;
+  // Back to Imports is the dialog's Close: it waits for exactly what Close waits for.
+  const closeBusy = detail.approving || detail.verifying || undoBusy(gx);
+  if (!next) return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`This is the last session in "${title}".`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-close" ${closeBusy ? "disabled" : ""}>Back to Imports</button></div>`;
   return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`Session ${at + 1} of ${ids.length} in "${title}"`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-group-next" ${busy ? "disabled" : ""}>Next session</button></div>`;
 }
 
@@ -2588,7 +2590,7 @@ function renderApproveHtml(c, detail, status) {
   // check; after a link change it must be made again before approving.
   if (reviewMadeBeforeLinkChange(c, gx)) {
     const day = c.sessionStartedAt ? formatDate(c.sessionStartedAt) : "";
-    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> ${detail.updating ? "Updating the review..." : detail.updateError ? `Update the review again, or close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.` : "Update the review; approving waits until then."}${detail.updating ? "" : ` <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-review-update">Update the review</button>`}</p>`;
+    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> ${detail.updating ? "Updating the review..." : detail.updateError ? `Update the review again, or close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.` : "Approving waits until the review is updated."}${detail.updating ? "" : ` <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-review-update">Update the review</button>`}</p>`;
   }
   const viewer = status?.viewer || {};
   const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");
