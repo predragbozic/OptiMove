@@ -18,16 +18,17 @@ export function renderCoachesHtml(data) {
     <section class="content-section coach-directory">
       <section class="coach-directory-head">
         <div>
-          <p class="eyebrow">Expert directory</p>
           <h3>Coach profiles</h3>
-          <p class="muted">Profiles can connect programs, specialties, and future marketplace requests.</p>
+          <p class="muted">The coaches you can see, with their specialties and programs.</p>
         </div>
         ${canEditProfile ? `<button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">${ownProfile ? "Edit my profile" : "Create my profile"}</button>` : ""}
       </section>
       ${coaches.error ? `<p class="builder-error">${escapeHtml(coaches.error)}</p>` : ""}
       ${canEditProfile && coaches.editOpen ? renderCoachProfileForm(ownProfile, currentUser) : ""}
       <section class="coach-card-grid">
-        ${rows.length ? rows.map(renderCoachCard).join("") : `<div class="empty-state">No visible coach profiles yet.</div>`}
+        ${rows.length ? rows.map(renderCoachCard).join("") : `<div class="empty-state">${canEditProfile
+          ? "No coach profiles yet. Your profile shows your specialties and programs to the athletes and coaches who can see it."
+          : "No coach profiles to show yet."}</div>`}
       </section>
     </section>
     ${renderCoachDetailModalHtml(coaches, currentUser)}
