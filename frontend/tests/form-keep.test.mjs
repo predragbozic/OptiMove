@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { captureChangedFields, restoreChangedFields } from "../form-keep.js";
+import { captureChangedFields, resetLiveForm, restoreChangedFields } from "../form-keep.js";
+import { renderFilterableSelect } from "../organization-select.js";
 
 // F1: what a person typed in an open Settings form survives a repaint of the panel (a late /api/organization answer).
 // Browser proof: e2e/tests/settings-keep-typed.test.mjs.
@@ -80,4 +81,45 @@ test("a value goes back only to the same form: another team's edit form or a for
   root.innerHTML = '<form><input name="q" value=""></form>';
   root.querySelector('[name="q"]').value = "typed";
   assert.deepEqual(repaint('<form><input name="q" value=""></form>'), []);
+});
+
+const picker = (value = "t1") => `
+  <form data-organization-form="edit-athlete" data-organization-edit-id="a1">
+    <input name="name" value="Ana Example">
+    ${renderFilterableSelect({ name: "teamId", label: "Team", value, options: [{ value: "t1", label: "First team" }, { value: "t2", label: "U19 team" }] })}
+  </form>`;
+
+test("a searchable picker's choice (its search text and its hidden value) survives the repaint, so Save sends it", () => {
+  root.innerHTML = picker("t1");
+  const search = root.querySelector("[data-org-select-filter]");
+  search.value = "U19 team";
+  root.querySelector('input[type="hidden"][name="teamId"]').value = "t2"; // what filterOrganizationSelect sets on a match
+  repaint(picker("t1"));
+  assert.equal(root.querySelector("[data-org-select-filter]").value, "U19 team");
+  assert.equal(new dom.window.FormData(root.querySelector("form")).get("teamId"), "t2");
+});
+
+test("the field being typed in keeps the focus and its caret after the repaint", () => {
+  root.innerHTML = editTeam("First team");
+  const name = root.querySelector('[name="name"]');
+  name.value = "First team S4";
+  name.focus();
+  name.setSelectionRange(5, 5);
+  repaint(editTeam("First team"));
+  const again = root.querySelector('[name="name"]');
+  assert.notEqual(again, name, "a new node");
+  assert.equal(dom.window.document.activeElement, again);
+  assert.deepEqual([again.selectionStart, again.selectionEnd], [5, 5]);
+});
+
+test("after a successful save the form on screen is reset, also when a repaint replaced the submitted one", () => {
+  root.innerHTML = editTeam("First team");
+  const submitted = root.querySelector("form");
+  submitted.querySelector('[name="name"]').value = "Typed";
+  submitted.querySelector('[name="password"]').value = "s3cret-demo";
+  repaint(editTeam("First team")); // a late answer during the request: the typed values move into a new form
+  assert.equal(submitted.isConnected, false);
+  resetLiveForm(submitted, dom.window.document);
+  assert.equal(root.querySelector('[name="name"]').value, "First team");
+  assert.equal(root.querySelector('[name="password"]').value, "", "no password left on screen");
 });

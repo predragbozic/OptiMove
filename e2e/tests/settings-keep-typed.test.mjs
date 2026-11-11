@@ -43,3 +43,41 @@ for (const width of [390, 1280]) test(`(club_admin, ${width} px) a late organiza
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+for (const width of [390, 1280]) test(`(club_admin, ${width} px) typing through a late organization answer in Edit athlete: every keystroke and the chosen team stay`, async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", width);
+  try {
+    await openSettings(page);
+    await page.locator('.settings-tabs [data-section="athletes"]').first().click();
+    const edit = page.locator('main.workspace .organization-row [data-action="organization-edit"]').first();
+    await edit.waitFor();
+    let delayed = 0;
+    await page.route(/\/api\/organization(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      delayed += 1;
+      await new Promise((r) => setTimeout(r, 1000));
+      return route.continue();
+    });
+    const late = page.waitForResponse((r) => /\/api\/organization(\?.*)?$/.test(r.url()) && r.request().method() === "GET");
+    await edit.click();
+    const form = page.locator('[role="dialog"] form[data-organization-form="edit-athlete"]');
+    const team = form.locator('[data-org-select-filter][data-target-select="teamId"]');
+    await team.waitFor();
+    await team.fill("U19 team - Example Club");
+    const name = form.locator('input[name="fullName"]');
+    const before = await name.inputValue();
+    await name.click();
+    await page.keyboard.press("End");
+    // Six keystrokes over about two seconds: the late answer (and its repaint) lands in the middle of them.
+    await page.keyboard.type("ABCDEF", { delay: 330 });
+    await late;
+    await page.waitForTimeout(200);
+    assert.ok(delayed >= 1, "an organization answer arrived while typing");
+    assert.equal(await name.inputValue(), `${before}ABCDEF`, "no keystroke was lost to the repaint");
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), "fullName", "the name field still has the focus");
+    assert.equal(await team.inputValue(), "U19 team - Example Club");
+    assert.equal(await form.locator('input[type="hidden"][name="teamId"]').inputValue(), world.ids.teamA2, "the chosen team is still chosen");
+    await page.unroute(/\/api\/organization(\?.*)?$/);
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
