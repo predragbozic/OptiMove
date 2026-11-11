@@ -60,7 +60,7 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
   const dashboard = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
   const widgets = await query(
-    `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, presentation_config, local_filter_override, revision
+    `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, to_jsonb(dashboard_widgets)->'presentation_config' as presentation_config, local_filter_override, revision
      from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`,
     [dashboardId],
   );
