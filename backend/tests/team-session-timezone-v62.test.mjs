@@ -114,7 +114,7 @@ async function clubAdminOf(clubId) {
 }
 
 // A session of athletes 101 and 102 whose tracks report `zones` (one per athlete; the fixture's own zone is Europe/Sarajevo).
-function bundleOf({ sessionId, zones = ["Europe/Sarajevo", "Europe/Sarajevo"], hour = 8, ids = [101, 102] }) {
+function bundleOf({ sessionId, zones = ["Europe/Sarajevo", "Europe/Sarajevo"], hour = 8, ids = [101, 102], gpexeTeamId = 77 }) {
   const byId = Object.fromEntries(standardAthletes().map((a) => [a.id, a]));
   const athletes = ids.map((id, i) => {
     const a = structuredClone(byId[id]);
@@ -122,7 +122,7 @@ function bundleOf({ sessionId, zones = ["Europe/Sarajevo", "Europe/Sarajevo"], h
     for (const part of a.parts) delete part.track;
     return a;
   });
-  const bundle = makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-14T${String(hour).padStart(2, "0")}:08:12`, updatedOn: "2026-09-14T20:18:09.337", athletes });
+  const bundle = makeBundle({ sessionId, gpexeTeamId, start: `2026-09-14T${String(hour).padStart(2, "0")}:08:12`, updatedOn: "2026-09-14T20:18:09.337", athletes });
   ids.forEach((id, i) => { bundle.tracks[String(sessionId * 10 + i)].timezone = zones[i]; });
   return bundle;
 }
@@ -371,6 +371,7 @@ test("9. an imported single-zone away session is unchanged after the team's zone
   const team = await setupTeam();
   const zones = ["Europe/London", "Europe/London"];
   const s = await importSession(team, 9802, { zones });
+  // The stored hash of the imported row (never rewritten); test 13 compares freshly computed previews.
   const hashBefore = (await admin.query(`select preview_hash from training_load.gpexe_import_candidates where id = $1`, [s.candidateId])).rows[0].preview_hash;
   assert.equal((await setZone(team, "Europe/Sarajevo")).status, 200);
   await checkNow(team, [bundleOf({ sessionId: 9802, zones })]);
@@ -394,6 +395,98 @@ test("10. the edge: an imported single-zone session re-sent with a track in anot
   assert.equal(det.preview.status, "blocked");
   assert.equal(det.preview.blocked.code, "event_changed");
   assert.equal((await admin.query(`select event_timezone_snapshot from training_load.metric_events where id = $1`, [s.eventId])).rows[0].event_timezone_snapshot, "Europe/London", "the imported event is untouched");
+});
+
+test("12. the Mappings preview over a mixed session passes the same gates as its import: 409 mixed_timezones without the team's zone, 200 with it", async () => {
+  const team = await setupTeam();
+  const zones = ["Europe/Sarajevo", "Europe/Stockholm"];
+  await checkNow(team, [bundleOf({ sessionId: 9804, zones })]);
+  const cand = await candidateOf(team, 9804);
+  const act = (await admin.query(
+    `select mapping_id, mapping_version_id from training_load.source_metric_mapping_activations where source_team_binding_id = $1 and ended_at is null and applies_to_session order by activated_at limit 1`,
+    [team.bindingId],
+  )).rows[0];
+  assert.ok(act, "an open session activation on the team's binding");
+  const preview = () => fetch(`${apiBase}/api/training-load/sources/metrics/mappings/${act.mapping_id}/versions/${act.mapping_version_id}/preview?candidateId=${cand.id}`, { headers: { Cookie: team.padmin.cookie } })
+    .then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+  let r = await preview();
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.current?.reason, "mixed_timezones");
+  assert.equal((await setZone(team, "Europe/London")).status, 200);
+  r = await preview();
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.preview?.levels, "the preview's levels");
+});
+
+test("13. a single-zone session's preview is byte for byte the same with and without the team's zone (the same previewHash)", async () => {
+  const team = await setupTeam();
+  const { buildCandidatePreview } = await import("../src/gpexeImportPreview.js");
+  const bundle = bundleOf({ sessionId: 9805, zones: ["Europe/London", "Europe/London"] });
+  const importPath = { path: "source_connection", bindingId: String(team.bindingId) };
+  const c = await newClient();
+  try {
+    const before = await buildCandidatePreview(c, { bundle, ownerTeamId: team.teamId, performedByUserId: team.padmin.id, importPath });
+    assert.equal((await setZone(team, "Europe/Sarajevo")).status, 200);
+    const after = await buildCandidatePreview(c, { bundle, ownerTeamId: team.teamId, performedByUserId: team.padmin.id, importPath });
+    assert.equal(after.previewHash, before.previewHash);
+    assert.deepEqual(after.preview.session, before.preview.session);
+    assert.equal(after.preview.session.timezoneSource, undefined);
+    // And a mixed bundle's preview does change with the zone (the guard above is not vacuous).
+    const mixed = bundleOf({ sessionId: 9806, zones: ["Europe/London", "Europe/Stockholm"] });
+    const m = await buildCandidatePreview(c, { bundle: mixed, ownerTeamId: team.teamId, performedByUserId: team.padmin.id, importPath });
+    assert.equal(m.preview.session.timezoneSource, "team");
+  } finally {
+    await c.end();
+  }
+});
+
+test("14. a read-back that fails after the zone was saved still answers 200 with the saved zone and readError; the row is there", async () => {
+  const team = await setupTeam();
+  const tzService = await import("../src/gpexeTeamTimezone.js");
+  tzService.setTimezoneReadBackForTests(async () => { throw Object.assign(new Error("read after commit failed"), { code: "pool_checkout_timeout" }); });
+  try {
+    const r = await setZone(team, "Europe/Sarajevo");
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.sessionTimezone.readError, true);
+    assert.equal(r.body.sessionTimezone.current.timezone, "Europe/Sarajevo");
+  } finally {
+    tzService.setTimezoneReadBackForTests(null);
+  }
+  assert.equal(await historyCount(team.teamId), 1, "the write was saved");
+});
+
+test("15. a team of an archived club gets the identical 404 on both routes, and nothing is written", async () => {
+  const team = await setupTeam();
+  const missing = await api(`/teams/00000000-0000-4000-8000-000000000000/session-timezone`, { cookie: team.padmin.cookie });
+  await admin.query(`update public.clubs set is_active = false where id = $1`, [team.clubId]);
+  try {
+    const read = await api(tzPath(team), { cookie: team.padmin.cookie });
+    const write = await setZone(team, "Europe/Sarajevo");
+    assert.equal(read.status, 404);
+    assert.equal(write.status, 404);
+    assert.equal(read.text, missing.text);
+    assert.equal(write.text, missing.text);
+  } finally {
+    await admin.query(`update public.clubs set is_active = true where id = $1`, [team.clubId]);
+  }
+  assert.equal(await historyCount(team.teamId), 0);
+});
+
+test("16. the writer's own bundle import (the CLI path) reads the team's zone too: a mixed bundle is imported with the event in the team's zone", async () => {
+  const team = await setupTeam();
+  const { importGpexeBundle } = await import("../src/gpexeImportWriter.js");
+  const mixed = bundleOf({ sessionId: 9807, zones: ["Europe/Sarajevo", "Europe/Stockholm"], gpexeTeamId: Number(team.sourceTeamId) });
+  const ctx = { ownerTeamId: team.teamId, performedByUserId: team.padmin.id, athleteIdByGpexeId: { 101: team.athleteIds[0], 102: team.athleteIds[1] }, batchFilename: "tz62" };
+  const c = await newClient();
+  try {
+    await assert.rejects(importGpexeBundle(c, mixed, ctx), (e) => e.code === "mixed_timezones", "without the zone: refused");
+    assert.equal((await setZone(team, "Europe/London")).status, 200);
+    await importGpexeBundle(c, mixed, ctx);
+  } finally {
+    await c.end();
+  }
+  const ev = (await admin.query(`select event_timezone_snapshot from training_load.metric_events where owner_team_id = $1 and source_external_id = 'team_session:9807'`, [team.teamId])).rows[0];
+  assert.equal(ev?.event_timezone_snapshot, "Europe/London");
 });
 
 async function newClient() {

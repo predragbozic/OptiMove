@@ -672,4 +672,15 @@ test("TZ5. a zone in force that the browser's list does not name is still offere
   assert.match(html, /<option value="Etc\/Zulu-Alias" selected>Etc\/Zulu-Alias<\/option>/);
   assert.doesNotMatch(html, /<option value="" selected>/, "None is not the selection");
   assert.match(html, /If you clear it, sessions whose GPS units report different time zones are not imported until a zone is set again\./);
+  assert.match(html, /If you change it, a session imported through the old zone that GPEXE sends again will need review\./);
+});
+
+test("TZ6. a save whose read-back failed is shown as saved, with a note that the details are out of date - never as a failure", async () => {
+  await openTeam({ writes: { [`PUT ${TEAM}/session-timezone`]: { status: 200, body: { sessionTimezone: { current: { timezone: "Europe/Sarajevo", setAt: null, reason: null, setByName: null }, history: null, readError: true } } } } });
+  await act("data-sources-tz-open");
+  await submit("timezone", { timezone: "Europe/Sarajevo", reason: "home zone" });
+  const html = renderDataSourcesPanelHtml();
+  assert.match(html, /The team(?:'|&#0?39;)s session time zone is Europe\/Sarajevo\. It was saved, but the details below could not be read again; open the team again to see them\./);
+  assert.match(html, /<dd>Europe\/Sarajevo<\/dd>/);
+  assert.doesNotMatch(html, /data-sources-error/);
 });

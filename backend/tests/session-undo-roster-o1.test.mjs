@@ -13,6 +13,10 @@ import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 // This suite pins v60 as the last migration (its rollback tests need that); later migrations (v61, J20-C) have their own suites.
 const UP_TO_V60 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v60_undo_roster_work")) + 1);
+// v62: every check, preview and approval reads the team's session time zone, so the main database carries v62 as well; the v60
+// rollback checks below hide v62's record for their run (its later-migration gate would refuse first) and put it back.
+const V62_FILE = "202611111200_training_load_v62_team_session_timezone.sql";
+const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE];
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -39,7 +43,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undoo1", migrations: UP_TO_V60.filter((m) => !m.includes("app_error_events")) }); // every migration but the error-tracking one (an injected failure would be recorded as a row)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undoo1", migrations: MAIN_MIGRATIONS }); // through v60, plus v62 (the importer reads it); not the error-tracking one (an injected failure would be recorded as a row)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -299,6 +303,8 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
   const rollback = fs.readFileSync(RUNBOOK("undo-roster-work-v60-rollback.sql"), "utf8");
   const before = await catalogOf(admin);
   const c = await newClient();
+  await c.query(`create temp table o1_v62 as select * from public.schema_migrations where migration_name = $1`.replace("$1", `'migrations_v2/${V62_FILE}'`));
+  await c.query(`delete from public.schema_migrations where migration_name in (select migration_name from o1_v62)`);
   const attempt = async (pattern) => {
     await assert.rejects(c.query(rollback), pattern);
     await c.query("rollback").catch(() => {});
@@ -327,8 +333,10 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
     assert.deepEqual(await catalogOf(c), before);
   } finally {
     await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/209912312359_later.sql'`).catch(() => {});
+    await c.query(`insert into public.schema_migrations select * from o1_v62`).catch(() => {});
     await c.end();
   }
+  assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V62_FILE}`])).rows[0].n, 1, "v62's record is back");
 });
 
 // ---------------------------------------------------------------------------

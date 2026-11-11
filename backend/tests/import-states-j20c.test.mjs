@@ -658,8 +658,13 @@ test("12. migration v61: the preflight passes on v60, the post-check on v61, the
   const before = await catalogOf(admin);
   const c = await newClient();
   try {
+    // v62 (and anything later) is applied on this database, which the v61 rollback refuses first; its records are hidden inside
+    // a transaction that is rolled back with the refusal, so the gate under test is the import-origin one.
+    await c.query("begin");
+    await c.query(`delete from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > $1`, [V61]);
     await assert.rejects(c.query(fs.readFileSync(RUNBOOK("import-states-v61-rollback.sql"), "utf8")), /v61 rollback refused: an import-origin roster request exists/);
     await c.query("rollback").catch(() => {});
+    assert.ok((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name > $1 and migration_name like 'migrations_v2/%'`, [V61])).rows[0].n >= 1, "the later records are back");
   } finally {
     await c.end();
   }

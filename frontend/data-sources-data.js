@@ -249,7 +249,8 @@ export async function saveTeamTimezone(render) {
     resetDataSourcesForms();
     d.timezone = answer.sessionTimezone || d.timezone;
     d.noticeFor = "timezone";
-    d.notice = draft.timezone ? `The team's session time zone is ${draft.timezone}.` : "The team's session time zone is cleared.";
+    d.notice = (draft.timezone ? `The team's session time zone is ${draft.timezone}.` : "The team's session time zone is cleared.")
+      + (answer.sessionTimezone?.readError ? " It was saved, but the details below could not be read again; open the team again to see them." : "");
   } catch (error) {
     if (generation !== d.generation) return;
     d.tzError = errorInfo(error);

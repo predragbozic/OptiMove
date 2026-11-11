@@ -22,6 +22,7 @@ import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { mayManageActivations, readableOwnerKeys } from "./sourceMetricAccess.js";
 import { extractabilityCode, extractorFor } from "./sourceMetricExtractors.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeLevelValues } from "./gpexeImportMapper.js";
+import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { PREVIEW_MINIMUM_ATHLETES, previewLevel } from "./sourceMetricPreview.js";
 
 const { boundedRead, refusal, NOT_FOUND, MESSAGES, UUID, PARAMS_AS_TEXT } = adminWriteKit;
@@ -61,7 +62,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
   // One REPEATABLE READ READ ONLY transaction: the version, the candidate's
   // scope, its snapshot state and its bundle are one snapshot. The candidate
   // row is read without a lock.
-  const { v, bundle } = await boundedRead(async (client) => {
+  const { v, bundle, teamTimezone } = await boundedRead(async (client) => {
     // The mapping readable in this workspace, the version of that mapping.
     const version = (await client.query(
       `select v.id, v.source_unit, v.target_unit,
@@ -104,7 +105,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
            join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
           where c.id = $1::uuid
             and (($2::text = 'system' and $3::uuid is null) or ($2::text = 'club' and t.club_id = $3::uuid)))
-       select s.id, s.purged, s.expired, b.too_large, k.source_path, h.api_family,
+       select s.id, s.owner_team_id, s.purged, s.expired, b.too_large, k.source_path, h.api_family,
               case when b.too_large is false and k.source_path = $7::text and h.api_family = $6::text and $8::boolean
                    then s.raw_bundle end as raw_bundle
          from scoped s
@@ -125,13 +126,14 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
       throw refusal(409, "candidate_source_mismatch", PREVIEW_MESSAGES.candidate_source_mismatch);
     }
     if (registryCode) throw refusal(409, registryCode, MESSAGES[registryCode]);
-    return { v: version, bundle: candidate.raw_bundle };
+    // v62: the candidate team's session time zone, read in the same transaction, so a mixed session passes the import's gates.
+    return { v: version, bundle: candidate.raw_bundle, teamTimezone: await teamSessionTimezone(client, candidate.owner_team_id) };
   });
   // After the transaction: the values.
   // Fail closed: every check above lets the bundle through or refuses.
   if (bundle === null || typeof bundle !== "object") throw new Error("preview bundle missing");
   const entry = extractorFor({ sourceSystem: v.source_system, apiFamily: v.api_family, sourceMetricKey: v.source_metric_key });
-  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters));
+  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters), { teamTimezone });
   if (out.code) throw refusal(409, "candidate_not_importable", PREVIEW_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   const factors = { scale: v.scale, divisor: v.scale_divisor, offset: v.offset };
   return {

@@ -209,7 +209,7 @@ function renderTimezoneFormHtml(d, current) {
       <label class="search-field"><span>Why?</span>
         <textarea name="reason" required maxlength="500" rows="2" placeholder="Short note for the record">${escapeHtml(draft.reason)}</textarea>
       </label>
-      <p class="muted">Sessions already imported keep the date and time they were imported with. The zone is used for sessions found from now on.${current ? " If you clear it, sessions whose GPS units report different time zones are not imported until a zone is set again." : ""}</p>
+      <p class="muted">Sessions already imported keep the date and time they were imported with. The zone is used for sessions found from now on.${current ? " If you clear it, sessions whose GPS units report different time zones are not imported until a zone is set again. If you change it, a session imported through the old zone that GPEXE sends again will need review." : ""}</p>
       ${errorHtml(d.tzError)}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="submit" ${d.tzBusy ? "disabled" : ""}>${d.tzBusy ? "Saving..." : "Save"}</button>

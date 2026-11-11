@@ -486,10 +486,11 @@ export function wholeRowHelperValues(row) {
 // and skips name session, track, row and athlete ids, and none of them is
 // returned. `extract` gets the plan's per-row input and returns { value } or
 // { skip }.
-export function gpexeLevelValues(bundle, extract) {
+// v62: `teamTimezone` is the candidate team's session time zone, so a mixed session passes the same gates as its import.
+export function gpexeLevelValues(bundle, extract, { teamTimezone = null } = {}) {
   let plan;
   try {
-    plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ raw: true, key: "preview", levels: { full: true, drill: true }, extract }] });
+    plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ raw: true, key: "preview", levels: { full: true, drill: true }, extract }], teamTimezone });
   } catch (error) {
     if (error instanceof GpexeMappingError) return { code: error.code };
     throw error;

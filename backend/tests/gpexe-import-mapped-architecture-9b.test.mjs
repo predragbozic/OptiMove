@@ -396,7 +396,8 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   assert.ok(plans.some((p) => p.startsWith("gpexeImportPreview.js") && !p.endsWith(": []")), "the preview builds its plan from mappedMetricSpecs");
   // The 7e raw spec's extract is gpexeLevelValues' parameter, and every caller
   // passes a registry entry's extract.
-  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract\)/);
+  // v62: the one other parameter is the options object carrying the team's session time zone (no spec, no value).
+  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)/);
   const levelCalls = files.flatMap((g) => callsOf(g, "gpexeLevelValues").map((call) => ({ g, call })));
   assert.ok(levelCalls.length >= 1, "gpexeLevelValues has a caller");
   for (const { g, call } of levelCalls) {

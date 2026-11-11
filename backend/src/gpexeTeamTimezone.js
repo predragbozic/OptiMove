@@ -46,7 +46,7 @@ export async function setTeamSessionTimezone(teamId, { timezone, reason, userId 
   if (timezone !== null && !validIanaZone(timezone)) {
     throw new TeamTimezoneError(400, "invalid_timezone", "Choose a time zone from the list (for example Europe/Sarajevo).");
   }
-  if (typeof reason !== "string" || !reason.trim() || reason.length > REASON_MAX) {
+  if (typeof reason !== "string" || !reason.trim() || reason.trim().length > REASON_MAX) {
     throw new TeamTimezoneError(400, "reason_required", `Say why the time zone is set or changed (at most ${REASON_MAX} characters).`);
   }
   const client = await pool.connect();
@@ -61,7 +61,7 @@ export async function setTeamSessionTimezone(teamId, { timezone, reason, userId 
     if ((current ? current.timezone : null) === timezone) {
       // Idempotent: nothing is written, so nothing is appended to the history.
       await client.query("commit");
-      return readTeamSessionTimezone(teamId);
+      return readBackAfterCommit(teamId, timezone);
     }
     await client.query(
       `insert into training_load.gpexe_team_session_timezones (owner_team_id, timezone, set_by_user_id, set_at, reason)
@@ -84,5 +84,21 @@ export async function setTeamSessionTimezone(teamId, { timezone, reason, userId 
   } finally {
     client.release();
   }
-  return readTeamSessionTimezone(teamId);
+  return readBackAfterCommit(teamId, timezone);
+}
+
+// After a confirmed COMMIT the zone is saved: a failed read-back never turns that into a failure. It answers the saved zone
+// with readError, and the screen says the list is out of date (the code review of v62, the post-COMMIT rule).
+let readBackForTests = null;
+export function setTimezoneReadBackForTests(fn) {
+  readBackForTests = fn ?? null;
+}
+async function readBackAfterCommit(teamId, timezone) {
+  try {
+    if (readBackForTests) await readBackForTests();
+    return await readTeamSessionTimezone(teamId);
+  } catch (error) {
+    console.error(`[gpexe] reading the session time zone of team ${teamId} after it was saved failed: ${error?.code || error?.message || error}`);
+    return { current: { timezone, setAt: null, reason: null, setByName: null }, history: null, readError: true };
+  }
 }
