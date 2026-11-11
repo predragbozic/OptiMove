@@ -700,18 +700,17 @@ test("4. D29, C110 and R17: a club variable with a maximum, activated alone - an
   assert.ok(named.text.includes("Club max speed"), "the coach C99 admits reads the club variable's name");
   assert.equal(workspaceReads.length, 1, `one read of the stored workspace: ${workspaceReads.length}`);
 
-  // R17 through the route: the route still admits the team's coach when the
-  // team's club is archived (resolveGpexeTeamAccess reads the team only), but
-  // C99 (resolveVariableEditor) admits only a coach of an active club - so the
-  // same coach now reads "Club variable" and no key.
+  // R17 through the route, since the archived-club fix: the GPEXE routes no
+  // longer admit anyone for a team whose club is archived
+  // (resolveGpexeTeamAccess requires the club active), so the club variable's
+  // name and key cannot be read through them at all - the identical 404.
   await admin.query(`update public.clubs set is_active = false where id = $1`, [team.clubId]);
-  const excluded = await reads(team, viewers.coach, cand.id);
-  for (const e of entries(excluded.candidate.preview)) {
-    assert.equal(e.label, CLUB_VARIABLE_LABEL, "a viewer C99 does not admit reads the neutral label");
-    assert.ok(!("variableKey" in e));
-  }
-  assert.ok(!excluded.detail.text.includes("Club max speed"));
-  assert.ok(!excluded.detail.text.includes(variableKey));
+  const refused = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: viewers.coach.cookie });
+  assert.equal(refused.status, 404, refused.text);
+  assert.ok(!refused.text.includes("Club max speed"));
+  assert.ok(!refused.text.includes(variableKey));
+  const list = await api(`/teams/${team.teamId}/candidates`, { cookie: viewers.coach.cookie });
+  assert.equal(list.status, 404, list.text);
 });
 
 // ---------------------------------------------------------------------------

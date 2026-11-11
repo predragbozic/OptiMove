@@ -4106,18 +4106,24 @@ pre-existing; pass/fail counts don't belong in this file
   The *Rukovodilac* also accepted, for the M6 runbook:
   - blocks 11 to 13 of the preflight are read again right before step 14;
   - the freeze covers rights too (platform-admin roles and approver grants).
-- **A coach of a team whose club is archived still reaches the GPEXE team routes** (pre-existing, MEDIUM; found by
-  `security-reviewer` on the 9-B pull request and confirmed from the code; recorded on the *Rukovodilac*'s order of
-  2026-11-02, not yet assigned).
-  - **Cause:** the club archive (`DELETE /clubs/:id`, `routes/organization.js`) sets only `clubs.is_active`.
-    `loadAvailableWorkspaces` (`workspace.js`) still offers the team's workspace, and `resolveGpexeTeamAccess`
-    (`gpexeImportAccess.js`) checks the team, not its club.
-  - **What stays open to that coach:** the reads (status, candidates, source athletes, approvers) and Link / Unlink.
-    A check start is refused by the credential resolver (`team_club_active`), and since 9-B an approval is refused by
-    `lockApprovalTeam` with the identical 404.
-  - **Scope:** no other club's data is reachable.
-  - **Fix:** check the club's `is_active` in `resolveGpexeTeamAccess` and in the team-workspace query, with a test for
-    the reads and Link / Unlink.
+- **A coach of a team whose club is archived still reached the GPEXE team routes: fixed by the pull request that adds
+  this line** (★★, trigger 2; no migration).
+  - `resolveGpexeTeamAccess` (`gpexeImportAccess.js`) now joins the team's club and requires it active, so every
+    `/api/training-load/gpexe/teams/:teamId/...` route answers a team of an archived club with the identical 404, for its
+    coach, its club admin and a platform admin. That covers the reads, check, Link, Unlink, settings, the switch,
+    approvers, approve, preview, imports, states, identities, pair suggestions and undo. A restore brings them back.
+    Test: `gpexe-in-app-import` "archived club", with the mutation killed.
+  - **Not changed:** the workspace list. A team coach of an archived club keeps the team workspace, because confirmed
+    contracts rely on it: 7h-V test 4 (the session read without names), central calendar test 26 (a team workspace of
+    an archived club answers the one 404) and audience-9b test 4. Changing it app-wide failed those tests. Test 4 of
+    audience-9b, which had documented the old gap, now expects the 404.
+  - **Follow-ups (`security-reviewer`, LOW; not scheduled):**
+    - Link / Unlink (`writeUnderTeamLock`), grant / revoke and the settings change do not re-check the club under their
+      lock. A write that passed the route check in the same instant as a club archive can still commit. It stays inside
+      the same club and is visible again after a restore. The fix is the `clubs … for share` check of `lockApprovalTeam`
+      in those transactions.
+    - Routes outside GPEXE that check a team through `req.authz` and the team's own `is_active` only
+      (`trainingLoad.js:1778`, `:1782`; several `organization.js` reads) were not audited for an archived club.
 - **C110 form C: a session held for an administrator's choice** (the owner's target, 2026-11-01): for a value outside a
   variable's limits or a missing required value, the session waits; an administrator chooses "leave out only this
   value" (the default) or "import anyway" with a mandatory reason and a record of who approved it. After the pilot's
