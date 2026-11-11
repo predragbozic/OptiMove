@@ -82,13 +82,16 @@ function row(overrides = {}) {
 let MINUTES = {};
 let HELPERS = {};
 let UNLINKED = new Set();
-function durationValue(gid) {
-  const m = MINUTES[gid];
-  return m === undefined ? [] : [{ metricDefinitionId: "def-duration", variableScope: "system", label: "Duration", unit: "min", value: String(m), sourceMetricKey: "athlete_session.total_time", sourceValue: String(m * 60), sourceUnit: "s", previous: null, change: "new" }];
+let UNIT = "min";
+let OUTCOME = {};
+let DRILL = {};
+function durationValue(gid, m = MINUTES[gid]) {
+  return m === undefined ? [] : [{ metricDefinitionId: "def-duration", variableScope: "system", label: "Duration", unit: UNIT, value: String(m), sourceMetricKey: "athlete_session.total_time", sourceValue: String(m * 60), sourceUnit: "s", previous: null, change: "new" }];
 }
 function athleteEntry([gid, aid]) {
   return { gpexeAthleteId: gid, athleteId: aid, participation: { status: "recorded_by_gpexe" }, gps: { status: "measured", reason: null }, notImported: null, blocksSession: false,
-    results: [{ externalId: `athlete_session:${gid}:full`, level: "full", drillIndex: null, outcome: "created", values: [{ metricDefinitionId: "def-distance", variableScope: "system", label: "Distance", unit: "m", value: "3000", sourceMetricKey: "athlete_session.total_distance", sourceValue: "3000", sourceUnit: "m", previous: null, change: "new" }, ...durationValue(gid)] }], skippedValues: [] };
+    results: [...(DRILL[gid] === undefined ? [] : [{ externalId: `athlete_session:${gid}:drill:0`, level: "drill", drillIndex: 0, outcome: "created", values: DRILL[gid] === null ? [{ metricDefinitionId: "def-distance", variableScope: "system", label: "Distance", unit: "m", value: "500", sourceMetricKey: "athlete_session.total_distance", sourceValue: "500", sourceUnit: "m", previous: null, change: "new" }] : durationValue(gid, DRILL[gid]) }]),
+      { externalId: `athlete_session:${gid}:full`, level: "full", drillIndex: null, outcome: OUTCOME[gid] || "created", values: [{ metricDefinitionId: "def-distance", variableScope: "system", label: "Distance", unit: "m", value: "3000", sourceMetricKey: "athlete_session.total_distance", sourceValue: "3000", sourceUnit: "m", previous: null, change: "new" }, ...durationValue(gid)] }], skippedValues: [] };
 }
 function previewOf(leftOut = []) {
   return { version: 3, status: "ready", blocked: null, counts: { created: 3, changesToImported: 0 }, changesToImported: [],
@@ -161,14 +164,15 @@ test("1. a GPS athlete clearly below the session's longest time gets a yellow Ch
   MINUTES = { 101: 94, 102: 92, 103: 41 };
   await openReview();
   const page = reviewHtml();
-  assert.match(rowOf("Cy Example", page), /gpexe-badge is-check" title="A hint only">Check</);
+  assert.match(rowOf("Cy Example", page), /gpexe-badge is-check">Check</);
   assert.match(rowOf("Cy Example", page), /class="gpexe-short-cell">41 \/ 94 min</);
-  assert.match(rowOf("Cy Example", page), /Recorded 41 of 94 min, clearly less than the longest in this session\. Check it: keep the values, or tick Leave out and choose &quot;Participated · no device data&quot;\./);
+  assert.match(rowOf("Cy Example", page), /Only 41 of 94 min recorded \(the longest in this session\)\. Imported as is unless you tick Leave out and choose &quot;Participated · no device data&quot;\./);
   for (const [name, text] of [["Ana Example", "94 min"], ["Bea Example", "92 min"]]) {
     assert.ok(rowOf(name, page).includes(`>${text}<`), `${name}: ${text}`);
     assert.ok(!/is-check/.test(rowOf(name, page)), `${name}: no flag`);
   }
-  assert.match(page, /data-filter="short" aria-pressed="false">Check <span class="gpexe-chip-count">1<\/span>/);
+  assert.match(page, /data-filter="short" aria-pressed="false">Short recording <span class="gpexe-chip-count">1<\/span>/);
+  assert.match(page, /Needs a person <span class="gpexe-chip-count">3<\/span>/, "the flagged athlete and the two without a record");
   const fine = page.slice(page.indexOf('class="gpexe-fine"'));
   assert.ok(!fine.includes(">Cy Example</th>"), "the flagged athlete is shown, not folded under the fine ones");
   assert.ok(fine.includes(">Ana Example</th>"));
@@ -179,7 +183,7 @@ test("2. the threshold is below 75 % of the longest: exactly 75 % is not flagged
   await openReview();
   assert.ok(!/is-check/.test(rowOf("Bea Example")), "75 of 100 is not short");
   assert.match(rowOf("Cy Example"), /is-check/);
-  assert.match(rowOf("Cy Example"), />75 \/ 100 min</, "the whole minutes");
+  assert.match(rowOf("Cy Example"), />74 \/ 100 min</, "the athlete's minutes rounded down, never 75 beside an unflagged 75");
 });
 
 test("3. a hint only: the import is unchanged - the same button, every athlete sent, nothing left out unless the coach ticks it; ticking Leave out on the flagged row leaves exactly that athlete out", async () => {
@@ -213,7 +217,7 @@ test("5. a viewer who may not approve sees the flag and the time, and a sentence
   await openReview({ canApprove: false });
   const row = rowOf("Cy Example");
   assert.match(row, /is-check/);
-  assert.match(row, /keep the values, or have them left out and set to &quot;Participated · no device data&quot;\./);
+  assert.match(row, /Only 41 of 94 min recorded \(the longest in this session\)\. Whoever imports can keep the values or leave them out as &quot;Participated · no device data&quot;\./);
   assert.ok(!/training-load-gpexe-leave-out/.test(row));
 });
 
@@ -234,5 +238,65 @@ test("6. only a row the import would write is flagged: an athlete not linked yet
   } finally {
     HELPERS = {};
     UNLINKED = new Set();
+  }
+});
+
+test("7. ticking Leave out on the flagged row clears the flag: the coach has decided", async () => {
+  MINUTES = { 101: 94, 102: 92, 103: 41 };
+  await openReview();
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "103" }, { checked: true });
+  const row = rowOf("Cy Example");
+  assert.ok(!/is-check/.test(row), "no flag once ticked");
+  assert.ok(!/gpexe-short-cell/.test(row));
+  assert.ok(!/data-filter="short"/.test(reviewHtml()), "no Short recording chip");
+  await act("training-load-gpexe-leave-out", { gpexeAthleteId: "103" }, { checked: false });
+  assert.match(rowOf("Cy Example"), /is-check/, "back when unticked");
+});
+
+test("8. only the time the import writes, in minutes, is compared: a Duration in seconds, a drill's own time, or a result that does not write are never flagged", async () => {
+  try {
+    UNIT = "s";
+    MINUTES = { 101: 94, 102: 92, 103: 41 };
+    await openReview();
+    assert.ok(!/is-check/.test(reviewHtml()), "a Duration in another unit is not compared");
+    UNIT = "min";
+    MINUTES = { 101: 94, 102: 92 };
+    DRILL = { 103: 10 };
+    await openReview();
+    assert.ok(!/is-check/.test(reviewHtml()), "a drill's own Duration is not the session time");
+    DRILL = {};
+    MINUTES = { 101: 94, 102: 92, 103: 41 };
+    OUTCOME = { 103: "stale_resend_ignored" };
+    DRILL = { 103: null };
+    await openReview();
+    assert.match(rowOf("Cy Example"), /Importable/, "the drill still writes");
+    assert.ok(!/is-check/.test(reviewHtml()), "a whole-session result that writes nothing has no time to judge");
+    // A linked athlete whose import carries no Duration is not judged by the server's helper time either.
+    DRILL = {};
+    OUTCOME = {};
+    MINUTES = { 101: 94, 102: 92 };
+    HELPERS = { 103: { duration: 41, distance: null, maxSpeed: null } };
+    await openReview();
+    assert.ok(!/is-check/.test(reviewHtml()), "the helper time is for an athlete not linked yet only");
+  } finally {
+    UNIT = "min";
+    DRILL = {};
+    OUTCOME = {};
+    HELPERS = {};
+  }
+});
+
+test("9. a flagged row without a Leave out box (results imported before) names the fact only, never a box that is not there", async () => {
+  MINUTES = { 101: 94, 102: 92, 103: 41 };
+  OUTCOME = { 103: "corrected" };
+  try {
+    await openReview();
+    const row = rowOf("Cy Example");
+    assert.match(row, /is-check/);
+    assert.match(row, /Only 41 of 94 min recorded \(the longest in this session\)\.(?! Imported as is)/);
+    assert.ok(!/tick Leave out/.test(row));
+    assert.ok(!/training-load-gpexe-leave-out/.test(row));
+  } finally {
+    OUTCOME = {};
   }
 });

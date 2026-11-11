@@ -2217,34 +2217,40 @@ function valueCellText(row, col, c) {
 const PROBLEM_KIND = { needs_link: "not_linked", no_record: "no_data", blocked: "review", not_imported: "review" };
 
 // 6a: a GPS athlete whose recorded time is clearly shorter than the session's longest (below SHORT_SHARE of it) gets a yellow
-// "Check": a hint only, never a decision (in a match a substitution is normal). The time is the Duration the import writes
-// (athlete_session.total_time), or for an athlete not linked yet the helper value the server read from the session.
+// "Check": a hint only, never a decision (in a match a substitution is normal). The time is the Duration the import writes for
+// the whole session (athlete_session.total_time, in minutes) - the value the Duration cell shows - or, for an athlete not
+// linked yet, the helper value the server read from the session (shown in the same cell). A Duration in another unit is never
+// compared.
 export const SHORT_SHARE = 0.75;
 const DURATION = VALUE_COLUMNS[0];
 function durationMinutes(r, c) {
   if (!r.a) return null;
-  for (const res of (r.a.results || []).filter((x) => x.level !== "drill")) {
-    const v = (res.values || []).find((x) => (DURATION.keys.includes(x.sourceMetricKey) || DURATION.keys.includes(x.metricKey)) && x.value !== null && x.value !== undefined);
-    const n = v ? Number(v.value) : NaN;
-    if (Number.isFinite(n)) return n;
+  if (r.a.allValuesLeftOut !== true) {
+    for (const res of (r.a.results || []).filter((x) => x.level !== "drill" && WRITING_OUTCOMES.has(x.outcome))) {
+      const v = (res.values || []).find((x) => (DURATION.keys.includes(x.sourceMetricKey) || DURATION.keys.includes(x.metricKey)) && x.value !== null && x.value !== undefined);
+      if (!v) continue;
+      const n = Number(v.value);
+      return (v.unit || DURATION.unit) === DURATION.unit && Number.isFinite(n) ? n : null;
+    }
   }
-  // The helper value only where the Duration cell shows it (an athlete not linked yet), so the flag never compares a time the
-  // row does not show.
   if (r.status !== "needs_link") return null;
   const h = c?.helperValues?.[r.a.gpexeAthleteId]?.duration;
   return h === null || h === undefined || !Number.isFinite(Number(h)) ? null : Number(h);
 }
-// The rows' times, the session's longest, and which rows are short. Only a row the import would write can be short: the choice
-// (keep the values, or leave out) exists only there.
-function markShortRecordings(rows, c) {
+// The rows' times, the session's longest (every recorded time, the athletes left out included, so the reference is the same
+// before and after the import), and which rows are short. Only a row the import would write, and that the coach has not
+// ticked to leave out, can be short.
+function markShortRecordings(rows, c, chosen = new Set()) {
   for (const r of rows) r.minutes = durationMinutes(r, c);
-  const longest = Math.max(0, ...rows.filter((r) => r.status !== "left_out" && r.minutes !== null).map((r) => r.minutes));
+  const longest = Math.max(0, ...rows.filter((r) => r.minutes !== null).map((r) => r.minutes));
   for (const r of rows) {
     r.longest = longest || null;
-    r.short = Boolean(longest) && r.minutes !== null && (r.status === "importable" || r.status === "participation") && r.minutes < SHORT_SHARE * longest;
+    const ticked = r.a?.gpexeAthleteId && chosen.has(String(r.a.gpexeAthleteId));
+    r.short = Boolean(longest) && !ticked && r.minutes !== null && (r.status === "importable" || r.status === "participation") && r.minutes < SHORT_SHARE * longest;
   }
 }
-const minutesText = (n) => String(Math.round(n));
+// The athlete's time rounded down (74.9 of 100 reads "74 / 100", never "75 / 100" next to an unflagged 75), the longest rounded.
+const minutesText = (n, down = false) => String(down ? Math.floor(n) : Math.round(n));
 const REVIEW_ORDER = ["blocked", "needs_link", "not_imported", "no_record", "importable", "participation", "nothing_new", "left_out"];
 
 function unlinkedChoicesFor(preview, c) {
@@ -2299,17 +2305,21 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
   const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" || r.status === "left_out" ? "" : "is-blocked";
   const cells = VALUE_COLUMNS.map((col) => {
     // "41 / 94 min" on a flagged row only; every other row shows its time as before.
-    const text = col === DURATION && r.short ? `${minutesText(r.minutes)} / ${minutesText(r.longest)} min` : (r.a ? valueCellText(r, col, c) : "-");
+    const text = col === DURATION && r.short ? `${minutesText(r.minutes, true)} / ${minutesText(r.longest)} min` : (r.a ? valueCellText(r, col, c) : "-");
     return `<td data-label="${escapeAttr(col.label)}" role="cell"${col === DURATION && r.short ? ` class="gpexe-short-cell"` : ""}>${escapeHtml(text)}</td>`;
   }).join("");
-  const shortNote = r.short
-    ? ` Recorded ${minutesText(r.minutes)} of ${minutesText(r.longest)} min, clearly less than the longest in this session. Check it: keep the values, or${lo.offered ? " tick Leave out and choose \"Participated · no device data\"" : " have them left out and set to \"Participated · no device data\""}.`
-    : "";
+  // The choice is named only where it exists: the Leave out box on this very row, or (for a viewer who may not import) a
+  // session still waiting for its import.
+  const shortFact = r.short ? `Only ${minutesText(r.minutes, true)} of ${minutesText(r.longest)} min recorded (the longest in this session).` : "";
+  const shortNote = !r.short ? ""
+    : lo.offered && leaveOutAvailable(r) ? ` ${shortFact} Imported as is unless you tick Leave out and choose "Participated · no device data".`
+      : !lo.offered && c?.status === "pending" ? ` ${shortFact} Whoever imports can keep the values or leave them out as "Participated · no device data".`
+        : ` ${shortFact}`;
   const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices, { compact: !!c?.helperValues }) : "";
   return `
     <tr class="gpexe-review-row is-${r.status}" role="row">
       <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
-      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check" title="A hint only">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
       ${cells}
       <td data-label="What happens" role="cell">${escapeHtml(lo.states && r.status === "no_record" ? "No GPS record in this session. You can set their attendance here; it is saved after the import." : r.note)}${escapeHtml(shortNote)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${lo.states ? stateChooserHtml(r, lo) : ""}</td>
       ${lo.offered ? leaveOutCellHtml(r, lo) : ""}
@@ -2347,13 +2357,17 @@ function stateChooserHtml(r, lo) {
   return `<label class="gpexe-state-choice"><span>Attendance</span><select class="gpexe-select gpexe-state-select" data-action="training-load-gpexe-state" data-athlete-id="${escapeAttr(athleteId)}" aria-label="${escapeAttr(`Attendance for ${r.name}`)}" ${lo.statesLocked ? "disabled" : ""}>${options.join("")}</select></label>`;
 }
 
+// Whether this row can be left out: a row the import would write, of an athlete whose results are all new. An athlete whose
+// results were imported before (any result that is not new) cannot be left out: the server refuses it, so no box.
+function leaveOutAvailable(r) {
+  const newOnly = (r.a?.results || []).every((x) => !x.outcome || x.outcome === "created" || x.outcome === "not_imported");
+  return Boolean(r.a && newOnly && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId);
+}
+
 // The "Leave out" cell of a row the import would write. The accessible name carries the athlete, so a screen reader hears who.
 function leaveOutCellHtml(r, lo) {
-  // An athlete whose results were imported before (any result that is not new) cannot be left out: the server refuses it, so no box.
-  const newOnly = (r.a?.results || []).every((x) => !x.outcome || x.outcome === "created" || x.outcome === "not_imported");
-  const imports = r.a && newOnly && (r.status === "importable" || r.status === "participation") && r.a.gpexeAthleteId;
   // A row the import would not write has nothing to leave out: an empty cell on a wide table, no line at all in the phone cards.
-  if (!imports) return `<td role="cell" class="gpexe-leave-out-cell is-empty" aria-hidden="true"></td>`;
+  if (!leaveOutAvailable(r)) return `<td role="cell" class="gpexe-leave-out-cell is-empty" aria-hidden="true"></td>`;
   const id = String(r.a.gpexeAthleteId);
   return `<td data-label="Leave out" role="cell" class="gpexe-leave-out-cell"><label class="gpexe-leave-out"><input type="checkbox" data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="${escapeAttr(id)}" ${lo.chosen.has(id) ? "checked" : ""} aria-label="${escapeAttr(`Leave out ${r.name}`)}"><span>Leave out</span></label></td>`;
 }
@@ -2365,14 +2379,14 @@ function reviewTableOf(rows, c, choices, lo = { offered: false, chosen: new Set(
   </table></div>`;
 }
 
-const REVIEW_CHIPS = [["needs", "Needs a person"], ["not_linked", "Not linked"], ["short", "Check"], ["no_data", "No data"], ["review", "Needs review"], ["all", "All"]];
+const REVIEW_CHIPS = [["needs", "Needs a person"], ["not_linked", "Not linked"], ["short", "Short recording"], ["no_data", "No data"], ["review", "Needs review"], ["all", "All"]];
 // The chip a row belongs to: its problem, or "short" for a row the import would write whose time is short (6a).
 const rowKind = (r) => PROBLEM_KIND[r.status] || (r.short ? "short" : null);
 
 function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.detail) {
   const rows = reviewRowsOf(preview, c);
   if (!rows.length) return "";
-  markShortRecordings(rows, c);
+  markShortRecordings(rows, c, leaveOutOf(detail));
   const choices = unlinkedChoicesFor(preview, c);
   const lo = { offered: leaveOutOffered(c, detail), chosen: leaveOutOf(detail) };
   // J20-C: the attendance chooser, on the same rows and under the same conditions as Leave out.

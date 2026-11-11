@@ -25921,3 +25921,6 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   color: var(--om-warning, #8a5300);
   white-space: nowrap;
 }
+@media (max-width: 760px) {
+  .gpexe-short-cell { white-space: normal; }
+}
