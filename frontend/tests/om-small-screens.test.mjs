@@ -34,7 +34,7 @@ test("L1 changes no sign-in markup or wording", () => {
   assert.ok(auth.includes('<p class="muted"><a href="/forgot-password">Forgot password?</a></p>'));
 });
 
-test("C1: the directory promises no marketplace and says what a profile does; its button is 44 px", async () => {
+test("C1: the directory names the marketplace only when its list holds it, and says what a profile does; its button is 44 px", async () => {
   assert.match(c1, /body:not\(\.login-mode\) \.coach-directory-head \.plain-button \{\n  min-height: var\(--om-tap-target\);/);
   const { renderCoachesHtml } = await import("../coach-profiles.js");
   const { state } = await import("../state.js");
@@ -44,6 +44,13 @@ test("C1: the directory promises no marketplace and says what a profile does; it
   assert.ok(!/marketplace/i.test(coach.slice(0, coach.indexOf("coach-card-grid"))), "no marketplace promise in the head");
   assert.ok(!coach.includes("Expert directory"));
   assert.match(coach, /The coaches you can see, with their specialties and programs\./);
+  // The marketplace is named only when the list holds it.
+  const withRows = (rows) => renderCoachesHtml({ coaches: { rows }, currentUser: state.currentUser, programInfo: null, renderProgramInfoModal: () => "", renderTemplatePreviewModal: () => "" });
+  const plain = /<p class="muted">The coaches you can see, with their specialties and programs\.<\/p>/;
+  const market = /<p class="muted">The coaches you can see, with their specialties and programs, including programs offered on the marketplace\.<\/p>/;
+  assert.match(withRows([{ id: "p1", name: "Coach Example", visibility: "club", marketplace_count: 0 }]), plain);
+  assert.match(withRows([{ id: "p1", name: "Coach Example", visibility: "marketplace", marketplace_count: 0 }]), market);
+  assert.match(withRows([{ id: "p1", name: "Coach Example", visibility: "public", marketplace_count: 2 }]), market);
   assert.match(coach, /data-action="coach-edit-toggle">Create my profile</);
   assert.match(coach, /No coach profiles yet\. Your profile shows your specialties and programs to the athletes and coaches who can see it\./);
   bodyClasses.add("athlete-mode");
