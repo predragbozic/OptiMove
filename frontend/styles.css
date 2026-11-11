@@ -25718,7 +25718,6 @@ body:not(.athlete-mode):not(.login-mode) .tests-library-row-text {
 }
 
 body:not(.athlete-mode):not(.login-mode) .tests-result-back {
-  justify-self: start;
   width: auto;
   margin-bottom: var(--om-space-2);
 }

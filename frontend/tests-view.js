@@ -79,7 +79,7 @@ export function renderTestsTabsHtml() {
   `;
 }
 
-function renderTestsSectionHtml() {
+export function renderTestsSectionHtml() {
   // A coach reads a result from Results (or a session): the way back says where it goes; an athlete keeps the icon.
   if (state.tests.form) return renderWellnessFormPageHtml(state.tests.form, { backLabel: isAthleteMode() ? "" : state.tests.section === "results" ? "Back to results" : "Back" });
   if (isAthleteMode()) {
@@ -1493,7 +1493,7 @@ function renderCoachResultsListHtml() {
 // Coach: Test Library (read-only)
 // ------------------------------------------------------------
 
-// T3a: the library is read-only for a coach (said once, not on every row); only the wellness check-in can be scheduled.
+// T3a: the library is read-only for a coach (said once, not on every row); a pill marks the tests that can be scheduled.
 // The search narrows the rows in place (handleTestsLibraryInput), so the field keeps its focus while typing.
 const LIBRARY_SEARCH_MAX = 80;
 
@@ -1505,11 +1505,10 @@ function libraryMatches(item, term) {
   return !term || `${item.name || ""} ${item.description || ""}`.toLowerCase().includes(term);
 }
 
-const LIBRARY_NOUNS = { test: ["test", "tests"], battery: ["battery", "batteries"] };
 
-function libraryCountText(n, kind) {
-  const [one, many] = LIBRARY_NOUNS[kind];
-  return `${n} ${n === 1 ? one : many}`;
+// The heading names the kind ("Tests"), so the count is only the number: "Tests · 2", never "Tests 2 tests".
+function libraryCountText(n) {
+  return `· ${n}`;
 }
 
 function renderLibraryRow(item, kind, term) {
@@ -1517,7 +1516,7 @@ function renderLibraryRow(item, kind, term) {
     <li class="tests-library-row" data-tests-library-row data-search-text="${escapeAttr(`${item.name || ""} ${item.description || ""}`.toLowerCase())}"${libraryMatches(item, term) ? "" : " hidden"}>
       <div class="tests-library-row-head">
         <span class="tests-library-row-name">${escapeHtml(item.name)}</span>
-        ${kind === "test" && item.schedulable ? `<span class="tests-status-pill tests-status-completed">Can be scheduled</span>` : ""}
+        ${kind === "test" && item.schedulable ? `<span class="tests-status-pill">Can be scheduled</span>` : ""}
       </div>
       ${item.description ? `<p class="muted tests-library-row-text">${escapeHtml(item.description)}</p>` : ""}
     </li>`;
@@ -1528,9 +1527,17 @@ function renderLibraryGroup({ title, items, kind, term }) {
   const shown = items.filter((item) => libraryMatches(item, term)).length;
   return `
     <section class="tests-library-group" data-tests-library-group${shown ? "" : " hidden"}>
-      <h3>${escapeHtml(title)} <span class="muted" data-tests-library-count data-kind="${kind}">${escapeHtml(libraryCountText(shown, kind))}</span></h3>
+      <h3>${escapeHtml(title)} <span class="muted" data-tests-library-count>${escapeHtml(libraryCountText(shown))}</span></h3>
       <ul class="tests-library-list">${items.map((item) => renderLibraryRow(item, kind, term)).join("")}</ul>
     </section>`;
+}
+
+// The note follows the data: it names the tests that can be scheduled and where (the Schedule tab).
+function libraryNoteText(tests) {
+  const names = tests.filter((item) => item.schedulable).map((item) => item.name).filter(Boolean);
+  if (!names.length) return "The library is read-only. Nothing here can be scheduled yet.";
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `The library is read-only. ${list} can be scheduled from the Schedule tab; the other tests and batteries are here for reference.`;
 }
 
 function renderCoachLibraryHtml() {
@@ -1539,13 +1546,13 @@ function renderCoachLibraryHtml() {
   const shown = [...tests, ...batteries].filter((item) => libraryMatches(item, term)).length;
   return `
     <div class="tests-library" data-tests-library>
-      <p class="muted tests-library-note">The library is read-only. You can schedule the wellness check-in; the other tests and batteries are here for reference.</p>
+      <p class="muted tests-library-note">${escapeHtml(libraryNoteText(tests))}</p>
       <label class="search-field tests-library-search"><span>Search the library</span>
         <input type="search" data-tests-library-search value="${escapeAttr(state.tests.librarySearch || "")}" maxlength="${LIBRARY_SEARCH_MAX}" placeholder="Name or description" autocomplete="off" autocapitalize="none" spellcheck="false">
       </label>
       ${renderLibraryGroup({ title: "Tests", items: tests, kind: "test", term })}
       ${renderLibraryGroup({ title: "Batteries", items: batteries, kind: "battery", term })}
-      <p class="muted tests-empty" data-tests-library-empty${shown || !(tests.length + batteries.length) ? " hidden" : ""}>Nothing matches. Try another word.</p>
+      <p class="muted tests-empty" role="status" aria-live="polite" data-tests-library-empty${shown || !(tests.length + batteries.length) ? " hidden" : ""}>Nothing matches. Try another word.</p>
     </div>
   `;
 }
@@ -1568,7 +1575,7 @@ export function handleTestsLibraryInput(target) {
     }
     group.hidden = !shown;
     const count = group.querySelector("[data-tests-library-count]");
-    if (count) count.textContent = libraryCountText(shown, count.dataset.kind === "battery" ? "battery" : "test");
+    if (count) count.textContent = libraryCountText(shown);
     total += shown;
   }
   const empty = root.querySelector("[data-tests-library-empty]");

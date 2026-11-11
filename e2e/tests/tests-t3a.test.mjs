@@ -54,7 +54,7 @@ for (const width of [390, 360, 1280]) test(`(team_coach, ${width} px) the Test L
     assert.ok(look.rows >= 10);
     assert.ok(look.minRow >= 44, `${look.minRow} px`);
     assert.deepEqual(look.pills, ["Can be scheduled"], "only the schedulable test has a pill");
-    assert.match(look.note, /^The library is read-only\./);
+    assert.match(look.note, /^The library is read-only\. WELLNESS can be scheduled from the Schedule tab;/);
     assert.equal(look.small, 0);
     assert.ok(look.font >= 16);
     assert.equal(look.overflow, 0);
@@ -62,12 +62,17 @@ for (const width of [390, 360, 1280]) test(`(team_coach, ${width} px) the Test L
     await page.locator("[data-tests-library-search]").pressSequentially("shoulder", { delay: 20 });
     const after = await page.evaluate(() => ({
       shown: [...document.querySelectorAll("[data-tests-library-row]")].filter((r) => !r.hidden).map((r) => r.querySelector(".tests-library-row-name").textContent.trim()),
+      // Seen, not only flagged: a row marked hidden takes no space, and every row left is on screen.
+      drawn: [...document.querySelectorAll("[data-tests-library-row]")].filter((r) => r.getClientRects().length > 0).length,
       focus: document.activeElement?.hasAttribute("data-tests-library-search"),
       count: document.querySelector("[data-tests-library-count]").textContent,
     }));
     assert.deepEqual(after.shown, ["Shoulder Clearing Test", "Shoulder Mobility"]);
     assert.equal(after.focus, true, "the search keeps the focus while typing");
-    assert.equal(after.count, "2 tests");
+    assert.equal(after.count, "\u00b7 2");
+    assert.equal(after.drawn, 2, "the rows that do not match are not drawn");
+    assert.equal(await page.locator("[data-tests-library-row]", { hasText: "Shoulder Mobility" }).isVisible(), true);
+    assert.equal(await page.locator("[data-tests-library-row][hidden]").first().isVisible(), false);
     await page.locator("[data-tests-library-search]").fill("no such test");
     await page.locator("[data-tests-library-empty]:not([hidden])").waitFor();
     assert.deepEqual(pageErrors, []);
