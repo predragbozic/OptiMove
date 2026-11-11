@@ -2507,3 +2507,72 @@ test("archived team: the GPEXE routes answer the same 404 as a missing team - to
   await admin.query(`update public.teams set is_active = true where id = $1`, [team.teamId]);
   for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${team.teamId}/status`, { cookie })).status, 200, `${who} after restore`);
 });
+
+test("archived club: a team of an archived club is the same 404 as a missing team on every GPEXE route - reads, check, Link, Unlink and every other team route - for its coach, its club admin and a platform admin; nothing is written; the coach keeps the team workspace (other modules' contracts) and restoring the club restores the routes", async () => {
+  const team = await setupTeam();
+  const clubAdmin = await makeUser("club admin");
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [clubAdmin, team.clubId]);
+  await setWorkspace(clubAdmin, "club", team.clubId);
+  const clubAdminCookie = await cookieFor(clubAdmin);
+  const viewers = [["coach", team.coach.cookie], ["club admin", clubAdminCookie], ["platform admin", team.padmin.cookie]];
+  const id = team.teamId;
+  const Z = "00000000-0000-4000-8000-000000000000";
+  const reads = [`/teams/${id}/status`, `/teams/${id}/candidates`, `/teams/${id}/source-athletes`, `/teams/${id}/athlete-links`, `/teams/${id}/approvers`];
+  const link = (await api(`/teams/${id}/athlete-links`, { cookie: team.coach.cookie })).body.links[0];
+  assert.ok(link?.id, "the team has a link to unlink");
+  const me = async (cookie) => (await (await fetch(`${apiBase}/api/auth/me`, { headers: { Cookie: cookie } })).json());
+  const teamWorkspace = (body) => (body.user?.availableWorkspaces || body.availableWorkspaces || []).some((w) => w.type === "team" && String(w.scopeId) === String(id));
+  for (const [who, cookie] of viewers) for (const path of reads) assert.equal((await api(path, { cookie })).status, 200, `${who} ${path} while the club is active`);
+  const count = async (sql) => (await admin.query(sql, [id])).rows[0].n;
+  const writes = async () => [
+    await count(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`),
+    await count(`select count(*)::int as n from training_load.gpexe_athlete_links where owner_team_id = $1 and unlinked_at is null`),
+    await count(`select count(*)::int as n from training_load.gpexe_import_approvers where owner_team_id = $1`),
+    await count(`select count(*)::int as n from training_load.gpexe_team_settings_history where owner_team_id = $1`),
+  ];
+  const before = await writes();
+
+  // The club is archived the way Settings archives it: the club row only; the team itself stays active.
+  await admin.query(`update public.clubs set is_active = false where id = $1`, [team.clubId]);
+  // The workspace list is not changed by this fix: other modules keep a team coach of an archived club in the team's
+  // workspace (7h-V test 4, central calendar test 26); the GPEXE routes refuse on their own.
+  assert.equal(teamWorkspace(await me(team.coach.cookie)), true, "the coach keeps the team workspace");
+  const every = [
+    ...reads.map((p) => ["GET", p]),
+    ["POST", `/teams/${id}/checks`, {}],
+    ["GET", `/teams/${id}/checks/${Z}`],
+    ["POST", `/teams/${id}/athlete-links`, { gpexeAthleteId: "300", athleteId: team.ids.d }],
+    ["POST", `/teams/${id}/athlete-links/${link.id}/unlink`, {}],
+    ["PUT", `/teams/${id}/settings`, { gpexeTeamId: "78", reason: "x" }],
+    ["GET", `/teams/${id}/settings/history`],
+    ["GET", `/teams/${id}/import-switch`],
+    ["PUT", `/teams/${id}/import-switch`, { enabled: false }],
+    ["POST", `/teams/${id}/approvers`, { userId: team.coach.id, reason: "x" }],
+    ["POST", `/teams/${id}/approvers/${Z}/revoke`, { reason: "x" }],
+    ["GET", `/teams/${id}/candidates/${Z}`],
+    ["POST", `/teams/${id}/candidates/${Z}/approve`, {}],
+    ["POST", `/teams/${id}/candidates/${Z}/preview`, {}],
+    ["POST", `/teams/${id}/imports`, { candidateIds: [], previewHashes: {} }],
+    ["GET", `/teams/${id}/approvals/${Z}`],
+    ["POST", `/teams/${id}/approvals/${Z}/states`, {}],
+    ["GET", `/teams/${id}/athlete-identities`],
+    ["POST", `/teams/${id}/athlete-identities/loads`, { requestKey: Z }],
+    ["GET", `/teams/${id}/athlete-pair-suggestions`],
+    ["GET", `/teams/${id}/candidates/${Z}/undo-preview`],
+    ["POST", `/teams/${id}/candidates/${Z}/undo-import`, {}],
+  ];
+  for (const [who, cookie] of viewers) {
+    for (const [method, path, body] of every) {
+      const r = await api(path, { method, cookie, body });
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${who} ${method} ${path} under an archived club`);
+    }
+  }
+  // The same answer as a team that does not exist.
+  const missing = await api(`/teams/${Z}/status`, { cookie: team.padmin.cookie });
+  assert.deepEqual([missing.status, missing.body], [404, { error: "notFound" }]);
+  assert.deepEqual(await writes(), before, "no check, link, unlink, grant or settings change was written");
+
+  // Restored: the routes answer again.
+  await admin.query(`update public.clubs set is_active = true where id = $1`, [team.clubId]);
+  for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${id}/status`, { cookie })).status, 200, `${who} after the club is restored`);
+});
