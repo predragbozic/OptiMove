@@ -25569,3 +25569,78 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:chec
 }
 
 /* End of design T1. */
+
+/* ==========================================================================
+   Design T2: the Tests session, schedule and result screens (coach). Every
+   button and text action in a detail is 44 px, a back button is as wide as
+   its words (it stretched across the page), the reminder rows are 44 px with
+   a 20 px checkbox, and Today sits after the week's arrows. On a narrow
+   phone the four section tabs fit on one row. An athlete keeps their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-detail > .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-detail > .plain-button[data-action="tests-close-schedule"] {
+  justify-self: start;
+  width: auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The round Cancel / Confirm of the Tests pickers (recipients, dates) stay round at 44 x 44. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-cancel,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-continue {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+}
+
+/* A form's close button is 44 x 44, and its heading leaves room for it. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .wellness-back {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-form > h3 {
+  padding-right: 52px;
+}
+
+/* Every athlete a reminder goes to is in view: no capped inner scroll (it showed 5 of 11). */
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-list {
+  max-height: none;
+  overflow: visible;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-link-box > .plain-button {
+  justify-self: start;
+  width: auto;
+}
+
+@media (max-width: 380px) {
+  body:not(.athlete-mode):not(.login-mode) .tests-section-tabs.om-tabs .om-tab {
+    padding-inline: var(--om-space-2);
+  }
+}
+/* End of design T2. */

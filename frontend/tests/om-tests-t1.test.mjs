@@ -33,5 +33,6 @@ test("Show cancelled stays a native checkbox (its handler reads .checked), drawn
 test("one title: the coach's eyebrow names the area; the hard-coded labels say wellness, not WELLNESS", () => {
   assert.ok(view.includes('els.context.textContent = isAthleteMode() ? "Tests" : "Testing and wellness";'));
   for (const old of ["New WELLNESS schedule", "No WELLNESS scheduled", "Edit WELLNESS schedule", "No WELLNESS results"]) assert.ok(!view.includes(old), old);
-  for (const now of ["New wellness schedule", "No wellness check-ins scheduled for this day.", "Edit wellness schedule", "No wellness results yet."]) assert.ok(view.includes(now), now);
+  // T2 settled the noun: "check-ins" for the wellness questionnaire.
+  for (const now of ["New check-in schedule", "No check-ins scheduled for this day.", "Edit check-in schedule", "No check-in results yet."]) assert.ok(view.includes(now), now);
 });
