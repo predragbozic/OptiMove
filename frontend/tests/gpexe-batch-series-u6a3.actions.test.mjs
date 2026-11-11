@@ -166,9 +166,9 @@ test("U6a-3 1: a long selection goes on by itself - each round sends exactly the
   for (const body of seen) for (const id of body.candidateIds) assert.equal(body.previewHashes[id], hashOf(Number(id.slice(5))), "the hash the session was chosen with");
   assert.equal(gx().batch.results.length, 6);
   assert.ok(gx().batch.results.every((r) => r.outcome === "imported"));
-  assert.equal(gx().batch.summary.imported, 6, "the summary is the sum of the answers' own summaries");
+  assert.equal(gx().batch.summary.imported, 6, "the summary is counted from each session's final result");
   assert.equal(gx().batch.sending, false);
-  assert.deepEqual(gx().batch.progress, { total: 6, done: 6, rounds: 3 });
+  assert.deepEqual(gx().batch.progress, { total: 6, done: 6, imported: 6, rounds: 3 });
 });
 
 test("U6a-3 2: the series stops at the first refusal that needs a person, at an unconfirmed result, and when a round decides nothing; what is left stays selected", async () => {
@@ -188,15 +188,18 @@ test("U6a-3 2: the series stops at the first refusal that needs a person, at an 
   }
 });
 
-test("U6a-3 3: a busy server (try_again) or a server fault does not count as a person's refusal - the series goes on with the sessions that were not tried", async () => {
+test("U6a-3 3: a busy server (try_again) ends the import after its round: the server leaves the rest untried with no budget code, so nothing is resent by itself", async () => {
   resetState();
   const seen = [];
-  installFetchMock(seriesServer([[done(1), { candidateId: "cand-2", outcome: "refused", code: "try_again" }, budget(3), budget(4), budget(5), budget(6)], [done(3), done(4), done(5), done(6)]], seen));
+  // The server's real shape (approveCandidates, BATCH_STOP_CODES): after try_again the rest is not_attempted with code null.
+  const tail = (n) => ({ candidateId: `cand-${n}`, outcome: "not_attempted", code: null });
+  installFetchMock(seriesServer([[done(1), { candidateId: "cand-2", outcome: "refused", code: "try_again" }, tail(3), tail(4), tail(5), tail(6)], [done(3), done(4), done(5), done(6)]], seen));
   await openImports();
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
-  assert.equal(seen.length, 2);
-  assert.deepEqual(seen[1].candidateIds, ["cand-3", "cand-4", "cand-5", "cand-6"], "the busy one waits for the list, it is not resent by itself");
+  assert.equal(seen.length, 1, "no second request");
+  assert.match(dialog(), /Not tried because the batch stopped\./);
+  assert.deepEqual(Object.keys(gx().batch.selected).sort(), ["cand-2", "cand-3", "cand-4", "cand-5", "cand-6"], "the busy one and the untried stay ticked");
 });
 
 test("U6a-3 4: Stop ends the series after the request in flight; the rest is not sent", async () => {
@@ -271,12 +274,33 @@ test("U6a-3 8: a refusal in a later round (the switch turned off) shows what the
   await act("training-load-gpexe-batch-send");
   assert.equal(seen.length, 2);
   const panel = dialog();
-  assert.match(panel, /The series stopped\./, "the reason is shown in the result panel");
+  assert.match(panel, /The import stopped before the rest of the sessions: importing was switched off in this environment\. The sessions marked Imported below are in OptiMove/, "why it stopped, never 'nothing was imported'");
+  assert.ok(!/Nothing was imported/.test(panel));
   assert.match(panel, /Imported\./, "and what the first round did");
   assert.ok(candidatesReads() > readsBefore, "the list is read again after sessions were imported in round 1");
 });
 
-test("U6a-3 9: confirming a move to another part of the app while a series runs stops it after the request in flight, and the question says so", async () => {
+test("U6a-3 9: moving to another Training Load section or another part of the app while a request is in flight ends the import after it; the leave question says so", async () => {
+  for (const [name, move] of [
+    ["another Training Load section", () => act("training-load-section", { section: "schedule" })],
+    ["another part of the app", () => { assert.equal(confirmLeaveTrainingLoad("calendar"), true); state.activeTab = "calendar"; }],
+  ]) {
+    resetState();
+    const seen = [];
+    installFetchMock(seriesServer([
+      async () => { await move(); return result({}, [done(1), done(2), budget(3), budget(4), budget(5), budget(6)]); },
+      [done(3), done(4), done(5), done(6)],
+    ], seen));
+    await openImports();
+    await act("training-load-gpexe-import-ready");
+    await act("training-load-gpexe-batch-send");
+    assert.equal(seen.length, 1, `${name}: no second round after the person left Imports`);
+    assert.equal(gx().batch.stopReason, "left");
+  }
+  assert.match(confirmQuestions.at(-1), /the ones being imported right now finish and the rest are not imported/);
+});
+
+test("U6a-3 9b: a leave question answered yes, after which the person stays (another guard says no), does not stop the import", async () => {
   resetState();
   const seen = [];
   installFetchMock(seriesServer([
@@ -286,8 +310,8 @@ test("U6a-3 9: confirming a move to another part of the app while a series runs 
   await openImports();
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
-  assert.match(confirmQuestions.at(-1), /it stops after the request in flight; what is left stays under Imports/);
-  assert.equal(seen.length, 1, "no second round after the person agreed to leave");
+  assert.equal(seen.length, 2, "still on Imports: the import goes on");
+  assert.equal(gx().batch.summary.imported, 6);
 });
 
 test("U6a-3 10: a lost answer in the middle of a series stops it: no further round, the dialog says the result is not confirmed", async () => {
@@ -310,7 +334,8 @@ test("U6a-3 10: a lost answer in the middle of a series stops it: no further rou
 test("U6a-3 11: Stop pressed between two rounds and leaving Imports between two rounds each end the series before the next request", async () => {
   for (const [name, between] of [
     ["Stop", () => act("training-load-gpexe-batch-stop")],
-    ["leaving Imports", () => assert.equal(confirmLeaveTrainingLoad("calendar"), true)],
+    ["leaving Imports for another section", () => act("training-load-section", { section: "schedule" })],
+    ["leaving Training Load", () => { state.activeTab = "calendar"; }],
     ["a workspace change", () => resetTrainingLoadForWorkspaceChange()],
   ]) {
     resetState();
@@ -320,7 +345,7 @@ test("U6a-3 11: Stop pressed between two rounds and leaving Imports between two 
     await act("training-load-gpexe-import-ready");
     // The repaint after the first answer, with the second round about to go: the person acts there.
     let fired = false;
-    onRender = () => { if (!fired && gx().batch.progress?.rounds === 2) { fired = true; between(); } };
+    onRender = () => { if (!fired && gx().batch.sending && gx().batch.progress?.done === 2) { fired = true; between(); } };
     await act("training-load-gpexe-batch-send");
     assert.equal(fired, true, `${name}: the hook ran between the rounds`);
     assert.equal(seen.length, 1, `${name}: no second request`);
@@ -331,7 +356,7 @@ test("U6a-3 12: a later round never sends a session that already has a final res
   resetState();
   const seen = [];
   installFetchMock(seriesServer([
-    [done(1), { candidateId: "cand-2", outcome: "already_imported" }, { candidateId: "cand-3", outcome: "refused", code: "try_again" }, budget(4), budget(5), budget(6)],
+    [done(1), { candidateId: "cand-2", outcome: "already_imported" }, done(3), budget(4), budget(5), budget(6)],
     [done(4), { candidateId: "cand-5", outcome: "already_imported" }, budget(6)],
     [done(6)],
   ], seen));
@@ -345,7 +370,7 @@ test("U6a-3 12: a later round never sends a session that already has a final res
   for (const id of ["cand-1", "cand-2", "cand-3"]) assert.ok(!seen[1].candidateIds.includes(id) && !seen[2].candidateIds.includes(id), `${id} is not sent again`);
   assert.ok(!seen[2].candidateIds.includes("cand-5"), "cand-5 (already imported in round 2) is not sent again");
   assert.equal(gx().batch.summary.alreadyImported, 2);
-  assert.equal(gx().batch.summary.imported, 3);
+  assert.equal(gx().batch.summary.imported, 4);
   assert.match(dialog(), /Already imported, nothing more was written\./);
 });
 
@@ -371,5 +396,60 @@ test("U6a-3 13: the series stops after BATCH_MAX_ROUNDS requests; what is left i
   assert.equal(gx().batch.summary.notAttempted, 10);
   assert.equal(gx().batch.sending, false);
   assert.equal(Object.keys(gx().batch.selected).length, 10, "the ten not tried stay ticked for the next click");
-  assert.match(dialog(), /Not tried: time ran out\./);
+  assert.match(dialog(), /Not imported yet: the import stops after 30 rounds\./);
+  assert.equal(gx().batch.stopReason, "cap");
+});
+
+test("U6a-3 14: while the import goes on, the dialog says 'Importing sessions', the rows not reached read 'waiting', nothing says 'not tried' or 'still ticked', and Done is off; after Stop the rows no longer say waiting", async () => {
+  resetState();
+  const seen = [];
+  let during = "";
+  let afterStop = "";
+  installFetchMock(seriesServer([
+    [done(1), done(2), budget(3), budget(4), budget(5), budget(6)],
+    async () => { during = dialog(); await act("training-load-gpexe-batch-stop"); afterStop = dialog(); return result({}, [done(3), budget(4), budget(5), budget(6)]); },
+  ], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.match(html(), /aria-label="Import result"/);
+  const page = during;
+  assert.match(page, /Waiting: it will be imported automatically\./);
+  assert.ok(!/not tried|still ticked/i.test(page), "nothing reads as finished");
+  assert.match(page, /data-action="training-load-gpexe-batch-done" disabled/, "Done is off while it runs");
+  assert.match(page, /Stop after the current sessions/);
+  assert.match(page, /2 of 6 sessions handled - 2 imported so far\./);
+  assert.ok(!/Waiting: it will be imported/.test(afterStop), "after Stop no row says it will be imported");
+  assert.match(afterStop, /Stopping - the sessions being imported right now finish first/);
+  assert.equal(seen.length, 2);
+  assert.match(dialog(), /Not imported: you stopped the import\./);
+});
+
+test("U6a-3 15: after a lost answer in a later round, the sessions answered earlier stay in the dialog", async () => {
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([[done(1), done(2), budget(3), budget(4), budget(5), budget(6)], () => { throw new TypeError("network down"); }], seen));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  const panel = dialog();
+  assert.match(panel, /The answer to the import did not arrive for the last 4 sessions\./);
+  assert.match(panel, /Answered before the answer was lost:[\s\S]*FULL TRAINING 1[\s\S]*Imported\./);
+});
+
+test("U6a-3 16: a team change is refused while an import of several sessions runs (its answers belong to this team)", async () => {
+  const { selectGpexeTeam } = await import("../gpexe-import-data.js");
+  resetState();
+  const seen = [];
+  installFetchMock(seriesServer([
+    async () => { await selectGpexeTeam("bbbbbbbb-0000-4000-8000-000000000002", render); return result({}, [done(1), budget(2), budget(3), budget(4), budget(5), budget(6)]); },
+    [done(2), done(3), done(4), done(5), done(6)],
+  ], seen));
+  await openImports();
+  const team = gx().teamId;
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.equal(gx().teamId, team, "the team stays");
+  assert.equal(seen.length, 2);
+  assert.equal(gx().batch.summary.imported, 6);
 });

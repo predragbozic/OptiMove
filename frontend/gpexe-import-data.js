@@ -89,6 +89,8 @@ function linksChanged() {
 export async function selectGpexeTeam(teamId, render) {
   const gx = g();
   if (String(teamId) === gx.teamId) return;
+  // U6a-3: never while an import of several sessions runs (its answers belong to this team); the handler refuses it too.
+  if (gx.batch?.sending) return;
   resetGpexeTeamState(String(teamId));
   await loadGpexeTeam(render);
 }
@@ -132,7 +134,7 @@ function emptyMapping() {
 }
 
 function emptyBatch() {
-  return { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false };
+  return { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false, stopReason: "" };
 }
 
 export async function loadGpexeTeam(render) {
@@ -1288,15 +1290,22 @@ export async function sendBatch(render) {
   gx.batch.summary = null;
   gx.batch.unknown = null;
   gx.batch.stopRequested = false;
-  gx.batch.progress = { total: items.length, done: 0, rounds: 1 };
+  gx.batch.stopReason = "";
+  gx.batch.progress = { total: items.length, done: 0, imported: 0, rounds: 1 };
   render();
   const collected = new Map();
   let round = 0;
   let candidateIds = [];
+  // Whether the person is still on this team's Imports screen: a new generation (team or workspace), another Training Load
+  // section or another part of the app all end the series - read from the state itself, never from a dialog's side effect.
+  const left = () => generation !== gx.generation || state.activeTab !== "training-load" || state.trainingLoad?.section !== "imports" || state.trainingLoad?.gpexe !== gx;
   try {
     for (round = 0; round < BATCH_MAX_ROUNDS; round += 1) {
       // Before every further request: Stop, or leaving Imports or the team, ends the series here too (not only after an answer).
-      if (round > 0 && (gx.batch.stopRequested || generation !== gx.generation)) break;
+      if (round > 0 && (gx.batch.stopRequested || left())) {
+        gx.batch.stopReason = gx.batch.stopRequested ? "stop" : "left";
+        break;
+      }
       candidateIds = items.map((i) => i.candidateId);
       const previewHashes = Object.fromEntries(items.map((i) => [i.candidateId, i.previewHash]));
       // J19 U1 (R5): the server's batch time budget is 45 s and one approval adds at most its 15 s COMMIT wait, so the answer arrives
@@ -1305,7 +1314,9 @@ export async function sendBatch(render) {
       const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(BATCH_REQUEST_BOUND_MS) : undefined;
       const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }), ...(signal ? { signal } : {}) });
       if (generation !== gx.generation) return;
-      const results = Array.isArray(answer?.results) ? answer.results : [];
+      // Only the answers for the sessions this request sent count (a stray id never decides or extends anything).
+      const asked = new Set(candidateIds);
+      const results = (Array.isArray(answer?.results) ? answer.results : []).filter((r) => asked.has(r?.candidateId));
       for (const r of results) {
         collected.set(r.candidateId, r);
         // The same marks the single review uses: an unconfirmed result stays
@@ -1323,13 +1334,20 @@ export async function sendBatch(render) {
       gx.batch.results = order.map((id) => collected.get(id)).filter(Boolean);
       gx.batch.summary = summaryOf(order, collected);
       const waiting = results.filter(isBudgetStop).map((r) => r.candidateId);
-      gx.batch.progress = { total: order.length, done: [...collected.values()].filter((r) => !isBudgetStop(r)).length, rounds: round + 1 };
+      const finals = [...collected.values()].filter((r) => !isBudgetStop(r));
+      gx.batch.progress = { total: order.length, done: finals.length, imported: finals.filter((r) => r.outcome === "imported" || r.outcome === "already_imported").length, rounds: round + 1 };
       const decided = results.length - waiting.length;
-      const stop = !waiting.length || decided <= 0 || gx.batch.stopRequested || results.some((r) => needsPerson(r) || r.outcome === "import_outcome_unknown");
-      if (stop) break;
+      const stop = !waiting.length || decided <= 0 || gx.batch.stopRequested || left() || results.some((r) => needsPerson(r) || r.outcome === "import_outcome_unknown");
+      if (stop) {
+        if (waiting.length) gx.batch.stopReason = gx.batch.stopRequested ? "stop" : left() ? "left" : decided <= 0 ? "budget" : "";
+        break;
+      }
+      if (round + 1 >= BATCH_MAX_ROUNDS) {
+        gx.batch.stopReason = "cap";
+        break;
+      }
       // The rest of the series: exactly the sessions the server did not try, with the hashes they were chosen with.
       items = items.filter((i) => waiting.includes(i.candidateId));
-      gx.batch.progress.rounds = round + 2;
       render();
     }
     gx.batch.confirming = false;
@@ -1345,6 +1363,7 @@ export async function sendBatch(render) {
       if (collected.size) {
         // Earlier rounds already wrote: show what they did, then the reason the series stopped, and read the list again below.
         gx.batch.confirming = false;
+        gx.batch.stopReason = "refused";
         gx.batch.results = order.map((id) => collected.get(id)).filter(Boolean);
         gx.batch.summary = summaryOf(order, collected);
       }

@@ -803,7 +803,7 @@ export const emptyGpexeImportState = () => ({
   // lost answer (unknown: the ids sent, the error, how many checks); the
   // sentence about choices dropped after a reload; a refusal of the whole
   // request.
-  batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false },
+  batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false, stopReason: "" },
   // The local sessions calendar: the month shown ("" = the newest found
   // session's month, or today's), the day the list is filtered to ("" =
   // every day), and whether the panel is open (null = the default: open on

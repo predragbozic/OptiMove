@@ -179,14 +179,33 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
   - a result is not confirmed (`import_outcome_unknown`, or a lost answer: "Import result not confirmed", the existing *Check again*);
   - a round decides nothing;
   - *Stop*;
-  - the person leaves Imports, the team or the workspace (checked after every answer and again before every further request);
-  - `BATCH_MAX_ROUNDS` (30) requests. What is left stays ticked and reads "Not tried: time ran out".
+  - the person is no longer on this team's Imports screen: another Training Load section, another part of the app, another
+    team or workspace. This is read from the state itself, after every answer and again before every further request. A
+    leave question answered yes, after which the person stays, does not stop the import;
+  - `BATCH_MAX_ROUNDS` (30) requests.
+
+  What is left stays ticked and says why it was not imported: the person stopped the import, left Imports, the 30-round
+  limit, or time ran out. A team change is refused while the import runs.
 - **What never happens:**
   - a session with a final answer (imported, `already_imported`, refused) is never in a later round;
+  - an answer for a session the request did not send counts for nothing;
+  - a whole request refused after earlier rounds wrote says "nothing was imported": the dialog says the import stopped
+    before the rest, and which sessions are in OptiMove;
   - `already_imported` counts as imported and does not stop the series;
   - the summary is counted from each session's final result.
 - **Server unchanged:** every round is the existing batch route, each approval idempotent by its candidate (`already_imported`), the 90 s client bound per request.
-- **Source:** item 8 of PR #408. The tests are `frontend/tests/gpexe-batch-series-u6a3.actions.test.mjs`.
+- **The screen:**
+  - while the import runs: "Importing sessions", the rows not reached yet "Waiting: it will be imported automatically.",
+    Done off;
+  - the progress block ("N of M sessions handled - K imported so far", *Stop after the current sessions*) sits between
+    the dialog's head and its scrolling list;
+  - after a lost answer, the sessions answered earlier stay listed.
+- **Source:** item 8 of PR #408.
+- **Tests:**
+  - `frontend/tests/gpexe-batch-series-u6a3.actions.test.mjs`;
+  - e2e scenario 13 (`e2e/tests/imports-batch-series.test.mjs`): the real route with the server's budget set to 0 in
+    the e2e server process (`E2E_BATCH_BUDGET_MS`, `e2e/lib/fake-source-preload.mjs`), three Ready sessions in three
+    rounds, three approvals.
 
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
