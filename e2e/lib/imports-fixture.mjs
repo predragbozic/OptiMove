@@ -21,3 +21,12 @@ export function importsBundles(sourceTeam = 7001) {
   });
   return [mk(SESSION_READY, "2026-11-04", [101, 102, 103]), mk(SESSION_NEEDS_LINK, "2026-11-05", [101, 102, 121])];
 }
+
+// U6a-3: three sessions with only linked athletes (101..103), all Ready - the batch series scenario.
+export const SERIES_SESSIONS = [9111, 9112, 9113];
+export function seriesBundles(sourceTeam = 7001) {
+  return SERIES_SESSIONS.map((sessionId, i) => makeBundle({
+    sessionId, gpexeTeamId: Number(sourceTeam), start: `2026-11-0${i + 2}T09:08:12`, updatedOn: `2026-11-0${i + 2}T11:18:09.337`,
+    category: "FULL TRAINING", athletes: [101, 102, 103].map((id) => athlete(id, sessionId)), detailsDrills: [0, 1],
+  }));
+}

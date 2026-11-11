@@ -264,9 +264,11 @@ function importsBatchMayBeLeft(nextTab) {
   // A workspace switch or a notification (nextTab null) resets Training
   // Load: that exit loses the result; a move inside the app keeps it.
   if (batch.sending) {
+    // U6a-3: leaving really stops the import - the import itself checks that the screen is no longer Imports before every
+    // further request; answering this question changes nothing by itself (the person may still stay).
     return ask(nextTab === null
-      ? "An import of several sessions is still running. If you switch workspace now, its result is lost. Leave anyway?"
-      : "An import of several sessions is still running. Its result will be under Imports when it finishes. Leave anyway?");
+      ? "Sessions are still being imported. If you switch workspace now, the sessions being imported right now finish but you won't see the result here, and the rest are not imported. Leave anyway?"
+      : "Sessions are still being imported. If you leave now, the ones being imported right now finish and the rest are not imported; they stay under Imports to import again. Leave anyway?");
   }
   // A click on the Training load item itself reloads the tab and keeps the
   // Imports state: nothing to ask.

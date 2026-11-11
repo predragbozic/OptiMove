@@ -25432,6 +25432,56 @@ body:not(.athlete-mode):not(.login-mode) .app-health-chip {
 }
 /* End of design S7. */
 
+/* U6a-3: a long import goes on in several requests - how far it is, and Stop. The block sits between the dialog's head and
+   its scrolling body (a flex item of the dialog's column, outside the scroller), so it stays in sight without sticking. */
+.imports-progress {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-progress p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.imports-progress-bar {
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong, #9aa5b1);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.imports-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent, currentColor);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .imports-progress-bar > i {
+    transition: width 0.3s;
+  }
+}
+@media (max-width: 760px) {
+  /* A phone keeps only the status, the bar and Stop in view; the explanation is the leave question's. */
+  .imports-progress-note {
+    display: none;
+  }
+  .imports-progress .gpexe-button {
+    width: 100%;
+  }
+}
+@media (forced-colors: active) {
+  .imports-progress-bar {
+    border: 1px solid CanvasText;
+  }
+  .imports-progress-bar > i {
+    background: Highlight;
+  }
+}
 
 /* ==========================================================================
    Design L1: the sign-in screens (sign in, password reset, invite, join,

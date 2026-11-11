@@ -358,7 +358,7 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   assert.match(d, /FULL TRAINING 4<\/strong>[\s\S]*?Open and review the changes individually\.<\/span><button [^>]*data-candidate-id="cand-4">Open</);
   assert.match(d, /FULL TRAINING 5<\/strong>[\s\S]*?Not imported: it is not ready any more - see its row under Needs attention\./);
   assert.match(d, /FULL TRAINING 6<\/strong>[\s\S]*?Import result not confirmed - check it before doing anything else\.[^<]*<\/span><button [^>]*data-candidate-id="cand-6">Check result</);
-  assert.match(d, /FULL TRAINING 7<\/strong>[\s\S]*?Not tried because the batch stopped\./);
+  assert.match(d, /FULL TRAINING 7<\/strong>[\s\S]*?Not imported: the import stopped before this session\./);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/failed|nothing was imported/i.test(open), "never 'failed' or 'nothing imported'");
   assert.ok(!/preview_changed|import_outcome_unknown|not_ready|appr-6/.test(open), "codes and ids only under Technical details");
@@ -813,9 +813,9 @@ test("leaving Training Load with a selection or a running import asks first; dec
   await new Promise((resolve) => setImmediate(resolve));
   confirmAnswer = false;
   assert.equal(confirmLeaveTrainingLoad("weekly"), false);
-  assert.match(confirmQuestions.at(-1), /An import of several sessions is still running\. Its result will be under Imports when it finishes\. Leave anyway\?/);
+  assert.match(confirmQuestions.at(-1), /Sessions are still being imported\. If you leave now, the ones being imported right now finish and the rest are not imported; they stay under Imports to import again\. Leave anyway\?/);
   assert.equal(confirmLeaveTrainingLoad(null, { discard: false }), false);
-  assert.match(confirmQuestions.at(-1), /If you switch workspace now, its result is lost\. Leave anyway\?/, "the workspace exit tells the truth");
+  assert.match(confirmQuestions.at(-1), /If you switch workspace now, the sessions being imported right now finish but you won't see the result here, and the rest are not imported\. Leave anyway\?/, "the workspace exit tells the truth");
   release();
   await sending;
   assert.equal(confirmLeaveTrainingLoad("weekly"), true, "a result waiting behind Done asks nothing");
@@ -934,7 +934,7 @@ test("J19 U1: a batch result with batch_time_budget says it ran out of time and 
   await openImports();
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
-  assert.match(html(), /Not tried: time ran out\. Nothing was saved for this session - import it again from the Ready list\./);
+  assert.match(html(), /Not imported yet: time ran out\. Nothing was saved for this session - import it again from the Ready list\./);
 });
 
 test("J19 U1: while a day filter is active the daily line says its counts are for all dates; the button still imports the whole list", async () => {
