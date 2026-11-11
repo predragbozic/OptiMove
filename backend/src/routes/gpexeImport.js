@@ -437,19 +437,22 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
 function identityHandle(fn, basisOf = identity.identityAdminBasis) {
   return async (req, res, next) => {
     res.set("Cache-Control", "no-store");
+    let basis = null;
     try {
       const access = await teamAccess(req, res);
       if (!access) return;
-      const basis = basisOf(req, access);
+      basis = basisOf(req, access);
       if (!basis) return notFound(res);
       await fn(req, res, access, { userId: String(req.user.id), basis });
     } catch (error) {
       if (isPoolCheckoutTimeout(error) && !res.headersSent) return poolBusy(req, res);
       if (error instanceof identity.GpexeIdentityError) {
         if (error.status === 404) return notFound(res);
-        const { reason, replayed, requestKey } = error.details || {};
-        return res.status(error.status).json({
-          error: error.code, message: error.message,
+        // A team's coach never reads the source connection's precise codes (identity.coachRefusal).
+        const shown = basis === "team_coach" ? identity.coachRefusal(error) : { status: error.status, code: error.code, message: error.message, details: error.details };
+        const { reason, replayed, requestKey } = shown.details || {};
+        return res.status(shown.status).json({
+          error: shown.code, message: shown.message,
           ...(typeof reason === "string" ? { reason } : {}),
           ...(replayed ? { replayed: true } : {}),
           ...(typeof requestKey === "string" ? { requestKey } : {}),
@@ -469,7 +472,8 @@ router.get("/teams/:teamId/athlete-identities", identityHandle(async (req, res, 
 // Body: { requestKey } and nothing else. The athletes are derived by the
 // server; the answer carries counts only.
 router.post("/teams/:teamId/athlete-identities/loads", identityHandle(async (req, res, access, ctx) => {
-  res.json(await identity.loadIdentities(access.teamId, { ctx, body: req.body }));
+  const answer = await identity.loadIdentities(access.teamId, { ctx, body: req.body });
+  res.json(ctx.basis === "team_coach" ? identity.coachResult(answer) : answer);
 }, identity.identityLoadBasis));
 
 // U3: suggested pairs. Audience: the identity administrators and the team's

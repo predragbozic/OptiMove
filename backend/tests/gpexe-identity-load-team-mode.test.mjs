@@ -454,3 +454,54 @@ test("5. a coach's own key from a team-mode team, replayed on another team of th
   assert.equal(r.text, missing.text, "the identical 404");
   assert.equal((await requestsOf(b.teamId)).length, 0);
 });
+
+test("6. the precise codes stay with the administrators: a coach's partial load names no cause, and a source or connection refusal is one coarse source_connection_unavailable with no reason; an administrator still reads the precise one", async () => {
+  // (a) one athlete's read fails: the coach sees a partial load that stopped, never the source's code.
+  {
+    const { o } = await ready(2, 871);
+    await scriptG(871, FIRST, `${LAST}871`, DOB(871));
+    src.st.athlete.set("872", { status: 503 });
+    await teamMode(o, "team", true);
+    const key = crypto.randomUUID();
+    const r = await load(o, o.coach.cookie, key);
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual([r.body.outcome, r.body.stopCode], ["partial", "stopped"]);
+    assert.doesNotMatch(r.text, /source_unavailable|source_answer_unexpected|network_budget_exhausted/);
+    const again = await load(o, o.coach.cookie, key);
+    assert.deepEqual([again.status, again.body.replayed, again.body.stopCode], [200, true, "stopped"], "the replay too");
+    const [req] = await requestsOf(o.teamId);
+    assert.equal(req.error_code, "source_unavailable", "the precise code is still stored for the administrators");
+  }
+  // (b) GPEXE refuses the credential: the coach gets the coarse refusal, never source_auth_rejected or the Settings path.
+  {
+    const { o } = await ready(1, 881);
+    src.st.athlete.set("881", { status: 401 });
+    await teamMode(o, "team", true);
+    const r = await load(o, o.coach.cookie);
+    assert.equal(r.status, 409, r.text);
+    assert.equal(r.body.error, "source_connection_unavailable");
+    assert.equal(r.body.message, identity.COACH_SOURCE_MESSAGE);
+    assert.equal("reason" in r.body, false);
+    assert.doesNotMatch(r.text, /source_auth_rejected|Settings|reconnect/i);
+    assert.equal((await requestsOf(o.teamId))[0].error_code, "source_auth_rejected");
+  }
+  // (c) the connection cannot be used (no key ring): no reason for the coach; the administrator reads it.
+  {
+    const { o } = await ready(1, 891);
+    await teamMode(o, "team", true);
+    const saved = process.env.SOURCE_CREDENTIAL_KEYS;
+    delete process.env.SOURCE_CREDENTIAL_KEYS;
+    try {
+      const coach = await load(o, o.coach.cookie);
+      assert.equal(coach.body.error, "source_connection_unavailable", coach.text);
+      assert.equal(coach.status, 409);
+      assert.equal("reason" in coach.body, false, "no reason for the coach");
+      assert.equal(coach.body.message, identity.COACH_SOURCE_MESSAGE);
+      const adm = await load(o, o.padmin.cookie);
+      assert.equal(adm.body.error, "source_connection_unavailable", adm.text);
+      assert.equal(typeof adm.body.reason, "string", "the administrator reads the precise reason");
+    } finally {
+      process.env.SOURCE_CREDENTIAL_KEYS = saved;
+    }
+  }
+});

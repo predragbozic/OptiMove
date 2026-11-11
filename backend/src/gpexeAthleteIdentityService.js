@@ -98,6 +98,20 @@ const STATUS = Object.freeze({
   key_missing: 503, credential_unreadable: 503,
 });
 const refusal = (code, details) => new GpexeIdentityError(STATUS[code] ?? 409, code, MESSAGES[code] ?? "The team's source connection cannot be used right now; nothing was read.", details);
+// Team mode (U3's open item): a team's coach may start a load, but the precise
+// codes of the source connection stay with the administrators (as in F3c2g, a
+// coach gets source_connection_unavailable and a sentence). The codes about the
+// coach's own request are kept; every other one is one coarse refusal, with no
+// reason, and a load that stopped early names no cause.
+const COACH_KEPT_CODES = new Set(["invalid_body", "request_key_reused", "identity_load_running", "identity_load_abandoned", "try_again", "outcome_unknown", "internal_error"]);
+export const COACH_SOURCE_MESSAGE = "GPEXE could not be read for this team right now; nothing was saved. Ask an administrator to check the team's GPEXE connection.";
+export function coachRefusal(error) {
+  if (COACH_KEPT_CODES.has(error.code)) return { status: error.status, code: error.code, message: error.message, details: error.details ? { replayed: error.details.replayed, requestKey: error.details.requestKey } : null };
+  return { status: 409, code: "source_connection_unavailable", message: COACH_SOURCE_MESSAGE, details: error.details?.replayed ? { replayed: true } : null };
+}
+export function coachResult(answer) {
+  return answer && answer.stopCode ? { ...answer, stopCode: "stopped" } : answer;
+}
 const notAvailable = () => new GpexeIdentityError(404, "notFound", "notFound");
 
 // ---------------------------------------------------------------------------
