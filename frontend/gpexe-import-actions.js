@@ -3,7 +3,8 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds } from "./gpexe-import-view.js";
+import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
+import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
@@ -185,9 +186,26 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
     const athletes = leave.length ? importableAthleteCount(gx.detail.subset.preview) : importableAthleteCount(candidate.preview);
-    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
+    // J20-C: the attendance states chosen on the rows are saved after the import (their keys are made now, before anything is sent).
+    const stateIds = stateAthleteIds(candidate, gx.detail);
+    const states = chosenStateCount(gx.detail, stateIds);
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}${states ? ` Then it saves ${states} ${states === 1 ? "attendance state" : "attendance states"}.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
+    if (states) prepareStateKeys(gx.detail, stateIds);
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
+    return true;
+  }
+  // J20-C: an attendance state chosen on a row of the review (kept in the browser until the import).
+  if (type === "training-load-gpexe-state") {
+    if (chooseState(gx.detail, action.dataset.athleteId, action.value)) renderTrainingLoad();
+    return true;
+  }
+  // J20-C: Check the result repeats the same requests with the same keys; Save them (again) prepares the not sent and refused ones.
+  if (type === "training-load-gpexe-states-check" || type === "training-load-gpexe-states-again") {
+    const approval = importedApprovalOf(gx.detail);
+    if (!approval) return true;
+    if (type === "training-load-gpexe-states-again") retryStates(gx.detail);
+    await saveImportStates(gx.detail, approval, renderTrainingLoad);
     return true;
   }
   // U5b: undoing an imported session (platform admin; the server decides again).
@@ -523,4 +541,12 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
 
   return false;
+}
+
+// J20-C: the confirmed import of the open review (its approval and activity), or null while it is not confirmed.
+function importedApprovalOf(detail) {
+  const o = detail?.outcome;
+  if (o?.kind === "imported" && o.result?.approval?.id && o.result?.import?.activityId) return { id: o.result.approval.id, activityId: o.result.import.activityId };
+  const a = o?.verified === "imported" ? o.approval : detail?.candidate?.status === "imported" ? detail.candidate.approval : null;
+  return a?.id && a?.import?.activityId ? { id: a.id, activityId: a.import.activityId } : null;
 }

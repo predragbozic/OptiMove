@@ -11,6 +11,7 @@ import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
 import { emptyGuideState, loadGuide } from "./gpexe-guide-data.js";
+import { discardStateKeys, saveImportStates, statesOf } from "./gpexe-import-states-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
 export const CHECK_POLL_MS = 2_000;
@@ -391,9 +392,12 @@ export async function openGpexeCandidate(candidateId, render) {
   gx.notice = "";
   render();
   try {
-    const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
+    const { candidate, participationReasons } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
     if (generation !== gx.generation || gx.detail?.id !== candidateId) return;
     gx.detail.candidate = candidate;
+    // J20-C: the reasons "Did not participate" takes, for the states chosen before the import.
+    gx.detail.participationReasons = Array.isArray(participationReasons) ? participationReasons : [];
+    statesOf(gx.detail, gx);
     // J20-A2 follow-up (J20 section 4): U3's suggested pair comes first in a row's chooser.
     if ((candidate?.preview?.athletes || []).some((a) => a.notImported?.code === "athlete_not_linked") && gx.suggestions?.status !== "ready") void loadPairSuggestions(render, { inReview: true });
   } catch (error) {
@@ -512,11 +516,16 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     detail.subset = null;
     rememberOutcome(detail.id, detail.outcome);
     if (result.candidate) detail.candidate = result.candidate;
+    // J20-C: the import is confirmed; its attendance states follow (a second step, never part of the import).
+    if (result.approval?.id && result.import?.activityId) void saveImportStates(detail, { id: result.approval.id, activityId: result.import.activityId }, render);
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail) return;
     const info = errorInfo(error);
     if (isDefiniteRefusal(info)) {
       detail.outcome = { kind: "refused", error: info };
+      // J20-C: nothing was imported, so the attendance keys made at the confirm are dropped and the choices can change again -
+      // except for already_imported (the import exists: a retry after an unknown outcome), whose keys can still be saved.
+      if (info.code !== "already_imported") discardStateKeys(detail);
       // The subset review belongs to a world that moved: it is made again, never reused.
       if (subset) detail.subset = null;
       // The candidate may have moved on (imported by someone else, blocked,
@@ -586,6 +595,8 @@ export async function verifyGpexeApproval(render) {
     if (candidate.status === "imported" && importedBy) {
       detail.outcome = { ...detail.outcome, checks, verified: "imported", approval: importedBy };
       void reloadGpexeCandidates(render);
+      // J20-C: only now is the activity known; the states chosen before the import follow.
+      if (importedBy.id && importedBy.import?.activityId) void saveImportStates(detail, { id: importedBy.id, activityId: importedBy.import.activityId }, render);
     }
     // Never "not imported" here (owner, F3a external review): a missing
     // approval with a pending candidate - after a 503 or after a lost answer

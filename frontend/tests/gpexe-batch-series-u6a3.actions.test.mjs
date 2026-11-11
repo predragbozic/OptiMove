@@ -278,6 +278,13 @@ test("U6a-3 8: a refusal in a later round (the switch turned off) shows what the
   assert.ok(!/Nothing was imported/.test(panel));
   assert.match(panel, /Imported\./, "and what the first round did");
   assert.ok(candidatesReads() > readsBefore, "the list is read again after sessions were imported in round 1");
+  // The Nezavisni revizor's L1: the branch for a refusal after earlier rounds closes the confirmation and keeps their answers.
+  const b = gx().batch;
+  assert.equal(b.confirming, false, "the confirmation is closed: the result panel shows");
+  assert.equal(b.stopReason, "refused");
+  assert.deepEqual(b.results.map((r) => [r.candidateId, r.outcome]), [["cand-1", "imported"], ["cand-2", "imported"], ["cand-3", "not_attempted"], ["cand-4", "not_attempted"], ["cand-5", "not_attempted"], ["cand-6", "not_attempted"]], "the earlier round's answers stay");
+  assert.equal(b.summary.imported, 2);
+  assert.equal(b.summary.notAttempted, 4);
 });
 
 test("U6a-3 9: moving to another Training Load section or another part of the app while a request is in flight ends the import after it; the leave question says so", async () => {

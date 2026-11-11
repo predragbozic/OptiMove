@@ -249,7 +249,12 @@ router.get("/teams/:teamId/candidates/:candidateId", handle(async (req, res) => 
     audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview),
   });
   if (!candidate) return notFound(res);
-  res.json({ candidate, importSwitch: service.applySwitchInfo() });
+  // J20-C: the review chooses attendance states before the import exists, and "Did not participate" needs a reason: the
+  // active reasons of the global catalog (keys and labels only), the ones the roster read offers.
+  const participationReasons = (await query(
+    `select key, label from training.participation_reasons where is_active order by sort_order, key`,
+  )).rows.map((r) => ({ key: r.key, label: r.label }));
+  res.json({ candidate, importSwitch: service.applySwitchInfo(), participationReasons });
 }));
 
 // Approve a candidate as a whole and import it. Body: { previewHash, the

@@ -683,3 +683,19 @@ test("13. the md5 gate: v61 refuses to run, changing nothing, when v60's guard i
     await rb.drop();
   }
 });
+
+test("15. part b: the candidate answer carries the active participation reasons (keys and labels) for the states chosen before the import; the same identical 404 otherwise", async () => {
+  const team = await setupTeam();
+  await checkNow(team, [cleanBundle({ sessionId: 9717 })]);
+  const cand = (await listFor(team)).find((c) => c.gpexeTeamSessionId === "9717");
+  const r = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: team.coach.cookie });
+  assert.equal(r.status, 200, r.text);
+  const active = (await admin.query(`select key, label from training.participation_reasons where is_active order by sort_order, key`)).rows;
+  assert.ok(active.length > 0);
+  assert.deepEqual(r.body.participationReasons, active.map((x) => ({ key: x.key, label: x.label })));
+  for (const reason of r.body.participationReasons) assert.deepEqual(Object.keys(reason).sort(), ["key", "label"]);
+  const other = await setupTeam();
+  const hidden = await api(`/teams/${other.teamId}/candidates/${cand.id}`, { cookie: other.coach.cookie });
+  assert.equal(hidden.status, 404);
+  assert.equal(hidden.body.participationReasons, undefined);
+});
