@@ -24523,3 +24523,1145 @@ body:not(.athlete-mode):not(.login-mode) .builder-drafts-panel .builder-drafts-t
     font-size: var(--om-text-sm);
   }
 }
+
+/* ==========================================================================
+   Design: the Settings forms (S1). The forms behind Tags & Presets "+ Add",
+   Users (add user, assign access, manual login, Select / Done, Manage
+   account) and Join links had 42 px fields, 40 px buttons, native selects
+   only 19 px tall at 13 px, 22 px colour swatches and a 20 px tall "Cancel".
+   Now every field, select and button is 44 px, the selects look like the
+   fields, and a swatch is a 28 px circle with a 44 px target. Only Settings
+   (.organization-view): the swatches and selects are shared with the
+   Builder and other screens.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="hidden"]),
+body:not(.athlete-mode):not(.login-mode) .organization-view select {
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view select {
+  width: 100%;
+  padding: 0 var(--om-space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background-color: var(--surface);
+  color: var(--text);
+  padding-right: calc(var(--om-space-3) + 20px); /* room for the native arrow */
+  font: inherit;
+  font-size: var(--om-text-sm);
+}
+
+/* Data sources already had 16 px selects; a field marked invalid keeps its
+   red border (Calendar settings). */
+body:not(.athlete-mode):not(.login-mode) .organization-view .data-sources select {
+  font-size: 16px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view select:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .tag-chip-add-row select {
+  width: auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .plain-button.icon-button {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+
+/* A 28 px circle; ::after (and the custom colour's own input) widens the
+   target to 44 px, and the 16 px gap keeps the targets apart. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-palette-options {
+  gap: var(--om-space-4, 16px);
+  padding: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch {
+  position: relative;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch::after {
+  content: "";
+  position: absolute;
+  inset: -10px; /* square, so neighbouring targets tile with no dead corners */
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch-custom {
+  overflow: visible;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .pastel-swatch-custom input[type="color"] {
+  inset: -10px;
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .organization-view select {
+    font-size: 16px;
+  }
+}
+
+/* ==========================================================================
+   Design: the Builder's program bar (B3). Exit, Save and Discard were 32 px
+   icons (Discard 42 x 40). They stay icons (the owner's decision), now 44 px,
+   named by a short aria-label, and each shows its description (its
+   aria-description, which starts with that name) in a styled tooltip: on a
+   computer on hover and on keyboard focus, on a phone after a long press,
+   which does not run the action (builder-bar-tooltip.js). There is no title,
+   so the browser's own tooltip never shows as well. The plan's state ("draft") is a
+   chip. The two identical "i" buttons of the outline say what they open
+   ("Program example", "Session example"); a weekly plan's "Copy from another
+   plan" beside them is 44 px too. No data-* or name changed.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 10px;
+  position: relative;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The tooltip: the button's description, drawn under it. */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action::after {
+  content: attr(aria-description);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  box-sizing: border-box; /* the padding counts inside max-width, even hidden */
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button:hover::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button:hover::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action:hover::after {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action:focus-visible::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button.is-tooltip-open::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button.is-tooltip-open::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action.is-tooltip-open::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Escape closes it until the pointer or focus leaves (builder-bar-tooltip.js). */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button.is-tooltip-dismissed::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button.is-tooltip-dismissed::after,
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action.is-tooltip-dismissed::after {
+  opacity: 0;
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .plain-button::after {
+    transition: none;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+  color: var(--danger, #a23b3b);
+}
+
+/* A visible focus ring (the shared .plain-button ring is a faint shadow). */
+body:not(.athlete-mode):not(.login-mode) .builder-program-actions .plain-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .plain-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+
+/* The plan's state as a chip: a dot and its word. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--muted, #667085);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* The dot marks a draft (a draft or an edit draft) only. */
+body:not(.athlete-mode):not(.login-mode) .builder-status-chip.is-draft::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c98a1c;
+}
+
+/* The outline's example buttons: their words beside the "i". */
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0 12px 0 8px;
+  font-size: var(--om-text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button .button-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-icon-action {
+  width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+
+/* A phone: the bar sits at the left, so its tooltips open to the right; the
+   outline's heading lets its example buttons wrap under it. */
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  /* 44 px icons; a button grows when its handler writes a word into it
+     ("Saving…" while a save runs). */
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+    width: auto;
+    min-width: var(--om-tap-target);
+    padding: 0 10px;
+  }
+
+  /* The tooltip hangs under the whole bar, from its left edge and never wider
+     than it, so a long description stays on the screen. */
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions {
+    position: relative;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action {
+    position: static;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-exit-button::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .builder-finish-button::after,
+  body:not(.athlete-mode):not(.login-mode) .builder-program-actions .icon-button.danger-action::after {
+    right: auto;
+    left: 0;
+    max-width: 100%;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading {
+    flex-wrap: wrap;
+    row-gap: var(--om-space-2);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline > .section-heading > .builder-outline-info-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    width: 100%;
+    margin-left: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .builder-outline-info-buttons .builder-info-button {
+    height: auto;
+    justify-content: flex-start;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.2;
+  }
+}
+
+/* ==========================================================================
+   Design: Settings rows (S5). An athlete's "Active" / "Disabled" pill was a
+   button that switched the login on a tap; it is now a plain badge, and the
+   switch sits in the athlete's Account dialog ("Disable login" asks first).
+   Every row keeps one order: the state, the text button (Invite or Account),
+   edit, then archive or delete, all 44 px on every width. A join link's
+   label has its own line on a phone, so its actions no longer squeeze it
+   letter by letter. Club and team rows are 44 px.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status.is-active {
+  background: var(--om-success-soft);
+  color: var(--om-success);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .athlete-login-status.is-disabled {
+  background: var(--om-danger-soft);
+  color: var(--danger);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .plain-button,
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .icon-button {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-main {
+  min-height: var(--om-tap-target);
+}
+
+/* A join link has no avatar, but its text block reuses .organization-row-main, a grid of avatar (42 px) and text:
+   the label landed in the avatar's column and wrapped letter by letter. Its text block is a plain block. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-link-row > .organization-row-main {
+  display: block;
+}
+
+/* The Account dialog's login switch: the state, then its button. */
+body:not(.athlete-mode):not(.login-mode) .athlete-login-switch .manage-account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .athlete-login-switch .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  /* On a phone the actions start at the left, under or beside the name: right-aligned, the team table's actions sat
+     past the visible part of its scrolling table. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-row-actions {
+    justify-content: flex-start;
+  }
+
+  /* On a phone the actions take the whole width under the label's line. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-link-row > .organization-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+/* ==========================================================================
+   Design: Settings sections (S2). One section, one list: each section has
+   one heading with its count (the "Organization browser" card no longer
+   repeats in every section), and Overview is a summary whose tiles open
+   each section.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-title {
+  margin: 2px 0;
+  font-size: var(--om-text-lg, 18px);
+  line-height: var(--om-leading-tight, 1.25);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary-tile {
+  display: grid;
+  justify-items: start;
+  gap: var(--om-space-1);
+  min-height: var(--om-tap-target);
+  padding: var(--om-space-4);
+  border: 1px solid var(--om-border-subtle, var(--line));
+  border-radius: var(--om-radius-lg, var(--radius));
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary-tile:hover {
+  border-color: var(--accent);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary-tile strong {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-section-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* U6a: the daily Imports screen - one state bar with one main button; the administrator's settings folded. */
+.imports-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.imports-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.imports-lastsearch {
+  overflow-wrap: anywhere;
+}
+.imports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-actions .gpexe-button {
+  min-height: 44px;
+}
+/* The one main button of the state bar looks like the main one (the app has no base .primary-button rule; the
+   design foundation's .om-btn--primary is the model). */
+.imports-actions .primary-button {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius, 8px);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0 16px;
+}
+.imports-actions .primary-button:hover:not(:disabled) {
+  border-color: var(--om-accent-strong, var(--accent));
+  background: var(--om-accent-strong, var(--accent));
+}
+.imports-actions .primary-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.imports-actions .gpexe-button:focus-visible,
+.imports-settings > summary:focus-visible,
+.imports-dates > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A folded card shows that it opens (the flex summary has no marker of its own). */
+.imports-settings > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+.imports-settings > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-settings > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+.imports-settings[open] > summary::after {
+  content: "\25BE";
+}
+.imports-settings {
+  padding-block: 0;
+}
+.imports-settings > .gpexe-panel {
+  border: 0;
+  padding-inline: 0;
+}
+.imports-dates-fields .gpexe-date {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .imports-actions,
+  .imports-actions .gpexe-button {
+    width: 100%;
+  }
+}
+
+/* ==========================================================================
+   Design: Settings add forms (S3). A section's add action is a labelled
+   button on its heading's row (it was a round icon whose meaning only its
+   aria-label carried); the form opens under the heading, in one column,
+   with Cancel and the filled primary in its footer. Users is one panel with
+   a tab per kind of form.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle {
+  justify-self: auto;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: auto;
+  min-height: var(--om-tap-target);
+  padding: 0 var(--om-space-4);
+  gap: var(--om-space-2);
+  border-radius: var(--radius);
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle .rail-icon {
+  width: 20px;
+  height: 20px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle.data-sources-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle.is-open {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+/* The open form: one column, its fields at a readable width. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-form,
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-user-forms {
+  max-width: 640px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-form-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer .data-sources-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Users: one panel, a tab per kind of form; the forms inside it lose their own card. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms {
+  display: grid;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms .organization-form {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms .organization-form + .organization-form {
+  padding-top: var(--om-space-4);
+  border-top: 1px solid var(--line);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-form-tabs .om-tab {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  /* On a phone Cancel and the primary share the footer's row, half each (the shared primary rule would make the
+     primary a full-width line of its own under Cancel); the heading's add button keeps its own width. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer > .plain-button {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle {
+    width: auto;
+  }
+}
+
+/* Join links: its heading, the open form and its two lists, spaced like a section (S3). */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-links {
+  display: grid;
+  gap: 12px;
+}
+
+/* ==========================================================================
+   Design: Settings dialog frame (S4). Manage account, Athlete account,
+   Invite and Edit club / team / athlete share one frame: a head that stays
+   put while the body scrolls (title, subtitle, a 44 px close icon), and a
+   saving dialog's footer that stays at the bottom. Manage account's groups
+   are cards whose rows read "name, state" on the left and the action on the
+   right; its one destructive switch, the login, comes last.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) :is(.organization-manage-account-modal, .organization-edit-modal, .organization-invite-modal) {
+  padding-top: 0;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -16px var(--om-space-1);
+  padding: var(--om-space-4) 16px var(--om-space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head h3 {
+  margin: 2px 0 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head .organization-dialog-close {
+  flex: 0 0 auto;
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-close .builder-icon-svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* A saving dialog's footer stays at the bottom while the fields scroll. The edit dialog has no bottom padding of its
+   own (its footer carries it), so the footer sticks at bottom: 0 in every engine; a focused field scrolled into view
+   is kept clear of the footer. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal {
+  padding-bottom: 0;
+  scroll-padding-bottom: 96px;
+  overscroll-behavior: contain;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0 -16px;
+  padding: var(--om-space-3) 16px var(--om-space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+/* What went wrong with a save is said in the footer, next to the button that was pressed. */
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error:empty {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-badge {
+  display: inline-flex;
+  margin-top: var(--om-space-1);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form h5 {
+  margin: var(--om-space-2) 0 0;
+  font-size: var(--om-text-sm, 14px);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+/* Edit athlete: the profile and the library access are two parts, each under its own heading with its own save. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part h4 {
+  margin: 0;
+  font-size: var(--om-text-md, 16px);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part + .organization-dialog-part {
+  margin-top: var(--om-space-4);
+  padding-top: var(--om-space-4);
+  border-top: 1px solid var(--line-strong);
+}
+
+
+/* Manage account: each group is a card; a row is "name, state" on the left and the action on the right. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section {
+  padding: var(--om-space-3) var(--om-space-4);
+  border: 1px solid var(--om-border-subtle, var(--line));
+  border-radius: var(--om-radius-md, var(--radius));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section:first-of-type {
+  padding-top: var(--om-space-3);
+  border-top: 1px solid var(--om-border-subtle, var(--line));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row {
+  justify-content: space-between;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-width: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row .plain-button,
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row :is(.plain-button, select) {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row select {
+    font-size: 16px;
+  }
+}
+
+/* The login switch, the one destructive account action, is the last card, marked as such. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-danger {
+  border-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+/* Only the profile's footer stays at the bottom; the library access is saved at the end of its own part (a second
+   sticky footer would show its save under the profile). */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form .organization-dialog-footer {
+  position: static;
+  margin: 0;
+  padding: var(--om-space-3) 0 var(--om-space-4);
+  border-top: 0;
+}
+
+/* ==========================================================================
+   Design S6 (shell): the header's controls are 44 px on a computer too. The
+   workspace switcher, Notifications, Messages and Sign out were 40 px above
+   the phone breakpoint (on a phone they already were 44). The "Online" status
+   pill is left as U4 set it.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .sign-out-button {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (shell). */
+
+/* ==========================================================================
+   Design S6 (Settings): App health's period, role and place chips are 44 px on
+   every width (on a phone they already were). (Calendar settings' "Add …"
+   button is hidden while its own form is open by the hidden attribute alone:
+   the global [hidden] rule hides it.)
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .app-health-chip {
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (Settings). */
+
+/* ==========================================================================
+   Design S7: Icons on a phone. The gallery is a grid of compact tiles (the
+   icon, its name and Copy key) instead of one long list, and the category
+   chips are one row that scrolls sideways and stays at the top while the page
+   scrolls. The search words still find an icon; on a phone they are not
+   repeated on its tile. Read-only, as before.
+   ========================================================================== */
+@media (max-width: 760px) {
+  /* A panel clips its overflow; "clip" (not "hidden") lets the chips stick to the page. */
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery.panel {
+    overflow: clip;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -16px;
+    padding: var(--om-space-2) 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] .icon-picker-chip {
+    flex: 0 0 auto;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: var(--om-space-2);
+  }
+
+  /* A 320 px phone still gets three tiles to a row. */
+  @media (max-width: 359px) {
+    body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--om-space-1);
+    padding: var(--om-space-2);
+    text-align: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-glyph {
+    align-self: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text strong {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text > small {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-refused code {
+    overflow-wrap: anywhere;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .plain-button {
+    width: 100%;
+    padding-inline: var(--om-space-1);
+  }
+}
+/* End of design S7. */
+
+
+/* ==========================================================================
+   Design L1: the sign-in screens (sign in, password reset, invite, join,
+   email verification and change, check-in). Each card carries the app's own
+   logo, its one main action is the accent button, and every field, button and
+   text link is 44 px. Presentation only: no text, route or form changes.
+   ========================================================================== */
+body.login-mode .login-form::before {
+  content: "";
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  background: url("./brand-logo.png") center / contain no-repeat;
+}
+
+body.login-mode .login-form input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: var(--om-tap-target);
+}
+
+body.login-mode .login-form .plain-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--om-tap-target);
+  text-decoration: none;
+}
+
+/* The card's one main action (Sign in, Send reset link, Set new password,
+   Back to sign in, a nested form's Send new confirmation email...); a compact
+   action (join's Resend) stays secondary. */
+body.login-mode .login-form > .plain-button:not(.compact-button),
+body.login-mode .login-form > form > .plain-button:not(.compact-button) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The card's grid gap spaces its lines; a paragraph's own margin would double it. */
+body.login-mode .login-form > p {
+  margin: 0;
+}
+
+body.login-mode .login-form .muted > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--om-tap-target);
+  color: var(--accent);
+  font-weight: 700;
+}
+/* End of design L1. */
+
+/* ==========================================================================
+   Design C1: the coach directory's Create / Edit my profile is 44 px.
+   ========================================================================== */
+body:not(.login-mode) .coach-directory-head .plain-button {
+  min-height: var(--om-tap-target);
+}
+/* End of design C1. */
+
+/* ==========================================================================
+   Design T1: the Tests week pager and Schedule toolbar (coach). The arrows
+   sit next to the week and Today instead of at the two far edges, every
+   pager and toolbar control is 44 px, and "Show cancelled" is a switch in a
+   44 px row instead of a bare 42 px box. An athlete's Tests keep their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-nav {
+  justify-content: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-range {
+  flex: 0 1 auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow,
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-today-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-toolbar .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .om-btn {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle {
+  min-height: var(--om-tap-target);
+  gap: var(--om-space-2);
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* The native checkbox (its handler reads .checked) drawn as a switch. */
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: left 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+    transition: none;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked::before {
+  left: 18px;
+  background: #fff;
+}
+
+/* End of design T1. */
+
+/* ==========================================================================
+   Design T2: the Tests session, schedule and result screens (coach). Every
+   button and text action in a detail is 44 px, a back button is as wide as
+   its words (it stretched across the page), the reminder rows are 44 px with
+   a 20 px checkbox, and Today sits after the week's arrows. On a narrow
+   phone the four section tabs fit on one row. An athlete keeps their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-detail > .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-detail > .plain-button[data-action="tests-close-schedule"] {
+  justify-self: start;
+  width: auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The round Cancel / Confirm of the Tests pickers (recipients, dates) stay round at 44 x 44. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-cancel,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-continue {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+}
+
+/* A form's close button is 44 x 44, and its heading leaves room for it. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .wellness-back {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-form > h3 {
+  padding-right: 52px;
+}
+
+/* Every athlete a reminder goes to is in view: no capped inner scroll (it showed 5 of 11). */
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-list {
+  max-height: none;
+  overflow: visible;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-link-box > .plain-button {
+  justify-self: start;
+  width: auto;
+}
+
+@media (max-width: 380px) {
+  body:not(.athlete-mode):not(.login-mode) .tests-section-tabs.om-tabs .om-tab {
+    padding-inline: var(--om-space-2);
+  }
+}
+/* End of design T2. */

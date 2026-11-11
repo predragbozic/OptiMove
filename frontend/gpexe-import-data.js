@@ -956,7 +956,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
       if (!isDefiniteRefusal(info)) {
         linksChanged();
         gx.linkConfirm = null;
-        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" on the Imports page, and unlink it there if it is wrong." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the linked athletes under Link athletes, and unlink it there if it is wrong." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -990,7 +990,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
       // the reviews on screen are treated as made with the old links.
       if (!isDefiniteRefusal(info)) {
         linksChanged();
-        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" on the Imports page." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the linked athletes under Link athletes." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -1401,14 +1401,14 @@ export function clearCalendarDay() {
   g().calendar.day = "";
 }
 
-// Whether the calendar panel is open: as the coach left it; otherwise open
-// on a desktop, folded on a phone (the list is the day's work), and open
-// while a day is filtered so the "Show all dates" line is in sight.
+// Whether the calendar panel is open: as the coach left it; otherwise folded
+// on every screen (U6a: the list is the day's work), and open while a day is
+// filtered so the "Show all dates" line is in sight.
 export function calendarOpen(gx = g()) {
   const open = gx.calendar?.open;
   if (open === true || open === false) return open;
   if (gx.calendar?.day) return true;
-  return !globalThis.window?.matchMedia?.("(max-width: 760px)")?.matches;
+  return false;
 }
 
 // The panel was opened or folded (the <details> element's own "toggle"
@@ -1416,6 +1416,11 @@ export function calendarOpen(gx = g()) {
 // request, no change to the search dates, the shared week or the filtered day.
 export function calendarToggled(open) {
   g().calendar.open = Boolean(open);
+}
+
+// U6a: the folded "Import settings" card was opened or folded by the person (its own "toggle" event, app.js); kept for the next repaint.
+export function importSettingsToggled(open) {
+  g().settingsOpen = Boolean(open);
 }
 
 // Leaving the page (reload, close, another site) while an import is running

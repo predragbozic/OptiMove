@@ -87,7 +87,7 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
+import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled } from "./gpexe-import-data.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -120,6 +120,7 @@ import {
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
+import { installBuilderBarTooltip } from "./builder-bar-tooltip.js";
 import { dropBuilderLibraryDrag, endBuilderLibraryDrag, endStaleBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
 import { dropVariableDrag, endVariableDrag, leaveVariableDrag, overVariableDrag, startVariableDrag } from "./data-config-drag.js";
 import { dropBlocked, dropVariableOnCategory } from "./metric-classification-drag.js";
@@ -304,6 +305,9 @@ let athleteRosterPending = true;
 init();
 
 async function init() {
+  // B3: a long press on a Builder bar icon shows its tooltip and does not run it (a window capture listener, so it
+  // stops the click before the app's own listeners, whichever is installed first).
+  installBuilderBarTooltip();
   bindEvents();
   // From here the menu button has its own listener; earlier taps were counted by index.html / athlete.html and
   // are replayed below, once the signed-in shell is shown (never into a sign-in or invite screen).
@@ -550,11 +554,13 @@ function bindEvents() {
       activityRosterDisclosureToggled(panel);
       return;
     }
-    if (!panel?.classList?.contains("imports-calendar")) return;
+    const settings = panel?.classList?.contains("imports-settings");
+    if (!settings && !panel?.classList?.contains("imports-calendar")) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
-    importsCalendarToggled(panel.open);
+    if (settings) importSettingsToggled(panel.open);
+    else importsCalendarToggled(panel.open);
   }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
@@ -3229,6 +3235,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     normalizeOrganizationSelection(data);
     const role = roleLabel();
     const scope = accessScopeLabel();
+    // S4: a Settings dialog that is drawn again (a pending or settled action) keeps where it was scrolled to, so an
+    // action near its end (Account status) shows its result in place.
+    const openDialog = els.content.querySelector?.('[role="dialog"][aria-modal="true"]');
+    const dialogScroll = openDialog ? { label: openDialog.getAttribute("aria-label"), top: openDialog.scrollTop } : null;
     els.content.innerHTML = renderOrganizationPanelHtml({
       currentUser: state.currentUser,
       data,
@@ -3236,6 +3246,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       role,
       scope,
     });
+    if (dialogScroll?.top) {
+      const again = [...els.content.querySelectorAll('[role="dialog"][aria-modal="true"]')].find((dialog) => dialog.getAttribute("aria-label") === dialogScroll.label);
+      if (again) again.scrollTop = dialogScroll.top;
+    }
     // The Settings tab row scrolls sideways when it does not fit: keep the active tab in view.
     revealActiveTab(els.content);
   };

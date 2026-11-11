@@ -325,6 +325,24 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  // S3: the Users add panel's tabs (New account, Give access, Athlete login).
+  if (type === "organization-user-form-tab") {
+    const tab = action.dataset.userFormTab || "";
+    state.organization.userFormTab = tab;
+    // Switch in place (no repaint), so what was typed in another tab is kept.
+    const forms = typeof action.closest === "function" ? action.closest(".organization-user-forms") : null;
+    if (forms) {
+      for (const button of forms.querySelectorAll("[data-user-form-tab]")) {
+        const on = button.dataset.userFormTab === tab;
+        button.classList.toggle("is-active", on);
+        button.setAttribute("aria-selected", String(on));
+      }
+      for (const panel of forms.querySelectorAll("[data-user-form-panel]")) panel.hidden = panel.dataset.userFormPanel !== tab;
+    } else {
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
   if (type === "organization-toggle-add-form") {
     state.organization.addFormOpen = !state.organization.addFormOpen;
     void renderOrganizationPanel({ refresh: false });
@@ -445,9 +463,17 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     const athleteId = action.dataset.athleteId || "";
     const userId = action.dataset.userId || "";
     if (!userId) return true;
-    state.athleteAccountManage = { open: true, athleteId, userId, loading: true, data: null, error: "", pending: false };
+    state.athleteAccountManage = { open: true, athleteId, userId, scope: "full", loading: true, data: null, error: "", message: "", pending: false };
     void renderOrganizationPanel({ refresh: false });
     void loadAthleteAccount(userId, { renderOrganizationPanel });
+    return true;
+  }
+  // S5: the login switch alone, for a club admin or a coach. Drawn from the athlete row: no request.
+  if (type === "organization-athlete-login-open") {
+    const athleteId = action.dataset.athleteId || "";
+    if (!athleteId) return true;
+    state.athleteAccountManage = { open: true, athleteId, userId: "", scope: "login", loading: false, data: null, error: "", message: "", pending: false };
+    void renderOrganizationPanel({ refresh: false });
     return true;
   }
   if (type === "organization-athlete-account-close") {
@@ -922,22 +948,43 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     }
     return true;
   }
+  // S5: the switch lives in the athlete's Account dialog. Disabling asks first; the result is said in the dialog.
   if (type === "organization-toggle-athlete-login") {
     const athleteId = action.dataset.athleteId;
     const nextActive = action.dataset.currentActive !== "true";
-    if (!athleteId) return true;
+    const manage = state.athleteAccountManage;
+    if (!athleteId || manage.pending) return true;
+    if (!nextActive) {
+      const name = action.dataset.athleteName || "this athlete";
+      if (!window.confirm(`Disable ${name}'s login? They can't sign in to the athlete app until it is enabled again. Roles, memberships and history are not changed.`)) return true;
+    }
     action.disabled = true;
+    manage.pending = true;
+    manage.error = "";
+    manage.message = "";
+    // The dialog's other actions are off while the write is in flight.
+    void renderOrganizationPanel({ refresh: false });
+    let saved = false;
     try {
       await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/login-status`, {
         method: "PUT",
         body: JSON.stringify({ active: nextActive }),
       });
-      await loadAthletes();
-      if (state.activeTab === "organization") await renderOrganizationPanel();
+      saved = true;
+      manage.message = nextActive ? "Login enabled." : "Login disabled.";
     } catch (error) {
-      window.alert(error?.message || "Could not update login status.");
+      manage.error = error?.message || "Could not update login status.";
+    }
+    // Read the state again after a write and after a failure alike: a failed answer may still have been applied.
+    try {
+      await loadAthletes();
+      if (manage.open && manage.scope === "full" && manage.userId) await loadAthleteAccount(manage.userId, { renderOrganizationPanel });
+    } catch {
+      if (saved) manage.message += " The list may be out of date; reload to see it.";
     } finally {
+      manage.pending = false;
       action.disabled = false;
+      if (state.activeTab === "organization") await renderOrganizationPanel();
     }
     return true;
   }

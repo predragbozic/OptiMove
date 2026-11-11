@@ -40,7 +40,8 @@ export function renderTestsBadge() {
 }
 
 export function renderTests() {
-  els.context.textContent = "Tests";
+  // A coach's eyebrow says what the area is for, not "Tests" over "Tests" (an athlete's header has its own look).
+  els.context.textContent = isAthleteMode() ? "Tests" : "Testing and wellness";
   els.title.textContent = "Tests";
   els.toolbar.innerHTML = "";
   els.content.innerHTML = `
@@ -283,6 +284,11 @@ function testsWeeklyTodayIso() {
   return localDateIsoInTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
 }
 
+// "06:00:00" -> "06:00": a coach reads a clock time, not seconds.
+function clockTime(value) {
+  return String(value || "").slice(0, 5);
+}
+
 function formatWeekRangeLabel(weekStart, weekEnd) {
   return `${formatDayMonth(weekStart)} – ${formatDayMonth(weekEnd)}`;
 }
@@ -300,9 +306,9 @@ function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate
         <button type="button" class="plain-button icon-button tests-weekly-arrow" data-action="tests-weekly-prev-week" data-section="${section}" aria-label="Previous week">&larr;</button>
         <div class="tests-weekly-range">
           <strong>${escapeHtml(formatWeekRangeLabel(weekStart, weekEnd))}</strong>
-          <button type="button" class="plain-button compact-button tests-weekly-today-button" data-action="tests-weekly-today" data-section="${section}">Today</button>
         </div>
         <button type="button" class="plain-button icon-button tests-weekly-arrow" data-action="tests-weekly-next-week" data-section="${section}" aria-label="Next week">&rarr;</button>
+        <button type="button" class="plain-button compact-button tests-weekly-today-button" data-action="tests-weekly-today" data-section="${section}">Today</button>
       </div>
       <div class="tests-weekly-strip" role="tablist" aria-label="Select a day">
         ${days.map((day) => renderWeeklyStripDayHtml(section, day, day.date === selectedDay?.date, todayIso)).join("")}
@@ -625,7 +631,7 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
       <div class="tests-today-head">
         <div>
           <h3>${escapeHtml(schedule.testName)}</h3>
-          <p class="muted">${escapeHtml(schedule.opensTime)}&ndash;${escapeHtml(schedule.closesTime)} in each athlete's local timezone &middot; ${escapeHtml(coachTodayGroupStatusLabel(group))}</p>
+          <p class="muted">${escapeHtml(clockTime(schedule.opensTime))}&ndash;${escapeHtml(clockTime(schedule.closesTime))} in each athlete's local timezone &middot; ${escapeHtml(coachTodayGroupStatusLabel(group))}</p>
         </div>
         <button type="button" class="plain-button compact-button" data-action="tests-copy-link" data-schedule-id="${escapeAttr(schedule.id)}">Copy group link</button>
       </div>
@@ -658,10 +664,10 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
 function renderCoachScheduleHtml() {
   return `
     <div class="tests-schedule-toolbar">
-      <button type="button" class="plain-button" data-action="tests-open-schedule-form">New WELLNESS schedule</button>
+      <button type="button" class="plain-button" data-action="tests-open-schedule-form">New check-in schedule</button>
       <label class="tests-show-cancelled-toggle">
-        <input type="checkbox" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
-        <span>Show cancelled</span>
+        <input type="checkbox" role="switch" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
+        <span>Show cancelled schedules</span>
       </label>
     </div>
     ${state.tests.scheduleForm.open ? renderScheduleFormHtml() : ""}
@@ -698,7 +704,7 @@ export function renderScheduleWeeklyHtml() {
     weekStart: nav.data.weekStart,
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
-    emptyAgendaText: "No WELLNESS scheduled for this day.",
+    emptyAgendaText: "No check-ins scheduled for this day.",
     renderSessionRow: (session) => renderWeeklySessionRowShell({
       dataAction: "tests-open-schedule",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}"`,
@@ -717,7 +723,7 @@ function renderScheduleDetailHtml() {
     <section class="panel tests-schedule-detail">
       <button type="button" class="plain-button compact-button" data-action="tests-close-schedule">&larr; Back to schedules</button>
       <h3>${escapeHtml(schedule.testName)} &middot; ${schedule.scheduleKind === "recurring" ? "Daily" : "One-time"}</h3>
-      <p class="muted">${escapeHtml(schedule.opensTime)}&ndash;${escapeHtml(schedule.closesTime)} ${escapeHtml(schedule.timezone)}</p>
+      <p class="muted">${escapeHtml(clockTime(schedule.opensTime))}&ndash;${escapeHtml(clockTime(schedule.closesTime))} ${escapeHtml(schedule.timezone)}</p>
       <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.id)).join(", ") || "none"}</p>
       ${schedule.status === "cancelled"
         ? `
@@ -1001,7 +1007,7 @@ export function renderScheduleFormHtml() {
   return `
     <section class="panel tests-schedule-form">
       <button type="button" class="plain-button icon-button wellness-back" data-action="tests-close-schedule-form" aria-label="Close">&times;</button>
-      <h3>${isEdit ? "Edit WELLNESS schedule" : isScheduleAgain ? "Schedule again" : "New WELLNESS schedule"}</h3>
+      <h3>${isEdit ? "Edit check-in schedule" : isScheduleAgain ? "Schedule again" : "New check-in schedule"}</h3>
       ${isScheduleAgain ? `<p class="muted">Settings copied from the original schedule - pick new dates below to create an independent new schedule. The original and its results are unaffected.</p>` : ""}
       ${form.error ? `<p class="builder-error">${escapeHtml(form.error)}</p>` : ""}
       ${blockedOneTimeEdit ? `
@@ -1436,7 +1442,8 @@ function renderResultsWeeklyHtml() {
     weekStart: nav.data.weekStart,
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
-    emptyAgendaText: "No results for this day.",
+    emptyAgendaText: "No results for this day. Results appear here once athletes complete a check-in.",
+    emptyAgendaAction: `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today's check-ins</button>`,
     renderSessionRow: (session, date) => renderWeeklySessionRowShell({
       dataAction: "tests-weekly-open-results",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
@@ -1460,7 +1467,7 @@ function renderResultsListFilteredHtml() {
 
 function renderCoachResultsListHtml() {
   const rows = state.tests.results;
-  if (!rows.length) return `<p class="muted tests-empty">No WELLNESS results yet.</p>`;
+  if (!rows.length) return `<p class="muted tests-empty">No check-in results yet.</p>`;
   return `
     <div class="tests-results-table">
       ${rows.map((row) => `
