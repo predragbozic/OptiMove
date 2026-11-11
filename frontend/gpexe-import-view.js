@@ -891,6 +891,7 @@ function batchOutcomeText(r) {
   if (o === "imported") return { cls: "is-imported", text: r.commitConfirmation === "verified_after_commit_error" ? "Imported (the confirmation arrived late, but the import is in OptiMove)." : "Imported." };
   if (o === "already_imported") return { cls: "is-imported", text: "Already imported, nothing more was written." };
   if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
+  if (o === "not_attempted" && r.code === "batch_time_budget" && state.trainingLoad.gpexe?.batch?.sending) return { cls: "is-skipped", text: "Waiting: the series goes on with this session by itself." };
   if (o === "not_attempted" && r.code === "batch_time_budget") return { cls: "is-skipped", text: "Not tried: time ran out. Nothing was saved for this session - import it again from the Ready list." };
   if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
   const code = r.code;
@@ -972,10 +973,23 @@ function renderBatchOverlayHtml(gx) {
           <h3>${escapeHtml(title)}</h3>
           <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="${close}" aria-label="Close" ${busy}>&times;</button>
         </div>
-        <div class="gpexe-detail-body">${body}</div>
+        <div class="gpexe-detail-body">${renderBatchProgressHtml(b)}${body}</div>
       </section>
     </div>
   `;
+}
+
+// U6a-3: while a long selection goes on in several requests: how far it is, that it goes on by itself, and Stop.
+function renderBatchProgressHtml(b) {
+  if (!b.sending || !b.progress || b.progress.total < 2) return "";
+  const { total, done } = b.progress;
+  return `
+    <div class="imports-progress" role="group" aria-label="Import progress">
+      <p role="status"><strong>Importing ${done} of ${total} sessions...</strong>${b.stopRequested ? " Stopping after this request." : ""}</p>
+      <div class="imports-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${Math.round((done / total) * 100)}%"></i></div>
+      <p class="muted">It goes on by itself until it ends or a session needs a person. If you leave Imports it stops after the request in flight; Import ready sends what is left.</p>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-stop" ${b.stopRequested ? "disabled" : ""}>Stop after this step</button>
+    </div>`;
 }
 
 // The confirmation: every chosen session by name and time, what happens,
@@ -1038,9 +1052,11 @@ function renderBatchResultsHtml(gx) {
     return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}${techHtml([["Outcome", r.outcome], ["Code", r.code], ["Approval id", r.approvalId], ["Candidate id", r.candidateId]])}</li>`;
   });
   const summary = batchSummaryText(b.summary);
+  const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>The series stopped.</strong> ${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : "";
   const still = batchSelection(gx).length;
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
+    ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
     ${(b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}

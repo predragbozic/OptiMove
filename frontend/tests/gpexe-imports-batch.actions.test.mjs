@@ -813,7 +813,7 @@ test("leaving Training Load with a selection or a running import asks first; dec
   await new Promise((resolve) => setImmediate(resolve));
   confirmAnswer = false;
   assert.equal(confirmLeaveTrainingLoad("weekly"), false);
-  assert.match(confirmQuestions.at(-1), /An import of several sessions is still running\. Its result will be under Imports when it finishes\. Leave anyway\?/);
+  assert.match(confirmQuestions.at(-1), /An import of several sessions is still running\. If you leave now it stops after the request in flight; what is left stays under Imports to import again\. Leave anyway\?/);
   assert.equal(confirmLeaveTrainingLoad(null, { discard: false }), false);
   assert.match(confirmQuestions.at(-1), /If you switch workspace now, its result is lost\. Leave anyway\?/, "the workspace exit tells the truth");
   release();

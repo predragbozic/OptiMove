@@ -25346,3 +25346,49 @@ body:not(.athlete-mode):not(.login-mode) .app-health-chip {
   }
 }
 /* End of design S7. */
+
+/* U6a-3: a long import goes on in several requests - how far it is, and Stop, kept in sight. */
+.imports-progress {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-progress p {
+  margin: 0;
+}
+.imports-progress-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--line);
+}
+.imports-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent, currentColor);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .imports-progress-bar > i {
+    transition: width 0.3s;
+  }
+}
+@media (max-width: 760px) {
+  .imports-progress .gpexe-button {
+    width: 100%;
+  }
+}
+@media (forced-colors: active) {
+  .imports-progress-bar {
+    border: 1px solid CanvasText;
+  }
+  .imports-progress-bar > i {
+    background: Highlight;
+  }
+}

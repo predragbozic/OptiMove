@@ -25,6 +25,7 @@ import {
   openBatchReview,
   selectBatchVisible,
   sendBatch,
+  stopBatchSeries,
   setCalendarDay,
   toggleBatchPick,
   chooseTeamMapping,
@@ -485,6 +486,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // refuses it too).
     if (gx.batch.sending || !gx.batch.confirming) return true;
     await sendBatch(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-stop") {
+    if (stopBatchSeries()) renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-batch-check") {
