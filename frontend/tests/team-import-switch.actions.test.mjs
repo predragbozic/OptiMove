@@ -104,7 +104,11 @@ function server({ sw, put, post } = {}) {
 async function act(action, dataset = {}) {
   await handleTrainingLoadAction({ dataset: { action, ...dataset } }, { renderTrainingLoad: render });
 }
-const openImports = () => act("training-load-section", { section: "imports" });
+// IMP1: the team's switch (its line and the Import settings panel) lives in the Search tab.
+const openImports = async () => {
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-tab", { importTab: "search" });
+};
 const html = () => renderTrainingLoadCoachHtml();
 const puts = () => fetchCalls.filter((c) => c.method === "PUT");
 const panel = (page = html()) => { const i = page.indexOf('aria-label="Imports for this team"'); return i < 0 ? "" : page.slice(i, page.indexOf("</section>", i)); };
@@ -116,7 +120,9 @@ test("1. a coach sees one sentence about the team's switch and no panel: off say
   let page = html();
   assert.match(page, /Imports are switched off for this team\.<\/strong> A platform administrator turns them on\./);
   assert.equal(panel(page), "", "no panel for a coach");
-  assert.match(page, /Review only - imports are switched off for this team\./);
+  // IMP1: the review-only reason sits by the Import place, in the Ready tab.
+  await act("training-load-gpexe-tab", { importTab: "ready" });
+  assert.match(html(), /Review only - imports are switched off for this team\./);
   assert.equal(puts().length, 0);
   resetState();
   responder = server({ sw: switchBody({ manager: false, enabled: true, mode: "team" }) });

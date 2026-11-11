@@ -15,7 +15,8 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { choiceValue, chosenStateCount, statesLockedOf, statesSummary } from "./gpexe-import-states-data.js";
-import { renderGuideHtml } from "./gpexe-guide-view.js";
+import { guideFacts, renderGuideHtml } from "./gpexe-guide-view.js";
+import { guideSteps } from "./gpexe-guide-steps.js";
 import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
@@ -30,6 +31,7 @@ import {
   calendarFiltered,
   calendarMonthShown,
   calendarOpen,
+  chooseOpen,
   candidateGroup,
   gpexeTeamOptions,
   inboxBucket,
@@ -464,15 +466,12 @@ export function renderGpexeImportsHtml() {
       ${renderTeamRowHtml(teams, gx.teamId)}
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load the imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
-      ${status ? renderGuideHtml(gx, status) : ""}
+      ${status && setupOpen(gx, status) ? renderGuideHtml(gx, status) : ""}
       ${status ? renderSourceCardHtml(IMPORT_SOURCES[0], gx, status) : ""}
-      ${status ? renderImportSettingsHtml(gx) : ""}
       ${status ? renderNextStepHtml(gx, status, IMPORT_SOURCES[0]) : ""}
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
-      ${status ? renderCalendarHtml(gx) : ""}
-      ${status ? renderBucketsHtml(gx, status) : ""}
-      ${status ? renderLinksHtml(gx) : ""}
+      ${status ? renderImportsTabsHtml(gx, status) : ""}
       ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
       ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
       ${!gx.detail && !gx.mapping?.open ? renderBatchOverlayHtml(gx) : ""}
@@ -495,21 +494,30 @@ function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   `;
 }
 
-// U6a-2 (D4): "Ready: N" and "Needs you: N", from the whole list (a day picked in the calendar does not change them).
-function renderCountPillsHtml(gx) {
+// IMP1 (the "GPS Import Flow" sketch): the banner on top - what the last search found and ONE main button. Dates stay a
+// small fold beside it (the search reads them from there); every other fact of the source lives in the Search tab.
+function shortWhen(value) {
+  const day = sessionDayText(value);
+  const time = sessionTimeText(value);
+  return day ? `${day.replace(/^\S+\s/, "")} ${time}`.trim() : "";
+}
+
+function bannerText(gx, check) {
   const list = gx.candidates || [];
   const ready = list.filter((c) => inboxBucket(c, gx) === "ready").length;
   const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
-  return `<span class="imports-pill is-ready">Ready: ${ready}</span>${needs ? `<span class="imports-pill is-needs">Needs you: ${needs}</span>` : ""}`;
+  const when = check?.finishedAt || check?.startedAt;
+  // Honest: OptiMove does not look in GPEXE by itself yet, so the banner says what the last search found, not what waits.
+  const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}` : "No search yet";
+  const parts = [head];
+  if (gx.candidates) {
+    parts.push(`${ready} ready`);
+    if (needs) parts.push(`${needs} need${needs === 1 ? "s" : ""} you`);
+  }
+  return parts.join(" · ");
 }
 
-// The source card: what the team reads from, when sessions were last found,
-// and the one button that finds them. Dates are there for the coach who
-// needs them, folded away for everyone else. Every id and code of the
-// source stays under Technical details.
 function renderSourceCardHtml(source, gx, status) {
-  const sw = status.importSwitch || {};
-  const viewer = status.viewer || {};
   const connected = Boolean(status.settings);
   const check = gx.check || status.lastCheck;
   const running = Boolean(gx.checkStarting || check?.status === "running");
@@ -518,26 +526,14 @@ function renderSourceCardHtml(source, gx, status) {
   // A step that needs other dates (a stale review, an expired snapshot)
   // opens the dates and fills them in, so "find again" is one click.
   const dated = datesNeededFor(list, gx);
-  const importOn = Boolean(sw.enabled) && status.teamImportSwitch?.enabled !== false;
-  const daily = dailyImportState(gx, status);
   return `
-    <section class="gpexe-panel imports-source" aria-label="Data source ${escapeAttr(source.name)}">
+    <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
-        <div class="imports-facts">
-          <strong>${escapeHtml(source.name)}</strong>
-          <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
-          ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
-          ${connected && gx.candidates ? renderCountPillsHtml(gx) : ""}
-          ${connected ? `<span class="muted imports-lastsearch">${check?.finishedAt || check?.startedAt ? `Last search ${escapeHtml(fmtDateTime(check.finishedAt || check.startedAt))}` : "No search yet"}</span>` : ""}
-        </div>
-        ${connected ? `<div class="imports-actions">
-          ${daily.n ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button>` : ""}
-          <button type="button" class="${daily.n || groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
-        </div>` : ""}
+        ${connected
+          ? `<p class="imports-facts imports-lastsearch">${escapeHtml(bannerText(gx, check))}</p>
+             <div class="imports-actions"><button type="button" class="${groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button></div>`
+          : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       </div>
-      ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
-      ${connected ? renderDailyStripHtml(gx, daily.ready, status) : ""}
-      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       ${connected ? `
         <details class="imports-dates" ${dated ? "open" : ""}>
           <summary>Choose dates</summary>
@@ -545,11 +541,33 @@ function renderSourceCardHtml(source, gx, status) {
             <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
             <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
           </div>
+          <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."}</p>
         </details>
-        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."}</p>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
+    </section>
+  `;
+}
+
+// The Search tab ("Search & settings" for whoever has Import settings): what the source is, what the last search
+// read, the environment's and the team's switch, Technical details, Import settings, and the setup guide once set up.
+function renderSearchTabHtml(source, gx, status) {
+  const sw = status.importSwitch || {};
+  const viewer = status.viewer || {};
+  const connected = Boolean(status.settings);
+  const check = gx.check || status.lastCheck;
+  const list = gx.candidates || [];
+  const importOn = Boolean(sw.enabled) && status.teamImportSwitch?.enabled !== false;
+  return `
+    <section class="gpexe-panel imports-search" aria-label="Search details">
+      <p class="imports-facts">
+        <strong>${escapeHtml(source.name)}</strong>
+        <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
+        ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
+      </p>
+      ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
+      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
       ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage), Boolean(gx.teamSwitch?.data?.canChangeMode || gx.teamSwitch?.data?.mode === "team"))}
       ${techHtml([
@@ -566,8 +584,59 @@ function renderSourceCardHtml(source, gx, status) {
         // The import switch's state, whatever the check did: a check never
         // depends on it (it only blocks approving).
         ["Import switch", sw.message],
-      ], `<div class="gpexe-replaced-toggle"><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced or no longer found versions" : "Show replaced or no longer found versions"}</button></div>`)}
+      ])}
     </section>
+    ${renderImportSettingsHtml(gx)}
+    ${setupOpen(gx, status) ? "" : renderGuideHtml(gx, status)}
+  `;
+}
+
+// The setup guide sits above the banner while setting up is not finished (connect and approve, the variables, the
+// first search); after that it lives in the Search tab. A search in progress does not count as unfinished.
+function setupOpen(gx, status) {
+  if (!gx.guide || !status) return false;
+  const g = gx.guide;
+  if (g.confirm || g.write) return true;
+  const { steps, variables } = guideSteps(guideFacts(gx, status));
+  const early = steps.filter((st) => st.id <= 3 || st.merged);
+  if (early.some((st) => st.state !== "done" && st.state !== "running")) return true;
+  return Boolean(variables && variables.state !== "done" && variables.state !== "none");
+}
+
+// IMP1: one row of tabs under the banner, one tab at a time. The tab is kept in state (a search repaints every 2 s);
+// until the person picks one it is "Needs you" when something needs them, otherwise "Ready" - fixed at the first paint
+// with sessions, so a repaint never moves it. data-import-tab, never data-tab: that one is the app's main navigation.
+const IMPORT_TABS = ["attention", "ready", "imported", "out", "athletes", "search"];
+
+export function importsTab(gx) {
+  if (IMPORT_TABS.includes(gx.tab)) return gx.tab;
+  const needs = (gx.candidates || []).some((c) => inboxBucket(c, gx) === "attention");
+  const tab = needs ? "attention" : "ready";
+  // Fixed at the first paint that has sessions: an empty list (before the first search) decides nothing yet.
+  if (gx.candidates?.length) gx.tab = tab;
+  return tab;
+}
+
+function renderImportsTabsHtml(gx, status) {
+  const all = gx.candidates || [];
+  const count = (name) => all.filter((c) => inboxBucket(c, gx) === name).length;
+  const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
+  const tab = importsTab(gx);
+  const tabs = [
+    ["attention", `Needs you (${count("attention")})`],
+    ["ready", `Ready (${count("ready")})`],
+    ["imported", `Imported (${count("imported")})`],
+    ["out", `Stays out (${count("out")})`],
+    ["athletes", unlinked ? `Athletes (${unlinked} not linked)` : "Athletes"],
+    ["search", renderTeamSwitchPanelHtml(gx) ? "Search & settings" : "Search"],
+  ];
+  return `
+    <nav class="om-tabs imports-tabs" aria-label="Imports">
+      ${tabs.map(([key, label]) => `<button type="button" class="om-tab${key === tab ? " is-active" : ""}"${key === tab ? ' aria-current="page"' : ""} data-action="training-load-gpexe-tab" data-import-tab="${key}">${escapeHtml(label)}</button>`).join("")}
+    </nav>
+    <div class="imports-tab-panel" data-imports-tab="${tab}">
+      ${tab === "athletes" ? renderLinksHtml(gx) : tab === "search" ? renderSearchTabHtml(IMPORT_SOURCES[0], gx, status) : renderBucketsHtml(gx, status, tab)}
+    </div>
   `;
 }
 
@@ -656,7 +725,7 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
     // J19 U1: the total is not known before the end, so the bar is indeterminate;
     // what is known is shown beside it: the sessions read so far and the time.
     const stopped = Boolean(gx?.pollStopped);
-    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>${check.startedAt && !stopped ? `<p class="muted gpexe-elapsed" aria-hidden="true">${escapeHtml(elapsedText(check.startedAt))}</p>` : ""}<div class="gpexe-progress-bar${stopped ? " is-stopped" : ""}" role="progressbar" aria-label="Finding sessions" aria-busy="${stopped ? "false" : "true"}"><span></span></div>${stopped ? "" : `<p class="muted gpexe-leave-note">You can leave this page. The search goes on in OptiMove, and the sessions are here when you come back.</p>`}${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}${gx?.pollStopped ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-refresh-status">Refresh status</button>` : ""}</div>`;
+    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Reading sessions from ${escapeHtml(source.name)}... ${escapeHtml(plural(check.sessionsSeen ?? 0, "session", "sessions"))} found so far.</p>${check.startedAt && !stopped ? `<p class="muted gpexe-elapsed" aria-hidden="true">${escapeHtml(elapsedText(check.startedAt))}</p>` : ""}<div class="gpexe-progress-bar${stopped ? " is-stopped" : ""}" role="progressbar" aria-label="Finding sessions" aria-busy="${stopped ? "false" : "true"}"><span></span></div>${stopped ? "" : `<p class="muted gpexe-leave-note">You can leave this page.</p>`}${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}${gx?.pollStopped ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-refresh-status">Refresh status</button>` : ""}</div>`;
   }
   // A finished search is rendered by renderFoundHtml.
   // A failed search through the team's source connection is not "try again":
@@ -766,58 +835,78 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
   return first ? reasonStep(first) : "Open it to see what to do.";
 }
 
-function renderBucketsHtml(gx, status) {
+// IMP1: one tab's sessions. A light list (1 px lines); a Ready row carries a "Ready" pill, a row that needs the person
+// the one step of its group. "Pick a day" (the calendar) sits above the list of Needs you, Ready and Imported.
+function renderBucketsHtml(gx, status, tab = "ready") {
   const all = gx.candidates || [];
   const day = gx.calendar?.day || "";
   const list = calendarFiltered(all, gx);
   const of = (name) => list.filter((c) => inboxBucket(c, gx) === name);
-  const ready = of("ready");
-  // U6a-2: the groups cover the whole list, like the counts in the state bar; the day filter narrows the other buckets only.
-  const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
-  const groups = attentionGroups(allAttention, gx);
-  const out = of("out");
-  const imported = of("imported");
-  const replaced = list.filter((c) => isHiddenVersion(c, gx));
-  const pickable = batchAllowed(gx);
-  // v33: a withdrawn session is listed only under "Show replaced or no longer
-  // found versions" - while the versions are folded away the server lists no
-  // superseded row at all, so the default view cannot count or name it (a trace
-  // there needs a server-side count; recorded under Separate tasks).
-  const rows = (items, kind, group = "") => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable, group)).join("")}</ul>`;
-  return `
-    ${allAttention.length ? `
-      <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
-        <div class="gpexe-panel-head"><h3>Needs you (${allAttention.length})</h3></div>
-        ${day ? `<p class="muted">These cover every date, not only the day you picked.</p>` : ""}
-        ${groups.map((grp, i) => renderAttentionGroupHtml(grp, gx, status, rows, i === 0 && groupLeads(gx, status))).join("")}
+  const rows = (items, kind, group = "", pick = false) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, pick, group)).join("")}</ul>`;
+  if (tab === "attention") {
+    // U6a-2: the groups cover the whole list, like the counts; the day filter narrows the other tabs only.
+    const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
+    const groups = attentionGroups(allAttention, gx);
+    // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
+    const readyCount = all.filter((c) => inboxBucket(c, gx) === "ready").length;
+    const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
+    return `
+      ${readyHint}
+      ${renderCalendarHtml(gx)}
+      ${allAttention.length ? `
+        <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
+          <div class="gpexe-panel-head imports-tab-title"><h3>Needs you (${allAttention.length})</h3></div>
+          ${day ? `<p class="muted">These cover every date, not only the day you picked.</p>` : ""}
+          ${groups.map((grp, i) => renderAttentionGroupHtml(grp, gx, status, rows, i === 0 && groupLeads(gx, status))).join("")}
+        </section>
+      ` : `<section class="gpexe-panel imports-bucket-empty"><p class="muted">Nothing needs you.</p></section>`}
+    `;
+  }
+  if (tab === "ready") {
+    const ready = of("ready");
+    const pickable = batchAllowed(gx);
+    const daily = dailyImportState(gx, status);
+    const choosing = pickable && chooseOpen(gx);
+    return `
+      ${renderCalendarHtml(gx)}
+      <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
+        <div class="gpexe-panel-head imports-tab-title"><h3>Ready to import (${ready.length})</h3></div>
+        ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
+        ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
+        ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
+        ${daily.n ? `<div class="imports-import-row"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button></div>` : ""}
+        ${renderDailyStripHtml(gx, daily.ready, status)}
+        ${pickable && (ready.some((c) => batchSelectable(c, gx)) || Object.keys(gx.batch?.selected || {}).length > 0) ? `
+          <details class="imports-choose" data-rendered-open="${choosing ? "1" : "0"}" ${choosing ? "open" : ""}>
+            <summary>Choose sessions</summary>
+            ${renderSelectBarHtml(gx, ready)}
+          </details>
+        ` : ""}
       </section>
-    ` : ""}
-    <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
-      <div class="gpexe-panel-head"><h3>Ready to import (${ready.length})</h3></div>
-      ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
-      ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
-      ${renderSelectBarHtml(gx, ready)}
-      ${ready.length ? rows(ready, "ready") : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
+    `;
+  }
+  if (tab === "imported") {
+    const imported = of("imported");
+    return `
+      ${renderCalendarHtml(gx)}
+      <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Imported">
+        <div class="gpexe-panel-head imports-tab-title"><h3>Imported (${imported.length})</h3></div>
+        ${imported.length ? rows(imported, "imported") : `<p class="muted">${day ? "No session of this day is imported." : "Nothing is imported yet."}</p>`}
+      </section>
+    `;
+  }
+  const out = all.filter((c) => inboxBucket(c, gx) === "out");
+  // v33: a withdrawn session is listed only under "Show replaced or no longer found versions" - while the versions are
+  // folded away the server lists no superseded row at all, so the default view cannot count or name it.
+  const replaced = all.filter((c) => isHiddenVersion(c, gx));
+  return `
+    <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Stays out">
+      <div class="gpexe-panel-head imports-tab-title"><h3>Stays out (${out.length})</h3></div>
+      <p class="muted">Session types OptiMove does not import. Nothing to do.</p>
+      ${out.length ? rows(out, "out") : `<p class="muted">No session stays out.</p>`}
+      <div class="gpexe-replaced-toggle"><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced or no longer found versions" : "Show replaced or no longer found versions"}</button></div>
+      ${gx.includeSuperseded && replaced.length ? `<h4>Replaced or no longer found versions (${replaced.length})</h4>${rows(replaced, "hidden")}` : ""}
     </section>
-    ${out.length ? `
-      <details class="gpexe-panel gpexe-group imports-bucket">
-        <summary>Stays out (${out.length})</summary>
-        <p class="muted">Session types OptiMove does not import. Nothing to do.</p>
-        ${rows(out, "out")}
-      </details>
-    ` : ""}
-    ${imported.length ? `
-      <details class="gpexe-panel gpexe-group imports-bucket">
-        <summary>Imported (${imported.length})</summary>
-        ${rows(imported, "imported")}
-      </details>
-    ` : ""}
-    ${gx.includeSuperseded && replaced.length ? `
-      <details class="gpexe-panel gpexe-group imports-bucket">
-        <summary>Replaced or no longer found versions (${replaced.length})</summary>
-        ${rows(replaced, "hidden")}
-      </details>
-    ` : ""}
   `;
 }
 
@@ -853,7 +942,8 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
 // state bar's button stays the main one.
 const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
 function groupLeads(gx, status) {
-  if (dailyImportState(gx, status).n) return false;
+  // IMP1: on the Needs you tab the Import button is a tab away, so the first group's step leads there either way.
+  if (dailyImportState(gx, status).n && importsTab(gx) !== "attention") return false;
   const first = attentionGroups((gx.candidates || []).filter((c) => inboxBucket(c, gx) === "attention"), gx)[0];
   return Boolean(first && LEADING_GROUPS.has(first.key));
 }
@@ -885,6 +975,10 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   const badge = isUncertain(c, gx)
     ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>`
     : (kind === "hidden" || (kind === "attention" && notConfirmedForImport(c))) ? badgeHtml(c, gx) : "";
+  // IMP1: a Ready row ends with a "Ready" pill, as in the sketch. A row that needs the person carries no label of its
+  // own: its group already has the one button and the row its step (a label would say the step a third time, and the
+  // "fresh" group's button starts a search, which the row does not).
+  const rowEnd = kind === "ready" && !badge ? `<span class="imports-row-pill is-ready">Ready</span>` : "";
   let box = "";
   if (pick && batchSelectable(c, gx)) {
     const checked = Object.hasOwn(gx.batch.selected, c.id);
@@ -900,6 +994,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
           <span class="muted">${escapeHtml(sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt))}</span>
         </span>
         ${badge}
+        ${rowEnd}
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
         ${step ? `<span class="gpexe-candidate-next">${escapeHtml(step)}</span>` : ""}
       </button>
@@ -925,7 +1020,7 @@ function dailyImportState(gx, status = gx.status) {
   const allowed = batchAllowed(gx);
   const pickable = allowed ? ready.filter((c) => batchSelectable(c, gx)) : [];
   const n = Math.min(pickable.length, BATCH_MAX);
-  const label = pickable.length > BATCH_MAX ? `Import first ${BATCH_MAX} ready` : `Import ${n} ready`;
+  const label = pickable.length > BATCH_MAX ? `Import the first ${BATCH_MAX} ready sessions` : `Import ${plural(n, "ready session", "ready sessions")}`;
   return { ready, allowed, pickable, n, label, reviewOnly: !allowed && ready.length ? reviewOnlyText(status) : "" };
 }
 
@@ -1243,7 +1338,7 @@ function renderCalendarHtml(gx) {
   // the calendar is folded.
   return `
     <details class="gpexe-panel imports-calendar" data-rendered-open="${open ? "1" : "0"}" ${open ? "open" : ""}>
-      <summary class="imports-cal-summary"><span class="imports-cal-title">Sessions calendar</span><span class="muted imports-cal-brief"> · ${escapeHtml(MONTH_NAMES[m - 1])} · ${escapeHtml(brief)}</span></summary>
+      <summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day</span><span class="muted imports-cal-brief"> · ${escapeHtml(MONTH_NAMES[m - 1])} · ${escapeHtml(brief)}</span></summary>
       <div class="imports-cal-nav">
         <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-prev" aria-label="Previous month">&lsaquo;</button>
         <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>

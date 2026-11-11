@@ -355,6 +355,13 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     await loadPairSuggestions(renderTrainingLoad);
     return true;
   }
+  // IMP1: a tab of the Imports screen. Local only: nothing is read or sent.
+  if (type === "training-load-gpexe-tab") {
+    const tab = action.dataset.importTab || "";
+    if (["attention", "ready", "imported", "out", "athletes", "search"].includes(tab)) gx.tab = tab;
+    renderTrainingLoad();
+    return true;
+  }
   // U4: the setup guide. Every button here is an existing action or the one "Use OptiMove variables" write.
   if (type === "training-load-gpexe-guide-toggle") {
     setGuideOpen(gx.guide?.open === true ? false : true);

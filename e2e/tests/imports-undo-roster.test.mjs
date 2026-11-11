@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, openAs, openImportsTab, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -52,9 +52,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         admin.page.on("request", (r) => { if (r.method() === "POST" && /\/undo-import$/.test(r.url())) undoPosts.push(JSON.parse(r.postData() || "{}")); });
         await openTrainingLoad(admin.page);
         await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
-        await admin.page.waitForSelector('[data-action="training-load-gpexe-open"]', { timeout: 20_000 });
-        // The imported session is in the folded "Imported" group.
-        await admin.page.locator("details.imports-bucket > summary", { hasText: /^Imported \(/ }).click();
+        await admin.page.waitForSelector('[data-action="training-load-gpexe-tab"]', { timeout: 20_000 });
+        // IMP1: the imported session is in the Imported tab.
+        await openImportsTab(admin.page, "imported");
         await admin.page.locator(`[data-action="training-load-gpexe-open"][data-candidate-id="${c.id}"]:visible`).first().click();
         await admin.page.waitForSelector('[data-action="training-load-gpexe-undo-open"]', { timeout: 20_000 }).catch(async (error) => {
           console.log("PAGE:", (await admin.page.locator("body").innerText()).replace(/\s+/g, " ").slice(0, 3000));

@@ -749,6 +749,10 @@ export const emptyGpexeImportState = () => ({
   status: null,
   candidates: null,
   includeSuperseded: false,
+  // IMP1: the Imports tab the person picked ("" until then: the default is fixed at the first paint with the list)
+  // and whether "Choose sessions" is open (null: open only while sessions are selected).
+  tab: "",
+  chooseOpen: null,
   links: null,
   linkBusy: false,
   linkError: null,
