@@ -111,15 +111,20 @@ for (const width of [390, 360]) test(`(team_coach, ${width} px) the new schedule
   try {
     await openTests(page, "schedule");
     await page.locator('[data-action="tests-open-schedule-form"]').click();
-    await page.locator(".tests-schedule-form .wellness-back").waitFor();
-    const close = await page.locator(".tests-schedule-form .wellness-back").evaluate((b) => {
-      const r = b.getBoundingClientRect(); const h = b.parentElement.querySelector("h3"); const range = document.createRange(); range.selectNodeContents(h); const t = range.getBoundingClientRect();
+    // The form repaints once its data arrives: measure in the same step that finds the button laid out.
+    const close = await (await page.waitForFunction(() => {
+      const b = document.querySelector(".tests-schedule-form .wellness-back");
+      if (!b || !b.getBoundingClientRect().width) return null;
+      const r = b.getBoundingClientRect(); const range = document.createRange(); range.selectNodeContents(b.parentElement.querySelector("h3")); const t = range.getBoundingClientRect();
       return { w: r.width, h: r.height, clear: t.right <= r.left || t.top >= r.bottom };
-    });
+    })).jsonValue();
     assert.ok(close.w >= 44 && close.h >= 44 && close.clear, JSON.stringify(close));
     await page.locator('[data-action="tests-open-recipient-picker"]').click();
-    await page.locator(".tests-recipient-picker .builder-athlete-picker-continue").waitFor();
-    const round = await page.$$eval(".tests-recipient-picker .builder-athlete-picker-cancel, .tests-recipient-picker .builder-athlete-picker-continue", (bs) => bs.map((b) => [Math.round(b.getBoundingClientRect().width), Math.round(b.getBoundingClientRect().height)]));
+    const round = await (await page.waitForFunction(() => {
+      const bs = [...document.querySelectorAll(".tests-recipient-picker .builder-athlete-picker-cancel, .tests-recipient-picker .builder-athlete-picker-continue")];
+      if (bs.length !== 2 || bs.some((b) => !b.getBoundingClientRect().width)) return null;
+      return bs.map((b) => [Math.round(b.getBoundingClientRect().width), Math.round(b.getBoundingClientRect().height)]);
+    })).jsonValue();
     assert.deepEqual(round, [[44, 44], [44, 44]]);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
     assert.deepEqual(pageErrors, []);
