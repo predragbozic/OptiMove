@@ -132,11 +132,21 @@ test("styles.css defines the tokens and components once, with a visible focus, a
   assert.match(css, /@media \(max-width: 760px\) \{\n  \.om-card[\s\S]*?\.om-tabs \{\n    flex-wrap: nowrap;[^}]*overflow-x: auto;/);
 });
 
-test("Training Load is not touched: no Training Load or Imports module uses an .om-* class yet", () => {
+// IMP1 (the manager's order of 2026-11-11): the Imports screen takes the shared tab row (.om-tabs / .om-tab), and only
+// that; every other Training Load and Imports module, and every other .om-* component, stays as it was.
+test("Training Load is not touched: no Training Load or Imports module uses an .om-* class yet, except the Imports tab row", () => {
   const dir = new URL("..", import.meta.url);
   const files = readdirSync(dir).filter((f) => /^(training-load|gpexe-import|source-connections|data-sources)/.test(f) && f.endsWith(".js"));
   assert.ok(files.length > 5);
-  for (const f of files) assert.doesNotMatch(readFileSync(new URL(f, dir), "utf8"), /\bom-(tabs|tab|card|btn|empty|badge|page-header|eyebrow)\b/, f);
+  for (const f of files) {
+    const text = readFileSync(new URL(f, dir), "utf8");
+    if (f === "gpexe-import-view.js") {
+      assert.match(text, /<nav class="om-tabs imports-tabs"/, "the Imports tab row is the shared one");
+      assert.doesNotMatch(text, /\bom-(card|btn|empty|badge|page-header|eyebrow)\b/, f);
+      continue;
+    }
+    assert.doesNotMatch(text, /\bom-(tabs|tab|card|btn|empty|badge|page-header|eyebrow)\b/, f);
+  }
 });
 
 // WCAG AA (4.5:1) for every text/background pair the components use.

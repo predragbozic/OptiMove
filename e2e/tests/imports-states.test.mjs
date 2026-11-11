@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, openAs, openImportsTab, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -29,10 +29,11 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         admin.page.on("request", (r) => { if (r.method() === "POST" && /\/(approve|states)$/.test(r.url())) posts.push(r.url().split("/").pop()); });
         await openTrainingLoad(admin.page);
         await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
-        await admin.page.waitForSelector('[data-action="training-load-gpexe-open"]', { timeout: 20_000 });
-        await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11." }).first().click().catch(async () => {
-          await admin.page.locator('[data-action="training-load-gpexe-open"]').first().click();
-        });
+        // IMP1: the 04.11. session is Ready; 05.11. needs a person, so the screen opens on Needs you. Open Ready, then the
+        // session itself - no fallback to another session.
+        await admin.page.waitForSelector('[data-action="training-load-gpexe-tab"]', { timeout: 20_000 });
+        await openImportsTab(admin.page, "ready");
+        await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11." }).first().click();
         await admin.page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
         const chooser = admin.page.locator('select[data-action="training-load-gpexe-state"]:visible').first();
         await chooser.waitFor({ timeout: 10_000 });

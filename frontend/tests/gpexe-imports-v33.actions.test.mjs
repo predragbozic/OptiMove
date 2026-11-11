@@ -143,8 +143,19 @@ function section(page, label) {
   const end = page.indexOf("</section>", start);
   return page.slice(start, end);
 }
-const readySection = (page = html()) => section(page, "Ready to import");
-const attentionSection = (page = html()) => section(page, "Needs attention");
+// IMP1: each bucket is a tab. A section is read from its own tab (whatever tab is open), with the tab's label - which
+// carries the count - in front; the page argument is kept for the callers and not needed.
+function tabSection(tab, label) {
+  const keep = gx().tab;
+  gx().tab = tab;
+  const page = html();
+  gx().tab = keep;
+  const body = section(page, label);
+  if (!body) return "";
+  return `${page.match(new RegExp(`data-import-tab="${tab}">([^<]*)<`))?.[1] || ""}\n${body}`;
+}
+const readySection = () => tabSection("ready", "Ready to import");
+const attentionSection = () => tabSection("attention", "Needs attention");
 const checkboxes = (page = html()) => [...page.matchAll(/data-action="training-load-gpexe-pick" data-candidate-id="([^"]+)"/g)].map((m) => m[1]);
 // The page with every closed Technical details block cut out.
 const outsideTech = (page) => page.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
@@ -163,7 +174,7 @@ test("1. Ready to import: a pending session the last successful search did not c
   responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row(), notConfirmed({ label: "FULL TRAINING 06.10.", sessionStartedAt: "2026-10-06T16:08:12Z" })] });
   await openImports();
   const page = html();
-  assert.match(readySection(page), /Ready to import \(1\)/);
+  assert.match(readySection(page), /Ready \(1\)/);
   assert.ok(readySection(page).includes('data-candidate-id="cand-1"') && !readySection(page).includes('data-candidate-id="cand-nc"'), "the unconfirmed session is not in Ready");
   assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.ok(attentionSection(page).includes('data-candidate-id="cand-nc"'));
@@ -173,7 +184,10 @@ test("1. Ready to import: a pending session the last successful search did not c
   // The dates are pre-filled for the session that needs finding again (as for an expired one).
   assert.match(page, /The dates are set to include the sessions that need finding again \(06\.10\.2026\)\./);
   assert.match(page, /value="2026-10-06"/);
-  assert.deepEqual(checkboxes(page), ["cand-1"], "no checkbox for the unconfirmed session");
+  // The checkboxes are in "Choose sessions" (IMP1), in the Ready tab.
+  gx().chooseOpen = true;
+  await act("training-load-gpexe-tab", { importTab: "ready" });
+  assert.deepEqual(checkboxes(), ["cand-1"], "no checkbox for the unconfirmed session");
   assert.equal(inboxBucket(notConfirmed(), gx()), "attention");
   assert.equal(batchSelectable(notConfirmed(), gx()), false);
   assert.equal(batchSelectable(row(), gx()), true);
@@ -244,7 +258,9 @@ test("4. a withdrawn session (superseded by a complete, successful search) is ne
   assert.doesNotMatch(page, /cand-wd/, "hidden until the switch");
   assert.match(page, new RegExp(`${dayLabel("2026-10-05T16:08:12Z")}, 1 session found`), "the published session's day is marked");
   assert.match(page, new RegExp(`${dayLabel("2026-10-06T16:08:12Z")}, nothing found yet`), "the withdrawn session's day is not counted");
-  assert.match(page, /Show replaced or no longer found versions</, "the toggle names the section");
+  // IMP1: the replaced and no-longer-found versions are shown in the Stays out tab.
+  await act("training-load-gpexe-tab", { importTab: "out" });
+  assert.match(html(), /Show replaced or no longer found versions</, "the toggle names the section");
   assert.ok(fetchCalls.some((c) => c.url.endsWith("/candidates")) && !fetchCalls.some((c) => c.url.includes("includeSuperseded")), "the default read asks for no superseded row");
   await act("training-load-gpexe-superseded");
   page = html();
@@ -268,7 +284,8 @@ test("5. a replaced version (superseded by newer content) stays as before: hidde
   await openImports();
   let page = html();
   assert.doesNotMatch(page, /cand-old/);
-  assert.match(readySection(page), /Ready to import \(1\)/);
+  assert.match(readySection(page), /Ready \(1\)/);
+  await act("training-load-gpexe-tab", { importTab: "out" });
   await act("training-load-gpexe-superseded");
   page = html();
   assert.match(page, /gpexe-badge is-superseded">Replaced</);
@@ -339,7 +356,12 @@ test("8. no GPEXE id outside Technical details: the session id of an unconfirmed
   responder = server({ teamStatus: { enabled: true, canApprove: true, admin: true }, candidates: [notConfirmed({ label: null }), withdrawn({ id: "cand-wd" }), replaced({ id: "cand-old" })] });
   await openImports();
   await act("training-load-gpexe-superseded");
-  assert.ok(!outsideTech(html()).includes(MARKER_SESSION), "the list");
+  // IMP1: every tab that lists them (Needs you: the unconfirmed; Stays out: the withdrawn and the replaced).
+  for (const tab of ["attention", "ready", "imported", "out", "search"]) {
+    await act("training-load-gpexe-tab", { importTab: tab });
+    assert.ok(!outsideTech(html()).includes(MARKER_SESSION), `the list (${tab})`);
+  }
+  await act("training-load-gpexe-tab", { importTab: "attention" });
   assert.match(html(), /<strong>[A-Z][a-z]{2} \d{2}\.\d{2}\. · GPEXE session</, "a label-less session is titled without its id");
   for (const id of ["cand-nc", "cand-wd", "cand-old"]) {
     await openCandidate(id);
@@ -367,13 +389,16 @@ test("10. the source card's 'listed below' line counts the visible rows only: wi
   resetState();
   responder = server({ teamStatus: { enabled: false, canApprove: true }, candidates: [withdrawn()] });
   await openImports();
+  // IMP1: the found line is in the Search tab; the versions are shown in the Stays out tab.
+  await act("training-load-gpexe-tab", { importTab: "search" });
   let page = html();
   assert.match(page, /No sessions found yet\./);
   assert.doesNotMatch(page, /are listed below/);
   await act("training-load-gpexe-superseded");
   page = html();
   assert.match(page, /No sessions found yet\./, "a hidden version is not a found session");
-  assert.match(page, /Replaced or no longer found versions \(1\)/);
+  await act("training-load-gpexe-tab", { importTab: "out" });
+  assert.match(html(), /Replaced or no longer found versions \(1\)/);
 });
 
 // Phase 9, 9-0 (switch condition 2): a bounded wait before the COMMIT answers
