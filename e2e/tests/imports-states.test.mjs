@@ -30,7 +30,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await openTrainingLoad(admin.page);
         await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
         await admin.page.waitForSelector('[data-action="training-load-gpexe-open"]', { timeout: 20_000 });
-        await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11.2026" }).first().click().catch(async () => {
+        await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11." }).first().click().catch(async () => {
           await admin.page.locator('[data-action="training-load-gpexe-open"]').first().click();
         });
         await admin.page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });

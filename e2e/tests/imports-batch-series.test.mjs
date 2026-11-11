@@ -37,7 +37,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.deepEqual(posts[2].candidateIds, ids.slice(2), "round 3: only the last");
         for (const body of posts) for (const id of body.candidateIds) assert.equal(body.previewHashes[id], posts[0].previewHashes[id], "the hash the session was chosen with");
         const panel = await admin.page.locator(".imports-batch").innerText();
-        assert.match(panel, /3 imported/);
+        assert.match(panel, /Imported 3 sessions/);
         assert.doesNotMatch(panel, /not tried|Not imported/i);
         const overflow = await admin.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         assert.ok(overflow <= 0, `no horizontal overflow (${overflow})`);
