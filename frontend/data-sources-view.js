@@ -168,7 +168,7 @@ function renderTimezoneHtml(d) {
   return `
     <div class="data-sources-timezone">
       <p class="data-sources-form-title">Session time zone</p>
-      ${tz.error ? `<p class="data-sources-warn" role="alert">The session time zone could not be read. Nothing was changed. Use Try again above to read the team again.</p>` : `
+      ${tz.error ? `<div class="data-sources-warn" role="alert"><p>The session time zone could not be read. Nothing was changed.</p><button class="plain-button" type="button" data-action="data-sources-reload">Try again</button></div>` : `
         <dl class="data-sources-facts">
           <dt>Time zone</dt><dd>${current ? escapeHtml(current) : "Not set"}</dd>
           ${current && tz.current?.setByName ? `<dt>Set by</dt><dd>${escapeHtml(tz.current.setByName)} · ${escapeHtml(fmtDateTime(tz.current.setAt))}</dd>` : ""}
@@ -195,7 +195,10 @@ function renderTimezoneHtml(d) {
 
 function renderTimezoneFormHtml(d, current) {
   const draft = d.tzDraft || { timezone: current, reason: "" };
-  const zones = timezoneOptions();
+  // The zone in force is always offered, even when this browser's list does not name it (an alias, an older name):
+  // otherwise the form would open on "None" and a Save would clear it without anyone choosing that.
+  const listed = timezoneOptions();
+  const zones = [current, draft.timezone].filter((z) => z && !listed.includes(z)).concat(listed);
   const options = [`<option value=""${draft.timezone ? "" : " selected"}>${current ? "None (clear the time zone)" : "Choose a time zone"}</option>`]
     .concat(zones.map((z) => `<option value="${escapeAttr(z)}"${z === draft.timezone ? " selected" : ""}>${escapeHtml(z)}</option>`));
   return `
@@ -206,7 +209,7 @@ function renderTimezoneFormHtml(d, current) {
       <label class="search-field"><span>Why?</span>
         <textarea name="reason" required maxlength="500" rows="2" placeholder="Short note for the record">${escapeHtml(draft.reason)}</textarea>
       </label>
-      <p class="muted">Sessions already imported keep the date and time they were imported with. The zone is used for sessions found from now on.</p>
+      <p class="muted">Sessions already imported keep the date and time they were imported with. The zone is used for sessions found from now on.${current ? " If you clear it, sessions whose GPS units report different time zones are not imported until a zone is set again." : ""}</p>
       ${errorHtml(d.tzError)}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="submit" ${d.tzBusy ? "disabled" : ""}>${d.tzBusy ? "Saving..." : "Save"}</button>

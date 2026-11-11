@@ -1766,7 +1766,7 @@ function renderTeamZoneNoteHtml(preview) {
   const s = preview?.session;
   if (s?.timezoneSource !== "team" || !s.timezone) return "";
   const reported = (Array.isArray(s.trackTimezones) ? s.trackTimezones : []).join(" and ");
-  return `<p class="gpexe-zone-note">The GPS units of this session report different time zones${reported ? ` (${escapeHtml(reported)})` : ""}, so its date and time are read in the team's time zone, ${escapeHtml(s.timezone)}.</p>`;
+  return `<p class="gpexe-zone-note">This session's GPS units report different time zones${reported ? ` (${escapeHtml(reported)})` : ""}, so OptiMove uses the team's time zone, ${escapeHtml(s.timezone)}, for its date and time.</p>`;
 }
 
 function renderCandidateBodyHtml(c, detail, status) {
@@ -1858,7 +1858,8 @@ function blockedCoachText(c) {
   // U6a-2 (D8): GPS units of one session report different time zones (mixed_timezones). The code stays in an
   // administrator's Technical details.
   if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
-    return { reason: "GPEXE reports this session's GPS devices in more than one time zone, so OptiMove can't tell when it took place.", step: "It is not imported until the team has a time zone: a platform administrator sets it in Settings > Data sources, then find the session again." };
+    const day = c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : "";
+    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: `It is not imported until the team has a time zone. Ask a platform administrator to set it in Settings > Data sources, then find new sessions again${day}.` };
   }
   const precise = setupBlockCode(c);
   if (precise) {

@@ -660,5 +660,16 @@ test("TZ4. a failed time zone read never takes the team down: the pair and the a
   assert.match(html, /1473/);
   assert.match(html, /Change GPEXE team/);
   assert.match(html, /The session time zone could not be read\. Nothing was changed\./);
+  assert.match(html, /could not be read\. Nothing was changed\.<\/p><button class="plain-button" type="button" data-action="data-sources-reload">Try again<\/button>/, "its own Try again");
   assert.doesNotMatch(html, /data-sources-tz-open/);
+});
+
+test("TZ5. a zone in force that the browser's list does not name is still offered and selected, so opening Change never falls back to None; clearing names its consequence", async () => {
+  const alias = { current: { ...SET.current, timezone: "Etc/Zulu-Alias" }, history: [] };
+  await openTeam({ timezone: { status: 200, body: { sessionTimezone: alias } } });
+  await act("data-sources-tz-open");
+  const html = renderDataSourcesPanelHtml();
+  assert.match(html, /<option value="Etc\/Zulu-Alias" selected>Etc\/Zulu-Alias<\/option>/);
+  assert.doesNotMatch(html, /<option value="" selected>/, "None is not the selection");
+  assert.match(html, /If you clear it, sessions whose GPS units report different time zones are not imported until a zone is set again\./);
 });
