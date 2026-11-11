@@ -125,6 +125,7 @@ function buildSeries(definition, results, groupBy, loading, querySkipped) {
   series.current = result.data.current.map((row, index) => normalizeRow(row, index, definition, groupBy));
   series.chartGroups = chartGroups(series.current);
   series.comparisonRange = copy(result.data.comparisonRange);
+  if (result.data.chartReference) series.chartReference = copy(result.data.chartReference);
   if (result.data.comparison !== undefined && result.data.comparison !== null && !Array.isArray(result.data.comparison)) {
     series.reasons.push("invalidComparison");
   } else {

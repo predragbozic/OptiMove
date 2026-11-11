@@ -1,5 +1,9 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
+import { clearDashboardChartStates } from './training-load-chart-interactions.js';
+import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
+import { handlePageAction, handlePageTabKeydown } from './training-load-pages-actions.js';
+import { pageAdvancedApi, pageWriteIsPending } from './training-load-pages-data.js';
 import {
   clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
@@ -58,6 +62,7 @@ import {
   nudgeAnalysisWidget,
   openAnalysisWidgetEditor,
   queryAnalysisDashboard,
+  reconcileConfirmedPageWrite,
   resetAnalysisDashboardQuery,
   removeEditorSeries,
   resizeAnalysisWidget,
@@ -67,9 +72,15 @@ import {
   setActiveAnalysisDashboard,
   setEditorSeriesMetric,
   setEditorWidgetType,
+  setEditorDisplayMode,
+  editorIsStacked,
+  invalidateEditorStack,
+  acknowledgeEditorStack,
+  loadAnalysisEditorCombinedCapability,
   setMetricPanelMetric,
   updateAnalysisDashboardMetadata,
   updateAnalysisLayoutDraft,
+  loadChartRoster,
 } from "./training-load-analysis-data.js";
 import {
   captureTrainingLoadCalendarMutationContext,
@@ -172,6 +183,8 @@ function releaseAnalysisEditorDraft() {
 // a request (workspace switch, a notification's mark-read) asks first and
 // discards only once that request went through.
 function analysisEditorMayBeDiscarded() {
+  if(pageWriteIsPending())return false;
+  if (!leaveSimpleEditor({ discard: false })) return false;
   const a = state.trainingLoad.analysis;
   if (!a.editor?.open) return true;
   if (a.editor.saving) return false;
@@ -179,6 +192,7 @@ function analysisEditorMayBeDiscarded() {
 }
 
 function discardAnalysisEditorDraft() {
+  simpleEditor.close();
   const a = state.trainingLoad.analysis;
   if (a.editor?.open) a.editor = closedAnalysisWidgetEditor();
 }
@@ -218,7 +232,9 @@ function discardAnalysisLayoutDraft() {
 // it navigates; a successful workspace switch resets Training Load anyway
 // (resetTrainingLoadForWorkspaceChange) or reloads the page.
 export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
-  if (state.activeTab !== "training-load") return true;
+  if(pageWriteIsPending())return false;
+  if(state.trainingLoad.analysis.pageForm && !window.confirm('Discard your unsaved page changes?'))return false;
+  if (state.activeTab !== "training-load") return leaveSimpleEditor({ discard });
   // Imports (phase 4b): an import of several sessions that is still running
   // must not be lost unseen, and a selection made but not imported is asked
   // about. Both live in state and survive a move inside the app; a
@@ -282,7 +298,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn() && !mappingsUnloadShouldWarn()) return false;
+  if (!pageWriteIsPending() && !simpleEditor.model && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn() && !mappingsUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -312,7 +328,10 @@ function analysisWidgetActionsBlocked() {
 // while its save is in flight). Returns whether anything closed so the
 // caller knows to re-render.
 export function closeTrainingLoadAnalysisOverlay() {
+  if(pageWriteIsPending())return false;
+  if (simpleEditor.model) return leaveSimpleEditor();
   const a = state.trainingLoad.analysis;
+  if(a.pageForm && !a.pageForm.submitting){a.pageForm=null;return true;}
   if (closeAnalysisPopovers()) return true;
   if (a.dashboardForm && !a.dashboardForm.submitting) { a.dashboardForm = null; return true; }
   if (a.metricPanel && !a.metricPanel.saving) { a.metricPanel = null; return true; }
@@ -421,7 +440,7 @@ export function syncDataAnalysisSharedWeek(newWeekStart, movedSide) {
 
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
-  return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
+  return state.trainingLoad.section === "analysis" && !simpleEditor.model && !a.simpleEditor?.open && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
 }
 
 function analysisLayoutMetrics() {
@@ -624,6 +643,10 @@ function analysisIsInteractiveTarget(target) {
 }
 
 export function bindTrainingLoadAnalysisLayoutInteractions(root = document, renderTrainingLoad) {
+  root.querySelectorAll?.('.tl-pages-tabs').forEach(tabs => {
+    tabs.removeEventListener('keydown', handlePageTabKeydown);
+    tabs.addEventListener('keydown', handlePageTabKeydown);
+  });
   const widgets = root.querySelectorAll?.("[data-analysis-widget-id]") || [];
   widgets.forEach((widget) => {
     const dragHandle = widget.querySelector("[data-analysis-drag-handle='true']");
@@ -662,6 +685,33 @@ export function bindTrainingLoadAnalysisLayoutInteractions(root = document, rend
 export async function handleTrainingLoadAction(action, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate }) {
   const type = action.dataset.action;
   if (!type?.startsWith("training-load-")) return false;
+  if(type.startsWith('training-load-analysis-page-'))return handlePageAction(action,{
+    render:renderTrainingLoad,
+    mayLeave:()=>{
+      const a=state.trainingLoad.analysis;
+      if(a.saving || a.editor?.saving || a.metricPanel?.saving || !analysisEditorMayBeDiscarded() || !analysisLayoutMayBeDiscarded())return false;
+      if(a.metricPanel && !window.confirm('Discard your unsaved metric settings?'))return false;
+      discardAnalysisEditorDraft();discardAnalysisLayoutDraft();a.metricPanel=null;return true;
+    },
+    refresh:async preferredPageId=>{
+      const a=state.trainingLoad.analysis;invalidateTrainingLoadAnalysis();
+      await loadDashboardDetail(a.selectedDashboardId,renderTrainingLoad,{force:true,preferredPageId});
+      if(!a.detailError)await queryAnalysisDashboard(renderTrainingLoad,{force:true});
+    },reconcile:reconcileConfirmedPageWrite,
+  });
+  if(pageWriteIsPending())return true;
+  if(state.trainingLoad.analysis.pageForm){if(!window.confirm('Discard your unsaved page changes?'))return true;state.trainingLoad.analysis.pageForm=null;}
+  if (type.startsWith('training-load-simple-')) {
+    const handled = await handleSimpleEditorAction(action, renderTrainingLoad);
+    if (!handled && state.trainingLoad.analysis.simpleAdvancedCreate) {
+      state.trainingLoad.analysis.simpleAdvancedCreate = false;
+      openAnalysisMetricPanel(null);
+      await loadAnalysisMetricDefinitions();
+      renderTrainingLoad();
+    }
+    return true;
+  }
+  if (simpleEditor.model) return true;
   if (type.startsWith("training-load-gpexe-")) return handleGpexeImportAction(action, { renderTrainingLoad });
   if (type.startsWith("training-load-roster-")) return handleActivityRosterAction(action, { render: renderTrainingLoad });
 
@@ -1203,6 +1253,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
     const a = state.trainingLoad.analysis;
+    if(a.pagesMode)a.pageRuntimeUsesDefaults=false;
     if (type.endsWith("from")) a.period.dateFrom = action.value || a.period.dateFrom;
     else a.period.dateTo = action.value || a.period.dateTo;
     renderTrainingLoad();
@@ -1245,6 +1296,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     a.runtimeFilter.componentId = "";
     a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };
     a.componentOptions = (detail.components || []).map((c) => ({ id: c.id, name: c.name }));
+    if(!a.pagesMode)a.pageHandoff={runtimeFilter:structuredClone(a.runtimeFilter),selectedActivity:structuredClone(a.selectedActivity),componentOptions:structuredClone(a.componentOptions)};
     a.pickingActivity = false;
     setTrainingLoadSection("analysis");
     renderTrainingLoad();
@@ -1273,6 +1325,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Dashboards UX H1: guided "Add metric" panel --------------------
   if (type === "training-load-analysis-add-widget") {
     if (!state.trainingLoad.analysis.dashboard) return true;
+    if (analysisWidgetActionsBlocked()) return true;
+    if (await openSimpleEditor(null, renderTrainingLoad)) return true;
     openAnalysisMetricPanel(null);
     // The catalog load flips metricPicker.loading synchronously, so this
     // first render already shows "Loading metrics..." under the built-ins;
@@ -1354,6 +1408,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     openAnalysisWidgetEditor(widget);
     renderTrainingLoad();
     void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    await loadAnalysisEditorCombinedCapability(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-save-layout") {
@@ -1425,11 +1480,43 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-analysis-copy-widget") {
+    const a = state.trainingLoad.analysis;
+    const widget = a.widgets.find(row => row.id === action.dataset.widgetId);
+    const destination = a.pages?.find(page => page.id === action.dataset.destinationPageId);
+    if (!widget || !destination || !a.pagesMode || !a.pageCapabilities?.widgetCopy || analysisWidgetActionsBlocked()) return true;
+    const dashboardId = a.selectedDashboardId;
+    const sourcePageId = a.selectedPageId;
+    const stillCurrent = () => state.trainingLoad.analysis === a &&
+      a.selectedDashboardId === dashboardId && a.selectedPageId === sourcePageId;
+    closeAnalysisPopovers();
+    a.mutationError = "";
+    try {
+      const write = pageAdvancedApi(`/api/training-load/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widget.id)}/copy`, {
+        method: "POST",
+        body: JSON.stringify({ expectedWidgetRevision: widget.revision, destinationPageId: destination.id })
+      });
+      renderTrainingLoad();
+      await write;
+      if (!stillCurrent()) return true;
+      invalidateTrainingLoadAnalysis();
+      await loadDashboardDetail(dashboardId, renderTrainingLoad, { force: true, preferredPageId: sourcePageId });
+      if (stillCurrent() && !a.detailError) await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+      if (stillCurrent()) a.notice = `Widget copied to ${destination.name}.`;
+    } catch (error) {
+      if (stillCurrent()) a.mutationError = error.message || "The widget could not be copied.";
+    }
+    if (stillCurrent()) renderTrainingLoad();
+    return true;
+  }
   if (type === "training-load-analysis-edit-widget") {
     // Widget "Settings" opens the guided panel in edit mode (staged; Save/
     // Cancel); the full per-series editor stays behind "Advanced settings".
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
     if (!widget || analysisWidgetActionsBlocked()) { closeAnalysisPopovers(); renderTrainingLoad(); return true; }
+    action.closest?.('.tl-widget-menu-anchor')?.querySelector('.tl-widget-menu-trigger')?.focus();
+    closeAnalysisPopovers();
+    if (await openSimpleEditor(widget, renderTrainingLoad)) return true;
     // The panel labels a catalog-backed series from the loaded definitions,
     // so make sure they're in before staging the widget.
     await loadAnalysisMetricDefinitions();
@@ -1445,8 +1532,51 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-analysis-editor-section") {
+    const editor = state.trainingLoad.analysis.editor;
+    const { section } = action.dataset;
+    if (!editor?.open || editor.saving || !["metrics", "filters", "display"].includes(section)) return true;
+    editor.settingsSection = section;
+    renderTrainingLoad();
+    globalThis.document?.querySelector(`[data-action="training-load-analysis-editor-section"][data-section="${section}"]`)?.focus();
+    return true;
+  }
   if (type === "training-load-analysis-editor-save") {
     await saveAnalysisWidgetEditor(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === 'training-load-analysis-stacked-acknowledgement') {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.error = acknowledgeEditorStack(editor.draft, action.checked === true);
+    renderTrainingLoad(); return true;
+  }
+  if (type === "training-load-analysis-widget-display-mode") {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.error = setEditorDisplayMode(editor.draft, action.value, action.value === 'stacked' ? editor.stackedAvailable : action.value === 'scatter' ? editor.scatterAvailable : editor.combinedAvailable);
+    renderTrainingLoad(); return true;
+  }
+  if (type.startsWith('training-load-analysis-radar-')) {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    const draft = editor.draft;
+    if (type.endsWith('-enabled')) {
+      draft.radarSettings = action.checked ? { athleteIds: [], axes: [], dateFrom: '', dateTo: null } : null;
+      if (action.checked) loadChartRoster(renderTrainingLoad);
+    } else if (draft.radarSettings) {
+      const settings = draft.radarSettings;
+      if (type.endsWith('-athletes')) settings.athleteIds = Array.from(action.selectedOptions, option => option.value);
+      else if (type.endsWith('-from')) settings.dateFrom = action.value;
+      else if (type.endsWith('-to')) settings.dateTo = action.value || null;
+      else if (type.endsWith('-value')) {
+        const metricDefinitionId = action.dataset.metricId;
+        settings.axes = settings.axes.filter(axis => axis.metricDefinitionId !== metricDefinitionId &&
+          draft.series.some(entry => entry.metric?.id === axis.metricDefinitionId));
+        if (action.value !== '') settings.axes.push({ metricDefinitionId, value: Number(action.value) });
+      }
+    }
     renderTrainingLoad();
     return true;
   }
@@ -1459,7 +1589,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       editor.draft.title = action.value ?? "";
     }
     else if (type.endsWith("type")) setEditorWidgetType(editor.draft, action.value || editor.draft.widgetType);
-    else editor.draft.groupBy = action.value || editor.draft.groupBy;
+    else { invalidateEditorStack(editor.draft); editor.draft.groupBy = action.value || editor.draft.groupBy; }
     renderTrainingLoad();
     return true;
   }
@@ -1504,12 +1634,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const editor = state.trainingLoad.analysis.editor;
     const entry = editorSeriesEntry(editor?.draft, action.dataset.seriesKey || editor?.seriesKey);
     if (!entry || editor.saving) return true;
+    const stacked = editorIsStacked(editor.draft);
+    invalidateEditorStack(editor.draft);
     if (type.endsWith("builtin")) {
-      if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey });
+      if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey }, { preservePolicies: stacked });
     } else if (action.dataset.metricId) {
       const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === action.dataset.metricId);
       // A variable the club hides is not chosen (7i-B2), unless it is the one already on the series.
-      if (!isHiddenInClub(def) || (entry.metric?.kind === "metric" && entry.metric.id === def.id)) setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId });
+      if (!isHiddenInClub(def) || (entry.metric?.kind === "metric" && entry.metric.id === def.id)) setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId }, { preservePolicies: stacked });
     }
     renderTrainingLoad();
     return true;
@@ -1549,7 +1681,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       if (key === "displayLabel" && entry.fields.displayLabel === (raw.trim() || null)) return true;
       const nullable = key === "displayLabel" || key === "color" || key === "comparisonPeriod";
       const value = key === "displayLabel" ? raw.trim() : raw;
-      if (value || nullable) entry.fields[key] = value || null;
+      if (value || nullable) {
+        if (!["displayLabel", "color"].includes(key)) invalidateEditorStack(editor.draft);
+        entry.fields[key] = value || null;
+      }
       renderTrainingLoad();
       return true;
     }
@@ -2754,6 +2889,8 @@ async function submitRpeForm(renderTrainingLoad) {
 // function's own comment in training-load-data.js).
 // ------------------------------------------------------------
 export function resetTrainingLoadForWorkspaceChange() {
+  clearDashboardChartStates();
+  simpleEditor.close();
   // Bumping the generation counter makes an in-flight response for the OLD
   // workspace bail out via its own early-return before it ever reaches the
   // line that clears `loading` - so `loading` must be reset HERE too, or a

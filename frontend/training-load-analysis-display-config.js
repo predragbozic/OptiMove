@@ -30,7 +30,7 @@ export function normalizeDashboardDisplayConfig(widget) {
   } else if (original.schemaVersion === 2) {
     sourceVersion = 2;
     for (const key of Object.keys(original)) {
-      if (!["schemaVersion", "numberFormat", "legend", "valueLabels"].includes(key)) issue("unknownDisplayConfigField", key);
+      if (!["schemaVersion", "numberFormat", "legend", "valueLabels", "radar", "radarSettings"].includes(key)) issue("unknownDisplayConfigField", key);
     }
     for (const [key, field] of [["numberFormat", "maximumFractionDigits"], ["legend", "visible"], ["valueLabels", "visible"]]) {
       if (!Object.hasOwn(original, key)) continue;

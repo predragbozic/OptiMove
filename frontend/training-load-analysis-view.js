@@ -1,7 +1,11 @@
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, editorIsCombined, editorIsBoxplot, editorIsScatter, editorIsStacked, editorStackAcknowledged, analysisEditorIsDirty, editorPresentation, editorPresentationKnown, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { boxplotExplanation } from './training-load-chart-gallery.js';
+import { renderSimpleEditorHtml } from './training-load-simple-view.js';
+import { renderPagesHtml,renderPagePendingHtml } from './training-load-pages-view.js';
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
+import { dashboardChartContext } from './training-load-chart-actions.js';
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
 import { pickable, pickerName } from "./metric-picker-visibility.js";
@@ -77,7 +81,7 @@ function layoutFor(widget) {
 
 function canEdit() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && (!state.trainingLoad.analysis.pagesMode || state.trainingLoad.analysis.pageCapabilities.pageWidgetEditing===true);
 }
 
 // Permanent delete is offered for any open dashboard except a system
@@ -231,7 +235,6 @@ function renderDashboardMenuHtml() {
             ${isActive
               ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
               : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
-            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
             ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
           ` : ""}
           ${canDeleteDashboard() ? `
@@ -288,7 +291,7 @@ function renderTopBarHtml() {
 }
 
 // ---------------- Dashboards UX H2: layout editing bar ----------------
-// Layout editing is its own mode (dashboard or widget "⋯" -> Edit layout).
+// Layout editing has one visible entry in the active Page header.
 // While it is on, this bar is the one place to leave it: Cancel drops the
 // local draft and exits; the primary button saves the draft (atomic
 // PUT /layout) and exits, or reads "Done" while nothing has been moved.
@@ -300,17 +303,17 @@ function renderLayoutBarHtml() {
   if (!a.editMode || !canEdit()) return "";
   const dirty = Boolean(a.layoutDraft);
   return `
-    <div class="tl-layout-bar" role="region" aria-label="Layout editing">
+    <div class="tl-layout-bar" role="region" aria-label="Editing layout">
       <div class="tl-layout-bar-text">
         <strong>Editing layout</strong>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget or use its arrows; drag the corner or use − / + to resize.</span>
-        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up / Move down to set the order on phones.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget title to move it, or its bottom-right corner to resize. You can also use the arrows.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up and Move down to set the order on phones.</span>
         <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Unsaved changes" : "No changes yet"}</span>
       </div>
       <div class="tl-layout-bar-actions">
         <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Cancel</button>
         ${dirty
-          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving..." : "Save layout"}</button>`
+          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving…" : "Save layout"}</button>`
           : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Done</button>`}
       </div>
     </div>
@@ -331,8 +334,8 @@ function renderEmptyHtml() {
   `;
 }
 
-// H2: layout-only controls, shown in layout mode (Settings/Delete moved to
-// the widget "⋯" menu). A button that would be a no-op at the current
+// Layout-only controls. Settings lives on the card; deletion stays in its
+// menu. A button that would be a no-op at the current
 // position is disabled - clampAnalysisLayoutEntry would undo it anyway.
 // Desktop gets the 12-column nudges and width -/+; phones only Move up/
 // Move down, because the phone layout reads nothing but the order
@@ -370,18 +373,24 @@ function renderWidgetToolbarHtml(widget, layout, position) {
   `;
 }
 
-// H2: the widget "⋯" menu - on every widget of an editable dashboard, in
-// and out of layout mode (before H2 a widget's Settings were only reachable
-// from inside layout mode). While a layout draft is unsaved, Settings/
-// Advanced/Delete are disabled: each of them reloads the dashboard on
-// success, which would silently drop the draft.
+// The card owns its Settings entry and the Page header owns layout editing.
+// This menu keeps deletion, blocked while a layout draft is unsaved.
 function renderWidgetMenuHtml(widget) {
   const a = state.trainingLoad.analysis;
   if (!canEdit()) return "";
   const menuKey = `widget:${widget.id}`;
-  const open = a.menu === menuKey;
+  const choosingPage = a.menu === `widget-copy:${widget.id}`;
+  const open = a.menu === menuKey || choosingPage;
   const blocked = Boolean(a.editMode && a.layoutDraft);
   const dataset = { "widget-id": widget.id };
+  const unavailable = blocked || a.saving;
+  const canCopy = a.pagesMode && a.pageCapabilities?.widgetCopy === true;
+  const pages = (a.pages ?? []).filter(page => page.id !== a.selectedPageId);
+  const icon = path => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="${path}"/></svg>`;
+  const settingsIcon = icon("M4 7h16M4 17h16M8 4v6m8 4v6");
+  const copyIcon = icon("M8 8h12v12H8zM16 8V4H4v12h4");
+  const pageIcon = icon("M6 3h8l4 4v14H6zM14 3v5h4M9 13h6m-3-3v6");
+  const deleteIcon = icon("M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7");
   return `
     <div class="tl-popover-anchor tl-widget-menu-anchor ${open ? "is-open" : ""}">
       <button type="button" class="plain-button icon-button tl-menu-trigger tl-widget-menu-trigger ${open ? "is-open" : ""}" data-action="training-load-analysis-open-menu" data-menu="${escapeAttr(menuKey)}" aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeAttr(`Widget actions: ${widget.title}`)}" title="Widget actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
@@ -389,11 +398,16 @@ function renderWidgetMenuHtml(widget) {
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
           ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
-          ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
-          ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
-          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout" })}
-          <div class="tl-menu-separator" role="separator"></div>
-          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
+          ${choosingPage ? `
+            ${menuItemHtml({ action: "training-load-analysis-open-menu", label: "Back to widget actions", dataset: { menu: menuKey }, disabled: unavailable })}
+            ${pages.map(page => menuItemHtml({ action: "training-load-analysis-copy-widget", label: escapeHtml(page.name), dataset: { ...dataset, "destination-page-id": page.id }, disabled: unavailable })).join("")}
+          ` : `
+            ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: `${settingsIcon} Settings`, dataset, disabled: unavailable })}
+            ${canCopy ? menuItemHtml({ action: "training-load-analysis-copy-widget", label: `${copyIcon} Duplicate widget`, dataset: { ...dataset, "destination-page-id": a.selectedPageId }, disabled: unavailable }) : ""}
+            ${canCopy && pages.length ? menuItemHtml({ action: "training-load-analysis-open-menu", label: `${pageIcon} Copy to page…`, dataset: { menu: `widget-copy:${widget.id}` }, disabled: unavailable }) : ""}
+            <div class="tl-menu-separator" role="separator"></div>
+            ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: `${deleteIcon} Delete widget`, dataset, danger: true, disabled: unavailable })}
+          `}
         </div>
       ` : ""}
     </div>
@@ -485,7 +499,7 @@ function renderTableHtml(model) {
                 <td>${escapeHtml([row.identity.bucketKey, displayRowContext(row)].filter(Boolean).join(" · "))}</td>
                 <td>${row.status === "value" ? escapeHtml(formatValue(row.value, model)) : "-"}</td>
                 <td>${escapeHtml(row.identity.unit || "")}</td>
-                <td>${row.status === "value" ? "" : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>
+                <td>${row.status === "value" ? escapeHtml(row.raw?.thresholdLabel ?? "") : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>
               </tr>
             `).join("");
           }).join("")}
@@ -495,17 +509,44 @@ function renderTableHtml(model) {
   `;
 }
 
-function renderChartHtml(model) {
+function renderChartHtml(model, widget) {
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
   const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext, {radarSnapshot:state.trainingLoad.analysis.queryResult?.widgets?.find(result => result.widgetId === widget.id)?.radarSnapshot,metricStack:state.trainingLoad.analysis.queryResult?.widgets?.find(result => result.widgetId === widget.id)?.metricStack,metricPairs:state.trainingLoad.analysis.queryResult?.widgets?.find(result => result.widgetId === widget.id)?.metricPairs,presentation:widget.presentation_config,queryId:state.trainingLoad.analysis.queryResult?.queryId,resolvedPeriod:state.trainingLoad.analysis.queryResult?.resolvedPeriod,contextId:dashboardChartContext(),widgetRevision:widget.revision,athletes:state.trainingLoad.orgPickerData?.athletes})}
+    ${editorIsBoxplot({ savedPresentation: widget.presentation_config }) ? `<p class="muted">${boxplotExplanation}</p>` : ''}
     ${diagnostics.join("")}
     <details class="tl-analysis-chart-values" open>
       <summary>Values and status</summary>
       ${renderTableHtml(model)}
     </details>
   `;
+}
+
+function renderRadarEditor(draft, off) {
+  const settings = draft.radarSettings;
+  const { analysis, orgPickerData } = state.trainingLoad;
+  if (!settings && (!analysis.pagesMode || analysis.dashboard?.data_workspace_type !== 'team' ||
+      draft.widgetType !== 'table' || draft.groupBy !== 'day')) return '';
+  const athletes = orgPickerData?.athletes ?? [];
+  const definitions = analysis.metricPicker.definitions ?? [];
+  return `<fieldset><legend>Radar</legend>
+    <label><input type="checkbox" data-action="training-load-analysis-radar-enabled" ${settings ? 'checked' : ''} ${off}> Show reference attainment</label>
+    ${settings ? `<p class="muted">Use a single-day query and set a positive reference for 3–8 catalog metrics. 100% means the reference was reached.</p>
+      <p class="muted">Reference tables require confirmed historical position, age band or sex. Match references require a confirmed measurement event, match classification and playing minutes.</p>
+      <label>Athletes (1–5)<select multiple data-action="training-load-analysis-radar-athletes" ${off}>
+        ${athletes.map(athlete => `<option value="${escapeAttr(athlete.id)}" ${settings.athleteIds.includes(athlete.id) ? 'selected' : ''}>${escapeHtml(athlete.display_name ?? athlete.name ?? [athlete.first_name, athlete.last_name].filter(Boolean).join(' '))}</option>`).join('')}
+      </select></label>
+      <label>Valid from<input type="date" data-action="training-load-analysis-radar-from" value="${escapeAttr(settings.dateFrom)}" ${off}></label>
+      <label>Valid through (optional)<input type="date" data-action="training-load-analysis-radar-to" value="${escapeAttr(settings.dateTo ?? '')}" ${off}></label>
+      ${draft.series.filter(entry => entry.metric?.kind === 'metric').map(({ metric }) => {
+        const definition = definitions.find(item => item.id === metric.id);
+        const label = definition?.label ?? 'Catalog metric';
+        const unit = definition?.unit ? ` (${definition.unit})` : '';
+        const value = settings.axes.find(axis => axis.metricDefinitionId === metric.id)?.value ?? '';
+        return `<label>${escapeHtml(label + unit)} reference<input type="number" step="any" data-action="training-load-analysis-radar-value" data-metric-id="${escapeAttr(metric.id)}" value="${escapeAttr(value)}" ${off}></label>`;
+      }).join('')}` : ''}
+  </fieldset>`;
 }
 
 function renderWidgetBodyHtml(widget, results) {
@@ -517,8 +558,18 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
   if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
   if (widget.widget_type === "kpi") return renderKpiHtml(model);
+  if (widget.widget_type === "table" && widget.display_config?.radar) {
+    return renderDashboardChartPlots(model, seriesLabel, displayRowContext, {
+      presentation: { chartVariant: 'radar' }, radarSnapshot: results?.radarSnapshot,
+      queryId: state.trainingLoad.analysis.queryResult?.queryId, athletes: state.trainingLoad.orgPickerData?.athletes
+    }) + `<details class="tl-analysis-chart-values" open>
+      <summary>Current period values</summary>
+      <div data-radar-series-controls></div>
+      ${renderTableHtml(model)}
+    </details>`;
+  }
   if (widget.widget_type === "table") return renderTableHtml(model);
-  return renderChartHtml(model);
+  return renderChartHtml(model, widget);
 }
 
 function renderWidgetHtml(widget, position) {
@@ -552,11 +603,12 @@ function renderGridHtml() {
     <section class="tl-analysis-dashboard-head">
       <div>
         <p class="eyebrow">${a.dashboard.is_template ? "Template" : a.dashboard.status === "archived" ? "Archived" : "Dashboard"}</p>
-        <h3>${escapeHtml(a.dashboard.name)}</h3>
+        <h3>${escapeHtml(a.pagesMode?a.page?.name??a.dashboard.name:a.dashboard.name)}</h3>
         ${a.dashboard.description ? `<p class="muted">${escapeHtml(a.dashboard.description)}</p>` : ""}
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
+          ${widgets.length ? `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-toggle-edit" ${a.saving ? "disabled" : ""}>Edit layout</button>` : ''}
           <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
         </div>
       ` : ""}
@@ -571,9 +623,9 @@ function renderGridHtml() {
     ${widgets.length
       ? `<div class="tl-analysis-grid">${widgets.map((w, index) => renderWidgetHtml(w, { index, total: widgets.length })).join("")}</div>`
       : `<section class="panel tl-analysis-empty">
-          <h3>No metrics yet</h3>
+          <h3>${a.pagesMode?'This page is empty':'No metrics yet'}</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
-          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">Add your first metric</button></div>` : ""}
+          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">${a.pagesMode?'Add your first metric':'Add your first metric'}</button></div>` : ""}
         </section>`}
   `;
 }
@@ -716,6 +768,7 @@ function renderMetricPanelHtml() {
             ${renderPanelPreviewHtml(panel)}
           </section>
         </div>
+        ${renderPagePendingHtml(a.pageWritePending)}
         ${panel.error ? `<p class="builder-error" role="alert">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.serverChanged ? `<p class="muted tl-metric-panel-server-note">Closing keeps what is already saved on the dashboard.</p>` : ""}
         <div class="tl-analysis-modal-actions tl-metric-panel-actions">
@@ -745,7 +798,7 @@ function editorMetricLabel(metric, displayLabel = "") {
   return metric?.hints?.[0]?.key || "Choose a metric";
 }
 
-function renderMetricPickerHtml(entry) {
+function renderMetricPickerHtml(entry, catalogOnly = false) {
   const picker = state.trainingLoad.analysis.metricPicker;
   const search = picker.search.trim().toLowerCase();
   const definitions = pickable(picker.definitions, { chosen: [entry.metric?.kind === "metric" ? entry.metric.id : null] }).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
@@ -761,10 +814,10 @@ function renderMetricPickerHtml(entry) {
     <div class="tl-analysis-metric-picker">
       <p class="eyebrow">Metric</p>
       <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit"></label>
-      <div class="tl-analysis-builtins">
+      ${catalogOnly ? '<p class="muted">Stacked components must be catalog metrics.</p>' : `<div class="tl-analysis-builtins">
         <p class="eyebrow">Built-in series</p>
         ${BUILT_IN_SERIES.map((b) => `<button type="button" class="plain-button compact-button ${isBuiltIn(b.key) ? "is-active" : ""}" aria-pressed="${isBuiltIn(b.key) ? "true" : "false"}" data-action="training-load-analysis-series-bind-builtin" data-series-key="${escapeAttr(entry.key)}" data-built-in-key="${escapeAttr(b.key)}"><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
-      </div>
+      </div>`}
       ${picker.loading ? `<p class="muted tl-analysis-loading" aria-live="polite">Loading metrics...</p>` : ""}
       ${picker.error ? `<p class="builder-error" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       ${[...groups.entries()].map(([group, rows]) => `
@@ -793,10 +846,14 @@ function renderEditorHtml() {
   const entries = draft.series;
   const entry = entries.find((item) => item.key === editor.seriesKey) || entries[0] || null;
   const rowsById = new Map((widget.series || []).map((row) => [row.id, row]));
-  const dirty = analysisEditorPlan(widget, draft).length > 0;
+  const dirty = analysisEditorIsDirty(a);
   const problem = dirty ? analysisEditorProblem(draft) : "";
-  const cap = analysisSeriesLimit(draft.widgetType);
+  const stacked = editorIsStacked(draft);
+  const combined = editorIsCombined(draft), scatter = editorIsScatter(draft), paired = combined || scatter;
+  const boxplot = editorIsBoxplot(draft);
+  const cap = boxplot ? 1 : paired ? 2 : analysisSeriesLimit(draft.widgetType);
   const saving = Boolean(editor.saving);
+  const section = editor.settingsSection ?? "display";
   const off = saving ? "disabled" : "";
   const override = draft.localFilterOverride || {};
   const entryIndex = entry ? entries.indexOf(entry) : -1;
@@ -808,11 +865,13 @@ function renderEditorHtml() {
     ? ["not_applicable"]
     : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
   const status = (item) => {
-    if (!item.id || !rowsById.has(item.id)) return "New - not saved yet";
+    const axis = scatter ? (item.fields.axis === "secondary" ? "Y axis" : "X axis") : combined ? (item.fields.axis === "secondary" ? "Secondary: line, right axis" : "Primary: bars, left axis") : `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    const suffix = paired ? ` / ${axis}` : '';
+    if (!item.id || !rowsById.has(item.id)) return `New - not saved yet${suffix}`;
     const row = rowsById.get(item.id);
-    if (row.resolution_status === "unresolved") return "Choose a metric";
-    if (row.resolution_status === "ambiguous") return "Ambiguous metric";
-    return `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    if (row.resolution_status === "unresolved") return `Choose a metric${suffix}`;
+    if (row.resolution_status === "ambiguous") return `Ambiguous metric${suffix}`;
+    return axis;
   };
   return `
     <div class="builder-athlete-overlay">
@@ -822,10 +881,30 @@ function renderEditorHtml() {
           <div><strong>Widget settings</strong><p class="muted">Nothing is saved until you choose Save changes.</p></div>
           <button type="button" class="plain-button icon-button" data-action="training-load-analysis-close-editor" aria-label="Close" ${off}>&times;</button>
         </div>
+        <ol class="tl-simple-steps" aria-label="Widget settings sections">
+          ${[["metrics", "Metrics"], ["filters", "Grouping and filters"], ["display", "Display"]].map(([id, label]) => `
+            <li><button type="button" class="plain-button" data-action="training-load-analysis-editor-section" data-section="${id}" ${section === id ? 'aria-current="step"' : ""} ${off}>${label}</button></li>
+          `).join("")}
+        </ol>
+        <div ${section === "display" ? "" : "hidden"}>
         <div class="tl-analysis-editor-grid">
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
+          ${renderRadarEditor(draft, off)}
           <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
-          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
+          <label>Display mode<select data-action="training-load-analysis-widget-display-mode" ${saving || !editorPresentationKnown(editorPresentation(draft)) ? 'disabled' : ''}>
+            ${!paired && !stacked && editorPresentation(draft) != null ? `<option value="preserve" selected>${boxplot ? 'Box plot' : 'Saved presentation'}</option>` : ''}
+            ${optionHtml('separate', 'Separate plots', stacked ? 'stacked' : scatter ? 'scatter' : combined ? 'combined' : editorPresentation(draft) != null ? 'preserve' : 'separate')}
+            <option value="combined" ${combined ? 'selected' : ''} ${!editor.combinedAvailable && !combined ? 'disabled' : ''}>Bar + line (two axes)</option>
+            <option value="scatter" ${scatter ? 'selected' : ''} ${!editor.scatterAvailable && !scatter ? 'disabled' : ''}>Scatter</option>
+            <option value="stacked" ${stacked ? 'selected' : ''} ${!editor.stackedAvailable && !stacked ? 'disabled' : ''}>Stacked bar</option>
+          </select></label>
+          ${stacked ? `<div class="tl-editor-wide"><strong>Stacked setup</strong><p>Choose 2 to 8 catalog metrics as components, not athletes. Use the same nonempty unit, scope and source, Total (sum) aggregation, Direct values only, Complete totals only, primary axes and no comparisons.</p><label class="tl-stacked-acknowledgement"><input type="checkbox" data-action="training-load-analysis-stacked-acknowledgement" ${editorStackAcknowledged(draft) ? 'checked' : ''} ${off}>I confirm the selected metrics are non-overlapping components of the same quantity, with no total plus its parts.</label><p class="muted">This is your declaration; names and units do not establish additivity. Changing components, units or policies requires confirmation again.</p></div>` : ''}
+          <p class="muted">${boxplot ? boxplotExplanation : stacked ? 'Each component uses the primary axis; stacked colors represent metrics, not athletes.' : scatter ? 'Primary: X axis. Secondary: Y axis. Two numeric metrics, day or week, automatic axes and disabled zoom.' : combined ? 'Primary: bars on the left axis. Secondary: line on the right axis. Each metric keeps its own unit, source and coverage. Two numeric metrics, day or week, automatic axes only.' : !editorPresentationKnown(editorPresentation(draft)) ? 'Saved presentation settings are preserved; this display mode is not supported here.' : !editor.combinedAvailable ? 'Bar + line is not available on this dashboard yet.' : 'Bar + line uses primary bars on the left axis and a secondary line on the right axis.'}</p>
+        </div>
+        </div>
+        <div ${section === "filters" ? "" : "hidden"}>
+        <div class="tl-analysis-editor-grid">
+          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${((paired || stacked || boxplot) ? GROUP_BY.filter(g => ["day", "week", draft.groupBy].includes(g)) : GROUP_BY).map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
             ${override.activityId
@@ -839,9 +918,11 @@ function renderEditorHtml() {
               : `<span class="muted">Uses dashboard/runtime filter</span>`}
           </div>
         </div>
+        </div>
+        <div ${section === "metrics" ? "" : "hidden"}>
         <div class="tl-analysis-series-editor">
           <div class="tl-analysis-series-head">
-            <strong>Series <span class="muted">${entries.length} of ${cap}</span></strong>
+            <strong>${stacked ? 'Stacked components' : 'Series'} <span class="muted">${entries.length} of ${cap}</span></strong>
             <button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-series" data-widget-id="${escapeAttr(widget.id)}" ${saving || entries.length >= cap ? "disabled" : ""}>Add series</button>
           </div>
           <div class="tl-analysis-series-list">
@@ -855,7 +936,7 @@ function renderEditorHtml() {
           ${entry ? `
             <div class="tl-analysis-editor-grid">
               <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
-              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
+              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${((stacked || boxplot) && entry.fields.axis !== "secondary" ? ["primary"] : ["primary", "secondary"]).map((v) => optionHtml(v, scatter ? (v === "primary" ? "X axis" : "Y axis") : AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
               <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
               ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
               <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
@@ -870,19 +951,21 @@ function renderEditorHtml() {
             <div class="tl-analysis-series-actions">
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" ${key} ${saving || entryIndex >= entries.length - 1 ? "disabled" : ""}>Move down</button>
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove series</button>
+              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${saving || (paired || stacked) && entries.length <= 2 ? "disabled" : ""}>Remove series</button>
             </div>
-            ${renderMetricPickerHtml(entry)}
+            ${renderMetricPickerHtml(entry, stacked)}
           ` : ""}
         </div>
+        </div>
         <div class="tl-analysis-modal-actions tl-editor-footer">
+          ${renderPagePendingHtml(a.pageWritePending)}
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
           ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}
           <div class="tl-editor-footer-row">
             <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}" ${off}>Delete widget</button>
             <span class="tl-editor-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${saving ? "Saving..." : dirty ? "Unsaved changes" : "No changes"}</span>
             <button type="button" class="plain-button compact-button" data-action="training-load-analysis-close-editor" ${off}>${editor.serverChanged ? "Close" : "Cancel"}</button>
-            <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-editor-save" ${off}>${saving ? "Saving..." : "Save changes"}</button>
+            <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-editor-save" ${saving || problem ? "disabled" : ""}>${saving ? "Saving..." : "Save changes"}</button>
           </div>
         </div>
       </section>
@@ -892,13 +975,17 @@ function renderEditorHtml() {
 
 export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
+  const editing = Boolean(a.simpleEditor?.open);
+  const dashboardControls = (html, label) => editing || a.pageWritePending || a.pagesMode&&a.detailLoading ? `<fieldset class="tl-analysis-paused-controls" disabled><legend class="tl-simple-sr-only">${label}</legend>${html}</fieldset>` : html;
   return `
     <div class="tl-analysis">
-      ${renderTopBarHtml()}
+      ${editing ? `<details class="tl-analysis-paused-filters"><summary>${escapeHtml(a.dashboard?.name ?? 'Dashboard')} · ${escapeHtml(a.period.dateFrom)} – ${escapeHtml(a.period.dateTo)} · Filters</summary>${dashboardControls(renderTopBarHtml(), 'Dashboard filters while editing')}</details>` : dashboardControls(renderTopBarHtml(), 'Dashboard controls while saving')}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
-      ${renderGridHtml()}
+      ${renderPagesHtml(a)}
+      ${renderSimpleEditorHtml(a.simpleEditor)}
+      <div ${a.pagesMode?'id="tl-page-panel" role="tabpanel" aria-label="Active page content"':''}>${dashboardControls(renderGridHtml(), 'Saved dashboard while editing')}</div>
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}

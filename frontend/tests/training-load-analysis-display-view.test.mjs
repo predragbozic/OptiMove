@@ -22,6 +22,27 @@ function rendered() {
   return new JSDOM(renderTrainingLoadAnalysisHtml()).window.document;
 }
 
+test('inline settings preserve visible results and disable dashboard controls until the draft closes', () => {
+  const analysis=setup('line_chart',[row(12.25)]);
+  analysis.simpleEditor={open:true,step:1,draft:{view:{}},capabilities:{}};
+  let document=rendered();
+  const editor=document.querySelector('.tl-simple-editor');
+  assert.equal(editor.getAttribute('role'),'region');
+  assert.equal(editor.closest('fieldset[disabled]'),null);
+  assert.equal(editor.querySelector('[data-action="training-load-simple-close"]').matches(':disabled'),false);
+  assert.ok(document.querySelector('.tl-analysis-widget-body').textContent.includes('12.3'));
+  for (const selector of ['[data-action="training-load-analysis-period-from"]','.tl-widget-menu-trigger']) {
+    assert.equal(document.querySelector(selector).matches(':disabled'),true);
+  }
+  analysis.simpleEditor=null;
+  document=rendered();
+  assert.equal(document.querySelector('.tl-simple-editor'),null);
+  assert.equal(document.querySelector('.tl-widget-menu-trigger').matches(':disabled'),false);
+  analysis.editMode=true;
+  document=rendered();
+  assert.ok(document.querySelector('.tl-widget-menu-trigger'));
+});
+
 for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
   test(`${type}: an existing V1 widget renders without migration, API calls or a configuration write`, () => {
     let requests = 0;

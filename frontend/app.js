@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { applyDashboardChartPeriod } from './training-load-chart-actions.js';
 import { openExerciseClassification } from "./exercise-classification.js";
 import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
 import {
@@ -505,6 +506,7 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  els.content.addEventListener('optimove-chart-period', event => { void applyDashboardChartPeriod(event.detail,renderActiveTrainingLoadSurface); });
   // Builder section editor on phones: a name cut to two lines unfolds on tap.
   els.content.addEventListener("click", (event) => { toggleClampedTitle(event.target); });
   // A click anywhere on the page folds an open exercise card "⋯" menu. iOS
@@ -2529,6 +2531,31 @@ function renderTrainingLoad() {
   if (state.activeTab !== "training-load") return;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   if (state.trainingLoad.section === "analysis") {
+    const context = currentUserWorkspaceContextParts();
+    const chartSections = '.tl-analysis-chart-values, .tl-radar-reference-values, .tl-chart-tools, .tl-chart-point-details';
+    for (const details of els.content.querySelectorAll(chartSections)) {
+      const widget = details.closest('[data-analysis-widget-id]');
+      if (!widget) continue;
+      const widgetId = widget.dataset.analysisWidgetId;
+      const section = details.classList[0];
+      const key = section === 'tl-analysis-chart-values'
+        ? 'optimove.chartTableOpen:' + JSON.stringify([...context, widgetId])
+        : 'optimove.chartSectionOpen:' + JSON.stringify([...context, widgetId, section]);
+      try {
+        const saved = window.localStorage.getItem(key);
+        if (saved !== null) details.open = saved === 'true';
+      } catch {
+        // The table still works when browser storage is unavailable.
+      }
+      details.addEventListener('toggle', () => {
+        if (!details.isConnected) return;
+        try {
+          window.localStorage.setItem(key, String(details.open));
+        } catch {
+          // The table still works when browser storage is unavailable.
+        }
+      });
+    }
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
   }
 }
@@ -2771,6 +2798,11 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  // Native selects commit through handleContentChange. Rendering on the
+  // opening click replaces the control and dismisses the browser's menu.
+  if (type?.startsWith('training-load-') && action.matches('select')) return;
+  if ((type?.startsWith('training-load-simple-') || type?.startsWith('training-load-analysis-radar-')) &&
+      action.matches('input, textarea')) return;
   // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
   // the tiny native calendar-icon glyph) opens the date picker. The label
   // wraps the input, so a click on the "From"/"To" text also lands here via
