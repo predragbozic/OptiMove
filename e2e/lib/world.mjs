@@ -78,6 +78,7 @@ export async function startWorld({ log = false, fakeSource = null } = {}) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --import=${pathToFileURL(path.join(here, "fake-source-preload.mjs")).href}`.trim();
       env.E2E_FAKE_VISIBLE_TEAMS = (fakeSource.visibleTeams || []).join(",");
       if (fakeSource.sessions) env.E2E_FAKE_SESSIONS = fakeSource.sessions;
+      if (fakeSource.batchBudgetMs !== undefined) env.E2E_BATCH_BUDGET_MS = String(fakeSource.batchBudgetMs);
       // Writing imports is a server-side switch; only a world that asks for sessions turns it on.
       if (fakeSource.sessions) env.GPEXE_IMPORT_APPLY_ENABLED = "true";
     }

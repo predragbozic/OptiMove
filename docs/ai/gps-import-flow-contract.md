@@ -170,6 +170,43 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
 - Baseline failures seen in the same runs, reproduced identically on a clean main (frontend code of `0022f579`): `gpexe-client` and `gpexe-rest-v1-adapter-reads` (backend) and, in the frontend `frontend-fast` preset, `builder-performance-fixes` (2), `exercise-editor-thumbnail` (4), `exercise-media-thumbnail` (8), `exercise-ownership` (1), `exercise-personalization` (1), `training-load.actions` (2, the known X5a/X5b hang), with the counts and the commit in `CURRENT_STATE.md`. Recorded in `CURRENT_STATE.md`, "Known baseline/environment test issues".
 - Deploy (the *Rukovodilac*, Render API, commit `76af5f52`, HTTP 201): `/api/health` briefly served the old commit during the swap, then `76af5f52` with `ok: true` four times in a row (to 13:07:59 UTC); without a login `/api/auth/me` 200 and the GPEXE team status (zero UUID) 401.
 
+### U6a-3 — the batch series (the pull request that adds this section; frontend only, no route or migration; ★★-lite, trigger 4: a client retry)
+
+- **What changes for the person:** one click on *Import N ready* may now send several `POST …/imports` requests in a row. After the server's 45 s budget (`not_attempted` / `batch_time_budget`), the screen sends the next round itself with **exactly** the sessions the server did not try, with the hashes they were chosen with. A progress block with *Stop after this step* stays in sight.
+- **When the series ends:**
+  - every session is decided;
+  - a refusal needs a person (anything but `try_again` / `internal_error`);
+  - a result is not confirmed (`import_outcome_unknown`, or a lost answer: "Import result not confirmed", the existing *Check again*);
+  - a round decides nothing;
+  - *Stop*;
+  - the person is no longer on this team's Imports screen: another Training Load section, another part of the app, another
+    team or workspace. This is read from the state itself, after every answer and again before every further request. A
+    leave question answered yes, after which the person stays, does not stop the import;
+  - `BATCH_MAX_ROUNDS` (30) requests.
+
+  What is left stays ticked and says why it was not imported: the person stopped the import, left Imports, the 30-round
+  limit, or time ran out. A team change is refused while the import runs.
+- **What never happens:**
+  - a session with a final answer (imported, `already_imported`, refused) is never in a later round;
+  - an answer for a session the request did not send counts for nothing;
+  - a whole request refused after earlier rounds wrote says "nothing was imported": the dialog says the import stopped
+    before the rest, and which sessions are in OptiMove;
+  - `already_imported` counts as imported and does not stop the series;
+  - the summary is counted from each session's final result.
+- **Server unchanged:** every round is the existing batch route, each approval idempotent by its candidate (`already_imported`), the 90 s client bound per request.
+- **The screen:**
+  - while the import runs: "Importing sessions", the rows not reached yet "Waiting: it will be imported automatically.",
+    Done off;
+  - the progress block ("N of M sessions handled - K imported so far", *Stop after the current sessions*) sits between
+    the dialog's head and its scrolling list;
+  - after a lost answer, the sessions answered earlier stay listed.
+- **Source:** item 8 of PR #408.
+- **Tests:**
+  - `frontend/tests/gpexe-batch-series-u6a3.actions.test.mjs`;
+  - e2e scenario 13 (`e2e/tests/imports-batch-series.test.mjs`): the real route with the server's budget set to 0 in
+    the e2e server process (`E2E_BATCH_BUDGET_MS`, `e2e/lib/fake-source-preload.mjs`), three Ready sessions in three
+    rounds, three approvals.
+
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
 - As designed in `docs/ai/u2a-club-admin-pair-plan.md` (section 8 records what was built and the decisions): the PUT of a team's settings accepts the active admin of the team's club in that club's workspace; the service re-checks the user, role, club, team and the club's `verified` connection inside its transaction; a club admin writes a first pair only; a GPEXE team already paired anywhere is the neutral `409 pair_not_available` for a club admin; Connect / Test return the whole annotated list to a club admin; *Approve pair* on the Source connections screen (the GPEXE team's name is the main text, an unnamed team cannot be approved).

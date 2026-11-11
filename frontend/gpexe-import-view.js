@@ -910,8 +910,18 @@ function batchOutcomeText(r) {
   if (o === "imported") return { cls: "is-imported", text: r.commitConfirmation === "verified_after_commit_error" ? "Imported (the confirmation arrived late, but the import is in OptiMove)." : "Imported." };
   if (o === "already_imported") return { cls: "is-imported", text: "Already imported, nothing more was written." };
   if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
-  if (o === "not_attempted" && r.code === "batch_time_budget") return { cls: "is-skipped", text: "Not tried: time ran out. Nothing was saved for this session - import it again from the Ready list." };
-  if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
+  if (o === "not_attempted" && r.code === "batch_time_budget") {
+    const b = state.trainingLoad.gpexe?.batch || {};
+    // U6a-3: while the import goes on, every such row belongs to the request in flight: never "not saved" before its answer.
+    if (b.sending) return { cls: "is-skipped", text: b.stopRequested ? "Being imported now - the result follows." : "Waiting: it will be imported automatically." };
+    const why = b.stopReason === "stop" ? "Not imported: you stopped the import."
+      : b.stopReason === "person" ? "Not imported: the import stopped at a session that needs you."
+      : b.stopReason === "left" ? "Not imported: the import stopped when you left Imports."
+      : b.stopReason === "cap" ? "Not imported yet: the import stops after 30 rounds."
+      : "Not imported yet: time ran out.";
+    return { cls: "is-skipped", text: `${why} Nothing was saved for this session - import it again from the Ready list.` };
+  }
+  if (o === "not_attempted") return { cls: "is-skipped", text: "Not imported: the import stopped before this session. Nothing was saved - import it again from the Ready list." };
   const code = r.code;
   if (code === "preview_changed") return { cls: "is-refused", text: "Session changed - review it again.", open: r.reviewAgain?.candidateId || r.candidateId, openLabel: "Review again" };
   if (code === "changes_need_acceptance") return { cls: "is-refused", text: "Open and review the changes individually.", open: r.candidateId, openLabel: "Open" };
@@ -928,6 +938,20 @@ function batchOutcomeText(r) {
   if (code === "try_again") return { cls: "is-refused", text: "Not imported: another check, import or change of this team was running, or the server was busy. Try again in a moment." };
   if (code === "notFound") return { cls: "is-refused", text: "Not imported: this session is not available." };
   return { cls: "is-refused", text: "Not imported: the server refused it. Open the session to see what to do.", open: r.candidateId, openLabel: "Open" };
+}
+
+// U6a-3: a whole request refused after earlier requests of the same import already wrote: why it stopped, never "nothing
+// was imported" (the rows above say what was).
+function batchStoppedText(error) {
+  const code = error?.code;
+  const why = code === "import_switch_off" ? "importing was switched off in this environment"
+    : code === "team_import_switch_off" ? "imports were switched off for this team"
+    : code === "not_an_approver" ? "you may not approve imports for this team any more"
+    : error?.status === 404 ? "one of the sessions is not available in this team any more"
+    : error?.status === 400 ? "the selection is out of date"
+    : code === "internal_error" ? "the server failed"
+    : "the server refused the next sessions";
+  return `The import stopped before the rest of the sessions: ${why}. The sessions marked Imported below are in OptiMove; the others were not imported and stay under Ready.`;
 }
 
 // The sentence of the whole refusal (nothing was tried), by the server's code.
@@ -975,7 +999,7 @@ function renderBatchOverlayHtml(gx) {
   let title;
   let body;
   if (b.results || b.unknown) {
-    title = b.unknown ? "Import result not confirmed" : "Import result";
+    title = b.sending ? "Importing sessions" : b.unknown ? "Import result not confirmed" : "Import result";
     body = renderBatchResultsHtml(gx);
   } else {
     const items = batchSelection(gx);
@@ -991,10 +1015,26 @@ function renderBatchOverlayHtml(gx) {
           <h3>${escapeHtml(title)}</h3>
           <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="${close}" aria-label="Close" ${busy}>&times;</button>
         </div>
+        ${renderBatchProgressHtml(b)}
         <div class="gpexe-detail-body">${body}</div>
       </section>
     </div>
   `;
+}
+
+// U6a-3: while a long selection goes on in several requests: how far it is, that it goes on by itself, and Stop. It sits between
+// the dialog's head and its scrolling body (outside the scroller), so it stays in sight on a long list without sticking.
+function renderBatchProgressHtml(b) {
+  if (!b.sending || !b.progress || b.progress.total < 2) return "";
+  const { total, done, imported = 0 } = b.progress;
+  const line = done ? `${done} of ${total} sessions handled - ${imported} imported so far.` : `Working on the first sessions of ${total}...`;
+  return `
+    <div class="imports-progress" role="group" aria-label="Import progress">
+      <p role="status"><strong>${escapeHtml(line)}</strong>${b.stopRequested ? " Stopping - the sessions being imported right now finish first (up to a minute); the rest won't be imported." : ""}</p>
+      <div class="imports-progress-bar" role="progressbar" aria-label="Sessions handled" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i style="width:${Math.round((done / total) * 100)}%"></i></div>
+      <p class="muted imports-progress-note">It continues automatically until every session is done or one needs you. If you leave Imports, the sessions being imported right now finish and the rest stay under Ready.</p>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-stop" ${b.stopRequested ? "disabled" : ""}>Stop after the current sessions</button>
+    </div>`;
 }
 
 // The confirmation: every chosen session by name and time, what happens,
@@ -1028,6 +1068,11 @@ function renderBatchResultsHtml(gx) {
   const busy = b.checking ? "disabled" : "";
   if (b.unknown) {
     const u = b.unknown;
+    // U6a-3: what earlier requests of the same import already answered stays in sight above the lost one.
+    const earlier = (b.results || []).filter((r) => !u.candidateIds.includes(r.candidateId)).map((r) => {
+      const t = batchOutcomeText(r);
+      return `<li class="${t.cls}">${batchSessionLine(byId.get(r.candidateId), r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span></li>`;
+    });
     const rows = u.candidateIds.map((id) => {
       const c = byId.get(id);
       const imported = c?.status === "imported";
@@ -1036,12 +1081,13 @@ function renderBatchResultsHtml(gx) {
     const confirmed = u.candidateIds.filter((id) => byId.get(id)?.status === "imported").length;
     return `
       <div class="gpexe-unknown" role="alert">
-        <p><strong>The answer to the import did not arrive.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
+        <p><strong>The answer to the import did not arrive${earlier.length ? ` for the last ${plural(u.candidateIds.length, "session", "sessions")}` : ""}.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
         <p>${confirmed} of ${u.candidateIds.length} confirmed as imported so far. The rest are not confirmed; nothing is sent again by itself. Sessions that stay unconfirmed keep the mark "Result not confirmed" in the list; open one to check it.</p>
         ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Ask a platform admin to check these imports (give them the Technical details). Until then, don't enter the data by hand.</p>` : ""}
         ${techHtml([["HTTP status", u.error?.status || "no answer"], ["Code", u.error?.code], ["Server message", u.error?.message], ["Candidate ids", u.candidateIds.join(", ")]])}
       </div>
       <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
+      ${earlier.length ? `<p class="muted">Answered before the answer was lost:</p><ul class="imports-batch-list imports-batch-results imports-batch-earlier">${earlier.join("")}</ul>` : ""}
       <div class="gpexe-link-actions imports-batch-actions">
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-check" ${busy}>${b.checking ? "Checking..." : "Check again"}</button>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-done" ${busy}>Done</button>
@@ -1056,15 +1102,18 @@ function renderBatchResultsHtml(gx) {
       : t.open ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-open" data-candidate-id="${escapeAttr(t.open)}">${escapeHtml(t.openLabel)}</button>` : "";
     return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}${techHtml([["Outcome", r.outcome], ["Code", r.code], ["Approval id", r.approvalId], ["Candidate id", r.candidateId]])}</li>`;
   });
-  const summary = batchSummaryText(b.summary);
-  const still = batchSelection(gx).length;
+  // While the import goes on, the sessions not reached yet are "waiting", not "not tried"; the progress block counts.
+  const summary = b.sending ? "" : batchSummaryText(b.summary);
+  const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>${escapeHtml(batchStoppedText(b.error))}</strong></p>${errorTech(b.error)}</div>` : "";
+  const still = b.sending ? 0 : batchSelection(gx).length;
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
+    ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
-    ${(b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
+    ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}
     <div class="gpexe-link-actions imports-batch-actions">
-      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-done">Done</button>
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-done" ${b.sending ? "disabled" : ""}>Done</button>
     </div>
   `;
 }
