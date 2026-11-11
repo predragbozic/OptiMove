@@ -399,7 +399,8 @@ router.post("/teams/:teamId/approvals/:approvalId/states", async (req, res, next
       console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
       return res.status(503).json({ error: "roster_busy", message: "The session is being changed. Try again." });
     }
-    console.error(`[gpexe] import states failed: ${error?.code ?? ""} ${error?.message}`);
+    // The importer's log sinks never print an error's text (architecture test 5): formatDbError only.
+    console.error(`[gpexe] import states failed: ${service.formatDbError(error)}`);
     // Everything that reaches here failed before the COMMIT (an unknown COMMIT outcome is a RosterError 503).
     if (!res.headersSent) res.status(500).json({ error: "internal_error", message: "Nothing was saved. Try again." });
     else next(error);
