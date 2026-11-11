@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { resetLiveForm } from "./form-keep.js";
 import { CALENDAR_SETTINGS_ICON_HOST } from "./calendar-settings-actions.js";
 import { enterCalendarSettingsSection } from "./calendar-settings-data.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
@@ -89,7 +90,7 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
       state.organizationJoinLinks.copiedId = "";
       state.organizationJoinLinks.error = "";
       state.organization.addFormOpen = false;
-      form.reset();
+      resetLiveForm(form);
       await renderOrganizationPanel({ refresh: true });
       return;
     }
@@ -106,7 +107,8 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
       await renderOrganizationPanel({ refresh: true });
       return;
     }
-    form.reset();
+    // The form on screen now, which a repaint during the request may have replaced (form-keep.js).
+    resetLiveForm(form);
     state.organizationEditor = { open: false, type: "", row: null };
     if (["club", "team", "athlete", "user"].includes(type)) state.organization.addFormOpen = false;
     await loadAthletes();
