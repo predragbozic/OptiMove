@@ -244,6 +244,28 @@ The *Rukovodilac* accepted the alignment table of the "GPS Import Flow" proposal
 - **Guide step 4** is no longer *done* while a session still lists an athlete as not linked (after PR #408). It then points to the *Athletes not linked* group, not to a search.
 - **Tests:** `frontend/tests/gpexe-attention-u6a2.actions.test.mjs` (17 tests); the existing Imports suites follow the texts; the J20-C suite gains test 25, the Nezavisni revizor's INFO 2: leaving between two groups does not send the next one.
 
+### U6b — the setup stepper (the pull request that adds this section; frontend only, no route or migration)
+
+The *Rukovodilac*'s split of 2026-11-11: S1, S4 after the first search, the S6 frontend, S7, and S5 as a link. S2 (one "Connect and test"), S3 (team facts) and J18 (the drag board) are separate pull requests.
+
+- **S1, the order of the sketch:** *Connect GPEXE* → *Choose team* → *Variables* → *Athletes* → *Ready* (`frontend/gpexe-guide-steps.js`).
+  - One step is open: the first that is not done, or the one the person clicks. The others are one row each, a button of at least 44 px.
+  - While the variables review or its write is open, the rows are locked, and a click does not move the step.
+  - A coach sees the administrator's three steps as one row, *Connect, team and variables*.
+  - Connect and Choose team still send the administrator to Settings, until S2 and S3.
+- **Variables (S5):** *Use the OptiMove GPEXE set* is U4's write, unchanged. *Choose my own* opens Training Load → Data configuration → Mappings (J16) until the J18 board exists.
+- **S4 is not in this pull request.** Two athletes' values per variable exist on the client only for a variable already switched on. 7e's preview of a variable not yet on gives only an aggregate (OD3). The choice is with the *Rukovodilac*.
+- **Athletes (S6):**
+  - The first search is this step's first action (an administrator's *Find new sessions*); OptiMove sees the GPEXE athletes only after it.
+  - After the search, U3's suggested pairs are read once, when athletes wait to be linked. They are counted against the athletes still unlinked: *Confirm N matches* (it opens Link athletes, where *Review all* stages them) and "N athletes need your choice".
+  - Without loaded names, the step says who can load them: an identity administrator, or a coach the server allows (`viewer.identityLoad`, PR #494).
+  - No name or date of birth is shown in the stepper.
+- **Ready (S7):** a checklist.
+  - The lines: the account, the team, the variables, the athletes, "Import on/off for <team>", and the first import.
+  - The backup line comes only from the recorded dates an administrator reads (the import switch read, v56): recorded, stale, or none. It is never shown without that read.
+  - The step is done once a session has been imported, as U4's step 5 was.
+- **Tests:** `frontend/tests/gpexe-setup-stepper-u6b.actions.test.mjs` (7 tests); `gpexe-guide.actions.test.mjs` follows the new order.
+
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
 - As designed in `docs/ai/u2a-club-admin-pair-plan.md` (section 8 records what was built and the decisions): the PUT of a team's settings accepts the active admin of the team's club in that club's workspace; the service re-checks the user, role, club, team and the club's `verified` connection inside its transaction; a club admin writes a first pair only; a GPEXE team already paired anywhere is the neutral `409 pair_not_available` for a club admin; Connect / Test return the whole annotated list to a club admin; *Approve pair* on the Source connections screen (the GPEXE team's name is the main text, an unnamed team cannot be approved).
