@@ -427,6 +427,22 @@ a roster write also needs the owner's order naming the migration and the *Rukovo
 * **Not built.** The default exclusion set offered by the review of a *changed* candidate (5.1 says the stored set is the default); an unconfirmed subset approval keeps its set across a reopened review instead (the review is made again).
 * **Evidence.** `gpexe-subset-import-j20b.test.mjs` (backend, disposable: 16 tests), `gpexe-imports-leave-out-j20b.actions.test.mjs` (frontend, 8 tests), e2e scenario 10 (1280 and 390 px).
 
+### 9.2 6a, the short-recording flag, as built (frontend only; the pull request that adds this section)
+
+The owner's decision of 2026-11-11, relayed by the *Rukovodilac*. The threshold and the text are the *Rukovodilac*'s.
+
+- **When a row is flagged.** In the Session review, a row the import would write (*Importable* or *Participation only*) gets a yellow **Check** when the athlete's recorded time is below **75 %** of the longest recorded time in the session (`SHORT_SHARE`).
+  - The time is the mapped Duration (`athlete_session.total_time`) of the whole-session result.
+  - For an athlete not linked yet, it is the helper value the server read. That value counts for the longest and is shown, but such a row is never flagged.
+  - Without the Duration mapping there is no time, and so no flag.
+- **What the flagged row shows.**
+  - Its Duration cell reads "41 / 94 min".
+  - Its note says the time and the choice: keep the values, or tick Leave out (J20-B) and choose "Participated · no device data" (J20-C).
+  - A viewer who may not approve reads the sentence without a box.
+- **Where it appears.** A flagged row is shown with the rows that need a person (a "Check" chip, counted in *Needs a person*), never folded under the fine ones.
+- **A hint only.** Nothing is decided automatically: the import button, the approval and the athletes sent are unchanged. In a match, a substitution is normal.
+- **Tests:** `frontend/tests/gpexe-short-recording-6a.actions.test.mjs` (6 tests); the mutations of the threshold, the chip, the helper rule, the rows that can be flagged and the badge are each killed.
+
 ## 10. Not in J20
 
 Estimated values (5b); per-athlete undo (U5 Q5); editing a value; merging two tracks of one athlete (a GPEXE data matter); the club-connection

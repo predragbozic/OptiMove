@@ -25909,3 +25909,15 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 .gpexe-leave-note {
   margin: 0;
 }
+
+/* 6a: a short recording - a yellow "Check" beside the athlete and the time in bold ("41 / 94 min"). A hint, never a decision. */
+.gpexe-badge.is-check {
+  color: var(--om-warning, #8a5300);
+  background: var(--om-warning-soft, #fdf1dc);
+  border-color: color-mix(in srgb, var(--om-warning, #8a5300) 30%, transparent);
+}
+.gpexe-short-cell {
+  font-weight: 600;
+  color: var(--om-warning, #8a5300);
+  white-space: nowrap;
+}
