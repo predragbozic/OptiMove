@@ -1,4 +1,5 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
@@ -902,6 +903,7 @@ export function renderTrainingLoadAnalysisHtml() {
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
+      ${renderSimpleEditorHtml(a.simpleEditor)}
     </div>
   `;
 }

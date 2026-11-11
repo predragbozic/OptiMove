@@ -52,7 +52,7 @@ function requireWorkspaceType(dataWorkspaceType) {
 // The authorized activity id set for one date range + workspace +
 // (optional) athlete filter — mirrors the real, already-shipped
 // GET /api/training-activity list-query's own workspace scoping.
-async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }) {
+async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }, queryRunner) {
   requireWorkspaceType(dataWorkspaceType);
   const params = [dateFrom, dateTo];
   let scopeSql = "true";
@@ -72,15 +72,15 @@ async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScop
     params.push(effectiveAthleteIds);
     athleteSql = `exists (select 1 from training.activity_participants p where p.activity_id=a.id and p.athlete_id = any($${params.length}::uuid[]) and p.merge_status='canonical')`;
   }
-  const r = await query(
+  const r = await queryRunner(
     `select a.id from training.activities a where a.occurred_local_date between $1 and $2 and a.lifecycle_state <> 'superseded' and (${scopeSql}) and (${athleteSql})`,
     params,
   );
   return r.rows.map((row) => row.id);
 }
 
-async function resolveComponentOwningActivityId(componentId) {
-  const r = await query(`select activity_id from training.activity_components where id = $1`, [componentId]);
+async function resolveComponentOwningActivityId(componentId, queryRunner) {
+  const r = await queryRunner(`select activity_id from training.activity_components where id = $1`, [componentId]);
   return r.rows[0]?.activity_id ?? null;
 }
 
@@ -90,8 +90,8 @@ async function resolveComponentOwningActivityId(componentId) {
 // rows today) and every filter-context in this batch shares the SAME
 // result, fetched once by runDashboardBatchQuery and threaded through
 // every buildRangeContext call.
-async function fetchBuiltinSeriesCatalog() {
-  const r = await query(`select key, value_type, unit from training_load.dashboard_builtin_series`);
+async function fetchBuiltinSeriesCatalog(queryRunner) {
+  const r = await queryRunner(`select key, value_type, unit from training_load.dashboard_builtin_series`);
   return Object.fromEntries(r.rows.map((row) => [row.key, { valueType: row.value_type, unit: row.unit }]));
 }
 
@@ -99,9 +99,9 @@ async function fetchBuiltinSeriesCatalog() {
 // LATERAL-joined with every canonical fact training.canonical_activity_
 // results() would produce per activity. This is the single fetch that
 // replaces the design proof's own per-activity loop.
-async function fetchCanonicalFactsForActivities(activityIds) {
+async function fetchCanonicalFactsForActivities(activityIds, queryRunner) {
   if (!activityIds.length) return { factRows: [], activityDT: {} };
-  const r = await query(
+  const r = await queryRunner(
     `select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
             r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
      from training.activities a
@@ -118,10 +118,10 @@ async function fetchCanonicalFactsForActivities(activityIds) {
   return { factRows: r.rows, activityDT };
 }
 
-async function fetchOccasionContexts(occasionIds) {
+async function fetchOccasionContexts(occasionIds, queryRunner) {
   const uniq = [...new Set(occasionIds)];
   if (!uniq.length) return {};
-  const r = await query(
+  const r = await queryRunner(
     `select o.id as occasion_id, o.entry_method, e.source_connection_id, e.scope_level as event_scope_level, e.occurred_instant as event_instant
      from training_load.metric_measurement_occasions o
      join training_load.metric_event_participants ep on ep.id = o.event_participant_id
@@ -140,19 +140,19 @@ async function fetchOccasionContexts(occasionIds) {
   }]));
 }
 
-async function fetchVersionInfo(versionIds) {
+async function fetchVersionInfo(versionIds, queryRunner) {
   const uniq = [...new Set(versionIds)];
   if (!uniq.length) return {};
-  const r = await query(`select id, daily_aggregation_method, value_type from training_load.metric_definition_versions where id = any($1::uuid[])`, [uniq]);
+  const r = await queryRunner(`select id, daily_aggregation_method, value_type from training_load.metric_definition_versions where id = any($1::uuid[])`, [uniq]);
   return Object.fromEntries(r.rows.map((row) => [row.id, { dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type }]));
 }
 
 // One query for EVERY session_count/last_session_date built-in request in
 // this batch, across the WHOLE authorized activity set — never per
 // activity.
-async function fetchActivityParticipantRows(activityIds) {
+async function fetchActivityParticipantRows(activityIds, queryRunner) {
   if (!activityIds.length) return [];
-  const r = await query(
+  const r = await queryRunner(
     `select p.athlete_id, a.id as activity_id, a.occurred_local_date::text as local_date
      from training.activity_participants p join training.activities a on a.id = p.activity_id
      where a.id = any($1::uuid[]) and a.lifecycle_state <> 'superseded' and p.merge_status = 'canonical'`,
@@ -165,7 +165,7 @@ async function fetchActivityParticipantRows(activityIds) {
 // day-scope fetch in this batch — never one query per widget. `metricIds`
 // is deduplicated by the caller (buildRangeContext) before this is
 // called, and the whole set is fetched together via `= any($...)`.
-async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }) {
+async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, queryRunner) {
   if (!metricIds.length) return [];
   requireWorkspaceType(dataWorkspaceType);
   const params = [metricIds, dateFrom, dateTo];
@@ -184,7 +184,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
     params.push(dataWorkspaceUserId);
     scopeSql = `ev.owner_scope='user' and ev.owner_user_id=$${params.length}`;
   }
-  const r = await query(
+  const r = await queryRunner(
     `select v.metric_definition_id, p.athlete_id, ev.occurred_date::text as local_date, ev.occurred_instant as event_instant,
             ev.source_connection_id, o.id as occasion_id, o.entry_method,
             v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text, v.unit_at_capture,
@@ -205,7 +205,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
        ))`,
     params,
   );
-  const versionInfo = await fetchVersionInfo(r.rows.map((row) => row.metric_definition_version_id));
+  const versionInfo = await fetchVersionInfo(r.rows.map((row) => row.metric_definition_version_id), queryRunner);
   return r.rows.map((row) => {
     const ver = versionInfo[row.metric_definition_version_id] || {};
     return {
@@ -231,15 +231,15 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
 // what makes the batch endpoint genuinely set-based: N widgets against
 // the SAME range never cost more DB round trips than 1 widget would.
 // ------------------------------------------------------------
-async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, dayScopeMetricIds, builtinCatalog) {
+async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, dayScopeMetricIds, builtinCatalog, queryRunner) {
   const workspaceArgs = { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds };
-  let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs);
+  let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs, queryRunner);
 
   // activityId/componentId ALWAYS intersect with the already-authorized
   // set — never trusted outright, never widening it.
   let resolvedComponentId = null;
   if (componentId) {
-    const owningActivityId = await resolveComponentOwningActivityId(componentId);
+    const owningActivityId = await resolveComponentOwningActivityId(componentId, queryRunner);
     if (owningActivityId && authorizedActivityIds.includes(owningActivityId) && (!activityId || owningActivityId === activityId)) {
       authorizedActivityIds = [owningActivityId];
       resolvedComponentId = componentId;
@@ -250,7 +250,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     authorizedActivityIds = authorizedActivityIds.includes(activityId) ? [activityId] : [];
   }
 
-  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds);
+  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds, queryRunner);
 
   // Build the segment -> canonical component map from the SAME fact rows
   // already fetched (no second round trip) — component_metric_segment_
@@ -263,8 +263,8 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
 
   const metricValueRows = factRows.filter((r) => r.fact_kind === "metric_value");
   const rpeRows = factRows.filter((r) => r.fact_kind === "rpe");
-  const occContext = await fetchOccasionContexts(metricValueRows.map((r) => r.detail.occasionId));
-  const versionInfo = await fetchVersionInfo(metricValueRows.map((r) => r.detail.metricDefinitionVersionId));
+  const occContext = await fetchOccasionContexts(metricValueRows.map((r) => r.detail.occasionId), queryRunner);
+  const versionInfo = await fetchVersionInfo(metricValueRows.map((r) => r.detail.metricDefinitionVersionId), queryRunner);
 
   // Every real Metrics-Core metric_value fact, canonicalized exactly like
   // the design proof's own queryMetricSeries() — grain/component identity
@@ -309,7 +309,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     if (d.durationMinutes != null) { const meta = builtinCatalog.duration_minutes || {}; rpeFacts.duration_minutes.push({ athleteId: row.athlete_id, value: d.durationMinutes, unit: meta.unit ?? null, valueType: meta.valueType ?? "numeric", ...common }); }
   }
 
-  const participantRows = await fetchActivityParticipantRows(authorizedActivityIds);
+  const participantRows = await fetchActivityParticipantRows(authorizedActivityIds, queryRunner);
 
   let dayLevelFactsByDefinition = new Map();
   if (dayScopeMetricIds?.length) {
@@ -317,7 +317,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     // returns ZERO rows, structurally — the day-level fetch is never even
     // attempted when either filter narrowed the set.
     if (!activityId && !componentId) {
-      const rows = await fetchDayLevelFactsForMetrics(dayScopeMetricIds, workspaceArgs);
+      const rows = await fetchDayLevelFactsForMetrics(dayScopeMetricIds, workspaceArgs, queryRunner);
       for (const f of rows) {
         if (!dayLevelFactsByDefinition.has(f.metricDefinitionId)) dayLevelFactsByDefinition.set(f.metricDefinitionId, []);
         dayLevelFactsByDefinition.get(f.metricDefinitionId).push(f);
@@ -651,7 +651,7 @@ function mergeFilters(...layers) {
 // the number of widgets), while two widgets with genuinely different
 // local_filter_override values never leak each other's rows.
 // ------------------------------------------------------------
-export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs) {
+export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query } = {}) {
   const rangeCache = new Map();
 
   function athleteIdsKey(athleteIds) {
@@ -674,7 +674,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
     }
   }
 
-  const builtinCatalog = specs.some((s) => s.builtInSeriesKey) ? await fetchBuiltinSeriesCatalog() : {};
+  const builtinCatalog = specs.some((s) => s.builtInSeriesKey) ? await fetchBuiltinSeriesCatalog(queryRunner) : {};
 
   async function contextFor(rDateFrom, rDateTo, athleteIds, activityId, componentId) {
     const fk = filterKeyFor(athleteIds, activityId, componentId);
@@ -685,6 +685,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
         { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId },
         dayScopeMetricIds,
         builtinCatalog,
+        queryRunner,
       ));
     }
     return rangeCache.get(cacheKey);
@@ -753,7 +754,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
 // dashboard" cost a small, range-and-filter-bounded number of queries
 // regardless of how many widgets/series it holds.
 // ------------------------------------------------------------
-export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter } = {}) {
+export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter, queryRunner = query } = {}) {
   const specs = [];
   const placeholders = [];
   for (const widget of widgetsWithSeries) {
@@ -787,7 +788,7 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
       });
     }
   }
-  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, dateFrom, dateTo }, specs);
+  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, dateFrom, dateTo }, specs, { queryRunner });
   const byWidget = new Map();
   for (const item of [...results, ...placeholders]) {
     if (!byWidget.has(item.widgetId)) byWidget.set(item.widgetId, []);
