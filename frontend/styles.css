@@ -25482,3 +25482,215 @@ body:not(.athlete-mode):not(.login-mode) .app-health-chip {
     background: Highlight;
   }
 }
+
+/* ==========================================================================
+   Design L1: the sign-in screens (sign in, password reset, invite, join,
+   email verification and change, check-in). Each card carries the app's own
+   logo, its one main action is the accent button, and every field, button and
+   text link is 44 px. Presentation only: no text, route or form changes.
+   ========================================================================== */
+body.login-mode .login-form::before {
+  content: "";
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  background: url("./brand-logo.png") center / contain no-repeat;
+}
+
+body.login-mode .login-form input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: var(--om-tap-target);
+}
+
+body.login-mode .login-form .plain-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--om-tap-target);
+  text-decoration: none;
+}
+
+/* The card's one main action (Sign in, Send reset link, Set new password,
+   Back to sign in, a nested form's Send new confirmation email...); a compact
+   action (join's Resend) stays secondary. */
+body.login-mode .login-form > .plain-button:not(.compact-button),
+body.login-mode .login-form > form > .plain-button:not(.compact-button) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The card's grid gap spaces its lines; a paragraph's own margin would double it. */
+body.login-mode .login-form > p {
+  margin: 0;
+}
+
+body.login-mode .login-form .muted > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--om-tap-target);
+  color: var(--accent);
+  font-weight: 700;
+}
+/* End of design L1. */
+
+/* ==========================================================================
+   Design C1: the coach directory's Create / Edit my profile is 44 px.
+   ========================================================================== */
+body:not(.login-mode) .coach-directory-head .plain-button {
+  min-height: var(--om-tap-target);
+}
+/* End of design C1. */
+
+/* ==========================================================================
+   Design T1: the Tests week pager and Schedule toolbar (coach). The arrows
+   sit next to the week and Today instead of at the two far edges, every
+   pager and toolbar control is 44 px, and "Show cancelled" is a switch in a
+   44 px row instead of a bare 42 px box. An athlete's Tests keep their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-nav {
+  justify-content: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-range {
+  flex: 0 1 auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow,
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-today-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-toolbar .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .om-btn {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle {
+  min-height: var(--om-tap-target);
+  gap: var(--om-space-2);
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* The native checkbox (its handler reads .checked) drawn as a switch. */
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: left 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+    transition: none;
+  }
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked::before {
+  left: 18px;
+  background: #fff;
+}
+
+/* End of design T1. */
+
+/* ==========================================================================
+   Design T2: the Tests session, schedule and result screens (coach). Every
+   button and text action in a detail is 44 px, a back button is as wide as
+   its words (it stretched across the page), the reminder rows are 44 px with
+   a 20 px checkbox, and Today sits after the week's arrows. On a narrow
+   phone the four section tabs fit on one row. An athlete keeps their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-detail > .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-detail > .plain-button[data-action="tests-close-schedule"] {
+  justify-self: start;
+  width: auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The round Cancel / Confirm of the Tests pickers (recipients, dates) stay round at 44 x 44. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-cancel,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .builder-athlete-picker-continue {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+}
+
+/* A form's close button is 44 x 44, and its heading leaves room for it. */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .wellness-back {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-form > h3 {
+  padding-right: 52px;
+}
+
+/* Every athlete a reminder goes to is in view: no capped inner scroll (it showed 5 of 11). */
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-list {
+  max-height: none;
+  overflow: visible;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-link-box > .plain-button {
+  justify-self: start;
+  width: auto;
+}
+
+@media (max-width: 380px) {
+  body:not(.athlete-mode):not(.login-mode) .tests-section-tabs.om-tabs .om-tab {
+    padding-inline: var(--om-space-2);
+  }
+}
+/* End of design T2. */
