@@ -240,10 +240,12 @@ test("4./5./6. Review shows the sessions (no hash, id or code in the open), Back
   await act("training-load-gpexe-batch-review");
   let d = dialog();
   assert.match(d, /aria-label="Import 2 sessions"/);
-  assert.match(d, /<strong>Import these sessions exactly as found in the last search\.<\/strong>/);
+  // U6a-2 (D7): the confirmation is one question.
+  assert.match(d, /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
+  assert.match(d, /exactly as found in the last search/);
   assert.match(d, /<strong>FULL TRAINING 1<\/strong> <span class="muted">01\.09\.2026 /);
   assert.match(d, /<strong>FULL TRAINING 3<\/strong>/);
-  assert.match(d, /one by one and the result is shown for each/);
+  assert.match(d, /one that can.t be imported does not stop the others/);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!open.includes("cand-1") && !open.includes("cand-3"), "ids only under Technical details");
   assert.ok(!html().includes(hashOf(1)) && !html().includes(hashOf(3)), "a hash is never in the page");
@@ -372,7 +374,7 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   // The result stays until Done; the row of 6 carries the mark behind it.
   await act("training-load-gpexe-batch-done");
   assert.ok(!/imports-batch"/.test(html()));
-  assert.match(html(), /<strong>FULL TRAINING 6<\/strong>[\s\S]*?Result not confirmed/);
+  assert.match(html(), /<strong>[^<]*FULL TRAINING 6<\/strong>[\s\S]*?Result not confirmed/);
   assert.ok(!/removed from the selection/.test(html()), "nothing to drop: the refused ones left with the answer, the not-tried one is still Ready with the same hash");
   assert.match(html(), /<strong>1 selected<\/strong>/);
 });
@@ -458,7 +460,7 @@ test("10. a lost answer never reads as failed: every session is 'not confirmed',
   assert.equal(importPosts().length, 1);
   // The uncertain state survives closing the panel: the row keeps its mark.
   await act("training-load-gpexe-batch-done");
-  assert.match(html(), /<strong>FULL TRAINING 2<\/strong>[\s\S]*?Result not confirmed/);
+  assert.match(html(), /<strong>[^<]*FULL TRAINING 2<\/strong>[\s\S]*?Result not confirmed/);
   assert.ok(gx().uncertain["cand-2"]);
   // Three checks without confirmation: the coach is sent to a platform admin.
   gx().batch.unknown = { candidateIds: ["cand-2"], error: { status: 0, code: "Failed to fetch" }, checks: 3 };
@@ -510,9 +512,10 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
   const page = html();
-  assert.match(page, /Needs attention \(1\)[\s\S]*?<strong>FULL TRAINING 1<\/strong>[\s\S]*?Find new sessions again \(with dates that include 01\.09\.2026\) - athlete links changed after this review was made\./);
+  assert.match(page, /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.match(page, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 01\.09\.2026\): athlete links changed after this review was made\.[^<]* 1 session is ready to import now\./, "the next step also names what can be imported now");
+  // U6a-2: the group says it; the state bar's "Import 1 ready" names what can be imported now.
+  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 1 ready</, "the main button names what can be imported now");
   assert.ok(!/imports-bucket-note/.test(page), "no lock note on the Ready bucket");
   assert.deepEqual(checkboxes(page).map((b) => b.id), ["cand-2"], "the fresh session has its checkbox, the stale one none");
   assert.deepEqual(gx().batch.selected, {}, "the stale choice was dropped");
@@ -706,7 +709,9 @@ test("14./15. a marked day filters the list locally (no request, the search date
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 1 session found, showing this day" aria-pressed="true"/);
   assert.match(page, /Showing the sessions of 21\.09\.2026 only \(1 of 3\)\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.ok(!/Needs attention \(/.test(page), "the attention row of another day is hidden");
+  // U6a-2: the sessions that need a person stay grouped over every date (like the counts in the state bar), and say so.
+  assert.match(page, /<h3>Needs you \(1\)<\/h3><\/div>\s*<p class="muted">These cover every date, not only the day you picked\.<\/p>/);
+  assert.match(page, /data-candidate-id="cand-7"/);
   assert.match(page, /data-candidate-id="cand-21"/);
   assert.ok(!/data-candidate-id="cand-14"/.test(page));
   assert.match(page, /data-gpexe-field="from" value=""/, "the search dates stay empty");
@@ -715,7 +720,7 @@ test("14./15. a marked day filters the list locally (no request, the search date
   page = html();
   assert.equal(gx().calendar.day, "");
   assert.match(page, /<h3>Ready to import \(2\)<\/h3>/);
-  assert.match(page, /Needs attention \(1\)/);
+  assert.match(page, /Needs you \(1\)/);
   assert.ok(!/Showing the sessions of/.test(page));
   assert.equal(fetchCalls.length, calls);
   // The same day again also clears the filter.
@@ -765,7 +770,7 @@ test("17. a session close to midnight is marked on the same day its row shows (t
   const page = html();
   assert.match(page, new RegExp(`data-day="${localDay}" aria-label="${d.getDate()} September, 1 session found`));
   // The row shows the same day.
-  assert.match(page, new RegExp(`<span class="muted">${two(d.getDate())}\\.09\\.2026 ${two(d.getHours())}:30</span>`));
+  assert.match(page, new RegExp(`<strong>[A-Z][a-z]{2} ${two(d.getDate())}\\.09\\. · [^<]*</strong>\\s*<span class="muted">${two(d.getHours())}:30</span>`));
   const utcDay = iso.slice(0, 10);
   if (utcDay !== localDay) assert.ok(!page.includes(`data-day="${utcDay}"`), "the UTC day is not marked");
   // The filter uses the same key.
@@ -879,8 +884,8 @@ test("10f. a 'nothing new' session reviewed before a link change is a Needs-atte
   gx().linkCheckStartedAt = "2026-09-25T09:00:00Z"; // only cand-2 was seen by a check after the link change
   const page = html();
   const attention = page.slice(page.indexOf('aria-label="Needs attention"'), page.indexOf('aria-label="Ready to import"'));
-  assert.match(attention, /<h3>Needs attention \(1\)<\/h3>/);
-  assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Find new sessions again \(with dates that include 01\.09\.2026\) - athlete links changed after this review was made\./, "the stale 'nothing new' session is an attention item with its step");
+  assert.match(attention, /<h3>Needs you \(1\)<\/h3>/);
+  assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale 'nothing new' session is an attention item with its step");
   assert.ok(!attention.includes('data-candidate-id="cand-2"'));
   const imported = page.slice(page.indexOf("<summary>Imported ("));
   assert.match(imported, /^<summary>Imported \(1\)<\/summary>/, "only the fresh one is up to date");

@@ -53,7 +53,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       try {
         coach.page.on("dialog", (d) => d.accept());
         await findThroughUi(coach.page);
-        await openSession(coach.page, "05.11.2026");
+        await openSession(coach.page, "05.11.");
         await linkFromRow(coach.page, world.ids.athleteIds[3]);
         const importBtn = coach.page.locator('[data-action="training-load-gpexe-approve"]').first();
         await importBtn.waitFor({ timeout: 20_000 });
@@ -84,7 +84,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const coach = await openAs(browser, world, "team_coach", width);
       try {
         await findThroughUi(coach.page);
-        await openSession(coach.page, "05.11.2026");
+        await openSession(coach.page, "05.11.");
         await linkFromRow(coach.page, world.ids.athleteIds[3]);
         assert.equal(await coach.page.locator('[data-action="training-load-gpexe-approve"]').count(), 0, "no Import button without the right");
         assert.match((await coach.page.locator(".gpexe-detail").innerText()).replace(/\s+/g, " "), /Approving needs a platform admin or an explicit approver grant/);

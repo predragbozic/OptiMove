@@ -16,6 +16,7 @@
 import { state } from "./state.js";
 import { choiceValue, chosenStateCount, statesLockedOf, statesSummary } from "./gpexe-import-states-data.js";
 import { renderGuideHtml } from "./gpexe-guide-view.js";
+import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
@@ -349,6 +350,20 @@ function resultLabel(result) {
 
 // The session's name without a raw timestamp at its end; the date and time
 // are shown next to it anyway.
+// U6a-2 (D5): "Tue 03.11." - the day a session is listed under, in the viewer's time.
+function sessionDayText(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${WEEKDAY_NAMES[(d.getDay() + 6) % 7]} ${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.`;
+}
+function sessionTimeText(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function sessionTitle(c) {
   // No id outside Technical details: a label-less session is just "GPEXE session" (its date is shown beside it).
   const label = c.label || "GPEXE session";
@@ -480,6 +495,14 @@ function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   `;
 }
 
+// U6a-2 (D4): "Ready: N" and "Needs you: N", from the whole list (a day picked in the calendar does not change them).
+function renderCountPillsHtml(gx) {
+  const list = gx.candidates || [];
+  const ready = list.filter((c) => inboxBucket(c, gx) === "ready").length;
+  const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
+  return `<span class="imports-pill is-ready">Ready: ${ready}</span>${needs ? `<span class="imports-pill is-needs">Needs you: ${needs}</span>` : ""}`;
+}
+
 // The source card: what the team reads from, when sessions were last found,
 // and the one button that finds them. Dates are there for the coach who
 // needs them, folded away for everyone else. Every id and code of the
@@ -504,13 +527,15 @@ function renderSourceCardHtml(source, gx, status) {
           <strong>${escapeHtml(source.name)}</strong>
           <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
           ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
+          ${connected && gx.candidates ? renderCountPillsHtml(gx) : ""}
           ${connected ? `<span class="muted imports-lastsearch">${check?.finishedAt || check?.startedAt ? `Last search ${escapeHtml(fmtDateTime(check.finishedAt || check.startedAt))}` : "No search yet"}</span>` : ""}
         </div>
         ${connected ? `<div class="imports-actions">
           ${daily.n ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button>` : ""}
-          <button type="button" class="${daily.n ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
+          <button type="button" class="${daily.n || groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
         </div>` : ""}
       </div>
+      ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
       ${connected ? renderDailyStripHtml(gx, daily.ready, status) : ""}
       ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       ${connected ? `
@@ -521,7 +546,7 @@ function renderSourceCardHtml(source, gx, status) {
             <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
           </div>
         </details>
-        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."} Finding sessions does not import anything.</p>
+        <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."}</p>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
@@ -567,7 +592,8 @@ function sessionsNeedingDates(list, gx) {
   return list.filter((c) => {
     const bucket = inboxBucket(c, gx);
     if (bucket !== "ready" && bucket !== "attention") return false;
-    return !c.snapshot?.available || reviewMadeBeforeLinkChange(c, gx) || notConfirmedForImport(c);
+    // U6a-2: a review made before a link change is updated in the review itself (J20-A1), not by a new search.
+    return !c.snapshot?.available || notConfirmedForImport(c);
   });
 }
 
@@ -630,7 +656,7 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
     // J19 U1: the total is not known before the end, so the bar is indeterminate;
     // what is known is shown beside it: the sessions read so far and the time.
     const stopped = Boolean(gx?.pollStopped);
-    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>${check.startedAt && !stopped ? `<p class="muted gpexe-elapsed" aria-hidden="true">${escapeHtml(elapsedText(check.startedAt))}</p>` : ""}<div class="gpexe-progress-bar${stopped ? " is-stopped" : ""}" role="progressbar" aria-label="Finding sessions" aria-busy="${stopped ? "false" : "true"}"><span></span></div>${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}${gx?.pollStopped ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-refresh-status">Refresh status</button>` : ""}</div>`;
+    return `<div class="gpexe-check-progress"><p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>${check.startedAt && !stopped ? `<p class="muted gpexe-elapsed" aria-hidden="true">${escapeHtml(elapsedText(check.startedAt))}</p>` : ""}<div class="gpexe-progress-bar${stopped ? " is-stopped" : ""}" role="progressbar" aria-label="Finding sessions" aria-busy="${stopped ? "false" : "true"}"><span></span></div>${stopped ? "" : `<p class="muted gpexe-leave-note">You can leave this page. The search goes on in OptiMove, and the sessions are here when you come back.</p>`}${gx?.pollNote ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.pollNote)}</p>` : ""}${gx?.pollStopped ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-refresh-status">Refresh status</button>` : ""}</div>`;
   }
   // A finished search is rendered by renderFoundHtml.
   // A failed search through the team's source connection is not "try again":
@@ -656,8 +682,8 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
 function reasonStep(r) {
   const n = r.count || 0;
   switch (r.code) {
-    case "no_linked_athlete": return "No linked athlete in this session yet - link the athletes under Link athletes (below), then find new sessions.";
-    case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - link them under Link athletes (below), then find new sessions.`;
+    case "no_linked_athlete": return "No linked athlete in this session yet - open it and link the athletes from their rows.";
+    case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - open it and link them from their rows.`;
     case "athletes_not_in_team": return `${plural(n, "linked athlete is", "linked athletes are")} no longer in the team - open it to see who.`;
     case "athletes_need_manual_review": return `${plural(n, "athlete needs", "athletes need")} manual review - open it to see who and why.`;
     case "athletes_marked_invalid_by_source": return `${plural(n, "athlete's statistics are", "athletes' statistics are")} marked not valid in the source data - open it to see who.`;
@@ -712,13 +738,11 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   const stale = list.filter((c) => (inboxBucket(c, gx) === "ready" || inboxBucket(c, gx) === "attention") && reviewMadeBeforeLinkChange(c, gx));
   const unlinkedAthletes = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
   const reviewOnly = reviewOnlyText(status);
-  const readyText = reviewOnly ? plural(ready.length, "session is", "sessions are") + " ready for review" : plural(ready.length, "session is", "sessions are") + " ready to import";
   let text;
   if (!status.settings) text = "A platform admin needs to connect this team to a data source (Settings > Data sources).";
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
-  else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after ${stale.length === 1 ? "this review was" : "these reviews were"} made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}${ready.length ? ` ${readyText.replace(/^\w/, (ch) => ch.toUpperCase())} now.` : ""}`;
-  // U6a: what the state bar, the Link athletes button and the rows below already say is not repeated here.
-  else if (unlinkedAthletes || attention) text = "";
+  // U6a / U6a-2: what the state bar and the attention groups below already say is not repeated here.
+  else if (stale.length || unlinkedAthletes || attention) text = "";
   // The review-only reason is said once, under the main button (renderDailyStripHtml).
   else if (ready.length) text = "";
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
@@ -735,7 +759,7 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
   if (!c.snapshot?.available) return `Needs a fresh search - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""}.`;
   if (c.status === "blocked") return c.blockedCode ? blockedCoachText(c).step : "Open it to see what is in the way.";
   if (notConfirmedForImport(c)) return notConfirmedStep(c);
-  if (reviewMadeBeforeLinkChange(c, gx)) return `${findAgainText([c])} - athlete links changed after this review was made.`;
+  if (reviewMadeBeforeLinkChange(c, gx)) return "Athlete links changed after this review was made - open it and update the review.";
   // The first reason is the coach's own step (linking comes first); the
   // row's facts name every reason.
   const [first] = rowReasons(c);
@@ -748,7 +772,9 @@ function renderBucketsHtml(gx, status) {
   const list = calendarFiltered(all, gx);
   const of = (name) => list.filter((c) => inboxBucket(c, gx) === name);
   const ready = of("ready");
-  const attention = of("attention");
+  // U6a-2: the groups cover the whole list, like the counts in the state bar; the day filter narrows the other buckets only.
+  const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
+  const groups = attentionGroups(allAttention, gx);
   const out = of("out");
   const imported = of("imported");
   const replaced = list.filter((c) => isHiddenVersion(c, gx));
@@ -757,12 +783,13 @@ function renderBucketsHtml(gx, status) {
   // found versions" - while the versions are folded away the server lists no
   // superseded row at all, so the default view cannot count or name it (a trace
   // there needs a server-side count; recorded under Separate tasks).
-  const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
+  const rows = (items, kind, group = "") => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable, group)).join("")}</ul>`;
   return `
-    ${attention.length ? `
+    ${allAttention.length ? `
       <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
-        <div class="gpexe-panel-head"><h3>Needs attention (${attention.length})</h3></div>
-        ${rows(attention, "attention")}
+        <div class="gpexe-panel-head"><h3>Needs you (${allAttention.length})</h3></div>
+        ${day ? `<p class="muted">These cover every date, not only the day you picked.</p>` : ""}
+        ${groups.map((grp, i) => renderAttentionGroupHtml(grp, gx, status, rows, i === 0 && groupLeads(gx, status))).join("")}
       </section>
     ` : ""}
     <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
@@ -794,11 +821,48 @@ function renderBucketsHtml(gx, status) {
   `;
 }
 
+// U6a-2: one group of sessions that need a person - the kind of problem, one sentence, how many, and ONE button.
+// The sessions are folded inside; a group of one shows its session. The button opens the group's first session, and
+// the review steps through the group (J20 section 8); "Needs a new search" finds new sessions for the dates it names,
+// and sends exactly those dates.
+function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
+  const cls = lead ? "primary-button" : "plain-button";
+  let button;
+  if (grp.key === "fresh") {
+    const dated = datesNeededFor(gx.candidates || [], gx);
+    const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
+    const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
+    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
+  } else {
+    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
+  }
+  const sessions = grp.count > 1
+    ? `<details class="imports-attn-sessions"><summary>Show the ${escapeHtml(plural(grp.count, "session", "sessions"))}</summary>${rows(grp.items, "attention", grp.key)}</details>`
+    : rows(grp.items, "attention", grp.key);
+  return `
+    <div class="imports-attn-group" data-attention-group="${escapeAttr(grp.key)}">
+      <div class="imports-attn-head"><h4>${escapeHtml(grp.title)}</h4><span class="imports-attn-count">${escapeHtml(plural(grp.count, "session", "sessions"))}</span></div>
+      <p>${escapeHtml(grp.sentence)}</p>
+      <div class="imports-attn-actions">${button}</div>
+      ${sessions}
+    </div>`;
+}
+
+// U6a-2: with nothing ready to import, the first group's button is the screen's one main action when it is a step the
+// person can take now (check a result, link athletes, update a review); a new search would not fix those. Otherwise the
+// state bar's button stays the main one.
+const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
+function groupLeads(gx, status) {
+  if (dailyImportState(gx, status).n) return false;
+  const first = attentionGroups((gx.candidates || []).filter((c) => inboxBucket(c, gx) === "attention"), gx)[0];
+  return Boolean(first && LEADING_GROUPS.has(first.key));
+}
+
 // One line per session: what it is, when, and - only where the coach has to
 // do something - the one step. No ids, no hashes, no internal statuses. A
 // Ready row that can go into a batch gets a checkbox beside the row (the
 // row itself still opens the review); choosing only stages it.
-function renderSessionRowHtml(c, status, kind, pick = false) {
+function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   const counts = c.counts || {};
   const facts = [];
   if (kind === "ready" || kind === "attention") {
@@ -830,10 +894,10 @@ function renderSessionRowHtml(c, status, kind, pick = false) {
   return `
     <li class="${box ? "imports-pick-row" : ""}">
       ${box}
-      <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}">
+      <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
-          <strong>${escapeHtml(sessionTitle(c))}</strong>
-          <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
+          <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), sessionTitle(c)].filter(Boolean).join(" · "))}</strong>
+          <span class="muted">${escapeHtml(sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt))}</span>
         </span>
         ${badge}
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
@@ -1041,16 +1105,20 @@ function renderBatchProgressHtml(b) {
 // The confirmation: every chosen session by name and time, what happens,
 // and the one button. No id, hash or code in the open; the ids only under
 // Technical details, the hashes nowhere.
+function batchTeamName(gx) {
+  const team = gpexeTeamOptions().find((t) => String(t.id) === String(gx.teamId));
+  return team?.name || "";
+}
+
 function renderBatchReviewHtml(gx, items) {
   const b = gx.batch;
   const busy = b.sending ? "disabled" : "";
   return `
-    <p><strong>Import these sessions exactly as found in the last search.</strong></p>
+    <p><strong>Import ${escapeHtml(plural(items.length, "session", "sessions"))}${batchTeamName(gx) ? ` into ${escapeHtml(batchTeamName(gx))}` : ""}? Their values appear in Training Load right away.</strong></p>
     <ul class="imports-batch-list">
       ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
-    <p class="muted">The sessions are imported one by one and the result is shown for each. A session that can't be imported does not stop the others - the batch is not all-or-nothing.</p>
-    <p class="muted">Athletes are imported under the names shown in each session's review. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    <p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
     ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
     ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")]])}
     <div class="gpexe-link-actions imports-batch-actions">
@@ -1108,16 +1176,19 @@ function renderBatchResultsHtml(gx) {
   const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>${escapeHtml(batchStoppedText(b.error))}</strong></p>${errorTech(b.error)}</div>` : "";
   const still = b.sending ? 0 : batchSelection(gx).length;
   return `
-    ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
+    ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary)}.</p>` : ""}
     ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
-    ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
+    ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<p>You can see them in Training Load → Activities. They are also listed under Imported below.</p>` : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}
     <div class="gpexe-link-actions imports-batch-actions">
+      ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" data-section="today">Open Activities</button>` : ""}
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-done" ${b.sending ? "disabled" : ""}>Done</button>
     </div>
   `;
 }
+
+const onlyImported = (s) => Boolean(s?.imported) && !s.alreadyImported && !s.refused && !s.unknown && !s.notAttempted;
 
 // ---------------------------------------------------------------------------
 // The local sessions calendar (Imports phase 4b)
@@ -1646,6 +1717,22 @@ function renderLastLinkHtml(gx) {
 // Candidate detail
 // ---------------------------------------------------------------------------
 
+// U6a-2 (J20 section 8): a review opened from an attention group says where it is in the group and offers the next
+// session of the group as it was when it was opened (a link may move the others to "Review out of date"). Off while
+// something of this review must still be seen. Nothing for a group of one, or outside a group.
+function renderGroupNavHtml(gx, detail) {
+  const ids = Array.isArray(detail?.groupIds) ? detail.groupIds : [];
+  const at = ids.indexOf(detail?.id);
+  const title = ATTENTION_TEXT[detail?.group]?.title || "";
+  if (!title || at < 0 || ids.length < 2) return "";
+  const next = nextInGroup(detail, gx.candidates || [], gx);
+  const busy = reviewMustStay(gx, detail);
+  // Back to Imports is the dialog's Close: it waits for exactly what Close waits for.
+  const closeBusy = detail.approving || detail.verifying || undoBusy(gx);
+  if (!next) return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`This is the last session in "${title}".`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-close" ${closeBusy ? "disabled" : ""}>Back to Imports</button></div>`;
+  return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`Session ${at + 1} of ${ids.length} in "${title}"`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-group-next" ${busy ? "disabled" : ""}>Next session</button></div>`;
+}
+
 function renderCandidateDetailHtml(gx, status) {
   const detail = gx.detail;
   const c = detail.candidate;
@@ -1661,6 +1748,7 @@ function renderCandidateDetailHtml(gx, status) {
           <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="training-load-gpexe-close" aria-label="Close" ${busy}>&times;</button>
         </div>
         <div class="gpexe-detail-body">
+          ${renderGroupNavHtml(gx, detail)}
           ${gx.notice ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
           ${renderLastLinkHtml(gx)}
           ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
@@ -1758,6 +1846,11 @@ function setupBlockCode(c) {
 
 function blockedCoachText(c) {
   const code = c.blockedCode;
+  // U6a-2 (D8): GPS units of one session report different time zones (mixed_timezones). The code stays in an
+  // administrator's Technical details.
+  if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
+    return { reason: "GPEXE reports this session's GPS devices in more than one time zone, so OptiMove can't tell when it took place.", step: "Nothing to do for now. It is not imported until this is settled; your administrator can see the details." };
+  }
   const precise = setupBlockCode(c);
   if (precise) {
     const own = c.preview?.blocked?.code === precise ? c.preview.blocked.message : null;
@@ -2497,7 +2590,7 @@ function renderApproveHtml(c, detail, status) {
   // check; after a link change it must be made again before approving.
   if (reviewMadeBeforeLinkChange(c, gx)) {
     const day = c.sessionStartedAt ? formatDate(c.sessionStartedAt) : "";
-    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> ${detail.updating ? "Updating the review..." : `Update the review${detail.updateError ? " again" : ""}, or close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.`}${detail.updating ? "" : ` <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-review-update">Update the review</button>`}</p>`;
+    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> ${detail.updating ? "Updating the review..." : detail.updateError ? `Update the review again, or close it and find new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.` : "Approving waits until the review is updated."}${detail.updating ? "" : ` <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-review-update">Update the review</button>`}</p>`;
   }
   const viewer = status?.viewer || {};
   const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");

@@ -204,7 +204,7 @@ test("3. a session with an open reason is never 'Up to date' and never 'Nothing 
   assert.doesNotMatch(review, /Up to date</);
   assert.doesNotMatch(review, /Nothing new to import/);
   assert.match(review, /gpexe-badge is-blocked">Needs attention</);
-  assert.match(review, /No linked athlete in this session yet - link the athletes under Link athletes/);
+  assert.match(review, /No linked athlete in this session yet - open it and link the athletes from their rows/);
   assert.doesNotMatch(review, /training-load-gpexe-approve"/);
 });
 

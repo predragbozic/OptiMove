@@ -165,7 +165,7 @@ test("1. Ready to import: a pending session the last successful search did not c
   const page = html();
   assert.match(readySection(page), /Ready to import \(1\)/);
   assert.ok(readySection(page).includes('data-candidate-id="cand-1"') && !readySection(page).includes('data-candidate-id="cand-nc"'), "the unconfirmed session is not in Ready");
-  assert.match(attentionSection(page), /Needs attention \(1\)/);
+  assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.ok(attentionSection(page).includes('data-candidate-id="cand-nc"'));
   assert.match(attentionSection(page), COACH_STEP("06.10.2026"), "the row names the action and the dates; its badge says the status");
   assert.doesNotMatch(attentionSection(page), /Not confirmed for import yet\./, "the row does not repeat the badge");
@@ -187,7 +187,7 @@ test("2. not observed: the same word on a session that would otherwise read 'up 
   responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [notConfirmed({ previewStatus: "no_changes", counts: { created: 0, unchanged: 4 } })] });
   await openImports();
   const page = html();
-  assert.match(attentionSection(page), /Needs attention \(1\)/);
+  assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.doesNotMatch(section(page, "Imported"), /cand-nc/);
   assert.doesNotMatch(page, /Nothing new to import/);
   await openCandidate("cand-nc");
@@ -326,7 +326,10 @@ test("7. a search that fails, and one whose answer is lost, change nothing of wh
   await act("training-load-gpexe-check");
   const afterLost = html();
   assert.equal(readySection(afterLost), before);
-  assert.equal(attentionSection(afterLost), attentionBefore);
+  // U6a-2: the group's own search button follows the search like the state bar's (off while a search may still run); the
+  // sessions and their sentences are what must not change.
+  const noGroupButton = (h) => h.replace(/<div class="imports-attn-actions">[\s\S]*?<\/div>/g, "");
+  assert.equal(noGroupButton(attentionSection(afterLost)), noGroupButton(attentionBefore));
   assert.equal(writes().length, 0);
   assert.doesNotMatch(outsideTech(afterLost), CODES);
 });
@@ -337,7 +340,7 @@ test("8. no GPEXE id outside Technical details: the session id of an unconfirmed
   await openImports();
   await act("training-load-gpexe-superseded");
   assert.ok(!outsideTech(html()).includes(MARKER_SESSION), "the list");
-  assert.match(html(), />GPEXE session</, "a label-less session is titled without its id");
+  assert.match(html(), /<strong>[A-Z][a-z]{2} \d{2}\.\d{2}\. · GPEXE session</, "a label-less session is titled without its id");
   for (const id of ["cand-nc", "cand-wd", "cand-old"]) {
     await openCandidate(id);
     assert.ok(!outsideTech(html()).includes(MARKER_SESSION), `the review of ${id}`);

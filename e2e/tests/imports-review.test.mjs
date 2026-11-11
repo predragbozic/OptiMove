@@ -45,7 +45,7 @@ test(`7. (${label}) the coach links the unlinked athlete from the row, the revie
   const coach = await openAs(browser, world, "team_coach", width);
   try {
     await importsTab(coach.page);
-    await openSession(coach.page, "05.11.2026");
+    await openSession(coach.page, "05.11.");
     const rows = await coach.page.$$eval(".gpexe-review-row", (e) => e.map((x) => x.className));
     assert.ok(rows.some((c) => c.includes("is-needs_link")), "a row needs a link");
     assert.equal(rows.filter((c) => c.includes("is-needs_link")).length, 1);
@@ -77,7 +77,7 @@ test(`7. (${label}) the coach links the unlinked athlete from the row, the revie
   try {
     admin.page.on("dialog", (d) => d.accept());
     await importsTab(admin.page);
-    await openSession(admin.page, "05.11.2026");
+    await openSession(admin.page, "05.11.");
     assert.equal(await importButtonText(admin.page), "Import 3 athletes");
     await admin.page.click('[data-action="training-load-gpexe-approve"]');
     let after = null;
