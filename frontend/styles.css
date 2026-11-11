@@ -25062,3 +25062,114 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-sectio
     width: 100%;
   }
 }
+
+/* ==========================================================================
+   Design: Settings add forms (S3). A section's add action is a labelled
+   button on its heading's row (it was a round icon whose meaning only its
+   aria-label carried); the form opens under the heading, in one column,
+   with Cancel and the filled primary in its footer. Users is one panel with
+   a tab per kind of form.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle {
+  justify-self: auto;
+  width: auto;
+  min-width: var(--om-tap-target);
+  height: auto;
+  min-height: var(--om-tap-target);
+  padding: 0 var(--om-space-4);
+  gap: var(--om-space-2);
+  border-radius: var(--radius);
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle .rail-icon {
+  width: 20px;
+  height: 20px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle.data-sources-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle.is-open {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+/* The open form: one column, its fields at a readable width. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-form,
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-user-forms {
+  max-width: 640px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-panel .organization-form-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer .data-sources-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Users: one panel, a tab per kind of form; the forms inside it lose their own card. */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms {
+  display: grid;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms .organization-form {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-forms .organization-form + .organization-form {
+  padding-top: var(--om-space-4);
+  border-top: 1px solid var(--line);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-user-form-tabs .om-tab {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  /* On a phone Cancel and the primary share the footer's row, half each (the shared primary rule would make the
+     primary a full-width line of its own under Cancel); the heading's add button keeps its own width. */
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-form-footer > .plain-button {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-view .organization-add-toggle {
+    width: auto;
+  }
+}
+
+/* Join links: its heading, the open form and its two lists, spaced like a section (S3). */
+body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-links {
+  display: grid;
+  gap: 12px;
+}
