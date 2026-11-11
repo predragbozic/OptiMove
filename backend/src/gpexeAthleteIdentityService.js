@@ -98,6 +98,20 @@ const STATUS = Object.freeze({
   key_missing: 503, credential_unreadable: 503,
 });
 const refusal = (code, details) => new GpexeIdentityError(STATUS[code] ?? 409, code, MESSAGES[code] ?? "The team's source connection cannot be used right now; nothing was read.", details);
+// Team mode (U3's open item): a team's coach may start a load, but the precise
+// codes of the source connection stay with the administrators (as in F3c2g, a
+// coach gets source_connection_unavailable and a sentence). The codes about the
+// coach's own request are kept; every other one is one coarse refusal, with no
+// reason, and a load that stopped early names no cause.
+const COACH_KEPT_CODES = new Set(["invalid_body", "request_key_reused", "identity_load_running", "identity_load_abandoned", "try_again", "outcome_unknown", "internal_error"]);
+export const COACH_SOURCE_MESSAGE = "GPEXE could not be read for this team right now; nothing was saved. Ask an administrator to check the team's GPEXE connection.";
+export function coachRefusal(error) {
+  if (COACH_KEPT_CODES.has(error.code)) return { status: error.status, code: error.code, message: error.message, details: error.details ? { replayed: error.details.replayed, requestKey: error.details.requestKey } : null };
+  return { status: 409, code: "source_connection_unavailable", message: COACH_SOURCE_MESSAGE, details: error.details?.replayed ? { replayed: true } : null };
+}
+export function coachResult(answer) {
+  return answer && answer.stopCode ? { ...answer, stopCode: "stopped" } : answer;
+}
 const notAvailable = () => new GpexeIdentityError(404, "notFound", "notFound");
 
 // ---------------------------------------------------------------------------
@@ -154,7 +168,12 @@ export function identityAdminBasis(req, access) {
 // team's club; and the club itself active. Locked users row first, the
 // revocations' order (`for update of u, g` / `u, r`; the lock-order pull
 // request).
-async function rightHolds(executor, ctx, clubId, { lock = false, teamId = null } = {}) {
+//
+// teamMode (the identity load only, D3 after the pilot): a team coach's right holds only while the team's import switch is
+// on in mode `team` (v56, training_load.gpexe_team_import_switch), read last and FOR SHARE with the rest, so a switch-off
+// or a change to `pilot` waits for a running write and is seen by the next one. The suggestions read (U3) does not ask
+// for it.
+async function rightHolds(executor, ctx, clubId, { lock = false, teamId = null, teamMode = false } = {}) {
   const share = lock ? " for share" : "";
   // The users row first, in its own statement, then the role row (the
   // revocations' order, `.claude/rules/migrations.md`): never one statement
@@ -173,7 +192,15 @@ async function rightHolds(executor, ctx, clubId, { lock = false, teamId = null }
   }
   if (right.rowCount === 0) return false;
   const club = await executor.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)${share}`, [clubId]);
-  return club.rowCount > 0;
+  if (club.rowCount === 0) return false;
+  if (ctx.basis === "team_coach" && teamMode) {
+    const on = await executor.query(
+      `select 1 from training_load.gpexe_team_import_switch where owner_team_id = $1 and enabled = true and mode = 'team'${share}`,
+      [teamId],
+    );
+    return on.rowCount > 0;
+  }
+  return true;
 }
 
 // The team's active gpexe binding with an active team and club, or null.
@@ -358,6 +385,14 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
 // and, new, the team's own coach acting in that TEAM's workspace. Everyone else
 // - a coach of another team, a coach in the club or platform workspace - gets
 // the router's identical 404.
+// The identity load (D3, after the pilot): the identity administrators, and the team's own coach in that team's workspace.
+// A coach's right holds only while the team's import switch is on in mode `team`; the service checks it in every phase of
+// the load (rightHolds with teamMode) and answers the identical 404 otherwise, as before. The stored snapshot's list
+// (listIdentities) stays the administrators'.
+export function identityLoadBasis(req, access) {
+  return pairSuggestionBasis(req, access);
+}
+
 export function pairSuggestionBasis(req, access) {
   const admin = identityAdminBasis(req, access);
   if (admin) return admin;
@@ -499,8 +534,9 @@ async function closeIfStale(executor, requestId) {
 async function replay(row, teamId, ctx, clubId, bindingId) {
   // The same key belongs to one team and one binding: after an Unbind and a
   // new binding an old key answers nothing of the old one.
+  // The right first: a caller without it on this team gets the identical 404, never a code about the key (D3 review).
+  if (!(await rightHolds(pool, ctx, clubId, { teamId, teamMode: true }))) throw notAvailable();
   if (String(row.owner_team_id) !== String(teamId) || (bindingId && String(row.binding_id) !== String(bindingId))) throw refusal("request_key_reused");
-  if (!(await rightHolds(pool, ctx, clubId))) throw notAvailable();
   if (row.status === "running" && row.stale) {
     await closeIfStale(pool, row.id);
     throw refusal("identity_load_abandoned", { replayed: true });
@@ -564,6 +600,11 @@ async function markFailed(requestId, code) {
 }
 
 export async function loadIdentities(teamId, { ctx, body }) {
+  // The right first (the Nezavisni revizor's L1 on #494): before the body is read and before any fact of the
+  // connection, so a caller without it on this team - a coach whose team is not in team mode - gets the identical
+  // 404, never invalid_body or source_connection_unavailable. The claim and the finalize check it again.
+  const team0 = (await pool.query(`select club_id from public.teams where id = $1`, [teamId])).rows[0];
+  if (!team0 || !(await rightHolds(pool, ctx, team0.club_id, { teamId, teamMode: true }))) throw notAvailable();
   const requestKey = readBody(body);
   await purgeExpiredIdentities().catch((error) => console.error(`[gpexe-identity] purge before a load failed: ${error?.code ?? ""}`));
 
@@ -597,7 +638,7 @@ export async function loadIdentities(teamId, { ctx, body }) {
     } catch (error) {
       throw mapResolveError(error) ?? error;
     }
-    if (!(await rightHolds(client, ctx, facts.teamClubId))) throw notAvailable();
+    if (!(await rightHolds(client, ctx, facts.teamClubId, { teamId, teamMode: true }))) throw notAvailable();
     await client.query(
       `update training_load.gpexe_athlete_identity_requests set status = 'failed', finished_at = now(), error_code = 'abandoned'
         where owner_team_id = $1 and status = 'running' and started_at < now() - make_interval(secs => $2)`,
@@ -772,7 +813,7 @@ async function finalize({ teamId, ctx, facts, request, targets, outcome }) {
     if (!conn || !binding || binding.state !== "active" || String(binding.team_id) !== String(teamId) || !team || team.active !== true || String(team.club_id) !== String(facts.teamClubId)) {
       throw Object.assign(notAvailable(), { failCode: "binding_ended" });
     }
-    if (!(await rightHolds(client, ctx, facts.teamClubId, { lock: true }))) throw Object.assign(notAvailable(), { failCode: "rights_changed" });
+    if (!(await rightHolds(client, ctx, facts.teamClubId, { lock: true, teamId, teamMode: true }))) throw Object.assign(notAvailable(), { failCode: "rights_changed" });
     try {
       await assertImportSourceStillUsable(outcome.source, client);
     } catch (error) {
