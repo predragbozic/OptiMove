@@ -10,6 +10,7 @@ import {
   resetDataSourcesForms,
   revokeApprover,
   saveGpexeConnection,
+  saveTeamTimezone,
   selectDataSourcesTeam,
 } from "./data-sources-data.js";
 import { validateFilterableSelects } from "./organization-select.js";
@@ -33,6 +34,15 @@ export async function handleDataSourcesAction(action, { render }) {
   if (type === "data-sources-connect-open") {
     resetDataSourcesForms();
     d.connectOpen = true;
+    d.notice = "";
+    d.noticeFor = "";
+    render();
+    return true;
+  }
+  if (type === "data-sources-tz-open") {
+    resetDataSourcesForms();
+    d.tzOpen = true;
+    d.tzDraft = { timezone: d.timezone?.current?.timezone || "", reason: "" };
     d.notice = "";
     d.noticeFor = "";
     render();
@@ -117,6 +127,25 @@ export async function submitDataSourcesForm(form, { render }) {
     d.connectOpen = false;
     d.connectConfirm = { gpexeTeamId, reason };
     render();
+    return;
+  }
+
+  if (kind === "timezone") {
+    const timezone = value("timezone");
+    const reason = value("reason");
+    d.tzDraft = { timezone, reason };
+    if (!reason) {
+      d.tzError = localError("reason_required");
+      render();
+      return;
+    }
+    if ((d.timezone?.current?.timezone || "") === timezone) {
+      d.tzError = localError("timezone_unchanged");
+      render();
+      return;
+    }
+    d.tzError = null;
+    await saveTeamTimezone(render);
     return;
   }
 

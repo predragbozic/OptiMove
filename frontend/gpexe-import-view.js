@@ -1761,6 +1761,14 @@ function renderCandidateDetailHtml(gx, status) {
   `;
 }
 
+// v62 (mixed_timezones (b)): a session whose GPS units report several zones is read in the team's zone; say which and why.
+function renderTeamZoneNoteHtml(preview) {
+  const s = preview?.session;
+  if (s?.timezoneSource !== "team" || !s.timezone) return "";
+  const reported = (Array.isArray(s.trackTimezones) ? s.trackTimezones : []).join(" and ");
+  return `<p class="gpexe-zone-note">The GPS units of this session report different time zones${reported ? ` (${escapeHtml(reported)})` : ""}, so its date and time are read in the team's time zone, ${escapeHtml(s.timezone)}.</p>`;
+}
+
 function renderCandidateBodyHtml(c, detail, status) {
   const preview = c.preview;
   return `
@@ -1769,6 +1777,7 @@ function renderCandidateBodyHtml(c, detail, status) {
       <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
       ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
+    ${renderTeamZoneNoteHtml(preview)}
     ${adminTechHtml([["GPEXE session name", c.label]])}
     ${renderApprovalRecordHtml(c)}
     ${renderUndoneNoteHtml(c, state.trainingLoad.gpexe)}
@@ -1849,7 +1858,7 @@ function blockedCoachText(c) {
   // U6a-2 (D8): GPS units of one session report different time zones (mixed_timezones). The code stays in an
   // administrator's Technical details.
   if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
-    return { reason: "GPEXE reports this session's GPS devices in more than one time zone, so OptiMove can't tell when it took place.", step: "Nothing to do for now. It is not imported until this is settled; your administrator can see the details." };
+    return { reason: "GPEXE reports this session's GPS devices in more than one time zone, so OptiMove can't tell when it took place.", step: "It is not imported until the team has a time zone: a platform administrator sets it in Settings > Data sources, then find the session again." };
   }
   const precise = setupBlockCode(c);
   if (precise) {

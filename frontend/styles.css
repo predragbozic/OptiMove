@@ -25909,3 +25909,6 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 .gpexe-leave-note {
   margin: 0;
 }
+/* v62: the team's session time zone in Settings > Data sources, and the review's note when it was used. */
+.data-sources-timezone { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d9dee3); }
+.gpexe-zone-note { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--om-accent, #1f6f68); background: var(--om-surface-2, #f4f6f8); }

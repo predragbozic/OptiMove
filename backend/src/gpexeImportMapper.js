@@ -235,7 +235,10 @@ export function mappedMetricSpecs(rows) {
 // specs { raw: true, key, levels, extract } whose values are kept unconverted
 // (the 7e preview and the characterisation oracle). A result exists only for a
 // row whose level at least one spec covers; [] builds the gates alone.
-export function buildGpexeImportPlan(bundle, { metricSpecs } = {}) {
+// teamTimezone (v62, mixed_timezones (b)): the team's session time zone, set by a platform admin. It is used only when the
+// tracks report more than one zone; a session whose tracks agree keeps its own zone (an away match keeps its real local
+// time). Without it a mixed session is refused as before.
+export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null } = {}) {
   if (!Array.isArray(metricSpecs)) throw new TypeError("metricSpecs must be an array");
   const session = bundle?.teamSession;
   if (!session?.id) throw new GpexeMappingError("session_missing", "teamSession is required.");
@@ -383,9 +386,11 @@ export function buildGpexeImportPlan(bundle, { metricSpecs } = {}) {
     participants.push({ gpexeAthleteId, timezone: track.timezone, results });
   }
 
-  if (timezones.size > 1) throw new GpexeMappingError("mixed_timezones", `tracks report more than one timezone: ${[...timezones].join(", ")}.`);
+  const mixed = timezones.size > 1;
+  if (mixed && !validTimezone(teamTimezone)) throw new GpexeMappingError("mixed_timezones", `tracks report more than one timezone: ${[...timezones].join(", ")}.`);
   if (participants.length === 0) throw new GpexeMappingError("no_importable_participants", `team_session ${sessionId} has no importable athlete.`);
-  const timezone = [...timezones][0];
+  // Each participant keeps its own track's zone; only the event's zone is chosen.
+  const timezone = mixed ? teamTimezone : [...timezones][0];
 
   const segments = [];
   for (let drillIndex = 0; drillIndex < drillsCount; drillIndex += 1) {
@@ -407,6 +412,9 @@ export function buildGpexeImportPlan(bundle, { metricSpecs } = {}) {
       endedInstant: endInstant.toISOString(),
       occurredLocalDate: localDateInTimezone(startInstant, timezone),
       timezone,
+      // Only for a mixed session: which zones the tracks reported, and that the team's zone was used. A single-zone
+      // session's event (and so its preview and its hash) is byte for byte what it was.
+      ...(mixed ? { timezoneSource: "team", trackTimezones: [...timezones].sort() } : {}),
       sourceReportedAt: sourceReportedAt.toISOString(),
     },
     segments,

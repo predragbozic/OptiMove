@@ -80,8 +80,9 @@ const submit = (kind, fields) => submitDataSourcesForm(
 );
 
 // The three reads a chosen team needs, with whatever the test wants back.
-function teamResponder({ status = CONNECTED, history = [], approvers = [], writes = {} } = {}) {
+function teamResponder({ status = CONNECTED, history = [], approvers = [], writes = {}, timezone = { status: 200, body: { sessionTimezone: { current: null, history: [] } } } } = {}) {
   return (call) => {
+    if (call.method === "GET" && call.url.endsWith("/session-timezone")) return timezone;
     if (call.method === "GET" && call.url.endsWith("/status")) return { status: 200, body: status };
     if (call.method === "GET" && call.url.endsWith("/settings/history")) return { status: 200, body: { history } };
     if (call.method === "GET" && call.url.endsWith("/approvers")) return { status: 200, body: { approvers } };
@@ -114,6 +115,7 @@ test("2. choosing a team reads that team only, from the teams Settings already l
     `GET /api/training-load/gpexe/teams/${TEAM}/status`,
     `GET /api/training-load/gpexe/teams/${TEAM}/settings/history`,
     `GET /api/training-load/gpexe/teams/${TEAM}/approvers`,
+    `GET /api/training-load/gpexe/teams/${TEAM}/session-timezone`,
   ]);
   const html = renderDataSourcesPanelHtml();
   assert.match(html, /FK Borac · First team/);
@@ -589,3 +591,74 @@ for (const flow of STALE_FLOWS) {
     assert.equal(state.dataSources[flow.busy], false, "only its own answer releases it");
   });
 }
+
+// v62 (mixed_timezones (b)): the team's session time zone, next to the pair.
+const SET = { current: { timezone: "Europe/Sarajevo", setAt: "2026-11-11T10:00:00.000Z", reason: "home zone", setByName: "Owner" }, history: [
+  { timezone: "Europe/Sarajevo", setAt: "2026-11-11T10:00:00.000Z", reason: "home zone", setByName: "Owner" },
+  { timezone: null, setAt: "2026-11-10T10:00:00.000Z", reason: "cleared <b>", setByName: "Owner" },
+] };
+
+test("TZ1. the time zone is shown next to the pair: not set, with what it is for; set, with who and why and the earlier values escaped", async () => {
+  await openTeam();
+  let html = renderDataSourcesPanelHtml();
+  assert.match(html, /Session time zone/);
+  assert.match(html, /<dt>Time zone<\/dt><dd>Not set<\/dd>/);
+  assert.match(html, /Used only when the GPS units of one session report different time zones/);
+  assert.match(html, /Until it is set, such a session cannot be imported\./);
+  assert.match(html, /data-action="data-sources-tz-open">Set time zone</);
+  await openTeam({ timezone: { status: 200, body: { sessionTimezone: SET } } });
+  html = renderDataSourcesPanelHtml();
+  assert.match(html, /<dd>Europe\/Sarajevo<\/dd>/);
+  assert.match(html, /<dt>Why<\/dt><dd>home zone<\/dd>/);
+  assert.match(html, />Change time zone</);
+  assert.match(html, /Earlier time zones \(1\)/);
+  assert.match(html, /<strong>Cleared<\/strong>/);
+  assert.ok(html.includes("cleared &lt;b&gt;") && !html.includes("cleared <b>"), "the reason is escaped");
+});
+
+test("TZ2. setting the zone: opening sends nothing; no reason or the same zone is refused locally; Save sends one PUT with the zone and the reason and shows the answer", async () => {
+  await openTeam({ writes: { [`PUT ${TEAM}/session-timezone`]: { status: 200, body: { sessionTimezone: SET } } } });
+  const reads = fetchCalls.length;
+  await act("data-sources-tz-open");
+  assert.equal(fetchCalls.length, reads, "opening sends nothing");
+  let html = renderDataSourcesPanelHtml();
+  assert.match(html, /data-data-sources-form="timezone"/);
+  assert.match(html, /<option value="Europe\/Sarajevo"/);
+  await submit("timezone", { timezone: "Europe/Sarajevo", reason: "" });
+  assert.equal(fetchCalls.length, reads, "no reason: nothing sent");
+  assert.match(renderDataSourcesPanelHtml(), /A reason is required\./);
+  await submit("timezone", { timezone: "", reason: "why" });
+  assert.equal(fetchCalls.length, reads, "the same (empty) zone: nothing sent");
+  assert.match(renderDataSourcesPanelHtml(), /already the team(?:'|&#0?39;)s session time zone/);
+  await submit("timezone", { timezone: "Europe/Sarajevo", reason: "home zone" });
+  const puts = fetchCalls.filter((c) => c.method === "PUT");
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].url, `/api/training-load/gpexe/teams/${TEAM}/session-timezone`);
+  assert.deepEqual(puts[0].body, { timezone: "Europe/Sarajevo", reason: "home zone" });
+  html = renderDataSourcesPanelHtml();
+  assert.match(html, /The team(?:'|&#0?39;)s session time zone is Europe\/Sarajevo\./);
+  assert.match(html, /<dd>Europe\/Sarajevo<\/dd>/);
+  assert.doesNotMatch(html, /data-data-sources-form="timezone"/, "the form closes");
+});
+
+test("TZ3. clearing sends null; a refusal keeps the form with a plain sentence and the code in Technical details", async () => {
+  await openTeam({ timezone: { status: 200, body: { sessionTimezone: SET } }, writes: { [`PUT ${TEAM}/session-timezone`]: { status: 409, body: { error: "gpexe_change_busy", message: "busy" } } } });
+  await act("data-sources-tz-open");
+  await submit("timezone", { timezone: "", reason: "not needed" });
+  const put = fetchCalls.find((c) => c.method === "PUT");
+  assert.deepEqual(put.body, { timezone: null, reason: "not needed" });
+  const html = renderDataSourcesPanelHtml();
+  assert.match(html, /data-data-sources-form="timezone"/, "the form stays open");
+  assert.match(html, /A check or an import is running for this team\. Try again when it has finished\./);
+  assert.match(html, /<details class="data-sources-tech">[\s\S]*gpexe_change_busy/);
+  assert.match(html, /<dd>Europe\/Sarajevo<\/dd>/, "the zone in force is unchanged on screen");
+});
+
+test("TZ4. a failed time zone read never takes the team down: the pair and the approvers stay, the zone says it could not be read", async () => {
+  await openTeam({ timezone: { status: 503, body: { error: "database_busy" } } });
+  const html = renderDataSourcesPanelHtml();
+  assert.match(html, /1473/);
+  assert.match(html, /Change GPEXE team/);
+  assert.match(html, /The session time zone could not be read\. Nothing was changed\./);
+  assert.doesNotMatch(html, /data-sources-tz-open/);
+});

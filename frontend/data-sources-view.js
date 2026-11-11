@@ -8,7 +8,7 @@
 // Carbon informs the structure (one card per source, status first, the
 // destructive step behind a named confirmation) - it is a design reference
 // only, nothing from Carbon runs here.
-import { dataSourcesTeamOptions, SETTINGS_HISTORY_LIMIT, selectedTeam, teamCoachOptions } from "./data-sources-data.js";
+import { dataSourcesTeamOptions, SETTINGS_HISTORY_LIMIT, selectedTeam, teamCoachOptions, timezoneOptions } from "./data-sources-data.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -33,6 +33,8 @@ export function adminMessage(info) {
   if (code === "change_reason_required") return "Changing a connection that already exists needs a reason.";
   if (code === "change_reason_too_long") return "The reason is too long (at most 500 characters).";
   if (code === "reason_required") return "A reason is required.";
+  if (code === "invalid_timezone") return "Choose a time zone from the list.";
+  if (code === "timezone_unchanged") return "That is already the team's session time zone. Nothing to save.";
   if (code === "already_granted") return "This coach already has approval rights for this team.";
   if (code === "grantee_not_team_coach") return "Only an active coach of this team can be given approval rights.";
   if (info.status === 403) return "This needs platform admin access, which this account does not have (any more). Reload the app before trying again.";
@@ -151,7 +153,66 @@ function renderGpexeCardHtml(d, team) {
         : `<button class="plain-button data-sources-primary" type="button" data-action="data-sources-connect-open">${connected ? "Change GPEXE team" : "Connect GPEXE"}</button>`)}
       ${!d.connectConfirm && !d.connectOpen ? errorHtml(d.connectError) : ""}
       ${renderHistoryHtml(d)}
+      ${renderTimezoneHtml(d)}
     </section>
+  `;
+}
+
+// v62 (mixed_timezones (b)): the team's session time zone, next to the pair. Used only for a session whose GPS units report
+// different time zones; a session whose units agree keeps its own zone (an away match keeps its local time).
+function renderTimezoneHtml(d) {
+  const tz = d.timezone;
+  if (!tz) return "";
+  const current = tz.current?.timezone || "";
+  const earlier = (tz.history || []).slice(1);
+  return `
+    <div class="data-sources-timezone">
+      <p class="data-sources-form-title">Session time zone</p>
+      ${tz.error ? `<p class="data-sources-warn" role="alert">The session time zone could not be read. Nothing was changed. Use Try again above to read the team again.</p>` : `
+        <dl class="data-sources-facts">
+          <dt>Time zone</dt><dd>${current ? escapeHtml(current) : "Not set"}</dd>
+          ${current && tz.current?.setByName ? `<dt>Set by</dt><dd>${escapeHtml(tz.current.setByName)} · ${escapeHtml(fmtDateTime(tz.current.setAt))}</dd>` : ""}
+          ${current && tz.current?.reason ? `<dt>Why</dt><dd>${escapeHtml(tz.current.reason)}</dd>` : ""}
+        </dl>
+        <p class="muted">Used only when the GPS units of one session report different time zones; the session's date and time are then read in this zone. A session whose units agree keeps its own zone, so an away match keeps its local time.${current ? "" : " Until it is set, such a session cannot be imported."}</p>
+        ${d.notice && d.noticeFor === "timezone" ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>` : ""}
+        ${d.tzOpen ? renderTimezoneFormHtml(d, current) : `<button class="plain-button" type="button" data-action="data-sources-tz-open">${current ? "Change time zone" : "Set time zone"}</button>`}
+        ${earlier.length ? `
+          <details class="data-sources-history">
+            <summary>Earlier time zones (${earlier.length})</summary>
+            <ul>${earlier.map((row) => `
+              <li>
+                <strong>${row.timezone ? escapeHtml(row.timezone) : "Cleared"}</strong>
+                <span class="muted">${escapeHtml(fmtDateTime(row.setAt))}${row.setByName ? ` · ${escapeHtml(row.setByName)}` : ""}</span>
+                ${row.reason ? `<span class="data-sources-history-reason">${escapeHtml(row.reason)}</span>` : ""}
+              </li>`).join("")}
+            </ul>
+          </details>` : ""}
+      `}
+    </div>
+  `;
+}
+
+function renderTimezoneFormHtml(d, current) {
+  const draft = d.tzDraft || { timezone: current, reason: "" };
+  const zones = timezoneOptions();
+  const options = [`<option value=""${draft.timezone ? "" : " selected"}>${current ? "None (clear the time zone)" : "Choose a time zone"}</option>`]
+    .concat(zones.map((z) => `<option value="${escapeAttr(z)}"${z === draft.timezone ? " selected" : ""}>${escapeHtml(z)}</option>`));
+  return `
+    <form class="data-sources-form" data-data-sources-form="timezone">
+      <label class="search-field"><span>Time zone</span>
+        <select name="timezone" class="data-sources-select">${options.join("")}</select>
+      </label>
+      <label class="search-field"><span>Why?</span>
+        <textarea name="reason" required maxlength="500" rows="2" placeholder="Short note for the record">${escapeHtml(draft.reason)}</textarea>
+      </label>
+      <p class="muted">Sessions already imported keep the date and time they were imported with. The zone is used for sessions found from now on.</p>
+      ${errorHtml(d.tzError)}
+      <div class="data-sources-form-actions">
+        <button class="plain-button data-sources-primary" type="submit" ${d.tzBusy ? "disabled" : ""}>${d.tzBusy ? "Saving..." : "Save"}</button>
+        <button class="plain-button ghost" type="button" data-action="data-sources-cancel" ${d.tzBusy ? "disabled" : ""}>Cancel</button>
+      </div>
+    </form>
   `;
 }
 

@@ -273,7 +273,7 @@ test("6. (D8) mixed time zones: a data problem in plain words for everyone; the 
     await openImports();
     const list = html();
     assert.match(groupHtml("data", list), /Problem in the GPEXE data/);
-    assert.match(list, /Nothing to do for now\. It is not imported until this is settled; your administrator can see the details\./);
+    assert.match(list, /It is not imported until the team has a time zone: a platform administrator sets it in Settings &gt; Data sources, then find the session again\./);
     assert.ok(!/mixed_timezones|Zone\/A/.test(list.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no code in the open");
     await act("training-load-gpexe-open", { candidateId: "cand-2", group: "data" });
     const review = html();
@@ -283,6 +283,19 @@ test("6. (D8) mixed time zones: a data problem in plain words for everyone; the 
     if (admin) assert.match(review, /<details class="gpexe-tech">[\s\S]*mixed_timezones/, "an administrator has the code");
     else assert.ok(!/mixed_timezones/.test(review), "a coach never gets the code");
   }
+});
+
+test("6b. (v62) a session read in the team's time zone says which zone was used and why; a single-zone session says nothing", async () => {
+  resetState();
+  const zoned = (c) => { const d = candidateDetail(c); d.preview.session = { name: "x", occurredLocalDate: "2026-09-14", timezone: "Europe/Sarajevo", timezoneSource: "team", trackTimezones: ["Europe/<b>A", "Europe/Stockholm"] }; return d; };
+  installFetchMock(gpexeServer({ candidates: [ready(1), ready(2)], onCandidate: (call, id) => ({ status: 200, body: { candidate: id === "cand-1" ? zoned(ready(1)) : candidateDetail(ready(2)) } }) }));
+  await openImports();
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const review = html();
+  assert.match(review, /<p class="gpexe-zone-note">The GPS units of this session report different time zones \(Europe\/&lt;b&gt;A and Europe\/Stockholm\), so its date and time are read in the team(?:'|&#0?39;)s time zone, Europe\/Sarajevo\.<\/p>/);
+  await act("training-load-gpexe-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-2" });
+  assert.doesNotMatch(html(), /gpexe-zone-note/);
 });
 
 test("7. (D3) while a search runs the screen says it may be left; the sentence goes when the search ends", async () => {

@@ -382,7 +382,9 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   for (const g of files) {
     for (const call of callsOf(g, "buildGpexeImportPlan")) {
       const caller = enclosing(g, call.index, { named: true });
-      const spec = /\{\s*metricSpecs\s*:\s*([\s\S]*?)\s*\}\s*$/.exec(call.args)?.[1] ?? null;
+      // v62: `teamTimezone` (the team's session time zone, a shorthand property) is the one other key a plan may take; it
+      // chooses only the event's zone of a mixed session and never a value, so the specs are read without it.
+      const spec = /\{\s*metricSpecs\s*:\s*([\s\S]*?)(?:\s*,\s*teamTimezone)?\s*\}\s*$/.exec(call.args)?.[1] ?? null;
       const ok = spec === "[]"
         || (g.rel === "gpexeImportMapper.js" && caller?.name === "gpexeLevelValues" && /^\[\{\s*raw\s*:\s*true\s*,[\s\S]*\bextract\s*\}\]$/.test(spec ?? ""))
         || (caller !== null && spec !== null && fromMapped(bodyOf(g, caller), spec));

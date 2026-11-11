@@ -11,6 +11,7 @@ import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 import * as identity from "../gpexeAthleteIdentityService.js";
 import * as teamSwitch from "../teamImportSwitchService.js";
+import * as teamTimezone from "../gpexeTeamTimezone.js";
 import * as sessionUndo from "../gpexeSessionUndoService.js";
 import { decideImportStates } from "../activityRosterCommands.js";
 import { RosterError } from "../activityRoster.js";
@@ -215,6 +216,31 @@ router.get("/teams/:teamId/settings/history", handle(async (req, res) => {
   if (!access) return;
   if (!access.platformAdmin) return forbidden(res);
   res.json({ history: await service.listSettingsHistory(access.teamId) });
+}));
+
+// v62 (mixed_timezones (b)): the team's session time zone, used by the importer only for a session whose GPS units report
+// several zones. A platform admin reads and sets it (with a reason); everyone else who sees the team gets the 403 of the
+// settings, and a foreign or archived team the identical 404 of teamAccess.
+router.get("/teams/:teamId/session-timezone", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!access.platformAdmin) return forbidden(res);
+  res.json({ sessionTimezone: await teamTimezone.readTeamSessionTimezone(access.teamId) });
+}));
+
+router.put("/teams/:teamId/session-timezone", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!access.platformAdmin) return forbidden(res);
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  try {
+    const timezone = body.timezone === null ? null : body.timezone;
+    if (timezone !== null && typeof timezone !== "string") return res.status(400).json({ error: "invalid_timezone", message: "Choose a time zone from the list (for example Europe/Sarajevo)." });
+    res.json({ sessionTimezone: await teamTimezone.setTeamSessionTimezone(access.teamId, { timezone, reason: body.reason, userId: req.user.id }) });
+  } catch (error) {
+    if (error instanceof teamTimezone.TeamTimezoneError) return res.status(error.status).json({ error: error.code, message: error.message });
+    throw error;
+  }
 }));
 
 router.post("/teams/:teamId/checks", handle(async (req, res) => {
