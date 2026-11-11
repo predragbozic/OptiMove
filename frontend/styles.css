@@ -25569,3 +25569,50 @@ body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:chec
 }
 
 /* End of design T1. */
+
+/* ==========================================================================
+   Design T2: the Tests session, schedule and result screens (coach). Every
+   button and text action in a detail is 44 px, a back button is as wide as
+   its words (it stretched across the page), the reminder rows are 44 px with
+   a 20 px checkbox, and Today sits after the week's arrows. On a narrow
+   phone the four section tabs fit on one row. An athlete keeps their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-shell .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-select-actions .text-action {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-detail > .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-detail > .plain-button[data-action="tests-close-schedule"] {
+  justify-self: start;
+  width: auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-reminder-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 380px) {
+  body:not(.athlete-mode):not(.login-mode) .tests-section-tabs.om-tabs .om-tab {
+    padding-inline: var(--om-space-2);
+  }
+}
+/* End of design T2. */

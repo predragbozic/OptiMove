@@ -408,8 +408,9 @@ test("the 'Schedule again' form visually looks like a prefilled edit (title + no
   state.tests.scheduleForm.editingScheduleId = "";
   const html = renderScheduleFormHtml();
   assert.ok(html.includes("Schedule again"));
-  // Case-insensitive, so the guard survives a change of the title's wording ("WELLNESS" became "wellness").
-  assert.ok(!/Edit wellness schedule/i.test(html));
+  // Any "Edit ... schedule" title, whatever the noun, so the guard survives a change of the wording
+  // ("WELLNESS" became "wellness", then "check-in").
+  assert.ok(!/<h3>Edit\b[^<]*schedule<\/h3>/i.test(html));
 });
 
 test("saving a 'Schedule again' form goes through the CREATE path (POST), never PATCH of the original", async () => {

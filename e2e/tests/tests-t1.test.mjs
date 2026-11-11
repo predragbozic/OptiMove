@@ -22,9 +22,10 @@ async function openTests(page, section) {
 
 const pager = () => {
   const box = (s) => document.querySelector(s).getBoundingClientRect();
-  // Measured to what the range shows (the week and Today), not to its box, which may stretch.
+  // Measured to what the range shows (the week), not to its box, which may stretch. Since T2, Today follows the arrows.
   const prev = box('[data-action="tests-weekly-prev-week"]'), next = box('[data-action="tests-weekly-next-week"]');
-  const range = { left: box(".tests-weekly-range strong").left, right: box(".tests-weekly-today-button").right };
+  const week = box(".tests-weekly-range strong");
+  const range = { left: week.left, right: week.right };
   const small = [...document.querySelectorAll(".tests-weekly-nav button, .tests-schedule-toolbar button, .tests-shell .om-btn, .tests-show-cancelled-toggle")]
     .filter((e) => e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height < 43.5).map((e) => e.textContent.trim() || e.getAttribute("aria-label"));
   return { gapPrev: range.left - prev.right, gapNext: next.left - range.right, small, context: document.querySelector("#contextLabel")?.textContent.trim(), overflow: document.documentElement.scrollWidth - window.innerWidth };
@@ -60,7 +61,7 @@ for (const width of [390, 1280]) test(`(team_coach, ${width} px) Show cancelled 
     await reload;
     // After the reload the toolbar is drawn again from state: the new switch must still be on.
     await page.waitForFunction(() => document.querySelector('[data-action="tests-toggle-show-cancelled"]')?.checked === true);
-    assert.equal(await page.locator('[data-action="tests-open-schedule-form"]').textContent(), "New wellness schedule");
+    assert.equal(await page.locator('[data-action="tests-open-schedule-form"]').textContent(), "New check-in schedule");
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
