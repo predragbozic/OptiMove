@@ -24978,6 +24978,91 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-sectio
   }
 }
 
+/* U6a: the daily Imports screen - one state bar with one main button; the administrator's settings folded. */
+.imports-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.imports-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.imports-lastsearch {
+  overflow-wrap: anywhere;
+}
+.imports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-actions .gpexe-button {
+  min-height: 44px;
+}
+/* The one main button of the state bar looks like the main one (the app has no base .primary-button rule; the
+   design foundation's .om-btn--primary is the model). */
+.imports-actions .primary-button {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius, 8px);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0 16px;
+}
+.imports-actions .primary-button:hover:not(:disabled) {
+  border-color: var(--om-accent-strong, var(--accent));
+  background: var(--om-accent-strong, var(--accent));
+}
+.imports-actions .primary-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.imports-actions .gpexe-button:focus-visible,
+.imports-settings > summary:focus-visible,
+.imports-dates > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A folded card shows that it opens (the flex summary has no marker of its own). */
+.imports-settings > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+.imports-settings > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-settings > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+.imports-settings[open] > summary::after {
+  content: "\25BE";
+}
+.imports-settings {
+  padding-block: 0;
+}
+.imports-settings > .gpexe-panel {
+  border: 0;
+  padding-inline: 0;
+}
+.imports-dates-fields .gpexe-date {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .imports-actions,
+  .imports-actions .gpexe-button {
+    width: 100%;
+  }
+}
+
 /* ==========================================================================
    Design: Settings add forms (S3). A section's add action is a labelled
    button on its heading's row (it was a round icon whose meaning only its
