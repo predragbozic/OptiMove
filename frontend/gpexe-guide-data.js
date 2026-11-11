@@ -24,6 +24,8 @@ export const emptyGuideState = () => ({
   vars: { status: "idle", items: [], total: 0, onCount: 0 },
   // Variables the server clearly refused in this session (memory only): never offered again, listed instead.
   skipped: [],
+  // U6b: the step the person opened (null = the first step that is not done).
+  step: null,
   // null = automatic (folded when all is done), true / false = the person's choice.
   open: null,
   // The review card of "Use OptiMove variables".

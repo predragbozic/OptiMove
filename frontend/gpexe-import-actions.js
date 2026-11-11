@@ -361,6 +361,15 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     renderTrainingLoad();
     return true;
   }
+  // U6b: open one step of the setup stepper (never while the variables write is running or unconfirmed).
+  if (type === "training-load-gpexe-guide-step") {
+    const step = Number(action.dataset.step);
+    if (gx.guide && !gx.guide.write?.sending && !gx.guide.write?.unknown && !gx.guide.confirm && Number.isInteger(step) && step >= 1 && step <= 5) {
+      gx.guide = { ...gx.guide, step };
+      renderTrainingLoad();
+    }
+    return true;
+  }
   if (type === "training-load-gpexe-guide-reload") {
     if (gx.guide?.conn?.status !== "loading") await loadGuide(renderTrainingLoad);
     return true;

@@ -17091,6 +17091,56 @@ p.muted.gpexe-approve-note {
   margin: 6px 0;
   padding-left: 18px;
 }
+/* U6b: the setup stepper - one step open, the others one tappable row each */
+.gpexe-guide-collapsed {
+  display: block;
+}
+.gpexe-guide-head-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.gpexe-guide-head-button:disabled {
+  cursor: default;
+}
+.gpexe-guide-head-button .gpexe-guide-num {
+  flex: none;
+}
+.gpexe-guide-current {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.gpexe-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.gpexe-guide-checklist {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.gpexe-guide-ok span[aria-hidden] {
+  color: var(--success, #2e7d32);
+  font-weight: 600;
+}
+.gpexe-guide-open {
+  color: var(--muted, inherit);
+}
 /* U3: suggested athlete pairs on Link athletes */
 .gpexe-suggest {
   margin-top: 12px;

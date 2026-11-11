@@ -190,6 +190,8 @@ export async function loadGpexeTeam(render) {
     if (generation !== gx.generation) return;
     applySourceAthletesRead(gx, sourceAthletes);
     render();
+    // U6b: the setup stepper's Athletes step counts the suggested pairs (S6) once a search has seen athletes to link.
+    if (status?.lastCheck?.status === "succeeded" && (gx.sourceAthletes || []).some((a) => a.status === "unlinked")) void loadPairSuggestions(render, { forGuide: true });
     return;
   } catch (error) {
     if (generation !== gx.generation) return;
@@ -1554,10 +1556,10 @@ function suggestionData(answer) {
 }
 
 // 404: not available here (no binding, no right) - the screen shows nothing of it.
-export async function loadPairSuggestions(render, { inReview = false } = {}) {
+export async function loadPairSuggestions(render, { inReview = false, forGuide = false } = {}) {
   const gx = g();
-  // The Link athletes screen asks when it opens; the session review asks when a row needs a link.
-  if (!gx.teamId || (!gx.mapping?.open && !inReview)) return;
+  // The Link athletes screen asks when it opens; the session review asks when a row needs a link; the setup stepper counts them.
+  if (!gx.teamId || (!gx.mapping?.open && !inReview && !forGuide)) return;
   const generation = gx.generation;
   const epoch = suggestionEpoch;
   const seq = ++suggestionSeq;
