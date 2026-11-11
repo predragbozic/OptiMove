@@ -26250,3 +26250,126 @@ body:not(.athlete-mode):not(.login-mode) .imports-search .imports-facts {
   }
 }
 /* End of design IMP1. */
+
+/* ==========================================================================
+   Design IMP2: the batch import dialog and the last light cards, as the
+   "GPS Import Flow" sketch. The confirmation asks one question over one
+   light list; what happens is folded; the result says what was imported
+   and where to see it, then one light list with each session's outcome on
+   the right (a dot of its colour). The batch flow itself is unchanged.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-question {
+  margin: 0 0 4px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-list {
+  gap: 0;
+  margin: 4px 0 8px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-list li:last-child {
+  border-bottom: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-list li > strong {
+  min-width: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-list .gpexe-candidate-facts {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+}
+
+/* The result: the outcome sits on the right with a dot of its colour (the left bar of the framed card is gone). */
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-results li {
+  border-left: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: var(--om-text-sm);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-outcome::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-results li.is-imported .imports-batch-outcome::before {
+  background: var(--om-success);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-results li.is-refused .imports-batch-outcome::before {
+  background: var(--danger);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-results li.is-unknown .imports-batch-outcome::before {
+  background: var(--om-warning);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-summary {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--om-tap-target);
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > summary {
+  list-style: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more[open] > summary::after {
+  content: "\25BE";
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > p {
+  margin: 0 0 8px;
+}
+
+/* The last light cards: no line above the first group, and "Pick a day" a plain fold row until it is opened. */
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-tab-title + .imports-attn-group {
+  border-top: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar:not([open]) {
+  padding: 0 4px;
+  border-color: transparent;
+  background: transparent;
+}
+/* End of design IMP2. */

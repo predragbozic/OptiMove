@@ -1208,16 +1208,17 @@ function batchTeamName(gx) {
 function renderBatchReviewHtml(gx, items) {
   const b = gx.batch;
   const busy = b.sending ? "disabled" : "";
+  // IMP2 (the sketch's one-line confirmation): the question first, the sessions as one light list, what happens folded.
   return `
-    <p><strong>Import ${escapeHtml(plural(items.length, "session", "sessions"))}${batchTeamName(gx) ? ` into ${escapeHtml(batchTeamName(gx))}` : ""}? Their values appear in Training Load right away.</strong></p>
+    <p class="imports-batch-question"><strong>Import ${escapeHtml(plural(items.length, "session", "sessions"))}${batchTeamName(gx) ? ` into ${escapeHtml(batchTeamName(gx))}` : ""}? Their values appear in Training Load right away.</strong></p>
     <ul class="imports-batch-list">
       ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
-    <p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    <details class="imports-batch-more"><summary>What happens</summary><p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p></details>
     ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
     ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")]])}
     <div class="gpexe-link-actions imports-batch-actions">
-      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-back" ${busy}>Back</button>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-back" ${busy}>Cancel</button>
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-send" ${busy || b.error ? "disabled" : ""}>${b.sending ? "Importing..." : `Import ${plural(items.length, "session", "sessions")}`}</button>
     </div>
   `;
@@ -1264,17 +1265,21 @@ function renderBatchResultsHtml(gx) {
     const button = t.check
       ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-open" data-candidate-id="${escapeAttr(r.candidateId)}">Check result</button>`
       : t.open ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-open" data-candidate-id="${escapeAttr(t.open)}">${escapeHtml(t.openLabel)}</button>` : "";
-    return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}${techHtml([["Outcome", r.outcome], ["Code", r.code], ["Approval id", r.approvalId], ["Candidate id", r.candidateId]])}</li>`;
+    return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}</li>`;
   });
+  // IMP2: every session's ids and codes in ONE Technical details at the end, not one per row.
+  const rowsTech = (b.results || []).map((r) => [`Session ${r.candidateId}`, [r.outcome, r.code, r.approvalId ? `approval ${r.approvalId}` : ""].filter(Boolean).join(" · ")]);
   // While the import goes on, the sessions not reached yet are "waiting", not "not tried"; the progress block counts.
   const summary = b.sending ? "" : batchSummaryText(b.summary);
   const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>${escapeHtml(batchStoppedText(b.error))}</strong></p>${errorTech(b.error)}</div>` : "";
   const still = b.sending ? 0 : batchSelection(gx).length;
+  // IMP2 (the sketch): "Imported N sessions. You can see them in Training Load → Activities." first, in one line.
+  const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? " You can see them in Training Load → Activities." : "";
   return `
-    ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary)}.</p>` : ""}
+    ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(`${onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary}.${seen}`)}</p>` : ""}
     ${stopped}
     <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
-    ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<p>You can see them in Training Load → Activities. They are also listed under Imported below.</p>` : ""}
+    ${rowsTech.length ? techHtml(rowsTech) : ""}
     ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}
     <div class="gpexe-link-actions imports-batch-actions">
       ${!b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" data-section="today">Open Activities</button>` : ""}

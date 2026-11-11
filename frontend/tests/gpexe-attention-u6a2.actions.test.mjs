@@ -334,7 +334,7 @@ test("8. (D7) the confirmation is one question naming the team; the result says 
   assert.match(dialog(), /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
   await act("training-load-gpexe-batch-send");
   const d = dialog();
-  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\.<\/p>/);
+  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities\.<\/p>/);
   assert.match(d, /You can see them in Training Load → Activities\./);
   assert.match(d, /data-action="training-load-section" data-section="today">Open Activities</);
   await act("training-load-section", { section: "today" });

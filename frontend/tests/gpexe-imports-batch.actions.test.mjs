@@ -309,7 +309,7 @@ test("7. a second click while the request runs sends nothing; the dialog cannot 
   assert.equal(gx().batch.sending, true);
   let d = dialog();
   assert.match(d, /data-action="training-load-gpexe-batch-send" disabled>Importing\.\.\.</);
-  assert.match(d, /data-action="training-load-gpexe-batch-back" disabled>Back</);
+  assert.match(d, /data-action="training-load-gpexe-batch-back" disabled>Cancel</);
   assert.match(d, /aria-label="Close" disabled>/);
   await act("training-load-gpexe-batch-send");
   await act("training-load-gpexe-batch-back");
@@ -490,7 +490,7 @@ test("10b. the whole request refused before anything was tried (the switch turne
   const d = dialog();
   assert.match(d, /Not imported: importing is switched off in this environment\./);
   assert.match(d, /data-action="training-load-gpexe-batch-send" disabled>Import 1 session</);
-  assert.match(d, /data-action="training-load-gpexe-batch-back" >Back</, "Back works");
+  assert.match(d, /data-action="training-load-gpexe-batch-back" >Cancel</, "Cancel (IMP2: the sketch's word for going back) works");
   assert.deepEqual(Object.keys(gx().batch.selected), ["cand-1"]);
   assert.deepEqual(gx().uncertain, {});
   // Back closes the dialog; the reason stays under the Ready bucket until the next choice.
