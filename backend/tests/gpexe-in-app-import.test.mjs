@@ -2507,3 +2507,44 @@ test("archived team: the GPEXE routes answer the same 404 as a missing team - to
   await admin.query(`update public.teams set is_active = true where id = $1`, [team.teamId]);
   for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${team.teamId}/status`, { cookie })).status, 200, `${who} after restore`);
 });
+
+test("archived club: a team of an archived club is the same 404 as a missing team on every GPEXE route - reads, check, Link and Unlink - for its coach and a platform admin, and its coach is no longer offered its team workspace; restoring the club restores both", async () => {
+  const team = await setupTeam();
+  const viewers = [["coach", team.coach.cookie], ["platform admin", team.padmin.cookie]];
+  const reads = [`/teams/${team.teamId}/status`, `/teams/${team.teamId}/candidates`, `/teams/${team.teamId}/source-athletes`, `/teams/${team.teamId}/athlete-links`, `/teams/${team.teamId}/approvers`];
+  const link = (await api(`/teams/${team.teamId}/athlete-links`, { cookie: team.coach.cookie })).body.links[0];
+  assert.ok(link?.id, "the team has a link to unlink");
+  const me = async (cookie) => (await (await fetch(`${apiBase}/api/auth/me`, { headers: { Cookie: cookie } })).json());
+  const teamWorkspace = (body) => (body.user?.availableWorkspaces || body.availableWorkspaces || []).some((w) => w.type === "team" && String(w.scopeId) === String(team.teamId));
+  assert.equal(teamWorkspace(await me(team.coach.cookie)), true, "the coach is offered the team workspace while the club is active");
+  for (const [who, cookie] of viewers) for (const path of reads) assert.equal((await api(path, { cookie })).status, 200, `${who} ${path} while the club is active`);
+  const count = async (sql) => (await admin.query(sql, [team.teamId])).rows[0].n;
+  const checksBefore = await count(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`);
+  const activeLinksBefore = await count(`select count(*)::int as n from training_load.gpexe_athlete_links where owner_team_id = $1 and unlinked_at is null`);
+
+  // The club is archived the way Settings archives it: the club row only; the team itself stays active.
+  await admin.query(`update public.clubs set is_active = false where id = $1`, [team.clubId]);
+  assert.equal(teamWorkspace(await me(team.coach.cookie)), false, "no team workspace under an archived club");
+  for (const [who, cookie] of viewers) {
+    for (const path of reads) {
+      const r = await api(path, { cookie });
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${who} ${path} under an archived club`);
+    }
+    const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie, body: {} });
+    assert.deepEqual([started.status, started.body], [404, { error: "notFound" }], `${who} check under an archived club`);
+    const linked = await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie, body: { gpexeAthleteId: "300", athleteId: team.ids.d } });
+    assert.deepEqual([linked.status, linked.body], [404, { error: "notFound" }], `${who} link under an archived club`);
+    const unlinked = await api(`/teams/${team.teamId}/athlete-links/${link.id}/unlink`, { method: "POST", cookie, body: {} });
+    assert.deepEqual([unlinked.status, unlinked.body], [404, { error: "notFound" }], `${who} unlink under an archived club`);
+  }
+  // The same answer as a team that does not exist.
+  const missing = await api(`/teams/00000000-0000-4000-8000-000000000000/status`, { cookie: team.padmin.cookie });
+  assert.deepEqual([missing.status, missing.body], [404, { error: "notFound" }]);
+  assert.equal(await count(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`), checksBefore, "no check was started");
+  assert.equal(await count(`select count(*)::int as n from training_load.gpexe_athlete_links where owner_team_id = $1 and unlinked_at is null`), activeLinksBefore, "nothing was linked or unlinked");
+
+  // Restored: the workspace and the routes come back.
+  await admin.query(`update public.clubs set is_active = true where id = $1`, [team.clubId]);
+  assert.equal(teamWorkspace(await me(team.coach.cookie)), true);
+  for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${team.teamId}/status`, { cookie })).status, 200, `${who} after the club is restored`);
+});

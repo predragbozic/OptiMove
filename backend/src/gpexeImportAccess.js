@@ -17,10 +17,16 @@ import { canManageTeamById, holdsClubAdminRole, isPlatformAdministrator } from "
 import { resolveActiveWorkspace } from "./workspace.js";
 
 export async function resolveGpexeTeamAccess(req, teamId, { query }) {
-  // An archived team is the same 404 as a missing one, for its coach, its
-  // club admin and a platform admin alike - every GPEXE route, including
-  // the administrative ones, goes through here.
-  const team = (await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true)`, [teamId])).rows[0];
+  // An archived team - or a team of an archived club - is the same 404 as a
+  // missing one, for its coach, its club admin and a platform admin alike -
+  // every GPEXE route, including the administrative ones, goes through here.
+  const team = (await query(
+    `select t.id, t.club_id
+       from public.teams t
+       join public.clubs c on c.id = t.club_id
+      where t.id = $1 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
+    [teamId],
+  )).rows[0];
   if (!team) return null;
   if (!canManageTeamById(req.authz, team.id)) return null;
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);

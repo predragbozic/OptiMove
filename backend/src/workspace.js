@@ -50,7 +50,14 @@ export async function loadAvailableWorkspaces(authz) {
       ? query(`select id, name from public.clubs where id = any($1::uuid[]) and coalesce(is_active, true)`, [clubIds])
       : { rows: [] },
     teamIds.length
-      ? query(`select id, name, club_id from public.teams where id = any($1::uuid[]) and coalesce(is_active, true)`, [teamIds])
+      // A team of an archived club is not a workspace either: archiving the club ends its teams' workspaces too.
+      ? query(
+        `select t.id, t.name, t.club_id
+           from public.teams t
+           join public.clubs c on c.id = t.club_id
+          where t.id = any($1::uuid[]) and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
+        [teamIds],
+      )
       : { rows: [] },
   ]);
   for (const club of sortByLabel(clubsResult.rows)) {
