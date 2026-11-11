@@ -167,13 +167,13 @@ test("1. when a search finishes, the source-athletes list is read again: Link at
     checks: { start: () => ({ status: 202, body: { check: CHECK } }), poll: () => ({ status: 200, body: { check: DONE } }) },
   });
   await openImports();
-  assert.match(html(), /1 GPEXE athlete is not linked/);
+  assert.match(html(), /data-action="training-load-gpexe-map-open"[^>]*>Link athletes \(1\)</);
   const reads = () => fetchCalls.filter((c) => c.method === "GET" && c.url.endsWith("/source-athletes")).length;
   const before = reads();
   SRC.list = [UNLINKED(1), UNLINKED(2), UNLINKED(3)];
   await act("training-load-gpexe-check");
   assert.ok(reads() > before, "the list was read again after the search");
-  assert.match(html(), /3 GPEXE athletes are not linked/, "the next step names the three");
+  assert.match(html(), /data-action="training-load-gpexe-map-open"[^>]*>Link athletes \(3\)</, "the button names the three");
   assert.equal(fetchCalls.filter((c) => c.method !== "GET" && !c.url.endsWith("/checks")).length, 0, "GET only after the search start");
 });
 

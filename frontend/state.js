@@ -810,6 +810,8 @@ export const emptyGpexeImportState = () => ({
   // a desktop, folded on a phone, open while a day is filtered). Local to
   // Imports; never the shared Training Load week.
   calendar: { month: "", day: "", open: null },
+  // U6a: whether the person opened the folded "Import settings" card (kept across repaints).
+  settingsOpen: false,
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({

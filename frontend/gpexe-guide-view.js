@@ -71,7 +71,7 @@ export function renderGuideHtml(gx, status) {
   const busy = Boolean(g.write?.sending || g.write?.unknown);
   const folded = allDone && g.open !== true && !g.confirm && !g.write && !busy;
   if (folded) {
-    return `<section class="gpexe-guide gpexe-guide-folded" aria-label="GPEXE setup"><p><strong>GPEXE setup is complete.</strong></p><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-guide-toggle">Show setup</button></section>`;
+    return `<section class="gpexe-guide gpexe-guide-folded" aria-label="GPEXE setup"><p><strong>GPEXE is set up <span aria-hidden="true">\u2713</span></strong></p><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-guide-toggle">Show setup</button></section>`;
   }
   const rowList = steps.map((s) => `<li class="gpexe-guide-step gpexe-guide-${escapeHtml(s.state)}"><span class="gpexe-guide-num" aria-hidden="true">${s.merged ? "1-2" : s.id}</span><div class="gpexe-guide-body"><strong>${escapeHtml(s.title)}</strong> <span class="gpexe-guide-state muted">${escapeHtml(STATE_WORD[s.state] || "")}</span>${s.text ? `<p class="muted">${escapeHtml(s.text)}</p>` : ""}${s.action ? `<button type="button" class="${s.action.kind === "retry" ? "plain-button" : "primary-button"} gpexe-button" data-action="${ACTION_NAME[s.action.kind]}" ${gx.checkStarting || (s.action.kind === "retry" && g.conn.status === "loading") ? "disabled" : ""}>${escapeHtml(s.action.label)}</button>` : ""}</div></li>`)
   let variablesHtml = "";
