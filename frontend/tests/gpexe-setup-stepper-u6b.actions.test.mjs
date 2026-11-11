@@ -37,7 +37,7 @@ const MAPPINGS = [1, 2].map((n) => ({
   target: { key: `t${n}`, label: `Variable ${n}` }, activeVersionId: `11111111-0000-4000-8000-00000000000${n}`,
 }));
 const VIEWERS = {
-  admin: { canApprove: false, approvalBasis: null, isPlatformAdmin: true, identityAdmin: true, identityLoad: true },
+  admin: { canApprove: false, approvalBasis: null, isPlatformAdmin: true, identityAdmin: true },
   coach: { canApprove: false, approvalBasis: null, isPlatformAdmin: false },
   teamCoach: { canApprove: false, approvalBasis: null, isPlatformAdmin: false, identityLoad: true },
 };
@@ -151,6 +151,12 @@ test("5. Athletes (S6): the exact pairs become Confirm N matches, the rest need 
   assert.match(step, /2 athletes need your choice\./);
   assert.match(step, />Confirm 1 match</);
   assert.doesNotMatch(step, /Zqname|2000-01-01/, "no name or date of birth in the stepper");
+
+  // An identity administrator whose viewer has no identityLoad flag (a server before #494) can still load the names.
+  reset({ athletes: unlinked3, suggestions: { state: "no_identities_loaded", exact: [], ambiguous: [], dateConflicts: [] }, activations: MAPPINGS.map((m) => ({ id: m.id, versionId: m.activeVersionId, mappingId: m.id })) });
+  await open();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.match(openStep(guideHtml()), /Load the GPEXE names and dates of birth in Link athletes/);
 
   reset({ athletes: [athlete(1, "linked")] });
   await open();

@@ -28,7 +28,8 @@ export function guideFacts(gx, status) {
     vars: g.vars || null,
     skipped: g.skipped || [],
     suggestions: gx.suggestions || null,
-    identityLoad: status?.viewer?.identityLoad === true,
+    // Who may start a name load: an identity administrator always; a team's coach when the server says so (#494).
+    identityLoad: status?.viewer?.identityLoad === true || status?.viewer?.identityAdmin === true,
     teamName: guideTeamName(gx),
     switchData: gx.teamSwitch?.data || null,
   };
