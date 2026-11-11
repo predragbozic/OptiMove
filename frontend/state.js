@@ -486,6 +486,7 @@ export const emptyTestsState = (overrides = {}) => ({
   results: [],
   resultsScheduleId: "",
   library: { tests: [], batteries: [] },
+  librarySearch: "",
   orgPickerData: null,
   scheduleForm: emptyScheduleForm(),
   showCancelledSchedules: false,

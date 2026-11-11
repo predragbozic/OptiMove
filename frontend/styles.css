@@ -25694,3 +25694,81 @@ body:not(.athlete-mode):not(.login-mode) .tests-link-box > .plain-button {
   }
 }
 /* End of design T2. */
+
+/* ==========================================================================
+   Design T3a: the coach's Test Library. Read-only is said once at the top,
+   a search narrows the list, rows are 44 px cards with the description, and
+   on a computer the cards sit in columns instead of full-width bars. The way
+   back from a result says where it goes. An athlete keeps their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-library {
+  display: grid;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-note {
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-search {
+  max-width: 480px;
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-search input {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-group {
+  display: grid;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-group > h3 {
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  align-items: start;
+  gap: var(--om-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-row {
+  display: grid;
+  align-content: center;
+  gap: var(--om-space-1);
+  min-height: var(--om-tap-target);
+  padding: var(--om-space-2) var(--om-space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--om-space-2);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-row-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-library-row-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-result-back {
+  width: auto;
+  margin-bottom: var(--om-space-2);
+}
+/* End of design T3a. */

@@ -3,6 +3,15 @@ import { renderImage } from "./media.js";
 import { programPriceLabel, ratingLabel } from "./program-library.js";
 import { escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
+// The head line names the marketplace only when this list holds a marketplace profile or a coach with marketplace
+// programs; it never promises a purchase (there is no payment yet).
+export function coachDirectoryLine(rows) {
+  const marketplace = (rows || []).some((row) => row?.visibility === "marketplace" || Number(row?.marketplace_count) > 0);
+  return marketplace
+    ? "The coaches you can see, with their specialties and programs, including programs offered on the marketplace."
+    : "The coaches you can see, with their specialties and programs.";
+}
+
 export function renderCoachesHtml(data) {
   const {
     coaches,
@@ -19,7 +28,7 @@ export function renderCoachesHtml(data) {
       <section class="coach-directory-head">
         <div>
           <h3>Coach profiles</h3>
-          <p class="muted">The coaches you can see, with their specialties and programs.</p>
+          <p class="muted">${escapeHtml(coachDirectoryLine(rows))}</p>
         </div>
         ${canEditProfile ? `<button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">${ownProfile ? "Edit my profile" : "Create my profile"}</button>` : ""}
       </section>

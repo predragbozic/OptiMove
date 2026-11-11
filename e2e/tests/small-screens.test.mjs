@@ -1,6 +1,6 @@
 // L1 + C1 in a real browser: the sign-in cards (sign in, forgot password, an invalid reset link) show the app's logo,
 // an accent main action and only 44 px controls at 390 and 1280 px; forgot password still answers an existing and an
-// unknown email with the same sentence; the coach directory promises no marketplace and its button is 44 px.
+// unknown email with the same sentence; the coach directory names the marketplace only when its list holds it (this world holds none) and its button is 44 px.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
@@ -85,7 +85,7 @@ test("forgot password answers an existing and an unknown email with the same sen
   assert.equal(answers[0][0], "If an active account exists for that email, we've sent password reset instructions.");
 });
 
-for (const width of [390, 1280]) test(`(team_coach, ${width} px) the coach directory: no marketplace promise, a 44 px button`, async () => {
+for (const width of [390, 1280]) test(`(team_coach, ${width} px) the coach directory: no marketplace line without a marketplace entry, a 44 px button`, async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
   try {
     const toggle = page.locator('[data-action="mobile-nav-toggle"]');
@@ -97,6 +97,7 @@ for (const width of [390, 1280]) test(`(team_coach, ${width} px) the coach direc
       return { text: s.innerText, button: Math.round(s.querySelector(".coach-directory-head .plain-button").getBoundingClientRect().height) };
     });
     assert.ok(!/marketplace/i.test(d.text));
+    assert.match(d.text, /The coaches you can see, with their specialties and programs\./);
     assert.match(d.text, /Your profile shows your specialties and programs to the athletes and coaches who can see it\./);
     assert.ok(d.button >= 44, `${d.button} px`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);

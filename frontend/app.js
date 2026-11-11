@@ -45,7 +45,7 @@ import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-act
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
-import { renderTests, renderTestsBadge } from "./tests-view.js";
+import { handleTestsLibraryInput, renderTests, renderTestsBadge } from "./tests-view.js";
 import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
@@ -1343,6 +1343,8 @@ function handleContentInput(event) {
   // The shared icon picker and Settings -> Icons narrow their grids in place.
   if (handleIconPickerInput(event.target)) return;
   if (handleIconGalleryInput(event.target)) return;
+  // Tests -> Test Library: the search narrows the list in place.
+  if (handleTestsLibraryInput(event.target)) return;
   // Data configuration -> Variables: the form's values and the list filter.
   if (handleUndoReasonInput(event.target)) return;
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;

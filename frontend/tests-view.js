@@ -79,8 +79,9 @@ export function renderTestsTabsHtml() {
   `;
 }
 
-function renderTestsSectionHtml() {
-  if (state.tests.form) return renderWellnessFormPageHtml(state.tests.form);
+export function renderTestsSectionHtml() {
+  // A coach reads a result from Results (or a session): the way back says where it goes; an athlete keeps the icon.
+  if (state.tests.form) return renderWellnessFormPageHtml(state.tests.form, { backLabel: isAthleteMode() ? "" : state.tests.section === "results" ? "Back to results" : "Back" });
   if (isAthleteMode()) {
     if (state.tests.section === "upcoming") return renderAthleteUpcomingHtml();
     if (state.tests.section === "history") return renderAthleteHistoryHtml();
@@ -155,16 +156,16 @@ function renderAthleteHistoryHtml() {
 // WELLNESS form (shared: normal Tests tab + public check-in page)
 // ------------------------------------------------------------
 
-export function renderWellnessFormPageHtml(form) {
+export function renderWellnessFormPageHtml(form, { backLabel = "" } = {}) {
   return `
     <div class="wellness-shell">
-      ${renderWellnessFormHtml(form, { backAction: "tests-close-assignment" })}
+      ${renderWellnessFormHtml(form, { backAction: "tests-close-assignment", backLabel })}
     </div>
   `;
 }
 
-export function renderWellnessFormHtml(form, { backAction = "" } = {}) {
-  if (form.result) return renderWellnessResultHtml(form, { backAction });
+export function renderWellnessFormHtml(form, { backAction = "", backLabel = "" } = {}) {
+  if (form.result) return renderWellnessResultHtml(form, { backAction, backLabel });
 
   const answeredCount = form.parameters.filter((p) => form.answered[p.key]).length;
   const allAnswered = answeredCount === form.parameters.length;
@@ -243,11 +244,15 @@ function labelFor(key) {
   return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
-function renderWellnessResultHtml(form, { backAction }) {
+function renderWellnessResultHtml(form, { backAction, backLabel = "" }) {
   const score = form.result.wellnessScore;
+  const back = !backAction ? ""
+    : backLabel ? `<button type="button" class="plain-button compact-button tests-result-back" data-action="${escapeAttr(backAction)}">&larr; ${escapeHtml(backLabel)}</button>`
+      : `<button type="button" class="plain-button icon-button wellness-back" data-action="${escapeAttr(backAction)}" aria-label="Back">&larr;</button>`;
   return `
+    ${backLabel && backAction ? back : ""}
     <section class="panel wellness-card wellness-result" aria-label="WELLNESS result">
-      ${backAction ? `<button type="button" class="plain-button icon-button wellness-back" data-action="${escapeAttr(backAction)}" aria-label="Back">&larr;</button>` : ""}
+      ${backLabel ? "" : back}
       <div class="wellness-header">
         ${renderWellnessAvatar(form)}
         <div>
@@ -1488,34 +1493,92 @@ function renderCoachResultsListHtml() {
 // Coach: Test Library (read-only)
 // ------------------------------------------------------------
 
+// T3a: the library is read-only for a coach (said once, not on every row); a pill marks the tests that can be scheduled.
+// The search narrows the rows in place (handleTestsLibraryInput), so the field keeps its focus while typing.
+const LIBRARY_SEARCH_MAX = 80;
+
+function librarySearchTerm() {
+  return String(state.tests.librarySearch || "").trim().toLowerCase();
+}
+
+function libraryMatches(item, term) {
+  return !term || `${item.name || ""} ${item.description || ""}`.toLowerCase().includes(term);
+}
+
+
+// The heading names the kind ("Tests"), so the count is only the number: "Tests · 2", never "Tests 2 tests".
+function libraryCountText(n) {
+  return `· ${n}`;
+}
+
+function renderLibraryRow(item, kind, term) {
+  return `
+    <li class="tests-library-row" data-tests-library-row data-search-text="${escapeAttr(`${item.name || ""} ${item.description || ""}`.toLowerCase())}"${libraryMatches(item, term) ? "" : " hidden"}>
+      <div class="tests-library-row-head">
+        <span class="tests-library-row-name">${escapeHtml(item.name)}</span>
+        ${kind === "test" && item.schedulable ? `<span class="tests-status-pill">Can be scheduled</span>` : ""}
+      </div>
+      ${item.description ? `<p class="muted tests-library-row-text">${escapeHtml(item.description)}</p>` : ""}
+    </li>`;
+}
+
+function renderLibraryGroup({ title, items, kind, term }) {
+  if (!items.length) return "";
+  const shown = items.filter((item) => libraryMatches(item, term)).length;
+  return `
+    <section class="tests-library-group" data-tests-library-group${shown ? "" : " hidden"}>
+      <h3>${escapeHtml(title)} <span class="muted" data-tests-library-count>${escapeHtml(libraryCountText(shown))}</span></h3>
+      <ul class="tests-library-list">${items.map((item) => renderLibraryRow(item, kind, term)).join("")}</ul>
+    </section>`;
+}
+
+// The note follows the data: it names the tests that can be scheduled and where (the Schedule tab).
+function libraryNoteText(tests) {
+  const names = tests.filter((item) => item.schedulable).map((item) => item.name).filter(Boolean);
+  if (!names.length) return "The library is read-only. Nothing here can be scheduled yet.";
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `The library is read-only. ${list} can be scheduled from the Schedule tab; the other tests and batteries are here for reference.`;
+}
+
 function renderCoachLibraryHtml() {
   const { tests, batteries } = state.tests.library;
+  const term = librarySearchTerm();
+  const shown = [...tests, ...batteries].filter((item) => libraryMatches(item, term)).length;
   return `
-    <div class="tests-library">
-      <h3>Tests</h3>
-      <div class="tests-card-list">
-        ${tests.map((t) => `
-          <div class="panel tests-assignment-card">
-            <div class="tests-assignment-card-head">
-              <span class="tests-assignment-card-title">${escapeHtml(t.name)}</span>
-              ${t.schedulable ? `<span class="tests-status-pill tests-status-completed">Schedulable</span>` : `<span class="tests-status-pill">Read-only</span>`}
-            </div>
-            ${t.description ? `<p class="muted">${escapeHtml(t.description)}</p>` : ""}
-          </div>
-        `).join("")}
-      </div>
-      <h3>Batteries</h3>
-      <div class="tests-card-list">
-        ${batteries.map((b) => `
-          <div class="panel tests-assignment-card">
-            <div class="tests-assignment-card-head">
-              <span class="tests-assignment-card-title">${escapeHtml(b.name)}</span>
-              <span class="tests-status-pill">Read-only</span>
-            </div>
-            ${b.description ? `<p class="muted">${escapeHtml(b.description)}</p>` : ""}
-          </div>
-        `).join("")}
-      </div>
+    <div class="tests-library" data-tests-library>
+      <p class="muted tests-library-note">${escapeHtml(libraryNoteText(tests))}</p>
+      <label class="search-field tests-library-search"><span>Search the library</span>
+        <input type="search" data-tests-library-search value="${escapeAttr(state.tests.librarySearch || "")}" maxlength="${LIBRARY_SEARCH_MAX}" placeholder="Name or description" autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+      ${renderLibraryGroup({ title: "Tests", items: tests, kind: "test", term })}
+      ${renderLibraryGroup({ title: "Batteries", items: batteries, kind: "battery", term })}
+      <p class="muted tests-empty" role="status" aria-live="polite" data-tests-library-empty${shown || !(tests.length + batteries.length) ? " hidden" : ""}>Nothing matches. Try another word.</p>
     </div>
   `;
+}
+
+// The search box's input: narrow the rows already on screen (the field is not redrawn, so it keeps its focus).
+export function handleTestsLibraryInput(target) {
+  const search = target?.closest?.("[data-tests-library-search]");
+  if (!search) return false;
+  state.tests.librarySearch = String(search.value || "").slice(0, LIBRARY_SEARCH_MAX);
+  const term = librarySearchTerm();
+  const root = search.closest("[data-tests-library]");
+  if (!root) return true;
+  let total = 0;
+  for (const group of root.querySelectorAll("[data-tests-library-group]")) {
+    let shown = 0;
+    for (const row of group.querySelectorAll("[data-tests-library-row]")) {
+      const match = !term || row.dataset.searchText.includes(term);
+      row.hidden = !match;
+      if (match) shown += 1;
+    }
+    group.hidden = !shown;
+    const count = group.querySelector("[data-tests-library-count]");
+    if (count) count.textContent = libraryCountText(shown);
+    total += shown;
+  }
+  const empty = root.querySelector("[data-tests-library-empty]");
+  if (empty) empty.hidden = Boolean(total);
+  return true;
 }
