@@ -8,6 +8,8 @@ import fs from "node:fs";
 import http from "node:http";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+// This suite pins v60 as the last migration (its rollback tests need that); later migrations (v61, J20-C) have their own suites.
+const UP_TO_V60 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v60_undo_roster_work")) + 1);
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -33,7 +35,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) }); // everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: UP_TO_V60.filter((m) => !m.includes("app_error_events")) }); // everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -899,7 +901,7 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   } finally {
     await c.query(`insert into public.schema_migrations select * from u5_saved_migrations`).catch(() => {});
     await c.end();
-    await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")));
+    await applyGpexeTestMigrations(db.url, UP_TO_V60.filter((m) => !m.includes("app_error_events")));
   }
   assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name like '%v60%'`)).rows[0].n, 1, "v60 is in force again");
 });

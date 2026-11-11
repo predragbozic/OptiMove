@@ -236,6 +236,36 @@ Roster states are decisions on an **activity**, which exists only after the impo
 **Recommendation: A.** The states are small, reversible, and already have a correct write path; the import is the only irreversible act
 and should not wait for them. If the first months show friction, B is a later change, not a rework. **Decision for the owner: section 11, O2.**
 
+**As built (J20-C part a: migration v61 and the route; the *Rukovodilac*'s GO of 2026-11-10; runbook `docs/runbooks/import-states-v61.md`).**
+* **Deviation from the text above, decided:** the states are NOT sent through the generic bulk route. That route writes `origin = 'roster'`, so
+  the undo (v60) would treat them as later work and ask for a confirmation, against O1. They go through their own route, which writes
+  `origin = 'import'` bound to the approval.
+* **Migration v61** (`migrations_v2/202611101200_training_load_v61_import_states_approval.sql`): `activity_roster_requests.origin_approval_id`
+  (a foreign key to the approvals; CHECK `origin = 'import'` exactly when set); `training_load.import_states_window()` = **30 minutes**, the one
+  place the window lives; the request guard (`protect_activity_roster_request_v61`, md5 gate on v60's) checks the NAMED approval: same team,
+  same user, same session, `approved_at <= now() <= approved_at + window` (the server's time), its candidate not undone, and every decision of the request
+  on the session's roster (`training.activity_roster`).
+* **Route**: `POST /api/training-load/gpexe/teams/:teamId/approvals/:approvalId/states`, the roster bulk body (`requestKey`, `kind`,
+  `reasonKey`, `note`, `athletes` 1-60). `teamAccess` first; the approval must be the caller's own on this team (anything else, a missing
+  one and a malformed id are the identical 404); then the roster bulk command (`activityRosterCommands.decideImportStates`) with its own
+  locks and rights, checked at the time of this request (an approver who lost the right meanwhile gets the 404; the import stands). Inside
+  its transaction, after the requestKey replay: `409 import_undone`, `409 import_states_window_closed` (the window read from the database
+  function). After an undo the activity is gone, so the answer is the identical 404 (`409 roster_not_applicable` for a request that
+  raced the undo). The import's right and the roster's are two contracts, but in every reachable workspace they agree: a club or team
+  workspace exists only for a holder of its role (`workspace.js`), and a platform admin decides on rosters from the platform workspace
+  (tested: a platform admin who asks for a club workspace without that club's role works from the platform workspace). The canonical body (and so the request hash) carries `origin: "import"` and the approval id: a key used on the plain bulk
+  route is `request_key_reused` here and the other way round. A saved request replays its answer even after the window. A plain roster
+  request is written exactly as before (it does not name the new column).
+* **Athletes**: the bulk command's own rules hold (not on the roster -> `not_on_roster`, measured values -> `measured_record_exists`); an
+  athlete the coach left out of a subset import (v59) has no measured values and gets a state.
+* **Evidence**: `backend/tests/import-states-j20c.test.mjs` (13 tests, disposable: the route end to end with the undo removing the states
+  without a question, idempotency across routes, the identical 404s, rights at request time, the window with the replay of a saved key, the
+  left-out / measured / off-roster athletes, the database's own rules, a lost COMMIT answer replayed once, both lock orders with the undo,
+  the body, the migration's preflight / post-check / rollback / re-apply and md5 gate). The O1 and U5 suites pin v60 as their last
+  migration.
+* **Part b** (the frontend: choosing states on the review's *No data* and *Left out* rows, saved after a confirmed import, one requestKey
+  per kind and reason kept across a reload) is the next pull request, merged only after part a.
+
 ### 5.3 The undo (U5) and roster decisions — decided (O1, extended variant b)
 
 U5 refuses a session that has any coach roster decision (`roster_decisions_exist`). With J20, every session in which the coach saves states will carry

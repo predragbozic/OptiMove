@@ -84,6 +84,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611091000_app_error_events.sql",
   "202611091100_training_load_v59_import_approval_subset.sql",
   "202611101000_training_load_v60_undo_roster_work.sql",
+  "202611101200_training_load_v61_import_states_approval.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
