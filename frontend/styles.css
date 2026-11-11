@@ -25173,3 +25173,261 @@ body:not(.athlete-mode):not(.login-mode) .organization-view .organization-join-l
   display: grid;
   gap: 12px;
 }
+
+/* ==========================================================================
+   Design: Settings dialog frame (S4). Manage account, Athlete account,
+   Invite and Edit club / team / athlete share one frame: a head that stays
+   put while the body scrolls (title, subtitle, a 44 px close icon), and a
+   saving dialog's footer that stays at the bottom. Manage account's groups
+   are cards whose rows read "name, state" on the left and the action on the
+   right; its one destructive switch, the login, comes last.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) :is(.organization-manage-account-modal, .organization-edit-modal, .organization-invite-modal) {
+  padding-top: 0;
+  gap: var(--om-space-3);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -16px var(--om-space-1);
+  padding: var(--om-space-4) 16px var(--om-space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head h3 {
+  margin: 2px 0 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-head .organization-dialog-close {
+  flex: 0 0 auto;
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  height: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-close .builder-icon-svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* A saving dialog's footer stays at the bottom while the fields scroll. The edit dialog has no bottom padding of its
+   own (its footer carries it), so the footer sticks at bottom: 0 in every engine; a focused field scrolled into view
+   is kept clear of the footer. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal {
+  padding-bottom: 0;
+  scroll-padding-bottom: 96px;
+  overscroll-behavior: contain;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0 -16px;
+  padding: var(--om-space-3) 16px var(--om-space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+/* What went wrong with a save is said in the footer, next to the button that was pressed. */
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .builder-error:empty {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-badge {
+  display: inline-flex;
+  margin-top: var(--om-space-1);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form h5 {
+  margin: var(--om-space-2) 0 0;
+  font-size: var(--om-text-sm, 14px);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-dialog-footer .plain-button {
+  min-height: var(--om-tap-target);
+}
+
+/* Edit athlete: the profile and the library access are two parts, each under its own heading with its own save. */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part h4 {
+  margin: 0;
+  font-size: var(--om-text-md, 16px);
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-dialog-part + .organization-dialog-part {
+  margin-top: var(--om-space-4);
+  padding-top: var(--om-space-4);
+  border-top: 1px solid var(--line-strong);
+}
+
+
+/* Manage account: each group is a card; a row is "name, state" on the left and the action on the right. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section {
+  padding: var(--om-space-3) var(--om-space-4);
+  border: 1px solid var(--om-border-subtle, var(--line));
+  border-radius: var(--om-radius-md, var(--radius));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section:first-of-type {
+  padding-top: var(--om-space-3);
+  border-top: 1px solid var(--om-border-subtle, var(--line));
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row {
+  justify-content: space-between;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--om-space-2);
+  min-width: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-row .plain-button,
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row :is(.plain-button, select) {
+  min-height: var(--om-tap-target);
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-add-row select {
+    font-size: 16px;
+  }
+}
+
+/* The login switch, the one destructive account action, is the last card, marked as such. */
+body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-danger {
+  border-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+/* Only the profile's footer stays at the bottom; the library access is saved at the end of its own part (a second
+   sticky footer would show its save under the profile). */
+body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .athlete-access-form .organization-dialog-footer {
+  position: static;
+  margin: 0;
+  padding: var(--om-space-3) 0 var(--om-space-4);
+  border-top: 0;
+}
+
+/* ==========================================================================
+   Design S6 (shell): the header's controls are 44 px on a computer too. The
+   workspace switcher, Notifications, Messages and Sign out were 40 px above
+   the phone breakpoint (on a phone they already were 44). The "Online" status
+   pill is left as U4 set it.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .topbar .workspace-toggle {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle,
+body:not(.athlete-mode):not(.login-mode) .topbar-actions .sign-out-button {
+  width: var(--om-tap-target);
+  min-width: var(--om-tap-target);
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (shell). */
+
+/* ==========================================================================
+   Design S6 (Settings): App health's period, role and place chips are 44 px on
+   every width (on a phone they already were). (Calendar settings' "Add …"
+   button is hidden while its own form is open by the hidden attribute alone:
+   the global [hidden] rule hides it.)
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .app-health-chip {
+  min-height: var(--om-tap-target);
+}
+/* End of design S6 (Settings). */
+
+/* ==========================================================================
+   Design S7: Icons on a phone. The gallery is a grid of compact tiles (the
+   icon, its name and Copy key) instead of one long list, and the category
+   chips are one row that scrolls sideways and stays at the top while the page
+   scrolls. The search words still find an icon; on a phone they are not
+   repeated on its tile. Read-only, as before.
+   ========================================================================== */
+@media (max-width: 760px) {
+  /* A panel clips its overflow; "clip" (not "hidden") lets the chips stick to the page. */
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery.panel {
+    overflow: clip;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -16px;
+    padding: var(--om-space-2) 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery [data-icon-gallery-chips] .icon-picker-chip {
+    flex: 0 0 auto;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: var(--om-space-2);
+  }
+
+  /* A 320 px phone still gets three tiles to a row. */
+  @media (max-width: 359px) {
+    body:not(.athlete-mode):not(.login-mode) .icon-gallery-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--om-space-1);
+    padding: var(--om-space-2);
+    text-align: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-glyph {
+    align-self: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text strong {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-text > small {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .icon-gallery-refused code {
+    overflow-wrap: anywhere;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .icon-gallery-item .plain-button {
+    width: 100%;
+    padding-inline: var(--om-space-1);
+  }
+}
+/* End of design S7. */

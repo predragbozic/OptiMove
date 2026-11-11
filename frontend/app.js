@@ -3235,6 +3235,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     normalizeOrganizationSelection(data);
     const role = roleLabel();
     const scope = accessScopeLabel();
+    // S4: a Settings dialog that is drawn again (a pending or settled action) keeps where it was scrolled to, so an
+    // action near its end (Account status) shows its result in place.
+    const openDialog = els.content.querySelector?.('[role="dialog"][aria-modal="true"]');
+    const dialogScroll = openDialog ? { label: openDialog.getAttribute("aria-label"), top: openDialog.scrollTop } : null;
     els.content.innerHTML = renderOrganizationPanelHtml({
       currentUser: state.currentUser,
       data,
@@ -3242,6 +3246,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       role,
       scope,
     });
+    if (dialogScroll?.top) {
+      const again = [...els.content.querySelectorAll('[role="dialog"][aria-modal="true"]')].find((dialog) => dialog.getAttribute("aria-label") === dialogScroll.label);
+      if (again) again.scrollTop = dialogScroll.top;
+    }
     // The Settings tab row scrolls sideways when it does not fit: keep the active tab in view.
     revealActiveTab(els.content);
   };
