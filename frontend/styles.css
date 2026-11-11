@@ -25490,3 +25490,79 @@ body:not(.login-mode) .coach-directory-head .plain-button {
   min-height: var(--om-tap-target);
 }
 /* End of design C1. */
+
+/* ==========================================================================
+   Design T1: the Tests week pager and Schedule toolbar (coach). The arrows
+   sit next to the week and Today instead of at the two far edges, every
+   pager and toolbar control is 44 px, and "Show cancelled" is a switch in a
+   44 px row instead of a bare 42 px box. An athlete's Tests keep their look.
+   ========================================================================== */
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-nav {
+  justify-content: center;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-range {
+  flex: 0 1 auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow,
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-today-button,
+body:not(.athlete-mode):not(.login-mode) .tests-schedule-toolbar .plain-button,
+body:not(.athlete-mode):not(.login-mode) .tests-shell .om-btn {
+  min-height: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-weekly-arrow {
+  min-width: var(--om-tap-target);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle {
+  min-height: var(--om-tap-target);
+  gap: var(--om-space-2);
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* The native checkbox (its handler reads .checked) drawn as a switch. */
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: left 0.12s ease;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:checked::before {
+  left: 18px;
+  background: #fff;
+}
+
+body:not(.athlete-mode):not(.login-mode) .tests-show-cancelled-toggle input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* End of design T1. */

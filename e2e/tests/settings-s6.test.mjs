@@ -19,7 +19,9 @@ for (const width of [1280, 390]) test(`(platform_admin, ${width} px) App health'
   const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", width);
   try {
     await openSection(page, "appHealth");
-    await page.locator(".app-health-chip").first().waitFor();
+    // Under load App health can still be loading or repainting after its first chip appears: wait until the chips
+    // are laid out (at least four of the period and role chips have a size) before measuring them.
+    await page.waitForFunction(() => [...document.querySelectorAll(".app-health-chip")].filter((c) => c.getBoundingClientRect().width > 0).length >= 4);
     const sizes = await page.$$eval(".app-health-chip", (chips) => chips.filter((c) => c.getBoundingClientRect().width > 0).map((c) => Math.round(c.getBoundingClientRect().height)));
     assert.ok(sizes.length >= 4, `${sizes.length} chips`);
     for (const h of sizes) assert.ok(h >= 44, `a chip is ${h} px`);

@@ -40,7 +40,8 @@ export function renderTestsBadge() {
 }
 
 export function renderTests() {
-  els.context.textContent = "Tests";
+  // A coach's eyebrow says what the area is for, not "Tests" over "Tests" (an athlete's header has its own look).
+  els.context.textContent = isAthleteMode() ? "Tests" : "Testing and wellness";
   els.title.textContent = "Tests";
   els.toolbar.innerHTML = "";
   els.content.innerHTML = `
@@ -658,9 +659,9 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
 function renderCoachScheduleHtml() {
   return `
     <div class="tests-schedule-toolbar">
-      <button type="button" class="plain-button" data-action="tests-open-schedule-form">New WELLNESS schedule</button>
+      <button type="button" class="plain-button" data-action="tests-open-schedule-form">New wellness schedule</button>
       <label class="tests-show-cancelled-toggle">
-        <input type="checkbox" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
+        <input type="checkbox" role="switch" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
         <span>Show cancelled</span>
       </label>
     </div>
@@ -698,7 +699,7 @@ export function renderScheduleWeeklyHtml() {
     weekStart: nav.data.weekStart,
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
-    emptyAgendaText: "No WELLNESS scheduled for this day.",
+    emptyAgendaText: "No wellness check-ins scheduled for this day.",
     renderSessionRow: (session) => renderWeeklySessionRowShell({
       dataAction: "tests-open-schedule",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}"`,
@@ -1001,7 +1002,7 @@ export function renderScheduleFormHtml() {
   return `
     <section class="panel tests-schedule-form">
       <button type="button" class="plain-button icon-button wellness-back" data-action="tests-close-schedule-form" aria-label="Close">&times;</button>
-      <h3>${isEdit ? "Edit WELLNESS schedule" : isScheduleAgain ? "Schedule again" : "New WELLNESS schedule"}</h3>
+      <h3>${isEdit ? "Edit wellness schedule" : isScheduleAgain ? "Schedule again" : "New wellness schedule"}</h3>
       ${isScheduleAgain ? `<p class="muted">Settings copied from the original schedule - pick new dates below to create an independent new schedule. The original and its results are unaffected.</p>` : ""}
       ${form.error ? `<p class="builder-error">${escapeHtml(form.error)}</p>` : ""}
       ${blockedOneTimeEdit ? `
@@ -1460,7 +1461,7 @@ function renderResultsListFilteredHtml() {
 
 function renderCoachResultsListHtml() {
   const rows = state.tests.results;
-  if (!rows.length) return `<p class="muted tests-empty">No WELLNESS results yet.</p>`;
+  if (!rows.length) return `<p class="muted tests-empty">No wellness results yet.</p>`;
   return `
     <div class="tests-results-table">
       ${rows.map((row) => `
