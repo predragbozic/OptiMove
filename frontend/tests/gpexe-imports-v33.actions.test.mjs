@@ -165,7 +165,7 @@ test("1. Ready to import: a pending session the last successful search did not c
   const page = html();
   assert.match(readySection(page), /Ready to import \(1\)/);
   assert.ok(readySection(page).includes('data-candidate-id="cand-1"') && !readySection(page).includes('data-candidate-id="cand-nc"'), "the unconfirmed session is not in Ready");
-  assert.match(attentionSection(page), /Needs attention \(1\)/);
+  assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.ok(attentionSection(page).includes('data-candidate-id="cand-nc"'));
   assert.match(attentionSection(page), COACH_STEP("06.10.2026"), "the row names the action and the dates; its badge says the status");
   assert.doesNotMatch(attentionSection(page), /Not confirmed for import yet\./, "the row does not repeat the badge");
@@ -187,7 +187,7 @@ test("2. not observed: the same word on a session that would otherwise read 'up 
   responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [notConfirmed({ previewStatus: "no_changes", counts: { created: 0, unchanged: 4 } })] });
   await openImports();
   const page = html();
-  assert.match(attentionSection(page), /Needs attention \(1\)/);
+  assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.doesNotMatch(section(page, "Imported"), /cand-nc/);
   assert.doesNotMatch(page, /Nothing new to import/);
   await openCandidate("cand-nc");

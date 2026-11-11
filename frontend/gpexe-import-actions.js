@@ -6,7 +6,7 @@
 import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
-import { nextInGroup } from "./gpexe-attention-groups.js";
+import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import {
   reloadGpexeCandidates,
@@ -115,7 +115,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
-    await startGpexeCheck({ from: fieldValue("[data-gpexe-field='from']"), to: fieldValue("[data-gpexe-field='to']") }, renderTrainingLoad);
+    // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
+    const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
+    await startGpexeCheck(own || { from: fieldValue("[data-gpexe-field='from']"), to: fieldValue("[data-gpexe-field='to']") }, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
@@ -125,19 +127,22 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-open") {
     // U6a-2: a session opened from an attention group (its button or one of its rows) steps through that group.
-    await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group: action.dataset.group || "" });
+    // The group's sessions are kept as they are now, so a link that moves the others to "Review out of date" does not end it.
+    const group = action.dataset.group || "";
+    const groupIds = group ? groupItems(group, gx.candidates || [], gx).map((c) => c.id) : [];
+    await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group, groupIds });
     return true;
   }
   if (type === "training-load-gpexe-group-next") {
     // U6a-2 (J20 section 8): the next session of the same group, as the list is now. Never while something of this review
     // must still be seen (the same guards as Close).
     const detail = gx.detail;
-    if (!detail?.group || detail.approving || detail.verifying || detail.updating || gx.linkBusy || gx.undo?.step === "sending") return true;
-    const next = nextInGroup(detail.group, detail.id, gx.candidates || [], gx);
+    if (!detail?.group || reviewMustStay(gx, detail)) return true;
+    const next = nextInGroup(detail, gx.candidates || [], gx);
     if (!next || next.id === detail.id) return true;
     const refresh = closeGpexeCandidate();
     if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
-    await openGpexeCandidate(next.id, renderTrainingLoad, { group: detail.group });
+    await openGpexeCandidate(next.id, renderTrainingLoad, { group: detail.group, groupIds: detail.groupIds });
     if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
     return true;
   }

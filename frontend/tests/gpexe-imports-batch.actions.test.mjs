@@ -241,7 +241,7 @@ test("4./5./6. Review shows the sessions (no hash, id or code in the open), Back
   let d = dialog();
   assert.match(d, /aria-label="Import 2 sessions"/);
   // U6a-2 (D7): the confirmation is one question.
-  assert.match(d, /<strong>Import 2 sessions into First Team\? Their values appear in Training Load at once\.<\/strong>/);
+  assert.match(d, /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
   assert.match(d, /exactly as found in the last search/);
   assert.match(d, /<strong>FULL TRAINING 1<\/strong> <span class="muted">01\.09\.2026 /);
   assert.match(d, /<strong>FULL TRAINING 3<\/strong>/);
@@ -512,7 +512,7 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
   const page = html();
-  assert.match(page, /Needs attention \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
+  assert.match(page, /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   // U6a-2: the group says it; the state bar's "Import 1 ready" names what can be imported now.
   assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 1 ready</, "the main button names what can be imported now");
@@ -709,7 +709,9 @@ test("14./15. a marked day filters the list locally (no request, the search date
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 1 session found, showing this day" aria-pressed="true"/);
   assert.match(page, /Showing the sessions of 21\.09\.2026 only \(1 of 3\)\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.ok(!/Needs attention \(/.test(page), "the attention row of another day is hidden");
+  // U6a-2: the sessions that need a person stay grouped over every date (like the counts in the state bar), and say so.
+  assert.match(page, /<h3>Needs you \(1\)<\/h3><\/div>\s*<p class="muted">These cover every date, not only the day you picked\.<\/p>/);
+  assert.match(page, /data-candidate-id="cand-7"/);
   assert.match(page, /data-candidate-id="cand-21"/);
   assert.ok(!/data-candidate-id="cand-14"/.test(page));
   assert.match(page, /data-gpexe-field="from" value=""/, "the search dates stay empty");
@@ -718,7 +720,7 @@ test("14./15. a marked day filters the list locally (no request, the search date
   page = html();
   assert.equal(gx().calendar.day, "");
   assert.match(page, /<h3>Ready to import \(2\)<\/h3>/);
-  assert.match(page, /Needs attention \(1\)/);
+  assert.match(page, /Needs you \(1\)/);
   assert.ok(!/Showing the sessions of/.test(page));
   assert.equal(fetchCalls.length, calls);
   // The same day again also clears the filter.
@@ -882,7 +884,7 @@ test("10f. a 'nothing new' session reviewed before a link change is a Needs-atte
   gx().linkCheckStartedAt = "2026-09-25T09:00:00Z"; // only cand-2 was seen by a check after the link change
   const page = html();
   const attention = page.slice(page.indexOf('aria-label="Needs attention"'), page.indexOf('aria-label="Ready to import"'));
-  assert.match(attention, /<h3>Needs attention \(1\)<\/h3>/);
+  assert.match(attention, /<h3>Needs you \(1\)<\/h3>/);
   assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale 'nothing new' session is an attention item with its step");
   assert.ok(!attention.includes('data-candidate-id="cand-2"'));
   const imported = page.slice(page.indexOf("<summary>Imported ("));

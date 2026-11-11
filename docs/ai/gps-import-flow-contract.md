@@ -211,21 +211,23 @@ C113–C125 (the owner's answers to J18's Q1–Q14, 2026-11-04) are recorded in 
 
 The *Rukovodilac* accepted the alignment table of the "GPS Import Flow" proposal against main `05c08284` on 2026-11-11. U6a-2 takes the rows of that table that need no server change: D2–D8, with D5 without its counts. The rows that need a backend (D1, the D3 total "of M", the D5 counts, S2, S3) and the setup stepper (U6b) are separate pull requests.
 
-- **The sessions that need a person, grouped** (`frontend/gpexe-attention-groups.js`, after PR #408). The order is:
+- **The sessions that need a person, grouped** (`frontend/gpexe-attention-groups.js`, after PR #408), under the heading *Needs you (N)*. The groups cover the whole list, like the state bar's counts; with a day picked in the calendar, a line says so. The order is:
   - *Result not confirmed*;
   - *Athletes not linked*;
   - *Review out of date*;
   - *Needs a new search*;
-  - *Needs a manual review*;
+  - *Needs a look*;
   - *Problem in the GPEXE data*.
 
-  Each group has one sentence, a count and ONE button. A group with several sessions keeps them folded; a group of one shows its session.
+  Each group has one sentence (for one session or several), a count and ONE button with the same label whatever the count. A group with several sessions keeps them folded; a group of one shows its session.
 - **The group buttons.**
-  - *Needs a new search* finds new sessions for the group's dates.
+  - *Needs a new search* names the dates the search will use (the pre-filled ones, clipped to the latest 31 days) and sends exactly those.
   - Every other group's button opens its first session. So does any of its rows.
+  - With nothing ready to import, the first group's button is the screen's one main action when it is *Result not confirmed*, *Athletes not linked* or *Review out of date*, and *Find new sessions* becomes a plain button. Otherwise the state bar's button stays the main one.
 - **Stepping through a group** (J20 section 8). A review opened from a group says *Session i of n in "…"* and offers *Next session*.
-  - *Next session* opens the next session of the same group, as the list is now.
-  - It is off, and refused by the handler, while an approval, an update, a link or an undo of the review is in flight.
+  - The group is the list of sessions it held when it was opened, because a link made in one session moves the others to *Review out of date*.
+  - *Next session* opens the next of those that still needs a person, never back to the start. After the last one: "That was the last session in "…"." with *Back to Imports*.
+  - It is off, and refused by the handler, while something of the review must still be seen: an approval or its check, an update, a link, an undo in flight or not confirmed, or attendance states being saved or not confirmed (J20-C).
 - **A review made before a link change** is its own group, *Review out of date*.
   - Its review updates itself with J20-A1's recompute (*Update the review*), so no new search and no dates are asked for it.
   - The row says "open it and update the review"; the dates are no longer pre-filled for it.
@@ -238,9 +240,9 @@ The *Rukovodilac* accepted the alignment table of the "GPS Import Flow" proposal
   - The confirmation is one question: "Import N sessions into <team>? Their values appear in Training Load at once." It is followed by one note.
   - After an import that only imported, the result reads "Imported N sessions." with "You can see them in Training Load → Activities." and *Open Activities*.
   - A mixed result keeps the counts line.
-- **D8:** *mixed_timezones* is a data problem in plain words for everyone: "GPEXE reports this session's GPS units in more than one time zone…", with "Nothing to do for now". The code and the server's text stay in an administrator's Technical details. Policy (b) is its own ★★ pull request.
+- **D8:** *mixed_timezones* is a data problem in plain words for everyone: "GPEXE reports this session's GPS devices in more than one time zone…", with "Nothing to do for now". The group's button is *See why*. Such a session still counts in *Needs you* until policy (b); whether it should is open with the *Rukovodilac*. The code and the server's text stay in an administrator's Technical details. Policy (b) is its own ★★ pull request.
 - **Guide step 4** is no longer *done* while a session still lists an athlete as not linked (after PR #408). It then points to the *Athletes not linked* group, not to a search.
-- **Tests:** `frontend/tests/gpexe-attention-u6a2.actions.test.mjs` (12 tests); the existing Imports suites follow the texts; the J20-C suite gains test 25, the Nezavisni revizor's INFO 2: leaving between two groups does not send the next one.
+- **Tests:** `frontend/tests/gpexe-attention-u6a2.actions.test.mjs` (16 tests); the existing Imports suites follow the texts; the J20-C suite gains test 25, the Nezavisni revizor's INFO 2: leaving between two groups does not send the next one.
 
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 

@@ -800,13 +800,13 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
   // U6a: the state bar and the buckets say what the old next-step line said; there is no second line.
   assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the list");
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the ready session is listed");
-  assert.ok(html.indexOf('class="imports-statusbar"') < html.indexOf('Needs attention ('), "the state bar comes before the buckets");
+  assert.ok(html.indexOf('class="imports-statusbar"') < html.indexOf('Needs you ('), "the state bar comes before the buckets");
   const mainScreen = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/GPEXE team 980|Reads GPEXE team/.test(mainScreen), "the GPEXE team id is only in Technical details");
   assert.match(html, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
   assert.ok(!/candidates/i.test(mainScreen.replace(/data-[a-z-]+="[^"]*"/g, "")), "no 'candidates' jargon");
   assert.match(html, />Find new sessions</);
-  assert.match(html, /<h3>Needs attention \(2\)<\/h3>/);
+  assert.match(html, /<h3>Needs you \(2\)<\/h3>/);
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
   assert.match(html, /<summary>Imported \(1\)<\/summary>/);
   const readyRow = html.slice(html.indexOf('data-candidate-id="c-new"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-new"')));
@@ -1001,7 +1001,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   const imported = html.slice(html.indexOf("<summary>Imported (1)</summary>"));
   assert.match(imported, /Training E[\s\S]*nothing new/);
   assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</details>"))), "a session with nobody linked is not 'done'");
-  const attention = html.slice(html.indexOf("Needs attention (1)"), html.indexOf("Ready to import ("));
+  const attention = html.slice(html.indexOf("Needs you (1)"), html.indexOf("Ready to import ("));
   assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - open it and link the athletes from their rows\./);
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   assert.ok(!/Up to date/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no 'up to date' group any more");
@@ -1047,7 +1047,7 @@ test("blocked sessions in the list: sorted from the list's own code with no deta
 
   // Every other block is in Needs attention, and the row's step is exactly
   // the detail's "What to do".
-  assert.match(html, /<h3>Needs attention \(5\)<\/h3>/);
+  assert.match(html, /<h3>Needs you \(5\)<\/h3>/);
   assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the list");
   for (const id of ["c-thr", "c-stats", "c-none", "c-data", "c-conf"]) {
     const row = html.slice(rowIdx(html, id), html.indexOf("</button>", rowIdx(html, id)));
@@ -1081,7 +1081,7 @@ test("when nothing needs a decision but some sessions can't be imported yet, the
   });
   await openImports();
   assert.ok(!/class="gpexe-next"/.test(renderTrainingLoadCoachHtml()), "no next-step line repeats the list");
-  assert.match(renderTrainingLoadCoachHtml(), /<h3>Needs attention \(1\)<\/h3>/);
+  assert.match(renderTrainingLoadCoachHtml(), /<h3>Needs you \(1\)<\/h3>/);
   assert.match(renderTrainingLoadCoachHtml(), /Check the team thresholds in GPEXE, then find new sessions\./);
 });
 
@@ -1291,7 +1291,7 @@ test("link: after linking the old review can't be approved until a new check, an
   html = renderTrainingLoadCoachHtml();
   // U6a-2: the "Review out of date" group says it; the row's step is to update the review (no search needed).
   assert.ok(!/class="gpexe-next"/.test(html), "the groups say it, the next-step line does not repeat it");
-  assert.match(html, /Needs attention \(1\)[\s\S]*?Review out of date[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale session is an attention item with its own step");
+  assert.match(html, /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale session is an attention item with its own step");
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   await openCandidate();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(renderTrainingLoadCoachHtml()));
@@ -1858,7 +1858,7 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   });
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /<h3>Needs attention \(3\)<\/h3>/);
+  assert.match(html, /<h3>Needs you \(3\)<\/h3>/);
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
   assert.ok(!/Training L|Training M|Training G/.test(ready), "none of them is ready");
@@ -1880,7 +1880,7 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   });
   await openImports();
   const old = renderTrainingLoadCoachHtml();
-  assert.match(old, /<h3>Needs attention \(1\)<\/h3>/);
+  assert.match(old, /<h3>Needs you \(1\)<\/h3>/);
   assert.match(old, /Training O[\s\S]*1 recorded athlete is left out - open it to see who and why\./);
 });
 
@@ -1911,7 +1911,7 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(fetchCalls.filter((c) => /\/candidates\/[^/?]+$/.test(c.url)).length, 0, "no session detail was read");
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /<h3>Needs attention \(8\)<\/h3>/);
+  assert.match(html, /<h3>Needs you \(8\)<\/h3>/);
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
   assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
   assert.match(html, /<summary>Imported \(2\)<\/summary>/);
