@@ -25960,7 +25960,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel > .gpexe-guide {
    attention groups' own rules it was drawn as the browser's grey default. Only inside Imports, and only its colours:
    the size of every button (the review dialog's sticky bar included) stays as each one's own rule sets it. */
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports .primary-button {
-  border-color: var(--accent);
+  border: 1px solid var(--accent);
   background: var(--accent);
   color: #fff;
   font-weight: 600;
