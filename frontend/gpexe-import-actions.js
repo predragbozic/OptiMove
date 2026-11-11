@@ -56,6 +56,7 @@ import {
   identityViewer,
   loadGpexeIdentities,
   loadPairSuggestions,
+  loadGuidePairs,
   reviewSuggestedPairs,
   openIdentityConfirm,
   sendIdentityLoad,
@@ -416,6 +417,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
     closeTeamMapping();
     renderTrainingLoad();
+    // U6b: back to the stepper with counts that follow what was linked (names may have been loaded meanwhile).
+    await loadGuidePairs(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-map-choose") {

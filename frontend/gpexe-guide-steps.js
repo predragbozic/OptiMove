@@ -9,13 +9,14 @@ export const GUIDE_STEP_TITLES = ["Connect GPEXE", "Choose team", "Variables", "
 
 // facts: { admin, conn: { status, connected, reconnect, bound }, check, candidates,
 //          sourceAthletes, sourceAthletesError, links, teamSwitch, vars, skipped,
-//          suggestions: { status, data }, identityLoad, teamName, switchData }
+//          pairs: { exact, namesMissing } or null, identityLoad, teamName, switchData }
 //   conn.status: idle | loading | ready | error | unavailable
 //   vars: { status, total, onCount } or null
 //   switchData: the import switch read with its conditions (administrators) or null
 export function guideSteps(f) {
   const steps = [];
   const conn = f.conn || { status: "idle" };
+  const team = (f.teamName || "").trim() || "this team";
   const add = (id, state, text, action = null, extra = {}) => steps.push({ id, title: GUIDE_STEP_TITLES[id - 1], state, text, action, ...extra });
   const checkDone = f.check?.status === "succeeded";
   const running = f.check?.status === "running";
@@ -41,14 +42,16 @@ export function guideSteps(f) {
       s1 = conn.connected || conn.bound ? "done" : "next";
       s2 = conn.bound ? "done" : s1 === "done" ? "next" : "waiting";
     }
+    const settings = { kind: "settings", label: "Open Source connections" };
     add(1, s1, unreadable ? (failed ? "Could not be checked." : "Checking...")
       : s1 === "done" ? "The GPEXE account is connected."
-        : conn.reconnect ? "The GPEXE account needs to be connected again (Settings > Source connections > Reconnect)."
-          : "Connect the club's GPEXE account (Settings > Source connections > Connect account).",
-    failed ? { kind: "retry", label: "Try again" } : null);
-    add(2, s2, unreadable ? (failed ? "Could not be checked - see step 1." : "") : s2 === "done" ? "This team is bound to its GPEXE team."
-      : s2 === "next" ? "A platform administrator approves this team's GPEXE team in Settings > Data sources. Then test the connection and bind the team in Settings > Source connections."
-        : "Waiting for step 1.");
+        : conn.reconnect ? "The GPEXE account needs to be connected again: open Source connections and choose Reconnect."
+          : "Connect the club's GPEXE account: open Source connections and choose Connect account.",
+    failed ? { kind: "retry", label: "Try again" } : s1 === "next" ? settings : null);
+    add(2, s2, unreadable ? (failed ? "Could not be checked - see step 1." : "") : s2 === "done" ? `${team} uses its GPEXE team.`
+      : s2 === "next" ? `Choose the GPEXE team for ${team}: open Source connections, test the connection, approve the GPEXE team and bind it.`
+        : "Waiting for step 1.",
+    s2 === "next" ? settings : null);
 
     // Step 3: the variables (switching on the OptiMove GPEXE set; "Choose my own" is the Mappings screen).
     const v = f.vars || { status: "idle", total: 0, onCount: 0 };
@@ -66,7 +69,7 @@ export function guideSteps(f) {
   } else {
     const evidence = checkDone || running || Boolean(list && list.length);
     const state = evidence ? "done" : "waiting";
-    steps.push({ id: 1, title: "Connect, team and variables", state, text: evidence ? "An administrator has connected GPEXE, chosen this team and its variables." : "An administrator connects GPEXE, chooses this team and its variables.", action: null, merged: true });
+    steps.push({ id: 1, title: "Connect, team and variables", state, text: evidence ? "An administrator has connected GPEXE for this team." : "An administrator connects GPEXE for this team and chooses its variables.", action: null, merged: true });
     s1 = state; s2 = state;
   }
   const setupDone = f.admin ? s2 === "done" : s2 === "done";
@@ -76,13 +79,17 @@ export function guideSteps(f) {
   let text4;
   let action4 = null;
   const pairs = athleteSuggestions(f, unlinked);
-  if (!checkDone) {
+  // Evidence that a search already happened: a succeeded check, athletes or sessions seen. A later failed or running
+  // search never undoes what is already linked (code review of U6b).
+  const searched = checkDone || linked > 0 || Boolean(athletes && athletes.length) || Boolean(list && list.length);
+  const find = { kind: "check", label: "Find new sessions" };
+  if (!searched) {
     s4 = running ? "running" : setupDone ? "next" : "waiting";
     text4 = running ? "Finding sessions..."
       : !setupDone ? (f.admin ? "Waiting for steps 1 and 2." : "Waiting for the administrator.")
-        : f.admin ? "Find the sessions of the last days first: OptiMove sees the GPEXE athletes from them."
-          : "An administrator finds the sessions in GPEXE first.";
-    if (s4 === "next" && f.admin) action4 = { kind: "check", label: "Find new sessions" };
+        : "Find the sessions of the last days first: OptiMove sees the GPEXE athletes from them.";
+    // The server lets the team's coach search too (the same team access as the reads).
+    if (s4 === "next") action4 = find;
   } else {
     if (f.sourceAthletesError || unlinked === null) s4 = "unknown";
     else if (unlinked === 0 && sessionsUnlinked > 0) s4 = "next";
@@ -94,26 +101,27 @@ export function guideSteps(f) {
         : unlinked === 0 ? "No GPEXE athlete has been seen yet. Find sessions first."
           : `${unlinked} GPEXE ${unlinked === 1 ? "athlete is" : "athletes are"} not linked yet.`;
     if (s4 === "next" && unlinked > 0) action4 = pairs.exact > 0 ? { kind: "link", label: `Confirm ${pairs.exact} ${pairs.exact === 1 ? "match" : "matches"}` } : { kind: "link", label: "Link athletes" };
+    // No athlete seen yet: the instruction comes with its button.
+    if (s4 === "waiting" && setupDone && !running) action4 = find;
   }
-  add(4, s4, text4, action4, { pairs: checkDone && s4 === "next" && unlinked > 0 ? pairs : null });
+  add(4, s4, text4, action4, { pairs: s4 === "next" && unlinked > 0 ? pairs : null });
 
   // Step 5: ready - a checklist; done once a session has been imported (the import itself is the existing button below).
   const sw = f.teamSwitch;
   const switchOn = sw ? sw.enabled === true : null;
-  const team = (f.teamName || "").trim() || "this team";
   const check = [];
   if (f.admin) {
     check.push({ id: "connect", ok: s1 === "done", text: "GPEXE account connected" });
-    check.push({ id: "team", ok: s2 === "done", text: "Team bound to its GPEXE team" });
+    check.push({ id: "team", ok: s2 === "done", text: `GPEXE team chosen for ${team}` });
     check.push({ id: "variables", ok: variables.state === "done", text: "OptiMove variables switched on" });
   } else {
-    check.push({ id: "setup", ok: s2 === "done", text: "GPEXE set up by an administrator" });
+    check.push({ id: "setup", ok: s2 === "done", text: "GPEXE connected by an administrator" });
   }
   check.push({ id: "athletes", ok: s4 === "done", text: "Every GPEXE athlete linked" });
   check.push({ id: "switch", ok: switchOn === true, text: switchOn === false ? `Import off for ${team}` : `Import on for ${team}` });
-  const backup = backupLine(f.switchData);
+  const backup = backupLine(f.switchData, switchOn);
   if (backup) check.push(backup);
-  check.push({ id: "imported", ok: imported, text: imported ? "A session has been imported" : "Import your first session below" });
+  check.push({ id: "imported", ok: imported, text: imported ? "A session has been imported" : "No session imported yet" });
   let s5;
   if (imported) s5 = "done";
   else if (list === null) s5 = "unknown";
@@ -128,27 +136,27 @@ export function guideSteps(f) {
   return { steps, variables, allDone };
 }
 
-// S6: the suggested pairs by name and date of birth (U3), counted against the athletes still unlinked.
-// "names": names were never loaded, so no pair can be suggested yet; the server decides who may load them.
+// S6: the suggested pairs by name and date of birth (U3). `f.pairs` is counted by the screen with the same rule Review
+// all stages by (gpexe-import-data.js guidePairCounts), so the button never promises more than it opens.
 function athleteSuggestions(f, unlinked) {
-  const sug = f.suggestions;
-  const data = sug?.status === "ready" ? sug.data : null;
-  const open = new Set((Array.isArray(f.sourceAthletes) ? f.sourceAthletes : []).filter((a) => a.status === "unlinked").map((a) => String(a.gpexeAthleteId)));
-  const exact = data ? data.exact.filter((p) => open.has(String(p.gpexeAthleteId))).length : 0;
-  const choice = unlinked === null ? 0 : Math.max(0, unlinked - exact);
+  const p = f.pairs;
+  const exact = p ? p.exact : 0;
   return {
-    status: sug?.status || "idle",
+    ready: Boolean(p),
     exact,
-    choice,
-    namesMissing: Boolean(data && data.state !== "ok"),
+    choice: unlinked === null ? 0 : Math.max(0, unlinked - exact),
+    namesMissing: Boolean(p && p.namesMissing),
     canLoadNames: f.identityLoad === true,
   };
 }
 
 // The backup line of the checklist: only from the recorded dates an administrator reads (never claimed otherwise).
-function backupLine(data) {
+// The dates are a condition of switching import on (v56), so with import on the line is information only (ok: null).
+function backupLine(data, switchOn) {
   const c = Array.isArray(data?.conditions) ? data.conditions.find((x) => x.kind === "backup") : null;
   if (!c) return null;
   const when = c.recordedOn ? c.recordedOn.split("-").reverse().join(".") : null;
-  return { id: "backup", ok: c.met === true, text: c.met === true ? `Backup recorded on ${when}` : when ? `Backup is older than ${c.maxAgeDays} days (recorded on ${when})` : "No backup recorded" };
+  if (switchOn === true) return when ? { id: "backup", ok: null, text: `Last backup recorded ${when}` } : null;
+  const need = " (needed to switch import on)";
+  return { id: "backup", ok: c.met === true, text: c.met === true ? `Backup recorded on ${when}${need}` : when ? `Backup is older than ${c.maxAgeDays} days (recorded on ${when})${need}` : `No backup recorded${need}` };
 }

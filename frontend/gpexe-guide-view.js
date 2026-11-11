@@ -3,7 +3,7 @@
 import { escapeHtml } from "./utils.js";
 import { guideSteps } from "./gpexe-guide-steps.js";
 import { guideAdmin, refusalSentence } from "./gpexe-guide-data.js";
-import { gpexeTeamOptions } from "./gpexe-import-data.js";
+import { calendarDayKey, gpexeTeamOptions, guidePairCounts } from "./gpexe-import-data.js";
 
 // The team's name from the organization read (never an id); "" when it is not known.
 function guideTeamName(gx) {
@@ -27,7 +27,7 @@ export function guideFacts(gx, status) {
     teamSwitch: status?.teamImportSwitch || null,
     vars: g.vars || null,
     skipped: g.skipped || [],
-    suggestions: gx.suggestions || null,
+    pairs: guidePairCounts(gx),
     // Who may start a name load: an identity administrator always; a team's coach when the server says so (#494).
     identityLoad: status?.viewer?.identityLoad === true || status?.viewer?.identityAdmin === true,
     teamName: guideTeamName(gx),
@@ -64,7 +64,7 @@ function confirmHtml(gx) {
   const sending = Boolean(w?.sending);
   return `<div class="gpexe-link-confirm gpexe-guide-confirm" role="group" aria-label="Switch on OptiMove variables">
     <p><strong>Switch on ${escapeHtml(plural(items.length, "OptiMove variable", "OptiMove variables"))}?</strong></p>
-    <p class="muted">For ${team ? `${escapeHtml(team)}, ` : "this team, "}read from GPEXE${g.conn.hostLabel ? ` (${escapeHtml(g.conn.hostLabel)})` : ""}. If GPEXE has no value for a linked athlete, only that value is left out. Imports use these variables from the next Find new sessions.</p>
+    <p class="muted">For ${team ? `${escapeHtml(team)}, ` : "this team, "}read from GPEXE. If GPEXE has no value for a linked athlete, only that value is left out. Imports use these variables from the next Find new sessions.</p>
     <ul class="gpexe-guide-vars">${items.map((i, n) => `<li>${escapeHtml(i.label)}${sending && w.results.length > n ? ` <span class="muted">· on</span>` : ""}</li>`).join("")}</ul>
     ${sending ? `<p class="muted" role="status">Switching on ${escapeHtml(String(Math.min(w.results.length + 1, items.length)))} of ${escapeHtml(String(items.length))}...</p>` : ""}
     <div class="gpexe-link-actions">
@@ -86,12 +86,49 @@ function variablesBodyHtml(gx, variables, busy) {
   const skippedLine = variables.skipped.length ? `<p class="muted">${escapeHtml(plural(variables.skipped.length, "variable was", "variables were"))} not accepted: ${escapeHtml(names)}. Switch ${variables.skipped.length === 1 ? "it" : "them"} on in Training Load > Data configuration > Mappings.</p>` : "";
   const purpose = variables.state === "next" ? `<p class="muted">These decide which numbers (for example distance) are taken from GPEXE.</p>` : "";
   const offer = variables.state === "next" && !g.confirm && !g.write;
-  const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button>` : "";
+  const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button><span class="gpexe-guide-tag">Recommended</span>` : "";
   // S5: "Choose my own" is the Mappings screen until the J18 board exists.
   const own = variables.state !== "waiting" && variables.state !== "unknown" && !g.confirm && !g.write
     ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" data-section="mappings" ${busy ? "disabled" : ""}>Choose my own</button>` : "";
   const actions = primary || own ? `<div class="gpexe-guide-actions">${primary}${own}</div>` : "";
-  return `<p class="muted">${escapeHtml(text)}</p>${skippedLine}${purpose}${actions}${g.confirm || g.write ? confirmHtml(gx) : ""}`;
+  return `<p class="muted">${escapeHtml(text)}</p>${samplesHtml(gx)}${skippedLine}${purpose}${actions}${g.confirm || g.write ? confirmHtml(gx) : ""}`;
+}
+
+// A step's one action. "settings" only navigates (Settings > Source connections); it sends nothing.
+function actionHtml(action, gx) {
+  if (action.kind === "settings") return `<button type="button" class="primary-button gpexe-button" data-tab="organization" data-settings-section="sourceConnections">${escapeHtml(action.label)}</button>`;
+  const disabled = gx.checkStarting || (action.kind === "retry" && gx.guide.conn.status === "loading");
+  // The search is the state bar's main action (one main action per screen, U6a-1): here it is a plain button.
+  return `<button type="button" class="${action.kind === "retry" || action.kind === "check" ? "plain-button" : "primary-button"} gpexe-button" data-action="${ACTION_NAME[action.kind]}" ${disabled ? "disabled" : ""}>${escapeHtml(action.label)}</button>`;
+}
+
+const fmtNumber = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-GB", { maximumFractionDigits: 2 }).replace(/,/g, "\u2009") : String(v);
+};
+const withUnit = (v, unit) => `${fmtNumber(v)}${unit ? ` ${unit}` : ""}`;
+
+// S4: beside each variable, values from the newest saved session - two athletes' values for a variable already on
+// (what the import writes), a count and a range for one not on yet (7e's aggregate, OD3). Nothing before a search.
+function samplesHtml(gx) {
+  const sm = gx.guide.samples;
+  if (!sm || sm.status !== "ready" || !sm.startedAt) return "";
+  const v = gx.guide.vars;
+  const rows = [...(v.onItems || []), ...(v.items || [])].map((item) => {
+    const x = sm.byMapping[item.mappingId];
+    if (!x) return "";
+    const text = x.kind === "athletes"
+      ? x.values.map((a) => `${a.name} ${withUnit(a.value, a.unit)}`).join(" \u00b7 ")
+      : x.min !== null && x.max !== null
+        ? `${plural(x.count, "athlete", "athletes")} \u00b7 ${fmtNumber(x.min)}\u2013${withUnit(x.max, x.unit)}`
+        : `${plural(x.count, "athlete has", "athletes have")} a value`;
+    return `<li><strong>${escapeHtml(item.label)}</strong> <span class="muted">${escapeHtml(text)}</span></li>`;
+  }).filter(Boolean);
+  if (!rows.length) return "";
+  const key = calendarDayKey(sm.startedAt);
+  const day = key ? key.split("-").reverse().join(".") : "";
+  if (!day) return "";
+  return `<p class="muted">From the session of ${escapeHtml(day)}:</p><ul class="gpexe-guide-samples">${rows.join("")}</ul>`;
 }
 
 function athletesExtraHtml(step) {
@@ -99,14 +136,17 @@ function athletesExtraHtml(step) {
   if (!p) return "";
   const lines = [];
   if (p.exact > 0) lines.push(`${plural(p.exact, "athlete matches", "athletes match")} by name and date of birth.`);
-  if (p.choice > 0 && p.status === "ready" && !p.namesMissing) lines.push(`${plural(p.choice, "athlete needs", "athletes need")} your choice.`);
-  if (p.namesMissing) lines.push(p.canLoadNames ? "Load the GPEXE names and dates of birth in Link athletes, and OptiMove suggests the matches." : "An administrator can load the GPEXE names and dates of birth, so that OptiMove suggests the matches.");
+  if (p.choice > 0 && p.ready && !p.namesMissing) lines.push(`${plural(p.choice, "athlete needs", "athletes need")} your choice.`);
+  if (p.namesMissing) lines.push(p.canLoadNames ? "Load the GPEXE names and dates of birth in Link athletes, and OptiMove suggests the matches." : "You can link them yourself in Link athletes. If an administrator loads the GPEXE names and dates of birth, OptiMove suggests the matches.");
   return lines.map((l) => `<p class="muted">${escapeHtml(l)}</p>`).join("");
 }
 
 function checklistHtml(step) {
   if (!Array.isArray(step.checklist)) return "";
-  return `<ul class="gpexe-guide-checklist">${step.checklist.map((c) => `<li class="${c.ok ? "gpexe-guide-ok" : "gpexe-guide-open"}"><span aria-hidden="true">${c.ok ? "\u2713" : "\u25cb"}</span> ${escapeHtml(c.text)}<span class="visually-hidden">${c.ok ? " (done)" : " (not yet)"}</span></li>`).join("")}</ul>`;
+  // ok: true (a tick), false (not yet), null (information only, no mark).
+  return `<ul class="gpexe-guide-checklist">${step.checklist.map((c) => (c.ok === null
+    ? `<li class="gpexe-guide-info"><span aria-hidden="true">\u00b7</span> ${escapeHtml(c.text)}</li>`
+    : `<li class="${c.ok ? "gpexe-guide-ok" : "gpexe-guide-open"}"><span aria-hidden="true">${c.ok ? "\u2713" : "\u25cb"}</span> ${escapeHtml(c.text)}<span class="visually-hidden">${c.ok ? " (done)" : " (not yet)"}</span></li>`)).join("")}</ul>`;
 }
 
 // The step shown open: the person's choice, else the first step that is not done (a write in the variables step keeps it open).
@@ -133,11 +173,11 @@ export function renderGuideHtml(gx, status) {
     const label = `${escapeHtml(s.title)}`;
     const word = escapeHtml(STATE_WORD[s.state] || "");
     if (s.id !== current) {
-      return `<li class="gpexe-guide-step gpexe-guide-collapsed gpexe-guide-${escapeHtml(s.state)}"><button type="button" class="gpexe-guide-head-button" data-action="training-load-gpexe-guide-step" data-step="${s.id}" aria-expanded="false" ${busy || g.confirm || g.write ? "disabled" : ""}><span class="gpexe-guide-num" aria-hidden="true">${s.state === "done" ? "\u2713" : escapeHtml(num)}</span><strong>${label}</strong> <span class="gpexe-guide-state muted">${word}</span></button></li>`;
+      return `<li class="gpexe-guide-step gpexe-guide-collapsed gpexe-guide-${escapeHtml(s.state)}"><button type="button" class="gpexe-guide-head-button" data-action="training-load-gpexe-guide-step" data-step="${s.id}" aria-expanded="false" ${busy || g.confirm || g.write ? "disabled" : ""}><span class="gpexe-guide-num" aria-hidden="true">${s.state === "done" ? "\u2713" : escapeHtml(num)}</span><span class="gpexe-guide-head-text"><span class="visually-hidden">Step ${escapeHtml(num)}: </span><strong>${label}</strong> <span class="gpexe-guide-state muted">${word}</span></span></button></li>`;
     }
     const body = s.id === 3 && variables ? variablesBodyHtml(gx, variables, busy)
-      : `${s.text ? `<p class="muted">${escapeHtml(s.text)}</p>` : ""}${s.id === 4 ? athletesExtraHtml(s) : ""}${checklistHtml(s)}${s.action ? `<button type="button" class="${s.action.kind === "retry" ? "plain-button" : "primary-button"} gpexe-button" data-action="${ACTION_NAME[s.action.kind]}" ${gx.checkStarting || (s.action.kind === "retry" && g.conn.status === "loading") ? "disabled" : ""}>${escapeHtml(s.action.label)}</button>` : ""}`;
-    return `<li class="gpexe-guide-step gpexe-guide-current gpexe-guide-${escapeHtml(s.state)}" aria-current="step"><span class="gpexe-guide-num" aria-hidden="true">${escapeHtml(num)}</span><div class="gpexe-guide-body"><strong>${label}</strong> <span class="gpexe-guide-state muted">${word}</span>${body}</div></li>`;
+      : `${s.text ? `<p class="muted">${escapeHtml(s.text)}</p>` : ""}${s.id === 4 ? athletesExtraHtml(s) : ""}${checklistHtml(s)}${s.action ? actionHtml(s.action, gx) : ""}`;
+    return `<li class="gpexe-guide-step gpexe-guide-current gpexe-guide-${escapeHtml(s.state)}" aria-current="step"><span class="gpexe-guide-num" aria-hidden="true">${escapeHtml(num)}</span><div class="gpexe-guide-body"><span class="visually-hidden">Step ${escapeHtml(num)}: </span><strong>${label}</strong> <span class="gpexe-guide-state muted">${word}</span>${body}</div></li>`;
   }).join("");
   return `<section class="gpexe-guide" aria-label="GPEXE setup"><div class="gpexe-guide-head"><h3>Set up GPEXE imports</h3>${allDone ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-guide-toggle">Hide setup</button>` : ""}</div><ul class="gpexe-guide-list">${rows}</ul></section>`;
 }

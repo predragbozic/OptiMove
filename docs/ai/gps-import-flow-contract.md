@@ -249,22 +249,28 @@ The *Rukovodilac* accepted the alignment table of the "GPS Import Flow" proposal
 The *Rukovodilac*'s split of 2026-11-11: S1, S4 after the first search, the S6 frontend, S7, and S5 as a link. S2 (one "Connect and test"), S3 (team facts) and J18 (the drag board) are separate pull requests.
 
 - **S1, the order of the sketch:** *Connect GPEXE* → *Choose team* → *Variables* → *Athletes* → *Ready* (`frontend/gpexe-guide-steps.js`).
-  - One step is open: the first that is not done, or the one the person clicks. The others are one row each, a button of at least 44 px.
+  - One step is open: the first that is not done, or the one the person clicks. The others are one row each: a button of at least 44 px, named "Step N: …" for a screen reader, and dimmed while locked.
   - While the variables review or its write is open, the rows are locked, and a click does not move the step.
-  - A coach sees the administrator's three steps as one row, *Connect, team and variables*.
-  - Connect and Choose team still send the administrator to Settings, until S2 and S3.
-- **Variables (S5):** *Use the OptiMove GPEXE set* is U4's write, unchanged. *Choose my own* opens Training Load → Data configuration → Mappings (J16) until the J18 board exists.
-- **S4 is not in this pull request.** Two athletes' values per variable exist on the client only for a variable already switched on. 7e's preview of a variable not yet on gives only an aggregate (OD3). The choice is with the *Rukovodilac*.
+  - A coach sees the administrator's three steps as one row, *Connect, team and variables*. It is done on the evidence of a search and claims only "An administrator has connected GPEXE for this team".
+  - **Connect** and **Choose team** say what to do on one screen and carry *Open Source connections*. That button only navigates (Settings → Source connections) and sends nothing. The club's admin approves the pair there too (U2a). One "Connect and test" is S2.
+- **Variables:**
+  - **S5.** *Use the OptiMove GPEXE set* (with *Recommended*) is U4's write, unchanged. *Choose my own* opens Training Load → Data configuration → Mappings (J16) until the J18 board exists.
+  - **S4 (the *Rukovodilac*'s option (a)).** The values come from the newest saved session (`frontend/gpexe-guide-data.js` `loadGuideSamples`), for administrators only and only after a search.
+    - A variable already on shows two athletes' values from that session's stored preview.
+    - A variable not on yet shows 7e's aggregate over the same session: "13 athletes · 45–96.5 min". Below three athletes it shows a count only (OD3), never one athlete's value.
+    - A failed read leaves that variable without a sample.
 - **Athletes (S6):**
-  - The first search is this step's first action (an administrator's *Find new sessions*); OptiMove sees the GPEXE athletes only after it.
-  - After the search, U3's suggested pairs are read once, when athletes wait to be linked. They are counted against the athletes still unlinked: *Confirm N matches* (it opens Link athletes, where *Review all* stages them) and "N athletes need your choice".
-  - Without loaded names, the step says who can load them: an identity administrator, or a coach the server allows (`viewer.identityLoad`, PR #494).
-  - No name or date of birth is shown in the stepper.
+  - **Before any search** (no succeeded check, no athlete and no session seen), the step's action is *Find new sessions*, for a coach too, since the server lets the team's coach search. It is a plain button: the state bar's search stays the screen's one main action.
+  - **A later failed or running search** never undoes what is already linked.
+  - **The suggested pairs** live in the stepper's own state (`gx.guidePairs`: the ids of each exact pair and whether names are loaded, never a name or a date of birth). They are read after a succeeded search when athletes wait to be linked, again when a search finishes, and when Link athletes closes. They are counted with *Review all*'s own rule (`stageableSuggestedPairs`): *Confirm N matches* and "N athletes need your choice".
+  - **Without loaded names,** the step says who can load them: an identity administrator, or a coach the server allows (`viewer.identityLoad`, PR #494). Anyone else can link by hand.
 - **Ready (S7):** a checklist.
-  - The lines: the account, the team, the variables, the athletes, "Import on/off for <team>", and the first import.
-  - The backup line comes only from the recorded dates an administrator reads (the import switch read, v56): recorded, stale, or none. It is never shown without that read.
-  - The step is done once a session has been imported, as U4's step 5 was.
-- **Tests:** `frontend/tests/gpexe-setup-stepper-u6b.actions.test.mjs` (7 tests); `gpexe-guide.actions.test.mjs` follows the new order.
+  - The lines: the account, the GPEXE team chosen for the team, the variables, the athletes, "Import on/off for <team>", and "No session imported yet" or "A session has been imported".
+  - The backup line comes only from the recorded dates an administrator reads (v56):
+    - with import off it is a condition ("… (needed to switch import on)");
+    - with import on it is information only, with no mark, because the dates are checked when a team is turned on.
+  - The step is done once a session has been imported.
+- **Tests:** `frontend/tests/gpexe-setup-stepper-u6b.actions.test.mjs` (12 tests); `gpexe-guide.actions.test.mjs` follows the new order.
 
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
