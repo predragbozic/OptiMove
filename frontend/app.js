@@ -1,3 +1,4 @@
+import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
 import { openExerciseClassification } from "./exercise-classification.js";
 import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
@@ -3241,6 +3242,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     // action near its end (Account status) shows its result in place.
     const openDialog = els.content.querySelector?.('[role="dialog"][aria-modal="true"]');
     const dialogScroll = openDialog ? { label: openDialog.getAttribute("aria-label"), top: openDialog.scrollTop } : null;
+    // F1: what the person typed in an open form survives the repaint (form-keep.js); only for this one repaint.
+    const keptFields = captureChangedFields(els.content);
     els.content.innerHTML = renderOrganizationPanelHtml({
       currentUser: state.currentUser,
       data,
@@ -3248,6 +3251,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       role,
       scope,
     });
+    restoreChangedFields(els.content, keptFields);
     if (dialogScroll?.top) {
       const again = [...els.content.querySelectorAll('[role="dialog"][aria-modal="true"]')].find((dialog) => dialog.getAttribute("aria-label") === dialogScroll.label);
       if (again) again.scrollTop = dialogScroll.top;
