@@ -2245,8 +2245,9 @@ function markShortRecordings(rows, c, chosen = new Set()) {
   const longest = Math.max(0, ...rows.filter((r) => r.minutes !== null).map((r) => r.minutes));
   for (const r of rows) {
     r.longest = longest || null;
-    const ticked = r.a?.gpexeAthleteId && chosen.has(String(r.a.gpexeAthleteId));
-    r.short = Boolean(longest) && !ticked && r.minutes !== null && (r.status === "importable" || r.status === "participation") && r.minutes < SHORT_SHARE * longest;
+    r.ticked = Boolean(r.a?.gpexeAthleteId && chosen.has(String(r.a.gpexeAthleteId)));
+    r.wasShort = Boolean(longest) && r.minutes !== null && (r.status === "importable" || r.status === "participation") && r.minutes < SHORT_SHARE * longest;
+    r.short = r.wasShort && !r.ticked;
   }
 }
 // The athlete's time rounded down (74.9 of 100 reads "74 / 100", never "75 / 100" next to an unflagged 75), the longest rounded.
@@ -2313,7 +2314,7 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
   const shortFact = r.short ? `Only ${minutesText(r.minutes, true)} of ${minutesText(r.longest)} min recorded (the longest in this session).` : "";
   const shortNote = !r.short ? ""
     : lo.offered && leaveOutAvailable(r) ? ` ${shortFact} Imported as is unless you tick Leave out and choose "Participated · no device data".`
-      : !lo.offered && c?.status === "pending" ? ` ${shortFact} Whoever imports can keep the values or leave them out as "Participated · no device data".`
+      : !lo.offered && c?.status === "pending" && leaveOutAvailable(r) ? ` ${shortFact} Whoever imports can keep the values or leave them out as "Participated · no device data".`
         : ` ${shortFact}`;
   const link = r.status === "needs_link" ? renderLinkHtml(r.a, c, choices, { compact: !!c?.helperValues }) : "";
   return `
@@ -2381,7 +2382,8 @@ function reviewTableOf(rows, c, choices, lo = { offered: false, chosen: new Set(
 
 const REVIEW_CHIPS = [["needs", "Needs a person"], ["not_linked", "Not linked"], ["short", "Short recording"], ["no_data", "No data"], ["review", "Needs review"], ["all", "All"]];
 // The chip a row belongs to: its problem, or "short" for a row the import would write whose time is short (6a).
-const rowKind = (r) => PROBLEM_KIND[r.status] || (r.short ? "short" : null);
+// A flagged row the coach ticked to leave out loses its flag but stays shown until its attendance is chosen (the note's second step).
+const rowKind = (r) => PROBLEM_KIND[r.status] || (r.short || r.awaitingState ? "short" : null);
 
 function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.detail) {
   const rows = reviewRowsOf(preview, c);
@@ -2396,6 +2398,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
   // A choice is fixed once its keys are made (the import is in flight, imported, or its outcome unknown): never an enabled select
   // whose change would be ignored.
   lo.statesLocked = !!detail?.approving || statesLockedOf(detail);
+  for (const r of rows) r.awaitingState = r.wasShort && r.ticked && lo.states && !choiceValue(detail, String(r.a?.athleteId));
   const problem = rows.filter((r) => rowKind(r));
   const fine = rows.filter((r) => !rowKind(r));
   const counts = { needs: 0, not_linked: 0, short: 0, no_data: 0, review: 0, all: rows.length };

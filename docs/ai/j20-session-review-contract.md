@@ -431,18 +431,18 @@ a roster write also needs the owner's order naming the migration and the *Rukovo
 
 The owner's decision of 2026-11-11, relayed by the *Rukovodilac*. The threshold and the text are the *Rukovodilac*'s.
 
-- **When a row is flagged.** In the Session review, a row the import would write (*Importable* or *Participation only*) gets a yellow **Check** when the athlete's recorded time is below **75 %** of the longest recorded time in the session (`SHORT_SHARE`).
+- **When a row is flagged.** In the Session review, a row the import would write gets a yellow **Check** when the athlete's recorded time is below **75 %** of the longest recorded time in the session (`SHORT_SHARE`).
   - The time is the Duration (`athlete_session.total_time`) of the whole-session result the import writes (outcome created, supplemented or corrected), in minutes. A Duration in another unit, a drill's own time, a result that writes nothing and an athlete whose values are all left out (*Participation only*) give no time, and so no flag.
   - For an athlete not linked yet, it is the helper value the server read. That value counts for the longest and is shown, but such a row is never flagged.
-  - The longest counts every recorded time, the athletes left out included, so the reference is the same before and after the import.
-  - A row whose Leave out box is ticked is not flagged: the coach has decided.
+  - The longest is the largest of these times in the review, the athletes the coach ticks to leave out included, so ticking a box never moves the reference. A result that writes nothing (unchanged, already imported) gives no time.
+  - A row whose Leave out box is ticked loses its flag (the coach has decided) but stays shown, under the same chip, until its attendance is chosen.
   - Without the Duration mapping there is no time, and so no flag.
 - **What the flagged row shows.**
   - Its Duration cell reads "41 / 94 min" (the athlete's minutes rounded down, so 74.9 of 100 never reads "75 / 100").
-  - Its note says the fact, "Only 41 of 94 min recorded (the longest in this session).", and the choice only where it exists: with the row's own Leave out box, "Imported as is unless you tick Leave out and choose "Participated · no device data"."; for a viewer who may not import while the session is pending, "Whoever imports can keep the values or leave them out as "Participated · no device data"."; otherwise (results imported before, no box) the fact alone.
+  - Its note says the fact, "Only 41 of 94 min recorded (the longest in this session).", and the choice only where it exists: with the row's own Leave out box, "Imported as is unless you tick Leave out and choose "Participated · no device data"."; for a viewer who may not import while the session is pending and the row can be left out, "Whoever imports can keep the values or leave them out as "Participated · no device data"."; otherwise (results imported before, no box) the fact alone.
 - **Where it appears.** A flagged row is shown with the rows that need a person (a "Short recording" chip, counted in *Needs a person*), never folded under the fine ones.
 - **A hint only.** Nothing is decided automatically: the import button, the approval and the athletes sent are unchanged. In a match, a substitution is normal.
-- **Tests:** `frontend/tests/gpexe-short-recording-6a.actions.test.mjs` (9 tests); 12 mutations (the threshold, the chip, the helper rule, the rows that can be flagged, the badge, the tick, the unit, the drill, the outcome, the note's box, the rounding, the needs count) are each killed.
+- **Tests:** `frontend/tests/gpexe-short-recording-6a.actions.test.mjs` (9 tests); 14 mutations (the threshold, the chip, the helper rule, the rows that can be flagged, the badge, the tick, the unit, the drill, the outcome, the note's box for an approver and for a viewer, the rounding, the needs count, the ticked row kept in view) are each killed.
 
 ## 10. Not in J20
 

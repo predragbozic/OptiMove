@@ -248,7 +248,13 @@ test("7. ticking Leave out on the flagged row clears the flag: the coach has dec
   const row = rowOf("Cy Example");
   assert.ok(!/is-check/.test(row), "no flag once ticked");
   assert.ok(!/gpexe-short-cell/.test(row));
-  assert.ok(!/data-filter="short"/.test(reviewHtml()), "no Short recording chip");
+  // The row stays shown, outside the folded fine ones, until its attendance is chosen (the note's second step).
+  const beforeFine = (h = reviewHtml()) => h.slice(0, h.indexOf('class="gpexe-fine"') < 0 ? h.length : h.indexOf('class="gpexe-fine"'));
+  assert.ok(beforeFine().includes(">Cy Example</th>"), "the ticked row is not folded away");
+  assert.ok(beforeFine().includes(`data-action="training-load-gpexe-state" data-athlete-id="${A3}"`), "its attendance chooser is in view");
+  await choose(A3, "participated_no_values");
+  assert.ok(!beforeFine().includes(">Cy Example</th>"), "once chosen, the row may fold with the fine ones");
+  await choose(A3, "");
   await act("training-load-gpexe-leave-out", { gpexeAthleteId: "103" }, { checked: false });
   assert.match(rowOf("Cy Example"), /is-check/, "back when unticked");
 });
@@ -296,6 +302,10 @@ test("9. a flagged row without a Leave out box (results imported before) names t
     assert.match(row, /Only 41 of 94 min recorded \(the longest in this session\)\.(?! Imported as is)/);
     assert.ok(!/tick Leave out/.test(row));
     assert.ok(!/training-load-gpexe-leave-out/.test(row));
+    // The same row for a viewer who may not import: no "Whoever imports can ... leave them out" either.
+    await openReview({ canApprove: false });
+    assert.match(rowOf("Cy Example"), /is-check/);
+    assert.ok(!/Whoever imports/.test(rowOf("Cy Example")));
   } finally {
     OUTCOME = {};
   }
