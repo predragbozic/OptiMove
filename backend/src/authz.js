@@ -20,7 +20,7 @@
 import { query } from "./db.js";
 import { normalizeRole } from "./access.js";
 
-export async function loadAuthorizationContext(user) {
+export async function loadAuthorizationContext(user, queryRunner = query) {
   if (!user) {
     return {
       userId: null,
@@ -38,15 +38,15 @@ export async function loadAuthorizationContext(user) {
   const roleHint = normalizeRole(user.role_hint);
 
   const [globalRolesResult, clubRolesResult, teamRolesResult, athleteResult] = await Promise.all([
-    query(
+    queryRunner(
       `select role from public.user_global_roles where user_id = $1 and is_active = true`,
       [user.id],
     ),
-    query(
+    queryRunner(
       `select club_id, role from public.user_club_roles where user_id = $1 and is_active = true`,
       [user.id],
     ),
-    query(
+    queryRunner(
       `select team_id, role from public.user_team_roles where user_id = $1 and is_active = true`,
       [user.id],
     ),
@@ -56,7 +56,7 @@ export async function loadAuthorizationContext(user) {
     // a roster profile (or deactivating a coach relationship) must never
     // revoke the athlete's own login/workspace - only club/team-scoped data
     // access is gated on active membership, checked separately elsewhere.
-    query(
+    queryRunner(
       `select id from public.athletes where user_id = $1 limit 1`,
       [user.id],
     ),
@@ -71,7 +71,7 @@ export async function loadAuthorizationContext(user) {
   // per-request team checks never need an extra query to walk team -> club.
   let managedTeamIds = [];
   if (clubAdminClubIds.length) {
-    const teamsResult = await query(
+    const teamsResult = await queryRunner(
       `select id from public.teams where club_id = any($1::uuid[])`,
       [clubAdminClubIds],
     );
