@@ -66,7 +66,7 @@ function sliceFunction(source, name, windowSize = 1200) {
 }
 
 test("handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 6000);
+  const body = appJsSource.match(/^async function handleContentChange\(event\) \{[\s\S]*?^\}/m)?.[0] ?? "";
   assert.match(body, /if \(form\.dataset\.builderForm === "update-item"\) \{\s*scheduleBuilderItemAutosave\(form\);\s*return;\s*\}/);
 });
 
@@ -95,7 +95,7 @@ test("the update-item debounce delay is a small, named constant, not a magic num
 });
 
 test("other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 6000);
+  const body = appJsSource.match(/^async function handleContentChange\(event\) \{[\s\S]*?^\}/m)?.[0] ?? "";
   // The non-debounced fallback path must still exist right after the
   // update-item branch's early return, for every other data-builder-form.
   assert.match(body, /return;\s*\}\s*try \{\s*await submitBuilderFormAction\(form,/);

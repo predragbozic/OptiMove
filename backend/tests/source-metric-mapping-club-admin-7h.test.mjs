@@ -806,7 +806,7 @@ test("5. the rollback returns v51's catalog exactly (comments included; v34's T4
 });
 
 test("6. the three runbook SQL files and the migration are bound to LF by .gitattributes (git check-attr eol) and carry no CR", async () => {
-  const files = [ROLLBACK, PREFLIGHT, POSTCHECK, V52_FILE].map((f) => path.relative(ROOT, f));
+  const files = [ROLLBACK, PREFLIGHT, POSTCHECK, V52_FILE].map((f) => path.relative(ROOT, f).split(path.sep).join("/"));
   const out = execFileSync("git", ["check-attr", "eol", "--", ...files], { cwd: ROOT, encoding: "utf8" });
   for (const f of files) assert.match(out, new RegExp(`^${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: eol: lf$`, "m"), f);
   for (const f of [ROLLBACK, PREFLIGHT, POSTCHECK, V52_FILE]) assert.ok(!(await fsp.readFile(f, "utf8")).includes("\r"), `${path.basename(f)} has LF line endings`);
