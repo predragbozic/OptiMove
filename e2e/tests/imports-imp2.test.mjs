@@ -1,4 +1,4 @@
-// IMP2: the batch import dialog as the "GPS Import Flow" sketch, in a real browser at 1280 and 390 px: one question over
+// IMP2 / IMP3: the batch import dialog as the "GPS Import Flow" sketch, and the banner after the import, in a real browser at 1280 and 390 px: one question over
 // one light list (no framed cards), what happens folded, Cancel and a filled Import, then "Imported N sessions. You can
 // see them in Training Load → Activities." over a light list with each outcome on the right. Invented data on a
 // disposable database (the series fixture: three Ready sessions); the import writes into it.
@@ -65,6 +65,11 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.ok(result.outcomeRight <= 2, `the outcome sits on the right (${result.outcomeRight} px)`);
         assert.notEqual(result.dot, "rgba(0, 0, 0, 0)", "the outcome carries its dot");
         assert.ok(result.overflow <= 0);
+        // IMP3: after Done the banner says it, as the sketch does (the search succeeded, nothing is left).
+        await page.click('.imports-batch [data-action="training-load-gpexe-batch-done"]');
+        await page.waitForSelector(".imports-batch", { state: "detached" });
+        await page.waitForFunction(() => /^Everything from GPEXE is imported · Last search /.test(document.querySelector(".imports-lastsearch")?.textContent.trim() || ""), null, { timeout: 20_000 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
         assert.deepEqual(pageErrors, []);
       } finally { await context.close(); }
     } finally { await world.stop(); }

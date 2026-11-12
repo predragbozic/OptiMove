@@ -319,3 +319,33 @@ test("IMP2 4: a mixed result names only the imported ones in its Activities sent
   assert.match(dialog(), /You can see the imported ones in Training Load → Activities and in the Imported tab\./);
   assert.match(dialog(), /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-1<\/dd>/, "the raw GPEXE name stays under Technical details");
 });
+
+// IMP3: "Everything from GPEXE is imported." - the sketch's line, only when it is true.
+test("IMP3 1: the banner says everything is imported only after a succeeded search with nothing ready or needing the person, and something imported", async () => {
+  resetState();
+  const imported = (n) => ready(n, { status: "imported", importedAt: "2026-09-21T10:00:00Z", previewStatus: "no_changes" });
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [imported(1), imported(2)] }));
+  await openImports();
+  const banner = () => html().match(/<p class="imports-facts imports-lastsearch">([^<]*)<\/p>/)?.[1];
+  const ok = { id: "chk-1", status: "succeeded", startedAt: "2026-09-21T09:00:00Z", finishedAt: "2026-09-21T09:02:00Z" };
+  gx().status.lastCheck = ok;
+  assert.match(banner(), /^Everything from GPEXE is imported · Last search \d{2}\.\d{2}\. \d{2}:\d{2}$/);
+  for (const [why, change] of [
+    ["a failed search", () => { gx().status.lastCheck = { ...ok, status: "failed" }; }],
+    ["a running search", () => { gx().status.lastCheck = { ...ok, status: "running" }; }],
+    ["a search whose start is not confirmed", () => { gx().checkError = { status: 503, code: "check_outcome_unknown" }; }],
+    ["a search that could not be followed", () => { gx().pollStopped = true; }],
+    ["no search at all", () => { gx().status.lastCheck = null; }],
+  ]) {
+    gx().status.lastCheck = ok; gx().checkError = null; gx().pollStopped = false;
+    change();
+    assert.doesNotMatch(banner(), /Everything from GPEXE is imported/, why);
+  }
+  gx().status.lastCheck = ok; gx().checkError = null; gx().pollStopped = false;
+  gx().candidates = [imported(1), ready(3)];
+  assert.match(banner(), /1 ready$/, "a ready session: the usual line");
+  gx().candidates = [imported(1), unlinked(4)];
+  assert.match(banner(), /1 needs you$/, "something needs the person: the usual line");
+  gx().candidates = [];
+  assert.match(banner(), /0 ready$/, "nothing imported (an empty search) is not 'everything is imported'");
+});
