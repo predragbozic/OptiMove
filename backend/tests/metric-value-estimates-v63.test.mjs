@@ -425,9 +425,9 @@ test("2c. every branch of the occasion, value and provenance guards, one by one"
     const anyOcc = (await admin.query(`select id from training_load.metric_measurement_occasions limit 1`)).rows[0].id;
     const occasionCases = [["import_conflict_status", "needs_review"], ["content_hash", "h"], ["row_number", 1], ["source_reported_at", "2026-09-14T08:00:00Z"],
       ["supersedes_occasion_id", anyOcc], ["superseded_by_occasion_id", anyOcc]];
-    if (identity) occasionCases.push(["source_identity_id", identity]);
-    if (batch) occasionCases.push(["import_batch_id", batch]);
     assert.ok(identity, "the import wrote a source identity to test against");
+    assert.ok(batch, "the import wrote a batch to test against");
+    occasionCases.push(["source_identity_id", identity], ["import_batch_id", batch]);
     for (const [col, val] of occasionCases) {
       assert.match(await withActor(() => occInsert(col, val)), /^23514:estimate: an estimate occasion is a whole-session/, col);
     }
@@ -455,6 +455,13 @@ test("2c. every branch of the occasion, value and provenance guards, one by one"
       const val = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [occ, facts.sum.def, facts.sum.ver])).rows[0].id;
       return code(c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [val, occ, team.padmin.id]));
     }), /^42501/);
+    // the acting user changes between the occasion and its provenance: the provenance's author must still be the occasion's
+    assert.match(await withActor(async () => {
+      const occ = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [pc, team.coach.id])).rows[0].id;
+      const val = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [occ, facts.sum.def, facts.sum.ver])).rows[0].id;
+      await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.padmin.id]);
+      return code(c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [val, occ, team.padmin.id]));
+    }), /^42501/, "another author than the occasion's");
   } finally {
     await c.end();
   }
