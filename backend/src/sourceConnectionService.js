@@ -152,6 +152,12 @@ let unbindReplayHold = null;
 // Runs inside an Unbind once its own earlier request record was found, right
 // before the replay's right re-check: a test revokes the right there.
 export function setSourceUnbindReplayHoldForTests(fn) { unbindReplayHold = fn ?? null; }
+// S2: tests hold a Create replay between its request record and its rights re-check.
+let createReplayHold = null;
+export function setSourceCreateReplayHoldForTests(fn) { createReplayHold = fn ?? null; }
+// S2: tests hold a Create with a request key after its INSERT and audit, before its COMMIT (a second Create races it).
+let createCommitHold = null;
+export function setSourceCreateCommitHoldForTests(fn) { createCommitHold = fn ?? null; }
 let auditDedupeHold = null;
 // Runs inside the refusal-audit transaction while its dedupe advisory lock is
 // held, after the check-and-insert and before COMMIT: a test races a second
@@ -297,7 +303,7 @@ export async function getConnection({ ctx, sourceSystem, id }) {
 export async function createConnection({ ctx, sourceSystem, body }) {
   // A source this backend knows nothing about is the same 404 as elsewhere.
   if (!SOURCE_SYSTEM.test(sourceSystem ?? "") || adapterFamilies(sourceSystem).length === 0) return null;
-  const b = plainBody(body, ["ownerScope", "ownerClubId", "hostKey", "accountLabel", "credentialKind"]);
+  const b = plainBody(body, ["ownerScope", "ownerClubId", "hostKey", "accountLabel", "credentialKind", "requestKey"]);
   if (b.ownerScope !== "club") throw refusal(400, "owner_scope_unsupported", "A source connection belongs to a club in this step; teams are bound to it separately.");
   if (typeof b.ownerClubId !== "string" || !UUID.test(b.ownerClubId)) throw refusal(400, "invalid_body", "ownerClubId must be a club id.");
   if (typeof b.hostKey !== "string" || !HOST_KEY.test(b.hostKey)) throw refusal(400, "invalid_body", "hostKey must be a catalog key.");
@@ -305,6 +311,12 @@ export async function createConnection({ ctx, sourceSystem, body }) {
     throw refusal(400, "invalid_body", "accountLabel is one line of 1 to 120 characters.");
   }
   if (b.credentialKind !== SUPPORTED_CREDENTIAL_KIND) throw refusal(400, "credential_kind_unsupported", "Only a token obtained by a one-time username/password exchange is supported in this step.");
+  // S2: an optional requestKey makes Create idempotent (the Unbind pattern). Without one, Create behaves as before.
+  if (b.requestKey !== undefined && (typeof b.requestKey !== "string" || !UUID.test(b.requestKey))) throw refusal(400, "invalid_body", "requestKey must be a UUID chosen by the client for this one Create.");
+  const requestKey = b.requestKey === undefined ? null : b.requestKey.toLowerCase();
+  const requestHash = requestKey === null ? null : crypto.createHash("sha256").update(JSON.stringify({
+    sourceSystem, ownerScope: "club", ownerClubId: b.ownerClubId.toLowerCase(), hostKey: b.hostKey, accountLabel: b.accountLabel.trim(), credentialKind: b.credentialKind,
+  })).digest("hex");
   if (!clubVisible(ctx, b.ownerClubId)) return null;
   const client = await pool.connect();
   const release = guardClient(client);
@@ -312,6 +324,43 @@ export async function createConnection({ ctx, sourceSystem, body }) {
   let created = null;
   try {
     await client.query("begin");
+    if (requestKey !== null) {
+      // S2: the request record is the successful Create's own audit row (request_id, request_hash), read behind the
+      // per-user lock and BEFORE any insert, so two Creates with one key make one connection. A refusal is not a
+      // record: the same key may repeat a refused Create. The key is bound to this user AND the owning club: the same
+      // key for another club, or with another label or host, is request_key_reused, never a replay.
+      await client.query(`set local lock_timeout = '${userLockWaitMs}ms'`);
+      await client.query(`set local statement_timeout = '${userLockWaitMs + 2_000}ms'`);
+      try {
+        await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 21))`, [`source-auth-throttle:${ctx.userId}`]);
+      } catch (error) {
+        if (error.code === "55P03" || error.code === "57014") throw refusal(409, "try_again", "Another connect, reconnect, test, bind or unbind of yours is still running. Try again when it has finished.");
+        throw error;
+      }
+      await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+      const earlier = (await client.query(
+        `select a.connection_id, a.metadata, c.owner_club_id, c.source_system
+           from training_load.source_connection_audit a
+           join training_load.source_credential_connections c on c.id = a.connection_id
+          where a.action = 'create' and a.outcome = 'ok' and a.performed_by_user_id = $1 and a.metadata->>'request_id' = $2
+          order by a.performed_at, a.id limit 1`,
+        [ctx.userId, requestKey],
+      )).rows[0];
+      if (earlier) {
+        if (earlier.metadata.request_hash !== requestHash || String(earlier.owner_club_id) !== b.ownerClubId.toLowerCase() || earlier.source_system !== sourceSystem) {
+          throw refusal(409, "request_key_reused", "This requestKey was already used for a different Create; use a new key.");
+        }
+        // A replay is the caller's own earlier result, answered only while the connection is still theirs to see:
+        // the club visible in this workspace and the right held now. Otherwise the identical 404.
+        if (createReplayHold) await createReplayHold(client);
+        await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+        const holds = clubVisible(ctx, earlier.owner_club_id) && await rightsStillHold(client, ctx, earlier.owner_club_id);
+        await client.query("rollback"); released = true; release();
+        if (!holds) return null;
+        const connection = await getConnection({ ctx, sourceSystem, id: earlier.connection_id });
+        return connection ? { ...connection, replayed: true } : null;
+      }
+    }
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
     await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
     const club = (await client.query(`select id from public.clubs where id = $1 and coalesce(is_active, true) for share`, [b.ownerClubId])).rows[0];
@@ -330,7 +379,8 @@ export async function createConnection({ ctx, sourceSystem, body }) {
        values ($1, 'club', $2, $3, $4, $5, $6, $6) returning id`,
       [sourceSystem, b.ownerClubId, b.hostKey, b.accountLabel.trim(), b.credentialKind, ctx.userId],
     )).rows[0];
-    const auditId = await insertAudit(client, { connectionId: row.id, action: "create", outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { host_key: b.hostKey, credential_kind: b.credentialKind } });
+    const auditId = await insertAudit(client, { connectionId: row.id, action: "create", outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { host_key: b.hostKey, credential_kind: b.credentialKind, ...(requestKey !== null ? { request_id: requestKey, request_hash: requestHash } : {}) } });
+    if (createCommitHold && requestKey !== null) await createCommitHold(client);
     // The same bounded COMMIT and verify as an attempt: once the COMMIT is
     // sent, the answer never says "nothing was created".
     released = true;

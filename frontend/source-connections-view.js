@@ -215,30 +215,39 @@ function renderEmptyHtml(d, clubName) {
         <span class="data-sources-state is-off">Not connected</span>
       </div>
       <p class="muted">${escapeHtml(clubName || "This club")} has no ${escapeHtml(SOURCE_NAME)} connection yet. Its teams cannot read ${escapeHtml(SOURCE_NAME)} through a club account until one is created, connected, tested and bound.</p>
-      ${d.createOpen ? renderCreateFormHtml(d) : `<button class="plain-button data-sources-primary" type="button" data-action="source-connections-create-open" ${writeInFlight() ? "disabled" : ""}>Create connection</button>`}
+      ${d.createOpen ? renderCreateFormHtml(d) : `<button class="plain-button data-sources-primary" type="button" data-action="source-connections-create-open" ${writeInFlight() ? "disabled" : ""}>Connect and test</button>`}
       ${d.createOpen ? "" : errorHtml(d.createError)}
     </section>
   `;
 }
 
+// S2: one form, "Connect and test". The label and host profile create the connection (with its own request key); the
+// username and password go only with the Connect that follows, which also tests the account and reads its teams.
 function renderCreateFormHtml(d) {
   const draft = d.createDraft || { hostKey: HOST_PROFILES[0].hostKey, accountLabel: "" };
   return `
-    <form class="data-sources-form" data-source-connections-form="create" autocomplete="off">
-      <p class="data-sources-form-title">Create the ${escapeHtml(SOURCE_NAME)} connection</p>
+    <form class="data-sources-form source-connections-credential" data-source-connections-form="create" method="post" action="#" autocomplete="off">
+      <p class="data-sources-form-title">Connect and test ${escapeHtml(SOURCE_NAME)}</p>
       <label class="search-field"><span>Host profile</span>
         <select name="hostKey" required>
           ${HOST_PROFILES.map((host) => `<option value="${escapeAttr(host.hostKey)}" ${host.hostKey === draft.hostKey ? "selected" : ""}>${escapeHtml(host.label)}</option>`).join("")}
         </select>
       </label>
-      <p class="muted">Only an approved host profile can be chosen. The server reads from that host only, through its confirmed paths; no address is typed anywhere.</p>
       <label class="search-field"><span>Account name</span>
         <input name="accountLabel" type="text" required maxlength="${ACCOUNT_LABEL_MAX}" autocomplete="off" value="${escapeAttr(draft.accountLabel)}" placeholder="e.g. Club GPEXE account">
       </label>
-      <p class="muted">A label for this screen only - not the username. The username and the password come in the next step; OptiMove does not retain them after that request.</p>
-      ${errorHtml(d.createError)}
+      <p class="muted">A label for this screen only - not the username.</p>
+      <label class="search-field"><span>${escapeHtml(SOURCE_NAME)} username</span>
+        <input name="username" type="text" required maxlength="254" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+      </label>
+      <label class="search-field"><span>${escapeHtml(SOURCE_NAME)} password</span>
+        <input name="password" type="password" required maxlength="512" autocomplete="current-password" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+      </label>
+      <p class="source-connections-note source-connections-check">Check that both fields hold the ${escapeHtml(SOURCE_NAME)} account's username and password, not your OptiMove sign-in. If your browser filled either field, clear both and type them yourself.</p>
+      <p class="muted source-connections-note">OptiMove creates the connection, then exchanges the password once for an access token and stores only that token, encrypted. It does not retain the username or password. ${escapeHtml(SOURCE_NAME)} is read once to test the token and list its teams; nothing is imported.</p>
+      ${errorHtml(d.createError, "credential")}
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="submit" ${d.createBusy ? "disabled" : ""}>${d.createBusy ? "Creating..." : "Create and continue"}</button>
+        <button class="plain-button data-sources-primary" type="submit" ${d.createBusy ? "disabled" : ""}>${d.createBusy ? "Creating..." : "Connect and test"}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.createBusy ? "disabled" : ""}>Cancel</button>
       </div>
     </form>
@@ -341,15 +350,12 @@ function renderCredentialFormHtml(d, connection, clubName) {
 
 // A lost answer. A bind or an Unbind is asked of the server again with the
 // same pair / key, which it answers idempotently (Check result). A Connect,
-// Reconnect, Test or create cannot be settled that way: Read current state
+// Reconnect or Test cannot be settled that way (a create can, since S2: it carries a request key): Read current state
 // refreshes what is shown and keeps the marker; only the administrator's
 // explicit acknowledgement lifts it (locally, nothing sent).
 function unconfirmedTextHtml(pending) {
   const name = pending.action === "reconnect" ? "Reconnect" : "Connect";
   const tail = "Other changes stay locked so that none crosses it.";
-  if (pending.action === "create") {
-    return `<strong>Result not confirmed.</strong> The answer to the creation of the connection was lost, so this screen cannot tell whether the connection was created; the server may still be finishing it. ${tail} <strong>Read current state</strong> shows the club's connections as they are now (it sends nothing again) but cannot show whether one of them came from this request. <strong>Acknowledge uncertainty and continue</strong> unlocks the other changes; creating a connection again may then make a second one.`;
-  }
   if (pending.action === "test") {
     return `<strong>Result not confirmed.</strong> The answer to Test connection was lost, so this screen cannot tell whether the test went through; the server may still be finishing it. ${tail} <strong>Read current state</strong> shows the connection as it is now (it sends nothing again) but cannot show whether the test went through. <strong>Acknowledge uncertainty and continue</strong> unlocks the other changes.`;
   }
@@ -358,7 +364,7 @@ function unconfirmedTextHtml(pending) {
 
 function renderUnconfirmedHtml(d, pending) {
   const idempotent = isIdempotentPending(pending);
-  const what = pending.action === "unbind" ? "Unbind" : "binding";
+  const what = pending.action === "unbind" ? "Unbind" : pending.action === "create" ? "creation of the connection" : "binding";
   // The result of the last read / check is shown here, beside the buttons
   // that produced it (the card's own notice line is left out meanwhile).
   const noticeHere = d.notice && (pending.action === "create" ? !d.noticeFor : d.noticeFor === String(pending.connectionId))
@@ -367,7 +373,7 @@ function renderUnconfirmedHtml(d, pending) {
   if (idempotent) {
     return `
       <div class="data-sources-error source-connections-unconfirmed" role="alert">
-        <p><strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost, so this screen cannot say whether it was made. Check result asks the server for the same request again - it is never done twice.</p>
+        <p><strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost, so this screen cannot say whether it was made. Check result asks the server for the same request again - it is never done twice.${pending.action === "create" ? ` The ${escapeHtml(SOURCE_NAME)} password was not kept: once the connection is confirmed, enter the username and password again to connect and test it.` : ""}</p>
         ${noticeHere}
         <div class="data-sources-form-actions">
           <button class="plain-button data-sources-primary" type="button" data-action="source-connections-check-result" ${d.checkBusy ? "disabled" : ""}>${d.checkBusy ? "Checking..." : "Check result"}</button>

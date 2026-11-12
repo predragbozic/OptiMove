@@ -99,6 +99,8 @@ router.post("/:source/connections", handle(async (req, res) => {
     throw error;
   }
   if (!connection) return notFound(res);
+  // S2: a replay of a requestKey answers 200 with the saved connection (replayed: true); a new Create 201.
+  if (connection.replayed) return res.status(200).json({ connection, replayed: true });
   res.status(201).json({ connection });
 }));
 

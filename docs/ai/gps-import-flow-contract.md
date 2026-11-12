@@ -272,6 +272,21 @@ The *Rukovodilac*'s split of 2026-11-11: S1, S4 after the first search, the S6 f
   - The step is done once a session has been imported.
 - **Tests:** `frontend/tests/gpexe-setup-stepper-u6b.actions.test.mjs` (12 tests); `gpexe-guide.actions.test.mjs` follows the new order.
 
+### S2 — one "Connect and test" (the pull request that adds this section; no migration)
+
+The *Rukovodilac*'s GO of 2026-11-12, option (a), with five conditions.
+
+- **Create is idempotent.** `POST /api/training-load/sources/:source/connections` takes an optional `requestKey` (a UUID); without one it behaves as before.
+  - The request record is the successful Create's own audit row (`request_id`, `request_hash` in its metadata), as for Unbind. It is read behind the per-user lock and before any insert, so two Creates with one key make one connection. A refused Create is not a record.
+  - The same key and body replay the saved connection (`200`, `replayed: true`), with nothing written. The key is bound to the user and the owning club: another label, host or club with the same key answers `409 request_key_reused`, never a replay.
+  - A replay answers only while the club is visible in the caller's workspace and the right still holds; otherwise the identical 404, never a confirmation that the connection exists.
+- **One form** (Settings > Source connections, a club without a connection): host profile, account name, GPEXE username and password, one button *Connect and test*.
+  - Create goes first with the label and a request key, never with the pair; the pair goes once, only with the Connect that follows. Connect already tests the account (the team list and every bound team's read), so the result is *Verified* with the GPEXE teams, or the stable refusal sentence.
+  - The pair lives only in the submit handler's locals for that one Connect: never in state or HTML, not while Create runs either.
+  - A lost Create closes the form and drops the pair. *Check result* sends the same Create with the same key; once it is confirmed, the Connect form asks for the username and password again. Nothing is sent by itself.
+  - Reconnect and Test stay as they were. The old "Read current state" and acknowledgement paths for a lost Create are gone (a create is idempotent now).
+- **Tests:** `backend/tests/source-connections-f3c2d.test.mjs` test 27 (the replay, `request_key_reused` for another body or club, the per-user key, a refused Create is no record, two Creates with one key held before COMMIT make one row, a replay in another workspace or after a revoked right is the identical 404, no key unchanged); `frontend/tests/source-connections.actions.test.mjs` tests 3, 9b, 9d3, 14, 16 and 17 follow the new flow.
+
 ### U2a — the club admin approves the pair (PR #366, merge `db7ebd55`, 2026-11-04; no migration; **merged and deployed** with PR #361 on 2026-11-04)
 
 - As designed in `docs/ai/u2a-club-admin-pair-plan.md` (section 8 records what was built and the decisions): the PUT of a team's settings accepts the active admin of the team's club in that club's workspace; the service re-checks the user, role, club, team and the club's `verified` connection inside its transaction; a club admin writes a first pair only; a GPEXE team already paired anywhere is the neutral `409 pair_not_available` for a club admin; Connect / Test return the whole annotated list to a club admin; *Approve pair* on the Source connections screen (the GPEXE team's name is the main text, an unnamed team cannot be approved).

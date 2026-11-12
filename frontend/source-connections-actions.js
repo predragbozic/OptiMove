@@ -209,29 +209,32 @@ export async function submitSourceConnectionsForm(form, { render }) {
   }
 
   if (kind === "create") {
-    // No idempotency key on this route: nothing is sent while a write runs
-    // or an answer is unconfirmed (the form is closed then anyway).
+    // S2, "Connect and test": the label and host go to Create (with its own request key); the pair lives in these two
+    // locals only, for the one Connect that follows a confirmed Create - never in state, never in the Create request.
     if (writeInFlight()) return;
     const hostKey = fieldValue(form, "hostKey");
     const accountLabel = fieldValue(form, "accountLabel");
+    let username = fieldValue(form, "username");
+    let password = fieldValue(form, "password", { trim: false });
+    clearField(form, "password");
     d.createDraft = { hostKey, accountLabel };
-    if (!HOST_PROFILES.some((host) => host.hostKey === hostKey)) {
-      d.createError = localError("host_not_allowed");
-      render();
-      return;
-    }
-    if (!accountLabel) {
-      d.createError = localError("account_label_required");
-      render();
-      return;
-    }
-    if (accountLabel.length > ACCOUNT_LABEL_MAX) {
-      d.createError = localError("account_label_too_long");
+    let refusal = null;
+    if (!HOST_PROFILES.some((host) => host.hostKey === hostKey)) refusal = "host_not_allowed";
+    else if (!accountLabel) refusal = "account_label_required";
+    else if (accountLabel.length > ACCOUNT_LABEL_MAX) refusal = "account_label_too_long";
+    else if (!username || !password) refusal = "credentials_required";
+    if (refusal) {
+      username = password = "";
+      d.createError = localError(refusal);
       render();
       return;
     }
     d.createError = null;
-    await createConnection(render);
+    try {
+      await createConnection(render, { pair: { username, password } });
+    } finally {
+      username = password = "";
+    }
     return;
   }
 
