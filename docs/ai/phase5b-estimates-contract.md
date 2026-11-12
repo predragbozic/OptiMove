@@ -169,7 +169,7 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
   - a request key, with a request record;
   - a bounded COMMIT;
   - the participant and its confirmed link when missing;
-  - one occasion per athlete.
+  - one occasion per variable (rule 1: an estimate occasion holds one value; section 7).
 - The writer's and the preview's rule that a measured value supersedes an estimate (rule 6).
 - `activityRoster` and `calendarQuery` stay as they are: an estimate is not measured.
 
@@ -194,3 +194,107 @@ and `is_derived = false` (M1).
 - Estimates at the drill level.
 - An estimate before the import, in the review (it would need the approval's window and key).
 - Exporting estimates: an estimate goes to no export, file or third party; it lives only in OptiMove's own views.
+
+## 7. 6b-B as built
+
+The *Rukovodilac*'s GO of 2026-11-12 answered the four open questions:
+- **Q1 (a):** the request key lives on the provenance rows (migration v64), not in a request table;
+- **Q2 (a):** the estimate participant's time zone may be re-snapshot by a later import, under a database condition;
+- **Q3, Q4:** confirmed as proposed.
+
+Section 4's line "one occasion per athlete" reads **one occasion per variable**: rule 1 holds one value per estimate occasion, so
+a save writes one occasion for each variable it estimates.
+
+**Migration v64** (`migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql`; runbook
+`docs/runbooks/metric-value-estimates-v64.md`):
+- `metric_value_estimates.request_key` and `request_hash`, both `NOT NULL`, with an index on `(estimated_by_user_id,
+  request_key)`. The provenance guard refuses a second hash for an (author, key), under a transaction-scoped advisory lock of
+  that (author, key).
+- v12's participant guard allows a change of `athlete_timezone_snapshot` alone, and only while every occasion of the participant
+  is an estimate with no source identity.
+- v1's activity participant guard lets the linked `training.activity_participants` row follow, in the same transaction: its zone
+  and its day, to exactly what `materialize_activity_group_from_metric_event` computes, under the same condition. Both layers
+  then equal a direct import (the *Nezavisni revizor*'s M1, the *Rukovodilac*'s fix (b)).
+
+**The routes** (`backend/src/metricEstimateService.js`, `backend/src/routes/trainingActivity.js`). Both are behind
+`ESTIMATES_ENABLED` (default off); off, both are the router's identical 404.
+
+- `GET /api/training-activity/:activityId/estimates/proposal?athleteId=…[&minutes=…][&sourceAthleteId=…]`
+  - **Audience:** the roster read's (`resolveRosterTarget`: the team's coach, the club's admin, a platform admin, in the right
+    workspace); everyone else gets the identical 404.
+  - **The read:** no lock, nothing written, one read-only transaction bounded by a 5 s statement timeout (`503 try_again` past
+    it).
+  - **The answer:**
+    - the session's variables, each `estimable` or with its reason (`not_estimable` for a non-numeric or `max` / `last` / `none`
+      variable, `measured_exists` for a variable with the athlete's own real value);
+    - the three methods' numbers per variable, or why one cannot run (`too_few_athletes`, `too_few_sessions`,
+      `minutes_required`, `duration_not_available`, `method_not_for_variable`, `source_has_no_value`, and `invalid_history` for
+      a negative rate from a source's negative values);
+    - the default minutes (the median of the other athletes' measured durations) and the minutes used;
+    - the copy sources: roster athletes with a measured value of an estimable variable.
+- `POST /api/training-activity/:activityId/estimates` `{ requestKey, athleteId, method, minutes?, sourceAthleteId?, note? }`
+  - **Validation:**
+    - `minutes` belongs to `proportional` only (above 0 and at most 600 after rounding to 2 decimals; default: the median as
+      above);
+    - `sourceAthleteId` belongs to `copy_athlete` only and is never the athlete;
+    - `note` is one trimmed line of at most 500 visible characters.
+  - **One transaction, in this lock order:**
+    1. `training.lock_activity_decider` (`403 not_a_team_coach`);
+    2. the team's import lock, try-lock (`409 try_again`);
+    3. the alias set;
+    4. the (author, request key) advisory lock (v64's guard takes the same one), then the replay;
+    5. the checks under the locks;
+    6. the participant in the event's zone and its confirmed activity link
+       (`training.materialize_activity_group_from_metric_event`);
+    7. per variable: the occasion, its value and its provenance row.
+  - **The COMMIT:** the deferred checks are made immediate before the COMMIT, and the COMMIT is bounded (15 s). An unknown
+    outcome is looked up by the key on a new connection (5 s): `201` with `verifiedAfterCommitError`, or `503 outcome_unknown`.
+  - **The answer** is read back from the saved rows. The same key and body replays it (`200`); the same key with another body
+    (activity, athlete, method, minutes, source athlete, note) is `409 request_key_reused`.
+  - **Refusals write nothing,** so their key stays free:
+    - `athlete_not_on_roster`;
+    - `estimate_not_available`: the activity has no single imported session event;
+    - `copy_source_not_usable`: the source is not on the roster, or has no measured value;
+    - `minutes_required`;
+    - `nothing_to_estimate`, with the reasons;
+    - `measured_exists`: v63's M2 refusal of a real value written meanwhile by a path that does not take the team lock;
+    - `activity_superseded`;
+    - `roster_not_applicable`.
+- **The bases** (rule 2):
+  - measured values only (`api_import`, `csv_import`, effective, whole session) in the version's unit;
+  - `team_average` needs at least 3 athletes of the session;
+  - `copy_athlete` copies a roster athlete's value of the same session;
+  - `proportional`, for `sum` variables only: the athlete's own rate per minute over the last 5 measured sessions of the same
+    team and activity type within 90 days before this session (at least 3), times the minutes. A session's minutes are the
+    athlete's measured value of the system variable `duration`, in `min`.
+  - Values are rounded to 3 decimals, the rate to 6.
+
+**The import** (rule 6):
+- **The writer:** `ensureParticipants` re-snapshots an estimate participant's zone to the athlete's own, and its linked activity
+  participant's zone and day (the database's v64 conditions); any other zone change stays `participant_timezone_changed`.
+- **A Complete roster (I2, intended).** An estimate for an athlete without a metric participant adds the participant's confirmed
+  activity link, which is a roster change: a Complete roster turns to `needs_review` (the roster changed). The session undo then
+  lists that work and asks for `roster_work_needs_confirmation`, as for any later roster work.
+- **The preview:** the preview lists the estimates the import would replace in `supersededEstimates` (`athleteId`,
+  `metricDefinitionId`). The field is present only when there are some, so an existing preview hash is unchanged. It never
+  blocks and is never part of `acceptChanges`. An estimate saved after a check changes the approval's recomputed preview, so the
+  approval answers `preview_changed` and the coach reviews again.
+
+**Tests:** `backend/tests/metric-estimates-6b-b.test.mjs`, on disposable databases with the real import through the routes:
+- the flag;
+- the audience;
+- the proposal;
+- the save with its rows and link;
+- the request key, and one key sent to two teams' sessions at once (`request_key_reused`, never a second hash);
+- the refusals;
+- rule 7;
+- the try-lock;
+- the COMMIT outcomes;
+- Q2 through a real re-import near midnight UTC (both layers equal a direct import, the day moves with the zone; the supersede;
+  the preview's list; the frozen zone in both layers with a manual value);
+- the undo after an estimate saved through the route (not blocked, `estimates_removed`), and on a Complete roster (I2);
+- v64's participant guard, and its (author, key) lock between two transactions on two events;
+- the participant in the event's zone when the athlete's own zone differs, and in the v62 team zone for a mixed session;
+- the migration's preflight, post-check and rehearsed rollback.
+
+**Not in 6b-B:** the screens (6b-C) and the dashboards (6b-D).

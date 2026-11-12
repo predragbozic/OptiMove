@@ -284,6 +284,20 @@ function valueDiff(result, outcome, previous, { specsByDefinitionAtLevel, leftOu
   return entries.sort((a, b) => (a.metricDefinitionId < b.metricDefinitionId ? -1 : a.metricDefinitionId > b.metricDefinitionId ? 1 : 0));
 }
 
+// 6b-B: the effective estimates of a team's imported event, by its source external id (team_session:<id>).
+async function effectiveEstimates(client, ownerTeamId, sourceExternalId) {
+  return (await client.query(
+    `select o.id as occasion_id, p.athlete_id, v.metric_definition_id
+       from training_load.metric_events e
+       join training_load.metric_event_participants p on p.event_id = e.id
+       join training_load.metric_measurement_occasions o on o.event_participant_id = p.id
+       join training_load.metric_values v on v.occasion_id = o.id
+      where e.owner_scope = 'team' and e.owner_team_id = $1 and e.source_external_id = $2 and e.source_connection_id is not null
+        and o.entry_method = 'estimate' and o.superseded_by_occasion_id is null`,
+    [ownerTeamId, sourceExternalId],
+  )).rows.map((r) => ({ occasionId: String(r.occasion_id), athleteId: String(r.athlete_id), metricDefinitionId: String(r.metric_definition_id) }));
+}
+
 function hashOf(preview, state, activationSet) {
   return sha256Hex(canonicalJson({ preview, state, activations: activationSet ?? [] }));
 }
@@ -418,6 +432,11 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
 
   let outcomes = new Map();
   let summary = null;
+  // 6b-B (contract rule 6): the estimates this import would replace - effective estimate occasions of the session's event
+  // before the import, compared after it. Listed apart, only when there are some (so an existing preview's hash stays as
+  // it was), and never part of acceptChanges.
+  const estimatesBefore = await effectiveEstimates(client, ownerTeamId, plan.event.sourceExternalId);
+  let supersededEstimates = [];
   if (!blocked && importable.length) {
     // A savepoint, so an import refused by an SQL error (e.g. a concurrent
     // connection conflict) leaves the caller's transaction usable and the
@@ -434,6 +453,11 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         },
       );
       outcomes = new Map(summary.results.map((r) => [r.externalId, r]));
+      if (estimatesBefore.length) {
+        const still = new Set((await effectiveEstimates(client, ownerTeamId, plan.event.sourceExternalId)).map((e) => e.occasionId));
+        supersededEstimates = estimatesBefore.filter((e) => !still.has(e.occasionId)).map(({ occasionId, ...rest }) => rest)
+          .sort((a, b) => (a.athleteId < b.athleteId ? -1 : a.athleteId > b.athleteId ? 1 : a.metricDefinitionId < b.metricDefinitionId ? -1 : a.metricDefinitionId > b.metricDefinitionId ? 1 : 0));
+      }
     } catch (error) {
       await client.query("rollback to savepoint gpexe_preview_import");
       if (!(error instanceof GpexeImportError)) throw error;
@@ -635,6 +659,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     unmappedSourceFields: 0,
     unactivatedSourceMetrics: [...unactivated],
     unactivatedSourceMetricCount: unactivated.length,
+    // 6b-B: an estimate is replaced by a measured value (never blocks, never acceptChanges).
+    ...(supersededEstimates.length ? { supersededEstimates } : {}),
   };
   // Bound to the state the preview was computed against and to the activation
   // set (J17 step 11): the approval recomputes it under the same locks and
