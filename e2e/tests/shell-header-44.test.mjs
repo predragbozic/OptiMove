@@ -32,6 +32,7 @@ for (const role of ["platform_admin", "club_admin", "team_coach"]) for (const wi
     for (const key of ["notifications", "messages", "signOut"]) assert.deepEqual(h[key], [44, 44], key);
     if (width > 760) {
       assert.equal(h.pill[0], 104, "the Online pill keeps its width");
+      // Chrome measured 32 px on Windows and 31 px on Linux.
       assert.ok(Math.abs(h.pill[1] - 31) <= 1, "the Online pill keeps its height within one pixel");
     }
     else assert.deepEqual(h.pill, [12, 12], "the Online dot keeps its size on a phone");

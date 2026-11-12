@@ -33,7 +33,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events") && !m.includes("v63_metric_value_estimates")) }); // every migration but the error-tracking one (an injected failure would be recorded as a row); v62 stays the last one here (test 11 rehearses its rollback)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events") && !m.includes("v63_metric_value_estimates") && !m.includes("v64_metric_estimate_requests")) }); // every migration but the error-tracking one (an injected failure would be recorded as a row); v62 stays the last one here (test 11 rehearses its rollback)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

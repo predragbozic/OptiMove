@@ -63,10 +63,17 @@ test("1. sanitizers keep closed shapes only", () => {
   assert.equal(M.normalizeRoute("no-slash"), null);
   assert.ok(M.normalizeRoute(`/${"a/".repeat(100)}`).length <= 120);
   const err = new Error(`failed for ${SECRET} body={"password":"hunter2"}`);
-  err.stack = err.message + "\n    at handleRequest (file:///app/backend/src/routes.js:1:1)";
   const sig = M.stackSignatureFromError(err);
   assert.ok(!/hunter2|example|password|\d+:\d+/.test(sig || ""), sig);
-  assert.match(sig || "", /^[A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}( > [A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}){0,3}$/);
+  // Windows drive-letter paths can leave the native stack without a recognized frame.
+  if (process.platform === "win32" && sig === null) {
+    assert.match(err.stack, /[A-Za-z]:[\\/]/);
+  } else {
+    assert.match(sig || "", /^[A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}( > [A-Za-z0-9_.$]{1,40}@[A-Za-z0-9_.-]{1,40}){0,3}$/);
+  }
+  const synthetic = new Error(err.message);
+  synthetic.stack = synthetic.message + "\n    at handleRequest (file:///app/backend/src/routes.js:1:1)";
+  assert.equal(M.stackSignatureFromError(synthetic), "handleRequest@routes.js");
   assert.ok(!/secret/.test(M.stackSignatureFromError(new Error("x\n    at secret-ana-example (file.js:1:1)")) || ""), "a message line that looks like a frame is not read as one");
   assert.equal(M.cleanStackSignature("a b\nc'; drop table x;--"), null);
   for (const bad of ["ana.example@example.invalid reset token abc for Ana Example", "Error: boom", "a@b > ", "fn@file > fn@file > fn@file > fn@file > fn@file", "x".repeat(300)]) assert.equal(M.cleanStackSignature(bad), null, bad);
