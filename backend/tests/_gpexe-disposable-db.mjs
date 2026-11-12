@@ -86,6 +86,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611101000_training_load_v60_undo_roster_work.sql",
   "202611101200_training_load_v61_import_states_approval.sql",
   "202611111200_training_load_v62_team_session_timezone.sql",
+  "202611121000_training_load_v63_metric_value_estimates.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
