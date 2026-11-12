@@ -25,6 +25,13 @@ export async function openAs(browser, world, role, width = WIDTHS.desktop) {
   return { context, page, account, pageErrors };
 }
 
+// IMP1: the Imports screen shows one tab at a time (attention, ready, imported, out, athletes, search). Opens one by its
+// key and waits until its panel is drawn.
+export async function openImportsTab(page, tab) {
+  await page.click(`[data-action="training-load-gpexe-tab"][data-import-tab="${tab}"]`);
+  await page.waitForSelector(`.imports-tab-panel[data-imports-tab="${tab}"]`);
+}
+
 // Training Load from the main navigation (a phone opens the menu first).
 export async function openTrainingLoad(page) {
   const toggle = page.locator('[data-action="mobile-nav-toggle"]');

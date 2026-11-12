@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, openAs, openImportsTab, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
 
 let browser;
 before(async () => {
@@ -33,10 +33,11 @@ test(`10. (${label}) the administrator leaves one athlete out, reviews the impor
       admin.page.on("request", (r) => { if (r.method() === "POST" && /\/(preview|approve)$/.test(r.url())) posts.push(`${r.url().split("/").pop()} ${r.postData() || ""}`); });
       await openTrainingLoad(admin.page);
       await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
-      await admin.page.waitForSelector('[data-action="training-load-gpexe-open"]', { timeout: 20_000 });
-      await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11." }).first().click().catch(async () => {
-        await admin.page.locator('[data-action="training-load-gpexe-open"]').first().click();
-      });
+      // IMP1: the 04.11. session is Ready; 05.11. needs a person, so the screen opens on Needs you. Open Ready, then the
+      // session itself - no fallback to another session.
+      await admin.page.waitForSelector('[data-action="training-load-gpexe-tab"]', { timeout: 20_000 });
+      await openImportsTab(admin.page, "ready");
+      await admin.page.locator('[data-action="training-load-gpexe-open"]', { hasText: "04.11." }).first().click();
       await admin.page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
       // J20-C: the rows without a GPEXE record now need a person (an attendance choice), so the importable rows sit under
       // "N athletes are fine", which the screen tells the coach to open.

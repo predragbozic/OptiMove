@@ -30,7 +30,31 @@ function installFetchMock(responder) {
 }
 
 const { handleTrainingLoadAction, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
-const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
+const { renderTrainingLoadCoachHtml: renderTrainingLoadPage } = await import("../training-load-view.js");
+// IMP1: the Imports screen shows one tab at a time. These tests check what the Imports screen holds (rows, sentences,
+// buttons), so on the Imports section, with no dialog open, they read the page on the tab it is on and then the panel
+// of every other tab in the screen's order (Needs you, Ready, Imported, Stays out, Athletes, Search). The calendar is
+// read once. The tab the screen is on is left as it was. Every check still runs over the whole Imports content.
+const IMPORT_TABS_IN_ORDER = ["attention", "ready", "imported", "out", "athletes", "search"];
+function renderTrainingLoadCoachHtml() {
+  const page = renderTrainingLoadPage();
+  const gx = state.trainingLoad.gpexe;
+  if (state.trainingLoad.section !== "imports" || !page.includes('class="imports-tab-panel"') || gx.detail || gx.mapping?.open) return page;
+  const keep = gx.tab;
+  const shown = page.match(/data-imports-tab="(\w+)"/)?.[1];
+  const panels = [];
+  for (const tab of IMPORT_TABS_IN_ORDER) {
+    if (tab === shown) continue;
+    gx.tab = tab;
+    const other = renderTrainingLoadPage();
+    const at = other.indexOf('<div class="imports-tab-panel"');
+    panels.push(other.slice(at)
+      .replace(/<details class="gpexe-panel imports-calendar"[\s\S]*?<\/details>/, "")
+      .replace(/<p class="imports-cal-filter"[\s\S]*?<\/p>/, ""));
+  }
+  gx.tab = keep;
+  return `${page}\n${panels.join("\n")}`;
+}
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
@@ -242,7 +266,7 @@ test("GPEXE imports: a Data & Analysis sub-tab that loads status, candidates and
   assert.match(html, /checks and previews are saved, but no result or activity can be written/);
   assert.ok(!/backup/i.test(html), "the screen never says anything about a backup");
   assert.match(html, /training-load-filter-button[^>]*disabled/, "the shell filter does not apply here");
-  assert.match(html, /session of/);
+  assert.match(html, /Session of/);
   assert.ok(state.trainingLoad.gpexe.links.some((l) => l.athleteName === "Ana Example"), "the links are loaded (they are listed on the Link athletes screen)");
   assert.ok(!/GPEXE athletes linked to this team/.test(html), "U6a: no list of linked athletes on the daily screen");
 });
@@ -671,7 +695,8 @@ test("check (J19 U1): a failed poll keeps the running search on screen with a no
   assert.equal(polls, 4, "the first failure and three retries, then polling stops");
   const page = renderTrainingLoadCoachHtml();
   assert.match(page, /Finding sessions/, "the running search is still shown");
-  assert.match(page, /4 sessions in GPEXE: 1 not seen by OptiMove before, 0 changed, 3 unchanged so far/);
+  // IMP1: what is honestly known while a search runs - the sessions read so far (a running check gives no total).
+  assert.match(page, /Reading sessions from GPEXE\.\.\. 4 sessions found so far\./);
   assert.match(page, /role="progressbar"/);
   assert.match(page, /Progress is no longer refreshing\. The search may still be running - do not start another one; use Refresh status\./);
   assert.match(page, /data-action="training-load-gpexe-check"[^>]*disabled/, "Find new sessions stays off while the search is running");
@@ -808,7 +833,7 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
   assert.match(html, />Find new sessions</);
   assert.match(html, /<h3>Needs you \(2\)<\/h3>/);
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.match(html, /<summary>Imported \(1\)<\/summary>/);
+  assert.match(html, /<h3>Imported \(1\)<\/h3>/);
   const readyRow = html.slice(html.indexOf('data-candidate-id="c-new"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-new"')));
   assert.ok(!/gpexe-candidate-next/.test(readyRow), "a ready session carries no step - there is nothing to decide");
   assert.match(html, /Training B[\s\S]*2 changes to results already imported - review and accept them, then import\./);
@@ -998,9 +1023,9 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   });
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  const imported = html.slice(html.indexOf("<summary>Imported (1)</summary>"));
+  const imported = html.slice(html.indexOf("<h3>Imported (1)</h3>"));
   assert.match(imported, /Training E[\s\S]*nothing new/);
-  assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</details>"))), "a session with nobody linked is not 'done'");
+  assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</section>"))), "a session with nobody linked is not 'done'");
   const attention = html.slice(html.indexOf("Needs you (1)"), html.indexOf("Ready to import ("));
   assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - open it and link the athletes from their rows\./);
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
@@ -1040,10 +1065,10 @@ test("blocked sessions in the list: sorted from the list's own code with no deta
 
   // The match: its own collapsed group, badge "Not imported", no call to act.
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "only the approvable session is ready");
-  assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
-  const out = html.slice(html.indexOf("<summary>Stays out"));
+  assert.match(html, /<h3>Stays out \(1\)<\/h3>/);
+  const out = html.slice(html.indexOf("<h3>Stays out"));
   assert.match(out, /Session types OptiMove does not import\. Nothing to do\.[\s\S]*Session c-match/);
-  assert.ok(!/fix|Next:|gpexe-candidate-next/.test(out.slice(0, out.indexOf("</details>"))), "the excluded session asks for nothing");
+  assert.ok(!/fix|Next:|gpexe-candidate-next/.test(out.slice(0, out.indexOf("</section>"))), "the excluded session asks for nothing");
 
   // Every other block is in Needs attention, and the row's step is exactly
   // the detail's "What to do".
@@ -1718,7 +1743,8 @@ test("Imports: the source card shows the source name, the connection, when sessi
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } } }));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  // IMP1: the source card is now the banner (the search, the dates, a running or failed search) plus the Search tab.
+  const card = sourceCard(html);
   assert.match(card, /<strong>GPEXE<\/strong>/);
   assert.match(card, /imports-state is-on">Connected</);
   assert.match(card, /Sessions from the last successful search are listed below\./, "no search recorded, but sessions are listed");
@@ -1729,7 +1755,9 @@ test("Imports: the source card shows the source name, the connection, when sessi
   assert.match(card, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
   assert.match(card, /<dt>Import switch<\/dt><dd>Import writing is switched off in this environment/, "the switch's state is named as the switch, never as a server message");
   assert.doesNotMatch(card, /<dt>Server message<\/dt><dd>Import writing is switched off/);
-  assert.match(card, /<details class="gpexe-tech">[\s\S]*Show replaced or no longer found versions/);
+  // IMP1: the way to the replaced or no longer found versions is in the Stays out tab, not in this card.
+  assert.doesNotMatch(card, /Show replaced or no longer found versions/);
+  assert.match(html.slice(html.indexOf('data-imports-tab="out"')), /aria-label="Stays out"[\s\S]*Show replaced or no longer found versions/);
 });
 
 test("Imports: a failed check shows its own code and message beside its status; the import switch's sentence is never presented as the check's reason; the next step never says 'nothing found' after a failed search", async () => {
@@ -1742,7 +1770,8 @@ test("Imports: a failed check shows its own code and message beside its status; 
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false, lastCheck: failed } }, candidateList: [], sourceAthletes: [] }));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  // IMP1: the source card is now the banner (the search, the dates, a running or failed search) plus the Search tab.
+  const card = sourceCard(html);
   const cardTech = card.slice(card.lastIndexOf('<details class="gpexe-tech">'));
   assert.match(cardTech, /<dt>Last check status<\/dt><dd>failed<\/dd><dt>Last check code<\/dt><dd>drill_set_incomplete<\/dd><dt>Last check message<\/dt><dd>The source did not answer every drill/, "the check's own reason sits beside its status");
   assert.match(cardTech, /<dt>Import switch<\/dt><dd>Import writing is switched off/);
@@ -1835,7 +1864,8 @@ test("Imports: a team with no connection shows neither the dates nor a search hi
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { settings: null } } }));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  // IMP1: the source card is now the banner (the search, the dates, a running or failed search) plus the Search tab.
+  const card = sourceCard(html);
   assert.match(card, /imports-state is-off">Not connected</);
   assert.ok(!/Choose dates|last 14 days|data-gpexe-field/.test(card), "no search controls for an unconnected team");
   assert.match(html, /A platform admin needs to connect this team to a data source \(Settings &gt; Data sources\)\./);
@@ -1913,8 +1943,8 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   const html = renderTrainingLoadCoachHtml();
   assert.match(html, /<h3>Needs you \(8\)<\/h3>/);
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
-  assert.match(html, /<summary>Imported \(2\)<\/summary>/);
+  assert.match(html, /<h3>Stays out \(1\)<\/h3>/);
+  assert.match(html, /<h3>Imported \(2\)<\/h3>/);
   assert.ok(!/Training replaced/.test(html), "a replaced version is hidden");
   const row = (id) => html.slice(rowIdx(html, id), html.indexOf("</button>", rowIdx(html, id)));
   const step = (id) => row(id).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
@@ -2034,6 +2064,11 @@ function chooseFor(gpexeAthleteId, value) {
   return handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-map-choose", gpexeAthleteId }, { value }), { renderTrainingLoad: render });
 }
 
+function sourceCard(html) {
+  const part = (cls) => html.slice(html.indexOf(cls), html.indexOf("</section>", html.indexOf(cls)));
+  return `${part('class="gpexe-panel imports-source')}\n${html.includes('class="gpexe-panel imports-search"') ? part('class="gpexe-panel imports-search"') : ""}`;
+}
+
 function mappingHtml() {
   const html = renderTrainingLoadCoachHtml();
   const start = html.indexOf('class="panel builder-athlete-picker gpexe-detail gpexe-map"');
@@ -2067,7 +2102,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   // The unlinked row: number, last session, values, no name anywhere.
   const row104 = html.slice(html.indexOf('data-gpexe-athlete-id="104"') - 900, html.indexOf('data-gpexe-athlete-id="104"'));
   assert.match(row104, /<strong>GPEXE athlete 104<\/strong>/);
-  assert.match(row104, new RegExp(`Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`), "the same title and time as the inbox row");
+  assert.match(row104, new RegExp(`Last seen ${LAST_SEEN_STAMP} · Full training`), "the same title and time as the inbox row");
   assert.match(row104, /Time 74 min · Distance 5,230 m · Top speed 29\.5 km\/h · Drills 2/);
   // The raw-only row: the values GPEXE did not give are "—", never 0, and the row says where it was seen.
   const row105 = html.slice(html.indexOf('data-gpexe-athlete-id="105"') - 900, html.indexOf('data-gpexe-athlete-id="105"'));
@@ -2076,7 +2111,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   assert.match(row105, /Time — · Distance — · Top speed — · Drills —/);
   assert.ok(!/Time 0|Distance 0|Drills 0/.test(row105));
   // The linked row: the name from the link and Unlink; the inactive one says so.
-  assert.match(html, new RegExp(`<strong>Ana Example</strong>[\\s\\S]{0,200}GPEXE athlete 101 · Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`));
+  assert.match(html, new RegExp(`<strong>Ana Example</strong>[\\s\\S]{0,200}GPEXE athlete 101 · Last seen ${LAST_SEEN_STAMP} · Full training`));
   assert.match(html, /<strong>Former Member<\/strong>[\s\S]{0,200}GPEXE athlete 102 · no longer in the team · Not seen in any session that is still available\./);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-1"/);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-6"/);
@@ -2395,6 +2430,8 @@ test("Link athletes: a link made but the refresh failed - the result stays, the 
   assert.match(mappingHtml(), /Press Try again first\./);
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
   assert.equal(fetchCalls.length, callsBefore, "nothing was sent");
+  // IMP1: the way in is the Athletes tab's.
+  state.trainingLoad.gpexe.tab = "athletes";
   assert.match(renderTrainingLoadCoachHtml(), /data-action="training-load-gpexe-map-open" disabled>Link athletes \(1\)<\/button>/, "the way in behind the screen is off too");
   // 5-6: Try again succeeds - the athlete is under Linked, the warning is gone, the actions are back.
   sourcesFail = false;

@@ -88,7 +88,7 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled } from "./gpexe-import-data.js";
+import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -556,10 +556,19 @@ function bindEvents() {
       return;
     }
     const settings = panel?.classList?.contains("imports-settings");
-    if (!settings && !panel?.classList?.contains("imports-calendar")) return;
+    const choose = panel?.classList?.contains("imports-choose");
+    if (!settings && !choose && !panel?.classList?.contains("imports-calendar")) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
+    // IMP1: "Choose sessions" shows the checkboxes on the Ready rows, so it repaints; nothing is sent.
+    if (choose) {
+      importsChooseToggled(panel.open);
+      renderTrainingLoad();
+      // The repaint drew a new fold: the keyboard keeps its place on it.
+      els.content.querySelector(".imports-choose > summary")?.focus({ preventScroll: true });
+      return;
+    }
     if (settings) importSettingsToggled(panel.open);
     else importsCalendarToggled(panel.open);
   }, true);
@@ -2533,10 +2542,21 @@ function renderTrainingLoad() {
   // A paint that lands after an await (a read finishing, a section load) must not draw Training Load over the
   // screen the coach went to meanwhile (Back to Home while Training Load was loading drew it under the Home title).
   if (state.activeTab !== "training-load") return;
+  // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
+  // brought into view only when it is not.
+  const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
   }
+}
+
+// revealActiveTab scrolls the row only when the active tab is out of view (and marks the fades either way).
+function keepImportsTabRow(left) {
+  const row = els.content.querySelector(".imports-tabs");
+  if (row) row.scrollLeft = left;
+  revealActiveTab(els.content);
 }
 
 // Every training-load-* action can fire from either surface it appears on

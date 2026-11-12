@@ -170,22 +170,30 @@ test("1. the sessions that need a person are grouped by what is in the way, in a
   assert.match(page, /<h4>Needs a look<\/h4>/);
   assert.match(groupHtml("data", page), /data-candidate-id="cand-2" data-group="data">See why</);
   assert.match(page, /<h3>Needs you \(5\)<\/h3>/);
-  assert.match(page, /<h3>Ready to import \(2\)<\/h3>/);
+  // IMP1: the Ready sessions are in their own tab, which carries the count.
+  assert.match(page, /data-import-tab="ready">Ready \(2\)</);
+  await act("training-load-gpexe-tab", { importTab: "ready" });
+  assert.match(html(), /<h3>Ready to import \(2\)<\/h3>/);
 });
 
 test("2. (D4) the state bar counts 'Ready: N' and 'Needs you: N' from the whole list - a day picked in the calendar does not change them; with nothing to do there is no 'Needs you'", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), unlinked(3)] }));
   await openImports();
-  const bar = () => html().match(/<div class="imports-statusbar"[\s\S]*?<div class="imports-actions">/)[0];
-  assert.match(bar(), /<span class="imports-pill is-ready">Ready: 2<\/span><span class="imports-pill is-needs">Needs you: 1<\/span>/);
+  // IMP1: the counts are the tabs' (and the banner's); the banner says "N ready · N needs you".
+  const tabs = () => html().match(/<nav class="om-tabs imports-tabs"[\s\S]*?<\/nav>/)[0];
+  const banner = () => html().match(/<div class="imports-statusbar"[\s\S]*?<div class="imports-actions">/)[0];
+  assert.match(tabs(), /data-import-tab="attention">Needs you \(1\)<[\s\S]*data-import-tab="ready">Ready \(2\)</);
+  assert.match(banner(), /2 ready · 1 needs you/);
   await act("training-load-gpexe-cal-day", { day: calendarDayKey(ready(1).sessionStartedAt) });
-  assert.match(bar(), /Ready: 2<\/span><span class="imports-pill is-needs">Needs you: 1</, "the day filter does not change the counts");
+  assert.match(tabs(), /Needs you \(1\)<[\s\S]*Ready \(2\)</, "the day filter does not change the counts");
+  assert.match(banner(), /2 ready · 1 needs you/, "nor the banner's");
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1)] }));
   await openImports();
-  assert.match(bar(), /Ready: 1<\/span>/);
-  assert.ok(!/Needs you/.test(bar()));
+  assert.match(tabs(), /Ready \(1\)</);
+  assert.match(tabs(), /Needs you \(0\)</, "nothing to do: the tab says 0");
+  assert.ok(!/needs you/.test(banner()), "and the banner does not name it");
 });
 
 test("3. (J20 section 8) the group's button opens its first session; the review says where it is in the group and Next session steps to the next one as the list is now; the last one offers no Next", async () => {
@@ -259,7 +267,7 @@ test("5. (D5) a row reads 'Tue 01.09. · <name>' with the time beside it, on the
   const d = new Date(iso);
   const two = (n) => String(n).padStart(2, "0");
   const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-  assert.ok(html().includes(`<strong>${day} ${two(d.getDate())}.${two(d.getMonth() + 1)}. · FULL TRAINING MD-4</strong>\n          <span class="muted">${two(d.getHours())}:${two(d.getMinutes())}</span>`));
+  assert.ok(html().includes(`<strong>${day} ${two(d.getDate())}.${two(d.getMonth() + 1)}. · Full training md-4</strong>\n          <span class="muted">${two(d.getHours())}:${two(d.getMinutes())}</span>`));
 });
 
 test("6. (D8) mixed time zones: a data problem in plain words for everyone; the code only in an administrator's Technical details", async () => {
@@ -305,7 +313,9 @@ test("7. (D3) while a search runs the screen says it may be left; the sentence g
   assert.ok(polls >= 1);
   assert.ok(!/You can leave this page/.test(html()), "gone once the search has ended");
   gx().check = { ...poll.body.check, status: "running" };
-  assert.match(html(), /You can leave this page\. The search goes on in OptiMove, and the sessions are here when you come back\./);
+  // IMP1: the sketch's short sentence, and what is honestly known: the sessions read so far (no total).
+  assert.match(html(), /<p class="muted gpexe-leave-note">You can leave this page\.<\/p>/);
+  assert.match(html(), /Reading sessions from GPEXE\.\.\. 1 session found so far\./);
 });
 
 test("8. (D7) the confirmation is one question naming the team; the result says how many were imported and points to Activities", async () => {
@@ -324,8 +334,8 @@ test("8. (D7) the confirmation is one question naming the team; the result says 
   assert.match(dialog(), /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
   await act("training-load-gpexe-batch-send");
   const d = dialog();
-  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\.<\/p>/);
-  assert.match(d, /You can see them in Training Load → Activities\./);
+  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and in the Imported tab\.<\/p>/);
+  assert.match(d, /You can see them in Training Load → Activities and in the Imported tab\./);
   assert.match(d, /data-action="training-load-section" data-section="today">Open Activities</);
   await act("training-load-section", { section: "today" });
   assert.equal(state.trainingLoad.section, "today", "Open Activities leaves Imports for Activities");
@@ -366,10 +376,14 @@ test("11. (D2) the search button keeps its name, and the line under the bar says
   await openImports();
   const page = html();
   assert.match(page, /data-action="training-load-gpexe-check" >Find new sessions</);
-  const bar = page.indexOf('class="imports-statusbar"');
-  const line = page.indexOf("Finding sessions does not import anything; you choose what to import.");
-  assert.ok(bar > 0 && line > bar && line < page.indexOf('class="imports-dates"'), "right under the bar, before the dates");
-  assert.equal(page.split("does not import anything").length, 2, "said once");
+  // IMP1: no long sentence up front - the line is the first one of the Search tab.
+  assert.ok(!page.includes("does not import anything"), "not on the default tab");
+  await act("training-load-gpexe-tab", { importTab: "search" });
+  const search = html();
+  const tab = search.indexOf('data-imports-tab="search"');
+  const line = search.indexOf("Finding sessions does not import anything; you choose what to import.");
+  assert.ok(tab > 0 && line > tab, "in the Search tab");
+  assert.equal(search.split("does not import anything").length, 2, "said once");
 });
 
 test("12. guide step 4 is not done while a session still lists an athlete as not linked, even when the athletes list has none; it points to the group, not to a search", async () => {
@@ -448,7 +462,9 @@ test("15. a stale review asks for no search until updating it failed", async () 
 
 test("16. with nothing ready, the first group's button is the one main action when it is a step the person can take now; otherwise the search or Import N ready stays the main one", async () => {
   const primaries = (page) => (page.match(/class="primary-button gpexe-button"/g) || []).length;
-  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], false], [[notConfirmed(5)], false], [[blocked(2)], false]]) {
+  // IMP1: the Import button lives in the Ready tab, so on the Needs you tab a step the person can take now leads even
+  // when sessions are ready ([ready(1), unlinked(4)] used to keep "Import N ready" as the main action of one screen).
+  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], true], [[notConfirmed(5)], false], [[blocked(2)], false]]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
     await openImports();

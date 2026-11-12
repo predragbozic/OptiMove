@@ -151,7 +151,13 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     // administrator-only identity load.
     // U2 (v56): the team's own switch, shown to everyone who sees the team (no condition detail here).
     teamImportSwitch: { enabled: approval.switchOn, mode: approval.switchMode ?? "pilot" },
-    viewer: { canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin, ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}) },
+    viewer: {
+      canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin,
+      ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}),
+      // D3: whether this viewer may start the identity load (an administrator; or the team's own coach while the team's
+      // switch is on in mode `team`). Only when true, as identityAdmin; the load route decides again.
+      ...(identity.identityAdminBasis(req, access) || (identity.identityLoadBasis(req, access) === "team_coach" && approval.switchOn && approval.switchMode === "team") ? { identityLoad: true } : {}),
+    },
     approvalAvailable: true,
   });
 }));
@@ -425,22 +431,28 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
 // admin only, in the platform or the club's workspace. Everyone else - a
 // coach included - and a team without an active binding get the router's
 // identical 404. Every answer, the 404 included, is no-store.
-function identityHandle(fn) {
+// `basisOf` picks the audience: the identity administrators (identityAdminBasis) for the stored list; for the load, also the
+// team's own coach in that team's workspace (identityLoadBasis), whose right the service holds only while the team's
+// import switch is on in mode `team` (the identical 404 otherwise).
+function identityHandle(fn, basisOf = identity.identityAdminBasis) {
   return async (req, res, next) => {
     res.set("Cache-Control", "no-store");
+    let basis = null;
     try {
       const access = await teamAccess(req, res);
       if (!access) return;
-      const basis = identity.identityAdminBasis(req, access);
+      basis = basisOf(req, access);
       if (!basis) return notFound(res);
       await fn(req, res, access, { userId: String(req.user.id), basis });
     } catch (error) {
       if (isPoolCheckoutTimeout(error) && !res.headersSent) return poolBusy(req, res);
       if (error instanceof identity.GpexeIdentityError) {
         if (error.status === 404) return notFound(res);
-        const { reason, replayed, requestKey } = error.details || {};
-        return res.status(error.status).json({
-          error: error.code, message: error.message,
+        // A team's coach never reads the source connection's precise codes (identity.coachRefusal).
+        const shown = basis === "team_coach" ? identity.coachRefusal(error) : { status: error.status, code: error.code, message: error.message, details: error.details };
+        const { reason, replayed, requestKey } = shown.details || {};
+        return res.status(shown.status).json({
+          error: shown.code, message: shown.message,
           ...(typeof reason === "string" ? { reason } : {}),
           ...(replayed ? { replayed: true } : {}),
           ...(typeof requestKey === "string" ? { requestKey } : {}),
@@ -460,8 +472,9 @@ router.get("/teams/:teamId/athlete-identities", identityHandle(async (req, res, 
 // Body: { requestKey } and nothing else. The athletes are derived by the
 // server; the answer carries counts only.
 router.post("/teams/:teamId/athlete-identities/loads", identityHandle(async (req, res, access, ctx) => {
-  res.json(await identity.loadIdentities(access.teamId, { ctx, body: req.body }));
-}));
+  const answer = await identity.loadIdentities(access.teamId, { ctx, body: req.body });
+  res.json(ctx.basis === "team_coach" ? identity.coachResult(answer) : answer);
+}, identity.identityLoadBasis));
 
 // U3: suggested pairs. Audience: the identity administrators and the team's
 // own coach in that team's workspace (pairSuggestionBasis); the three lists

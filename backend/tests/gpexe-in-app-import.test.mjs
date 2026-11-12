@@ -659,9 +659,11 @@ test("approver grants: only a platform admin grants and revokes, only to an acti
   assert.equal((await status(team.coach)).canApprove, false);
   const history = (await api(`/teams/${team.teamId}/approvers`, { cookie: team.coach.cookie })).body.approvers;
   assert.deepEqual(history.map((h) => [h.active, h.grantReason, h.revokeReason]), [[false, "approves GPEXE imports for this team", "left the staff"]]);
-  // identityAdmin (the administrator-only identity load, v32) is present for a platform admin only when true.
-  assert.deepEqual(await status(team.padmin), { canApprove: true, approvalBasis: "platform_admin", hasApprovalRight: true, isPlatformAdmin: true, identityAdmin: true });
+  // identityAdmin (the administrator-only stored list, v32) and identityLoad (who may start a load) are present only when true;
+  // a coach gets identityLoad only while the team's switch is on in team mode (gpexe-identity-load-team-mode.test.mjs).
+  assert.deepEqual(await status(team.padmin), { canApprove: true, approvalBasis: "platform_admin", hasApprovalRight: true, isPlatformAdmin: true, identityAdmin: true, identityLoad: true });
   assert.equal("identityAdmin" in (await status(team.coach)), false, "a coach's viewer carries no identity trace");
+  assert.equal("identityLoad" in (await status(team.coach)), false, "no switch: no load offered to the coach");
 });
 
 test("database: approver grants and athlete links keep their history and refuse what the routes refuse", async () => {
