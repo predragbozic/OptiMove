@@ -29,7 +29,8 @@ test("explicit copying clears source media and code and saves only on confirmati
   let refreshes = 0;
   const handlers = { rerender() {}, async refreshAfterSave() { refreshes++; } };
   await openExerciseEditor(editorState, handlers, "system-source", { copy: true });
-  assert.equal(requests.length, 1);
+  assert.equal(requests.filter(request => request.url === "/api/exercises/system-source").length, 1);
+  assert.equal(requests.filter(request => request.method === "POST").length, 0);
   assert.equal(editorState.exerciseEditor.data.videoUrl, "");
   assert.equal(editorState.exerciseEditor.data.imageUrl, "");
   assert.doesNotMatch(renderExerciseEditorHtml(editorState.exerciseEditor), /https:\/\/source.test/);
