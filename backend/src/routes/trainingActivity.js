@@ -24,6 +24,7 @@ import {
 } from "../trainingActivityMaterialize.js";
 import { getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
+import { getEstimateProposal, saveEstimate } from "../metricEstimateService.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
 import { SourceMetricMappingError } from "../sourceMetricAccess.js";
 import {
@@ -295,6 +296,31 @@ router.post("/:activityId/roster/complete", rosterCommandRoute((ctx, activityId,
   completeRoster(ctx, activityId, req.body)));
 router.post("/:activityId/roster/reopen", rosterCommandRoute((ctx, activityId, req) =>
   reopenRoster(ctx, activityId, req.body)));
+
+// Estimated values for an athlete without GPS data (phase 5b, 6b-B; metricEstimateService.js). Behind ESTIMATES_ENABLED:
+// off, both are the identical 404. The proposal reads only; the save is the roster command's shape (stable codes, a bounded
+// COMMIT, an unknown outcome 503 outcome_unknown with the same requestKey safe to repeat).
+router.get("/:activityId/estimates/proposal", async (req, res) => {
+  try {
+    if (!validUuid(req.params.activityId)) return res.status(404).json({ error: "notFound" });
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const outcome = await getEstimateProposal({ userId: req.user.id, authz: req.authz, workspace }, req.params.activityId.toLowerCase(), req.query);
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    if (error instanceof RosterError) {
+      if (error.status === 404) return res.status(404).json({ error: "notFound" });
+      return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
+    }
+    if (isPoolCheckoutTimeout(error)) {
+      console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+      return res.status(503).json({ error: "try_again", message: "Try again in a moment." });
+    }
+    console.error(`[estimate] proposal of activity ${req.params.activityId} failed: ${error?.code ?? ""} ${error?.message}`);
+    res.status(500).json({ error: "internal_error", message: "The proposal could not be read." });
+  }
+});
+router.post("/:activityId/estimates", rosterCommandRoute((ctx, activityId, req) =>
+  saveEstimate(ctx, activityId, req.body)));
 
 // ------------------------------------------------------------
 // Match suggestions

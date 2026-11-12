@@ -190,7 +190,7 @@ export function requestHash(canonical) {
 // before it supersedes anything, so once this returns the alias set cannot
 // change until the command ends; the loop covers a merge that committed
 // between the resolve and the lock.
-async function lockAliasSet(client, activityId) {
+export async function lockAliasSet(client, activityId) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
   const read = async () => {
     const canonicalId = String((await one(`select training.resolve_canonical_activity_id($1) as id`, [activityId]))[0].id);
@@ -240,7 +240,7 @@ export function commitCertainlyRefused(error) {
   return !/^(08|57P)/.test(code) && code !== "40003";
 }
 
-function withinBound(promise, ms) {
+export function withinBound(promise, ms) {
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
