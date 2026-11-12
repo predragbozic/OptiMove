@@ -3,6 +3,9 @@
 // placement hash (section 4.2). No database, no network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { gpexeLevelValues, gpexeLevelValuesKeyed } from "../src/gpexeImportMapper.js";
+import { extractorFor } from "../src/sourceMetricExtractors.js";
+import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import {
   DISPLAY_REGISTRY_VERSION, PAIR_LIMIT, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs, roundDecimal,
   setDisplayRuleFallbackForTests,
@@ -76,11 +79,11 @@ test("rankPairs: named athletes only, the pair that proves most columns first, t
 });
 
 test("placementHash: stable, and different for every part the admin saw", () => {
-  const base = { bundleHash: "b", pairIndex: 0, revisionId: "r", targetVersionId: "t", mappingVersionId: null, conversion: "1/60+0", displayRule: "duration_mmss", displayUnit: "mm:ss", rawA: "1200", storedA: "20", rawB: "1800", storedB: "30" };
+  const base = { bundleHash: "b", pairIndex: 0, pairLabels: ["One", "Two"], revisionId: "r", targetVersionId: "t", mappingVersionId: null, conversion: "1/60+0", displayRule: "duration_mmss", displayUnit: "mm:ss", rawA: "1200", storedA: "20", rawB: "1800", storedB: "30" };
   const h = placementHash(base);
   assert.match(h, /^[0-9a-f]{64}$/);
   assert.equal(placementHash({ ...base }), h);
-  const changed = { bundleHash: "c", pairIndex: 1, revisionId: "s", targetVersionId: "u", mappingVersionId: "m", conversion: "same", displayRule: "distance_m", displayUnit: "m", rawA: "1201", storedA: "20.01", rawB: "1801", storedB: "30.01" };
+  const changed = { bundleHash: "c", pairIndex: 1, pairLabels: ["One", "Three"], revisionId: "s", targetVersionId: "u", mappingVersionId: "m", conversion: "same", displayRule: "distance_m", displayUnit: "m", rawA: "1201", storedA: "20.01", rawB: "1801", storedB: "30.01" };
   const seen = new Set([h]);
   for (const [name, value] of Object.entries(changed)) {
     const other = placementHash({ ...base, [name]: value });
@@ -89,4 +92,17 @@ test("placementHash: stable, and different for every part the admin saw", () => 
   }
   // Two parts never run together: ("ab","c") is not ("a","bc").
   assert.notEqual(placementHash({ ...base, rawA: "12", storedA: "3" }), placementHash({ ...base, rawA: "1", storedA: "23" }));
+});
+
+test("the mapper's raw read carries an athlete's internal key only when the board asks for it", () => {
+  const entry = extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.total_time" });
+  const bundle = previewBundle({ gpexeTeamId: 975999 });
+  const plain = gpexeLevelValues(bundle, (input) => entry.extract(input, {}));
+  const keyed = gpexeLevelValuesKeyed(bundle, (input) => entry.extract(input, {}));
+  assert.equal(plain.code, null);
+  assert.ok(plain.athletes.length >= 3);
+  for (const athlete of plain.athletes) assert.deepEqual(Object.keys(athlete).sort(), ["drill", "session"]);
+  assert.equal(JSON.stringify(plain).includes(PLANTED.athletePrefix), false);
+  assert.deepEqual(keyed.athletes.map(({ session, drill }) => ({ session, drill })), plain.athletes);
+  assert.ok(keyed.athletes.every((athlete) => String(athlete.key).startsWith(PLANTED.athletePrefix)));
 });

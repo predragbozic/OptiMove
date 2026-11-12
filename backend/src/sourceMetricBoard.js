@@ -117,12 +117,13 @@ export function rankPairs(athletes, fieldIds) {
 }
 
 // The placement hash (section 4.2): a concurrency token over what the admin
-// saw. Not a secret, no clock; recomputed by the server on every save. Never
+// saw, the two athletes' names included (the pair's index alone does not say
+// who the pair is). Not a secret, no clock; recomputed by the server on every save. Never
 // stored, never part of a request hash.
 export function placementHash(parts) {
   const canonical = JSON.stringify([
     "j18.placement.v1",
-    parts.bundleHash, parts.pairIndex, parts.revisionId, parts.targetVersionId ?? null, parts.mappingVersionId ?? null,
+    parts.bundleHash, parts.pairIndex, parts.pairLabels ?? null, parts.revisionId, parts.targetVersionId ?? null, parts.mappingVersionId ?? null,
     parts.conversion ?? "same", parts.displayRule ?? null, parts.displayUnit ?? null,
     parts.rawA ?? null, parts.storedA ?? null, parts.rawB ?? null, parts.storedB ?? null,
   ]);

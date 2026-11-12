@@ -32,6 +32,10 @@ export const BOARD_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 export const CONFIRMATIONS_PAGE = 50;
 const SOURCE_CONNECTION_PATH = "source_connection";
 const REMOVAL_BATCH = 200;
+// The removal batch's bounds: its statement and lock waits in the database, and the whole step on the client.
+const REMOVAL_STATEMENT_MS = 2000;
+const REMOVAL_LOCK_MS = 500;
+const REMOVAL_BOUND_MS = 4000;
 
 const BOARD_MESSAGES = {
   invalid_query: "The query carries a parameter this route does not take, or a value it cannot read.",
@@ -50,18 +54,44 @@ export const COLUMN_REASONS = Object.freeze(["field_not_confirmed", "field_has_p
 
 // Test seam: the removal batch that runs before a board or history read.
 let removalFault = null;
-export function setBoardRemovalFaultForTests(fn) { removalFault = fn ?? null; }
+let removalBoundMs = REMOVAL_BOUND_MS;
+export function setBoardRemovalFaultForTests(fn, { boundMs = REMOVAL_BOUND_MS } = {}) { removalFault = fn ?? null; removalBoundMs = fn ? boundMs : REMOVAL_BOUND_MS; }
 
 // Section 5.8: before every board or history read, ONE batch of the removal of
 // expired values, in its own call before the read's transaction (a read
 // transaction is read-only). Its failure is logged by code only and never
 // fails the read: no route returns a value past its date anyway.
 async function removeExpiredBatch() {
-  try {
+  // Bounded twice: the statement and its lock waits in the database, and the
+  // whole step by a client bound that closes the connection, so a stalled
+  // batch delays a read by at most the bound and never fails it.
+  let client = null;
+  let abandoned = false;
+  let timer;
+  const close = (destroy) => { const c = client; client = null; if (c) c.release(destroy); };
+  const work = (async () => {
     if (removalFault) await removalFault();
-    await pool.query(`select training_load.remove_expired_confirmation_values($1)`, [REMOVAL_BATCH]);
+    const c = await pool.connect();
+    if (abandoned) { c.release(true); return; }
+    client = c;
+    await c.query("begin");
+    await c.query(`set local statement_timeout = ${REMOVAL_STATEMENT_MS}`);
+    await c.query(`set local lock_timeout = ${REMOVAL_LOCK_MS}`);
+    await c.query(`select training_load.remove_expired_confirmation_values($1)`, [REMOVAL_BATCH]);
+    await c.query("commit");
+    close(false);
+  })();
+  work.catch(() => {});
+  try {
+    await Promise.race([work, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error("removal bound"), { code: "removal_bound_exceeded" })), removalBoundMs);
+    })]);
   } catch (error) {
+    abandoned = true;
+    close(true); // the connection is closed, so nothing of the batch stays open
     console.error(`[source-metric-board] expired_values_removal_failed (${error?.code ?? error?.name ?? "error"})`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -149,14 +179,17 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
     ), base)).rows[0];
     if (!candidate) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
   }
-  if (candidate.purged) throw refusal(409, "snapshot_expired", BOARD_MESSAGES.snapshot_expired, { current: { reason: "purged" } });
-  if (candidate.expired) throw refusal(409, "snapshot_expired", BOARD_MESSAGES.snapshot_expired, { current: { reason: "expired" } });
-  if (candidate.too_large === true) throw refusal(409, "candidate_too_large", BOARD_MESSAGES.candidate_too_large);
-  if (candidate.check_status !== "succeeded" || candidate.source_path !== SOURCE_CONNECTION_PATH || candidate.source_binding_id !== team.binding_id) {
-    throw refusal(409, "candidate_source_mismatch", BOARD_MESSAGES.candidate_source_mismatch);
-  }
-  if (candidate.session_started_at === null) throw refusal(409, "session_start_unknown", BOARD_MESSAGES.session_start_unknown);
-  if (candidate.raw_bundle === null || typeof candidate.raw_bundle !== "object") throw new Error("board bundle missing");
+  // The session's own refusal is carried, not thrown here: a placement first
+  // answers the identical 404 for a column or a variable outside the
+  // workspace (section 4.1: a 404 always comes before any 409).
+  let sessionRefusal = null;
+  if (candidate.purged) sessionRefusal = refusal(409, "snapshot_expired", BOARD_MESSAGES.snapshot_expired, { current: { reason: "purged" } });
+  else if (candidate.expired) sessionRefusal = refusal(409, "snapshot_expired", BOARD_MESSAGES.snapshot_expired, { current: { reason: "expired" } });
+  else if (candidate.too_large === true) sessionRefusal = refusal(409, "candidate_too_large", BOARD_MESSAGES.candidate_too_large);
+  else if (candidate.check_status !== "succeeded" || candidate.source_path !== SOURCE_CONNECTION_PATH || candidate.source_binding_id !== team.binding_id) {
+    sessionRefusal = refusal(409, "candidate_source_mismatch", BOARD_MESSAGES.candidate_source_mismatch);
+  } else if (candidate.session_started_at === null) sessionRefusal = refusal(409, "session_start_unknown", BOARD_MESSAGES.session_start_unknown);
+  else if (candidate.raw_bundle === null || typeof candidate.raw_bundle !== "object") throw new Error("board bundle missing");
 
   const teamTimezone = await teamSessionTimezone(client, team.id);
 
@@ -212,11 +245,15 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
     [team.binding_id],
   )).rows;
   const switchedOff = (await client.query(
-    `select distinct on (a.mapping_id) a.mapping_id, a.ended_at, coalesce(nullif(u.display_name, ''), u.full_name) as ended_by
-       from training_load.source_metric_mapping_activations a
-       left join public.users u on u.id = a.ended_by_user_id
-      where a.source_team_binding_id = $1 and a.end_reason = 'admin_ended'
-      order by a.mapping_id, a.ended_at desc`,
+    // The mapping's LATEST activation on this binding, and only when an administrator ended it:
+    // a mapping switched on again and then ended another way is not "switched off".
+    `select x.mapping_id, x.ended_at, coalesce(nullif(u.display_name, ''), u.full_name) as ended_by
+       from (select distinct on (a.mapping_id) a.mapping_id, a.ended_at, a.end_reason, a.ended_by_user_id
+               from training_load.source_metric_mapping_activations a
+              where a.source_team_binding_id = $1
+              order by a.mapping_id, a.activated_at desc, a.id desc) x
+       left join public.users u on u.id = x.ended_by_user_id
+      where x.end_reason = 'admin_ended'`,
     [team.binding_id],
   )).rows;
 
@@ -243,7 +280,7 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId: ctx.owner.clubId, team, candidate, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
+  return { clubId: ctx.owner.clubId, team, candidate, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,13 +366,14 @@ function versionRow(world, pair, col, v) {
     levels: levelsOf(v),
     values: { a: { raw: rawA, stored: storedA }, b: { raw: rawB, stored: storedB } },
     placementHash: placementHash({
-      bundleHash: world.candidate.bundle_hash, pairIndex: pair.index, revisionId: v.revision_id, mappingVersionId: v.id,
+      bundleHash: world.candidate.bundle_hash, pairIndex: pair.index, pairLabels: pair.labels, revisionId: v.revision_id, mappingVersionId: v.id,
       conversion: conversionText(factors), rawA, storedA, rawB, storedB,
     }),
   };
 }
 
 function boardOf(world, pairIndex) {
+  if (world.sessionRefusal) throw world.sessionRefusal;
   const columns = columnsOf(world);
   const pair = choosePair(world, columns, pairIndex);
   const colById = new Map(columns.map((c) => [c.field.id, c]));
@@ -429,12 +467,14 @@ function inLimits(value, variable) {
 
 function placementOf(world, pairIndex, { fieldId, targetId }) {
   const columns = columnsOf(world);
-  const pair = choosePair(world, columns, pairIndex);
   const col = columns.find((c) => c.field.id === fieldId);
   const variable = world.variables.find((v) => v.id === targetId);
   // A column or a variable outside what this workspace reads is the identical 404
-  // (another club's variable, a hidden OptiMove one, an unknown id).
+  // (another club's variable, a hidden OptiMove one, an unknown id) - before
+  // any refusal about the session or the pair.
   if (!col || !variable || (variable.owner_scope === "system" && variable.hidden)) throw NOT_FOUND();
+  if (world.sessionRefusal) throw world.sessionRefusal;
+  const pair = choosePair(world, columns, pairIndex);
   const refuse = (code, extra = {}) => ({ placement: { placeable: false, code, fieldId, targetId, ...extra } });
 
   if (variable.owner_scope === "system") {
@@ -464,6 +504,8 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
       || !sameFactors(factorsOf(active), conversion.factors) || active.applies_to_session !== levels.session || active.applies_to_drill !== levels.drill)) {
     return refuse("mapping_version_active");
   }
+  // The same contract is already on for the team: nothing to place.
+  if (active && world.open.some((o) => o.mapping_version_id === active.id)) return refuse("activation_exists");
   const rawA = pair.a.values.get(fieldId) ?? null;
   const rawB = pair.b.values.get(fieldId) ?? null;
   if (!distinctPair(rawA, rawB)) return refuse("pair_not_distinct");
@@ -477,7 +519,7 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
   for (const unit of col.rule.units) {
     display[unit] = { a: displayValue(col.rule, unit, rawA), b: displayValue(col.rule, unit, rawB) };
     hashes[unit] = placementHash({
-      bundleHash: world.candidate.bundle_hash, pairIndex: pair.index, revisionId: col.field.revision_id, targetVersionId: variable.version_id,
+      bundleHash: world.candidate.bundle_hash, pairIndex: pair.index, pairLabels: pair.labels, revisionId: col.field.revision_id, targetVersionId: variable.version_id,
       conversion: conversion.kind === "same_unit" ? "same" : conversionText(conversion.factors),
       displayRule: col.rule.rule, displayUnit: unit, rawA, storedA, rawB, storedB,
     });
@@ -520,7 +562,7 @@ const SCOPE_SQL = `
         or (c.owner_club_id = $2::uuid
             and exists (select 1 from public.teams t join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
                          where t.id = c.team_id and t.club_id = $2::uuid and coalesce(t.is_active, true))))`;
-const CONFIRMATION_COLUMNS = `c.id, c.team_id, c.confirmed_at, c.attested, c.values_expire_at <= now() as expired,
+const CONFIRMATION_COLUMNS = `c.id, c.team_id, c.confirmed_at, to_char(c.confirmed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_at, c.attested, c.values_expire_at <= now() as expired,
   coalesce(nullif(u.display_name, ''), u.full_name) as confirmed_by, s.session_started_at`;
 
 async function itemsOf(client, confirmationIds) {
@@ -570,11 +612,14 @@ function confirmationOut(row, items) {
   };
 }
 
-const encodeCursor = (row) => Buffer.from(JSON.stringify([new Date(row.confirmed_at).toISOString(), row.id])).toString("base64url");
+// The cursor carries the row's time in full (microseconds), as text from SQL, never through a JS Date.
+const CURSOR_AT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$/;
+const realInstant = (at) => { const d = new Date(at.slice(0, 23) + "Z"); return !Number.isNaN(d.getTime()) && d.getUTCFullYear() >= 2000 && d.toISOString().slice(0, 23) === at.slice(0, 23); };
+const encodeCursor = (row) => Buffer.from(JSON.stringify([row.cursor_at, row.id])).toString("base64url");
 function decodeCursor(text) {
   try {
     const [at, id] = JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
-    if (typeof at !== "string" || Number.isNaN(Date.parse(at)) || typeof id !== "string" || !UUID.test(id)) throw new Error("cursor");
+    if (typeof at !== "string" || !CURSOR_AT.test(at) || !realInstant(at) || typeof id !== "string" || !UUID.test(id)) throw new Error("cursor");
     return { at, id: id.toLowerCase() };
   } catch {
     throw refusal(400, "invalid_query", BOARD_MESSAGES.invalid_query);
@@ -589,8 +634,10 @@ export async function listConfirmations({ ctx, queryString }) {
   return boundedRead(async (client) => {
     // The team inside the scope first: a team outside it is the identical 404, not an empty list.
     const team = (await client.query(
-      `select 1 from public.teams t join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
-        where t.id = $1::uuid and ($2::text = 'system' or (t.club_id = $3::uuid and coalesce(t.is_active, true)))`,
+      // The same audience as SCOPE_SQL: a platform admin in the platform workspace reads any team's history.
+      `select 1 from public.teams t
+        where t.id = $1::uuid and ($2::text = 'system' or (t.club_id = $3::uuid and coalesce(t.is_active, true)
+              and exists (select 1 from public.clubs cl where cl.id = t.club_id and coalesce(cl.is_active, true))))`,
       [q.teamId, ctx.owner.scope, ctx.owner.clubId],
     )).rows[0];
     if (!team) throw NOT_FOUND();

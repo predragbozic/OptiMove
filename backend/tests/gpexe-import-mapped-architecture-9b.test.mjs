@@ -419,6 +419,14 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   assert.deepEqual(files.filter((f) => f.rel !== "sourceMetricExtractors.js" && /\bEXTRACTORS\b/.test(f.code)).map((f) => f.rel), [], "the registry table read around extractorFor");
   assert.deepEqual(files.filter((f) => /\bextract\s*:/.test(f.code)).map((f) => f.rel), ["gpexeImportMapper.js"], "an extract property (a spec) defined outside the mapper");
   assert.deepEqual(files.filter((f) => callsOf(f, "setExtractorFallbackForTests").length > 0).map((f) => f.rel), [], "the registry's test fallback is set by a source module");
+  // J18 (18-2): the board's two test seams are never set by a source module either, and the internal athlete key is
+  // asked for only through gpexeLevelValuesKeyed (no other call of gpexeLevelValues passes a fourth argument).
+  for (const seam of ["setDisplayRuleFallbackForTests", "setBoardRemovalFaultForTests"]) {
+    assert.deepEqual(files.filter((f) => callsOf(f, seam).length > 0).map((f) => f.rel), [], `${seam} is set by a source module`);
+  }
+  for (const { g, call } of levelCalls.filter((c) => !keyedCalls.includes(c))) {
+    assert.doesNotMatch(call.args, /\}\s*,\s*[^,]+$/, `${where(g, call.index)}: gpexeLevelValues is asked for the internal key outside gpexeLevelValuesKeyed`);
+  }
   assert.deepEqual(files.filter((f) => /\bfrom\s+["'][^"']*(?:\/tests\/|gpexe-legacy-specs|test-extractors)/.test(f.text)).map((f) => f.rel), [], "a source module imports test support");
 });
 

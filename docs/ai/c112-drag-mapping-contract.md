@@ -1591,7 +1591,9 @@ Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links
   or an archive). Everyone and everything else is the identical `404 {"error":"notFound"}`: a coach, no role,
   another club's admin, an unknown, archived, unbound or other club's team, an unknown or other club's candidate,
   an undone (v57) or superseded candidate, another club's or a hidden variable, an unknown field. A refusal about
-  the session is given only after all of that holds.
+  the session or the pair is given only after all of that holds: on route 2 the column and the variable are
+  resolved before the session's own `409` and before the pair is chosen. Routes 4 and 5 use one predicate; a
+  platform admin in the platform workspace lists and reads a team's History after a team or a club archive.
 - **Modules.** `backend/src/sourceMetricBoard.js` is pure: the display registry (version 1; `total_time` in s as
   `mm:ss`, `total_distance` in m to one decimal, `max_v` in m/s as km/h to one decimal, exact decimal arithmetic),
   the pair rule and the placement hash. `backend/src/sourceMetricBoardService.js` reads the database through the
@@ -1615,26 +1617,40 @@ Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links
   an OptiMove variable is a target only through OptiMove's own active mapping); `on` (open activations of the
   team); `preplaced` (OptiMove's and the club's active versions that are not on, not switched off by an
   administrator and not on a hidden variable, each with the pair's raw and stored values and a placement hash);
-  `replaceable` (the same, when it collides with something that is on, with what it would replace); `switchedOff` (ended by an administrator: who and when; never placed again by itself, Q9).
-- **A placement** is always `200` for an admitted caller with known ids: either `placeable: false` with one code
-  (`target_scope_mismatch`, `activation_exists`, the column's reason, `target_not_usable`, `condition_mismatch`,
+  `replaceable` (the same, when it collides with something that is on, with what it would replace); `switchedOff` (the mapping's latest activation on this binding was ended by an administrator: who and when;
+  never placed again by itself, Q9; a mapping switched on again and then ended another way is pre-placed again).
+- **A placement** is `200` for an admitted caller with known ids and a usable session and pair: either
+  `placeable: false` with one code (`target_scope_mismatch`, `activation_exists` (the same contract is already on
+  for the team, OptiMove's or the club's own), the column's reason, `target_not_usable`, `condition_mismatch`,
   `conversion_unavailable`, `level_not_allowed`, `source_metric_target_taken`, `mapping_version_active`,
   `pair_not_distinct`, `value_outside_limits`; a refusal carries no value) or the proposal: the conversion (the one
   active one, or `same_unit`), the levels, the two athletes' raw and stored values, what the GPEXE screen shows per
   display unit, one `placementHashes[unit]`, `reusesVersionId` when the club's own active version is the same
   contract, and the `collisions` with what is on for the team.
-- **The placement hash** is sha256 over the candidate's bundle hash, the pair index, the field revision, the target
+- **The placement hash** is sha256 over the candidate's bundle hash, the pair index and the pair's two names (the
+  index alone does not say who the pair is), the field revision, the target
   version or the mapping version, the conversion, the display rule and unit, and the four values. It is a
   concurrency token, not a secret; nothing stores it. 18-3 recomputes it on the save.
 - **History.** A row's `valuesState` is `present`, `expired`, `erased` or `not_compared`. A value is never returned
-  past `values_expire_at`, removed or not. Before a History read the service runs one batch of
-  `remove_expired_confirmation_values` on its own connection; a failure is logged by its SQLSTATE only and never
-  fails the read. The confirmer is returned by name, never by id.
+  past `values_expire_at`, removed or not. The confirmer is returned by name, never by id. The page cursor
+  carries the last row's time in microseconds as text from SQL; anything but that exact form is `400 invalid_query`.
+- **The one write.** Before a board read (route 1) and a History read (routes 4 and 5), never before a placement,
+  the service runs one batch of `remove_expired_confirmation_values` in its own short transaction on its own
+  connection: `statement_timeout` 2 s, `lock_timeout` 0.5 s, and a 4 s client bound that closes the connection. A
+  failure or a stall is logged by its code only and never fails the read.
 - **Never:** a GPEXE request, an identity load, a date of birth, a write other than that removal batch, a lock.
-- **Tests:** `backend/tests/source-metric-board-18-2.test.mjs` (disposable database, the real HTTP stack, 8 tests:
-  the audience matrix, the board, the session states, placements, what exists on the team, a hidden variable,
-  History with expiry and a failed removal, and the leak scan of every answer and log line) and
-  `backend/tests/source-metric-board.unit.test.mjs` (6 tests, the pure module).
+- **Tests:** `backend/tests/source-metric-board-18-2.test.mjs` (disposable database, the real HTTP stack, 9 tests:
+  the audience matrix, the board, the session states, placements with the 404 before any 409, what exists on the
+  team, a hidden variable, History with expiry, a failed and a stalled removal, History's pages, cursor, erased
+  values and archives, and the leak scan of every answer and log line) and
+  `backend/tests/source-metric-board.unit.test.mjs` (7 tests, the pure module and the keyed read). The importer's
+  architecture guard also holds that no source module sets the board's two test seams and that the internal key
+  is asked for only through `gpexeLevelValuesKeyed`.
 - **Not covered, stated:** no test counts the calls of `resolveActiveWorkspace` (the routes go through the
-  router's existing `adminContext`, once per request); `candidate_too_large` and `candidate_not_importable` have no
-  test of their own; the routes were not run against a real GPEXE bundle.
+  router's existing `adminContext`, once per request); `candidate_too_large`, `candidate_not_importable` and
+  `target_not_usable` have no test of their own; a `replaceable` row is asserted only as absent; no test holds an
+  item row's lock against the removal batch (the stalled batch is a planted one); the routes were not run against
+  a real GPEXE bundle.
+- **For 18-3:** a board replacement ends the replaced activation as `admin_ended`, so the replaced mapping then
+  reads as switched off by an administrator, not as pre-placed. Whether that is Q9's intent for a replacement is
+  decided with the save.

@@ -194,8 +194,8 @@ async function link(t, n, name = NAMES[n]) {
   await k.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [athleteId, t.clubId, t.teamId]);
   await k.query(`insert into training_load.gpexe_athlete_links (owner_team_id, gpexe_athlete_id, athlete_id, linked_by_user_id) values ($1,$2,$3,$4)`, [t.teamId, ATHLETE(n), athleteId, W.pa.id]);
 }
-async function variable(owner, { unit = "min", minValue = undefined, maxValue = undefined, label = `Variable ${uid()}` } = {}) {
-  const res = await post("/variables", owner, { requestKey: key(), label, unit, levels: ["session", "drill"], dailyAggregationMethod: "sum", ...(minValue === undefined ? {} : { minValue }), ...(maxValue === undefined ? {} : { maxValue }) });
+async function variable(owner, { unit = "min", minValue = undefined, maxValue = undefined, label = `Variable ${uid()}`, levels = ["session", "drill"], condition = undefined } = {}) {
+  const res = await post("/variables", owner, { requestKey: key(), label, unit, levels, dailyAggregationMethod: "sum", ...(condition === undefined ? {} : { condition }), ...(minValue === undefined ? {} : { minValue }), ...(maxValue === undefined ? {} : { maxValue }) });
   assert.equal(res.status, 201, res.text);
   return { id: res.body.variable.id, label };
 }
@@ -207,11 +207,11 @@ async function field(kind, { unit = { time: "s", dist: "m", speed: "m/s", burst:
   return { fieldId, revId, label };
 }
 // An active mapping version through the real routes, by `owner`.
-async function activeVersion(owner, f, target, { activate = true } = {}) {
+async function activeVersion(owner, f, target, { activate = true, drill = true } = {}) {
   const m = await post("/mappings", owner, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id });
   assert.equal(m.status, 201, m.text);
   const mappingId = m.body.mapping.id;
-  const v = await post(`/mappings/${mappingId}/versions`, owner, { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: true, conversionNote: "Converted by the active unit conversion." });
+  const v = await post(`/mappings/${mappingId}/versions`, owner, { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: drill, conversionNote: "Converted by the active unit conversion." });
   assert.equal(v.status, 201, v.text);
   const versionId = v.body.version.id;
   ok(await post(`/mappings/${mappingId}/versions/${versionId}/submit`, owner, { requestKey: key() }));
@@ -334,7 +334,11 @@ test("1. the audience: the club's admin and a platform admin in the club's works
     assert.deepEqual(shape(await boardOf(who, W.tA)), NOT_FOUND, `board: ${label}`);
     assert.deepEqual(shape(await get(placeUrl, who)), NOT_FOUND, `placement: ${label}`);
     // Not even a malformed query tells them apart.
-    if (who !== W.pa && who !== W.caB) assert.deepEqual(shape(await get(`/board?teamId=not-a-uuid`, who)), NOT_FOUND, `malformed: ${label}`);
+    // (Another club's admin is in the audience of their own club's boards, so their malformed query is theirs to hear about.)
+    if (who !== W.caB) {
+      assert.deepEqual(shape(await get(`/board?teamId=not-a-uuid`, who)), NOT_FOUND, `malformed board: ${label}`);
+      assert.deepEqual(shape(await get(`/board/placement?teamId=${W.tA.teamId}`, who)), NOT_FOUND, `malformed placement: ${label}`);
+    }
   }
   assert.deepEqual(shape(await boardOf(null, W.tA)).status, 401, "without a login");
   // Inside the audience: a team of another club, an unknown team, an unbound team - one answer.
@@ -358,6 +362,22 @@ test("1. the audience: the club's admin and a platform admin in the club's works
   await candidate(gone);
   await k.query(`update public.teams set is_active = false where id = $1`, [gone.teamId]);
   assert.deepEqual(shape(await boardOf(W.caA, gone)), NOT_FOUND, "an archived team");
+  // An archived club: its own admin and a platform admin in its workspace get the identical 404.
+  const clubC = await club("Club C");
+  const caC = await clubAdmin(clubC, "Club C Admin");
+  const paC = await platformAdmin(["club", clubC]);
+  const tC = await gpexeTeam(clubC);
+  for (const n of [1, 2]) await link(tC, n, `Club C ${NAMES[n]}`);
+  await candidate(tC);
+  ok(await boardOf(caC, tC));
+  await k.query(`update public.clubs set is_active = false where id = $1`, [clubC]);
+  assert.deepEqual(shape(await boardOf(caC, tC)), NOT_FOUND, "an archived club, its admin");
+  assert.deepEqual(shape(await boardOf(paC, tC)), NOT_FOUND, "an archived club, a platform admin in its workspace");
+  // The two audience rules themselves.
+  const ctx = (scope, basis) => ({ owner: { scope, clubId: scope === "club" ? W.clubA : null }, basis });
+  assert.deepEqual([["club", "club_admin"], ["club", "platform_admin"], ["system", "platform_admin"], ["club", "team_coach"], ["system", "club_admin"], ["team", "club_admin"]].map(([sc, b]) => [boardService.mayUseBoard(ctx(sc, b)), boardService.mayReadConfirmations(ctx(sc, b))]),
+    [[true, true], [true, true], [false, true], [false, false], [false, false], [false, false]]);
+  assert.deepEqual([boardService.mayUseBoard(null), boardService.mayReadConfirmations(undefined)], [false, false]);
 });
 
 // ---------------------------------------------------------------------------
@@ -449,9 +469,13 @@ test("3. the stored session: the newest usable one by default; no session, an ex
   refused(await boardOf(W.caA, t3), 409, "not_enough_athletes");
   await link(t3, 1, "Only One Linked");
   refused(await boardOf(W.caA, t3), 409, "not_enough_athletes");
+  // A GPEXE name past its expiry is not a name.
+  await planted(() => k.query(`insert into training_load.gpexe_athlete_identities (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, display_name, observed_at, expires_at)
+                 values ($1,$2,$3,$4,$5,'Expired Name Three', now() - interval '337 hours', now() - interval '1 hour')`, [t3.teamId, t3.bindingId, t3.connectionId, t3.sourceTeamId, ATHLETE(3)]));
+  refused(await boardOf(W.caA, t3), 409, "not_enough_athletes");
   await k.query(`insert into training_load.gpexe_athlete_identities (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, display_name, birth_date, observed_at, expires_at)
                  values ($1,$2,$3,$4,$5,'Gpexe Named Two','2001-02-03', now(), now() + interval '336 hours')`, [t3.teamId, t3.bindingId, t3.connectionId, t3.sourceTeamId, ATHLETE(2)]);
-  assert.deepEqual(ok(await boardOf(W.caA, t3)).board.pair.labels, ["Only One Linked", "Gpexe Named Two"]);
+  assert.deepEqual(ok(await boardOf(W.caA, t3)).board.pair, { index: 0, count: 1, labels: ["Only One Linked", "Gpexe Named Two"] });
 });
 
 // ---------------------------------------------------------------------------
@@ -477,6 +501,17 @@ test("4. a placement: the proposal from the one active conversion, the two athle
   const other = ok(await placement(W.caA, W.tA, W.cA.id, W.fTime, W.vMin, 1)).placement;
   assert.notEqual(other.placementHashes["mm:ss"], p.placementHashes["mm:ss"]);
   assert.deepEqual(other.values.b, { raw: "1800", stored: "30" });
+  // The hash covers who the pair is: the same values under another name are another hash (placed and pre-placed).
+  const preHash = async () => ok(await boardOf(W.caA, W.tA)).board.preplaced.find((x) => x.mappingVersionId === W.sysTime.versionId).placementHash;
+  const preBefore = await preHash();
+  const renamed = `update public.athletes set display_name = $2, full_name = $2 where id = (select athlete_id from training_load.gpexe_athlete_links where owner_team_id = $1 and gpexe_athlete_id = $3 and unlinked_at is null)`;
+  await k.query(renamed, [W.tA.teamId, "Board Athlete Renamed", ATHLETE(1)]);
+  const after = ok(await placement(W.caA, W.tA, W.cA.id, W.fTime, W.vMin)).placement;
+  assert.deepEqual(after.values, p.values);
+  assert.notEqual(after.placementHashes["mm:ss"], p.placementHashes["mm:ss"]);
+  assert.notEqual(await preHash(), preBefore);
+  await k.query(renamed, [W.tA.teamId, NAMES[1], ATHLETE(1)]);
+  assert.equal(ok(await placement(W.caA, W.tA, W.cA.id, W.fTime, W.vMin)).placement.placementHashes["mm:ss"], p.placementHashes["mm:ss"], "and the same again under the same name");
   // The refusals.
   const code = async (f, v, pair = 0) => ok(await placement(W.caA, W.tA, W.cA.id, f, v, pair)).placement;
   assert.deepEqual(await code(W.fTime, W.vKg), { placeable: false, code: "conversion_unavailable", fieldId: W.fTime.fieldId, targetId: W.vKg.id, sourceUnit: "s", targetUnit: "kg" });
@@ -497,6 +532,17 @@ test("4. a placement: the proposal from the one active conversion, the two athle
     assert.deepEqual(shape(await placement(W.caA, W.tA, W.cA.id, f, v)), NOT_FOUND);
   }
   assert.deepEqual(shape(await placement(W.caA, W.tA, W.cB.id, W.fTime, W.vMin)), NOT_FOUND, "another club's candidate");
+  // The variable's own refusals.
+  assert.equal((await code(W.fSpeed, await variable(W.caA, { unit: "km/h", condition: { kind: "zone", operator: ">=", value: "20", unit: "km/h" } }))).code, "condition_mismatch");
+  assert.equal((await code(W.fTime, await variable(W.caA, { unit: "min", levels: ["drill"] }))).code, "level_not_allowed");
+  // A 404 always comes before any 409: a foreign or unknown id with a pair past the end or an expired session is still the 404.
+  const expired = await candidate(W.tA, { state: "expired", startedAt: "2026-09-30T10:00:00Z" });
+  for (const [f, v] of [[W.fTime, W.vB], [{ fieldId: crypto.randomUUID() }, W.vMin], [W.fTime, { id: crypto.randomUUID() }]]) {
+    assert.deepEqual(shape(await placement(W.caA, W.tA, W.cA.id, f, v, 9999)), NOT_FOUND, "a pair past the end");
+    assert.deepEqual(shape(await placement(W.caA, W.tA, expired.id, f, v)), NOT_FOUND, "an expired session");
+  }
+  assert.deepEqual(refused(await placement(W.caA, W.tA, W.cA.id, W.fTime, W.vMin, 9999), 409, "pair_out_of_range").current, { count: 3 });
+  assert.deepEqual(refused(await placement(W.caA, W.tA, expired.id, W.fTime, W.vMin), 409, "snapshot_expired").current, { reason: "expired" });
   assert.deepEqual(shape(await placement(W.caA, W.tB, W.cB.id, W.fTime, W.vMin)), NOT_FOUND, "another club's team");
 });
 
@@ -517,7 +563,15 @@ test("5. a placement against what exists: the club's own active version is reuse
   const on = ok(await boardOf(W.caA, W.tA)).board;
   assert.deepEqual(on.on.map((o) => [o.activationId, o.mappingVersionId, o.requirement, o.badge]), [[activation.id, own.versionId, "required", "club_mapping"]]);
   assert.equal(on.preplaced.some((p) => p.mappingVersionId === own.versionId), false);
-  assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f, target)).placement.collisions, [{ activationId: activation.id, fieldId: f.fieldId, variableId: target.id }]);
+  // The same contract is already on: nothing to place. Another column onto the same variable lists the collision.
+  assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f, target)).placement, { placeable: false, code: "activation_exists", fieldId: f.fieldId, targetId: target.id });
+  const f2 = await field("time");
+  assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f2, target)).placement.collisions, [{ activationId: activation.id, fieldId: f.fieldId, variableId: target.id }]);
+  // The club's active version with other levels is not this contract.
+  const f3 = await field("time");
+  const target3 = await variable(W.caA, { unit: "min" });
+  await activeVersion(W.caA, f3, target3, { drill: false });
+  assert.equal(ok(await placement(W.caA, W.tA, W.cA.id, f3, target3)).placement.code, "mapping_version_active");
   // Switched off by an administrator: not placed again, shown with who and when (Q9).
   ok(await end(W.caA, activation.id));
   const off = ok(await boardOf(W.caA, W.tA)).board;
@@ -525,6 +579,12 @@ test("5. a placement against what exists: the club's own active version is reuse
   assert.equal(off.preplaced.some((p) => p.mappingVersionId === own.versionId), false, "never switched back on by itself");
   const entry = off.switchedOff.find((s) => s.mappingVersionId === own.versionId);
   assert.deepEqual([entry.endedBy, entry.badge, Boolean(entry.endedAt)], ["Club Admin Person", "club_mapping", true]);
+  // Switched on again and then ended another way (its version disabled): not "switched off by an administrator" any more.
+  ok(await start(W.caA, own, W.tA), 201);
+  const again = await openOn(own, W.tA);
+  await planted(() => k.query(`update ${T5} set ended_at = now(), ended_by_user_id = $2, ended_basis = 'platform_admin', end_reason = 'mapping_version_disabled' where id = $1`, [again.id, W.pa.id]));
+  const back = ok(await boardOf(W.caA, W.tA)).board;
+  assert.deepEqual([back.switchedOff.some((x) => x.mappingVersionId === own.versionId), back.preplaced.some((p) => p.mappingVersionId === own.versionId)], [false, true], "the mapping's latest activation decides");
   // A pair with the same value, and a pair where one athlete has none.
   const t = await gpexeTeam(W.clubA);
   for (const n of [1, 2]) await link(t, n, `Equal ${NAMES[n]}`);
@@ -598,6 +658,18 @@ test("7. the stored confirmations: the club's admins and a platform admin read t
     assert.deepEqual(hidden.rows.map((r) => [r.valuesState, r.values]), [["expired", null], ["not_compared", null]]);
     assert.equal((await one(`select raw_a from ${T9I} where confirmation_id = $1 and checked`, [confId])).raw_a !== null, true, "not removed yet: the batch failed");
     assert.ok(logLines.some((l) => l.includes("expired_values_removal_failed (57014)")), "the failure is logged by its code only");
+    // A batch that never answers delays the read by its bound and never fails it.
+    boardService.setBoardRemovalFaultForTests(() => new Promise(() => {}), { boundMs: 300 });
+    assert.equal(ok(await get(`/confirmations/${confId}`, W.caA)).confirmation.id, confId);
+    assert.ok(logLines.some((l) => l.includes("expired_values_removal_failed (removal_bound_exceeded)")));
+    // The batch runs before a board read and a History read, never before a placement.
+    let runs = 0;
+    boardService.setBoardRemovalFaultForTests(() => { runs += 1; throw Object.assign(new Error("planted"), { code: "57014" }); });
+    ok(await boardOf(W.caA, W.tA));
+    ok(await placement(W.caA, W.tA, W.cA.id, W.fTime, W.vMin));
+    ok(await get(`/confirmations?teamId=${t.teamId}`, W.caA));
+    ok(await get(`/confirmations/${confId}`, W.caA));
+    assert.equal(runs, 3);
   } finally {
     boardService.setBoardRemovalFaultForTests(null);
   }
@@ -611,6 +683,56 @@ test("7. the stored confirmations: the club's admins and a platform admin read t
   assert.deepEqual(shape(await get(`/confirmations/${confId}`, W.caA)), NOT_FOUND);
   assert.deepEqual(shape(await get(`/confirmations?teamId=${t.teamId}`, W.caA)), NOT_FOUND);
   assert.equal(ok(await get(`/confirmations/${confId}`, W.pa)).confirmation.id, confId);
+});
+
+test("7b. History's pages, cursor and audience after an archive: 50 per page with no row lost inside one millisecond; a forged cursor is 400; an erased value is not returned; a platform admin lists and reads after a team and a club archive", async () => {
+  const clubD = await club("Club D");
+  const caD = await clubAdmin(clubD, "Club D Admin");
+  const t = await gpexeTeam(clubD);
+  const cand = await candidate(t);
+  const f = await field("time");
+  const v = await activeVersion(caD, f, await variable(caD, { unit: "min" }));
+  const confId = await confirm(caD, t, cand, [{ v, checked: true }]);
+  // 51 more confirmations of the team (planted: no item, the guards off), a second apart, the 50th and 51st of
+  // the whole list 200 microseconds apart inside one millisecond.
+  await planted(async () => {
+    for (let g = 1; g <= 51; g += 1) {
+      const at = g === 49 ? `- interval '49 seconds' + interval '500 microseconds'` : g === 50 ? `- interval '49 seconds' + interval '300 microseconds'` : `- interval '${g} seconds'`;
+      const id = (await one(
+        `insert into ${T9} select (jsonb_populate_record(null::${T9}, to_jsonb(c) || jsonb_build_object('id', gen_random_uuid(), 'operation_id', gen_random_uuid(),
+                   'confirmed_at', date_trunc('second', c.confirmed_at) ${at}, 'values_expire_at', date_trunc('second', c.confirmed_at) ${at} + interval '2160 hours'))).*
+           from ${T9} c where c.id = $1 returning id`, [confId])).id;
+      await k.query(`insert into ${T9S} select (jsonb_populate_record(null::${T9S}, to_jsonb(s) || jsonb_build_object('confirmation_id', $2::uuid))).* from ${T9S} s where s.confirmation_id = $1`, [confId, id]);
+    }
+  });
+  const first = ok(await get(`/confirmations?teamId=${t.teamId}`, caD));
+  assert.equal(first.confirmations.length, 50);
+  assert.equal(first.confirmations[0].id, confId, "the newest first");
+  assert.equal(typeof first.nextCursor, "string");
+  const second = ok(await get(`/confirmations?teamId=${t.teamId}&cursor=${first.nextCursor}`, caD));
+  assert.deepEqual([second.confirmations.length, second.nextCursor], [2, null]);
+  assert.equal(new Set([...first.confirmations, ...second.confirmations].map((c) => c.id)).size, 52, "no row lost or repeated between the pages");
+  assert.equal(JSON.stringify(first).includes("cursor_at"), false);
+  // A cursor that is not exactly the server's form is 400, never a database error.
+  const cursor = (at, id = confId) => Buffer.from(JSON.stringify([at, id])).toString("base64url");
+  for (const bad of [cursor("2026"), cursor("foo 1"), cursor("2026-02-30T00:00:00.000000Z"), cursor("2026-11-12T10:00:00.000Z"), cursor("-000001-01-01T00:00:00.000000Z"), cursor("0000-01-01T00:00:00.000000Z"),
+    cursor("2026-11-12T10:00:00.000000Z", "x"), Buffer.from("[]").toString("base64url"), Buffer.from("{}").toString("base64url")]) {
+    refused(await get(`/confirmations?teamId=${t.teamId}&cursor=${bad}`, caD), 400, "invalid_query");
+  }
+  assert.equal(ok(await get(`/confirmations?teamId=${t.teamId}&cursor=${cursor("2000-01-01T00:00:00.000000Z")}`, caD)).confirmations.length, 0, "a well-formed cursor of the caller's own making reads only the team's rows");
+  // A value erased on request is not returned, whatever its date.
+  await planted(() => k.query(`update ${T9I} set raw_a = null, stored_a = null, raw_b = null, stored_b = null, values_salt = null,
+                                 values_removed_at = now(), values_removed_kind = 'erased', values_removed_by_user_id = $2 where confirmation_id = $1 and checked`, [confId, W.pa.id]));
+  assert.deepEqual(ok(await get(`/confirmations/${confId}`, caD)).confirmation.rows.map((r) => [r.valuesState, r.values]), [["erased", null]]);
+  // The team archived, then the club: the club's admin reads nothing; a platform admin in the platform workspace lists and reads.
+  for (const archive of [`update public.teams set is_active = false where id = '${t.teamId}'`, `update public.clubs set is_active = false where id = '${clubD}'`]) {
+    await k.query(archive);
+    assert.deepEqual(shape(await get(`/confirmations?teamId=${t.teamId}`, caD)), NOT_FOUND);
+    assert.deepEqual(shape(await get(`/confirmations/${confId}`, caD)), NOT_FOUND);
+    assert.equal(ok(await get(`/confirmations?teamId=${t.teamId}`, W.pa)).confirmations.length, 50);
+    assert.equal(ok(await get(`/confirmations/${confId}`, W.pa)).confirmation.id, confId);
+  }
+  assert.deepEqual(shape(await get(`/confirmations?teamId=${crypto.randomUUID()}`, W.pa)), NOT_FOUND, "an unknown team is not an empty list");
 });
 
 // ---------------------------------------------------------------------------
