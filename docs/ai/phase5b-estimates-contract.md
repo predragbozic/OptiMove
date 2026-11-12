@@ -1,6 +1,6 @@
 # Phase 5b (6b): estimated values — contract (6b-0)
 
-Status: **proposed**, for the *Rukovodilac*'s GO. It follows the discovery `docs/ai/phase5b-estimates-discovery.md` (branch
+Status: **accepted** with the *Rukovodilac*'s three corrections (GO of 2026-11-12, M1–M3 and two LOW, folded in below). It follows the discovery `docs/ai/phase5b-estimates-discovery.md` (branch
 `docs/phase5b-estimates-discovery` at `51d1c91`). The owner approved that discovery's recommendations on 2026-11-12 (relayed by
 the *Rukovodilac*). This contract fixes the exact shape of each pull request. No code is written before the GO.
 
@@ -57,9 +57,16 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 
 1. **An estimate is its own kind.**
    - **The occasion.** `entry_method = 'estimate'`, whole-session level only (no segment); `recorded_by_user_id` is the author.
-     There is no source identity and no batch.
-   - **Its values.** `is_derived = true`, `aggregation_role = 'standalone'`, `coverage = 'not_applicable'`, `computed_by_ref` null.
-     v3's constraints stay as they are.
+     There is no source identity and no batch. **One estimate occasion holds one value**, of one variable for one athlete, so an
+     estimate is superseded per (athlete, variable) (rule 6).
+   - **Its values (M1, option (a)).** `is_derived = false`, `aggregation_role = 'standalone'`, `coverage = 'not_applicable'`,
+     `computed_by_ref` null.
+     - **Recognition.** An estimate is recognised only by its occasion's `entry_method = 'estimate'`. `is_derived` keeps its
+       meaning (a value computed from other values), so the dashboards' `derived` policy never picks up an estimate.
+     - **v3 allows the combination.** `computed_by_ref is null or aggregation_role = 'derived_rollup'` (M/training_activity_v3:158)
+       holds with null. `aggregation_role <> 'derived_rollup' or (…)` (v3:160) holds with standalone. `(standalone and
+       not_applicable) or …` (v3:162-165) holds.
+     - **Proof.** A 6b-A test inserts exactly this value under the estimate guards.
    - **The provenance.** Each estimated value has exactly one row in `training_load.metric_value_estimates`. Nothing else may write
      an `estimate` occasion or value (database guard).
 2. **Methods** (the discovery's section 5): `proportional`, `copy_athlete`, `team_average`. The `position_average` method waits
@@ -73,21 +80,59 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
    - `max`, `last`, `none`: never.
 
    The database guard checks the same rule.
-4. **When.** Only on an activity that came from an import and is not undone, for an athlete of the activity whose roster state is
-   *Participated · no device data*, or who has no measured whole-session value. Never in the preview, the approval or the import
-   transaction.
+4. **When (M2, per athlete and variable).** Only on an activity that came from an import and is not undone, for an athlete of the
+   activity. An estimate is **never written for a variable that already has an effective measured whole-session value for that
+   athlete** in the same metric event.
+   - **"Effective measured"** means an occasion with `entry_method in ('api_import', 'csv_import')`, no segment,
+     `superseded_by_occasion_id` null, `import_conflict_status` null, and (when it has a source identity) its identity's current
+     occasion, carrying a value of that variable.
+   - **The database holds it.** A BEFORE INSERT trigger on `metric_values` for a value of an `estimate` occasion refuses it
+     (`23514`, `estimate_measured_exists`). It runs after the occasion's insert has locked the participant and the event
+     (`lock_ancestors_before_occasion_insert`, v13:106-125).
+   - **Never** in the preview, the approval or the import transaction.
 5. **Who.** The J20-C audience: the activity's roster decider, through `training.lock_activity_decider`'s right, in the team's
    workspace. Everyone else gets the identical 404.
-6. **A measured value later.** A measured whole-session value for the same athlete and variable supersedes the estimate occasion,
-   through the existing supersede chain. The import preview lists it under *changes to imported results* as "an estimate is
-   replaced by a measured value". An estimate never blocks a measured value, and it is never kept the way `manual` is.
+6. **A measured value later (M3).** The database does it, whoever writes the measured value, so the import writer needs no new
+   write code.
+   - **The mechanism.** An AFTER INSERT trigger on `metric_values` (`metric_values_supersede_estimate`) fires for a value of a
+     measured whole-session occasion. It finds the effective estimate occasion of the same participant (the same event and
+     athlete) holding a value of the same variable. It sets that occasion's `superseded_by_occasion_id` to the new measured
+     occasion; the column is v13:45, and v13 freezes only identity and content, not the revision fields (v13:134-148).
+   - **The reads follow without a change.** The new measured occasion's `supersedes_occasion_id` is left as the import's own chain
+     sets it, and estimates are not chained the other way. Every reader of effective values already filters
+     `superseded_by_occasion_id is null` (`canonical_activity_results`, v4:786; the dashboards' fact query; the occasion index,
+     v13:272).
+   - **Lock order.** Both sides take the same locks in the same order, so they serialize and never deadlock:
+     1. the team's import lock (`lockTeamForImport`, the advisory key the import already holds; the estimate save takes it first,
+        try-lock, `409 try_again`);
+     2. the participant row `FOR UPDATE`, then the event `FOR UPDATE` (the occasion insert trigger);
+     3. the estimate occasion's row (the supersede update).
+   - **The preview.** The import's preview runs the real import in a rolled-back transaction, so the trigger fires there too. The
+     preview counts the estimate occasions it superseded and lists them under *changes to imported results* as "an estimate is
+     replaced by a measured value". It never blocks the import and is never kept the way `manual` is.
+   - **Tests (6b-A and 6b-B, disposable databases, both orders):**
+     - an estimate, then an import of a measured value for the same athlete and variable: the estimate is superseded, and
+       `canonical_activity_results` shows the measured value only;
+     - an import, then an estimate: refused, `estimate_measured_exists`;
+     - an import holding the team lock while an estimate is saved: the save answers `try_again` (or waits and is then refused),
+       and nothing is written twice;
+     - two estimates of the same athlete and variable: the second supersedes the first through rule 7;
+     - a measured value of another variable leaves the estimate in force.
 7. **A new estimate replaces the old one.** It is a new `estimate` occasion that supersedes the previous one; the history is kept.
 8. **The undo** counts the `estimate` occasions and values of the event in its scope (`estimateOccasionCount`,
    `estimateValueCount`). It deletes them with their provenance rows and records `estimates_removed` in `removed_counts`. They
    never block. The preview lists them: "N estimated values of M athletes will be removed".
 9. **Dashboards** leave estimates out by default (section 5, PR 6b-D).
 10. **Every place that shows a value** shows an estimate with its label: method, basis, author and date. A coach never sees an
-    estimate unlabelled.
+    estimate unlabelled. The readers, and who labels each:
+    - `training.canonical_activity_results()`, which passes `detail.entryMethod` (v4:764-783), feeds the Activities drawer's
+      recorded metrics. 6b-C labels it.
+    - The activity's Roster tab metric columns (`activityRoster.js`): an estimate is not measured (`MEASURED_METHODS`), so the row
+      keeps its state. 6b-C shows the estimated value with its label beside it.
+    - The import's session review: an estimate never appears among import values. Only the replacement line of rule 6 shows,
+      from 6b-B, and 6b-C words it.
+    - Dashboards and analyses: left out under every existing policy, shown only under the new policy (6b-D, section 5).
+    - `calendarQuery.js:302` reads only measured methods; it is unchanged and shows no estimate.
 
 ## 4. The pull requests
 
@@ -103,6 +148,8 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 - The `entry_method` CHECK widened to `estimate`.
 - `training_load.metric_value_estimates`: `metric_value_id` unique, the method, the basis jsonb in a closed shape, the author, the
   time, an optional note.
+- The two triggers on `metric_values`: the M2 refusal and the M3 supersede (rules 4 and 6).
+- The `source_policy` CHECKs widened to `estimate` (section 5).
 - Guards:
   - the occasion must be `estimate`;
   - a value of an `estimate` occasion needs its provenance row by COMMIT (a deferred constraint trigger, the v35 pattern);
@@ -125,20 +172,21 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 **6b-D, dashboards.** It needs the answer in section 5. It depends on rule 1: an estimate is always `entry_method = 'estimate'`
 and `is_derived = true`.
 
-## 5. One question before 6b-D (not blocking 6b-A to 6b-C)
+## 5. Dashboards (6b-D): the *Rukovodilac*'s decision of 2026-11-12
 
-Leaving estimates out by default means a change in `backend/src/trainingLoadDashboardQuery.js` (`resolveFactsToRows`, the
-default `all_with_conflicts`) and a policy word in the `source_policy` CHECK (M/v16:365) or a separate switch, with its frontend
-in `frontend/training-load-analysis-*`. The executor does not touch these files without the *Rukovodilac*'s word, and another
-executor's D pull requests are working in them.
-
-Until 6b-D, an estimate would appear in dashboards as an ordinary value, or as a conflict next to a measured one. **Proposal:**
-6b-B does not let anyone save an estimate until 6b-D is merged; the route stays behind a server flag (`ESTIMATES_ENABLED`,
-default off). Question for the *Rukovodilac*: who builds 6b-D, and in which order with the D pull requests?
+- **The flag.** 6b-B keeps the save behind a server flag `ESTIMATES_ENABLED`, default off. The flag is turned on only after 6b-D
+  is merged and deployed, by a separate owner order.
+- **6b-D is built by this executor,** as a small separate pull request right after 6b-C.
+  - **Backend:** in `resolveFactsToRows`, an estimate (`entryMethod === 'estimate'`) is left out under every existing policy,
+    `all_with_conflicts` and `derived` included, and shown only under the new policy word **`estimate`**.
+  - **The CHECK.** v16's `source_policy` CHECK (M/v16:365-366, and its twins at 393-394 and 418-419, and v17's) is widened to
+    `estimate` **inside v63**, so 6b-D needs no migration of its own.
+  - **Frontend:** only the option's label.
+- Other executors' D pull requests merge main after it, whatever their order.
 
 ## 6. Not in this contract
 
 - Positions and the position average.
 - Estimates at the drill level.
 - An estimate before the import, in the review (it would need the approval's window and key).
-- Exporting estimates.
+- Exporting estimates: an estimate goes to no export, file or third party; it lives only in OptiMove's own views.
