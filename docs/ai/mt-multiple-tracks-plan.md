@@ -145,24 +145,25 @@ imports.
 - v59's left-out ids live on the approval row, so they exist only once an approval is sent and do not survive a new search
   before it.
 
-**Proposed: `training_load.gpexe_athlete_import_choices`.** It holds MT's track choice and section 10's scale choice. One row
-per decision, append-only:
+**Decided (the *Rukovodilac*, 2026-11-12): `training_load.gpexe_track_choices`,** MT's track choice only. Section 10's scale
+choice gets its own migration in MT-D, which widens the `choice` CHECK and adds `scale_target_minutes`. One row per decision,
+append-only:
 
 | Column | Meaning |
 |---|---|
 | owner team | the team the choice belongs to |
 | GPEXE session id | the session (`team_session`) |
 | GPEXE athlete id | the athlete |
-| `track_set_fingerprint` | the sorted track ids and their athlete-session row ids |
-| `choice` | `single` (one track: only a scale choice), `sum`, `track`, or `none` |
-| `scale_target_minutes` | section 10: null, or the minutes the recorded part is scaled to |
-| `chosen_track_id` | for `track` only |
+| `track_set_fingerprint` | the sorted track ids and their athlete-session row ids, computed by the server |
+| `choice` | MT-A: `track` (use one track), `none`, or `cleared` (the way back: the athlete is `multiple_tracks` again). `sum` comes with MT-E, the scale choice with MT-D |
+| `chosen_track_id` | for `track` only, one of the athlete's tracks in the candidate's bundle |
 | `chosen_by_user_id`, `chosen_basis` | who chose, on which right |
 | `chosen_at` | when |
 | `supersedes_choice_id` | the earlier choice this one replaces |
-| request key and hash | the same pattern as the other admin writes |
+| request key and hash | the same pattern as the other admin writes (v64) |
 
-- The current choice is the newest row not superseded.
+- The current choice is the newest row not superseded. "Clear the choice" is a superseding row, never a delete.
+- The table holds ids, the fingerprint, who and when only: no GPEXE name and no value.
 - A DB actor guard (the v35 / v63 pattern) and append-only triggers.
 
 **It survives a new search.** The choice is keyed by (team, GPEXE session, athlete), not by candidate. A new candidate of the
@@ -187,7 +188,20 @@ same session finds it.
   - the guard's verdict;
   - the current choice.
 - `PUT …/track-choices/:gpexeAthleteId` `{ requestKey, choice, trackId?, expectedChoiceId }`.
-- The approver's audience; everyone else gets the identical 404.
+- **The audience** is whoever may approve the import for that team, through the function the approval uses
+  (`lock_gpexe_import_approver`, team mode of v56 included). Everyone else gets the identical 404. A team coach without the right
+  does not use these routes, but the review (MT-B) shows everyone who may open it that a choice exists and what it is ("Track 2
+  of 2 used", "Left out by choice"), without the chooser's name for a coach.
+- **Refusals** (409, nothing written): `not_multiple_tracks` (one track, or tracks MT-0 takes as one recording),
+  `track_not_in_session` (a `trackId` that is not one of the athlete's tracks), `choice_changed` (a stale `expectedChoiceId`),
+  `choice_final_after_import` (the candidate is imported: changing it needs the U5 undo first).
+- **Lock order** (decided, 2026-11-12), the approval's: an unlocked rights read (the fast 404) → the candidate FOR SHARE
+  (pending or blocked, its snapshot available) → the team import lock (blocking, with the approval's `lock_timeout` mapped to
+  `try_again`) → the team and its club FOR SHARE (`lockApprovalTeam`) → the approver's rights FOR SHARE
+  (`lock_gpexe_import_approver`), last as in the approval's step 6b → the current choice row FOR UPDATE → the insert → a bounded
+  COMMIT. The request key's advisory lock on (author, key) comes first, as in v64. Written under the team lock, a choice is
+  serialised with every `previewLocked` (the check's preview, the J20-A1 recompute, the approval). A recorded-SQL-order test
+  covers the PUT against the approval, the check finalization, the J20-A1 recompute and the U5 undo.
 
 ## 6. Raw data and identities
 
@@ -248,15 +262,15 @@ and the choice row say it.
 |---|---|---|---|
 | **MT-0** | This plan (docs) | ★ | the *Rukovodilac* |
 | **MT-0** | Section 11: identical tracks are one recording. Mapper and preview only, no migration, no choice | ★★ (trigger 3: the mapper's identity) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor*; the owner's yes (it is automatic) |
-| **MT-A** | Migration (the next free number at PR time; v65 and v66 are taken by J18's open #506 and #508): `gpexe_track_choices`, append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
+| **MT-A** | Migration (the next free number at PR time): `gpexe_track_choices` (`track`, `none`, `cleared`), append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint, the lock order) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
 | **MT-B** | Mapper, preview, writer: apply the current choice ("Use one track", "None"); the combined identity (only with MT-E); avg / last / none left out; `trackChoice` in the preview and its hash; `track_choice_stale` in the blocking resolution; a characterisation test that a single-track session is byte-for-byte unchanged | ★★ (triggers 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
-| **MT-D** | Section 10: the `scale_recording` method in the 6b save (backend; its basis shape and method in the same migration as MT-A), the mapper's "max only" result for a scaled athlete, the preview's `scaleRecording` entry | ★★ (triggers 1, 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
+| **MT-D** | Section 10: the `scale_recording` method in the 6b save (backend; its own migration: the method, its basis shape, the choice CHECK widened and `scale_target_minutes`), the mapper's "max only" result for a scaled athlete, the preview's `scaleRecording` entry | ★★ (triggers 1, 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
 | **MT-E (later)** | "Add them up": the overlap guard of section 3 and the combined identity. Built only if a real sequential case appears, and after O2's evidence | ★★ | as MT-B |
 | **MT-C** | Frontend: the choice row for a `multiple_tracks` athlete in the session review (the tracks side by side, the three options, the guard's reason when "Add them up" is not offered); the labels in the review and Activities | ★ | `code-reviewer`, `ux-design-reviewer`, `mobile-qa`; browser QA at 360 / 375 / 390 / 1280 |
 
-Order: MT-0, then MT-A, then MT-B, then MT-D, then MT-C. MT-E only on a real sequential case and O2's evidence. **One
-migration** (the next free number at PR time) carries both the choice table and the `scale_recording` method, since both are
-read by the same preview and written from the same row of the session review.
+Order: MT-0, then MT-A, then MT-B, then MT-D, then MT-C. MT-E only on a real sequential case and O2's evidence. **Two
+migrations** (decided, 2026-11-12): MT-A's choice table, and MT-D's own for `scale_recording`, each under the next free number
+at PR time.
 
 ## 9. Decisions and open questions
 
@@ -290,7 +304,7 @@ read by the same preview and written from the same row of the session review.
 - M2 is per variable (v63's `estimate_measured_exists`), so an athlete may carry a measured value of one variable and an
   estimate of another. It never carries both for the same variable.
 - **The choice** ("Scale the recorded part", with its target minutes) is recorded before the import, in the choice table of
-  section 5, as `scale_target_minutes`. The athlete's track choice (single, a picked track, or the sum) says what the recorded
+  section 5, as `scale_target_minutes` (added by MT-D's migration). The athlete's track choice (single, a picked track, or the sum) says what the recorded
   part is.
 - **The import** writes, for that athlete, only the variables that are not scaled: the `max` variables, as measured with their
   source identity. Its sum variables are left out of the import, with the reason `scaled_by_choice`, never as zero.
@@ -318,8 +332,8 @@ read by the same preview and written from the same row of the session review.
     `0 < recordedMinutes < targetMinutes <= 600`);
   - `validate_metric_value_estimate` allowing it for `sum` variables only.
 - These are two body replacements under md5 gates (v64's bodies) and one CHECK.
-- They share **one migration with MT-A's choice table**, under the next free number at PR time (v65 and v66 are J18's). Recommended:
-  share it, since both are read by the same preview.
+- **Decided (2026-11-12): MT-D's own migration**, under the next free number at PR time, not MT-A's. It also widens the choice
+  table's `choice` CHECK and adds `scale_target_minutes`.
 
 **Q3. With MT: a combined-tracks athlete who is still short.**
 - The scale applies to whatever recorded part the track choice gives: one track, the picked track, or the sum.
