@@ -267,7 +267,7 @@ test("5. (D5) a row reads 'Tue 01.09. · <name>' with the time beside it, on the
   const d = new Date(iso);
   const two = (n) => String(n).padStart(2, "0");
   const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-  assert.ok(html().includes(`<strong>${day} ${two(d.getDate())}.${two(d.getMonth() + 1)}. · FULL TRAINING MD-4</strong>\n          <span class="muted">${two(d.getHours())}:${two(d.getMinutes())}</span>`));
+  assert.ok(html().includes(`<strong>${day} ${two(d.getDate())}.${two(d.getMonth() + 1)}. · Full training md-4</strong>\n          <span class="muted">${two(d.getHours())}:${two(d.getMinutes())}</span>`));
 });
 
 test("6. (D8) mixed time zones: a data problem in plain words for everyone; the code only in an administrator's Technical details", async () => {
@@ -334,8 +334,8 @@ test("8. (D7) the confirmation is one question naming the team; the result says 
   assert.match(dialog(), /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
   await act("training-load-gpexe-batch-send");
   const d = dialog();
-  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\.<\/p>/);
-  assert.match(d, /You can see them in Training Load → Activities\./);
+  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and in the Imported tab\.<\/p>/);
+  assert.match(d, /You can see them in Training Load → Activities and in the Imported tab\./);
   assert.match(d, /data-action="training-load-section" data-section="today">Open Activities</);
   await act("training-load-section", { section: "today" });
   assert.equal(state.trainingLoad.section, "today", "Open Activities leaves Imports for Activities");
