@@ -1,0 +1,328 @@
+# MT: an athlete with more than one track in a session, and scaling a short recording (plan)
+
+Status: **proposed plan, docs only.** Nothing here is built. It was written on the *Rukovodilac*'s order of 2026-11-12, which
+relays the owner's task "MT", and follows its conditions. Code, migrations and GPEXE requests come only after the plan is
+accepted.
+
+Last verified against commit: `cc20f63` (main after #502).
+
+## 1. Today
+
+- **The mapper.** `buildGpexeImportPlan` groups an athlete's rows by `track` (`backend/src/gpexeImportMapper.js:275-280`).
+  More than one track gives the anomaly `multiple_tracks` ("tracks …, not imported, needs review"), and the athlete is left
+  out. The rest of the session imports.
+- **The review.** The session review shows the athlete as *Needs review*, with one sentence and no action
+  (`docs/ai/j20-session-review-contract.md:65`).
+- **GPEXE cannot merge tracks.**
+- **Earlier decisions this plan revisits:**
+  - discovery section I (`docs/ai/gpexe-metric-variable-mapping-discovery.md:2285-2295`): "no automatic merge"; a future M5
+    may offer a manual choice of one track;
+  - phase 10 §2 (`docs/ai/phase10-estimates-decisions.md:104-160`): `track_choose_one` and `track_sum_disjoint`, both written
+    as **estimates** (D1, a recommendation that was never decided), with a sum only on the coach's confirmation that the tracks
+    do not overlap, because "the system cannot check the overlap".
+
+  The owner's MT task and the *Rukovodilac*'s conditions go another way: the mapper computes the result from the stored
+  tracks, with idempotent source identities. **Decision O1 (section 9) confirms this.** It supersedes phase 10's D1 and its
+  §2.2 confirmation box for MT.
+
+## 2. Proof of need
+
+**From the repository (fixtures and code only; no production access):**
+- One multi-track shape exists: the synthetic fixture athlete 103 (`backend/tests/_gpexe-fixtures.mjs:92-97`).
+  - It has 2 tracks, `[9003, 9004]`, one whole-session row each (600 s and 900 s), and no drill rows.
+  - Both tracks get the same start instant (`_gpexe-fixtures.mjs:47-49`: every track starts 10 minutes before the session).
+  - By the start-plus-duration rule of section 3 it is therefore **overlapping**. That is a fixture artefact, not a real shape.
+- No stored real snapshot is in the repository; the owner keeps the real responses outside it.
+
+**Recorded facts:**
+- `docs/ai/CURRENT_STATE.md:1893` (2026-10-11, the First team, 05.10–06.10.2026): one session was *Needs attention* for "more
+  than one track for one athlete".
+- Whether those tracks were sequential, overlapping or more than two is not recorded.
+
+**What is missing, and how to get it without a GPEXE request.** A read-only count over the deployed database's stored
+snapshots. The raw bundle is kept for `pending`, `blocked` and `superseded` candidates
+(`backend/src/gpexeImportService.js:605`). Proposed for the *Rukovodilac*'s read-only connector; it is not run by the executor:
+
+```sql
+-- Read-only. For each stored snapshot: athletes with more than one track, classified by the start + whole-session TIME rule.
+with c as (
+  select id, raw_bundle b from training_load.gpexe_import_candidates where raw_bundle is not null
+), rows as (
+  select c.id, r ->> 'athlete' athlete, r ->> 'track' track, r -> 'drill' drill, (r ->> 'total_time')::numeric total_time
+    from c, jsonb_array_elements(c.b -> 'athleteSessions') r
+), multi as (
+  select id, athlete from rows group by id, athlete having count(distinct track) > 1
+), spans as (
+  select r.id, r.athlete, r.track,
+         (c.b -> 'tracks' -> r.track ->> 'utc_timestamp')::numeric as start_s,
+         max(r.total_time) filter (where r.drill is null or r.drill = 'null'::jsonb) as whole_s,
+         count(*) filter (where r.drill is null or r.drill = 'null'::jsonb) as whole_rows
+    from rows r join multi m using (id, athlete) join c on c.id = r.id
+   group by r.id, r.athlete, r.track, c.b
+), shaped as (
+  select id, athlete, count(*) tracks,
+         bool_and(whole_rows = 1 and start_s is not null and whole_s is not null) as readable,
+         bool_or(exists (select 1 from spans o where o.id = s.id and o.athlete = s.athlete and o.track <> s.track
+                          and o.start_s < s.start_s + s.whole_s and s.start_s < o.start_s + o.whole_s)) as overlapping
+    from spans s group by id, athlete
+)
+select case when tracks > 2 then 'more_than_two' when not readable then 'unreadable'
+            when overlapping then 'two_overlapping' else 'two_sequential' end as shape,
+       count(*) as athletes, count(distinct id) as candidates
+  from shaped group by 1 order by 1;
+```
+
+Checked by the executor on a throwaway local database with three variants of the fixture bundle (2026-11-12). The unchanged
+fixture is `two_overlapping`; with track 9004 one hour later it is `two_sequential`; with a third track it is `more_than_two`. It
+was not run against any persistent database.
+
+The result decides whether "Add them up" is worth its slice. If nothing is sequential, MT-B ships "Use one track" and "None"
+first.
+
+## 3. The overlap guard
+
+**The stored fields** (the snapshot keeps only these; `backend/src/gpexeRestV1Adapter.js:88-97`, `BUNDLE_FIELDS`):
+- **The start:** `track.utc_timestamp` (epoch seconds) and `track.timestamp` (`gpexeRestV1Adapter.js:95`). The mapper
+  already requires them to be the same instant (`validateTrackTimestamps`, `gpexeImportMapper.js:106-113`).
+- **No end is stored.** The only length is the athlete-session row's `total_time` in seconds (`gpexeRestV1Adapter.js:90`).
+  Its unit is confirmed by C97 (`docs/ai/gpexe-c97-unit-evidence.md`), and it is the value mapped to `duration`.
+- **A track's span** is therefore `[utc_timestamp, utc_timestamp + total_time of that track's whole-session row]`.
+
+**The guard (computed by the mapper, fail-closed).** "Add them up" is offered only when:
+1. every track has exactly one whole-session row with a finite `total_time > 0`, and a start;
+2. the spans are pairwise disjoint (`end_i <= start_j` for consecutive spans);
+3. no drill index appears on more than one track. A shared drill index means the two tracks recorded the same drill, so they
+   overlap.
+
+Anything else gives `overlap_or_unknown`, and only options 2 and 3 are offered.
+
+**The evidence gap (O2).** Whether `total_time` is the track's wall-clock length or its active time (pauses left out) is not
+proven.
+- If it is active time, the computed end is too early, and a real overlap can look disjoint.
+- Recommendation: before "Add them up" is released, one owner-run C97-style check (no GPEXE request by the executor). For two
+  or three real tracks, compare the start + `total_time` with the GPEXE screen's end time.
+- Until that check is done, MT-B ships options 2 and 3 only, or "Add them up" stays behind a server flag.
+
+## 4. The three choices
+
+Made per athlete in the session review, **by whoever may approve the import** (`lock_gpexe_import_approver`: a platform admin
+or a coach with an approver grant). Nothing is chosen automatically.
+
+| Choice | What the mapper writes | Label |
+|---|---|---|
+| **Add them up** (only when the guard of section 3 holds) | see "Add them up" below | "Combined from N tracks" |
+| **Use one track** (the reviewer picks which) | That track's rows exactly as a single-track athlete today; the other tracks are ignored | "One of N tracks (track started HH:MM)" |
+| **None** | Nothing from GPEXE. The athlete follows the existing no-data path: *Participated · no device data*, then an estimate (6b) or a manual entry | none needed: no GPEXE value exists |
+
+**Add them up:**
+- **Whole session:**
+  - `sum` variables (duration, distance, counts, zone distances): the sum;
+  - `max` variables: the largest;
+  - `avg`: **refused in v1**, left out with the reason `not_combinable` (O3);
+  - `last`, `none`: left out, `not_combinable`.
+- **Drills:** each drill row as it is (a drill comes from one track; the guard refuses a shared index).
+
+**Until a choice is made:** the athlete stays left out exactly as today (`multiple_tracks`), and the rest of the session
+imports.
+
+**Sum or largest per variable:** decided from the variable's daily aggregation (`metric_definition_versions`, the same column
+6b uses), not from a list.
+
+## 5. Where the choice lives
+
+**Its own table, with a migration (★★).** Neither J20-C's import states (v61) nor J20-B's left-out ids (v59) can hold it:
+- v61 states are roster attendance, written **after** an approval and bound to it (`origin_approval_id`);
+- v59's left-out ids live on the approval row, so they exist only once an approval is sent and do not survive a new search
+  before it.
+
+**Proposed: `training_load.gpexe_athlete_import_choices`.** It holds MT's track choice and section 10's scale choice. One row
+per decision, append-only:
+
+| Column | Meaning |
+|---|---|
+| owner team | the team the choice belongs to |
+| GPEXE session id | the session (`team_session`) |
+| GPEXE athlete id | the athlete |
+| `track_set_fingerprint` | the sorted track ids and their athlete-session row ids |
+| `choice` | `single` (one track: only a scale choice), `sum`, `track`, or `none` |
+| `scale_target_minutes` | section 10: null, or the minutes the recorded part is scaled to |
+| `chosen_track_id` | for `track` only |
+| `chosen_by_user_id`, `chosen_basis` | who chose, on which right |
+| `chosen_at` | when |
+| `supersedes_choice_id` | the earlier choice this one replaces |
+| request key and hash | the same pattern as the other admin writes |
+
+- The current choice is the newest row not superseded.
+- A DB actor guard (the v35 / v63 pattern) and append-only triggers.
+
+**It survives a new search.** The choice is keyed by (team, GPEXE session, athlete), not by candidate. A new candidate of the
+same session finds it.
+
+**It is in the preview hash:**
+- `previewLocked` reads the current choices of the session's multi-track athletes **under the team lock** and hands them to the
+  mapper;
+- the preview carries, per athlete, `trackChoice: { choiceId, kind, trackIds }`;
+- the hash covers the preview, so a changed choice changes the preview;
+- the approval recomputes under its locks, so a choice changed between the review and the approval gives `preview_changed`
+  (the existing rule; nothing new).
+
+**A stale choice.** If GPEXE's tracks for that athlete change (another track, other rows), the fingerprint differs:
+- the choice no longer applies, and the athlete is `multiple_tracks` again, with the reason "the tracks changed since the
+  choice";
+- the choice is never silently re-applied to other tracks.
+
+**The routes (MT-A):**
+- `GET …/gpexe/teams/:teamId/candidates/:candidateId/track-choices`: the session's multi-track athletes, each with:
+  - its tracks: start, whole-session time and distance, the drill indexes;
+  - the guard's verdict;
+  - the current choice.
+- `PUT …/track-choices/:gpexeAthleteId` `{ requestKey, choice, trackId?, expectedChoiceId }`.
+- The approver's audience; everyone else gets the identical 404.
+
+## 6. Raw data and identities
+
+**The stored snapshot is never rewritten.** The mapper computes the combination from the stored rows on every preview and
+import. The same rows and the same choice give the same values and the same content hash, so a re-import is idempotent.
+
+**Source identities** (`metric_source_identities.source_external_id`):
+
+| Choice | Whole-session result | Drill results |
+|---|---|---|
+| **Use one track** | `athlete_session:<row>:full` (native) | `athlete_session:<row>:drill:<i>` (native) |
+| **Add them up** | **`athlete_session:<rowA>+<rowB>[+…]:full`**, the whole-session row ids in ascending order | their native identities, `athlete_session:<row>:drill:<i>` |
+
+- **Use one track:** the native identities of the chosen track's rows, exactly as a single-track athlete.
+- **Add them up:** a single identity names every row it is made of, so it is stable while the rows are, and a different set
+  is a different identity.
+
+**T6 provenance** of a combined value:
+- the combined source value (the sum, or the largest);
+- the activation and revision as usual.
+
+Whether T6 needs a marker column for "combined" is open, as T1 (section 9). The proposal is no new column: the identity shape
+and the choice row say it.
+
+**The label in Activities and the review:**
+- "Combined from N tracks" is read from the identity shape (`+`);
+- "One of N tracks" is read from the current choice row.
+
+## 7. Interactions
+
+- **Short recording (6a, `frontend/gpexe-import-view.js:2373-2385`).** The flag compares a result's written whole-session
+  duration with the session's longest.
+  - A combined result is checked with its summed duration.
+  - A picked track is checked with its own; a device restart usually gives a short one, and the flag is the right hint there.
+  - No change to 6a.
+- **Drills.** Section 3, point 3 and section 4: drill rows keep their native identities; a shared drill index refuses the sum.
+- **Supersede when GPEXE changes the tracks:**
+  - before any import, a stale choice (section 5) puts the athlete back to `multiple_tracks`;
+  - after an import, the imported identities are missing from the new plan, so the session is blocked by the existing
+    `identities_missing_from_source` rule.
+  - A new resolution cause `track_choice_stale` tells the reviewer to choose again or to undo the earlier import.
+  - **Changing an imported choice** (for example from "Use one track" to "Add them up") is the same case: the old identities
+    go missing. v1: a choice is final once imported, and changing it needs the session undo (U5) first.
+- **Undo (v57 / v60 / v63).**
+  - The undo removes the combined and picked results like any import; nothing new in its scope.
+  - The choice rows are not import data and stay, so after an undo the session is offered again with the same choice, which
+    the reviewer may change.
+- **Estimates (6b).**
+  - "None" leaves the athlete without a GPEXE value, so an estimate is allowed (rule 4).
+  - "Add them up" or "Use one track" writes real `api_import` values: an estimate is then refused (`estimate_measured_exists`),
+    and an earlier estimate is superseded (M3) and listed in the preview's `supersededEstimates` (6b-B).
+- **The dashboards' source filter.** Combined and picked values are `api_import` values of the source connection, so they
+  appear under the existing policies like every import. No new policy word; the label is enough.
+
+## 8. Slices
+
+| Slice | Content | Mark | Reviewers |
+|---|---|---|---|
+| **MT-0** | This plan (docs) | ★ | the *Rukovodilac* |
+| **MT-A** | Migration v65 (or the next free number): `gpexe_track_choices`, append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
+| **MT-B** | Mapper, preview, writer: apply the current choice; the overlap guard; the combined identity; avg / last / none left out; `trackChoice` in the preview and its hash; `track_choice_stale` in the blocking resolution; a characterisation test that a single-track session is byte-for-byte unchanged | ★★ (triggers 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
+| **MT-D** | Section 10: the `scale_recording` method in the 6b save (backend; its basis shape and method in the same migration as MT-A), the mapper's "max only" result for a scaled athlete, the preview's `scaleRecording` entry | ★★ (triggers 1, 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
+| **MT-C** | Frontend: the choice row for a `multiple_tracks` athlete in the session review (the tracks side by side, the three options, the guard's reason when "Add them up" is not offered); the labels in the review and Activities | ★ | `code-reviewer`, `ux-design-reviewer`, `mobile-qa`; browser QA at 360 / 375 / 390 / 1280 |
+
+Order: MT-A, then MT-B, then MT-D, then MT-C (the screen covers all four choices). MT-B depends on the count of section 2 and
+on O2 for "Add them up". **One migration** (v65, or the next free number after #505's v64) carries both the choice table and
+the `scale_recording` method, since both are read by the same preview and written from the same row of the session review.
+
+## 9. Decisions and open questions
+
+- **O1 (owner).** A combined or picked result is a measured `api_import` value, computed by the mapper with a source identity.
+  It is not an estimate (this supersedes phase 10 D1 and §2.2's confirmation box for MT). Recommended: yes, as the
+  *Rukovodilac*'s conditions say.
+- **O2 (owner).** The overlap evidence for `total_time` (section 3). Recommended: one owner-run comparison before "Add them up"
+  ships; until then, options 2 and 3 only.
+- **O3 (owner).** `avg` variables in a sum. Recommended: refused in v1 (`not_combinable`). A time-weighted mean needs the same
+  evidence as O2.
+- **O4.** More than two tracks. Recommended: "Use one track" and "None" always; "Add them up" for any number of disjoint
+  tracks, if the count of section 2 shows such sessions.
+- **O5.** Who chooses: whoever may approve (recommended), or also the team's coach without an approver grant.
+- **T1.** Whether T6 marks a combined value (section 6). Recommended: no new column.
+- **O6 (owner).** `scale_recording`: max variables stay measured (recommended, as the owner asked), and avg variables are left
+  out of a scaled athlete in v1 (section 10, Q-avg).
+
+## 10. A fourth method: scale the recorded part (`scale_recording`)
+
+**The owner's request (2026-11-12, relayed by the *Rukovodilac*):**
+- **For whom:** an athlete with the short-recording flag (6a), for example 25 of 56 minutes.
+- **What it does:** the measured values of the recorded part are multiplied by target minutes / recorded minutes. The target
+  defaults to the session's longest recorded time, and the coach may change it.
+- **Sum variables** are scaled: distance, counts, zone distances, and duration (which becomes the target).
+- **Max variables** are not scaled; they stay as measured.
+- **The label:** always an estimate, with the basis "25 → 56 min", the author and the time.
+
+**Q1. Storage against M2 (no estimate while a real value exists).** Recommended: **(a), per variable.**
+- M2 is per variable (v63's `estimate_measured_exists`), so an athlete may carry a measured value of one variable and an
+  estimate of another. It never carries both for the same variable.
+- **The choice** ("Scale the recorded part", with its target minutes) is recorded before the import, in the choice table of
+  section 5, as `scale_target_minutes`. The athlete's track choice (single, a picked track, or the sum) says what the recorded
+  part is.
+- **The import** writes, for that athlete, only the variables that are not scaled: the `max` variables, as measured with their
+  source identity. Its sum variables are left out of the import, with the reason `scaled_by_choice`, never as zero.
+- **After the import,** the session review offers "Save the scaled values". This is the 6b save with the method
+  `scale_recording`, run by the J20-C audience. It is never part of the approval's transaction (6b rule 4).
+- **The scaled values.** The save recomputes the athlete's measured sum values from the imported candidate's stored snapshot,
+  through the same mapper, extractors and conversion. The snapshot is kept for 90 days after an import
+  (`gpexeImportService.js:605`).
+  - Each value is measured × target / recorded.
+  - Duration becomes the target.
+- **The basis keeps the measured numbers,** so nothing is lost when the snapshot is purged:
+  `{ recordedMinutes, targetMinutes, measured }`.
+- **The rule for max variables:**
+  - imported as measured, unscaled, with the athlete's source identity, and shown with the scaled values' label beside them
+    ("max of the recorded part");
+  - never estimated; v63 already refuses an estimate of a `max` variable.
+- **Q-avg (O6):** an average over the recorded part is a measured value of another time base. Recommended: left out of a
+  scaled athlete in v1 (`not_scaled`), neither measured nor estimated. The alternative, keeping it measured, is the owner's
+  choice.
+
+**Q2. The migration.**
+- The estimate side needs:
+  - the method `scale_recording` in `metric_value_estimates.method`'s CHECK;
+  - its basis shape in `estimate_basis_ok` (exactly `recordedMinutes`, `targetMinutes` and `measured`: numbers,
+    `0 < recordedMinutes < targetMinutes <= 600`);
+  - `validate_metric_value_estimate` allowing it for `sum` variables only.
+- These are two body replacements under md5 gates (v64's bodies) and one CHECK.
+- They share **one migration with MT-A's choice table**, the next free slot after #505's v64 (v65). Recommended: share it, since
+  both are read by the same preview.
+
+**Q3. With MT: a combined-tracks athlete who is still short.**
+- The scale applies to whatever recorded part the track choice gives: one track, the picked track, or the sum.
+- With "Add them up", the recorded minutes are the summed duration, and the 6a flag is computed on that sum.
+- "None" cannot be scaled: nothing is recorded.
+
+**Q4. The undo, a later full recording, and the dashboards.**
+- **The undo** removes the scaled estimates with the session (v63: `estimates_removed`). The choice stays, as in section 7.
+- **A full recording arriving later:**
+  - GPEXE's rows for the athlete change, so the choice's fingerprint no longer matches and the choice is void (section 5);
+  - the athlete is then imported normally, with all variables measured;
+  - those real sum values supersede the scaled estimates (M3), and the preview lists them in `supersededEstimates` (6b-B);
+  - the max value follows the existing correction rules.
+- **The dashboards:** estimates are left out by default (6b-D), so a scaled athlete's sum variables show only under the
+  `estimate` policy. The max shows like any import.
+
+**When it is offered:** only for a row with the 6a flag (whole-session duration below 75 % of the session's longest), and never
+for "None".
+
+**The label:** "Estimate · scaled 25 → 56 min" (recorded → target), with the author and the time from the provenance row.
