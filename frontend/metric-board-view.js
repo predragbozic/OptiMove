@@ -80,7 +80,9 @@ function columnHtml(s, c, drag) {
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
-    return `<li class="mb-col-item"><div class="mb-col is-used">${main}${badge}${values}</div>${tech}</li>`;
+    const why = use === "on" ? "Already on for the team. Switch it off on the right to place it again." : "Placed. Remove it on the right to place it elsewhere.";
+    const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
+    return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
   const picked = s.picked === c.fieldId;
   return `<li class="mb-col-item">
@@ -284,9 +286,11 @@ function reviewBody(s) {
   const group = (label, rows) => (rows.length ? `<p class="om-eyebrow">${label}</p><ul class="mb-review-list">${rows.map((p) => `<li class="mb-review-row"><strong>${name(columnOf(s.board, p.fieldId)?.label)} → ${name(variableOf(s.board, p.variableId)?.label)}</strong>
       <small>${p.requirement === "optional" ? "Optional" : "Required"}${p.replaces.length ? " · replaces what is on now" : ""}</small></li>`).join("")}</ul>` : "");
   const send = `<button type="button" class="om-btn om-btn--primary" data-action="metric-board-save" ${unticked.length === 0 && !s.write ? "" : "disabled"} aria-describedby="mb-review-note">Save and switch on for ${name(teamName(s))}</button>`;
-  return `<h3 class="om-card__title" id="mb-review-title" tabindex="-1">Review before saving</h3>
+  // One new row and nothing else: the panel's own summary and the send, not a second form.
+  const single = fresh.length === 1 && pre.length === 0;
+  return `<h3 class="om-card__title" id="mb-review-title" tabindex="-1">${single ? "Switch this on?" : "Review before saving"}</h3>
     <p class="muted">GPEXE · ${name(team?.name || teamName(s))} — linked to GPEXE team ${escapeHtml(team?.sourceTeamId || s.board.team.sourceTeamId)}</p>
-    ${fresh.length ? `<p class="om-eyebrow">New columns</p><ul class="mb-review-list">${freshHtml}</ul>` : ""}
+    ${fresh.length ? `${single ? "" : `<p class="om-eyebrow">New columns</p>`}<ul class="mb-review-list">${freshHtml}</ul>` : ""}
     ${group("OptiMove mappings (no check needed)", pre.filter((p) => p.badge !== "club_mapping"))}
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
     <p class="muted" id="mb-review-note">${unticked.length ? `Tick every new column to save: ${unticked.map((p) => name(columnOf(s.board, p.fieldId)?.label)).join(", ")}.`
@@ -337,7 +341,7 @@ function mapTab(s) {
     const search = ["no_stored_session", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "session_start_unknown"].includes(s.error.code);
     return `<div class="om-empty" role="status"><p class="om-empty__title">${escapeHtml(boardErrorText(s.error))}</p>
       <div class="om-empty__actions">
-        ${search || linkAthletes ? `<button type="button" class="om-btn om-btn--primary" data-action="training-load-section" data-section="imports">Open Imports</button>` : ""}
+        ${search || linkAthletes ? `<button type="button" class="om-btn om-btn--primary" data-action="training-load-section" data-section="imports">${linkAthletes ? "Open Imports to link athletes" : "Open Imports to search"}</button>` : ""}
         ${s.error.code === "pair_out_of_range" ? `<button type="button" class="om-btn" data-action="metric-board-first-athletes">Back to the first athletes</button>` : `<button type="button" class="om-btn" data-action="metric-board-reload">Read again</button>`}
       </div></div>`;
   }
