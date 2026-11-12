@@ -11,7 +11,7 @@ import { createSimpleSaveRouter } from './saveRouter.js';
 import { withPreviewTransaction } from './previewTransaction.js';
 
 export const SIMPLE_RUNTIME_PATH = '/api/training-load/dashboards/:dashboardId/simple';
-export const SIMPLE_MIGRATION_NAME = 'migrations_v2/202611121000_training_load_v63_dashboard_simple_atomic_save.sql';
+export const SIMPLE_MIGRATION_NAME = 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql';
 export const SIMPLE_MIGRATION_SHA256 = '73a85c31070d90244942ce0300edc6c88706cae4b1dc3bada28754fc7c57c5c2';
 
 async function assertSchema(pool) {

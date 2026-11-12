@@ -4,7 +4,7 @@ set local lock_timeout = '5s';
 do $guard$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v63 rollback refused: the migrator is running';
+    raise exception 'v64 rollback refused: the migrator is running';
   end if;
 end
 $guard$;
@@ -15,19 +15,19 @@ lock table training_load.dashboard_widgets, training_load.dashboard_widget_serie
 do $guard$
 begin
   if not exists (select 1 from public.schema_migrations
-      where migration_name = 'migrations_v2/202611121000_training_load_v63_dashboard_simple_atomic_save.sql')
+      where migration_name = 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql')
     or exists (select 1 from public.schema_migrations
       where migration_name like 'migrations_v2/%'
-        and migration_name > 'migrations_v2/202611121000_training_load_v63_dashboard_simple_atomic_save.sql') then
-    raise exception 'v63 rollback refused: v63 is not the last applied v2 migration';
+        and migration_name > 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql') then
+    raise exception 'v64 rollback refused: v64 is not the last applied v2 migration';
   end if;
   if (select md5(prosrc) from pg_proc where oid =
       to_regprocedure('training_load.dashboard_widgets_bump_revision()')) is distinct from 'a845d879d38d8a6dccf443736a34fe8f' then
-    raise exception 'v63 rollback refused: unexpected revision function';
+    raise exception 'v64 rollback refused: unexpected revision function';
   end if;
   if exists (select 1 from training_load.dashboard_simple_requests)
     or exists (select 1 from training_load.dashboard_widgets where presentation_config is not null) then
-    raise exception 'v63 rollback refused: dashboard presentation or save receipts exist';
+    raise exception 'v64 rollback refused: dashboard presentation or save receipts exist';
   end if;
 end
 $guard$;
@@ -94,5 +94,5 @@ drop function training_load.dashboard_simple_object;
 
 drop table training_load.dashboard_simple_requests;
 delete from public.schema_migrations
-where migration_name = 'migrations_v2/202611121000_training_load_v63_dashboard_simple_atomic_save.sql';
+where migration_name = 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql';
 commit;
