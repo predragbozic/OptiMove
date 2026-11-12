@@ -890,6 +890,10 @@ test("9. route 7 and the scheduled removal: values past their date are removed i
   assert.equal(removal.startConfirmationRemovalSchedule({ env: { OPTIMOVE_TEST_RUNNER: "1", DATABASE_URL: "postgres://example.invalid/x" } }).started, false);
   assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "" } }).started, false);
   assert.equal(removal.startConfirmationRemovalSchedule({ env: {} }).started, false);
+  // A disposable test database, as the e2e world's server has: nothing is started, whatever markers are missing.
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "postgresql://u:p@localhost:5432/optimove_tests_e2e_abc123" } }).started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: db.url } }).started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "not a url" } }).started, false, "an unreadable URL is not a database to run on");
   const on = removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "postgres://example.invalid/x" }, startupDelayMs: 3_600_000 });
   assert.equal(on.started, true);
   on.stop();

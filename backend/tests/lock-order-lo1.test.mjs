@@ -46,6 +46,8 @@ const originalConsole = {};
 before(async () => {
   // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
   // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
+  // Not yet in this file: a test on the full schema. Tests 7 and 8 fail on main too and leave connections holding
+  // a users row, so a test added after them waits on it; a recorded follow-up of J18's 18-3.
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo1", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });

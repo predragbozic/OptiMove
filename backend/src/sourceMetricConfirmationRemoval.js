@@ -90,11 +90,25 @@ export async function runExpiredRemoval({ limit = REMOVAL_BATCH, maxBatches = MA
   }
 }
 
+// Whether the schedule may run on this DATABASE_URL: a readable URL that names a database which is not a disposable
+// test database.
+function runsOn(url) {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.slice(1));
+    return name !== "" && !/^optimove_tests_/.test(name);
+  } catch {
+    return false;
+  }
+}
+
 // In the web server process only (server.js). Never inside the test runner
 // and never without a database: it then starts nothing. Timers are unref'd.
 export function startConfirmationRemovalSchedule({ intervalHours = REMOVAL_INTERVAL_HOURS, startupDelayMs = 60_000, env = process.env } = {}) {
-  // node:test's own marker, the T1 runner's marker (scripts/test-runner.mjs), or no database: nothing is started.
-  if (env.NODE_TEST_CONTEXT || env.OPTIMOVE_TEST_RUNNER || !env.DATABASE_URL) return { started: false, stop: () => {} };
+  // node:test's own marker, the T1 runner's marker (scripts/test-runner.mjs), no readable database, or a disposable
+  // test database (optimove_tests_*: the e2e world starts a real server process on one): nothing is started. The removal
+  // would be harmless there - it only nulls values that are already past their date, which no route returns - but
+  // a test's fixture rows are the test's.
+  if (env.NODE_TEST_CONTEXT || env.OPTIMOVE_TEST_RUNNER || !env.DATABASE_URL || !runsOn(env.DATABASE_URL)) return { started: false, stop: () => {} };
   const tick = () => runExpiredRemoval().catch((error) => console.error(`[source-metric-board] expired_values_removal_failed (${error?.code ?? error?.name ?? "error"})`));
   const first = setTimeout(tick, startupDelayMs);
   first.unref();
