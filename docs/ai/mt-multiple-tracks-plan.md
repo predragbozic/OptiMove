@@ -400,8 +400,14 @@ review reads "Duplicate track ignored (2 identical tracks)".
   - its finalization recomputes the preview, now importing that athlete, and so a new hash;
   - an approval sent with the old hash answers `preview_changed` and the session is reviewed again. This is the existing rule
     (9-B's refresh), and nothing is imported twice.
-- **An imported session** whose duplicate athlete was left out (as `multiple_tracks`, before MT-0): the next search shows that athlete as importable (new results).
-  Importing it adds the athlete, as for an athlete linked later.
+- **An imported session** whose duplicate athlete was left out (as `multiple_tracks`, before MT-0) **is not reopened.**
+  - While GPEXE's content is unchanged, a new search only records a sighting of the imported candidate
+    (`gpexeImportService.js` `finalizeCheck`, step 1); no new candidate and no new preview are made. So the athlete stays out.
+  - The remedy is the U5 undo of that session: it writes a fresh pending candidate whose preview, computed by MT-0, now
+    imports the athlete. O1 applies to roster work.
+  - The sessions concerned are the section 2 query limited to `status = 'imported'`; the *Rukovodilac* tells the owner which.
+  - Proof: MT-0's route test 4 (an imported session with the athlete left out, the same bundle searched again: still one
+    imported candidate, no identity for the athlete).
 
 **No choice, no migration, no route.** It is automatic, so it needed the owner's yes, given on 2026-11-12.
 
@@ -410,5 +416,5 @@ review reads "Duplicate track ignored (2 identical tracks)".
 - one differing field in any compared group (track, row, `/more/`) gives `multiple_tracks`, with a case per field group;
 - a deduplicated athlete's burst and brake imported exactly as the details give them, once, with nothing left out (E1);
 - a session without duplicates gives a byte-for-byte unchanged plan and preview;
-- the stored candidate's refresh (`preview_changed`, then the import);
+- the stored candidate's refresh (`preview_changed`, then the import; route test 3);
 - a later cleanup in both directions (unchanged, or blocked).
