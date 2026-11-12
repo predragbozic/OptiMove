@@ -265,6 +265,10 @@ async function world() {
   W.sysTime = await activeVersion(W.pa, W.fSysTime, W.sysMin);
   W.vBActive = await activeVersion(W.caB, await field("time"), W.vB);
 }
+// OptiMove's own active mapping of a fresh column onto a fresh OptiMove variable (on for no team).
+async function systemMapping(kind = "time", unit = "min") {
+  return activeVersion(W.pa, await field(kind), await variable(W.pa, { unit, label: `OptiMove ${kind} ${uid()}` }));
+}
 // A fresh team of club A with three named athletes, a coach and a stored session.
 async function freshTeam() {
   const t = await gpexeTeam(W.clubA);
@@ -409,4 +413,331 @@ test("2. the body and the audience: the right is asked before the body; a malfor
     assert.deepEqual(shape(await post("/confirmations", W.caA, body({ rows: [{ ...good, replaces: [otherOn] }] }))), NOT_FOUND);
     assert.deepEqual(shape(await post("/confirmations", W.caA, body({ rows: [{ ...good, replaces: [crypto.randomUUID()] }] }))), NOT_FOUND);
   });
+});
+
+// ---------------------------------------------------------------------------
+// 2. A board that changed, and what is already on
+// ---------------------------------------------------------------------------
+test("3. a row that is stale or cannot be saved is refused by its place in the list, and nothing is written: another hash, another variable version, a placement the read refuses, a collision the row does not list, a listed activation that is gone or not in the way, a hidden OptiMove variable, an undone session", async () => {
+  const { t, cand } = await freshTeam();
+  const fTime = await field("time");
+  const fDist = await field("dist");
+  const vMin = await variable(W.caA, { unit: "min" });
+  const vM = await variable(W.caA, { unit: "m" });
+  const good = await newRow(W.caA, t, cand, fTime, vMin);
+  const second = await newRow(W.caA, t, cand, fDist, vM);
+  const fake = (f, target, over = {}) => ({ ...good, fieldId: f.fieldId, targetId: target.id, ...over });
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ ...good, placementHash: "0".repeat(64) }]), "board_changed", 0);
+    rowRefused(await save(W.caA, t, cand, [good, { ...second, placementHash: "f".repeat(64) }]), "board_changed", 1);
+    // Another pair than the one the hash was read for.
+    rowRefused(await save(W.caA, t, cand, [good], { pair: 1 }), "board_changed", 0);
+    rowRefused(await save(W.caA, t, cand, [{ ...good, expectedTargetVersionId: crypto.randomUUID() }]), "canonical_version_changed", 0);
+    refused(await save(W.caA, t, cand, [good], { pair: 9999 }), 409, "pair_out_of_range");
+  });
+  // A placement the read refuses is refused by the same code (a hash cannot be had for it).
+  const vKg = await variable(W.caA, { unit: "kg" });
+  const vSmall = await variable(W.caA, { unit: "min", maxValue: "10" });
+  const fUnverified = await field("time", { verified: false });
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [fake(fTime, vKg)]), "conversion_unavailable", 0);
+    rowRefused(await save(W.caA, t, cand, [fake(fTime, vSmall)]), "value_outside_limits", 0);
+    rowRefused(await save(W.caA, t, cand, [fake(fUnverified, vMin)]), "field_not_confirmed", 0);
+    // An OptiMove variable is never a new row.
+    refused(await save(W.caA, t, cand, [fake(W.fSysTime, W.sysMin)]), 400, "invalid_body");
+    rowRefused(await save(W.caA, t, cand, [fake(fTime, W.sysMin)]), "target_scope_mismatch", 0);
+  });
+  // What is on and in the way must be listed, exactly.
+  const sysOn = ok(await start(W.paA, W.sysTime, t), 201).activations[0].id;
+  const vOther = await variable(W.caA, { unit: "min" });
+  const onto = await newRow(W.caA, t, cand, W.fSysTime, vOther);
+  assert.deepEqual(onto.replaces, [sysOn], "the read names the collision");
+  const elsewhere = (await freshTeam());
+  const idle = ok(await start(W.paA, W.sysTime, elsewhere.t), 201).activations[0].id;
+  void idle;
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ ...onto, replaces: [] }]), "activation_exists", 0);
+    // A pre-placed row whose version is on already.
+    rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: W.sysTime.versionId, placementHash: good.placementHash, requirement: "optional", replaces: [] }]), "activation_exists", 0);
+    // An open activation that is not in the way of the row that lists it.
+    rowRefused(await save(W.caA, t, cand, [{ ...good, replaces: [sysOn] }]), "board_changed", 0);
+  });
+  // The listed activation was switched off meanwhile.
+  ok(await end(W.caA, sysOn));
+  await nothingWritten(async () => { rowRefused(await save(W.caA, t, cand, [onto]), "activation_changed", 0); });
+  // A hidden OptiMove variable: its pre-placed row is refused (the row was read before the hide).
+  const other = await freshTeam();
+  const hidden = await systemMapping();
+  const pre = await preplacedRow(W.caA, other.t, other.cand, hidden);
+  ok(await post(`/variables/${hidden.target.id}/hide`, W.caA, { requestKey: key() }));
+  await nothingWritten(async () => { rowRefused(await save(W.caA, other.t, other.cand, [pre]), "variable_hidden", 0); });
+  // An undone session is not a stored session: the identical 404.
+  await planted(() => k.query(`update training_load.gpexe_import_candidates set status = 'imported', imported_at = now(), import_undone_at = now(), import_undone_request_id = gen_random_uuid() where id = $1`, [other.cand.id]));
+  await nothingWritten(async () => { assert.deepEqual(shape(await save(W.caA, other.t, other.cand, [pre])), NOT_FOUND); });
+});
+
+test("4. what exists: the club's own active version of the same contract is reused (no new version, a checked row for it); a mapping with only a disabled version gets version 2; another contract of the mapping is mapping_version_active; a replacement ends what was on in the same operation and is not a switch-off, a manual end is", async () => {
+  const { t, cand } = await freshTeam();
+  // Reuse.
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const own = await activeVersion(W.caA, f, target);
+  const row = await newRow(W.caA, t, cand, f, target);
+  const before = await counts();
+  const saved = ok(await save(W.caA, t, cand, [row])).confirmation;
+  const after = await counts();
+  assert.deepEqual([after.t3 - before.t3, after.t4 - before.t4, after.t5 - before.t5, after.t9i - before.t9i], [0, 0, 1, 1]);
+  assert.deepEqual([saved.rows[0].versionId, saved.rows[0].mappingId], [own.versionId, own.mappingId]);
+  assert.deepEqual(await one(`select item_kind, checked, mapping_version_id from ${T9I} where confirmation_id = $1`, [saved.id]), { item_kind: "club_mapping", checked: true, mapping_version_id: own.versionId });
+  assert.equal((await one(`select activated_basis from ${T4} where id = $1`, [own.versionId])).activated_basis, "platform_admin", "the reused version is not written");
+  // A mapping whose only version is disabled: the next version number.
+  const f2 = await field("time");
+  const target2 = await variable(W.caA, { unit: "min" });
+  const old = await activeVersion(W.caA, f2, target2);
+  ok(await post(`/mappings/${old.mappingId}/versions/${old.versionId}/disable`, await activatorOf(W.caA), { requestKey: key(), expectedStatus: "active", reason: "Disabled for the save test." }));
+  const again = ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, f2, target2)])).confirmation;
+  assert.equal(again.rows[0].mappingId, old.mappingId);
+  assert.deepEqual(await one(`select version_number, status, activated_basis from ${T4} where id = $1`, [again.rows[0].versionId]), { version_number: 2, status: "active", activated_basis: "club_admin" });
+  // Another contract of the mapping (other levels) is active: nothing is replaced automatically.
+  const f3 = await field("time");
+  const target3 = await variable(W.caA, { unit: "min" });
+  await activeVersion(W.caA, f3, target3, { drill: false });
+  await nothingWritten(async () => { rowRefused(await save(W.caA, t, cand, [{ ...row, fieldId: f3.fieldId, targetId: target3.id }]), "mapping_version_active", 0); });
+
+  // A replacement: OptiMove's mapping of a column is on; the club maps the same column onto its own variable.
+  const r = await freshTeam();
+  const sysOn = ok(await start(W.paA, W.sysTime, r.t), 201).activations[0].id;
+  const mine = await variable(W.caA, { unit: "min" });
+  const replacing = await newRow(W.caA, r.t, r.cand, W.fSysTime, mine);
+  assert.deepEqual(replacing.replaces, [sysOn]);
+  const done = ok(await save(W.caA, r.t, r.cand, [replacing])).confirmation;
+  const endedRow = await one(`select a.ended_at is not null as ended, a.end_reason, a.ended_by_user_id, a.ended_basis from ${T5} a where a.id = $1`, [sysOn]);
+  assert.deepEqual(endedRow, { ended: true, end_reason: "admin_ended", ended_by_user_id: W.caA.id, ended_basis: "club_admin" });
+  const endAudit = await one(`select e.reason, e.request_key, e.operation_id = c.operation_id as same_operation from ${T8} e, ${T9} c where e.activation_id = $1 and e.action = 'activation_end' and c.id = $2`, [sysOn, done.id]);
+  assert.deepEqual(endAudit, { reason: "Replaced on the drag-and-drop board.", request_key: null, same_operation: true });
+  // The replaced mapping is not "switched off by an administrator": it is offered again, as a replacement of what replaced it.
+  const board1 = ok(await boardOf(W.caA, r.t)).board;
+  assert.equal(board1.switchedOff.some((x) => x.mappingVersionId === W.sysTime.versionId), false, "a replacement is not a switch-off");
+  assert.deepEqual(board1.replaceable.filter((x) => x.mappingVersionId === W.sysTime.versionId).map((x) => x.replaces.map((c) => c.activationId)), [[done.rows[0].activationId]]);
+  // A manual end of the successor: only the successor's mapping is switched off; OptiMove's is pre-placed again.
+  ok(await end(W.caA, done.rows[0].activationId));
+  const board2 = ok(await boardOf(W.caA, r.t)).board;
+  assert.deepEqual(board2.switchedOff.map((x) => x.mappingVersionId), [done.rows[0].versionId]);
+  assert.equal(board2.preplaced.some((x) => x.mappingVersionId === W.sysTime.versionId), true);
+  // And a manual end of OptiMove's own activation is a switch-off.
+  const m = await freshTeam();
+  const manual = ok(await start(W.paA, W.sysTime, m.t), 201).activations[0].id;
+  ok(await end(W.caA, manual));
+  assert.deepEqual(ok(await boardOf(W.caA, m.t)).board.switchedOff.map((x) => x.mappingVersionId), [W.sysTime.versionId]);
+});
+
+// ---------------------------------------------------------------------------
+// 3. Races (the hold seam), the COMMIT, and the lock order
+// ---------------------------------------------------------------------------
+test("5. races, each held between the save's plain read and its locks: a check that saw the session again, an undone import, an Unbind, a lost right, another admin's same placement and a hide each end the save with its stated answer and nothing of it written", async () => {
+  const saveService = await import("../src/sourceMetricBoardSaveService.js");
+  const during = async (step, change, run) => {
+    let done = false;
+    saveService.setBoardSaveHoldForTests(async (client, at) => { if (at === step && !done) { done = true; await change(); } });
+    try { return await run(); } finally { saveService.setBoardSaveHoldForTests(null); }
+  };
+  const setup = async () => {
+    const x = await freshTeam();
+    const f = await field("time");
+    const target = await variable(W.caA, { unit: "min" });
+    return { ...x, f, target, row: await newRow(W.caA, x.t, x.cand, f, target) };
+  };
+  // A check of the team saw the session again.
+  let s = await setup();
+  let before = await counts();
+  let res = await during("before_locks", async () => { const c = await check(s.t); await k.query(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [s.cand.id, c]); }, () => save(W.caA, s.t, s.cand, [s.row]));
+  refused(res, 409, "board_changed");
+  assert.deepEqual({ ...(await counts()) }, before);
+  // The session's import was undone.
+  s = await setup();
+  before = await counts();
+  res = await during("before_locks", () => planted(() => k.query(`update training_load.gpexe_import_candidates set status = 'imported', imported_at = now(), import_undone_at = now(), import_undone_request_id = gen_random_uuid() where id = $1`, [s.cand.id])),
+    () => save(W.caA, s.t, s.cand, [s.row]));
+  refused(res, 409, "board_changed");
+  assert.deepEqual({ ...(await counts()) }, before);
+  // An Unbind.
+  s = await setup();
+  before = await counts();
+  res = await during("before_locks", () => k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Race test.' where id = $1`, [s.t.bindingId, W.pa.id]),
+    () => save(W.caA, s.t, s.cand, [s.row]));
+  refused(res, 409, "binding_not_active");
+  assert.deepEqual({ ...(await counts()) }, before);
+  // The admin's role is revoked: the identical 404.
+  s = await setup();
+  before = await counts();
+  const lost = await clubAdmin(W.clubA, "Soon Revoked Admin");
+  const lostRow = await newRow(lost, s.t, s.cand, s.f, s.target);
+  res = await during("before_locks", () => k.query(`update public.user_club_roles set is_active = false where user_id = $1`, [lost.id]), () => save(lost, s.t, s.cand, [lostRow]));
+  assert.deepEqual(shape(res), NOT_FOUND);
+  assert.deepEqual({ ...(await counts()) }, before);
+  // Another admin saves the same placement first: the second answers board_changed and writes nothing of its own.
+  s = await setup();
+  let firstSave = null;
+  res = await during("before_locks", async () => { firstSave = await save(W.caA2, s.t, s.cand, [await newRow(W.caA2, s.t, s.cand, s.f, s.target)]); }, () => save(W.caA, s.t, s.cand, [s.row]));
+  ok(firstSave);
+  refused(res, 409, "board_changed");
+  assert.equal((await one(`select count(*)::int as n from ${T9} where team_id = $1`, [s.t.teamId])).n, 1);
+  assert.equal((await one(`select count(*)::int as n from ${T8} where performed_by_user_id = $1 and team_id = $2`, [W.caA.id, s.t.teamId])).n, 0);
+  // A hide of the OptiMove variable lands before the save's hide lock.
+  const h = await freshTeam();
+  const toHide = await systemMapping();
+  const pre = await preplacedRow(W.caA, h.t, h.cand, toHide);
+  before = await counts();
+  res = await during("before_hide_locks", async () => { ok(await post(`/variables/${toHide.target.id}/hide`, W.caA2, { requestKey: key() })); }, () => save(W.caA, h.t, h.cand, [pre]));
+  rowRefused(res, "variable_hidden", 0);
+  const now = await counts();
+  assert.deepEqual([now.t5, now.t9, now.t4, now.t3], [before.t5, before.t9, before.t4, before.t3]);
+});
+
+test("6. the COMMIT (the five-point rule): an answer lost after the COMMIT is 200 verified_after_commit_error; a COMMIT that never reached the database is 503 outcome_unknown and the same key then saves; a failed read-back is 200 readError with the confirmation's id; a replay after an Unbind still answers, after the team is archived it is the identical 404", async () => {
+  const service = await import("../src/sourceMetricMappingService.js");
+  const setup = async () => {
+    const x = await freshTeam();
+    const f = await field("time");
+    const target = await variable(W.caA, { unit: "min" });
+    return { ...x, rows: [await newRow(W.caA, x.t, x.cand, f, target)] };
+  };
+  // The answer of the COMMIT is lost, the COMMIT happened.
+  let s = await setup();
+  let requestKey = key();
+  service.setMappingCommitForTests({ fault: (c) => c.query("commit").then(() => { throw new Error("answer lost"); }), timeoutMs: 2_000 });
+  let res;
+  try { res = await save(W.caA, s.t, s.cand, s.rows, { requestKey }); } finally { service.setMappingCommitForTests(); }
+  const verified = ok(res);
+  assert.deepEqual([verified.commitConfirmation, verified.replayed, verified.confirmation.rows.length], ["verified_after_commit_error", false, 1]);
+  assert.deepEqual(ok(await save(W.caA, s.t, s.cand, s.rows, { requestKey })).confirmation, verified.confirmation);
+  // The COMMIT never reached the database.
+  s = await setup();
+  requestKey = key();
+  const before = await counts();
+  service.setMappingCommitForTests({ fault: () => Promise.reject(new Error("socket gone")), timeoutMs: 2_000, checkTimeoutMs: 2_000 });
+  try { res = await save(W.caA, s.t, s.cand, s.rows, { requestKey }); } finally { service.setMappingCommitForTests(); }
+  assert.deepEqual([res.status, res.body.error, res.body.requestKey], [503, "outcome_unknown", requestKey], res.text);
+  assert.deepEqual({ ...(await counts()) }, before, "nothing was committed");
+  const repeated = ok(await save(W.caA, s.t, s.cand, s.rows, { requestKey }));
+  assert.deepEqual([repeated.replayed, repeated.confirmation.rows.length], [false, 1]);
+  // A committed save whose answer cannot be read back.
+  s = await setup();
+  service.setMappingRereadFaultForTests(() => { throw new Error("read failed"); });
+  try { res = await save(W.caA, s.t, s.cand, s.rows); } finally { service.setMappingRereadFaultForTests(null); }
+  const unread = ok(res);
+  assert.equal(unread.readError, true);
+  assert.equal(unread.confirmationId, (await one(`select id from ${T9} where team_id = $1`, [s.t.teamId])).id);
+  assert.equal(Object.hasOwn(unread, "confirmation"), false);
+  // A replay's scope: after an Unbind it still answers; after the team is archived it is the 404.
+  s = await setup();
+  requestKey = key();
+  const saved = ok(await save(W.caA, s.t, s.cand, s.rows, { requestKey })).confirmation;
+  await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Replay test.' where id = $1`, [s.t.bindingId, W.pa.id]);
+  const replay = ok(await post("/confirmations", W.caA, { requestKey, teamId: s.t.teamId, candidateId: s.cand.id, pair: 0, rows: s.rows }));
+  assert.deepEqual([replay.replayed, replay.confirmation.id], [true, saved.id]);
+  await k.query(`update public.teams set is_active = false where id = $1`, [s.t.teamId]);
+  assert.deepEqual(shape(await post("/confirmations", W.caA, { requestKey, teamId: s.t.teamId, candidateId: s.cand.id, pair: 0, rows: s.rows })), NOT_FOUND);
+});
+
+test("7. the lock order (section 4.4), from the SQL the save sends: conversions, fields, revisions, mappings, versions, variables, their levels, the activations it ends, the binding, the team, the users row before the role row, the club, then the hide lock - all before the first write, and no locking clause between the first write and the COMMIT; the candidate is never locked", async () => {
+  const { t, cand } = await freshTeam();
+  // What is on: OptiMove's mapping (it will be replaced by a new row onto the club's variable).
+  const sys1 = await systemMapping();
+  const sysOn = ok(await start(W.paA, sys1, t), 201).activations[0].id;
+  const mine = await variable(W.caA, { unit: "min" });
+  const fDist = await field("dist");
+  const vM = await variable(W.caA, { unit: "m" });
+  // A second OptiMove mapping, to be switched on as it is (a hide lock).
+  const fSys2 = await field("speed");
+  const sysKmh = await variable(W.pa, { unit: "km/h", label: `OptiMove speed ${uid()}` });
+  const sys2 = await activeVersion(W.pa, fSys2, sysKmh);
+  // A reused club version (T4 FOR SHARE, T3 FOR NO KEY UPDATE).
+  const fOwn = await field("time");
+  const vOwn = await variable(W.caA, { unit: "min" });
+  await activeVersion(W.caA, fOwn, vOwn);
+  const rows = [
+    await newRow(W.caA, t, cand, sys1, mine),
+    await newRow(W.caA, t, cand, fDist, vM),
+    await newRow(W.caA, t, cand, fOwn, vOwn),
+    await preplacedRow(W.caA, t, cand, sys2),
+  ];
+  assert.deepEqual(rows[0].replaces, [sysOn]);
+  const seen = [];
+  const wrapped = [];
+  const original = appPool.connect;
+  appPool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    return original.call(this).then((c) => {
+      if (!wrapped.some((w) => w.c === c)) {
+        const send = c.query;
+        wrapped.push({ c, send });
+        c.query = function (...args) {
+          const text = typeof args[0] === "string" ? args[0] : args[0]?.text;
+          if (text) seen.push(text.replace(/\s+/g, " ").trim());
+          return send.apply(this, args);
+        };
+      }
+      return c;
+    });
+  };
+  let res;
+  try { res = await save(W.caA, t, cand, rows); } finally {
+    appPool.connect = original;
+    for (const { c, send } of wrapped) c.query = send;
+  }
+  assert.equal(ok(res).confirmation.rows.length, 4);
+  // The save's own transaction: from its actor setting to its COMMIT.
+  const from = seen.findIndex((x) => x.includes("optimove.source_metric_actor"));
+  const to = seen.findIndex((x, i) => i > from && /^commit$/i.test(x));
+  assert.ok(from >= 0 && to > from, "the save's transaction was recorded");
+  const tx = seen.slice(from, to);
+  const LOCKING = /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock|\block table\b/i;
+  const WRITE = /^(insert|update|delete)\b/i;
+  const at = (re, after = -1) => { const i = tx.findIndex((x, n) => n > after && re.test(x)); assert.ok(i >= 0, `not sent: ${re}`); return i; };
+  // The patterns are anchored on the service's exact SQL: a reworded statement fails here, never passes vacuously.
+  const order = [
+    ["conversions", /from training_load\.unit_conversions c where c\.state = 'active' .* order by c\.id for share$/],
+    ["fields", /from training_load\.source_metric_definitions where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["revisions", /from training_load\.source_metric_definition_versions where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["a mapping", /from training_load\.source_metric_mappings where id = \$1 for (share|no key update)$/],
+    ["versions", /from training_load\.source_metric_mapping_versions where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["variables", /from training_load\.metric_definitions where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["levels", /from training_load\.metric_definition_scope_capabilities where metric_definition_id = any\(\$1::uuid\[\]\) order by metric_definition_id, scope_level for share$/],
+    ["activations to end", /from training_load\.source_metric_mapping_activations where id = any\(\$1::uuid\[\]\) and source_team_binding_id = \$2 order by id for no key update$/],
+    ["binding", /from training_load\.source_team_bindings where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["team", /from public\.teams where id = any\(\$1::uuid\[\]\) order by id for share$/],
+    ["users before role", /for share of u, (g|r)$/],
+    // The rights check locks the admin's own club row, then the binding's club (the same row here).
+    ["club", /from public\.clubs where id = (\$1 and coalesce\(is_active, true\)|any\(\$1::uuid\[\]\) order by id) for share$/],
+    ["hide lock", /pg_advisory_xact_lock\(hashtextextended\('club-variable-hide:'/],
+  ];
+  let last = -1;
+  const positions = {};
+  for (const [name, re] of order) { last = at(re, last); positions[name] = last; }
+  const firstWrite = tx.findIndex((x) => WRITE.test(x));
+  assert.ok(firstWrite > positions["hide lock"], "every lock comes before the first write");
+  // Nothing locks out of order: every locking statement before the first write is one of the list, in a non-decreasing place.
+  const placeOf = (x) => order.findIndex(([, re]) => re.test(x));
+  const places = tx.slice(0, firstWrite).filter((x) => LOCKING.test(x)).map((x) => [placeOf(x), x]);
+  assert.deepEqual(places.filter(([p]) => p < 0).map(([, x]) => x), [], "a lock the order does not know");
+  assert.deepEqual(places.map(([p]) => p), [...places.map(([p]) => p)].sort((a, b) => a - b), "the locks are taken in D's order");
+  assert.equal(places.filter(([p]) => p === 3).length, 2, "the existing mappings: the reused one and the pre-placed one");
+  // No locking clause between the first write and the COMMIT.
+  assert.deepEqual(tx.slice(firstWrite).filter((x) => LOCKING.test(x)), []);
+  // The candidate, the team import lock and the v11 connection are never locked.
+  assert.deepEqual(tx.filter((x) => LOCKING.test(x) && /gpexe_import_candidates|hold_gpexe_team_lock|metrics_core|source_credential_connections/.test(x)), []);
+  // The writes, in step 16's order.
+  const writes = tx.slice(firstWrite).filter((x) => WRITE.test(x)).map((x) => {
+    const m = /^insert into training_load\.(\w+)/.exec(x) ?? /^update training_load\.(\w+)/.exec(x);
+    const action = /values \('(\w+)'/.exec(x)?.[1] ?? (x.includes("source_metric_audit") ? "audit" : "");
+    return `${x.startsWith("insert") ? "+" : "~"}${m?.[1] ?? "?"}${action && m?.[1] === "source_metric_audit" ? `:${action}` : ""}`;
+  });
+  const firstOf = (w) => writes.indexOf(w);
+  const lastOf = (w) => writes.lastIndexOf(w);
+  assert.ok(firstOf("+source_metric_mappings") === 0, writes.join(" "));
+  assert.ok(lastOf("~source_metric_mapping_activations") < firstOf("+source_metric_confirmations"), "the ends before the confirmation");
+  assert.ok(lastOf("+source_metric_confirmation_items") < writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")), "the confirmation's rows before the activation of a version");
+  assert.ok(writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")) < firstOf("+source_metric_mapping_activations"), "the versions active before the starts");
+  assert.equal(writes.at(-1), "+source_metric_audit:mapping_confirmation", "the keyed request record is the last write");
 });

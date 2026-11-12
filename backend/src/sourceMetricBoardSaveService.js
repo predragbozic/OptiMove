@@ -281,6 +281,13 @@ export async function saveConfirmation({ ctx, body }) {
         if (known.rowCount !== replaced.length) throw NOT_FOUND();
       }
       const first = evaluate(seen, pairIndex, rows);
+      // The club's existing mappings of the new rows, as the plain read sees them (locked at step 9).
+      const existing = new Map((await client.query(
+        `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
+           from training_load.source_metric_mappings m
+          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
+        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
+      )).rows.map((m) => [`${m.field_id}:${m.variable_id}`, m.id]));
       await hold(client, "before_locks");
 
       // Step 7: the unit conversions of every converted row, ascending.
@@ -300,12 +307,6 @@ export async function saveConfirmation({ ctx, body }) {
       // Step 9: the mappings (T3), one pass in ascending id - the club's
       // existing mapping of a new row FOR NO KEY UPDATE, a pre-placed row's
       // FOR SHARE. A missing one is inserted at step 16.1.
-      const existing = new Map((await client.query(
-        `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
-           from training_load.source_metric_mappings m
-          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
-        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
-      )).rows.map((m) => [`${m.field_id}:${m.variable_id}`, m.id]));
       const mappingLocks = [];
       for (const p of first.plan) {
         if (p.kind === "preplaced") mappingLocks.push({ id: p.mappingId, strength: "share" });
@@ -352,6 +353,14 @@ export async function saveConfirmation({ ctx, body }) {
       if (world.candidate.bundle_hash !== seen.candidate.bundle_hash || world.candidate.last_seen_check_id !== seen.candidate.last_seen_check_id) throw boardChanged();
       const ended = ending.findIndex((e) => e.ended_at !== null);
       if (ended >= 0) throw rowRefusal("activation_changed", rows.findIndex((r) => r.replaces.includes(ending[ended].id)));
+      // A mapping of a new row that another save created meanwhile: the board changed (section 4.4).
+      const nowExisting = (await client.query(
+        `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
+           from training_load.source_metric_mappings m
+          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
+        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
+      )).rows;
+      if (nowExisting.length !== existing.size) throw boardChanged();
       const { plan, pair } = evaluate(world, pairIndex, rows);
       // What was locked is what is saved: a mapping or version that appeared
       // or changed between the plain read and the locks is board_changed.
@@ -359,13 +368,6 @@ export async function saveConfirmation({ ctx, body }) {
         const before = first.plan[i];
         if ((p.reusesVersionId ?? null) !== (before.reusesVersionId ?? null) || p.revisionId !== before.revisionId || p.targetVersionId !== before.targetVersionId) throw rowRefusal("board_changed", i);
       });
-      const nowExisting = (await client.query(
-        `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
-           from training_load.source_metric_mappings m
-          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
-        [plan.filter((p) => p.kind === "new").map((p) => p.fieldId), plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
-      )).rows;
-      if (nowExisting.length !== existing.size) throw boardChanged();
       await hold(client, "before_writes");
 
       // Step 16.1: each missing mapping, each new version, its submit - every
