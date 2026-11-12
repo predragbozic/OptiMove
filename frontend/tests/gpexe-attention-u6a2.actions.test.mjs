@@ -278,6 +278,7 @@ test("5b. (D5 counts) the time is followed by the session's athletes and drills 
     ready(2, { sessionStartedAt: "2026-11-02T16:08:12Z", athleteCount: 1, drillsCount: 1 }),
     ready(3, { sessionStartedAt: "2026-11-01T16:08:12Z", athleteCount: 12, drillsCount: 0 }),
     ready(4, { sessionStartedAt: "2026-10-31T16:08:12Z", athleteCount: null, drillsCount: null }),
+    ready(5, { sessionStartedAt: "2026-10-30T16:08:12Z", athleteCount: null, drillsCount: 3 }),
   ] }));
   await openImports();
   const page = html();
@@ -287,6 +288,7 @@ test("5b. (D5 counts) the time is followed by the session's athletes and drills 
   assert.ok(page.includes(`<span class="muted">${time("2026-11-02T16:08:12Z")} · 1 athlete · 1 drill</span>`));
   assert.ok(page.includes(`<span class="muted">${time("2026-11-01T16:08:12Z")} · 12 athletes</span>`), "no drill: no drill count");
   assert.ok(page.includes(`<span class="muted">${time("2026-10-31T16:08:12Z")}</span>`), "no count from the server: nothing added");
+  assert.ok(page.includes(`<span class="muted">${time("2026-10-30T16:08:12Z")} · 3 drills</span>`), "athletes unknown (a session the mapper refused): the drills alone");
 });
 
 test("6. (D8) mixed time zones: a data problem in plain words for everyone; the code only in an administrator's Technical details", async () => {

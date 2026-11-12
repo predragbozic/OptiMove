@@ -1999,11 +1999,14 @@ test("candidates list: blocked code and reasons come with the list, and the list
   // recorded, linked or not), and agree with the single candidate's preview.
   for (const c of list) {
     const detail = (await api(`/teams/${team.teamId}/candidates/${c.id}`, { cookie: team.coach.cookie })).body.candidate;
-    assert.equal(c.athleteCount, Array.isArray(detail.preview?.athletes) ? detail.preview.athletes.length : null, c.gpexeTeamSessionId);
+    if (detail.preview?.status !== "blocked") assert.equal(c.athleteCount, Array.isArray(detail.preview?.athletes) ? detail.preview.athletes.length : null, c.gpexeTeamSessionId);
     assert.equal(c.drillsCount, Number.isInteger(detail.preview?.session?.drillsCount) ? detail.preview.session.drillsCount : null, c.gpexeTeamSessionId);
   }
   assert.deepEqual([by["7201"].athleteCount, by["7201"].drillsCount], [5, 2], "every recorded athlete, linked or not; the session's drills");
   assert.deepEqual([by["7202"].athleteCount, by["7202"].drillsCount], [1, 2], "one unlinked athlete still counts");
+  // A session the mapper's gates refused lists no athlete: unknown, never "0 athletes" (code review MEDIUM).
+  assert.deepEqual([by["7203"].athleteCount, by["7203"].drillsCount], [null, 2], "an unsupported category: athletes unknown");
+  assert.deepEqual([by["7204"].athleteCount, by["7204"].drillsCount], [null, 2], "a session GPEXE marks invalid: athletes unknown");
   // No server sentence rides on the list: the coach's words are the app's.
   for (const c of list) {
     assert.equal(c.preview, undefined);
