@@ -379,7 +379,9 @@ burst and brake with the GPEXE screen. If they match, a follow-up drops the excl
 
 **Which track is used.** The lowest track id, with its rows. **The identity** is the one a single-track import of that track
 has: `athlete_session:<its whole row id>:full` and `athlete_session:<its drill row id>:drill:<i>`.
-- A later GPEXE cleanup that removes the other track leaves the import unchanged.
+- A later GPEXE cleanup that removes the other track keeps the same identities and values. The athlete then has one track,
+  so the details E1 left out are added (`supplemented`, shown under the changes to imported results). It is never a new result
+  and never a block (MT-0's route test 2).
 - A cleanup that removes the lowest track leaves a row with another id, so a new identity. That is today's
   `identities_missing_from_source` block, resolved by the undo, as for any changed row.
 - Choosing by the lowest id is deterministic. It cannot know which track GPEXE will keep.
