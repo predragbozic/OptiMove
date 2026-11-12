@@ -226,9 +226,9 @@ section 4.4's lock order (the hide lock), each marked in place.
 |---|---|
 | The team has no active GPEXE binding of the club's connection (a tampered or foreign id; *Which team?* lists only bound teams) | The identical 404 sentence: "Map by drag and drop is not available in this workspace." |
 | No team of the club has an active GPEXE binding (from Data configuration) | "No team of your club is linked to GPEXE yet. Link one in Settings > Source connections." |
-| No stored session through the binding | "No saved session yet. Run a search in Imports first." |
+| No stored session through the binding (**18-A2:** an undone import, `import_undone_at` set, does not count; v57) | "No saved session yet. Run a search in Imports first." |
 | The chosen session's snapshot has expired (30 days after it was last seen) | "The saved session is no longer available. Run a new search in Imports." No GPEXE request is sent. |
-| Fewer than two athletes OptiMove can name, with different, non-zero values (R6; under its distance option, only when no proven distance column can name them either) | "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them." This links to Link athletes. Loading GPEXE names, which also loads dates of birth, is not offered here (section 6.4). |
+| Fewer than two athletes OptiMove can name, with different, non-zero values (R6; **18-A2:** the distance option that stood here is rejected by the *Rukovodilac*'s R6 of 2026-11-12) | "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them." This links to Link athletes. Loading GPEXE names, which also loads dates of birth, is not offered here (section 6.4). |
 | No column can be placed | Every column is shown with its reason (section 3.3). |
 | Loading, a write in flight, or a result not confirmed | Every act except *Check result* is off, as in J16 section 8. |
 
@@ -280,7 +280,7 @@ section 4.4's lock order (the hide lock), each marked in place.
   - *The GPEXE screen should show* uses the display registry (R5). The default is the unit the C97 comparison saw: mm:ss for time, metres to 0.1 for distance, km/h to 0.1 for speed. A small choice above the table lets the admin set the unit their own GPEXE screen uses, from the units the handbook's page 11 lists. GPEXE shows each user's own units. The chosen unit is sent with the row as `displayUnit`, and `placementHash` covers it (sections 3.7 and 4.2).
 - **The athletes' names.**
   - They come from the OptiMove link, or from a valid v32 GPEXE name. They are shown live to the admin and never stored.
-  - If fewer than two athletes can be named, the panel refuses and points to Link athletes (section 3.2), as R6 recommends. R6's other option names an athlete by the value the GPEXE screen shows for a proven distance column, as the C97 sitting paired athletes by distance.
+  - If fewer than two athletes can be named, the panel refuses and points to Link athletes (section 3.2), as R6 recommends. R6's other option names an athlete by the value the GPEXE screen shows for a proven distance column, as the C97 sitting paired athletes by distance. **18-A2:** that other option is rejected (R6, 2026-11-12): the refusal is the only form.
   - The client never sends an athlete id. *Other athletes* asks the server for the next pair by its index (section 6.1).
 - **The tick.** Under the table sits the row's own checkbox, *Matches GPEXE for both athletes* (section 3.7).
 - **The guide** sits beside the table: *What to watch for* (its text is in section 3.11).
@@ -424,6 +424,8 @@ All routes are under `/api/training-load/sources/metrics`, behind `requireAuth`,
 | 7 | `POST /confirmations/expired-values/remove` | `{requestKey}` | `200 {removed: N, more: bool}`: at most 200 confirmations per call. It is the on-demand backstop of the scheduled removal: the same function, under the admin's identity, with one T8 `confirmation_values_expired` row per confirmation it removed, the last one keyed. A replay counts those rows by `operation_id`. A run that removes nothing writes no row (section 5.8) | `404` for everyone but an active platform admin in the platform workspace; `400 invalid_body`; `409 request_key_reused`, `try_again`; `503 outcome_unknown` |
 | 8–9 | Only with 18-P (Q2, Q3): `GET /fields/:fieldId/observation?candidateIds=a,b&pairs=i,j` and `POST /fields/:fieldId/revisions/:revisionId/observed-confirmation` | `{requestKey, sessions: [{candidateId, pair, displayUnit, placementHash} × 2], attested: true}` | Fields without parameters only: the observed unit and meaning acts, in one operation | `404` for everyone but an active platform admin in the platform workspace; `409 field_has_parameters`; the M2b codes (`unit_already_verified`, `meaning_already_verified`, `revision_retired`); `board_changed` |
 | 10 | Only with 18-P: `GET /fields/:fieldId/observations` | — | The field's stored observations: when, who (display name), the two sessions' dates, the acts they proved, and the `field_unit` values, or "removed" with its kind (`expired` or `erased`) | `404` for everyone but an active platform admin in the platform workspace |
+
+**18-A2, routes 1 and 2:** the candidate each of them reads, chosen or default, is one with `import_undone_at is null` (v57; section 15.1); an undone one is `409 no_stored_session` when no live row of the team is left, and otherwise the identical 404 as an id that is not usable. Route 1 also answers `409 session_start_unknown` for a candidate with no start (section 5.2).
 
 **Routes reused unchanged:**
 - S2 `POST /activations/:id/end`, for *Switch off*;
@@ -601,7 +603,7 @@ There is no free text, and no athlete data.
 | `candidate_id` | uuid, **no foreign key**. The candidate row is never pinned, because v22 allows deleting a candidate that was not imported (`v22:296-303`). |
 | `candidate_bundle_hash` | 64 lower-case hex characters, copied from the candidate |
 | `gpexe_team_session_id` | The canonical session id, copied. It is a session, not a person. |
-| `session_started_at` | **18-A2 (the *Rukovodilac*, 2026-11-12):** the session's start, copied from the candidate at the save, so History never reads the candidate row. A session fact, not a person's. |
+| `session_started_at` | **18-A2 (the *Rukovodilac*, 2026-11-12):** the session's start, copied from the candidate at the save, so History never reads the candidate row. A session fact, not a person's. `timestamptz`, **NOT NULL**. The candidate's own column is nullable (`v22:254`), so route 1 refuses a candidate whose start is null with `409 session_start_unknown`, and such a candidate is never the default session. The T9s guard requires the value to equal the candidate's (section 5.4). |
 | `check_id` | A foreign key to `gpexe_import_checks`, which are never deleted (`v24:336`). The check must have succeeded for this team. For `team_mapping`, through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). For `field_observation`, through `source_connection` on a host of the field's family. |
 | `team_id` | The session's team |
 | `pair_index` | Zero or more: the server's pair order. No athlete id. |
@@ -635,7 +637,7 @@ There is no free text, and no athlete data.
 - **Plain reads.** Every v52 guard reads the connection, the binding, the check and the candidate as plain reads and never locks them. So an Unbind's order (the connection, then the binding; `CURRENT_STATE.md:824-827`) is never inverted, as v34's T5 trigger keeps it for the v27 rows (`discovery:1288-1290`).
 - **BEFORE INSERT on T9s and T9i:** the row's confirmation must have been written in this transaction by the same actor.
   - On T9s, the check's facts must hold. For `team_mapping`, the team must be the binding's, and the check must have run through the confirmation's binding. At insert the candidate exists, belongs to `team_id`, has `last_seen_check_id = check_id`, carries `candidate_bundle_hash`, and is not `superseded`. Each failure has its fixed message.
-    **18-A2:** at insert the candidate is also not an undone import (`import_undone_at is null`, v57), with its own fixed `23514` message, which the service maps to `board_changed`; its direct database test and mutation are in section 15.5.
+    **18-A2:** at insert the candidate is also not an undone import (`import_undone_at is null`, v57), with its own fixed `23514` message, which the service maps to `board_changed`; its direct database test and mutation are in section 15.5. The guard also requires the row's `session_started_at` to be `is not distinct from` the candidate's `session_started_at`, with its own fixed `23514` message (a null start is refused by the column's NOT NULL, and before that by route 1); its test and mutation are in section 15.5 too.
   - On T9i, the T4 and T2b facts must be equal; the T4's owner must be the confirmation's club for `club_mapping`, and `system` for `system_mapping`; the T2b revision must be active and verified.
   - The salt and the digest are computed by the trigger. A salt or digest the writer supplies is overwritten. Every rule of section 5.3 that can fail on a row holding values is checked here, with fixed messages, before any CHECK.
 - **UPDATE:** refused on T9 and T9s. On T9i, only the two removals of section 5.8: the values and the salt set to null, with `values_removed_at`, `values_removed_kind` and `values_removed_by_user_id`, and nothing else. The guard checks the removal's shape itself, with fixed messages, before any CHECK.
@@ -726,7 +728,7 @@ There is no free text, and no athlete data.
 - **Rollback:** `docs/runbooks/source-metric-confirmations-v52-rollback.sql`. It refuses:
   - once any T9 row exists;
   - when any v52 trigger is missing or disabled, as the v35 rollback refuses (`docs/runbooks/source-metric-mapping-v35-rollback.sql:20-22, :86-90`);
-  - once a T2b observation column is set;
+  - once a T2b observation column is set (**18-A2:** 18-P's migration only; M-A creates no such column, so M-A's rollback has no such refusal);
   - once a later migration is recorded (C96's pattern).
   Otherwise it restores the replaced bodies by their md5, and drops the triggers, tables, columns and actions. It is rehearsed on a disposable database: apply → rollback → identical catalog → apply again.
 - **Preflight (read-only):**
@@ -734,7 +736,7 @@ There is no free text, and no athlete data.
   - the last migration (7h's);
   - the md5 of every body to be replaced;
   - T8's action list as expected;
-  - the number of club versions of fields without parameters in `draft` or `needs_review` (**18-A2:** in M-B's preflight, counted apart for versions with a copy link to an active system version, which pass the gate and need nothing). After v52 a club admin can no longer activate them, and the board does not adopt them (step 10 reuses only an active version). So they are disabled, or activated under 7h, before v52 is applied;
+  - the number of club versions of fields without parameters in `draft` or `needs_review` (**18-A2:** in M-B's preflight, counted apart for versions with a copy link to an active system version, which pass the gate and need nothing). **If the count of the others is above 0, the owner decides before the joint deploy of 18-3 and 18-4 who disables or activates them; nothing is disabled automatically** (the *Rukovodilac*, 2026-11-12). After v52 a club admin can no longer activate them, and the board does not adopt them (step 10 reuses only an active version). So they are disabled, or activated under 7h, before v52 is applied;
   - a quiet moment.
 - **Post-check (read-only):** every object exists and is enabled; the md5 of each new body; no T9 row.
 - Neither is ever run by the executor against a persistent database.
@@ -1002,7 +1004,7 @@ There is no free text, and no athlete data.
     - every reason a column cannot be placed;
     - pre-placed rows. A system mapping switched off on the binding by S2 or by a board replacement is not pre-placed and reads *Switched off by <name> on <date> · Add*. One whose activation ended by A2 or the pinned step is pre-placed again once a newer version is active;
     - the pair is the same on two calls;
-    - named athletes come first; with fewer than two, the refusal of R6 (or its distance option, if chosen);
+    - named athletes come first; with fewer than two, the refusal of R6 (**18-A2:** no distance option; R6, 2026-11-12);
     - `not_enough_athletes`, `snapshot_expired`, `candidate_too_large`, `candidate_source_mismatch`, `no_stored_session`;
     - a session whose last check ran through another binding is never used;
     - a scan that no answer or URL carries an athlete id;
@@ -1257,7 +1259,7 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
 - **The snapshot lives 30 days after it was last seen.** The board needs a recent search and never sends a GPEXE request.
 - **C9 pinning.** A club's active version pins its own variable, so a unit change becomes a new variable (C111). C61 is kept, so no club can freeze a system variable.
 - **Migration size.** T8's revision guard and v48's actor guard are replaced, and T2b too under a2. Each replacement is md5-checked. The rollback refuses once the tables are used.
-- **The pair must be findable.** Without links or GPEXE names, the board refuses and points to Link athletes (R6). Only R6's distance option would help there.
+- **The pair must be findable.** Without links or GPEXE names, the board refuses and points to Link athletes (R6). **18-A2:** R6's distance option, the only thing that would have helped there, is rejected (2026-11-12), so linking athletes is the way.
 
 ---
 
@@ -1337,7 +1339,7 @@ and the list may move while a ★★ pull request is open.
   key is (team, session, content) among rows that are not undone (`v57:136-138`). So one session can have an undone row
   and a live one. **Everywhere the board reads or re-reads a candidate to work on it, it requires
   `import_undone_at is null`:** route 1's default and chosen session, route 2, step 5, step 15's re-read and the T9s
-  guard (sections 4.4 and 5.4, marked in place). An imported candidate is still never deleted, and a check row is
+  guard (marked in place: section 3.2's row, the note under section 4.2's table for routes 1 and 2, section 4.3's steps 5 and 15, section 4.4's undo row and section 5.4). An imported candidate is still never deleted, and a check row is
   still never deleted.
   - **History reads no candidate** (routes 4 and 5; the *Rukovodilac*, 2026-11-12). T9s copies the session's start
     at the save (`session_started_at`, section 5.2), so History shows the session's date from T9s and never reads the
@@ -1403,7 +1405,7 @@ and the list may move while a ★★ pull request is open.
 | **18-A2** | This refresh, and the J18 row of the discovery document (documentation only) | — | ★★ by its content | `code-reviewer` on the whole diff; `db-reviewer` on sections 4–5 and 15.1, 15.3; `security-reviewer` on sections 4, 6, 7 and 15 | 1, 2, 3, 4 (on its content) |
 | **18-1** | **M-A:** T9, T9s and T9i with their guards and deferred links (sections 5.1–5.4); T8's `confirmation_id`, the actions `mapping_confirmation`, `confirmation_values_expired` and `confirmation_values_erased`, and the replaced T8 bodies (section 5.6, without the two observed acts); the removal function, its purge marker and the salt (section 5.8). Only the `team_mapping` shape (section 5.1's note). It is the first migration to alter T8's table: it checks the action CHECK's text before it replaces it (as `v52:87-96` does for T4), locks T4, T5 and T8 in the writers' order (as `v52:63-65`) with T8, the table it alters, taken `nowait` (the modes are fixed and reviewed in 18-1), and creates the index for the gate's lookup. Runbook, read-only preflight and post-check, rehearsed rollback (it restores v34's CHECK text and the replaced bodies by md5), md5 gates. **No gate, no T2b column, no application code.** | M-A | ★★ | `db-reviewer`, `security-reviewer` | 1, 2, 3, 4 |
 | **18-2** | Backend reads: the board, one placement, the evidence (routes 1, 2, 4, 5); the name reader; the pair rule; the display registry (R5) | none | ★★ | `code-reviewer`, `security-reviewer` | 2 |
-| **18-3** | Backend writes: the save (route 3, section 4.3); the scheduled removal in its own module; routes 6 and 7. **M-B, the gate** (section 5.5): one new trigger on T4, accepting a checked T9i row or v53's copy link, with the service's `confirmation_required` mapping in the same pull request. It replaces no body; its precondition and preflight pin the md5 of T4's update guard in force and T4's trigger set. | M-B | ★★ | `code-reviewer`, `security-reviewer`, `db-reviewer` | 1, 2, 3, 4, and the five-point rule |
+| **18-3** | Backend writes: the save (route 3, section 4.3); the scheduled removal in its own module; routes 6 and 7. **M-B, the gate** (section 5.5): one new trigger on T4, accepting a checked T9i row or v53's copy link, with the service's `confirmation_required` mapping in the same pull request. It replaces no body; its precondition and preflight pin the md5 of T4's update guard in force and T4's trigger set. Its preflight counts the club `draft` and `needs_review` versions of fields without parameters that have no copy link; above 0, the owner decides before the joint deploy who disables or activates them, and nothing is disabled automatically (section 5.9). | M-B | ★★ | `code-reviewer`, `security-reviewer`, `db-reviewer` | 1, 2, 3, 4, and the five-point rule |
 | **18-4** | Frontend: the board, the panel, the phone sheet, the entries of section 15.4, the history, the guide; J16's sentence and link in place of *Activate*, *Replace* and *Save and activate* for a club admin's version of a field without parameters | none | ★ (proposed) | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`, and a narrow `security-reviewer` pass on how values and names are rendered | 2; 5 is answered by the real-route run of section 9.4 item 21 |
 | **18-E** | Facts after each merge | none | — | `code-reviewer` | — |
 | later | C121's change while no value is written (its proposal first); 18-P (its amendment first) | their own | — | — | — |
@@ -1457,6 +1459,9 @@ and the list may move while a ★★ pull request is open.
   session date in History, from T9s, and History's queries read no candidate row (a query spy); after an undo that leaves no live row, route 1 answers `no_stored_session`, never the
   undone row. **The T9s guard alone** (a direct insert, past the service) refuses an undone candidate with its fixed
   `23514` message, added to section 9.1 item 3, with its mutation.
+- **The session's start:** a direct T9s insert whose `session_started_at` differs from the candidate's is refused with
+  the guard's fixed `23514` message, with its mutation (the comparison removed); a null value is refused; route 1
+  answers `409 session_start_unknown` for a candidate with a null start and never picks one as the default session.
 - **The time zone:** a mixed-zone session of a team with a session time zone is readable by the board exactly when it
   is importable.
 - **The hide:** a hidden system variable is not pre-placed; a save that names it answers `variable_hidden`; the save
