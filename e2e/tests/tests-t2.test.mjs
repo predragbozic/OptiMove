@@ -10,6 +10,7 @@ import { launch, openAs } from "../lib/browser.mjs";
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 let world;
 let browser;
+let scheduleId;
 
 async function api(role, path, method = "GET", body) {
   const token = world.accounts.find((a) => a.role === role).sessionToken;
@@ -25,6 +26,8 @@ before(async () => {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(new Date());
   const created = await api("team_coach", "/api/tests/schedules", "POST", { testVersionId: WELLNESS, scheduleKind: "one_time", timezone: zone, startDate: today, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: world.ids.teamA }] });
   assert.equal(created.status, 201, JSON.stringify(created.body));
+  scheduleId = created.body.schedule.id;
+  assert.ok(scheduleId);
   const mine = await api("athlete", "/api/tests/athlete/today");
   const assignment = mine.body?.assignments?.[0];
   assert.ok(assignment, "the athlete has today's check-in");
@@ -78,7 +81,7 @@ for (const width of [390, 360, 1280]) test(`(team_coach, ${width} px) a schedule
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
   try {
     await openTests(page, "schedule");
-    await page.locator(".tests-weekly-agenda .tests-weekly-session").first().click();
+    await page.locator(`[data-action="tests-open-schedule"][data-schedule-id="${scheduleId}"]`).click();
     await page.locator('[data-action="tests-close-schedule"]').waitFor();
     const d = await page.evaluate(detail);
     assert.deepEqual(d.small, []);
