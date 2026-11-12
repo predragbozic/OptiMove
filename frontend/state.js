@@ -1101,6 +1101,8 @@ export const createInitialState = () => ({
     grantOpen: false, grantConfirm: null, grantBusy: false, grantError: null,
     revokeConfirm: null, revokeBusy: false, revokeError: null,
     historyOpen: false,
+    // v62: the team's session time zone (null = not read; { error } = the read failed), its form and its write.
+    timezone: null, tzOpen: false, tzDraft: { timezone: "", reason: "" }, tzBusy: false, tzError: null,
   },
   // Settings -> Source connections (F3c3): the club's source credential
   // connection. Never a username, a password or a token: states, facts,

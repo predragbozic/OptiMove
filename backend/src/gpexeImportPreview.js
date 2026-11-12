@@ -16,6 +16,7 @@
 //     does not stop the others.
 import crypto from "node:crypto";
 import { buildGpexeImportPlan, classifyMappedPlan, GpexeMappingError, leftOutReason, mappedMetricSpecs } from "./gpexeImportMapper.js";
+import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { ImportBindingNotActiveError, prepareImportMapping } from "./gpexeImportMapping.js";
 import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gpexeImportWriter.js";
 import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
@@ -231,6 +232,9 @@ function sessionSummary(bundle, plan) {
     drillsCount: Number(s.drills_count ?? 0),
     name: plan?.event?.name ?? null,
     occurredLocalDate: plan?.event?.occurredLocalDate ?? null,
+    // v62: only for a session whose tracks report several zones - the zone used and the zones reported. A single-zone
+    // session's summary (and so its preview hash) is unchanged.
+    ...(plan?.event?.timezoneSource === "team" ? { timezone: plan.event.timezone, timezoneSource: "team", trackTimezones: plan.event.trackTimezones } : {}),
   };
 }
 
@@ -313,9 +317,11 @@ export function setCheckPreviewHoldForTests(fn) {
 // ImportBindingNotActiveError, and a mapping that changed under the locks
 // ImportMappingChangedError - the caller fails the check, nothing staged.
 export async function buildCandidatePreview(client, { bundle, ownerTeamId, performedByUserId, importPath = null }) {
+  // v62: read without the lock here (the session's identity only); previewLocked reads it again under the lock.
+  const teamTimezone = await teamSessionTimezone(client, ownerTeamId);
   let gates;
   try {
-    gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+    gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone });
   } catch (error) {
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error);
@@ -361,9 +367,11 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   const invalidExclusions = [];
   const activationSet = mapping?.activationSet ?? [];
   const unactivated = mapping?.unactivated ?? [];
+  // v62: the team's zone, under the team lock the caller holds; used only for a session whose tracks report several zones.
+  const teamTimezone = await teamSessionTimezone(client, ownerTeamId);
   let gates;
   try {
-    gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+    gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone });
   } catch (error) {
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error, { activationSet, unactivated });
@@ -380,7 +388,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     else {
       specs = built.specs;
       try {
-        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs });
+        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs, teamTimezone });
       } catch (error) {
         if (!(error instanceof GpexeMappingError)) throw error;
         return blockedByMapping(bundle, error, { activationSet, unactivated });

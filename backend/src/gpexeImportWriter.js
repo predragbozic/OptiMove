@@ -68,6 +68,7 @@
 // A flagged result with the same hash and status is written only once.
 import crypto from "crypto";
 import { buildGpexeImportPlan, classifyMappedPlan, mappedMetricSpecs } from "./gpexeImportMapper.js";
+import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { prepareImportMapping } from "./gpexeImportMapping.js";
 import { canonicalDecimal } from "./sourceMetricExtractors.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
@@ -655,14 +656,16 @@ export async function importGpexeBundleLocked(client, bundle, ctx, hooks = {}) {
     )).rows;
     bindingId = bindings.length === 1 ? String(bindings[0].id) : null;
   }
-  const gates = buildGpexeImportPlan(bundle, { metricSpecs: [] });
+  // v62: the team's zone, read under the team lock this function's callers hold; used only for a mixed session.
+  const teamTimezone = await teamSessionTimezone(client, ctx.ownerTeamId);
+  const gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone });
   const mapping = await prepareImportMapping(client, {
     teamId: ctx.ownerTeamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
   });
   if (mapping.block) throw new GpexeImportError(mapping.block, "The session cannot be imported through the team's mapping activations.");
   const specs = mappedMetricSpecs(mapping.rows);
   if (specs.block) throw new GpexeImportError(specs.block, "The session cannot be imported through the team's mapping activations.");
-  const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs });
+  const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs, teamTimezone });
   const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));
   const plan = ctx.onlyMapped ? { ...full, participants: full.participants.filter((p) => athleteIdByGpexeId.has(p.gpexeAthleteId)) } : full;
   const classified = classifyMappedPlan(plan, { importableIds: plan.participants.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });
