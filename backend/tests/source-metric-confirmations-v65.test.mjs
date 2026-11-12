@@ -545,7 +545,8 @@ test("A2. v65 refuses, with nothing applied: a busy T8 (NOWAIT, at once), each o
     const waiting = migrate(rdb.url, [...BEFORE_V65, V65]);
     const deadline = Date.now() + 10_000;
     for (;;) {
-      if ((await one(r, `select count(*)::int as n from pg_locks where not granted`)).n > 0) break;
+      if ((await one(r, `select count(*)::int as n from pg_locks where not granted
+                           and database = (select oid from pg_database where datname = current_database()) and relation = 'public.teams'::regclass`)).n > 0) break;
       assert.ok(Date.now() < deadline, "v65 waits for the writer of public.teams");
       await new Promise((res) => setTimeout(res, 50));
     }
@@ -600,7 +601,8 @@ test("A3. v65 through the runner - waiting for a writer of T4 - adds exactly its
     const applying = migrate(rdb.url, [...BEFORE_V65, V65]);
     const deadline = Date.now() + 10_000;
     for (;;) {
-      if ((await one(r, `select count(*)::int as n from pg_locks where not granted`)).n > 0) break;
+      if ((await one(r, `select count(*)::int as n from pg_locks where not granted
+                           and database = (select oid from pg_database where datname = current_database()) and relation = '${T4}'::regclass`)).n > 0) break;
       assert.ok(Date.now() < deadline, "v65 waits for the writer of T4");
       await new Promise((res) => setTimeout(res, 50));
     }

@@ -1561,6 +1561,10 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
     would reach the server log, which is decided before 18-3 is deployed;
   - the removal function's scan walks every expired confirmation on each call; negligible now, recorded;
   - the digest's canonical text joins fields with `|` and no escaping; sound for an append-only row, recorded.
+  - the deferred links hold at COMMIT for the rows a transaction inserted; a state changed later in the same
+    transaction after the links were forced early (raw SQL only) is not checked again, so 18-3 does not rely on it;
+  - a T8 row's `performed_at` is the transaction's start, while `confirmed_at` and `values_removed_at` are the
+    clock's: History orders by the T9 time, never by comparing the two.
 - **Tests** (`backend/tests/source-metric-confirmations-v65.test.mjs`, disposable databases, 17 tests): the preflight
   and every flipped block; the `NOWAIT`, md5 and CHECK refusals; the exact catalog change; the post-check; every
   refusal of the rollback; apply → rollback → the identical catalog → apply again; and the guards of sections 9.1
