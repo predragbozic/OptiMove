@@ -30,3 +30,17 @@ export function seriesBundles(sourceTeam = 7001) {
     category: "FULL TRAINING", athletes: [101, 102, 103].map((id) => athlete(id, sessionId)), detailsDrills: [0, 1],
   }));
 }
+
+// J18, the board: one Ready session whose three linked athletes have different values, so the board finds two
+// athletes it can tell apart (the Imports scenario's athletes are copies of one).
+export const SESSION_BOARD = 9121;
+export function boardBundles(sourceTeam = 7001) {
+  const athletes = standardAthletes().map((a) => {
+    for (const p of a.parts) delete p.track;
+    return { ...a, tracks: [SESSION_BOARD * 100 + (a.id % 100)] };
+  });
+  return [makeBundle({
+    sessionId: SESSION_BOARD, gpexeTeamId: Number(sourceTeam), start: "2026-11-04T09:08:12", updatedOn: "2026-11-04T11:18:09.337",
+    category: "FULL TRAINING", athletes, detailsDrills: [0, 1],
+  })];
+}

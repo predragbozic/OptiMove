@@ -255,7 +255,7 @@ function rowsCount(s) { return newRows(s).length + preplacedRows(s).length; }
 function saveBar(s) {
   const count = rowsCount(s);
   const label = `Save and switch on for ${name(teamName(s))}`;
-  return `<div class="mb-savebar">
+  return `<div class="mb-savebar ${count === 0 ? "is-idle" : ""}">
     <button type="button" class="om-btn om-btn--primary" data-action="metric-board-review" ${count > 0 && !busy(s) ? "" : "disabled"} aria-describedby="mb-savebar-note">${label}</button>
     <span class="muted" id="mb-savebar-note">${count === 0 ? "Place a column first." : `${count} ${count === 1 ? "row" : "rows"} to switch on.`}</span>
   </div>`;
