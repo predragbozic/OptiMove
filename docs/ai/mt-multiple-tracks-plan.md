@@ -351,7 +351,7 @@ for "None".
 - **Rows and tracks come as GPEXE sends them.** `fetchSessionBundle` takes each athlete row, and its `track`, as GPEXE's athlete
   list returns it, through the projection only (`backend/src/gpexeRestV1Adapter.js:1696-1715`).
 - **The list+canary path of PR #212 keeps the track.** It replaces only `max_v` in a list row; the `track` field is untouched
-  (`gpexeRestV1Adapter.js:1777`).
+  (`gpexeRestV1Adapter.js:1778`).
 - **Each track object is GPEXE's own record,** read once per distinct track id named by the rows (`:1713-1714`).
 - **Our paging cannot repeat a row.** `wholeList` refuses a row id that comes twice (`source_list_changed`,
   `gpexeRestV1Adapter.js:1113`). Even if it did, a repeated row carries the same track id: one track with two whole-session rows
