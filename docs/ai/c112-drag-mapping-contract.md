@@ -1,21 +1,19 @@
-# J18 — mapping by drag and drop (C112): one board per team, a stored two-athlete confirmation, and switching on system mappings (proposed ★★ contract)
+# J18 — mapping by drag and drop (C112): one board per team, a stored two-athlete confirmation, and switching on system mappings (accepted ★★ contract)
 
 This is the contract of decision C112 in `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*). C112 records the owner's direction of 2026-11-01 for mappings after the pilot. This contract builds on phases 1–9: migrations v34–v50, the routes of J1–J13, the Mappings screen of J16 and the importer of J17. J14 and J15 stay reserved for 7h and 7i. J19 is proposed for C111 (editing a canonical variable), which is a separate contract after phase 9. This contract only names the points where C111 touches it.
 
 | | |
 |---|---|
-| Status | **Proposed** by the executor on 2026-11-01. It follows the *Rukovodilac*'s order of that day, 20:33 UTC. The order, paraphrased: write the contract now as a proposal, documentation only; code comes after phase 9; sections 1–4 of the plan stay untouched; answer questions (a)–(d) as recommendations for the owner. It was drafted from a discovery and design panel: five fact sheets, three competing designs, and three review lenses (owner intent, security and privacy, database integrity). **No code is written before the owner accepts this contract and decides Q1–Q11, Q13 and Q14. O16 (Q12) gates 18-3, and Q11's answer gates the first real confirmation. No code is written before phase 9 ends, unless the owner says otherwise** (Q10 proposes what "ends" means). |
-| Verified against commit | `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line, and the dates Imports pre-fills when the board's after-save link opens it, in `frontend/gpexe-import-view.js` (sections 3.1 and 3.8). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`, except references into the discovery document and `CURRENT_STATE.md`, which this PR also edits: those are to the lines with this PR's own changes in place. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
-| Mark | ★★, proposed. The triggers are 1, 2, 3 and 4 of `CLAUDE.md`, plus the five-point rule for a transaction with an external effect. Trigger 5 applies to the frontend slice unless an integration run against the real routes covers it. A mark, a phase entry and its "Start" line go into the plan only on the owner's direct word (`metrics-core-plan.md:432-435`). For a ★★ phase the owner approves the contract before any code (`:450-452`). |
+| Status | **Accepted** by the owner on 2026-11-04 (C113, with Q1–Q14 answered as C113–C125) and **started** (C122, ★★; the owner ordered a dedicated executor on 2026-11-12). It was proposed by the executor on 2026-11-01 on the *Rukovodilac*'s order of that day, 20:33 UTC, from a discovery and design panel: five fact sheets, three competing designs, and three review lenses (owner intent, security and privacy, database integrity). **Refreshed by 18-A2 on 2026-11-12** against `cc20f632`: section 15 records what changed on `main` since `c930cde1`, the *Rukovodilac*'s decisions of 2026-11-12 (R1–R9 and the split of the gate into its own migration), and the slices as they are built. Where section 15 and an earlier section differ, section 15 wins; the earlier places it changes are marked in place. |
+| Verified against commit | Sections 0–13 as proposed: `c930cde1` (below). **The delta `c930cde1..cc20f632` was checked by 18-A2 on 2026-11-12** for the files and migrations this document cites, and only for them (`.claude/rules/metrics-core-mapping.md`); section 15.1 lists every cited fact that changed and section 15.6 the references that moved. A file and line reference in sections 0–13 is still to `c930cde1` unless it is marked; a reference in section 15 is to `cc20f632`. As proposed: `c930cde1`, the merge of PR #323 (documentation only), on `8fa0ea7`, the merge of PR #322 (9-0). Code is unchanged since `656cf88` except the 9-0 files and `backend/scripts/gpexe-backup-verify.mjs` with its test. The 9-0 files are `backend/src/gpexeImportService.js`, `gpexeImportPreview.js`, `sourceImportCredentialResolver.js`, `gpexeCheckTiming.js`, `backend/scripts/gpexe-undo-imported-session.mjs`, `frontend/gpexe-import-view.js`, `frontend/gpexe-import-data.js` and their tests. This document cites some of them and changes none. A J18 slice changes one of them only where section 2 says so: 18-4 adds the board's link to the Imports success line, and the dates Imports pre-fills when the board's after-save link opens it, in `frontend/gpexe-import-view.js` (sections 3.1 and 3.8). The removal of expired evidence values runs in its own module, not in `gpexeImportService.js` (section 5.8). Every file and line reference is to `c930cde1`, except references into the discovery document and `CURRENT_STATE.md`, which this PR also edits: those are to the lines with this PR's own changes in place. The production database was not read. Production facts are quoted from `docs/ai/CURRENT_STATE.md` as the owner reported them. |
+| Mark | ★★ (C122). The triggers are 1, 2, 3 and 4 of `CLAUDE.md`, plus the five-point rule for a transaction with an external effect. Trigger 5 applies to the frontend slice unless an integration run against the real routes covers it. A mark, a phase entry and its "Start" line go into the plan only on the owner's direct word (`metrics-core-plan.md:432-435`). For a ★★ phase the owner approves the contract before any code (`:450-452`). |
 | Owner decisions | Section 11.1 (Q1–Q14). Q1–Q11, Q13 and Q14 become C113–C123, C124 and C125 once decided; Q12 stays O16. They are written into section C of the discovery document before any code (the plan's rule A3, `metrics-core-plan.md:458-460`). |
 | Decides | The owner decides Q1–Q14. The *Rukovodilac* decides R1–R9 (section 11.2). The *Nezavisni revizor* reviews this contract and every ★★ slice. |
 
-**Decided 2026-11-04 (C113–C125):** the owner answered Q1–Q14. Q2 is softened by C114 (zones and thresholds are no longer document only), Q9 gets a delta (the admin may change a mapping while no value is written under it), Q11 is closed by C123. See the discovery document, section C. The status line below is amended when J18's code is scheduled.
+**Decided 2026-11-04 (C113–C125):** the owner answered Q1–Q14. Q2 is softened by C114 (zones and thresholds are no longer document only), Q9 gets a delta (the admin may change a mapping while no value is written under it), Q11 is closed by C123. See the discovery document, section C, and section 15.2 here for what each answer changes in this document.
 
-**Renumbered by J14 (C126, accepted 2026-11-02):** phase 7h is migration v52, not v51, so J18's own migration and its
-runbook names are ≥ v53 wherever this document says v52 for them (lines at `565fe097`: `:46`, `:182-183`, `:479`, `:548`, `:550`, `:608`,
-`:636`, `:690`, `:692`, `:701`, `:834`, `:947`, `:979`, `:1166`, `:1172`), and its "v51" for 7h reads v52 (`:46`,
-`:182`, `:550`). **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):**
+**Numbers (18-A2, replacing J14's renumbering note):** wherever this document says "v52" for J18's own migration, or "v51" for 7h's, it is out of date. 7h is v52 and the numbers up to v63 are taken. J18 now has **two** migrations (section 15.3), each named by the next free number at the time its pull request is opened and checked again against `origin/main` right before; this document calls them **M-A** (18-1) and **M-B** (the gate, with 18-3) and never assumes a number. The runbook file names follow the numbers they get.
+**Amended by J15 (C132, accepted 2026-11-02; in force since v53's deploy on 2026-11-04):**
 sections 3.6 and 7 (a mapping of a variable the team's club hides is not eligible), Q14 (answered, option one) and
 section 4.4's lock order (the hide lock), each marked in place.
 
@@ -52,13 +50,13 @@ section 4.4's lock order (the hide lock), each marked in place.
 - A club uses a system variable only through its active system mapping. C61 stays: no club mapping ever targets a system definition.
 - Every write but one has a real acting user (v35). There is no system actor. The one exception is the scheduled removal of expired evidence values, which only nulls values past their date, as v32 removes GPEXE names (section 5.8). Nothing is switched on for a team that is bound later.
 
-**What is new in the database.** Migration v52 comes after 7h's v51 (section 5). It adds:
+**What is new in the database.** Two migrations, M-A and M-B (section 15.3; as proposed, one migration "v52"). Together they add:
 - three append-only, owner-keyed tables for the evidence: the act, its session, and its rows with the values;
 - typed foreign keys from the evidence to the field revision, the mapping version, the binding and its connection, and the check;
 - values the server recomputes from the stored snapshot, never sent by the client;
 - no athlete id, GPEXE id, name, date of birth or free text in these tables;
 - value columns and a per-row random salt, removed together 90 days after the confirmation by a scheduled purge with no actor, or earlier on request. The digest the database computes survives the removal, but with the salt gone it can no longer be tested against guessed values;
-- a database gate: a club admin can activate a club version of a field without parameters only with a matching checked row (section 5.5, Q13). A 7i copy needs its own proof (Q14).
+- a database gate, in M-B: a club admin can activate a club version of a field without parameters only with a matching checked row, or with v53's copy link (section 5.5, C124, C125).
 
 **What is self-service at once.** A club can map every field whose revision is active and verified. Today that is `total_time`, `total_distance` and `max_v`, as the owner reports (`docs/ai/CURRENT_STATE.md:2658-2662`). A club sees every other column with the reason it cannot be placed. Questions (a) and (b) give the owner options to make the platform's own confirmation lighter.
 
@@ -68,7 +66,7 @@ section 4.4's lock order (the hide lock), each marked in place.
 - **(c)** A club checks two athletes of one stored session. A global confirmation needs two sessions with two athletes each.
 - **(d)** The evidence goes into the new owner-keyed, append-only store. Exact values are shown only to the two admin audiences. Values are removed 90 days after the confirmation by a scheduled purge, as v32 removes GPEXE names, or earlier on request by an audited act.
 
-**When.** Code starts once the owner has accepted this contract and decided Q1–Q11, Q13 and Q14, after phase 9 ends, and after 7h, the club admin's approval of its club's mapping versions, is merged. O16 (Q12) must be decided before 18-3, so before any club variable is switched on. Q11's answer must come before the first real confirmation (sections 2, 6.6 and 8.5, Q10).
+**When.** As proposed: code starts once the owner has accepted this contract and decided Q1–Q11, Q13 and Q14, after phase 9 ends, and after 7h is merged; O16 (Q12) before 18-3; Q11 before the first real confirmation. **All of these are met** (section 15.1): the contract is accepted and started (C113, C122), 9-B and 7h are merged and deployed, O16 is C127 and Q11 is C123 (it opens again if a minor athlete is ever added).
 
 ---
 
@@ -172,6 +170,8 @@ section 4.4's lock order (the hide lock), each marked in place.
 
 ### 1.8 Not built, or not verified
 
+**18-A2:** this list is as of `c930cde1`. 7h, 7i and 9-B are since built and deployed (section 15.1); C111's contract is still not written.
+
 - **Not built:**
   - 7h (J14) and 7i (J15);
   - 9-B, the importer reading T5 (`phase9-importer-mappings-contract.md:77`). 9-0, the step before it (switch conditions 2 and 3), is merged as PR #322 (`8fa0ea7`) and deployed (`CURRENT_STATE.md:2691-2700`);
@@ -184,6 +184,8 @@ section 4.4's lock order (the hide lock), each marked in place.
 ---
 
 ## 2. Pull requests
+
+**18-A2:** the table below is the split as proposed. The split as it is built, with two migrations and without 18-P, is section 15.3 (the *Rukovodilac*'s R1 of 2026-11-12).
 
 | PR | Content | Migration | Reviewers (`CLAUDE.md` matrix) | External-review triggers | Merge path (proposal) |
 |---|---|---|---|---|---|
@@ -205,6 +207,8 @@ section 4.4's lock order (the hide lock), each marked in place.
 ## 3. The flow
 
 ### 3.1 Where the board opens
+
+**18-A2:** Imports was rebuilt after this section was written (J19's U1–U6). The board's entry from Imports is the setup stepper's *Variables* step; section 15.4 says how, and what stays of U4's button.
 
 - **From Imports.** After a successful search, the source card's success line (`renderFoundHtml`) gains *Map this team's GPEXE columns*.
   - It is shown only to an administrator, using the existing `status.viewer.identityAdmin` signal.
@@ -287,7 +291,7 @@ section 4.4's lock order (the hide lock), each marked in place.
 
 - **Which rows are pre-placed.** Every system mapping that is eligible for the team (section 7) is already placed when the board opens. Its badge reads *OptiMove mapping*. Q9 recommends one exception: a system mapping switched off on this binding by an administrator is not placed again. That is a *Switch off* (S2) or a replacement on the board. It reads "Switched off by <name> on <date> · *Add*". An end that the platform causes by disabling or replacing a version (A2, the pinned step, a G1 replacement) does not count (section 7).
   - R4 decides whether the club's own active mappings are pre-placed on another team's board in the same way, with the badge *Your club's mapping*.
-  - **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** a system
+  - **Amended by J15 (C132, accepted 2026-11-02; in force since v53's deploy on 2026-11-04):** a system
     mapping of a variable the team's club hides is not eligible, so it is not pre-placed (section 7).
 - **What the admin can do.** Each row has *Remove*. It shows the two athletes' values like any other row, but they are not stored (section 5.3). It needs no comparison: its field is proven globally, and its version is active (a system version; under R4, the club's own).
 - **Collisions.** A row that would collide with an open activation on the team (same field and parameters, or same variable and level) reads "Replaces <old column> → <variable> for <team>". It is not pre-placed silently. The admin may keep or remove it. After the save it reads "<old column> → <variable> is switched off for <team> and replaced."
@@ -462,11 +466,11 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
    Then the v35 actor setting is written (`:797`).
 5. **Plain reads, with no lock:**
    - the team and its one active GPEXE binding. The binding's club must be the workspace's club, and the team must be active. Otherwise the answer is 404.
-   - the candidate, through 7e's scope query (`sourceMetricPreviewService.js:98-121`). It must be stored, not expired, at most 16 MiB, and its last check must have succeeded through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). It must not be `superseded`, which blocks a candidate everywhere else (`gpexeImportService.js:1327`). Otherwise the answer is the 409 of route 1.
+   - the candidate, through 7e's scope query (`sourceMetricPreviewService.js:98-121`). It must not be an undone import (`import_undone_at is null`, v57; section 15.1). It must be stored, not expired, at most 16 MiB, and its last check must have succeeded through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). It must not be `superseded`, which blocks a candidate everywhere else (`gpexeImportService.js:1327`). Otherwise the answer is the 409 of route 1.
    - every other id of the body (`targetId`, `mappingVersionId`, each id in `replaces`) is read inside the readable owner scope and the binding (section 4.1). One outside it is the identical 404.
    - The candidate row is never locked (section 4.4).
 6. **The recompute.**
-   - `gpexeLevelValues` runs with each row's extractor and the version's parameters (`gpexeImportMapper.js:427-441`). A variant keeps an internal athlete key, which never leaves the service.
+   - `gpexeLevelValues` runs with each row's extractor and the version's parameters (`gpexeImportMapper.js:427-441`), and with the team's session time zone (`teamTimezone`, v62; section 15.1), so a session passes the same gates as its import. A variant keeps an internal athlete key, which never leaves the service.
    - The pair is chosen for the request's index (section 6.1). `convertAtStorageScale` gives the stored values, and the display values are computed.
    - Each row's hash is compared with the one the client got. Any difference is `409 board_changed`, naming the row. Nothing is written.
 7. **Conversions.** The `unit_conversions` rows of every value pair used are taken `FOR SHARE`, in ascending order (`source_metric_lock_conversions`, `v34:952`).
@@ -487,8 +491,8 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
     - Their scope capabilities are taken `FOR SHARE` (for the levels).
 12. **Replaced activations.** The T5 rows listed in `replaces` are taken `FOR NO KEY UPDATE`, in ascending order, by a query that filters on this binding (`id = any($1) and source_team_binding_id = $2`). A row of another binding is neither locked nor told apart: it is the identical 404. A listed row on this binding that is no longer open is `409 activation_changed`.
 13. **The binding** and its team are taken `FOR SHARE` (`lockListedBindings`, `sourceMetricActivationSteps.js:100-128`). The binding must be active. Otherwise the answer is `409 binding_not_active`.
-14. **The rights.** The acting user's role, user and club rows are taken `FOR SHARE` (`rightsStillHold`, `bindingClubHolds`; `sourceMetricAccess.js:66-130`). A lost right is the identical 404, and nothing is written. Every new `42501` text of v52 is added to `ACTOR_REFUSALS` in 18-3 (`sourceMetricMappingService.js:341, :398`), so a right lost under a v52 guard is the 404 too, never a 500.
-15. **The state checks.** First the candidate is read again, as a plain read after the step-14 locks. If its `bundle_hash`, `last_seen_check_id`, `status` or `superseded_by_check_id` differs from step 5's, a check was finalized meanwhile. It saw the session again (`gpexeImportService.js:2063`), replaced it with newer content (`:2101-2108`) or withdrew it (`:2112-2115`). The answer is `409 board_changed`. The T9s guard refuses the same cases with fixed messages (section 5.4), which the service maps to `board_changed` too, as the backstop. Then the checks run in this order, and the first failure names its row:
+14. **The rights.** The acting user's role, user and club rows are taken `FOR SHARE`, the users row first (LO-1, LO-2) (`rightsStillHold`, `bindingClubHolds`; `sourceMetricAccess.js:66-130`). A lost right is the identical 404, and nothing is written. Then the hide locks of J15's amendment (section 4.4) are taken, through `lockHides`, for every system target the save starts. Every new `42501` text of M-A and M-B is added to `ACTOR_REFUSALS` in 18-3 (`sourceMetricMappingService.js:341, :398`), so a right lost under a v52 guard is the 404 too, never a 500.
+15. **The state checks.** First the candidate is read again, as a plain read after the step-14 locks. If its `bundle_hash`, `last_seen_check_id`, `status`, `superseded_by_check_id` or `import_undone_at` differs from step 5's, a check was finalized meanwhile. It saw the session again (`gpexeImportService.js:2063`), replaced it with newer content (`:2101-2108`) or withdrew it (`:2112-2115`). The answer is `409 board_changed`. The T9s guard refuses the same cases with fixed messages (section 5.4), which the service maps to `board_changed` too, as the backstop. Then the checks run in this order, and the first failure names its row:
     1. the revision;
     2. the target;
     3. the conversion (`conversionsHold`);
@@ -497,7 +501,8 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
     6. extractability (`assertExtractable`);
     7. for every new row, the pair's values must be non-zero and distinct (`pair_not_distinct`);
     8. the stored values must be inside the variable's limits (`value_outside_limits`);
-    9. a T5 collision not listed in `replaces` (`activation_exists`, `variable_taken_on_binding`; `sourceMetricActivationSteps.js:138-158`).
+    9. a T5 collision not listed in `replaces` (`activation_exists`, `variable_taken_on_binding`; `sourceMetricActivationSteps.js:138-158`);
+    10. a system target the team's club hides (`variable_hidden`, J15 section 4.3; read after the hide locks of step 14).
 16. **The writes, in this order.** Every existing row is locked by steps 7–14, before the first write, as D requires (`discovery:1277-1280`). So the guards' own `FOR SHARE` locks at the first protected write (the role, user and club rows of v35 and v48, `v35:131, :162`; `metric_definitions` in the T3 trigger, `v34:647-648`) find their rows already held.
     1. the T3 insert of each missing mapping, in ascending (field id, variable id) order, and its `mapping_create` row; the T4 draft of each new version and its `mapping_version_create` row; its `needs_review` transition and its `mapping_status` row. Each audit row comes right after its own write, so v35's guard sees the version at its target status (`v35:268-276`);
     2. the listed T5 ends (`admin_ended`, by the actor, with the basis v48 derives), carrying the fixed reason "Replaced on the drag-and-drop board.", with their `activation_end` rows;
@@ -509,11 +514,11 @@ It is not a secret and has no clock. The server recomputes it on every save. A d
 
 ### 4.4 Lock order and concurrency
 
-The order is D's (`discovery:1271-1280`). A1 takes its listed bindings after its rights check (`sourceMetricMappingService.js:1426, :1485`); this write takes them before, as D lists:
+The order is D's (`discovery:1271-1280`). As proposed, this sentence said A1 took its listed bindings after its rights check; since LO-1 (PR #344) A1 takes them before, in D's order, as this write does (section 15.1):
 
 `unit_conversions → T2a → T2b → T3 → T4 → metric_definitions → scope capabilities → T5 (to end) → binding → team → role / user / club`, then the new rows.
 
-**Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** after the
+**Amended by J15 (C132, accepted 2026-11-02; in force since v53's deploy on 2026-11-04):** after the
 role, user and club rows (step 14) and before step 15's state checks and step 16's writes, the board takes the hide
 lock for every (team's club, target definition) pair it starts, ascending by `(club, definition)`; after it no new row
 lock is taken (J15 section 5).
@@ -561,9 +566,11 @@ A partial result is never shown as switched on. If the fallback of R8 is used, t
 
 ---
 
-## 5. Data model and migration (v52)
+## 5. Data model and migrations (M-A and M-B)
 
-v52 comes after 7h's v51; if another migration comes between, the next free number. It is additive. It replaces functions only after checking the md5 of the body in force, as v50 does (`v50:84-99`). Fixed messages are used: `42501` for a refused actor and `23514` for everything else (C79).
+**18-A2:** as proposed, this section was one migration, "v52". It is now two (section 15.3): **M-A** (18-1) holds sections 5.1–5.4, 5.6 and 5.8; **M-B** (with 18-3) holds the gate of section 5.5 alone. Section 5.7 is in neither (C114, section 15.2). "v52" below means M-A, and in section 5.5 M-B. The bodies each one replaces, and their md5, are those in force when its branch is cut (section 15.1), not the ones named below.
+
+Each migration takes the next free number when its pull request is opened. It is additive. It replaces functions only after checking the md5 of the body in force, as v50 does (`v50:84-99`). Fixed messages are used: `42501` for a refused actor and `23514` for everything else (C79).
 
 ### 5.1 T9 `training_load.source_metric_confirmations` — the act
 
@@ -641,6 +648,8 @@ There is no free text, and no athlete data.
 
 ### 5.5 The gate on a club admin's activation
 
+**18-A2:** the gate is M-B, deployed together with 18-3 (the *Rukovodilac*, 2026-11-12: no gap in which a club admin's activation is refused while the board's backend does not exist). Its first body already accepts v53's copy link (C125; section 15.3).
+
 - A new trigger on T4 runs `BEFORE UPDATE`. It is named to sort after v34's and v35's guards.
 - When `needs_review → active` has `activated_basis = 'club_admin'` and the version's `parameter_kind` is `'none'`, it requires a T9i `club_mapping` row that:
   - has `checked = true`;
@@ -677,6 +686,8 @@ There is no free text, and no athlete data.
 
 ### 5.7 T2b — only if Q2 chooses a2 and Q3 chooses b1
 
+**18-A2: not built by J18's migrations.** C114 changed this form (zones and thresholds too, a note and an optional image, no document). It gets its own contract amendment and its own later migration, with 18-P (section 15.2). The text below is the proposal as it stood.
+
 - **New columns:** `unit_observation_id` and `meaning_observation_id`, both referencing T9 with kind `field_observation` and the same revision. Also `meaning_evidence_kind` (`document` or `observed_column`), and `meaning_observed_column`, a registry code (never typed text).
 - **Rewritten CHECKs:**
   - A unit proof carries `unit_evidence_ref` or `unit_observation_id`, never both, and `unit_observation_id` only when `parameter_kind = 'none'`.
@@ -704,6 +715,8 @@ There is no free text, and no athlete data.
 - **Backups.** A backup keeps the values for its own retention. The removal runs before a restored copy is used (the v32 rule; `CURRENT_STATE.md:1214, :4215`).
 
 ### 5.9 Rollback, preflight and post-check
+
+**18-A2:** each of M-A and M-B has its own runbook, preflight, post-check and rehearsed rollback (section 15.3). The preflight's "last migration" is the one in force on the day, not 7h's. The count of club versions of fields without parameters in `draft` or `needs_review` belongs to M-B's preflight, since M-B is the migration that stops a club admin's A1 for them.
 
 - **Rollback:** `docs/runbooks/source-metric-confirmations-v52-rollback.sql`. It refuses:
   - once any T9 row exists;
@@ -814,8 +827,9 @@ There is no free text, and no athlete data.
 - its field has an extractor for the binding's family, and a value in the board's session;
 - the team has no open activation of the same field and parameters, and none of the same variable and level (`sourceMetricActivationSteps.js:42-47`);
 - under Q9's recommendation, the mapping was not switched off on this binding by an administrator. That is an activation on this binding ended with `end_reason = 'admin_ended'` (`v34:1317-1319`): a *Switch off* (S2, `sourceMetricActivationService.js:193-194`) or a replacement on the board (section 4.3 step 16.2). A version-driven end does not count: A2, the pinned step and a G1 replacement end with `mapping_version_disabled` or `mapping_version_replaced` (`sourceMetricMappingService.js:1465, :1555`; `sourceRevisionLifecycleService.js:245`). Such a mapping reads "Switched off by <name> on <date> · *Add*" and is placed only on *Add*.
-- **Amended by J15 (C132, accepted 2026-11-02; in force once 7i-B is merged and its migration deployed):** the
+- **Amended by J15 (C132, accepted 2026-11-02; in force since v53's deploy on 2026-11-04):** the
   variable is not hidden in the team's club.
+- **18-A2:** a system mapping already switched on for the team, by U4's *Use the OptiMove GPEXE set* or in Mappings, is not pre-placed: it is a row already on, "On for <team>" (section 3.3, section 15.4).
 
 **How they are switched on:**
 - The board shows every eligible system mapping already placed, with the badge *OptiMove mapping*.
@@ -871,6 +885,8 @@ There is no free text, and no athlete data.
 
 ### 8.4 C111 (J19) — touch points only
 
+**18-A2:** "J19" in this section and in section 13 was the number proposed for C111's contract. J19 has since become the GPS import flow (`docs/ai/gps-import-flow-contract.md`); C111's contract is not written and has no number yet.
+
 1. **Creating a variable.** The board creates a variable only through M3-0's create (`POST /variables`). A column never creates a variable (C1, C2).
 2. **Editing in place.** C111 allows an in-place edit of the unit, the daily aggregation, min/max, the condition, the levels and the key only while the variable has no value and no mapping. "No mapping" must count T3 and T4 rows of any status, and every T9i row naming the variable's versions.
 3. **After a confirmation.** A change becomes "only a new version". C9 refuses it while the active version pins the old one (`v34:1222-1238`). So the board says: "To change a confirmed variable's unit, create a new variable and place the column again." The replacement is explicit, through "Replaces …".
@@ -879,6 +895,8 @@ There is no free text, and no athlete data.
 6. **Order.** J19 is written separately after phase 9. If its backend is merged before 18-4, the board may offer *Fix the unit* for a variable with no value and no mapping. Otherwise it offers *Create* only.
 
 ### 8.5 9-B, 7h, 7i and O16
+
+**18-A2:** all four are settled (section 15.1): 9-B, 7h and 7i are merged and deployed, and O16 is C127 (a team coach sees a club variable's name and unit).
 
 - **9-B.** Nothing switched on has any effect before 9-B is live, because the importer reads T5 only from 9-B (`phase9-importer-mappings-contract.md:77`).
   - After 9-B, a session with no activation is `no_mapped_values` and stays stored. That is the board's source.
@@ -1083,7 +1101,7 @@ Each new guard has a mutation that the suite kills:
 ### 9.6 Tiers
 
 - During development, only the files that changed are run.
-- Before each review, the mapping suites are run: `source-metric-mapping-m2`, `-transitions-7b`, `mapping-activations-7d`, `-v35`, `source-metric-preview-7e`, and the new suites. `test:gpexe` and `test:frontend:fast` are run as well.
+- Before each review, the mapping suites are run: `source-metric-mapping-m2`, `-transitions-7b`, `mapping-activations-7d`, `-v35`, `source-metric-preview-7e`, and the new suites. `test:gpexe` and `test:frontend:fast` are run as well. **18-A2:** the suites added since, and the frontend gate, are in section 15.5.
 - `test:backend:shared` runs only if non-GPEXE Training Load code changes, and only on the owner's word for that run, because it writes to the local OPTIMOVE database (`.claude/rules/agent-efficiency.md` §6).
 
 ---
@@ -1198,6 +1216,8 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
 
 ### 11.2 For the *Rukovodilac* (R1–R9)
 
+**Decided by the *Rukovodilac* on 2026-11-12** (its answer to the executor's delta plan; section 15.2 gives each): R1 the split of section 15.3; R2, R3, R4, R7 and R9 as written; R5 only `total_time`, `total_distance` and `max_v`; R6 the refusal, no distance fallback; R8 the fallback only, after the failing test is shown.
+
 - **R1.** The PR split of section 2. Recommended: as written.
 - **R2.** The route names and shapes of section 4.2. Recommended: as written.
 - **R3.** In a club workspace, the board is the main path for fields without parameters. J16's flow and its card stay. Recommended: yes.
@@ -1256,4 +1276,196 @@ Each of Q1–Q11, Q13 and Q14 becomes the decision named here when decided. It i
 
 ## 14. Review record
 
-*Empty.* This section will record the internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`), then the *Rukovodilac*'s and the *Nezavisni revizor*'s ★★ reviews, and the owner's decisions on Q1–Q14.
+*Empty for the proposal.* The reviews of 18-A2 are recorded in its pull request. This section will record the internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`), then the *Rukovodilac*'s and the *Nezavisni revizor*'s ★★ reviews, and the owner's decisions on Q1–Q14.
+---
+
+## 15. Refresh at `cc20f632` (18-A2, 2026-11-12)
+
+This section brings the contract to `main` as it is when J18's code starts. It was written from a check of
+`c930cde1..cc20f632` limited to the files and migrations this document cites. No database was read and no test was run
+for it: it is documentation only. A reference in this section is to `cc20f632`.
+
+### 15.1 What changed on `main`, and what it changes here
+
+**Prerequisites, all merged and deployed** (`docs/ai/CURRENT_STATE.md`, the discovery document's status line):
+
+| Prerequisite | Where | Evidence in the code |
+|---|---|---|
+| 7h, the club admin's activation basis (C108, C126) | PR #339 (`0334ddbd`), migration v52 | T4's basis CHECKs admit `club_admin` (`v52:103-108`); the activation branch of T4's update guard (`v52:202-207`); T8's row shape (`v52:261-265`); `mayTransitionMappings` (`backend/src/sourceMetricAccess.js:42-45`) |
+| 7h-F, *Save and activate* | PR #345 (`ee85875c`) | J16's screen offers a club admin the activation of its club's version |
+| LO-1: every service rights lock users first, A1 in D's order | PR #344 (`ad0e0d63`) | `backend/src/sourceMetricMappingService.js:1462-1469` |
+| LO-2: the database's rights-lock functions take the users row first | PR #359 (`d67cc7b0`), migration v54 | `v54:210-275` |
+| 7i-B1: copy, hide, the copy link (C125 option one) | PR #352 (`26b6c8bc`), migration v53 | `source_metric_mapping_version_copies` (`v53:265-276`); the hide in T5's insert guard (`v53:709-715`); `lockHides` (`backend/src/sourceMetricActivationSteps.js:156`) |
+| 9-B, the importer reads T5 | PR #326 (`b6c2254`) | `backend/src/gpexeImportMapping.js:88` |
+| O16 (Q12) | C127; 7h-V, PR #337 (`d3dcb641`) | a team coach sees a club variable's name and unit |
+| Q1–Q14 | C113–C125 | discovery document, section C |
+
+**The bodies in force that J18 replaces.** Sections 5.4–5.6 name them by the migration that last wrote them at
+`c930cde1`. At `cc20f632` they are:
+
+| Function | Last written by | J18 replaces it in |
+|---|---|---|
+| `source_metric_audit_row_ok` | v52 (`:239`; before: v48) | M-A (the new actions' shapes) |
+| `source_metric_audit_actor_guard` | v52 (`:355`; before: v48) | M-A (`club_admin` on `mapping_confirmation`) |
+| `source_metric_audit_insert_guard` | v48 (`:339`) | M-A |
+| `source_metric_audit_revision_guard` | v50 (`:211`) | M-A (the new branches) |
+| `source_metric_mapping_versions_update_guard` | v52 (`:117`; before: v34) | not replaced: the gate is its own trigger (section 5.5) |
+| `source_metric_activations_insert_guard`, `_update_guard` | v53 (`:632`), v52 (`:284`) | not replaced |
+| `source_metric_actor_basis`, `_require_platform_admin`, `_require_club_admin` | v54 (`:242`, `:210`, `:225`) | not replaced; the new guards call them |
+
+The md5 list of every replaced body is taken from `origin/main` when a migration's branch is cut and checked again
+right before its pull request is opened. Another executor is adding migrations (the GPS import's estimates), so both
+the number and the list may move.
+
+**Facts of sections 1–9 that are no longer true:**
+
+- **The hide lock is in force.** v53's T5 insert guard takes it itself for a system mapping and refuses a start while
+  the binding's club hides the variable. So the save takes the hide locks through `lockHides` after the rights (step
+  14) and before the state checks; it gains the refusal `variable_hidden` (step 15.10); and a hidden variable's system
+  mapping is not pre-placed (sections 3.6 and 7).
+- **A1 is in D's order** since LO-1; section 4.4's first sentence said otherwise. Rights checks lock the users row
+  first, in the services (LO-1) and in the database (LO-2). A new guard of M-A or M-B that locks rights rows follows
+  that order (`.claude/rules/migrations.md`).
+- **Candidates (v57, the session undo).** `gpexe_import_candidates` has `import_undone_at` (`v57:118`), and its unique
+  key is (team, session, content) among rows that are not undone (`v57:136-138`). So one session can have an undone row
+  and a live one. **Everywhere the board reads or re-reads a candidate it requires `import_undone_at is null`:** route
+  1's default and chosen session, step 5, step 15's re-read and the T9s guard. An imported candidate is still never
+  deleted, and a check row is still never deleted.
+- **The mapper (v62).** `gpexeLevelValues` takes the team's session time zone
+  (`backend/src/gpexeImportMapper.js:490`). The board and the save pass it, so a session whose devices report more than
+  one time zone passes the same gates as its import.
+- **Stored values can be removed again.** The session undo deletes T6 rows (`metric_value_source_provenance`;
+  `v63:761`, as `v57:611` and `v60:785` before it). This matters only for C121's "while no value is written" (section 15.2).
+- **Imports.** The screen was rebuilt (J19's U1–U6, D5, IMP3). `renderFoundHtml` is at
+  `frontend/gpexe-import-view.js:665`, but it is no longer the place a first-time admin lands: that is the setup
+  stepper (section 15.4). The import switch is per team (v56, `gpexe_team_import_switch`), no longer one switch on the
+  server; section 3.8's Imports-not-yet sentence (Q10's early-ship option) is not used, since 9-B is live.
+- **GPEXE names.** U3 added suggested athlete pairs, and a team coach now sees a date of birth there (C123, J19 R2).
+  The board's rule is unchanged: its own reader selects `display_name` only, never `birth_date`, and it never calls
+  `listIdentities` (`backend/src/gpexeAthleteIdentityService.js:289`) or `listPairSuggestions` (`:410`).
+
+### 15.2 The decisions since the proposal
+
+**The owner's C113–C125** (2026-11-04; the discovery document, section C) and what each changes here:
+
+| Decision | Effect on this document |
+|---|---|
+| C113 (Q1) | The contract is accepted, with the effects of section 8.6. |
+| C114 (Q2) | Softer than a2: the platform confirms global fields, **zones and thresholds too**, without a document, by a note "this column is column X on the GPEXE screen", with an optional image. Section 5.7, routes 8–10 and 18-P as written do not fit this form. **They are not built by J18's migrations or slices;** 18-P gets its own contract amendment and its own later migration (the *Rukovodilac*, 2026-11-12). Until then the platform's two acts stay as M2b built them, and C97's text stands until a pull request amends it. A club still places only a field whose revision is active and verified. |
+| C115 (Q3), C116 (Q4) | b1 without b3; two sessions with two athletes for a global confirmation. Both concern 18-P only. |
+| C117 (Q5) | Section 6.1 as written. |
+| C118 (Q6) | Sections 5.8 and 6.3 as written: 90 days, the scheduled removal with no actor, erasure by a platform admin. |
+| C119 (Q7), C120 (Q8) | As written. |
+| C121 (Q9) | Section 7 as written, plus **a delta that is not in this contract yet**: the admin may change a mapping while no value is written under it; after the first value the rule is replacement. It is a separate slice after 18-4, with a short proposal to the *Rukovodilac* first (what it needs from T4, v43's replacement chain and the gate; that an undo can make "no value" true again). Until it is built, a wrong saved placement is corrected by C124's path. |
+| C122 (Q10) | J18 starts, ★★. |
+| C123 (Q11) | No legal basis is needed for the stored confirmation values. It opens again if a minor athlete is ever added. |
+| Q12 | C127: a team coach sees a club variable's name and unit. |
+| C124 (Q13) | Option one: a club admin activates a club version of a field without parameters only through the board; a replacement is "disable in Mappings, then place again". |
+| C125 (Q14) | Option one, already built in v53: the gate accepts the copy link. |
+
+**The *Rukovodilac*'s decisions of 2026-11-12** (section 11.2):
+
+- **R1.** The split of section 15.3: two migrations, no 18-P, 18-A2 first.
+- **R2, R3, R4, R7.** As written: the routes of section 4.2 (routes 8–10 wait for 18-P); the board is the main path for
+  fields without parameters in a club workspace; the club's own active mappings are pre-placed on another team's board
+  as *Your club's mapping*; at most 20 rows, History as a secondary tab, *Switch off* as its own act.
+- **R5.** The display registry starts with `total_time`, `total_distance` and `max_v` only, each with its evidence and
+  a test. A column without a rule cannot be placed as a new row; it reads "OptiMove cannot show what GPEXE displays for
+  this column yet." (a text proposed by 18-A2, for the ux review of 18-4).
+- **R6.** With fewer than two athletes OptiMove can name, the board refuses and points to Link athletes. No distance
+  fallback.
+- **R8.** The two-operation fallback is used only after the failing one-transaction test has been shown to the
+  *Rukovodilac*.
+- **R9.** As written: a board version keeps the levels both the field and the variable allow, and the session-level
+  comparison covers the drill level of the same version.
+- **The gate has no gap.** The refusal `confirmation_required` must not reach production before the board's backend.
+  So the gate is its own migration, M-B, in 18-3's pull request and deploy.
+- **U4's button stays.** Section 15.4.
+
+### 15.3 The slices as they are built (R1)
+
+| Slice | Content | Migration | Mark | Reviewers (`CLAUDE.md` matrix) | External-review triggers |
+|---|---|---|---|---|---|
+| **18-A2** | This refresh, and the J18 row of the discovery document (documentation only) | — | ★★ by its content | `code-reviewer` on the whole diff; `db-reviewer` on sections 4–5 and 15.1, 15.3; `security-reviewer` on sections 4, 6, 7 and 15 | 1, 2, 3, 4 (on its content) |
+| **18-1** | **M-A:** T9, T9s and T9i with their guards and deferred links (sections 5.1–5.4); T8's `confirmation_id`, the actions `mapping_confirmation`, `confirmation_values_expired` and `confirmation_values_erased`, and the replaced T8 bodies (section 5.6, without the two observed acts); the removal function, its purge marker and the salt (section 5.8). Runbook, read-only preflight and post-check, rehearsed rollback, md5 gates. **No gate, no T2b column, no application code.** | M-A | ★★ | `db-reviewer`, `security-reviewer` | 1, 2, 3, 4 |
+| **18-2** | Backend reads: the board, one placement, the evidence (routes 1, 2, 4, 5); the name reader; the pair rule; the display registry (R5) | none | ★★ | `code-reviewer`, `security-reviewer` | 2 |
+| **18-3** | Backend writes: the save (route 3, section 4.3); the scheduled removal in its own module; routes 6 and 7. **M-B, the gate** (section 5.5): one new trigger on T4, accepting a checked T9i row or v53's copy link, with the service's `confirmation_required` mapping in the same pull request. | M-B | ★★ | `code-reviewer`, `security-reviewer`, `db-reviewer` | 1, 2, 3, 4, and the five-point rule |
+| **18-4** | Frontend: the board, the panel, the phone sheet, the entries of section 15.4, the history, the guide; J16's sentence and link in place of *Activate*, *Replace* and *Save and activate* for a club admin's version of a field without parameters | none | ★ (proposed) | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`, and a narrow `security-reviewer` pass on how values and names are rendered | 2; 5 is answered by the real-route run of section 9.4 item 21 |
+| **18-E** | Facts after each merge | none | — | `code-reviewer` | — |
+| later | C121's change while no value is written (its proposal first); 18-P (its amendment first) | their own | — | — | — |
+
+- **Why the gate can stand alone.** It is a trigger of its own on T4 (section 5.5), not a line of T4's update guard, and
+  no guard of M-A depends on it: M-A's deferred link asks only that a confirmation's versions are active with an open
+  activation started in the same transaction (section 5.4). Between M-A and M-B the three tables exist and nothing
+  writes to them.
+- **M-B's first body knows the copy link.** A club admin's activation of a `needs_review` club version with
+  `parameter_kind = 'none'` passes with a checked T9i row of this transaction (section 5.5), **or** with a row of
+  `source_metric_mapping_version_copies` for that version whose system version is still active, read with a plain read
+  and never a lock (J15 sections 7.2 and 7.6). J15's R7 ("whichever migration lands second replaces the other's gate
+  body") is settled by this: v53 landed first, so no body is replaced for it.
+- **Each migration** has its runbook, its read-only preflight and post-check SQL, and a rollback rehearsed on a
+  disposable database (apply → rollback → identical catalog → apply again). M-A's rollback refuses once a T9 row exists
+  or a later migration is recorded; M-B's refuses under a later migration and drops only its trigger and function.
+  Neither is applied by the executor: only on the owner's order naming the file.
+- **Between 18-3 and 18-4** a club admin's activation of such a version exists only as the board's API, and J16's
+  *Save and activate* answers `409 confirmation_required` with its sentence but without the link. The two are deployed
+  close together; the *Rukovodilac* decides whether 18-3's deploy waits for 18-4's GO.
+- **The prefix rule.** Before each migration pull request is opened, and again before its merge, the 12-digit prefixes
+  of the merge tree are checked for a duplicate (`.claude/rules/migrations.md`).
+
+### 15.4 The entries, and U4's button
+
+- **From the setup stepper** (U6b, `frontend/gpexe-guide-steps.js`; J19 section "U6b"). In its *Variables* step,
+  *Choose my own* opens the Mappings screen today (`frontend/gpexe-guide-view.js:90-92`). 18-4 points it to the board
+  for the step's team. This replaces section 3.1's link on the Imports success line.
+- ***Use the OptiMove GPEXE set* stays as it is** (the *Rukovodilac*, 2026-11-12): U4's write, the existing
+  `POST /activations`, one request per system mapping (`frontend/gpexe-guide-data.js:213`). A system mapping is not
+  gated, so M-B does not touch it. J19's note that this button is re-pointed to the board
+  (`docs/ai/gps-import-flow-contract.md:111`) is narrowed to *Choose my own*; 18-4 amends that line.
+- **On the board,** a mapping already on for the team reads "On for <team>" with *Switch off* (section 3.3), whoever
+  switched it on. Only an eligible system mapping that is not on is pre-placed (section 7).
+- **From Data configuration:** the card *Map by drag and drop* and *Which team?*, as section 3.1.
+- **Never for a coach.** A coach sees the administrator's steps as one row and never gets the board, its link or a
+  route of it; the server answers the identical 404 (section 4.1). **The board never sends a GPEXE request**
+  (section 4.6).
+
+### 15.5 Tests added to section 9
+
+- **The recorded-SQL-order test of the save** (`.claude/rules/migrations.md`, the rule of PR #346): the SQL the save
+  sends is recorded and asserted against section 4.4's order with the hide locks after the rights, with no locking
+  clause between the first write and the COMMIT.
+- **Candidates:** an undone import is never the board's session, on any of the reads of section 15.1; a session with an
+  undone row and a live row uses the live one.
+- **The time zone:** a mixed-zone session of a team with a session time zone is readable by the board exactly when it
+  is importable.
+- **The hide:** a hidden system variable is not pre-placed; a save that names it answers `variable_hidden`; the save
+  against a hide and a show of the same variable ends without a `40P01` that is not answered `try_again`.
+- **The gate (M-B):** section 9.1 item 7, plus a copy: a club admin's activation of a copied draft passes through the
+  link and is refused once the linked system version is disabled (J15 section 10).
+- **Regression suites before each review**, beside those of section 9.6: `source-metric-mapping-club-admin-7h`,
+  `source-metric-variables-club-7i`, `lock-order-lo1`, `rights-locks-users-first-lo2`.
+- **The frontend gate** (`.claude/rules/testing-evidence.md`): the whole `--preset frontend-fast` on the head and on a
+  clean `origin/main`, compared file by file; the production build; `--preset e2e`, run alone.
+- **The runner:** every command is `node scripts/test-runner.mjs …` (T1); databases are disposable
+  `optimove_tests_*` ones on a local PostgreSQL, removed after the run.
+
+### 15.6 References that moved
+
+Same content at a new place, unless section 15.1 says the content changed.
+
+| Cited in sections 1–13 | At `cc20f632` |
+|---|---|
+| `sourceMetricMappingService.js:763-847` (`runWrite`), `:776-780`, `:93-95` (the bounds) | `:789`; the bounds at `:91-95` and `:802-806` |
+| `sourceMetricMappingService.js:63-77` (`commitCertainlyRefused`) | `:72` |
+| `sourceMetricMappingService.js:312-324` (the allowlist), `:341, :398` (`ACTOR_REFUSALS`) | `TRIGGER_REFUSALS` at `:314`; `ACTOR_REFUSALS` at `:345`, used at `:402` |
+| `sourceMetricMappingService.js:909` (`writableMappingSummary`), `:921-926` (`createMapping`) | `:719`; `:926` |
+| `sourceMetricMappingService.js:1367-1518` (A1), `:1465-1506` | `activateVersion` at `:1403`; `disableVersion` at `:1576` |
+| `sourceMetricActivationSteps.js:100-128` (`lockListedBindings`), `:163-186` (`insertStarts`), `:192-200` (`startAuditRows`), `:222-252` | `:110`, `:228`, `:257`; `lockOpenActivations` `:276`, `endOpenActivations` `:295` |
+| `sourceMetricAccess.js:38-40`, `:46-61`, `:66-130`, `:88-90` | `mayTransitionMappings` `:42`, `mayManageActivations` `:51`, `activationInScope` `:62`, `bindingClubHolds` `:71`, `resolveMappingAdminWith` `:93`, `rightsStillHold` `:128` |
+| `gpexeImportMapper.js:419-441` (`gpexeLevelValues`) | `:490` |
+| `gpexeImportService.js:35-36` (retention), `:1613-1620` (`listAthleteLinks`) | `:38-39`; `:1750` |
+| `gpexeAthleteIdentityService.js:246` (`listIdentities`), `:138-149` | `:289`; `identityAdminBasis` `:157` |
+| `sourceMetricPreviewService.js:34` (16 MiB) | `:35` |
+| `sourceMetricPreview.js:33-56` (`convertAtStorageScale`) | `:37` |
+| `frontend/gpexe-import-view.js:441-451` (`renderFoundHtml`) | `:665` |
+| `frontend/gpexe-import-data.js:1263-1265` (`identityViewer`) | `:1684` |
