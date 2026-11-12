@@ -362,7 +362,7 @@ test("8. no GPEXE id outside Technical details: the session id of an unconfirmed
     assert.ok(!outsideTech(html()).includes(MARKER_SESSION), `the list (${tab})`);
   }
   await act("training-load-gpexe-tab", { importTab: "attention" });
-  assert.match(html(), /<strong>[A-Z][a-z]{2} \d{2}\.\d{2}\. · GPEXE session</, "a label-less session is titled without its id");
+  assert.match(html(), /<strong>[A-Z][a-z]{2} \d{2}\.\d{2}\. · Session</, "a label-less session is titled without its id");
   for (const id of ["cand-nc", "cand-wd", "cand-old"]) {
     await openCandidate(id);
     assert.ok(!outsideTech(html()).includes(MARKER_SESSION), `the review of ${id}`);

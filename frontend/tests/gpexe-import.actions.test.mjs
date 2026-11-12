@@ -266,7 +266,7 @@ test("GPEXE imports: a Data & Analysis sub-tab that loads status, candidates and
   assert.match(html, /checks and previews are saved, but no result or activity can be written/);
   assert.ok(!/backup/i.test(html), "the screen never says anything about a backup");
   assert.match(html, /training-load-filter-button[^>]*disabled/, "the shell filter does not apply here");
-  assert.match(html, /session of/);
+  assert.match(html, /Session of/);
   assert.ok(state.trainingLoad.gpexe.links.some((l) => l.athleteName === "Ana Example"), "the links are loaded (they are listed on the Link athletes screen)");
   assert.ok(!/GPEXE athletes linked to this team/.test(html), "U6a: no list of linked athletes on the daily screen");
 });
@@ -2102,7 +2102,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   // The unlinked row: number, last session, values, no name anywhere.
   const row104 = html.slice(html.indexOf('data-gpexe-athlete-id="104"') - 900, html.indexOf('data-gpexe-athlete-id="104"'));
   assert.match(row104, /<strong>GPEXE athlete 104<\/strong>/);
-  assert.match(row104, new RegExp(`Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`), "the same title and time as the inbox row");
+  assert.match(row104, new RegExp(`Last seen ${LAST_SEEN_STAMP} · Full training`), "the same title and time as the inbox row");
   assert.match(row104, /Time 74 min · Distance 5,230 m · Top speed 29\.5 km\/h · Drills 2/);
   // The raw-only row: the values GPEXE did not give are "—", never 0, and the row says where it was seen.
   const row105 = html.slice(html.indexOf('data-gpexe-athlete-id="105"') - 900, html.indexOf('data-gpexe-athlete-id="105"'));
@@ -2111,7 +2111,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   assert.match(row105, /Time — · Distance — · Top speed — · Drills —/);
   assert.ok(!/Time 0|Distance 0|Drills 0/.test(row105));
   // The linked row: the name from the link and Unlink; the inactive one says so.
-  assert.match(html, new RegExp(`<strong>Ana Example</strong>[\\s\\S]{0,200}GPEXE athlete 101 · Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`));
+  assert.match(html, new RegExp(`<strong>Ana Example</strong>[\\s\\S]{0,200}GPEXE athlete 101 · Last seen ${LAST_SEEN_STAMP} · Full training`));
   assert.match(html, /<strong>Former Member<\/strong>[\s\S]{0,200}GPEXE athlete 102 · no longer in the team · Not seen in any session that is still available\./);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-1"/);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-6"/);

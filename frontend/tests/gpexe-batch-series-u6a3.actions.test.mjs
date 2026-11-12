@@ -444,7 +444,7 @@ test("U6a-3 15: after a lost answer in a later round, the sessions answered earl
   await act("training-load-gpexe-batch-send");
   const panel = dialog();
   assert.match(panel, /The answer to the import did not arrive for the last 4 sessions\./);
-  assert.match(panel, /Answered before the answer was lost:[\s\S]*FULL TRAINING 1[\s\S]*Imported\./);
+  assert.match(panel, /Answered before the answer was lost:[\s\S]*Full training 1[\s\S]*Imported\./);
 });
 
 test("U6a-3 16: a team change is refused while an import of several sessions runs (its answers belong to this team)", async () => {
