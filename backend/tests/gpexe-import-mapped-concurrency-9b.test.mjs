@@ -47,7 +47,7 @@ import { GpexeImportError, importGpexeBundle, importGpexeBundleLocked, lockTeamF
 import { ImportMappingChangedError, setImportMappingHoldForTests, setSourceInstanceHoldForTests } from "../src/gpexeImportMapping.js";
 import { setImportTransactionBoundsForTests } from "../src/gpexeImportPreview.js";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
+import { createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
@@ -78,7 +78,9 @@ const errorLines = [];
 const originalConsoleError = console.error;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b" });
+  // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
+  // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

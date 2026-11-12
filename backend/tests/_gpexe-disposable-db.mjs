@@ -261,6 +261,14 @@ function assertDisposableName(name, url) {
 // `migrations` applies only the first files of GPEXE_TEST_MIGRATIONS (e.g. to
 // write rows as they were before a migration); applyGpexeTestMigrations then
 // brings the database up to date through the real runner.
+// The migrations before v66 (J18, M-B). From v66 on a club admin activates a mapping version of a field WITHOUT
+// parameters only from the drag-and-drop board (or as a copy of OptiMove's mapping); the gate itself and the board's
+// save are tested in club-activation-confirmation-gate-v66 and source-metric-board-save-18-3. The suites of phase 7h,
+// LO-1 and 9-B's concurrency exercise a club admin's A1, A2 and replacement - code paths that are unchanged and stay
+// in force for fields with parameters (zones and thresholds) - on test fields without parameters, so they build
+// their database through v65.
+export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf("202611131000_training_load_v66_club_activation_confirmation_gate.sql"));
+
 export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");
   // The database itself - the loopback-only server rule, the admin
