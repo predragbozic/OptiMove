@@ -81,21 +81,25 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 
    The database guard checks the same rule.
 4. **When (M2, per athlete and variable).** Only on an activity that came from an import and is not undone, for an athlete of the
-   activity. An estimate is **never written for a variable that already has an effective measured whole-session value for that
+   activity. An estimate is **never written for a variable that already has an effective real whole-session value for that
    athlete** in the same metric event.
-   - **"Effective measured"** means an occasion with `entry_method in ('api_import', 'csv_import')`, no segment,
+   - **"Effective real"** means an occasion with `entry_method in ('manual', 'api_import', 'csv_import')`, no segment,
      `superseded_by_occasion_id` null, `import_conflict_status` null, and (when it has a source identity) its identity's current
      occasion, carrying a value of that variable.
+   - **A coach's manual value counts** (the *Rukovodilac*'s decision of 2026-11-12, Q2): the owner's rule is that an estimate is
+     never mixed with real values, and a value a coach entered is real. So a `manual` whole-session value refuses an estimate
+     here, and a later one supersedes it in rule 6, exactly like an imported one. `activityRoster` and `calendarQuery` keep their
+     own meaning of "measured" (device data), and only measured values are a basis for a method (rule 2).
    - **The database holds it.** A BEFORE INSERT trigger on `metric_values` for a value of an `estimate` occasion refuses it
      (`23514`, `estimate_measured_exists`). It runs after the occasion's insert has locked the participant and the event
      (`lock_ancestors_before_occasion_insert`, v13:106-125).
    - **Never** in the preview, the approval or the import transaction.
 5. **Who.** The J20-C audience: the activity's roster decider, through `training.lock_activity_decider`'s right, in the team's
    workspace. Everyone else gets the identical 404.
-6. **A measured value later (M3).** The database does it, whoever writes the measured value, so the import writer needs no new
+6. **A real value later (M3).** The database does it, whoever writes the real value (manual or imported), so the import writer needs no new
    write code.
    - **The mechanism.** An AFTER INSERT trigger on `metric_values` (`metric_values_supersede_estimate`) fires for a value of a
-     measured whole-session occasion. It finds the effective estimate occasion of the same participant (the same event and
+     real (`manual`, `api_import` or `csv_import`) whole-session occasion. It finds the effective estimate occasion of the same participant (the same event and
      athlete) holding a value of the same variable. It sets that occasion's `superseded_by_occasion_id` to the new measured
      occasion; the column is v13:45, and v13 freezes only identity and content, not the revision fields (v13:134-148).
    - **The reads follow without a change.** The new measured occasion's `supersedes_occasion_id` is left as the import's own chain
@@ -170,7 +174,7 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 - `activityRoster` and `calendarQuery` stay as they are: an estimate is not measured.
 
 **6b-D, dashboards.** It needs the answer in section 5. It depends on rule 1: an estimate is always `entry_method = 'estimate'`
-and `is_derived = true`.
+and `is_derived = false` (M1).
 
 ## 5. Dashboards (6b-D): the *Rukovodilac*'s decision of 2026-11-12
 

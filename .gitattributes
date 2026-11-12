@@ -53,3 +53,5 @@ docs/runbooks/gpexe-import-check.sql text eol=lf
 docs/runbooks/undo-roster-work-v60*.sql text eol=lf
 # J20-C (v61): the rollback is compared by md5 against bodies in force; new files only, same reason.
 docs/runbooks/import-states-v61*.sql text eol=lf
+# 6b-A (v63): the rollback restores v60's undo bodies verbatim and checks them by md5; new files only, same reason.
+docs/runbooks/metric-value-estimates-v63*.sql text eol=lf
