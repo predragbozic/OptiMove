@@ -241,12 +241,14 @@ const MORE_IDENTITY_KEYS = new Set(["athletesession_id", "track_id", "id"]);
 const moreContent = (more) => canonicalJson(Object.fromEntries(Object.entries(more).filter(([k]) => !MORE_IDENTITY_KEYS.has(k))));
 const levelKey = (row) => (row.drill === null || row.drill === undefined ? "full" : `drill:${row.drill}`);
 
-// MT-0: the tracks of one athlete are one recording when every track starts at the same instant in the same zone, holds the
+// MT-0: the tracks of one athlete are one recording when every track is the athlete's own, starts at the same instant in the same zone, holds the
 // same levels (one row each), and the rows of each level are equal in every consumed field, their /more/ included. Anything
 // else (a missing track or /more/, a second row of a level, any difference) is not identical: null, and today's rule applies.
 export function identicalTracks(bundle, athleteRows, trackIds) {
   const tracks = trackIds.map((id) => bundle.tracks?.[id]);
   if (tracks.some((t) => !t)) return null;
+  // Every track must be this athlete's own (only the used one is checked later, as track_athlete_mismatch).
+  if (tracks.some((t) => String(t.athlete) !== String(athleteRows[0]?.athlete))) return null;
   for (const field of DUPLICATE_TRACK_FIELDS) {
     if (tracks.some((t) => canonicalJson(t[field]) !== canonicalJson(tracks[0][field]))) return null;
   }
