@@ -16,11 +16,12 @@
 --        is the transaction's acting user (optimove.estimate_actor = '<user uuid>:<xact id>', set by the service);
 --      - a value of an 'estimate' occasion: the occasion's only value; numeric; is_derived = false, standalone,
 --        not_applicable, no computed_by_ref (M1: an estimate is recognised by its occasion's entry_method only);
---        refused while an effective measured whole-session value of the same variable exists for the same participant
---        (M2: estimate_measured_exists); it must have its provenance row by COMMIT (deferred);
+--        refused while an effective real whole-session value of the same variable exists for the same participant
+--        (M2: estimate_measured_exists; real is manual, api_import or csv_import - a coach's value counts); it must have its provenance row by COMMIT (deferred);
 --      - a provenance row: of that value and occasion, by the occasion's author; the method allowed by the variable's
 --        daily aggregation (sum: every method; avg: copy_athlete and team_average; max, last, none: never).
---   4. M3: when a whole-session value is inserted - measured and effective, or another estimate - the effective estimate
+--   4. M3: when a whole-session value is inserted - a real one (manual, api_import, csv_import) and effective, or another
+--      estimate - the effective estimate
 --      occasion of the same participant holding the same variable is superseded by the new occasion
 --      (superseded_by_occasion_id). Every reader of effective values already filters on that column. Lock order: the
 --      insert has already locked the participant and the event (v13's occasion trigger); the update locks the estimate
@@ -167,13 +168,13 @@ create trigger metric_measurement_occasions_estimate_guard
   before insert on training_load.metric_measurement_occasions
   for each row execute function training_load.validate_estimate_occasion();
 
--- An effective measured whole-session value of the variable for the participant (M2).
+-- An effective real whole-session value of the variable for the participant (M2): manual, api_import or csv_import.
 create function training_load.estimate_measured_exists(p_participant uuid, p_definition uuid) returns boolean as $$
   select exists (
     select 1 from training_load.metric_measurement_occasions o
       join training_load.metric_values v on v.occasion_id = o.id
      where o.event_participant_id = p_participant and v.metric_definition_id = p_definition
-       and o.entry_method in ('api_import', 'csv_import') and o.segment_id is null
+       and o.entry_method in ('manual', 'api_import', 'csv_import') and o.segment_id is null
        and o.superseded_by_occasion_id is null and o.import_conflict_status is null
        and (o.source_identity_id is null or exists (
              select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id)));
@@ -296,7 +297,7 @@ begin
   select o.event_participant_id, o.entry_method, o.segment_id, o.superseded_by_occasion_id, o.import_conflict_status
     into v_new from training_load.metric_measurement_occasions o where o.id = new.occasion_id;
   if v_new.segment_id is not null or v_new.superseded_by_occasion_id is not null or v_new.import_conflict_status is not null
-     or v_new.entry_method not in ('api_import', 'csv_import', 'estimate') then
+     or v_new.entry_method not in ('manual', 'api_import', 'csv_import', 'estimate') then
     return null;
   end if;
   update training_load.metric_measurement_occasions o
@@ -313,7 +314,7 @@ create trigger metric_values_supersede_estimate
 
 -- v13 leaves the revision fields of an occasion updatable by any path (corrections set them; only identity and content are
 -- frozen, v13:134-148). For an estimate occasion this narrows them: it is superseded once, and only by a whole-session
--- occasion of the same participant (a measured, effective one, or another estimate) that holds a value of the same
+-- occasion of the same participant (a real one - manual, api_import, csv_import - effective, or another estimate) that holds a value of the same
 -- variable; its conflict status stays null.
 create function training_load.guard_estimate_occasion_revision() returns trigger as $$
 declare
@@ -336,7 +337,7 @@ begin
   -- The superseding occasion is effective and holds a value of the same variable (M3: only the same variable's later value).
   if not found or new.superseded_by_occasion_id = old.id or v_by.event_participant_id is distinct from old.event_participant_id
      or v_by.segment_id is not null or v_by.import_conflict_status is not null or v_by.superseded_by_occasion_id is not null
-     or v_by.entry_method not in ('api_import', 'csv_import', 'estimate')
+     or v_by.entry_method not in ('manual', 'api_import', 'csv_import', 'estimate')
      or not exists (select 1 from training_load.metric_values e
                       join training_load.metric_values b on b.metric_definition_id = e.metric_definition_id
                      where e.occasion_id = old.id and b.occasion_id = new.superseded_by_occasion_id) then

@@ -12,7 +12,7 @@
   - An estimate occasion is whole-session, with nothing of a source, and is written by the transaction's acting user
     (`optimove.estimate_actor`).
   - It holds one value, and that value is numeric, standalone, not derived and not_applicable.
-  - It is refused while an effective measured whole-session value of the same variable exists for the same participant
+  - It is refused while an effective real whole-session value of the same variable exists for the same participant
     (`estimate_measured_exists`).
   - Its provenance row is required by COMMIT, and the occasion holds exactly one value by COMMIT.
   - The method must be allowed by the variable's daily aggregation:
@@ -20,11 +20,11 @@
     - `avg`: `copy_athlete` and `team_average`;
     - `max`, `last`, `none`: never.
 - **M3.** A later whole-session value of the same variable for the same participant supersedes the estimate occasion. This holds
-  for a measured, effective value and for another estimate. Any other path that sets an estimate occasion's
+  for a real, effective value and for another estimate. Any other path that sets an estimate occasion's
   `superseded_by_occasion_id` must name an effective whole-session occasion of the same participant that holds the same variable.
-- **"Measured" is `api_import` and `csv_import`** (the contract's rule 4). A `manual` whole-session value neither refuses an
-  estimate nor supersedes it.
-- **Known limit, accepted.** The supersede runs when the measured value is inserted. If that occasion is later flagged with a
+- **"Real" is `manual`, `api_import` and `csv_import`** (the contract's rule 4, the *Rukovodilac*'s decision of 2026-11-12): a
+  coach's manual whole-session value refuses an estimate and supersedes it, like an imported one.
+- **Known limit, accepted.** The supersede runs when the real value is inserted. If that occasion is later flagged with a
   conflict status, or never becomes its source identity's current occasion, the estimate stays superseded (an estimate is
   superseded once, by design); the athlete then has neither value for that variable until it is entered again.
 - The dashboards' series `source_policy` takes `estimate` (6b-D shows estimates only under it).

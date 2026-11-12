@@ -543,6 +543,39 @@ test("3b. M2 allows an estimate when the only measured value of the variable is 
   }
 });
 
+test("3c. a coach's manual whole-session value is real: it refuses an estimate (M2), and a later one supersedes the estimate (M3); a manual drill value does neither", async () => {
+  const { team, s, facts } = await imported();
+  const fresh = async (name) => participantFor(s, (await admin.query(`insert into public.athletes (full_name, display_name, device_timezone) values ($1,$1,'Europe/Sarajevo') returning id`, [name])).rows[0].id);
+  const seg = (await admin.query(`select id from training_load.metric_event_segments where event_id = $1 limit 1`, [s.eventId])).rows[0].id;
+  const writeManual = async (participantId, { segmentId = null, value = 3000 } = {}) => {
+    const occ = (await admin.query(
+      `insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method, recorded_by_user_id) values ($1,$2,'manual',$3) returning id`,
+      [participantId, segmentId, team.coach.id])).rows[0].id;
+    await admin.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,$4)`, [occ, facts.sum.def, facts.sum.ver, value]);
+    return occ;
+  };
+  const c = await newClient();
+  try {
+    // M2: a manual value first, then an estimate: refused
+    const p1 = await fresh("Zq Man1");
+    await writeManual(p1);
+    assert.match(await code(writeEstimate(c, { participantId: p1, def: facts.sum, actor: team.coach.id })), /^23514:estimate_measured_exists$/);
+    // M3: an estimate first, then a manual value: the estimate is superseded by it
+    const p2 = await fresh("Zq Man2");
+    const e = await writeEstimate(c, { participantId: p2, def: facts.sum, actor: team.coach.id });
+    const manual = await writeManual(p2);
+    assert.equal((await admin.query(`select superseded_by_occasion_id s from training_load.metric_measurement_occasions where id = $1`, [e.occ])).rows[0].s, manual);
+    // a manual drill value neither refuses nor supersedes
+    const p3 = await fresh("Zq Man3");
+    await writeManual(p3, { segmentId: seg });
+    const e3 = await writeEstimate(c, { participantId: p3, def: facts.sum, actor: team.coach.id });
+    await writeManual(p3, { segmentId: seg, value: 3100 });
+    assert.ok(await effective(e3.occ), "a manual drill value leaves the estimate");
+  } finally {
+    await c.end();
+  }
+});
+
 test("4. M3: a later measured whole-session value supersedes the estimate of the same variable; another variable, a drill value or a flagged value leaves it; a second estimate supersedes the first", async () => {
   const { team, s, facts } = await imported();
   const other = facts.defs.find((d) => d.def !== facts.sum.def && d.agg === "sum");
