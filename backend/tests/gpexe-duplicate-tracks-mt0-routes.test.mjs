@@ -1,6 +1,8 @@
 // MT-0 through the real check and approval routes (disposable database): the deduplicated athlete is imported once with the
-// lowest track's identities and its details left out (E1); a second search gives the same preview hash; a later GPEXE cleanup
-// that removes the ignored track is "nothing new", one that removes the used track is today's identities_missing_from_source.
+// lowest track's identities and its details as GPEXE gives them (E1 decided); a second search gives the same preview hash; a
+// later GPEXE cleanup that removes the ignored track is "nothing new", one that removes the used track is today's
+// identities_missing_from_source; a candidate stored before MT-0 is refused with preview_changed, then imported; an already
+// imported session whose content did not change is not reopened.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -241,4 +243,52 @@ test("2. a later GPEXE cleanup: removing the ignored track (9207) keeps the same
   assert.ok(blocked);
   const d2 = await detailOf(team2, blocked.id);
   assert.equal(d2.preview.blocked?.code, "identities_missing_from_source");
+});
+
+test("3. a pending candidate stored before MT-0 (another preview hash): the approval with that hash is refused with preview_changed and writes nothing; reviewed again, it imports the athlete once from track 9206", async () => {
+  const team = await setupTeam();
+  await checkNow(team, [bundleOf({ sessionId: 9504 })]);
+  const fresh = (await candidates(team)).find((c) => c.gpexeTeamSessionId === "9504" && c.status === "pending");
+  // The stored preview of before this change (athlete 106 left out as multiple_tracks) had another hash.
+  const oldHash = "0".repeat(64);
+  await admin.query(`update training_load.gpexe_import_candidates set preview_hash = $2 where id = $1`, [fresh.id, oldHash]);
+  const stale = (await candidates(team)).find((c) => c.id === fresh.id);
+  assert.equal(stale.previewHash, oldHash);
+  const refused = await approve(team, stale);
+  assert.equal(refused.status, 200, refused.text);
+  assert.deepEqual(refused.body.results.map((x) => [x.outcome, x.code]), [["refused", "preview_changed"]], refused.text);
+  assert.equal((await admin.query(`select count(*)::int as n from training_load.gpexe_import_approvals where candidate_id = $1`, [fresh.id])).rows[0].n, 0);
+  assert.deepEqual(await identitiesOf(team.teamId, team.athleteIds[2]), []);
+
+  const again = (await candidates(team)).find((c) => c.id === fresh.id);
+  assert.notEqual(again.previewHash, oldHash, "the refusal stored today's preview");
+  const r = await approve(team, again);
+  assert.equal(r.body.results[0].outcome, "imported", r.text);
+  const used = bundleOf({ sessionId: 9504 }).athleteSessions.filter((x) => String(x.athlete) === "106" && String(x.track) === "9206");
+  assert.deepEqual(await identitiesOf(team.teamId, team.athleteIds[2]), used.map((x) => (x.drill === null ? `athlete_session:${x.id}:full` : `athlete_session:${x.id}:drill:${x.drill}`)).sort());
+});
+
+test("4. an already imported session is not reopened: its content unchanged, the next search only records a sighting, so an athlete it left out stays out (the remedy is the undo)", async () => {
+  const team = await setupTeam();
+  const bundle = bundleOf({ sessionId: 9505 });
+  await checkNow(team, [bundle]);
+  const cand = (await candidates(team)).find((c) => c.gpexeTeamSessionId === "9505" && c.status === "pending");
+  // Imported with athlete 106 left out (J20-B), as a pre-MT-0 import left it out as multiple_tracks.
+  const subset = (await api(`/teams/${team.teamId}/candidates/${cand.id}/preview`, { method: "POST", cookie: team.padmin.cookie, body: { excludedAthleteIds: ["106"] } })).body.subset;
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  let done;
+  try {
+    done = await api(`/teams/${team.teamId}/candidates/${cand.id}/approve`, {
+      method: "POST", cookie: team.padmin.cookie, body: { previewHash: subset.previewHash, subsetHash: subset.subsetHash, excludedAthleteIds: ["106"] },
+    });
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.equal(done.body.outcome, "imported", done.text);
+  assert.deepEqual(await identitiesOf(team.teamId, team.athleteIds[2]), []);
+
+  await checkNow(team, [bundle]);
+  const rows = (await candidates(team)).filter((c) => c.gpexeTeamSessionId === "9505");
+  assert.deepEqual(rows.map((c) => c.status), ["imported"], "one candidate, still imported: nothing new to approve");
+  assert.deepEqual(await identitiesOf(team.teamId, team.athleteIds[2]), []);
 });
