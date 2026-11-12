@@ -31,13 +31,13 @@ select current_setting('server_version_num')::int as server_version_num,
 --    name (the migrator runs files in name order).
 --    Expected: previous_rows = 1, previous_checksum_ok = true, v65_rows = 0,
 --    at_or_after_v65 = 0, and
---    last_migration = migrations_v2/202611121000_training_load_v63_metric_value_estimates.sql.
+--    last_migration = migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql.
 --    (If another migration is merged before v65, this block is re-issued with
 --    that migration's name and checksum before the preflight is run.)
 select
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121000_training_load_v63_metric_value_estimates.sql') as previous_rows,
-  (select bool_and(checksum = '495fae952949bc361f19008eaea137772ca1716028b3ab3a4a20ce76c3fd44ff') from public.schema_migrations
-    where migration_name = 'migrations_v2/202611121000_training_load_v63_metric_value_estimates.sql') as previous_checksum_ok,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql') as previous_rows,
+  (select bool_and(checksum = '278870571b4a1641fbfee652a15ecdc4045de999ca81f083513638e9ad71c4e1') from public.schema_migrations
+    where migration_name = 'migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql') as previous_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as v65_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name >= 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as at_or_after_v65,

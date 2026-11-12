@@ -287,9 +287,21 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   const VALUES = /\binsert\s+into\s+training_load\.metric_values\b/gi;
   const PROVENANCE = /\binsert\s+into\s+training_load\.metric_value_source_provenance\b/gi;
   const MANUAL = "trainingLoadMetricsMeasurements.js";
+  // 6b-B: the estimate save writes estimated values; they come from no source, so T6 does not apply - each has its own
+  // provenance row in metric_value_estimates (v63), checked below.
+  const ESTIMATE = "metricEstimateService.js";
   const files = all();
-  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), ["gpexeImportWriter.js", MANUAL],
-    "the import writer and the manual-entry module are the only modules that insert metric_values");
+  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), ["gpexeImportWriter.js", ESTIMATE, MANUAL],
+    "the import writer, the estimate save and the manual-entry module are the only modules that insert metric_values");
+  {
+    const est = files.find((f) => f.rel === ESTIMATE);
+    const ESTIMATES = /\binsert\s+into\s+training_load\.metric_value_estimates\b/gi;
+    for (const m of est.text.matchAll(VALUES)) {
+      const fn = enclosing(est, m.index);
+      assert.ok(fn && count(est.text.slice(m.index, fn.end + 1), ESTIMATES) > 0, `${where(est, m.index)}: an estimated value without its metric_value_estimates row in the same function`);
+    }
+    assert.equal(count(est.text, PROVENANCE), 0, "an estimate writes no T6 row");
+  }
   // A statement builder holds the SQL text and sends nothing itself; its
   // callers send it.
   const sendsQuery = (f, fn) => /\.query\s*\(/.test(bodyOf(f, fn));
@@ -312,7 +324,7 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   const failures = [];
   const checked = [];
   for (const f of files) {
-    if (f.rel === MANUAL) continue;
+    if (f.rel === MANUAL || f.rel === ESTIMATE) continue;
     for (const m of f.text.matchAll(VALUES)) {
       const fn = enclosing(f, m.index);
       if (!fn) { failures.push(`${where(f, m.index)}: a metric_values insert outside any function`); continue; }
