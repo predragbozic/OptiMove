@@ -1771,3 +1771,46 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
   - route 7 against a removal that lands between the function's snapshot and its lock is not raced;
   - `test:backend:shared` was not run (no local development database);
   - the save was not run against a real GPEXE bundle.
+
+### 15.10 As built: 18-4, the board's screen
+
+Frontend only, stacked on 18-3; no migration, no backend change. English texts only.
+
+- **Where.** Training Load > Data configuration: a sixth card, *Map by drag and drop*, and the section `board`
+  (`frontend/metric-board-{data,view,actions,drag}.js`, state slice `state.trainingLoad.board`). The setup stepper's
+  *Choose my own* opens the board for the stepper's team in a club workspace and stays the Mappings screen in the
+  platform workspace (15.4).
+- **Who.** A club workspace only (`boardContext()`): the club's admin, or a platform admin working in the club. A
+  team's coach, the platform workspace and every other workspace get no card, no section and no request; the server
+  answers 404 again for everyone else, and the screen reads it as "not available in this workspace".
+- **Which team.** The club's teams with an active binding, from the connections list. One team opens at once; two or
+  more ask *Which team?*.
+- **The board.** Two om-cards: *GPEXE columns* (label, unit, the two athletes' raw values, the key under Technical
+  details, why a column cannot be placed) and *Variables* (the club's first, then OptiMove's), with a slot per
+  variable: empty, new, pre-placed, on, switched off. A column that is already on for the team is shown as used and is
+  not offered for dragging: it is switched off first.
+  - **A computer** (fine pointer with hover): the browser's own drag and drop with its own type; tap a column and then
+    a variable works too, and is the only way by keyboard.
+  - **A phone** (760 px and below): one column of cards and one bottom sheet at a time (*Fill which variable?*, the
+    check, Switch off); the page behind it does not scroll; nothing drags; 44 px targets; the save bar is sticky only
+    while there is something to save.
+- **The check.** Route 2's answer as it is: the proposed conversion, both athletes' raw, stored and displayed values,
+  *What to watch for*, the tick *Matches GPEXE for both athletes* (never set for the admin) and *Required*. A refusal
+  is a sentence and never becomes a row. *Other athletes* reads every placement again and takes every tick away.
+- **The save.** Offered only when every new row is ticked. The body carries identities, the display unit, the
+  placement hash, the tick and the requirement: never a value, an athlete, a unit, a factor or an owner. One request
+  key per save; a lost answer is *Result not confirmed* and *Check result* sends the same request; a stated refusal
+  saves nothing, says so, reads the board again and takes the marked row's tick away. After a save: "Saved. Switched on
+  for <team>", the slot reads "On for <team>", and the notice links to *Find new sessions*.
+- **Switch off.** Asks first, then the existing `POST …/activations/:id/end` with its own request key.
+- **History.** The second tab: who confirmed and when, the session, each row with its conversion and the stored
+  values as "Athlete A / Athlete B". No athlete name.
+- **Mappings.** `409 confirmation_required` on a club admin's *Activate* reads "Switch this version on from Map by
+  drag and drop." with a button that opens the board.
+- **Leaving.** An unsaved placement, a save in flight and an unconfirmed result ask before a section, tab, team or
+  workspace change and on `beforeunload`. Escape closes the topmost of review, panel, chosen column.
+- **Left out of 18-4, stated:** the session chooser (the board uses the session route 1 picks) and the choice of the
+  display unit (the first the server offers is sent).
+- **Tests:** `frontend/tests/metric-board.actions.test.mjs` (the real handlers and markup against answers captured
+  from the real routes) and `e2e/tests/metric-board.test.mjs` (1280 px drag, 390 px tap, a coach offered nothing), with
+  the fake source's `board` scenario (three linked athletes with different values).
