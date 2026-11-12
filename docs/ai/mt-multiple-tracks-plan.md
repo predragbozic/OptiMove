@@ -76,10 +76,20 @@ Checked by the executor on a throwaway local database with three variants of the
 fixture is `two_overlapping`; with track 9004 one hour later it is `two_sequential`; with a third track it is `more_than_two`. It
 was not run against any persistent database.
 
-The result decides whether "Add them up" is worth its slice. If nothing is sequential, MT-B ships "Use one track" and "None"
+**The production count (the *Rukovodilac*, 2026-11-12, read-only, no names)** changes the plan:
+- 5 athletes in 4 stored candidates have more than one track (05.10, 29.10 with two athletes, 03.11, 05.11).
+- **All five are `two_overlapping`, and in every case the two tracks are identical:**
+  - the same start (offset 0 s);
+  - the same `total_time`: 4236, 968, 3366, 3366, 4381 s;
+  - the same `total_distance`: 5686, 1823, 4021, 4309, 5722 m;
+  - no drill row on either track.
+- No sequential case exists, and no case of more than two tracks.
+
+So the real case today is a **duplicate**, not two parts of one training. "Add them up" would double every value. Hence MT-0
+(section 11) comes first, and "Add them up" becomes a later slice (section 8). If nothing is sequential, MT-B ships "Use one track" and "None"
 first.
 
-## 3. The overlap guard
+## 3. The overlap guard (for "Add them up", a later slice)
 
 **The stored fields** (the snapshot keeps only these; `backend/src/gpexeRestV1Adapter.js:88-97`, `BUNDLE_FIELDS`):
 - **The start:** `track.utc_timestamp` (epoch seconds) and `track.timestamp` (`gpexeRestV1Adapter.js:95`). The mapper
@@ -237,14 +247,16 @@ and the choice row say it.
 | Slice | Content | Mark | Reviewers |
 |---|---|---|---|
 | **MT-0** | This plan (docs) | ★ | the *Rukovodilac* |
-| **MT-A** | Migration v65 (or the next free number): `gpexe_track_choices`, append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
-| **MT-B** | Mapper, preview, writer: apply the current choice; the overlap guard; the combined identity; avg / last / none left out; `trackChoice` in the preview and its hash; `track_choice_stale` in the blocking resolution; a characterisation test that a single-track session is byte-for-byte unchanged | ★★ (triggers 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
+| **MT-0** | Section 11: identical tracks are one recording. Mapper and preview only, no migration, no choice | ★★ (trigger 3: the mapper's identity) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor*; the owner's yes (it is automatic) |
+| **MT-A** | Migration (the next free number at PR time; v65 and v66 are taken by J18's open #506 and #508): `gpexe_track_choices`, append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
+| **MT-B** | Mapper, preview, writer: apply the current choice ("Use one track", "None"); the combined identity (only with MT-E); avg / last / none left out; `trackChoice` in the preview and its hash; `track_choice_stale` in the blocking resolution; a characterisation test that a single-track session is byte-for-byte unchanged | ★★ (triggers 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
 | **MT-D** | Section 10: the `scale_recording` method in the 6b save (backend; its basis shape and method in the same migration as MT-A), the mapper's "max only" result for a scaled athlete, the preview's `scaleRecording` entry | ★★ (triggers 1, 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
+| **MT-E (later)** | "Add them up": the overlap guard of section 3 and the combined identity. Built only if a real sequential case appears, and after O2's evidence | ★★ | as MT-B |
 | **MT-C** | Frontend: the choice row for a `multiple_tracks` athlete in the session review (the tracks side by side, the three options, the guard's reason when "Add them up" is not offered); the labels in the review and Activities | ★ | `code-reviewer`, `ux-design-reviewer`, `mobile-qa`; browser QA at 360 / 375 / 390 / 1280 |
 
-Order: MT-A, then MT-B, then MT-D, then MT-C (the screen covers all four choices). MT-B depends on the count of section 2 and
-on O2 for "Add them up". **One migration** (v65, or the next free number after #505's v64) carries both the choice table and
-the `scale_recording` method, since both are read by the same preview and written from the same row of the session review.
+Order: MT-0, then MT-A, then MT-B, then MT-D, then MT-C. MT-E only on a real sequential case and O2's evidence. **One
+migration** (the next free number at PR time) carries both the choice table and the `scale_recording` method, since both are
+read by the same preview and written from the same row of the session review.
 
 ## 9. Decisions and open questions
 
@@ -259,6 +271,10 @@ the `scale_recording` method, since both are read by the same preview and writte
   tracks, if the count of section 2 shows such sessions.
 - **O5.** Who chooses: whoever may approve (recommended), or also the team's coach without an approver grant.
 - **T1.** Whether T6 marks a combined value (section 6). Recommended: no new column.
+- **MT-0 (owner).** Identical tracks are taken as one recording automatically (section 11). The *Rukovodilac* is asking the
+  owner.
+- **E1 (owner-run evidence).** Whether GPEXE's details count a duplicate track twice (burst and brake). Until that comparison is
+  done, a deduplicated athlete's details-derived values are left out (section 11).
 - **O6 (owner).** `scale_recording`: max variables stay measured (recommended, as the owner asked), and avg variables are left
   out of a scaled athlete in v1 (section 10, Q-avg).
 
@@ -304,8 +320,8 @@ the `scale_recording` method, since both are read by the same preview and writte
     `0 < recordedMinutes < targetMinutes <= 600`);
   - `validate_metric_value_estimate` allowing it for `sum` variables only.
 - These are two body replacements under md5 gates (v64's bodies) and one CHECK.
-- They share **one migration with MT-A's choice table**, the next free slot after #505's v64 (v65). Recommended: share it, since
-  both are read by the same preview.
+- They share **one migration with MT-A's choice table**, under the next free number at PR time (v65 and v66 are J18's). Recommended:
+  share it, since both are read by the same preview.
 
 **Q3. With MT: a combined-tracks athlete who is still short.**
 - The scale applies to whatever recorded part the track choice gives: one track, the picked track, or the sum.
@@ -326,3 +342,68 @@ the `scale_recording` method, since both are read by the same preview and writte
 for "None".
 
 **The label:** "Estimate · scaled 25 → 56 min" (recorded → target), with the author and the time from the provenance row.
+
+## 11. MT-0: identical tracks are one recording
+
+**Why first.** Section 2's production count: every multi-track athlete today has two identical tracks (a duplicate).
+
+**Is the duplicate ours? No, from the code and the stored bundle shape:**
+- **Rows and tracks come as GPEXE sends them.** `fetchSessionBundle` takes each athlete row, and its `track`, as GPEXE's athlete
+  list returns it, through the projection only (`backend/src/gpexeRestV1Adapter.js:1696-1715`).
+- **The list+canary path of PR #212 keeps the track.** It replaces only `max_v` in a list row; the `track` field is untouched
+  (`gpexeRestV1Adapter.js:1777`).
+- **Each track object is GPEXE's own record,** read once per distinct track id named by the rows (`:1713-1714`).
+- **Our paging cannot repeat a row.** `wholeList` refuses a row id that comes twice (`source_list_changed`,
+  `gpexeRestV1Adapter.js:1113`). Even if it did, a repeated row carries the same track id: one track with two whole-session rows
+  (`whole_session_row_count`), not `multiple_tracks`.
+- **So two track ids mean two track records in GPEXE.** The fix belongs in the mapper. (The production count shows different
+  track ids. That the two rows' own ids differ follows, since a row names one track.)
+
+**The rule (mapper, fail-closed).** An athlete with more than one track is treated as **one recording** when all of these hold:
+1. **The tracks themselves** (`gpexeRestV1Adapter.js:95`): every track has the same `utc_timestamp` and `timestamp`, and the same
+   `timezone`.
+2. **The athlete-session rows** (`gpexeRestV1Adapter.js:90`):
+   - each track has the same set of levels: one whole-session row and the same drill indexes;
+   - the rows of each level are equal in every consumed field: `is_stats_valid`, `total_time`, `total_distance`, `max_v`, `drill`.
+3. **The `/more/` of those rows** (`gpexeRestV1Adapter.js:91-94`) is equal:
+   - the six `events` fields (acceleration and deceleration counts, thresholds and durations);
+   - every `complementary_data` zone of `power` and `speed`: `extremes`, `distance`, `is_ready`.
+
+Anything different in any of these fields leaves the athlete as today (`multiple_tracks`).
+
+**The details** (`tot_burst_events`, `tot_brake_events`) are one entry per athlete, not per track
+(`backend/src/gpexeImportMapper.js:317`). They cannot be compared between the tracks, and **whether GPEXE counts a duplicate
+track twice there is unknown (E1).** Recommended for v1: an athlete taken as one recording gets its details-derived values left
+out, with the reason `duplicate_track_details_unverified`, never zero. This holds until the owner compares one such athlete's
+burst and brake with the GPEXE screen. If they match, a follow-up drops the exclusion.
+
+**Which track is used.** The lowest track id, with its rows. **The identity** is the one a single-track import of that track
+has: `athlete_session:<its whole row id>:full` and `athlete_session:<its drill row id>:drill:<i>`.
+- A later GPEXE cleanup that removes the other track leaves the import unchanged.
+- A cleanup that removes the lowest track leaves a row with another id, so a new identity. That is today's
+  `identities_missing_from_source` block, resolved by the undo, as for any changed row.
+- Choosing by the lowest id is deterministic. It cannot know which track GPEXE will keep.
+
+**The label.** In the preview, the athlete entry carries `duplicateTracks: { count, usedTrackId, ignoredTrackIds }`. The session
+review reads "Duplicate track ignored (2 identical tracks)".
+
+**Stored candidates and the hash:**
+- The rule changes the plan only for an athlete it applies to. Every other preview is byte-for-byte the same, and
+  `PREVIEW_VERSION` stays.
+- **A pending or blocked candidate with such an athlete:**
+  - its bundle is the same, so the next search sees it as unchanged;
+  - its finalization recomputes the preview, now importing that athlete, and so a new hash;
+  - an approval sent with the old hash answers `preview_changed` and the session is reviewed again. This is the existing rule
+    (9-B's refresh), and nothing is imported twice.
+- **An imported session** whose duplicate athlete was left out: the next search shows that athlete as importable (new results).
+  Importing it adds the athlete, as for an athlete linked later.
+
+**No choice, no migration, no route.** It is automatic, so it needs the owner's yes, which the *Rukovodilac* is asking for.
+
+**Tests (MT-0):**
+- the fixture with two identical tracks gives one participant from the lowest track, with the native identities and the label;
+- one differing field in any compared group (track, row, `/more/`) gives `multiple_tracks`, with a case per field group;
+- the details exclusion;
+- a session without duplicates gives a byte-for-byte unchanged plan and preview;
+- the stored candidate's refresh (`preview_changed`, then the import);
+- a later cleanup in both directions (unchanged, or blocked).
