@@ -488,6 +488,7 @@ test("retention: an expired snapshot is gone for the app before the purge, the p
   assert.deepEqual([expired.snapshot.available, expired.snapshot.reason, expired.preview], [false, "expired", null]);
   assert.ok(expired.approvalBlockers.includes("snapshot_expired_check_again"));
   assert.deepEqual([expired.blockedCode, expired.blockedSourceCode, expired.sessionType, expired.reasons], [null, null, null, []], "an expired snapshot claims no reason");
+  assert.deepEqual([expired.athleteCount, expired.drillsCount], [null, null], "D5: an expired snapshot claims no counts");
   const padmin = await platformAdmin();
   const watching = (await api(`/retention`, { cookie: padmin.cookie })).body.retention;
   assert.ok(watching.expiredNotPurged >= 1);
@@ -1994,6 +1995,15 @@ test("candidates list: blocked code and reasons come with the list, and the list
     ["pending", "no_changes", null, [{ code: "no_linked_athlete", count: 1 }]]);
   assert.deepEqual([by["7204"].status, by["7204"].blockedCode, by["7204"].blockedSourceCode],
     ["blocked", "source_marks_session_invalid", "session_stats_invalid"]);
+  // D5: the athlete and drill counts ride on the list, from the stored preview (every GPEXE athlete the session
+  // recorded, linked or not), and agree with the single candidate's preview.
+  for (const c of list) {
+    const detail = (await api(`/teams/${team.teamId}/candidates/${c.id}`, { cookie: team.coach.cookie })).body.candidate;
+    assert.equal(c.athleteCount, Array.isArray(detail.preview?.athletes) ? detail.preview.athletes.length : null, c.gpexeTeamSessionId);
+    assert.equal(c.drillsCount, Number.isInteger(detail.preview?.session?.drillsCount) ? detail.preview.session.drillsCount : null, c.gpexeTeamSessionId);
+  }
+  assert.deepEqual([by["7201"].athleteCount, by["7201"].drillsCount], [5, 2], "every recorded athlete, linked or not; the session's drills");
+  assert.deepEqual([by["7202"].athleteCount, by["7202"].drillsCount], [1, 2], "one unlinked athlete still counts");
   // No server sentence rides on the list: the coach's words are the app's.
   for (const c of list) {
     assert.equal(c.preview, undefined);

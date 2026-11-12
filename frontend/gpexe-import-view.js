@@ -366,6 +366,15 @@ function sessionTimeText(value) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+// D5: the session's size beside its time - "18 athletes · 5 drills" (every GPEXE athlete the session recorded, linked or
+// not; drills only when it has some). Nothing when the server has no count (an expired snapshot): never a guess.
+function sessionSizeFacts(c) {
+  const facts = [];
+  if (Number.isInteger(c.athleteCount)) facts.push(plural(c.athleteCount, "athlete", "athletes"));
+  if (Number.isInteger(c.drillsCount) && c.drillsCount > 0) facts.push(plural(c.drillsCount, "drill", "drills"));
+  return facts;
+}
+
 function sessionTitle(c) {
   // No id outside Technical details: a label-less session is just "GPEXE session" (its date is shown beside it).
   const label = c.label || "GPEXE session";
@@ -993,7 +1002,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
           <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · "))}</strong>
-          <span class="muted">${escapeHtml(sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt))}</span>
+          <span class="muted">${escapeHtml([sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt), ...sessionSizeFacts(c)].filter(Boolean).join(" · "))}</span>
         </span>
         ${badge}
         ${rowEnd}

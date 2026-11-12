@@ -270,6 +270,25 @@ test("5. (D5) a row reads 'Tue 01.09. · <name>' with the time beside it, on the
   assert.ok(html().includes(`<strong>${day} ${two(d.getDate())}.${two(d.getMonth() + 1)}. · Full training md-4</strong>\n          <span class="muted">${two(d.getHours())}:${two(d.getMinutes())}</span>`));
 });
 
+test("5b. (D5 counts) the time is followed by the session's athletes and drills from the list; one is singular, no drill says nothing, and an unknown count adds nothing", async () => {
+  resetState();
+  const iso = "2026-11-03T16:08:12Z";
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [
+    ready(1, { sessionStartedAt: iso, athleteCount: 18, drillsCount: 5 }),
+    ready(2, { sessionStartedAt: "2026-11-02T16:08:12Z", athleteCount: 1, drillsCount: 1 }),
+    ready(3, { sessionStartedAt: "2026-11-01T16:08:12Z", athleteCount: 12, drillsCount: 0 }),
+    ready(4, { sessionStartedAt: "2026-10-31T16:08:12Z", athleteCount: null, drillsCount: null }),
+  ] }));
+  await openImports();
+  const page = html();
+  const two = (n) => String(n).padStart(2, "0");
+  const time = (v) => { const d = new Date(v); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
+  assert.ok(page.includes(`<span class="muted">${time(iso)} · 18 athletes · 5 drills</span>`));
+  assert.ok(page.includes(`<span class="muted">${time("2026-11-02T16:08:12Z")} · 1 athlete · 1 drill</span>`));
+  assert.ok(page.includes(`<span class="muted">${time("2026-11-01T16:08:12Z")} · 12 athletes</span>`), "no drill: no drill count");
+  assert.ok(page.includes(`<span class="muted">${time("2026-10-31T16:08:12Z")}</span>`), "no count from the server: nothing added");
+});
+
 test("6. (D8) mixed time zones: a data problem in plain words for everyone; the code only in an administrator's Technical details", async () => {
   for (const admin of [false, true]) {
     resetState();
