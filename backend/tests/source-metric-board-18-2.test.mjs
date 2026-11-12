@@ -206,6 +206,12 @@ async function field(kind, { unit = { time: "s", dist: "m", speed: "m/s", burst:
   const revId = await writeRevision(k, { fieldId, by: W.pa.id, valueShape, parameterKind, evidenceRef: COMPAT, unit, ...(parameterKind === "zone_bounds" ? { boundUnit: "W/kg", operator: "between" } : {}), unitRef: UNIT_REF, meaning: verified, meaningRef: verified ? MEANING_REF : undefined, state: "active" });
   return { fieldId, revId, label };
 }
+const activators = new Map();
+async function activatorOf(owner) {
+  if (owner.basis !== "club_admin") return owner;
+  if (!activators.has(owner.clubId)) activators.set(owner.clubId, await platformAdmin(["club", owner.clubId], "activating-platform-admin"));
+  return activators.get(owner.clubId);
+}
 // An active mapping version through the real routes, by `owner`.
 async function activeVersion(owner, f, target, { activate = true, drill = true } = {}) {
   const m = await post("/mappings", owner, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id });
@@ -215,7 +221,9 @@ async function activeVersion(owner, f, target, { activate = true, drill = true }
   assert.equal(v.status, 201, v.text);
   const versionId = v.body.version.id;
   ok(await post(`/mappings/${mappingId}/versions/${versionId}/submit`, owner, { requestKey: key() }));
-  if (activate) ok(await post(`/mappings/${mappingId}/versions/${versionId}/activate`, owner, { requestKey: key(), expectedActiveVersionId: null }));
+  // v66 (M-B): a club admin activates a version of a field without parameters only from the board, so a club's
+  // version is activated here by a platform admin in that club's workspace (the basis stays platform_admin).
+  if (activate) ok(await post(`/mappings/${mappingId}/versions/${versionId}/activate`, await activatorOf(owner), { requestKey: key(), expectedActiveVersionId: null }));
   return { mappingId, versionId, ...f, target };
 }
 const start = (who, v, t, requirement = "required") => post("/activations", who, { requestKey: key(), mappingId: v.mappingId, versionId: v.versionId, bindings: [{ bindingId: t.bindingId, requirement }], reason: `Start ${uid()}.` });

@@ -132,7 +132,7 @@ const IDENTITY = Object.freeze({ scale: "1", divisor: "1", offset: "0" });
 // The board's world: everything one board or placement read needs, in ONE
 // REPEATABLE READ READ ONLY transaction. Plain reads, no lock.
 // ---------------------------------------------------------------------------
-async function loadWorld(client, ctx, { teamId, candidateId }) {
+async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing = NOT_FOUND }) {
   // The team, its one active GPEXE binding, and the binding's connection owned by the workspace's club.
   const team = (await client.query(
     `select t.id, t.name, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
@@ -170,7 +170,7 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   if (candidateId) {
     candidate = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, candidateId])).rows[0];
     // An id that is not a usable stored session of this team is the identical 404.
-    if (!candidate) throw NOT_FOUND();
+    if (!candidate) throw onCandidateMissing();
   } else {
     candidate = (await client.query(candidateSql(
       `c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
@@ -246,14 +246,20 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   )).rows;
   const switchedOff = (await client.query(
     // The mapping's LATEST activation on this binding, and only when an administrator ended it:
-    // a mapping switched on again and then ended another way is not "switched off".
+    // a mapping switched on again and then ended another way is not "switched off". An end the
+    // board itself wrote when a save replaced the mapping is not a switch-off either (the
+    // Rukovodilac, 2026-11-12): it is the activation_end row of an operation that also holds a
+    // mapping_confirmation row. T8 is append-only, so that fact cannot change.
     `select x.mapping_id, x.ended_at, coalesce(nullif(u.display_name, ''), u.full_name) as ended_by
-       from (select distinct on (a.mapping_id) a.mapping_id, a.ended_at, a.end_reason, a.ended_by_user_id
+       from (select distinct on (a.mapping_id) a.id, a.mapping_id, a.ended_at, a.end_reason, a.ended_by_user_id
                from training_load.source_metric_mapping_activations a
               where a.source_team_binding_id = $1
               order by a.mapping_id, a.activated_at desc, a.id desc) x
        left join public.users u on u.id = x.ended_by_user_id
-      where x.end_reason = 'admin_ended'`,
+      where x.end_reason = 'admin_ended'
+        and not exists (select 1 from training_load.source_metric_audit e
+                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'mapping_confirmation'
+                         where e.activation_id = x.id and e.action = 'activation_end')`,
     [team.binding_id],
   )).rows;
 
@@ -465,8 +471,8 @@ function inLimits(value, variable) {
   return true;
 }
 
-function placementOf(world, pairIndex, { fieldId, targetId }) {
-  const columns = columnsOf(world);
+function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
+  const columns = shared?.columns ?? columnsOf(world);
   const col = columns.find((c) => c.field.id === fieldId);
   const variable = world.variables.find((v) => v.id === targetId);
   // A column or a variable outside what this workspace reads is the identical 404
@@ -474,7 +480,7 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
   // any refusal about the session or the pair.
   if (!col || !variable || (variable.owner_scope === "system" && variable.hidden)) throw NOT_FOUND();
   if (world.sessionRefusal) throw world.sessionRefusal;
-  const pair = choosePair(world, columns, pairIndex);
+  const pair = shared ? shared.pairOf() : choosePair(world, columns, pairIndex);
   const refuse = (code, extra = {}) => ({ placement: { placeable: false, code, fieldId, targetId, ...extra } });
 
   if (variable.owner_scope === "system") {
@@ -539,6 +545,26 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
       placementHashes: hashes,
     },
   };
+}
+
+// A row of an active version the save switches on as it is (OptiMove's, or
+// the club's own): { row } or { code }. The same eligibility as the board's
+// pre-placed rows, except that a mapping an administrator switched off may be
+// placed again by hand.
+function preplacedOf(world, shared, mappingVersionId) {
+  const v = world.versions.find((x) => x.id === mappingVersionId);
+  if (!v) throw NOT_FOUND();
+  const col = shared.columns.find((c) => c.field.id === v.field_id);
+  const variable = world.variables.find((x) => x.id === v.variable_id);
+  if (!col || !variable) throw NOT_FOUND();
+  if (world.sessionRefusal) throw world.sessionRefusal;
+  if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
+  if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
+  if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
+  if (variable.hidden) return { code: "variable_hidden", v };
+  if (world.open.some((o) => o.mapping_version_id === v.id)) return { code: "activation_exists", v };
+  const row = versionRow(world, shared.pairOf(), col, v);
+  return { row: { ...row, collisions: collisionsOf(world, { fieldId: v.field_id, variableId: v.variable_id, levels: row.levels }) }, v };
 }
 
 export async function readPlacement({ ctx, queryString }) {
@@ -669,3 +695,7 @@ export async function readConfirmation({ ctx, confirmationId }) {
     return { confirmation: confirmationOut(row, items.get(row.id) ?? []) };
   });
 }
+
+// What the save (sourceMetricBoardSaveService.js) reuses, so that it
+// recomputes exactly what the reads showed.
+export const boardKit = Object.freeze({ loadWorld, columnsOf, choosePair, placementOf, preplacedOf, BOARD_MESSAGES, removeExpiredBatch });
