@@ -12,10 +12,24 @@ const SWITCH_OFF_REASON = "Switched off on the drag-and-drop board.";
 const ask = (text) => (typeof globalThis.confirm === "function" ? globalThis.confirm(text) : true);
 const live = (s, generation) => boardState() === s && s.generation === generation;
 const focus = (id) => queueMicrotask(() => globalThis.document?.getElementById?.(id)?.focus?.());
+const focusFirst = (selector) => queueMicrotask(() => globalThis.document?.querySelector?.(selector)?.focus?.());
+const columnSelector = (fieldId) => `[data-action="metric-board-pick"][data-field-id="${String(fieldId).replace(/[^0-9a-f-]/gi, "")}"]`;
+const SAVE_BAR = '[data-action="metric-board-review"]';
+const clearForms = (s) => Object.assign(s, { placements: {}, preplaced: {}, extra: {}, panel: null, picked: null, review: false, switchOff: null, notice: "" });
+// Whether a refusal of a repeated request says the first one was not saved: only a stated 409 of the service
+// itself. Signed out, no access, a busy or failed server say nothing about it.
+const checkSettles = (info) => info.status === 409 && info.code !== "try_again";
+function checkNote(info) {
+  if (outcomeUnknown(info)) return "Still no answer. Wait a moment and check again.";
+  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here.";
+  if (info.status === 404) return "The check could not be done: this workspace has no access to it now. The result is still not confirmed.";
+  return "The check could not be done. The result is still not confirmed; Check result again in a moment.";
+}
 
 export function resetBoard() {
   const generation = (state.trainingLoad.board?.generation || 0) + 1;
   state.trainingLoad.board = { ...emptyBoardState(), generation };
+  pendingTeamId = null;
 }
 
 // A request to open the board for a team (the setup stepper's "Choose my own").
@@ -39,10 +53,16 @@ export function boardUnloadShouldWarn() {
   const s = state.trainingLoad.board;
   return Boolean(s && (s.write?.sending || s.write?.unconfirmed || unsavedCount(s) > 0));
 }
+// Leaving the board: everything read for it goes (the two athletes' names and values, the last save's notice, the
+// history), so the next visit reads it again; an answer still on its way is dropped. The team stays chosen.
 export function dropBoardForms() {
   const s = state.trainingLoad.board;
   if (!s) return;
-  Object.assign(s, { placements: {}, preplaced: {}, extra: {}, panel: null, picked: null, review: false, write: null, switchOff: null, notice: "" });
+  const { teams, teamId } = s;
+  const pending = pendingTeamId;
+  resetBoard();
+  pendingTeamId = pending;
+  Object.assign(boardState(), { teams: teams.loaded && !teams.error ? teams : emptyBoardState().teams, teamId });
 }
 
 // ---------------------------------------------------------------------------
@@ -53,8 +73,9 @@ export async function loadBoardSection(render) {
   let s = boardState();
   if (!ctx) { render(); return; }
   if (pendingTeamId) {
-    if (pendingTeamId !== s.teamId) { resetBoard(); s = boardState(); s.teamId = pendingTeamId; }
+    const wanted = pendingTeamId;
     pendingTeamId = null;
+    if (wanted !== s.teamId) { resetBoard(); s = boardState(); s.teamId = wanted; }
   }
   const generation = s.generation;
   if (!s.teams.loaded && !s.teams.loading) {
@@ -68,7 +89,9 @@ export async function loadBoardSection(render) {
       if (!s.teamId && items.length === 1) s.teamId = items[0].teamId;
     } catch (error) {
       if (!live(s, generation)) return;
-      s.teams = { items: [], loaded: true, loading: false, error: errorInfo(error) };
+      const info = errorInfo(error);
+      if (info.status === 404) info.code = "notFound";
+      s.teams = { items: [], loaded: true, loading: false, error: info };
     }
     render();
   }
@@ -104,17 +127,37 @@ async function loadBoard(render, { keepPlacements = false } = {}) {
 async function rereadPlacements(render) {
   const s = boardState();
   const generation = s.generation;
-  for (const p of Object.values(s.placements)) {
-    try {
-      const answer = await fetchPlacement({ teamId: s.teamId, candidateId: s.board.session.candidateId, pair: s.board.pair.index, fieldId: p.fieldId, targetId: p.targetId });
-      if (!live(s, generation)) return;
-      s.placements[p.fieldId] = { ...p, placement: answer.placement, checked: false, again: true };
-    } catch {
-      if (!live(s, generation)) return;
-      delete s.placements[p.fieldId];
-    }
-  }
+  const board = s.board;
+  const stillThis = () => live(s, generation) && s.board === board;
+  // The ticks go at once, and the board is held until every placement is read for the pair on screen.
+  for (const p of Object.values(s.placements)) s.placements[p.fieldId] = { ...p, checked: false, again: true };
+  if (Object.keys(s.placements).length === 0) { render(); return; }
+  s.loading = true;
   render();
+  try {
+    for (const p of Object.values(s.placements)) {
+      try {
+        const answer = await fetchPlacement({ teamId: s.teamId, candidateId: board.session.candidateId, pair: board.pair.index, fieldId: p.fieldId, targetId: p.targetId });
+        if (!stillThis()) return;
+        if (s.placements[p.fieldId]) s.placements[p.fieldId] = { ...s.placements[p.fieldId], placement: answer.placement, checked: false, again: true };
+      } catch {
+        if (!stillThis()) return;
+        delete s.placements[p.fieldId];
+      }
+    }
+  } finally {
+    if (stillThis()) { s.loading = false; render(); }
+  }
+}
+// Reads the board again and keeps the admin's own rows, each read again for what is on screen now.
+async function reloadKeeping(render) {
+  const s = boardState();
+  const keep = { placements: s.placements, preplaced: s.preplaced, extra: s.extra };
+  const ok = await loadBoard(render, { keepPlacements: true });
+  if (!ok || boardState() !== s) return ok;
+  Object.assign(s, keep);
+  await rereadPlacements(render);
+  return true;
 }
 
 async function loadHistory(render, { more = false } = {}) {
@@ -222,14 +265,25 @@ async function send(render) {
     s.saved = summary;
     s.notice = "";
     s.live = summary ? `Saved. Switched on for ${summary.team}.` : "Switched off.";
-    await loadBoard(render);
     s.history = emptyBoardState().history;
+    if (summary) {
+      // What was saved is no longer the admin's to send: it goes before the board is read again.
+      clearForms(s);
+      await loadBoard(render);
+    } else {
+      // A Switch off leaves the admin's unsaved rows where they are.
+      s.panel = null;
+      s.review = false;
+      await reloadKeeping(render);
+    }
+    focus("mb-outcome");
   } catch (error) {
     if (!live(s, generation)) return;
     const info = errorInfo(error);
-    if (outcomeUnknown(info)) {
-      s.write = { ...w, sending: false, unconfirmed: true, note: w.checkedOnce ? "Still no answer. Wait a moment and check again." : "" };
+    if (outcomeUnknown(info) || (w.checkedOnce && !checkSettles(info))) {
+      s.write = { ...w, sending: false, unconfirmed: true, note: w.checkedOnce ? checkNote(info) : "" };
       render();
+      focus("mb-outcome");
       return;
     }
     // A stated refusal: nothing was saved.
@@ -237,18 +291,11 @@ async function send(render) {
     s.switchOff = null;
     s.review = false;
     if (info.status === 404) info.code = "notFound";
-    if (w.kind === "save" && info.code === "request_key_reused") s.notice = boardErrorText(info);
-    else s.notice = boardErrorText(info);
-    const marked = w.kind === "save" && Number.isInteger(info.current?.rowIndex) ? w.body.rows[info.current.rowIndex] : null;
-    const keep = { placements: s.placements, preplaced: s.preplaced, extra: s.extra };
-    const ok = await loadBoard(render, { keepPlacements: true });
+    s.notice = boardErrorText(info);
+    await reloadKeeping(render);
     if (!live(s, generation)) return;
-    if (ok) {
-      Object.assign(s, keep);
-      if (marked?.kind === "new" && s.placements[marked.fieldId]) s.placements[marked.fieldId] = { ...s.placements[marked.fieldId], checked: false, again: true };
-      await rereadPlacements(render);
-    }
     render();
+    focus("mb-outcome");
   }
 }
 
@@ -256,6 +303,7 @@ function startSave(render) {
   const s = boardState();
   if (s.write || !s.board) return null;
   if (newRows(s).some((p) => !p.checked)) return null;
+  if (newRows(s).length + preplacedRows(s).length > MAX_ROWS) return null;
   const body = saveBody(s, newRequestKey());
   if (body.rows.length === 0) return null;
   s.write = { kind: "save", body, summary: savedSummary(s, body), sending: false, unconfirmed: false };
@@ -283,12 +331,12 @@ export async function handleBoardAction(action, { render }) {
     boardState().teams = teams;
     render();
   } else if (act === "reload") {
-    if (!s.teams.loaded || s.teams.error) { s.teams = emptyBoardState().teams; await loadBoardSection(render); } else await loadBoard(render, { keepPlacements: false });
+    if (!s.teams.loaded || s.teams.error) { s.teams = emptyBoardState().teams; await loadBoardSection(render); } else await reloadKeeping(render);
   } else if (act === "tab") {
     const tab = action.dataset.boardTab === "history" ? "history" : "map";
     if (tab === s.tab) return true;
     if (tab === "history" && unsavedCount(s) > 0 && !boardMayBeLeft()) return true;
-    if (tab === "history") dropBoardForms();
+    if (tab === "history") clearForms(s);
     s.tab = tab;
     render();
     if (tab === "history" && !s.history.loaded) await loadHistory(render);
@@ -304,10 +352,15 @@ export async function handleBoardAction(action, { render }) {
     const column = columnOf(s.board, s.picked);
     s.live = column ? `${column.label} chosen. Choose a variable for it.` : "";
     render();
-    if (s.picked) focus("mb-targets-title");
+    if (s.picked) { focus("mb-targets-title"); focusFirst(".mb-slot.is-target .mb-slot-open"); }
   } else if (act === "unpick") {
+    const fieldId = s.picked;
     s.picked = null;
     render();
+    if (fieldId) focusFirst(columnSelector(fieldId));
+  } else if (act === "dismiss") {
+    // The backdrop of a phone's sheet: what Escape does.
+    closeBoardOverlay(render);
   } else if (act === "place") {
     if (s.picked) await openPlacement(s.picked, action.dataset.variableId, render);
   } else if (act === "compare") {
@@ -323,12 +376,14 @@ export async function handleBoardAction(action, { render }) {
     if (s.panel && s.placements[s.panel.fieldId]) s.placements[s.panel.fieldId].fresh = false;
     s.panel = null;
     render();
+    focusFirst(SAVE_BAR);
   } else if (act === "cancel") {
     // Cancel removes this placement; a refusal or an error only closes.
     const fieldId = s.panel?.fieldId;
     if (fieldId && s.panel?.placement?.placeable === true && s.placements[fieldId]) delete s.placements[fieldId];
     s.panel = null;
     render();
+    if (fieldId) focusFirst(columnSelector(fieldId));
   } else if (act === "remove") {
     delete s.placements[action.dataset.fieldId];
     if (s.panel?.fieldId === action.dataset.fieldId) s.panel = null;
@@ -339,7 +394,8 @@ export async function handleBoardAction(action, { render }) {
     render();
   } else if (act === "pre-add") {
     const id = action.dataset.versionId;
-    s.preplaced = { ...s.preplaced, [id]: { ...(s.preplaced[id] || {}), removed: false, added: true } };
+    if (newRows(s).length + preplacedRows(s).length >= MAX_ROWS) s.notice = `A save holds at most ${MAX_ROWS} rows. Save these first.`;
+    else s.preplaced = { ...s.preplaced, [id]: { ...(s.preplaced[id] || {}), removed: false, added: true } };
     render();
   } else if (act === "off-add") {
     // A mapping an administrator switched off: placed again by hand, through its own placement.
@@ -351,9 +407,10 @@ export async function handleBoardAction(action, { render }) {
     s.pair = act === "first-athletes" ? 0 : (s.board?.pair?.index ?? s.pair) + 1;
     s.panel = null;
     s.review = false;
-    const keep = { placements: s.placements, preplaced: s.preplaced, extra: s.extra };
-    const ok = await loadBoard(render, { keepPlacements: true });
-    if (ok) { Object.assign(boardState(), keep); await rereadPlacements(render); }
+    const before = s.board?.pair?.index ?? 0;
+    const ok = await reloadKeeping(render);
+    // A failed read leaves the pair that is on record, so Try again reads it and not the next one.
+    if (!ok && boardState() === s) s.pair = before;
   } else if (act === "review") {
     s.review = true;
     s.panel = null;
@@ -363,14 +420,16 @@ export async function handleBoardAction(action, { render }) {
   } else if (act === "review-close") {
     s.review = false;
     render();
+    focusFirst(SAVE_BAR);
   } else if (act === "save") {
     await startSave(render);
   } else if (act === "check-result") {
     if (s.write?.unconfirmed) { s.write.checkedOnce = true; s.write.unconfirmed = false; await send(render); }
   } else if (act === "switch-off-open") {
     const on = (s.board.on || []).find((o) => o.activationId === action.dataset.activationId);
-    if (on) s.switchOff = { activationId: on.activationId, label: `${columnOf(s.board, on.fieldId)?.label || "the column"} → ${variableOf(s.board, on.variableId)?.label || "the variable"}` };
+    if (on) s.switchOff = { activationId: on.activationId, variableId: on.variableId, label: `${columnOf(s.board, on.fieldId)?.label || "the column"} → ${variableOf(s.board, on.variableId)?.label || "the variable"}` };
     render();
+    focus("mb-switch-off-title");
   } else if (act === "switch-off-cancel") {
     s.switchOff = null;
     render();
@@ -406,7 +465,8 @@ export function handleBoardInput(target, { render }) {
 export function closeBoardOverlay(render) {
   const s = state.trainingLoad.board;
   if (!s || s.write) return false;
-  if (s.review) s.review = false;
+  if (s.switchOff) s.switchOff = null;
+  else if (s.review) s.review = false;
   else if (s.panel) { if (s.panel.placement?.placeable === true && s.placements[s.panel.fieldId]?.fresh) delete s.placements[s.panel.fieldId]; s.panel = null; } else if (s.picked) s.picked = null;
   else return false;
   render();

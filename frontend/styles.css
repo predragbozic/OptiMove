@@ -26541,7 +26541,10 @@ button.mb-col:focus-visible, .mb-slot-open:focus-visible { outline: none; box-sh
   padding: var(--om-space-2) var(--om-space-3); border: 2px dashed var(--om-border-subtle); border-radius: var(--om-radius-md); font-size: var(--om-text-sm);
 }
 .mb-slot > .mb-slot-main, .mb-slot-open > .mb-slot-main { flex: 1 1 0; min-width: 120px; }
-.mb-slot .om-badge, .mb-slot-act { flex: none; white-space: nowrap; }
+.mb-slot-act { flex: none; white-space: nowrap; }
+.mb-slot .om-badge, .mb-header .om-badge { flex: 0 1 auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.mb-team, .mb-target { overflow-wrap: anywhere; }
+div.mb-slot-open { cursor: default; }
 @media (min-width: 761px) { .mb-slot { flex-wrap: nowrap; } .mb-slot.is-new { flex-wrap: wrap; } }
 .mb-slot.is-empty { padding: 0; }
 .mb-slot-open {
@@ -26603,7 +26606,7 @@ button.mb-col:focus-visible, .mb-slot-open:focus-visible { outline: none; box-sh
   body:has(.mb-screen.has-sheet) { overflow: hidden; }
   .mb-sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 1200; background: rgba(13, 27, 36, .46); }
   .mb-sheet {
-    display: grid; gap: var(--om-space-3); position: fixed; left: 0; right: 0; bottom: 0; z-index: 1201; max-height: 88dvh; overflow-y: auto;
+    display: grid; gap: var(--om-space-3); position: fixed; left: 0; right: 0; bottom: 0; z-index: 1201; max-height: 88vh; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain;
     padding: var(--om-space-4) var(--om-space-4) calc(var(--om-space-4) + env(safe-area-inset-bottom, 0px));
     border-radius: 16px 16px 0 0; background: var(--surface); box-shadow: 0 -12px 40px rgba(14, 28, 37, .28);
   }
@@ -26611,4 +26614,7 @@ button.mb-col:focus-visible, .mb-slot-open:focus-visible { outline: none; box-sh
   .mb-sheet .om-card__actions { display: grid; }
   .mb-sheet .om-card__actions .om-btn { width: 100%; }
   .mb-check input { width: 24px; height: 24px; }
+  .mb-tech summary { display: flex; align-items: center; min-height: var(--om-tap-target); }
+  .mb-col-item { gap: 0; }
+  .mb-sheet .mb-notice { margin: 0; }
 }

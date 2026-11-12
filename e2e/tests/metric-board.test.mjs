@@ -100,6 +100,16 @@ test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no d
       const page = admin.page;
       await openBoard(page);
       assert.equal(await page.locator("[data-mb-drag-field]").count(), 0, "nothing drags on a phone");
+      const summary = await page.locator(".mb-tech summary").first().boundingBox();
+      assert.ok(summary.height >= 44, `Technical details is ${summary.height}px tall`);
+      // Switch off asks in the bottom sheet, in view, not somewhere up the page.
+      await page.tap(`[data-action="metric-board-switch-off-open"][data-activation-id="${activationId}"]`);
+      const question = page.locator(".mb-sheet", { hasText: "Switch off TotDist" });
+      await question.waitFor({ timeout: 10_000 });
+      const qBox = await question.boundingBox();
+      assert.ok(qBox.y >= 0 && qBox.y + qBox.height <= 844 + 1, "the question is inside the viewport");
+      await page.tap('.mb-sheet [data-action="metric-board-switch-off-cancel"]');
+      await page.waitForSelector(".mb-sheet", { state: "detached" });
       await switchOff(page, activationId);
       await page.tap(`[data-action="metric-board-pick"][data-field-id="${fieldId}"]`);
       await page.waitForSelector(".mb-sheet");

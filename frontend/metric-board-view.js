@@ -4,7 +4,7 @@
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
-  BOARD_ERROR, COLUMN_REASON, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
+  BOARD_ERROR, COLUMN_REASON, MAX_ROWS, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
   preplacedRows, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
@@ -37,7 +37,7 @@ function header(s) {
       <div>
         <p class="om-eyebrow">Data configuration</p>
         <h2 class="om-page-header__title" id="metric-board-title" tabindex="-1">Map by drag and drop</h2>
-        <p class="muted mb-lead">After a search you see what GPEXE sent. Drag a column onto your variable. OptiMove proposes the conversion and shows two athletes. Compare them with the GPEXE screen and confirm. That confirmation is the evidence.</p>
+        <p class="muted mb-lead">After a search you see what GPEXE sent. ${sourceFieldDragAvailable() && !isPhone() ? "Drag a column onto your variable." : "Tap a column, then your variable."} OptiMove proposes the conversion and shows two athletes. Compare them with the GPEXE screen and confirm. That confirmation is the evidence.</p>
       </div>
       ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)} — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}</span>
         ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}</div>` : ""}
@@ -46,6 +46,7 @@ function header(s) {
 
 function whichTeam(s) {
   if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">Loading the club's teams...</p>`;
+  if (s.teams.error?.code === "notFound") return `<div class="om-empty" role="status"><p class="om-empty__title">${BOARD_ERROR.notFound}</p></div>`;
   if (s.teams.error) return `<div class="om-empty" role="status"><p class="om-empty__title">The teams could not be read.</p><div class="om-empty__actions"><button type="button" class="om-btn" data-action="metric-board-reload">Try again</button></div></div>`;
   if (s.teams.items.length === 0) {
     return `<div class="om-empty" role="status"><p class="om-empty__title">No team of your club is linked to GPEXE yet.</p><p class="om-empty__text">Link one in Settings &gt; Source connections.</p></div>`;
@@ -108,7 +109,7 @@ function slotHtml(s, v, drag) {
     const state_ = p.placement?.placeable !== true ? `<span class="om-badge om-badge--warning">Cannot be saved</span>`
       : p.checked ? `<span class="om-badge om-badge--success">Compared</span>` : `<span class="om-badge om-badge--warning">${p.again ? "Compare again" : "Not compared yet"}</span>`;
     return `<li class="mb-slot is-new">${head(`From ${col} · not saved yet`)}${unit}${state_}
-      <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-compare" data-field-id="${escapeAttr(p.fieldId)}" ${off}>Compare</button>
+      <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-compare" data-field-id="${escapeAttr(p.fieldId)}" ${off}>${p.checked ? "View check" : "Compare"}</button>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-remove" data-field-id="${escapeAttr(p.fieldId)}" ${off}>Remove</button></li>`;
   }
   if (slot.kind === "preplaced") {
@@ -134,6 +135,8 @@ function slotHtml(s, v, drag) {
   }
   const picked = s.picked ? columnOf(board, s.picked) : null;
   const sub = picked ? `Fill from ${name(picked.label)}` : drag ? "Empty · drag a column here" : "Empty · choose a column for it";
+  // On a phone a column is chosen first and its variable in the sheet: the empty slot is not a control there.
+  if (isPhone()) return `<li class="mb-slot is-empty"><div class="mb-slot-open">${head(sub)}${unit}</div></li>`;
   return `<li class="mb-slot is-empty ${picked ? "is-target" : ""}" ${drag ? `data-mb-drop-variable data-variable-id="${escapeAttr(v.id)}"` : ""}>
     <button type="button" class="mb-slot-open" data-action="metric-board-place" data-variable-id="${escapeAttr(v.id)}" ${picked && !busy(s) ? "" : 'aria-disabled="true"'}
       aria-label="${escapeAttr(`${cleanName(v.label)}, ${v.unit || "no unit"}${picked ? `, fill from ${cleanName(picked.label)}` : ", empty"}`)}">${head(sub)}${unit}</button></li>`;
@@ -150,7 +153,7 @@ function boardCards(s) {
       <section class="om-card mb-card" aria-labelledby="mb-columns-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-columns-title">GPEXE columns</h3></div>
         <p class="muted mb-note">From the session of ${escapeHtml(dateTime(board.session.startedAt))}. ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
-        <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <strong>${name(board.pair.labels[1])}</strong>.
+        <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
         <ul class="mb-list">${board.columns.map((c) => columnHtml(s, c, drag)).join("")}</ul>
       </section>
@@ -221,13 +224,14 @@ function panelBody(s) {
 function panelHtml(s) {
   if (!s.panel) {
     if (isPhone()) return "";
-    return `<section class="om-card mb-panel is-empty" aria-live="polite"><h3 class="om-card__title">${sourceFieldDragAvailable() ? "Drag a column onto a variable" : "Tap a column, then a variable"}</h3><p class="muted">The check for two athletes appears here.</p></section>`;
+    return `<section class="om-card mb-panel is-empty"><h3 class="om-card__title">${sourceFieldDragAvailable() ? "Drag a column onto a variable" : "Tap a column, then a variable"}</h3><p class="muted">The check for two athletes appears here.</p></section>`;
   }
-  if (isPhone()) return sheet("mb-panel-title", panelBody(s), "metric-board-cancel");
-  return `<section class="om-card mb-panel" aria-live="polite" aria-labelledby="mb-panel-title">${panelBody(s)}</section>`;
+  if (isPhone()) return sheet("mb-panel-title", panelBody(s), "metric-board-dismiss");
+  return `<section class="om-card mb-panel" aria-labelledby="mb-panel-title">${panelBody(s)}</section>`;
 }
 
 // The one bottom sheet of a phone (the roster's pattern: a backdrop, a dialog, the page behind does not scroll).
+// `labelledBy` and `cancelAction` are this file's own constants; `body` is HTML already escaped by its builder.
 function sheet(labelledBy, body, cancelAction) {
   return `<div class="mb-sheet-backdrop" data-action="${cancelAction}"></div>
     <section class="mb-sheet" role="dialog" aria-modal="true" aria-labelledby="${labelledBy}">${body}</section>`;
@@ -258,8 +262,8 @@ function saveBar(s) {
   const count = rowsCount(s);
   const label = `Save and switch on for ${name(teamName(s))}`;
   return `<div class="mb-savebar ${count === 0 ? "is-idle" : ""}">
-    <button type="button" class="om-btn om-btn--primary" data-action="metric-board-review" ${count > 0 && !busy(s) ? "" : "disabled"} aria-describedby="mb-savebar-note">${label}</button>
-    <span class="muted" id="mb-savebar-note">${count === 0 ? "Place a column first." : `${count} ${count === 1 ? "row" : "rows"} to switch on.`}</span>
+    <button type="button" class="om-btn om-btn--primary" data-action="metric-board-review" ${count > 0 && count <= MAX_ROWS && !busy(s) ? "" : "disabled"} aria-describedby="mb-savebar-note">${label}</button>
+    <span class="muted" id="mb-savebar-note">${count === 0 ? "Place a column first." : count > MAX_ROWS ? `A save holds at most ${MAX_ROWS} rows. Remove ${count - MAX_ROWS} first.` : `${count} ${count === 1 ? "row" : "rows"} to switch on.`}</span>
   </div>`;
 }
 
@@ -295,6 +299,7 @@ function reviewBody(s) {
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
     <p class="muted" id="mb-review-note">${unticked.length ? `Tick every new column to save: ${unticked.map((p) => name(columnOf(s.board, p.fieldId)?.label)).join(", ")}.`
     : "Saved with it: who confirmed, when, and the two athletes' values of the columns you checked. That is the evidence. The values are kept for 90 days, then removed."}</p>
+    ${s.write?.kind === "save" ? writeHtml(s) : ""}
     <div class="om-card__actions">${send}<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-review-close" ${s.write ? "disabled" : ""}>Back</button></div>`;
 }
 function reviewHtml(s) {
@@ -307,7 +312,7 @@ function writeHtml(s) {
   const w = s.write;
   if (!w) return "";
   if (w.unconfirmed) {
-    return `<div class="mb-notice is-warning" role="alert"><p><strong>Result not confirmed.</strong> OptiMove did not get an answer. Check result sends the same request again: it is never saved twice.</p>
+    return `<div class="mb-notice is-warning" role="alert" id="mb-outcome" tabindex="-1"><p><strong>Result not confirmed.</strong> OptiMove did not get an answer. Check result sends the same request again: it is never saved twice.</p>
       ${w.note ? `<p>${escapeHtml(w.note)}</p>` : ""}
       <div class="om-card__actions"><button type="button" class="om-btn om-btn--primary" data-action="metric-board-check-result" ${w.sending ? "disabled" : ""}>Check result</button></div></div>`;
   }
@@ -318,43 +323,48 @@ function savedHtml(s) {
   const saved = s.saved;
   if (!saved) return "";
   const list = (rows) => rows.map((r) => `${name(r.column)} → ${name(r.variable)}`).join(", ");
-  return `<div class="mb-notice is-success" role="status"><p><strong>Saved.</strong> Switched on for ${name(saved.team)}: ${list(saved.rows)}.
+  const free = s.board.columns.some((c) => c.placeable && !columnUse(s, c.fieldId));
+  return `<div class="mb-notice is-success" role="status" id="mb-outcome" tabindex="-1"><p><strong>Saved.</strong> Switched on for ${name(saved.team)}: ${list(saved.rows)}.
     ${saved.checked.length ? `Checked by you on ${escapeHtml(dateOnly(saved.at))} with two athletes: ${saved.checked.map((r) => name(r.column)).join(", ")}.` : ""}
     ${saved.plain.length ? `Mappings with no check needed: ${saved.plain.map((r) => name(r.column)).join(", ")}.` : ""}</p>
-    <p>To use them, run <button type="button" class="om-btn om-btn--ghost mb-inline" data-action="training-load-section" data-section="imports">Find new sessions</button> in Imports again, with dates that include ${escapeHtml(dateOnly(saved.sessionAt))}. Sessions found from then on can be imported with these variables. ${sourceFieldDragAvailable() ? "Drag" : "Choose"} the next column.</p></div>`;
+    <p>To use them, run <button type="button" class="om-btn om-btn--ghost mb-inline" data-action="training-load-section" data-section="imports">Find new sessions</button> in Imports again, with dates that include ${escapeHtml(dateOnly(saved.sessionAt))}. Sessions found from then on can be imported with these variables.${free ? ` ${sourceFieldDragAvailable() && !isPhone() ? "Drag" : "Choose"} the next column.` : ""}</p></div>`;
 }
 
 function switchOffHtml(s) {
   const x = s.switchOff;
   if (!x) return "";
   const team = teamOf(s);
-  return `<div class="mb-notice is-warning" role="alertdialog" aria-labelledby="mb-switch-off-title">
-    <p id="mb-switch-off-title"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? ` — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}` : ""}?</strong> Sessions found from then on are imported without it.</p>
+  const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? ` — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}` : ""}?</strong> Sessions found from then on are imported without it.</p>
     <div class="om-card__actions"><button type="button" class="om-btn om-btn--danger" data-action="metric-board-switch-off" ${s.write ? "disabled" : ""}>Switch off</button>
-      <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div></div>`;
+      <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div>
+    ${s.write?.kind === "switch-off" ? writeHtml(s) : ""}`;
+  if (isPhone()) return sheet("mb-switch-off-title", body, "metric-board-dismiss");
+  return `<div class="mb-notice is-warning" role="group" aria-labelledby="mb-switch-off-title">${body}</div>`;
 }
 
 function mapTab(s) {
   if (s.loading && !s.board) return `<p class="muted" role="status">Reading the saved session...</p>`;
   if (s.error) {
     const linkAthletes = s.error.code === "not_enough_athletes";
-    const search = ["no_stored_session", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "session_start_unknown"].includes(s.error.code);
+    const search = ["candidate_too_large", "board_too_large", "no_stored_session", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "session_start_unknown"].includes(s.error.code);
     return `<div class="om-empty" role="status"><p class="om-empty__title">${escapeHtml(boardErrorText(s.error))}</p>
       <div class="om-empty__actions">
         ${search || linkAthletes ? `<button type="button" class="om-btn om-btn--primary" data-action="training-load-section" data-section="imports">${linkAthletes ? "Open Imports to link athletes" : "Open Imports to search"}</button>` : ""}
-        ${s.error.code === "pair_out_of_range" ? `<button type="button" class="om-btn" data-action="metric-board-first-athletes">Back to the first athletes</button>` : `<button type="button" class="om-btn" data-action="metric-board-reload">Read again</button>`}
+        ${s.error.code === "pair_out_of_range" ? `<button type="button" class="om-btn" data-action="metric-board-first-athletes">Back to the first athletes</button>` : `<button type="button" class="om-btn" data-action="metric-board-reload">Try again</button>`}
       </div></div>`;
   }
   if (!s.board) return "";
-  const phoneSheet = isPhone() ? (s.review ? reviewHtml(s) : s.panel ? panelHtml(s) : s.picked ? targetsSheet(s) : "") : "";
+  const phoneSheet = isPhone() ? (s.switchOff ? switchOffHtml(s) : s.review ? reviewHtml(s) : s.panel ? panelHtml(s) : s.picked ? targetsSheet(s) : "") : "";
+  // A write says what it is doing where the admin is: in the review, in the Switch off question, else here.
+  const writeHere = s.write && !(s.write.kind === "save" && s.review) && !(s.write.kind === "switch-off" && s.switchOff);
   return `
     ${savedHtml(s)}
-    ${s.notice ? `<p class="mb-notice is-warning" role="alert">${escapeHtml(s.notice)}</p>` : ""}
-    ${writeHtml(s)}
-    ${switchOffHtml(s)}
+    ${s.notice ? `<p class="mb-notice is-warning" role="alert" ${s.saved || s.write ? "" : 'id="mb-outcome" tabindex="-1"'}>${escapeHtml(s.notice)}</p>` : ""}
+    ${writeHere ? writeHtml(s) : ""}
+    ${isPhone() ? "" : switchOffHtml(s)}
     ${boardCards(s)}
     ${isPhone() ? "" : s.review ? reviewHtml(s) : panelHtml(s)}
-    ${saveBar(s)}
+    ${s.review && !isPhone() ? "" : saveBar(s)}
     ${phoneSheet}`;
 }
 
@@ -385,7 +395,7 @@ function historyTab(s) {
 export function renderBoardHtml() {
   const s = boardState();
   if (!boardContext()) return `<section class="mb-screen"><div class="om-empty" role="status"><p class="om-empty__title">${BOARD_ERROR.notFound}</p></div></section>`;
-  const sheetOpen = isPhone() && (s.review || s.panel || s.picked);
+  const sheetOpen = isPhone() && (s.switchOff || s.review || s.panel || s.picked);
   return `<section class="mb-screen ${sheetOpen ? "has-sheet" : ""}" data-mb-board>
     ${header(s)}
     ${!s.teamId ? whichTeam(s) : `${tabs(s)}${s.tab === "history" ? historyTab(s) : mapTab(s)}`}

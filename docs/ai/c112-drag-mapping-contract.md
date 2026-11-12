@@ -1799,16 +1799,24 @@ Frontend only, stacked on 18-3; no migration, no backend change. English texts o
   is a sentence and never becomes a row. *Other athletes* reads every placement again and takes every tick away.
 - **The save.** Offered only when every new row is ticked. The body carries identities, the display unit, the
   placement hash, the tick and the requirement: never a value, an athlete, a unit, a factor or an owner. One request
-  key per save; a lost answer is *Result not confirmed* and *Check result* sends the same request; a stated refusal
-  saves nothing, says so, reads the board again and takes the marked row's tick away. After a save: "Saved. Switched on
+  key per save; a lost answer is *Result not confirmed* and *Check result* sends the same request. A repeated request
+  settles only on the saved answer or on a `409` the service states by name: signed out, no access, a busy or a failed
+  server leave it not confirmed, with the same key. A stated refusal saves nothing, says so, reads the board again and
+  takes every tick away. The outcome is shown where the admin is (inside the review, inside the Switch off question,
+  on a phone inside the sheet) and takes the focus. A save holds at most 20 rows. After a save: "Saved. Switched on
   for <team>", the slot reads "On for <team>", and the notice links to *Find new sessions*.
 - **Switch off.** Asks first, then the existing `POST …/activations/:id/end` with its own request key.
 - **History.** The second tab: who confirmed and when, the session, each row with its conversion and the stored
   values as "Athlete A / Athlete B". No athlete name.
 - **Mappings.** `409 confirmation_required` on a club admin's *Activate* reads "Switch this version on from Map by
   drag and drop." with a button that opens the board.
+- **What stays in memory.** Leaving the board, by any way, drops what was read for it (the two athletes' names and
+  values, the notice of the last save, the history); the next visit reads the board again. A workspace change drops
+  everything, a team asked for by the stepper included.
 - **Leaving.** An unsaved placement, a save in flight and an unconfirmed result ask before a section, tab, team or
   workspace change and on `beforeunload`. Escape closes the topmost of review, panel, chosen column.
+- **Not checked, stated:** dragging in Firefox (the column is a `<button draggable>`; the e2e runs Chromium only; tap
+  a column and then a variable works in every browser).
 - **Left out of 18-4, stated:** the session chooser (the board uses the session route 1 picks) and the choice of the
   display unit (the first the server offers is sent).
 - **Tests:** `frontend/tests/metric-board.actions.test.mjs` (the real handlers and markup against answers captured
