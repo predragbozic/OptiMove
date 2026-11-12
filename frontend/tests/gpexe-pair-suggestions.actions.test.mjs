@@ -68,6 +68,7 @@ function server({ viewer, suggestions, onLink }) {
 const render = () => {};
 function reset(viewer, opts = {}) {
   clearAllViewCache();
+  suggestBase = 0;
   state.currentUser = { id: "user-1", activeWorkspace: { type: "team", scopeId: TEAM } };
   state.trainingLoad = emptyTrainingLoadState();
   state.activeTab = "training-load";
@@ -79,10 +80,15 @@ function reset(viewer, opts = {}) {
 }
 const act = (action, extra = {}, element = {}) => handleTrainingLoadAction({ dataset: { action, ...extra }, ...element }, { renderTrainingLoad: render });
 const pageHtml = () => renderTrainingLoadCoachHtml();
-const suggestCalls = () => fetchCalls.filter((c) => c.url.endsWith("/athlete-pair-suggestions"));
+// U6b: the Imports setup stepper reads the pair counts on the Imports load too (its own state, ids only); these tests
+// count the reads Link athletes makes, so the calls made before it opens are left out.
+let suggestBase = 0;
+const suggestCalls = () => fetchCalls.filter((c) => c.url.endsWith("/athlete-pair-suggestions")).slice(suggestBase);
 const posts = () => fetchCalls.filter((c) => c.method === "POST");
 async function openMapping() {
   await act("training-load-section", { section: "imports" });
+  await new Promise((r) => setTimeout(r, 0));
+  suggestBase = fetchCalls.filter((c) => c.url.endsWith("/athlete-pair-suggestions")).length;
   await act("training-load-gpexe-map-open");
 }
 const OK = (over = {}) => ({ state: "ok", snapshotCount: 4, expiresAt: "2026-11-20T00:00:00Z", exact: [], ambiguous: [], dateConflicts: [], ...over });
@@ -248,14 +254,18 @@ test("9. overlapping reads: the newest call wins whatever the order of the answe
   let n = 0;
   reset("coach", { suggestions: () => new Promise((resolve) => { const i = n++; gates[i] = (body) => resolve({ status: 200, body }); }) });
   await act("training-load-section", { section: "imports" });
+  await new Promise((r) => setTimeout(r, 20));
+  // U6b: the setup stepper's own read on the Imports load (it never touches gx.suggestions); answer it first.
+  const before = n;
+  for (let i = 0; i < before; i += 1) gates[i](OK());
   const first = act("training-load-gpexe-map-open");
   await new Promise((r) => setTimeout(r, 20));
   const { loadPairSuggestions } = await import("../gpexe-import-data.js");
   const second = loadPairSuggestions(render);
   await new Promise((r) => setTimeout(r, 20));
-  gates[1](OK({ exact: [pair(0, { gpexeName: "Newest" })] }));
+  gates[before + 1](OK({ exact: [pair(0, { gpexeName: "Newest" })] }));
   await second;
-  gates[0](OK({ exact: [pair(0, { gpexeName: "Oldest" })] }));
+  gates[before](OK({ exact: [pair(0, { gpexeName: "Oldest" })] }));
   await first;
   assert.equal(state.trainingLoad.gpexe.suggestions.data.exact[0].gpexeName, "Newest");
 });

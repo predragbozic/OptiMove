@@ -100,9 +100,9 @@ test("1. guideSteps: states come from the facts, a failed read is never done, a 
   assert.equal(st({ ...base, sourceAthletes: [{ status: "unlinked" }, { status: "linked" }] }), "1:done 2:done 3:done 4:next 5:waiting");
   assert.equal(st({ ...base, sourceAthletesError: { status: 500 } }), "1:done 2:done 3:done 4:unknown 5:waiting");
   const coach = guideSteps({ admin: false, check: null, candidates: [], sourceAthletes: null });
-  assert.deepEqual(coach.steps.map((s) => s.id), [1, 3, 4, 5]);
+  assert.deepEqual(coach.steps.map((s) => s.id), [1, 4, 5], "U6b: the administrator's three steps are one row for a coach");
   assert.equal(coach.steps[0].merged, true);
-  assert.equal(coach.steps.find((s) => s.id === 3).action, null, "a coach has no Find sessions button");
+  assert.equal(coach.steps.find((s) => s.id === 4).action, null, "a coach has no Find sessions button");
   assert.equal(coach.variables, null);
   assert.match(guideSteps({ ...base, teamSwitch: { enabled: false }, sourceAthletes: [{ status: "linked" }] }).steps[4].text, /switched off for this team/);
 });
@@ -126,7 +126,7 @@ test("3. the coach's guide reads nothing of connections, mappings or activations
   await open();
   assert.ok(!fetchCalls.some((c) => /sources\/(gpexe\/connections|metrics)/.test(c.url)), "no administrator read");
   const g = guideHtml();
-  assert.match(g, /Connect and approve/);
+  assert.match(g, /Connect, team and variables/);
   assert.ok(!/Use OptiMove variables/.test(g));
   assert.ok(!/training-load-gpexe-check/.test(g), "step 3 has no button for a coach");
 });
@@ -362,6 +362,9 @@ test("19. an unbound team shows Waiting for steps 1 and 2 on the variables row; 
   reset({ connections: () => ({ status: 200, body: { connections: [{ id: "c", state: "verified", boundTeams: [] }] } }) });
   await open();
   assert.ok(!/Use OptiMove variables<\/strong>[\s\S]*?Checking\.\.\./.test(guideHtml()));
+  // U6b: the open step is the first that is not done (Choose team); the Variables step opens on a click.
+  assert.match(guideHtml(), /aria-current="step"[\s\S]*?Choose team/);
+  await act("training-load-gpexe-guide-step", { step: "3" });
   assert.match(guideHtml(), /Waiting for steps 1 and 2\./);
   // binding change
   reset();
