@@ -520,6 +520,14 @@ function bannerText(gx, check) {
   const when = check?.finishedAt || check?.startedAt;
   // Honest: OptiMove does not look in GPEXE by itself yet, so the banner says what the last search found, not what waits.
   const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}` : "No search yet";
+  // IMP3 (the sketch's "Everything from GPEXE is imported."): only after a search that succeeded, with nothing ready,
+  // nothing that needs the person and at least one session imported - never after a failed, stopped or unknown search,
+  // and never from a list read before that search ended.
+  const imported = list.filter((c) => inboxBucket(c, gx) === "imported").length;
+  // The list must have been read after that search ended (a failed re-read keeps an older list).
+  const searchOk = check?.status === "succeeded" && gx.candidatesCheckId === check.id && !gx.error
+    && !gx.checkStarting && !gx.checkError && !gx.pollStopped;
+  if (gx.candidates && searchOk && !ready && !needs && imported) return `Everything from GPEXE is imported · ${head}`;
   const parts = [head];
   if (gx.candidates) {
     parts.push(`${ready} ready`);

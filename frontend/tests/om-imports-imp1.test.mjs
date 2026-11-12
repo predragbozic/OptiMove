@@ -21,7 +21,7 @@ const { handleTrainingLoadAction } = await import("../training-load-actions.js")
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, importsChooseToggled } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, importsChooseToggled, reloadGpexeCandidates } = await import("../gpexe-import-data.js");
 const { readFileSync } = await import("node:fs");
 
 setGpexePollDelayForTests(() => Promise.resolve());
@@ -318,4 +318,111 @@ test("IMP2 4: a mixed result names only the imported ones in its Activities sent
   await act("training-load-gpexe-batch-send");
   assert.match(dialog(), /You can see the imported ones in Training Load → Activities and in the Imported tab\./);
   assert.match(dialog(), /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-1<\/dd>/, "the raw GPEXE name stays under Technical details");
+});
+
+// IMP3: "Everything from GPEXE is imported." - the sketch's line, only when it is true.
+test("IMP3 1: the banner says everything is imported only after a succeeded search with nothing ready or needing the person, and something imported", async () => {
+  resetState();
+  const imported = (n) => ready(n, { status: "imported", importedAt: "2026-09-21T10:00:00Z", previewStatus: "no_changes" });
+  const ok = { id: "chk-1", status: "succeeded", startedAt: "2026-09-21T09:00:00Z", finishedAt: "2026-09-21T09:02:00Z" };
+  const server = gpexeServer({ candidates: [imported(1), imported(2)] });
+  installFetchMock(async (call) => (/\/status$/.test(call.url) ? { status: 200, body: { ...status(), lastCheck: ok } } : server(call)));
+  await openImports();
+  const banner = () => html().match(/<p class="imports-facts imports-lastsearch">([^<]*)<\/p>/)?.[1];
+  assert.equal(gx().candidatesCheckId, "chk-1", "the list was read with that finished search");
+  assert.match(banner(), /^Everything from GPEXE is imported · Last search \d{2}\.\d{2}\. \d{2}:\d{2}$/);
+  const clean = () => {
+    gx().status.lastCheck = ok; gx().check = ok; gx().candidatesCheckId = "chk-1";
+    gx().checkError = null; gx().pollStopped = false; gx().checkStarting = false; gx().error = null;
+  };
+  for (const [why, change] of [
+    ["a failed search", () => { gx().check = { ...ok, status: "failed" }; }],
+    ["a running search", () => { gx().check = { ...ok, status: "running" }; }],
+    ["a search that is starting", () => { gx().checkStarting = true; }],
+    ["a search whose start is not confirmed", () => { gx().checkError = { status: 503, code: "check_outcome_unknown" }; }],
+    ["a search that could not be followed", () => { gx().pollStopped = true; }],
+    ["no search at all", () => { gx().check = null; gx().status.lastCheck = null; }],
+    ["a list read before this search ended", () => { gx().candidatesCheckId = "chk-0"; }],
+    ["a list whose re-read failed", () => { gx().error = { status: 503, code: "database_busy" }; }],
+  ]) {
+    clean();
+    change();
+    assert.doesNotMatch(banner(), /Everything from GPEXE is imported/, why);
+  }
+  clean();
+  gx().candidates = [imported(1), ready(3)];
+  assert.match(banner(), /1 ready$/, "a ready session: the usual line");
+  gx().candidates = [imported(1), unlinked(4)];
+  assert.match(banner(), /1 needs you$/, "something needs the person: the usual line");
+  gx().candidates = [];
+  assert.match(banner(), /0 ready$/, "nothing imported (an empty search) is not 'everything is imported'");
+});
+
+test("IMP3 2: a search that ends while the list is being read again never shows 'everything is imported' from the old list", async () => {
+  resetState();
+  const imported = (n) => ready(n, { status: "imported", importedAt: "2026-09-21T10:00:00Z", previewStatus: "no_changes" });
+  const running = { id: "chk-2", status: "running", startedAt: "2026-09-21T09:00:00Z" };
+  let candidateReads = 0;
+  let secondRead = { status: 503, body: { error: "database_busy", message: "" } };
+  let releaseSecond;
+  const held = new Promise((r) => { releaseSecond = r; });
+  let holdSecond = false;
+  const base = gpexeServer({ candidates: [imported(1)] });
+  const banners = [];
+  installFetchMock(async (call) => {
+    if (/\/status$/.test(call.url)) return { status: 200, body: { ...status(), lastCheck: candidateReads > 1 ? { ...running, status: "succeeded", finishedAt: "2026-09-21T09:02:00Z" } : running } };
+    if (/\/checks\/chk-2$/.test(call.url)) return { status: 200, body: { check: { ...running, status: "succeeded", finishedAt: "2026-09-21T09:02:00Z" } } };
+    if (/\/candidates(\?|$)/.test(call.url)) {
+      candidateReads += 1;
+      if (candidateReads > 1) {
+        banners.push(html().match(/<p class="imports-facts imports-lastsearch">([^<]*)<\/p>/)?.[1] || "");
+        if (holdSecond) await held;
+        return secondRead;
+      }
+    }
+    return base(call);
+  });
+  const settle = async () => { for (let i = 0; i < 30; i += 1) await new Promise((r) => setImmediate(r)); };
+  const banner = () => html().match(/<p class="imports-facts imports-lastsearch">([^<]*)<\/p>/)?.[1];
+  await openImports();
+  await settle();
+  assert.equal(gx().check?.status, "succeeded");
+  assert.ok(candidateReads >= 2, "the list was read again after the search");
+  for (const b of banners) assert.doesNotMatch(b, /Everything from GPEXE is imported/, "not while the list is being read again");
+  assert.doesNotMatch(banner(), /Everything from GPEXE is imported/, "the re-read failed: the old list proves nothing");
+
+  // The same search, the re-read held: the line is absent until the new list (with a ready session) arrives, then the usual line.
+  resetState();
+  candidateReads = 0; banners.length = 0; holdSecond = true;
+  secondRead = { status: 200, body: { candidates: [imported(1), ready(3)] } };
+  await openImports();
+  await settle();
+  assert.equal(gx().check?.status, "succeeded");
+  assert.doesNotMatch(banner(), /Everything from GPEXE is imported/, "while the new list is on its way");
+  releaseSecond();
+  await settle();
+  assert.match(banner(), /1 ready$/);
+});
+
+test("IMP3 3: a list asked for while the search was still running does not count as read after it", async () => {
+  resetState();
+  const imported = (n) => ready(n, { status: "imported", importedAt: "2026-09-21T10:00:00Z", previewStatus: "no_changes" });
+  const base = gpexeServer({ candidates: [imported(1)] });
+  let release;
+  let hold = false;
+  installFetchMock(async (call) => {
+    if (hold && /\/candidates(\?|$)/.test(call.url)) await new Promise((r) => { release = r; });
+    return base(call);
+  });
+  await openImports();
+  const running = { id: "chk-3", status: "running", startedAt: "2026-09-21T09:00:00Z" };
+  gx().check = running;
+  hold = true;
+  const read = reloadGpexeCandidates(render);
+  await new Promise((r) => setImmediate(r));
+  gx().check = { ...running, status: "succeeded", finishedAt: "2026-09-21T09:02:00Z" };
+  release();
+  await read;
+  assert.equal(gx().candidatesCheckId, null);
+  assert.doesNotMatch(html(), /Everything from GPEXE is imported/);
 });
