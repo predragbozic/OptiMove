@@ -15,7 +15,8 @@ import { activateBinding } from "./support/mapped-world.mjs";
 
 const V64_FILE = "202611121200_training_load_v64_metric_estimate_requests.sql";
 // Every migration but the error-tracking one (an injected failure would be recorded as a row); v64 last.
-const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events"));
+// Through v64 only: a later migration (v65 and after) is not part of this suite's rehearsal, which expects v64 last.
+const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V64_FILE) + 1).filter((m) => !m.includes("app_error_events"));
 const UP_TO_V63 = MAIN_MIGRATIONS.filter((m) => m !== V64_FILE);
 const OTHER_TZ = "America/New_York";
 

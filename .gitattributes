@@ -57,6 +57,8 @@ docs/runbooks/import-states-v61*.sql text eol=lf
 docs/runbooks/metric-value-estimates-v63*.sql text eol=lf
 # 6b-B (v64): the rollback restores v12's and v63's bodies verbatim and checks them by md5; new files only, same reason.
 docs/runbooks/metric-value-estimates-v64*.sql text eol=lf
+# J18 M-A (v65): the rollback restores four T8 bodies, which the preflight and the post-check compare by md5; new files only.
+docs/runbooks/source-metric-confirmations-v65*.sql text eol=lf
 
 docs/runbooks/activity-roster-v26-rollback.sql text eol=lf
 docs/runbooks/gpexe-check-finalization-v33-rollback.sql text eol=lf
