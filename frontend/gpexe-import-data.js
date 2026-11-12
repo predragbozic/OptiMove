@@ -107,6 +107,8 @@ function resetGpexeTeamState(teamId) {
   gx.teamId = teamId;
   gx.status = null;
   gx.candidates = null;
+  // IMP3: the finished search the candidate list was read after (the banner's "everything is imported" needs it).
+  gx.candidatesCheckId = null;
   gx.links = null;
   gx.check = null;
   gx.error = null;
@@ -167,6 +169,7 @@ export async function loadGpexeTeam(render) {
     if (generation !== gx.generation) return;
     gx.status = status;
     gx.candidates = candidates.candidates;
+    gx.candidatesCheckId = status.lastCheck && status.lastCheck.status !== "running" ? status.lastCheck.id : null;
     gx.links = links.links;
     // The inbox is painted as soon as the mandatory data is here: a slow
     // helper read must not hold it back either.
@@ -237,10 +240,13 @@ function forgetConfirmedImports() {
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
+  // IMP3: a list asked for after a search ended reflects that search; one asked for during a search does not.
+  const afterCheck = gx.check && gx.check.status !== "running" ? gx.check.id : null;
   try {
     const { candidates } = await api(teamPath(gx.teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`));
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
+    gx.candidatesCheckId = afterCheck;
     forgetConfirmedImports();
     pruneBatchSelection(gx);
   } catch (error) {
