@@ -89,6 +89,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611121000_training_load_v63_metric_value_estimates.sql",
   "202611121200_training_load_v64_metric_estimate_requests.sql",
   "202611121800_training_load_v65_source_metric_confirmations.sql",
+  "202611122300_training_load_v67_gpexe_track_choices.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
