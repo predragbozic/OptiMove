@@ -1,6 +1,6 @@
-# Dashboard Simple atomic save (v62)
+# Dashboard Simple atomic save (v63)
 
-Migration: `migrations_v2/202611111100_training_load_v62_dashboard_simple_atomic_save.sql`.
+Migration: `migrations_v2/202611121000_training_load_v63_dashboard_simple_atomic_save.sql`.
 
 ## Preflight
 
@@ -21,6 +21,6 @@ Migration: `migrations_v2/202611111100_training_load_v62_dashboard_simple_atomic
 
 ## Rollback
 
-Restore the previous application version and stop dashboard writes before using [the rollback script](dashboard-simple-v62-rollback.sql). Run it with `psql -v ON_ERROR_STOP=1` only on the approved database. The script refuses if a later migration is present, the revision function changed, or saved presentations or request receipts exist. If it refuses, stop and plan a forward fix or an approved backup restore.
+Restore the previous application version and stop dashboard writes before using [the rollback script](dashboard-simple-v63-rollback.sql). Run it with `psql -v ON_ERROR_STOP=1` only on the approved database. The script refuses if a later migration is present, the revision function changed, or saved presentations or request receipts exist. If it refuses, stop and plan a forward fix or an approved backup restore.
 
 Before requesting release approval, rehearse apply, rollback, catalog comparison and reapply against a disposable copy of the target schema. Record the results in the PR.

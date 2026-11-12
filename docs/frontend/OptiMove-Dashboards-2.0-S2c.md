@@ -85,7 +85,7 @@ in the historical results. The isolated integration on main `5a2b39d` passed
 ## Main compatibility corrections
 
 The unpublished S2c migration is now
-`202611111100_training_load_v62_dashboard_simple_atomic_save.sql`, avoiding a timestamp collision
+`202611121000_training_load_v63_dashboard_simple_atomic_save.sql`, avoiding a timestamp collision
 with main's v46 migration. It is an unmerged Draft candidate, not a migration
 upgrade for any database that already recorded the old filename. Before any
 activation, verify the target ledger has neither S2c identity; if the old identity
