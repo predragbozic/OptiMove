@@ -195,8 +195,9 @@ same session finds it.
 - **Refusals** (409, nothing written): `not_multiple_tracks` (one track, or tracks MT-0 takes as one recording),
   `track_not_in_session` (a `trackId` that is not one of the athlete's tracks), `choice_changed` (a stale `expectedChoiceId`),
   `choice_final_after_import` (the candidate is imported: changing it needs the U5 undo first).
-- **Lock order** (decided, 2026-11-12), the approval's: an unlocked rights read (the fast 404) → the candidate FOR SHARE
-  (pending or blocked, its snapshot available) → the team import lock (blocking, with the approval's `lock_timeout` mapped to
+- **Lock order** (decided, 2026-11-12), the approval's: an unlocked rights read (the fast 404) → the candidate FOR SHARE,
+  only while it is pending or blocked (the undo locks imported candidates FOR UPDATE after the team lock, so an imported one is
+  never locked here; one an approval imports meanwhile no longer matches when the lock is granted), its snapshot available → the team import lock (blocking, with the approval's `lock_timeout` mapped to
   `try_again`) → the team and its club FOR SHARE (`lockApprovalTeam`) → the approver's rights FOR SHARE
   (`lock_gpexe_import_approver`), last as in the approval's step 6b → the current choice row FOR UPDATE → the insert → a bounded
   COMMIT. The request key's advisory lock on (author, key) comes first, as in v64. Written under the team lock, a choice is
