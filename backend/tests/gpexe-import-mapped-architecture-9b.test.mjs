@@ -397,8 +397,14 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   // The 7e raw spec's extract is gpexeLevelValues' parameter, and every caller
   // passes a registry entry's extract.
   // v62: the one other parameter is the options object carrying the team's session time zone (no spec, no value).
-  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)/);
-  const levelCalls = files.flatMap((g) => callsOf(g, "gpexeLevelValues").map((call) => ({ g, call })));
+  // J18 (18-2): `keyed` only adds each athlete's internal key to the answer; gpexeLevelValuesKeyed is the same read with
+  // it set (one call of gpexeLevelValues passing its own parameters through), and its callers are held to the same rule.
+  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\},\s*keyed\s*=\s*false\)/);
+  assert.match(mapper.code, /export function gpexeLevelValuesKeyed\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)\s*\{\s*return gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*\},\s*true\);\s*\}/);
+  const keyedCalls = files.flatMap((g) => callsOf(g, "gpexeLevelValuesKeyed").map((call) => ({ g, call })));
+  assert.deepEqual([...new Set(keyedCalls.map(({ g }) => g.rel))], ["sourceMetricBoardService.js"], "only the board reads the keyed values");
+  const levelCalls = [...keyedCalls, ...files.flatMap((g) => callsOf(g, "gpexeLevelValues").map((call) => ({ g, call })))
+    .filter(({ g, call }) => !(g.rel === "gpexeImportMapper.js" && enclosing(g, call.index, { named: true })?.name === "gpexeLevelValuesKeyed"))];
   assert.ok(levelCalls.length >= 1, "gpexeLevelValues has a caller");
   for (const { g, call } of levelCalls) {
     const entry = /^\s*[\w$.]+\s*,\s*\(\s*input\s*\)\s*=>\s*([A-Za-z_$][\w$]*)\.extract\s*\(/.exec(call.args)?.[1];

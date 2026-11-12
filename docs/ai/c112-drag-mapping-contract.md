@@ -1574,3 +1574,67 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
   is a backstop behind the revision guard and the actor guard, which refuse every case first; no test reaches it
   alone. The server log was checked by hand on the local server for the planted values (none found); the suite itself
   asserts the error's message, detail, hint and context.
+
+### 15.8 As built: 18-2, the board's reads
+
+Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links to these routes before 18-4.
+
+- **Routes** (`backend/src/routes/sourceMetrics.js`, under `/api/training-load/sources/metrics`), each `GET`,
+  `Cache-Control: no-store`, a strict query (an unknown or repeated key, a malformed id, a `pair` that is not a
+  non-negative integer is `400 invalid_query`, and only for a caller who is admitted):
+  - route 1, `/board?teamId[&candidateId][&pair]`: the board of a team;
+  - route 2, `/board/placement?teamId&candidateId&pair&fieldId&targetId`: one placement;
+  - route 4, `/confirmations?teamId[&cursor]` (50 per page) and route 5, `/confirmations/:confirmationId`.
+  Route 3 (the save) is 18-3.
+- **Audience.** Routes 1 and 2: the active admin of the team's club, or a platform admin, **in that club's
+  workspace** only. Routes 4 and 5 also admit a platform admin in the platform workspace (History, after an Unbind
+  or an archive). Everyone and everything else is the identical `404 {"error":"notFound"}`: a coach, no role,
+  another club's admin, an unknown, archived, unbound or other club's team, an unknown or other club's candidate,
+  an undone (v57) or superseded candidate, another club's or a hidden variable, an unknown field. A refusal about
+  the session is given only after all of that holds.
+- **Modules.** `backend/src/sourceMetricBoard.js` is pure: the display registry (version 1; `total_time` in s as
+  `mm:ss`, `total_distance` in m to one decimal, `max_v` in m/s as km/h to one decimal, exact decimal arithmetic),
+  the pair rule and the placement hash. `backend/src/sourceMetricBoardService.js` reads the database through the
+  M2 kit's bounded read. `gpexeImportMapper.js` gains `gpexeLevelValuesKeyed` (the 7e raw read with each athlete's
+  internal key); the importer's architecture guard holds its one caller, the board, to the registry's extractors.
+- **The stored session.** The newest by its start among the team's candidates that are not undone or superseded,
+  whose snapshot is present and not expired, whose check ran through the team's current binding and whose start is
+  known. Chosen by id, each state has its own answer: `409 snapshot_expired` (`current.reason` `expired` or
+  `purged`), `409 session_start_unknown`, `409 candidate_source_mismatch`, `409 candidate_too_large`,
+  `409 candidate_not_importable` (the import's own gate, with its code). No candidate: `409 no_stored_session`.
+- **The pair** (section 6.1, R6). Only athletes OptiMove can name: a link's athlete name first, then the stored
+  GPEXE identity's `display_name` (never its date of birth; the identity service is not called). Pairs are ranked
+  by how many placeable columns they can prove (both values there, non-zero and different), ties by the internal
+  key, at most 200. `pair` is an index in that order; the answer carries `{ index, count, labels }` and never an
+  athlete id or a GPEXE athlete id. Fewer than two such athletes, or no pair that proves a column:
+  `409 not_enough_athletes`; an index past the end: `409 pair_out_of_range` with the count. No distance fallback.
+- **The board** (`board`): `team`, `session`, `pair`, `displayRegistryVersion`; `columns` (every `gpexe` /
+  `rest_v1` field with its label, its proven unit or none, `placeable`, one `reason` of `field_not_confirmed`,
+  `field_has_parameters`, `source_metric_unsupported`, `display_rule_missing`, `no_value_for_pair`, the display rule
+  and units, and the pair's two raw values); `variables` (the club's, then OptiMove's that the club does not hide;
+  an OptiMove variable is a target only through OptiMove's own active mapping); `on` (open activations of the
+  team); `preplaced` (OptiMove's and the club's active versions that are not on, not switched off by an
+  administrator and not on a hidden variable, each with the pair's raw and stored values and a placement hash);
+  `replaceable` (the same, when it collides with something that is on, with what it would replace); `switchedOff` (ended by an administrator: who and when; never placed again by itself, Q9).
+- **A placement** is always `200` for an admitted caller with known ids: either `placeable: false` with one code
+  (`target_scope_mismatch`, `activation_exists`, the column's reason, `target_not_usable`, `condition_mismatch`,
+  `conversion_unavailable`, `level_not_allowed`, `source_metric_target_taken`, `mapping_version_active`,
+  `pair_not_distinct`, `value_outside_limits`; a refusal carries no value) or the proposal: the conversion (the one
+  active one, or `same_unit`), the levels, the two athletes' raw and stored values, what the GPEXE screen shows per
+  display unit, one `placementHashes[unit]`, `reusesVersionId` when the club's own active version is the same
+  contract, and the `collisions` with what is on for the team.
+- **The placement hash** is sha256 over the candidate's bundle hash, the pair index, the field revision, the target
+  version or the mapping version, the conversion, the display rule and unit, and the four values. It is a
+  concurrency token, not a secret; nothing stores it. 18-3 recomputes it on the save.
+- **History.** A row's `valuesState` is `present`, `expired`, `erased` or `not_compared`. A value is never returned
+  past `values_expire_at`, removed or not. Before a History read the service runs one batch of
+  `remove_expired_confirmation_values` on its own connection; a failure is logged by its SQLSTATE only and never
+  fails the read. The confirmer is returned by name, never by id.
+- **Never:** a GPEXE request, an identity load, a date of birth, a write other than that removal batch, a lock.
+- **Tests:** `backend/tests/source-metric-board-18-2.test.mjs` (disposable database, the real HTTP stack, 8 tests:
+  the audience matrix, the board, the session states, placements, what exists on the team, a hidden variable,
+  History with expiry and a failed removal, and the leak scan of every answer and log line) and
+  `backend/tests/source-metric-board.unit.test.mjs` (6 tests, the pure module).
+- **Not covered, stated:** no test counts the calls of `resolveActiveWorkspace` (the routes go through the
+  router's existing `adminContext`, once per request); `candidate_too_large` and `candidate_not_importable` have no
+  test of their own; the routes were not run against a real GPEXE bundle.
