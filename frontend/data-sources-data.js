@@ -85,6 +85,9 @@ export function resetDataSourcesForms() {
   d.revokeConfirm = null;
   d.revokeError = null;
   d.historyOpen = false;
+  d.tzOpen = false;
+  d.tzError = null;
+  d.tzDraft = { timezone: "", reason: "" };
 }
 
 function resetTeamState(teamId) {
@@ -96,6 +99,8 @@ function resetTeamState(teamId) {
   // change clears all three here. Closing a form does not: that would unlock
   // a write that is still running.
   d.connectBusy = false;
+  d.tzBusy = false;
+  d.timezone = null;
   d.grantBusy = false;
   d.revokeBusy = false;
   d.teamId = String(teamId || "");
@@ -151,15 +156,18 @@ export async function loadDataSourcesTeam(render) {
   d.error = null;
   render();
   try {
-    const [status, history, approvers] = await Promise.all([
+    const [status, history, approvers, timezone] = await Promise.all([
       api(teamPath(teamId, "/status")),
       api(teamPath(teamId, "/settings/history")),
       api(teamPath(teamId, "/approvers")),
+      // v62: a helper read - its failure only marks the time zone as unreadable, never the whole team.
+      api(teamPath(teamId, "/session-timezone")).then((r) => r.sessionTimezone || { current: null, history: [] }, (error) => ({ error: errorInfo(error) })),
     ]);
     if (generation !== d.generation) return;
     d.status = status;
     d.history = history.history || [];
     d.approvers = approvers.approvers || [];
+    d.timezone = timezone;
   } catch (error) {
     if (generation !== d.generation) return;
     d.error = errorInfo(error);
@@ -215,6 +223,44 @@ export async function saveGpexeConnection(render) {
 // ---------------------------------------------------------------------------
 // Who may approve an import
 // ---------------------------------------------------------------------------
+
+// v62: the time zones a browser knows, for the picker; the server checks the choice again.
+export function timezoneOptions() {
+  try {
+    if (typeof Intl.supportedValuesOf === "function") return Intl.supportedValuesOf("timeZone");
+  } catch {
+    // fall through
+  }
+  return ["Europe/Sarajevo", "Europe/Belgrade", "Europe/Zagreb", "Europe/London", "Europe/Stockholm", "UTC"];
+}
+
+// Sets, changes or (timezone null) clears the team's session time zone, with a reason.
+export async function saveTeamTimezone(render) {
+  const d = ds();
+  if (d.tzBusy) return;
+  const generation = d.generation;
+  const draft = d.tzDraft;
+  d.tzBusy = true;
+  d.tzError = null;
+  render();
+  try {
+    const answer = await api(teamPath(d.teamId, "/session-timezone"), { method: "PUT", body: JSON.stringify({ timezone: draft.timezone || null, reason: draft.reason }) });
+    if (generation !== d.generation) return;
+    resetDataSourcesForms();
+    d.timezone = answer.sessionTimezone || d.timezone;
+    d.noticeFor = "timezone";
+    d.notice = (draft.timezone ? `The team's session time zone is ${draft.timezone}.` : "The team's session time zone is cleared.")
+      + (answer.sessionTimezone?.readError ? " It was saved, but the details below could not be read again; open the team again to see them." : "");
+  } catch (error) {
+    if (generation !== d.generation) return;
+    d.tzError = errorInfo(error);
+  } finally {
+    if (generation === d.generation) {
+      d.tzBusy = false;
+      render();
+    }
+  }
+}
 
 export async function grantApprover(render) {
   const d = ds();

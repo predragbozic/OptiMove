@@ -10,6 +10,10 @@ import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 // This suite pins v60 as the last migration (its rollback tests need that); later migrations (v61, J20-C) have their own suites.
 const UP_TO_V60 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v60_undo_roster_work")) + 1);
+// v62: every check, preview and approval reads the team's session time zone, so the main database carries v62 as well (test 21
+// rolls v62 back for real before v60's rollback, and applies both again at the end).
+const V62_FILE = "202611111200_training_load_v62_team_session_timezone.sql";
+const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE];
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -35,7 +39,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: UP_TO_V60.filter((m) => !m.includes("app_error_events")) }); // everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: MAIN_MIGRATIONS }); // through v60, plus v62 (the importer reads it); everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -874,6 +878,7 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   // again at the end.
   const u = await undo(team, s);
   assert.equal(u.status, 200, u.text);
+  await c.query(fs.readFileSync(RUNBOOK("team-session-timezone-v62-rollback.sql"), "utf8"));
   await c.query(fs.readFileSync(RUNBOOK("undo-roster-work-v60-rollback.sql"), "utf8"));
   const before = await catalogOf(admin);
   // v59 (and later) are applied on this database, which the v57 rollback refuses first; the checks below are about its own refusals, so the
@@ -901,7 +906,7 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   } finally {
     await c.query(`insert into public.schema_migrations select * from u5_saved_migrations`).catch(() => {});
     await c.end();
-    await applyGpexeTestMigrations(db.url, UP_TO_V60.filter((m) => !m.includes("app_error_events")));
+    await applyGpexeTestMigrations(db.url, MAIN_MIGRATIONS);
   }
   assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name like '%v60%'`)).rows[0].n, 1, "v60 is in force again");
 });

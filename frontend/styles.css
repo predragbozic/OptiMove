@@ -25925,6 +25925,15 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   .gpexe-short-cell { white-space: normal; }
 }
 
+/* v62: the team's session time zone in Settings > Data sources, and the review's note when it was used. */
+.data-sources-timezone { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d9dee3); }
+.gpexe-zone-note { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--om-accent, #1f6f68); background: var(--om-surface-2, #f4f6f8); }
+/* v62 (mobile-qa): the zone picker and its note never widen the card on a phone. */
+.data-sources-timezone .data-sources-form { min-width: 0; }
+.data-sources-timezone .data-sources-select,
+.data-sources-timezone textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.data-sources-timezone .data-sources-facts dd { min-width: 0; }
+.gpexe-zone-note { overflow-wrap: anywhere; }
 /* ==========================================================================
    Design IMP1: the Imports screen as the "GPS Import Flow" sketch. One
    column of about 860 px, light cards (1 px line, radius 10, padding 20),

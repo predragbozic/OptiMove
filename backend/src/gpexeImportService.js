@@ -24,6 +24,7 @@ import {
   assertImportSourceStillUsable, assertLegacyPathStillOpen,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId, wholeRowHelperValues } from "./gpexeImportMapper.js";
+import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
@@ -2503,7 +2504,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     try {
       let gates = null;
       try {
-        gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+        const teamTimezone = await teamSessionTimezone(client, teamId);
+        gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [], teamTimezone });
       } catch (error) {
         if (!(error instanceof GpexeMappingError)) throw error;
       }
@@ -2798,7 +2800,8 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
       try {
         let gates = null;
         try {
-          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+          const teamTimezone = await teamSessionTimezone(client, teamId);
+          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [], teamTimezone });
         } catch (error) {
           if (!(error instanceof GpexeMappingError)) throw error;
         }
@@ -2973,7 +2976,8 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
       try {
         let gates = null;
         try {
-          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [] });
+          const teamTimezone = await teamSessionTimezone(client, teamId);
+          gates = buildGpexeImportPlan(row.raw_bundle, { metricSpecs: [], teamTimezone });
         } catch (error) {
           if (!(error instanceof GpexeMappingError)) throw error;
         }
