@@ -315,10 +315,14 @@ function noDeadlock(from) {
 async function revocationFirst({ target, revoke, writerPattern, write }) {
   const peer = await peerHoldsUser(target.id);
   const revoking = revoke();
-  await waiters("for update of u, ");
-  const writing = write();
-  await waiters(writerPattern);
-  await release(peer);
+  let writing;
+  try {
+    await waiters("for update of u, ");
+    writing = write();
+    await waiters(writerPattern);
+  } finally {
+    await release(peer);
+  }
   return { revoked: await revoking, written: await writing };
 }
 
@@ -477,7 +481,7 @@ test("7. a club admin's locked identity read against the real club-admin revocat
   ok(await identities(adm1, b));
   // Order 1.
   const { revoked, written } = await revocationFirst({
-    target: adm1, revoke: () => revokeClub(adm1, x.clubId), writerPattern: "for share of", write: () => identities(adm1, b),
+    target: adm1, revoke: () => revokeClub(adm1, x.clubId), writerPattern: "from public[.]users where .* for share", write: () => identities(adm1, b),
   });
   assert.equal(revoked.status, 200, revoked.text);
   assert.equal(written.status, 404, written.text);
@@ -506,7 +510,7 @@ test("8. a platform admin's locked identity read against the real platform-admin
   const b = await binding(x.clubId);
   ok(await identities(pa, b));
   const { revoked, written } = await revocationFirst({
-    target: pa, revoke: () => revokePlatform(pa), writerPattern: "for share of", write: () => identities(pa, b),
+    target: pa, revoke: () => revokePlatform(pa), writerPattern: "from public[.]users where .* for share", write: () => identities(pa, b),
   });
   assert.equal(revoked.status, 200, revoked.text);
   assert.equal(written.status, 404, written.text);
