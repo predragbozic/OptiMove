@@ -445,6 +445,9 @@ All routes are under `/api/training-load/sources/metrics`, behind `requireAuth`,
 **The hashes.** `placementHash` is a SHA-256 over:
 - the candidate's `bundle_hash`;
 - the pair index;
+- the pair's two names, as the board shows them (18-2: the index alone does not say who the pair is). A rename of
+  either athlete between the read and the save therefore makes the hash stale: the save answers `board_changed`, and
+  the admin compares again under the new name;
 - the field revision;
 - the target version (or the system mapping version);
 - the conversion row (or "same");
@@ -1595,7 +1598,7 @@ Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links
   resolved before the session's own `409` and before the pair is chosen. Routes 4 and 5 use one predicate; a
   platform admin in the platform workspace lists and reads a team's History after a team or a club archive.
 - **Modules.** `backend/src/sourceMetricBoard.js` is pure: the display registry (version 1; `total_time` in s as
-  `mm:ss`, `total_distance` in m to one decimal, `max_v` in m/s as km/h to one decimal, exact decimal arithmetic),
+  `mm:ss`, `total_distance` in whole metres (no evidence says the GPEXE screen shows a decimal of a metre, so one rule), `max_v` in m/s as km/h to one decimal, exact decimal arithmetic),
   the pair rule and the placement hash. `backend/src/sourceMetricBoardService.js` reads the database through the
   M2 kit's bounded read. `gpexeImportMapper.js` gains `gpexeLevelValuesKeyed` (the 7e raw read with each athlete's
   internal key); the importer's architecture guard holds its one caller, the board, to the registry's extractors.

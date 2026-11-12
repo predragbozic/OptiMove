@@ -50,7 +50,8 @@ const RULES = Object.freeze({
   }),
   "gpexe/rest_v1/athlete_session.total_distance": Object.freeze({
     rule: "distance_m", sourceUnit: "m", units: Object.freeze(["m"]),
-    show: (raw) => roundDecimal(raw, 1),
+    // Whole metres. No evidence says the GPEXE screen shows a decimal of a metre, so one rule: a whole number.
+    show: (raw) => roundDecimal(raw, 0),
   }),
   "gpexe/rest_v1/athlete_session.max_v": Object.freeze({
     rule: "speed_kmh", sourceUnit: "m/s", units: Object.freeze(["km/h"]),

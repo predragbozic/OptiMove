@@ -28,7 +28,7 @@ test("the display registry: three columns, each only in its proven unit; what th
   assert.deepEqual([time.rule, time.units, dist.rule, dist.units, speed.rule, speed.units], ["duration_mmss", ["mm:ss"], "distance_m", ["m"], "speed_kmh", ["km/h"]]);
   assert.deepEqual([displayValue(time, "mm:ss", "5790"), displayValue(time, "mm:ss", "5789.5"), displayValue(time, "mm:ss", "59.4"), displayValue(time, "mm:ss", "0")], ["96:30", "96:30", "0:59", "0:00"]);
   assert.equal(displayValue(time, "mm:ss", "-5"), null, "a negative duration is not shown");
-  assert.deepEqual([displayValue(dist, "m", "3100"), displayValue(dist, "m", "3100.04"), displayValue(dist, "m", "3100.05")], ["3100.0", "3100.0", "3100.1"]);
+  assert.deepEqual([displayValue(dist, "m", "3100"), displayValue(dist, "m", "3100.49"), displayValue(dist, "m", "3100.5"), displayValue(dist, "m", "0.4")], ["3100", "3100", "3101", "0"], "whole metres, half away from zero");
   assert.deepEqual([displayValue(speed, "km/h", "8.6111"), displayValue(speed, "km/h", "6.2"), displayValue(speed, "km/h", "1.000000001")], ["31.0", "22.3", "3.6"]);
   // Another unit of the rule, another proven unit, an unknown column, another family: nothing.
   assert.equal(displayValue(time, "s", "5790"), null);

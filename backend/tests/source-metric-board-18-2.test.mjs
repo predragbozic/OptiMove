@@ -735,6 +735,50 @@ test("7b. History's pages, cursor and audience after an archive: 50 per page wit
   assert.deepEqual(shape(await get(`/confirmations?teamId=${crypto.randomUUID()}`, W.pa)), NOT_FOUND, "an unknown team is not an empty list");
 });
 
+test("7c. the refusals no other test reaches: a session too large to read, a session the import would not take, a variable without a numeric unit; and a replaceable row when it is there", async () => {
+  const t = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t, n, `Third ${NAMES[n]}`);
+  const good = await candidate(t, { startedAt: "2026-09-10T10:00:00Z" });
+  // Too large: over the board's bound, chosen or by default (it is the newest).
+  const large = await candidate(t, { startedAt: "2026-09-12T10:00:00Z" });
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = raw_bundle || jsonb_build_object('padding', repeat('x', $2::int)) where id = $1`, [large.id, boardService.BOARD_MAX_BUNDLE_BYTES + 1]);
+  refused(await boardOf(W.caA, t, { candidateId: large.id }), 409, "candidate_too_large");
+  refused(await boardOf(W.caA, t), 409, "candidate_too_large");
+  const placeLarge = await placement(W.caA, t, large.id, W.fTime, W.vMin);
+  refused(placeLarge, 409, "candidate_too_large");
+  assert.equal(placeLarge.text.length < 2000, true, "the refusal carries nothing of the bundle");
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = raw_bundle - 'padding', session_started_at = '2026-09-01T10:00:00Z' where id = $1`, [large.id]);
+  // A session the import itself would refuse: the mapper's own code is the reason, and nothing else of it.
+  const invalid = await candidate(t, { startedAt: "2026-09-11T10:00:00Z" });
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false') where id = $1`, [invalid.id]);
+  assert.deepEqual(refused(await boardOf(W.caA, t, { candidateId: invalid.id }), 409, "candidate_not_importable").current, { reason: "session_stats_invalid" });
+  refused(await placement(W.caA, t, invalid.id, W.fTime, W.vMin), 409, "candidate_not_importable");
+  // A club variable whose unit is not a unit token cannot be filled by a column: listed, not placeable, refused by name.
+  const odd = await variable(W.caA, { unit: "min", label: "Odd unit" });
+  await planted(() => k.query(`update training_load.metric_definition_versions v set unit = 'not a unit' from training_load.metric_definitions d where d.id = $1 and v.id = d.current_version_id`, [odd.id]));
+  const withOdd = ok(await boardOf(W.caA, t, { candidateId: good.id })).board;
+  assert.deepEqual([variableOf(withOdd, odd).placeable, variableOf(withOdd, odd).unit], [false, null]);
+  const refusedOdd = ok(await placement(W.caA, t, good.id, W.fTime, odd)).placement;
+  assert.deepEqual([refusedOdd.placeable, refusedOdd.code], [false, "target_not_usable"]);
+  // A replaceable row: OptiMove's mapping of a column whose club mapping is on for the team. It is not pre-placed;
+  // it names the activation it would replace.
+  const f = await field("time");
+  const vClub = await variable(W.caA, { unit: "s", label: "Club seconds 7c" });
+  const vSys = await variable(W.pa, { unit: "min", label: "OptiMove minutes 7c" });
+  const sys = await activeVersion(W.pa, f, vSys);
+  const mine = await activeVersion(W.caA, f, vClub);
+  ok(await start(W.caA, mine, t), 201);
+  const activationId = (await openOn(mine, t)).id;
+  const board = ok(await boardOf(W.caA, t, { candidateId: good.id })).board;
+  assert.equal(board.preplaced.some((p) => p.mappingVersionId === sys.versionId), false, "not pre-placed while it would replace something");
+  const row = board.replaceable.find((p) => p.mappingVersionId === sys.versionId);
+  assert.ok(row, "the replaceable row is there");
+  assert.deepEqual({ kind: row.kind, badge: row.badge, field: row.fieldId, variable: row.variableId }, { kind: "preplaced", badge: "optimove_mapping", field: f.fieldId, variable: vSys.id });
+  assert.deepEqual(row.replaces.map((r) => r.activationId), [activationId]);
+  assert.match(row.placementHash, /^[0-9a-f]{64}$/);
+  assert.deepEqual(board.on.map((o) => o.activationId), [activationId]);
+});
+
 // ---------------------------------------------------------------------------
 // 5. What never leaves, and what the service never does
 // ---------------------------------------------------------------------------
