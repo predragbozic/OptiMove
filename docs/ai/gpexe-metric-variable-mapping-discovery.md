@@ -1923,6 +1923,10 @@ the deploy that carries it); a test runs that insert shape.
 
 ### D10. T8 `training_load.source_metric_audit` — append-only, without a value-bearing column
 
+**Extended by J18's M-A (v65), in force once it is deployed:** the nullable `confirmation_id` (a typed foreign key to
+T9, never a value) and the actions `mapping_confirmation`, `confirmation_values_expired` and
+`confirmation_values_erased` (section J18, "18-1, as built").
+
 - Columns: `id`; `action` in a closed set (`source_metric_create`, `source_metric_revision_create`,
   `source_metric_unit_verified`, `source_metric_meaning_verified`, `source_metric_revision_activate`,
   `source_metric_revision_retire`, `source_metric_retire`, `mapping_create`,
@@ -4333,7 +4337,16 @@ evidence tables, their guards, T8's column and actions, the removal function) an
 admin's activation of a version without parameters, which accepts a checked row or v53's copy link), so the refusal
 never reaches production before the board's backend. 18-P and section 5.7's T2b columns are not built by them: C114
 changed that form, and it gets its own amendment and migration later. C121's "change while no value is written" is a
-separate slice after 18-4, with its proposal first. The paragraph above describes the proposal as it stood. The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
+separate slice after 18-4, with its proposal first. The paragraph above describes the proposal as it stood.
+
+**18-1, migration M-A (v65), as built** (J18 section 15.7; verified against `c16f0047`; applied only on the owner's
+order): `migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql` adds
+`training_load.source_metric_confirmations` (T9), `source_metric_confirmation_sessions` (T9s) and
+`source_metric_confirmation_items` (T9i) with their guards, `remove_expired_confirmation_values(p_limit)`, and on T8
+(section D10) the nullable `confirmation_id`, the actions `mapping_confirmation`, `confirmation_values_expired` and
+`confirmation_values_erased`, two CHECKs, one index and the four bodies (v52's row shape and actor guard, v48's insert
+guard, v50's revision guard) with the new lines marked. D10's "no value-bearing column" holds: `confirmation_id` is a
+typed link. No code writes these tables before 18-3, and the gate is M-B. The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
 
 ## K. Open, but not blocking M1
 

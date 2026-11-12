@@ -1497,3 +1497,53 @@ located again for the slices' work; it is not a complete list, and an unlisted r
 | `sourceMetricPreview.js:33-56` (`convertAtStorageScale`) | `:37` |
 | `frontend/gpexe-import-view.js:441-451` (`renderFoundHtml`) | `:665` |
 | `frontend/gpexe-import-data.js:1263-1265` (`identityViewer`) | `:1684` |
+
+### 15.7 As built: 18-1, migration M-A (v65)
+
+Built on `c16f0047` (the merge of 18-A2). Not applied anywhere but disposable test databases; it is applied only on
+the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
+
+- **The file:** `migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql`, with
+  `docs/runbooks/source-metric-confirmations-v65-preflight.sql`, `-postcheck.sql`, `-rollback.sql` and the runbook.
+  The number and the prefix are the ones free when the branch was cut and are checked again before the pull request
+  and on the merge tree.
+- **What it holds:** sections 5.1–5.4, 5.6 and 5.8 in the `team_mapping` shape, as section 15.3 lists them: T9, T9s
+  (with `session_started_at`) and T9i with their guards and the two deferred links;
+  `remove_expired_confirmation_values(p_limit)`; T8's `confirmation_id`, three actions, two CHECKs, one index and the
+  four bodies. No gate, no T2b column, no application code: nothing writes these tables until 18-3.
+- **The four bodies** are the ones in force (v52's row shape and actor guard, v48's insert guard, v50's revision
+  guard; their md5 is pinned in the migration, the preflight and the rollback) with the new lines between
+  `-- M-A (J18) begin` and `-- M-A (J18) end`. The suite strips the marked lines and compares the rest with the old
+  body, byte for byte.
+- **Departures from the text above, each for the *Rukovodilac*'s review of 18-1:**
+  - **Locks.** Section 15.3 said T4, T5 and T8. M-A locks T4 (`SHARE ROW EXCLUSIVE`, which T9i's foreign key takes
+    anyway) and then T8 (`ACCESS EXCLUSIVE`, `NOWAIT`). It neither changes nor locks T5.
+  - **The display registry in the database.** Section 5.3 asks that a checked row's display unit is "a unit from that
+    rule's closed list". The lists are a function, `source_metric_display_unit_ok(rule, unit)`, with the three rules
+    R5 allows and the one unit each has evidence for: `duration_mmss` → `mm:ss`, `distance_m` → `m`, `speed_kmh` →
+    `km/h` (`docs/ai/gpexe-c97-unit-evidence.md`). Section 3.5's choice of another GPEXE display unit has no evidence
+    in the repository (the handbook's page 11 is not in it), so a further unit is a later migration with its evidence
+    and test. Until then the panel offers one unit per rule.
+  - **The salt** is 16 bytes from `gen_random_uuid()` (122 random bits), and the digest uses the core `sha256()`: no
+    function of `pgcrypto`, whose schema differs between the local and the deployed database.
+  - **The expiry** is `confirmed_at + interval '2160 hours'` (90 days), so the CHECK that ties the two does not depend
+    on a session's time zone.
+  - **Rows that were not compared** store no digest (section 5.3 said only that the trigger computes it).
+  - **A system row is never compared** (`checked = false`): a new row is always a club's own mapping (C61). The guard
+    and a backstop CHECK refuse a checked `system_mapping` row.
+  - **The removal function** returns the ids as one `uuid[]` and takes a limit of 1 to 1000. The purge marker is the
+    setting `optimove.source_metric_confirmation_purge`.
+  - **T8's shapes:** `mapping_confirmation` names the team and the confirmation only; the two removal rows name the
+    confirmation only. T8's table comment now mentions confirmations; the rollback restores v34's text.
+  - **Foreign keys.** T9's foreign keys take `FOR KEY SHARE` on the binding and the connection, as T5's already does.
+    An Unbind's update of those rows neither blocks them nor waits for them; the guards themselves read them with
+    plain reads (section 5.4).
+- **Tests** (`backend/tests/source-metric-confirmations-v65.test.mjs`, disposable databases, 17 tests): the preflight
+  and every flipped block; the `NOWAIT`, md5 and CHECK refusals; the exact catalog change; the post-check; every
+  refusal of the rollback; apply → rollback → the identical catalog → apply again; and the guards of sections 9.1
+  items 1–8 and 10 and 15.5 for a save written as raw SQL in section 4.3 step 16's order. Section 9.1 item 7 (the
+  gate) is M-B's; item 9 (T2b) is 18-P's.
+- **Not covered here, stated:** the removal link's condition that the audit row is of the same transaction and user
+  is a backstop behind the revision guard and the actor guard, which refuse every case first; no test reaches it
+  alone. The server log was checked by hand on the local server for the planted values (none found); the suite itself
+  asserts the error's message, detail, hint and context.
