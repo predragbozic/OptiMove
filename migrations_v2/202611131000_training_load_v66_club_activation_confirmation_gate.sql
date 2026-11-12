@@ -76,8 +76,9 @@ begin
   end if;
   if to_regclass('training_load.source_metric_confirmation_items') is null
      or to_regclass('training_load.source_metric_confirmations') is null
-     or to_regclass('training_load.source_metric_mapping_version_copies') is null then
-    raise exception 'v66 refused: the confirmation tables of v65 or the copy links of v53 are missing' using errcode = '23514';
+     or to_regclass('training_load.source_metric_mapping_version_copies') is null
+     or to_regprocedure('training_load.source_metric_current_xmin()') is null then
+    raise exception 'v66 refused: the confirmation tables of v65, the copy links of v53 or v35''s transaction helper are missing' using errcode = '23514';
   end if;
 end;
 $$;

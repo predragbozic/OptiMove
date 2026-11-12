@@ -1677,13 +1677,18 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
     subtransaction has its own xid): the gate fails closed, and v65's own guards refuse such a write before it.
   - Its precondition pins the md5 of T4's update guard and actor guard and T4's six triggers, all enabled.
   - The preflight's block 4 counts the club `draft` and `needs_review` versions of fields without parameters, apart
-    for those with a copy link. Its block 5 is a refusal: each column says whether a save's bind parameters could
-    reach the server log (statement logging, logging on error, pgaudit, auto_explain), read from `pg_settings`.
+    for those with a copy link. Its block 5 is a refusal, run as the application's role: each column says whether a
+    save's bind parameters could reach the server log - statement, duration and sampled-transaction logging,
+    logging on error, pgaudit by class or by its object-audit role, auto_explain with parameters or a verbose plan,
+    a printed plan, and any role or database override of these settings. Not covered by it, stated in block 6: the
+    pooler's own log, and a value inside an error's text (v65's guards refuse such rows first with fixed texts).
 - **Route 3, the save** (`backend/src/sourceMetricBoardSaveService.js`), as section 4.3, with these points:
   - It recomputes with the board's own read functions, twice: on plain reads, to answer a stale or refused row
     before any lock, and again after every lock, which is the answer that counts.
   - Every foreign or unknown id of the body (team, candidate, field, variable, mapping version, listed activation of
-    another binding) is the identical 404 before any 409.
+    another binding), in whichever row, is the identical 404 before any 409: all rows' ids are resolved first.
+    (A body that is not valid JSON is `400 invalid_json` from the application's parser, before any route, for every
+    caller alike.)
   - A refusal names its row: `409 <code>` with `current.rowIndex`. The codes are the placement's own, plus
     `board_changed`, `canonical_version_changed`, `activation_changed`, `activation_exists`,
     `variable_taken_on_binding`, `variable_hidden`, `binding_not_active`, and the read's `409`s (`board_too_large`
@@ -1695,15 +1700,29 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
   - A mapping whose active version is the same contract is reused: no version is written, and the confirmation's
     checked row names the reused version.
   - The request hash covers identities only. No value, name or hash is written to T8, logged or returned.
-  - The database's refusals are mapped: a lost right under a guard of v65 or v66 is the 404; a candidate that
-    changed under the save, and a row another save wrote first (the T3 pair key, the one-active indexes, T5's
-    open-row indexes), are `board_changed`.
+  - The candidate is compared again after the locks by its `bundle_hash`, `last_seen_check_id` and `status`; an
+    undone or superseded one is no longer found. Each is `board_changed`.
+  - The database's refusals are mapped, each text held word for word to the migration that raises it (the save
+    suite's test 11): a lost right under a guard of v35, v48, v52 or v65 is the 404; a candidate that changed under
+    the save, and a row another save wrote first (the T3 pair key, the one-active indexes, T5's open-row indexes),
+    are `board_changed`.
   - A replay checks the scope of routes 4 and 5 again under `FOR SHARE`. It answers after an Unbind and is the 404
     once the team is archived.
 - **The lock order** is section 4.4's, proven by the SQL the save sends (the save suite's test 7): conversions,
   fields, revisions, mappings, versions, variables, their levels, the activations to end, the binding, the team, the
-  users row before the role row, the club, the hide locks; then the first write, and no locking clause after it. The
-  candidate, the team import lock and the v11 connection are never locked.
+  users row before the role row, the club, the hide locks, and last one advisory lock per binding
+  (`board-save:<binding>`); then the first write, and no locking clause after it. The mappings are locked one by
+  one in ascending id, whatever the order of the body's rows. The candidate, the team import lock and the v11
+  connection are never locked.
+  - **One save per binding.** Two admins' saves with crossed rows would meet on T5's open-row indexes in two orders
+    (a `40P01`). Only a save takes the binding's key, after its last row lock, so it adds no cycle; the second save
+    reads what the first wrote and answers a 409 of the board. Proven on free-running connections (test 12).
+  - **Foreign keys.** Three rows the save does not lock are key-share locked by a foreign key after the first write:
+    the variable's version (T4's), the connection (T9's) and the check (T9s's). Key share conflicts only with a
+    delete or a `FOR UPDATE`; Connect, Reconnect, Test and Unbind take the connection `FOR NO KEY UPDATE`, and A1
+    has the same edge on T4.
+  - **A replay** locks the users row before the team and the club (both `FOR SHARE`); a save locks the team first.
+    No writer holds a team row exclusively and then waits for a users row, so no cycle forms.
 - **A replacement is not a switch-off** (the *Rukovodilac*, 2026-11-12, option B). The end keeps `admin_ended`; the
   board reads "switched off by an administrator" only when the mapping's latest activation on the binding ended
   `admin_ended` and its `activation_end` row's operation holds no `mapping_confirmation` row. A replaced mapping
@@ -1711,7 +1730,9 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
 - **Routes 6 and 7** (`backend/src/sourceMetricConfirmationAdminService.js`): API only in J18, for an active platform
   admin in the platform workspace; the runbook says how they are called. Route 6 takes a fixed reason code and
   locks the confirmation's row first. Route 7 runs the removal function under the admin's identity and writes one
-  audit row per confirmation, the last keyed; a call that removes nothing writes nothing.
+  audit row per confirmation whose values this transaction removed (a confirmation the schedule emptied a moment
+  earlier is returned by the function too and gets no row), the last keyed; a call that removes nothing writes
+  nothing.
 - **The scheduled removal** (`backend/src/sourceMetricConfirmationRemoval.js`, started by `server.js`): every 6 hours
   and one minute after the start, batch after batch of 200 until none is left, at most 200 batches a run. Each batch
   is its own transaction with `statement_timeout` 2 s, `lock_timeout` 0.5 s and a 4 s client bound that closes the
@@ -1720,22 +1741,23 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
   time in a process. It starts nothing inside the test runner or without a database.
 - **One plan per board read.** A read built one import plan per readable column. It builds one for all of them
   (`gpexeSessionValuesKeyed`, session level only; the importer's architecture guard holds its one caller to the
-  registry's extractors). Measured on this machine on a synthetic session of 40 athletes with two drills each,
+  registry's extractors). The plan's session and athlete gates run as before; no extractor is called on a drill
+  row any more, and no extractor refuses a session. Measured on this machine on a synthetic session of 40 athletes with two drills each,
   per board read: 3 columns 11.8 ms → 3.9 ms; 30 columns 111.5 ms → 5.4 ms; 120 columns 448.1 ms → 9.2 ms. A read
   of more than 60 000 cells (readable columns × athlete rows of the session, drill rows included) is refused with
   `409 board_too_large`, before any value is read.
 - **Suites of other slices.** After v66 a club admin's A1 on a field without parameters is refused by design. The
   suites of 7h, LO-1 and 9-B's concurrency exercise a club admin's A1, A2 and replacement on test fields without
   parameters; they build their database through v65. Those code paths are unchanged and stay in force for zones and
-  thresholds. M2's architecture test lists the save and the two removals as writers.
-- **Tests:** `club-activation-confirmation-gate-v66.test.mjs` (5: R8, the gate, the routes, the copy link, the
-  migration's rehearsal) and `source-metric-board-save-18-3.test.mjs` (10: the save, the body and the audience,
-  refusals by row, reuse and replacement, races through a hold seam, the COMMIT outcomes, the recorded lock order,
-  routes 6 and 7, the scheduled removal, the size cap).
+  thresholds: a club admin's A1 of a zone version runs through the real routes on the v66 schema in the gate's
+  suite (test 3b). M2's architecture test lists the save and the two removals as writers.
+- **Tests:** `club-activation-confirmation-gate-v66.test.mjs` (6: R8, the gate, the routes, a zone version not
+  gated, the copy link, the migration's rehearsal) and `source-metric-board-save-18-3.test.mjs` (12: the save, the
+  body and the audience, refusals by row, reuse and replacement, races through a hold seam before the locks and
+  before the first write, the COMMIT outcomes, the recorded lock order, routes 6 and 7, the scheduled removal, the
+  size cap, the mapped database refusals, two admins' crossed saves on free-running connections).
 - **Not covered, stated:**
-  - no test runs a club admin's A1 on a field **with** parameters after v66 (the gate's own condition is tested by
-    its unit: a platform admin, a system version and the copy link pass; a parameterised club version is not built
-    by this suite);
-  - the races use a hold seam inside the save, not two free-running connections, except the two-run removal;
+  - the races but the crossed saves and the two-run removal use a hold seam inside the save;
+  - route 7 against a removal that lands between the function's snapshot and its lock is not raced;
   - `test:backend:shared` was not run (no local development database);
   - the save was not run against a real GPEXE bundle.

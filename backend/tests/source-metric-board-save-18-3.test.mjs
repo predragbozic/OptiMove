@@ -372,6 +372,7 @@ test("2. the body and the audience: the right is asked before the body; a malfor
   const vMin = await variable(W.caA, { unit: "min" });
   const fTime = await field("time");
   const fOther = await field("time");
+  const vOther = await variable(W.caA, { unit: "min" });
   const good = await newRow(W.caA, t, cand, fTime, vMin);
   const body = (over = {}) => ({ requestKey: key(), teamId: t.teamId, candidateId: cand.id, pair: 0, rows: [good], ...over });
   const otherOn = ok(await start(W.paA, W.sysTime, (await freshTeam()).t), 201).activations[0].id;
@@ -407,6 +408,12 @@ test("2. the body and the audience: the right is asked before the body; a malfor
       body({ rows: [{ kind: "preplaced", mappingVersionId: crypto.randomUUID(), placementHash: good.placementHash, requirement: "optional", replaces: [] }] }),
       // With a pair past the end and a stale hash too: still the 404.
       body({ pair: 9999, rows: [{ ...good, targetId: W.vB.id, placementHash: "0".repeat(64) }] }),
+      // In a LATER row, behind a row whose own answer would be a 409: still the 404.
+      body({ pair: 9999, rows: [good, { ...good, fieldId: fOther.fieldId, targetId: W.vB.id }] }),
+      body({ pair: 9999, rows: [good, { ...good, fieldId: fOther.fieldId, targetId: crypto.randomUUID() }] }),
+      body({ pair: 9999, rows: [good, { ...good, fieldId: crypto.randomUUID(), targetId: vOther.id }] }),
+      body({ pair: 9999, rows: [good, { kind: "preplaced", mappingVersionId: W.vBActive.versionId, placementHash: good.placementHash, requirement: "optional", replaces: [] }] }),
+      body({ rows: [{ ...good, placementHash: "0".repeat(64) }, { kind: "preplaced", mappingVersionId: crypto.randomUUID(), placementHash: good.placementHash, requirement: "optional", replaces: [] }] }),
     ];
     for (const b of foreign) assert.deepEqual(shape(await post("/confirmations", W.caA, b)), NOT_FOUND);
     // A listed activation of another binding (club B's, and another team of club A): the identical 404.
@@ -469,6 +476,11 @@ test("3. a row that is stale or cannot be saved is refused by its place in the l
   const other = await freshTeam();
   const hidden = await systemMapping();
   const pre = await preplacedRow(W.caA, other.t, other.cand, hidden);
+  // A pre-placed row read for another pair, or with another hash, is stale too.
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, other.t, other.cand, [{ ...pre, placementHash: "0".repeat(64) }]), "board_changed", 0);
+    rowRefused(await save(W.caA, other.t, other.cand, [pre], { pair: 1 }), "board_changed", 0);
+  });
   ok(await post(`/variables/${hidden.target.id}/hide`, W.caA, { requestKey: key() }));
   await nothingWritten(async () => { rowRefused(await save(W.caA, other.t, other.cand, [pre]), "variable_hidden", 0); });
   // An undone session is not a stored session: the identical 404.
@@ -583,6 +595,19 @@ test("5. races, each held between the save's plain read and its locks: a check t
   refused(res, 409, "board_changed");
   assert.equal((await one(`select count(*)::int as n from ${T9} where team_id = $1`, [s.t.teamId])).n, 1);
   assert.equal((await one(`select count(*)::int as n from ${T8} where performed_by_user_id = $1 and team_id = $2`, [W.caA.id, s.t.teamId])).n, 0);
+  // Behind the save's own checks (held right before its first write): the database's guards are the backstop.
+  // The unlocked candidate is seen again by a check: v65's guard of the session row refuses, answered board_changed.
+  s = await setup();
+  before = await counts();
+  res = await during("before_writes", async () => { const c = await check(s.t); await k.query(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [s.cand.id, c]); }, () => save(W.caA, s.t, s.cand, [s.row]));
+  refused(res, 409, "board_changed");
+  assert.deepEqual({ ...(await counts()) }, before);
+  // The session was imported meanwhile (its status moved): board_changed on the save's own re-read.
+  s = await setup();
+  before = await counts();
+  res = await during("before_locks", () => planted(() => k.query(`update training_load.gpexe_import_candidates set status = 'imported', imported_at = now() where id = $1`, [s.cand.id])), () => save(W.caA, s.t, s.cand, [s.row]));
+  refused(res, 409, "board_changed");
+  assert.deepEqual({ ...(await counts()) }, before);
   // A hide of the OptiMove variable lands before the save's hide lock.
   const h = await freshTeam();
   const toHide = await systemMapping();
@@ -663,7 +688,12 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
     await preplacedRow(W.caA, t, cand, sys2),
   ];
   assert.deepEqual(rows[0].replaces, [sysOn]);
+  // The two rows with an existing mapping (the reused one and the pre-placed one) in DESCENDING mapping id, so the
+  // save's ascending order is its own and not the body's.
+  const ownMapping = (await one(`select id from ${T3} where source_metric_definition_id = $1 and metric_definition_id = $2`, [fOwn.fieldId, vOwn.id])).id;
+  if (ownMapping < sys2.mappingId) [rows[2], rows[3]] = [rows[3], rows[2]];
   const seen = [];
+  const seenValues = [];
   const wrapped = [];
   const original = appPool.connect;
   appPool.connect = function (callback) {
@@ -674,7 +704,7 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
         wrapped.push({ c, send });
         c.query = function (...args) {
           const text = typeof args[0] === "string" ? args[0] : args[0]?.text;
-          if (text) seen.push(text.replace(/\s+/g, " ").trim());
+          if (text) { seen.push(text.replace(/\s+/g, " ").trim()); seenValues.push(Array.isArray(args[1]) ? args[1] : args[0]?.values ?? []); }
           return send.apply(this, args);
         };
       }
@@ -692,6 +722,7 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   const to = seen.findIndex((x, i) => i > from && /^commit$/i.test(x));
   assert.ok(from >= 0 && to > from, "the save's transaction was recorded");
   const tx = seen.slice(from, to);
+  const txValues = seenValues.slice(from, to);
   const LOCKING = /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock|\block table\b/i;
   const WRITE = /^(insert|update|delete)\b/i;
   const at = (re, after = -1) => { const i = tx.findIndex((x, n) => n > after && re.test(x)); assert.ok(i >= 0, `not sent: ${re}`); return i; };
@@ -711,12 +742,18 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
     // The rights check locks the admin's own club row, then the binding's club (the same row here).
     ["club", /from public\.clubs where id = (\$1 and coalesce\(is_active, true\)|any\(\$1::uuid\[\]\) order by id) for share$/],
     ["hide lock", /pg_advisory_xact_lock\(hashtextextended\('club-variable-hide:'/],
+    ["one save per binding", /pg_advisory_xact_lock\(hashtextextended\('board-save:'/],
   ];
   let last = -1;
   const positions = {};
   for (const [name, re] of order) { last = at(re, last); positions[name] = last; }
   const firstWrite = tx.findIndex((x) => WRITE.test(x));
-  assert.ok(firstWrite > positions["hide lock"], "every lock comes before the first write");
+  assert.ok(firstWrite > positions["one save per binding"], "every lock comes before the first write");
+  // The mappings are locked one by one: their ids ascend, whatever the order of the body's rows.
+  const t3 = tx.map((x, i) => (/from training_load\.source_metric_mappings where id = \$1 for (share|no key update)$/.test(x) ? txValues[i][0] : null)).filter(Boolean);
+  assert.equal(t3.length, 2);
+  assert.deepEqual(t3, [...t3].sort(), "the mappings are locked in ascending id");
+  assert.deepEqual(t3, [ownMapping, sys2.mappingId].sort());
   // Nothing locks out of order: every locking statement before the first write is one of the list, in a non-decreasing place.
   const placeOf = (x) => order.findIndex(([, re]) => re.test(x));
   const places = tx.slice(0, firstWrite).filter((x) => LOCKING.test(x)).map((x) => [placeOf(x), x]);
@@ -872,4 +909,68 @@ test("10. the size cap of a board read: a stored session with more athlete rows 
   await nothingWritten(async () => { refused(await save(W.caA, t, cand, [row]), 409, "board_too_large"); });
   // A foreign id is still the identical 404 first.
   assert.deepEqual(shape(await placement(W.caA, t, cand.id, f, W.vB)), NOT_FOUND);
+});
+
+test("11. the database's refusals a save maps (the backstop behind its own checks): every mapped text is raised, word for word, by a migration, and every mapped constraint exists; a lost right is the identical 404, a changed candidate and a raced row are board_changed, anything else is not a save's answer", async () => {
+  const { classifySaveError, SAVE_DATABASE_REFUSALS } = await import("../src/sourceMetricBoardSaveService.js");
+  const dir = path.resolve(__dirname, "../../migrations_v2");
+  const sql = (await Promise.all((await fsp.readdir(dir)).filter((f) => f.endsWith(".sql")).map((f) => fsp.readFile(path.join(dir, f), "utf8")))).join("\n");
+  const quoted = (text) => `'${text.replaceAll("'", "''")}'`;
+  assert.ok(SAVE_DATABASE_REFUSALS.actorTexts.length >= 9 && SAVE_DATABASE_REFUSALS.candidateTexts.length >= 8 && SAVE_DATABASE_REFUSALS.racedConstraints.length >= 7);
+  for (const text of SAVE_DATABASE_REFUSALS.actorTexts) {
+    assert.ok(sql.includes(`raise exception ${quoted(text)}`), `a migration raises: ${text}`);
+    const e = classifySaveError({ code: "42501", message: text });
+    assert.deepEqual([e.status, e.code], [404, "notFound"], text);
+  }
+  for (const text of SAVE_DATABASE_REFUSALS.candidateTexts) {
+    assert.ok(sql.includes(`raise exception ${quoted(text)}`), `a migration raises: ${text}`);
+    const e = classifySaveError({ code: "23514", message: text });
+    assert.deepEqual([e.status, e.code], [409, "board_changed"], text);
+  }
+  const constraints = new Set((await rows(`select conname as n from pg_constraint union select indexname from pg_indexes where schemaname = 'training_load'`)).map((r) => r.n));
+  for (const name of SAVE_DATABASE_REFUSALS.racedConstraints) {
+    assert.ok(constraints.has(name), `the constraint or index exists: ${name}`);
+    const e = classifySaveError({ code: "23505", constraint: name, message: "duplicate key" });
+    assert.deepEqual([e.status, e.code], [409, "board_changed"], name);
+  }
+  // Every v48 / v52 / v65 actor text a save's writes can meet is mapped (a new one fails here until it is added).
+  const reachable = [...sql.matchAll(/raise exception '(source metric (?:confirmation|activation|mapping): [^']*(?:''[^']*)*)'\s+using errcode = '42501'/g)].map((m) => m[1].replaceAll("''", "'"));
+  const unmapped = [...new Set(reachable)].filter((text) => !SAVE_DATABASE_REFUSALS.actorTexts.includes(text)).sort();
+  assert.deepEqual(unmapped, [
+    // The removal's (routes 6 and 7), mapped there.
+    "source metric confirmation: the acting user may not remove these values",
+    // Not a lost right but a defect of the caller (no actor set, a seed marker): they stay a 500.
+    "source metric mapping: a seed marker is accepted only from the seeding migration",
+    "source metric mapping: no acting user is set for this transaction",
+    // The three the shared classifier already answers as the 404.
+    "source metric mapping: the acting user is not an active admin of the mapping's club",
+    "source metric mapping: the acting user is not an active platform admin",
+    // A save never disables a version.
+    "source metric mapping: the acting user may not disable this mapping version",
+    "source metric mapping: the acting user may not submit this mapping version",
+  ], "every other actor refusal a save's writes can meet is mapped");
+  for (const text of unmapped.slice(3, 5).concat(unmapped.slice(6))) assert.equal(classifySaveError({ code: "42501", message: text }).status, 404, text);
+  // Not a save's answer: another text with the same code, the same text with another code, a CHECK constraint's own violation.
+  assert.ok((classifySaveError({ code: "42501", message: "permission denied for table x" })) == null);
+  assert.ok((classifySaveError({ code: "23514", message: SAVE_DATABASE_REFUSALS.actorTexts[0] })) == null);
+  assert.ok((classifySaveError({ code: "23514", constraint: "some_check", message: SAVE_DATABASE_REFUSALS.candidateTexts[0] })) == null);
+  assert.ok((classifySaveError({ code: "23505", constraint: "another_key", message: "duplicate key" })) == null);
+  assert.deepEqual([classifySaveError({ code: "40P01" }).code, classifySaveError({ code: "55P03" }).code], ["try_again", "try_again"]);
+});
+
+test("12. two admins save crossed rows of one team at the same moment, on free-running connections: one save per binding at a time, so exactly one is saved and the other answers a 409 of the board - never a deadlock, a try_again or a 500", async () => {
+  for (let round = 0; round < 4; round += 1) {
+    const { t, cand } = await freshTeam();
+    const sysA = await systemMapping();
+    const sysB = await systemMapping("dist", "m");
+    const a = [await preplacedRow(W.caA, t, cand, sysA), await preplacedRow(W.caA, t, cand, sysB)];
+    const b = [await preplacedRow(W.caA2, t, cand, sysB), await preplacedRow(W.caA2, t, cand, sysA)];
+    const [ra, rb] = await Promise.all([save(W.caA, t, cand, a), save(W.caA2, t, cand, b)]);
+    const statuses = [ra.status, rb.status].sort();
+    assert.deepEqual(statuses, [200, 409], `${ra.text} / ${rb.text}`);
+    const lost = ra.status === 409 ? ra : rb;
+    assert.ok(["activation_exists", "board_changed"].includes(lost.body.error), lost.text);
+    assert.equal((await one(`select count(*)::int as n from ${T5} where source_team_binding_id = $1 and ended_at is null`, [t.bindingId])).n, 2);
+    assert.equal((await one(`select count(*)::int as n from ${T9} where team_id = $1`, [t.teamId])).n, 1);
+  }
 });

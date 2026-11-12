@@ -76,38 +76,67 @@ select
 --    on a save inserts two athletes' values as bind parameters. A REFUSAL: if
 --    any column is false there is no deploy until the owner changes the
 --    setting, or the save is shown not to pass values as logged parameters.
+--    RUN THIS BLOCK AS THE APPLICATION'S DATABASE_URL ROLE: the values are
+--    those of the session that asks, and the last column says whether any
+--    role or database carries an override the asking session would not see.
 --    Expected: every column = true. (Read from pg_settings in the base
---    unit: current_setting() prints a unit, as in "64B".)
+--    unit: current_setting() prints a unit, as in "64B". A setting of an
+--    extension that is not loaded reads as NULL or as an empty text; both
+--    count as not set.)
 --      statement_parameters_not_logged_ok: parameters are cut to nothing
 --        (log_parameter_max_length = 0), or no statement that carries them is
---        logged (log_statement none or ddl, and no duration-based logging);
+--        logged (log_statement none or ddl, no duration-based logging and no
+--        sampled transaction);
 --      error_parameters_not_logged_ok: a failing statement's parameters are
 --        not logged (log_parameter_max_length_on_error = 0);
---      pgaudit_parameters_not_logged_ok: pgaudit is absent, logs nothing, or
---        does not log parameters;
---      auto_explain_parameters_not_logged_ok: auto_explain is absent, off, or
---        logs no parameters.
+--      pgaudit_parameters_not_logged_ok: pgaudit does not log parameters, or
+--        logs nothing at all (neither by class nor by its object-audit role);
+--      auto_explain_parameters_not_logged_ok: auto_explain is absent or off,
+--        or logs no parameters and no verbose plan (a verbose plan can carry
+--        a parameter as a constant);
+--      plans_not_printed_ok: no debug_print_* setting prints a statement's
+--        plan or parse tree, which carry its constants;
+--      no_role_or_database_override_ok: no ALTER ROLE / ALTER DATABASE ... SET
+--        of any of these settings exists (a session of another role would
+--        log differently from what this block reads).
 select
   ((select setting::int from pg_settings where name = 'log_parameter_max_length') = 0
     or ((select setting from pg_settings where name = 'log_statement') in ('none', 'ddl')
         and (select setting::int from pg_settings where name = 'log_min_duration_statement') = -1
-        and (select setting::int from pg_settings where name = 'log_min_duration_sample') = -1)) as statement_parameters_not_logged_ok,
+        and (select setting::int from pg_settings where name = 'log_min_duration_sample') = -1
+        and (select setting::float8 from pg_settings where name = 'log_transaction_sample_rate') = 0)) as statement_parameters_not_logged_ok,
   ((select setting::int from pg_settings where name = 'log_parameter_max_length_on_error') = 0) as error_parameters_not_logged_ok,
-  (coalesce(current_setting('pgaudit.log', true), '') in ('', 'none')
-    or coalesce(current_setting('pgaudit.log_parameter', true), 'off') = 'off') as pgaudit_parameters_not_logged_ok,
-  (coalesce(current_setting('auto_explain.log_min_duration', true), '-1') = '-1'
-    or coalesce(current_setting('auto_explain.log_parameter_max_length', true), '-1') = '0') as auto_explain_parameters_not_logged_ok;
+  (coalesce(nullif(current_setting('pgaudit.log_parameter', true), ''), 'off') = 'off'
+    or (coalesce(nullif(current_setting('pgaudit.log', true), ''), '') in ('', 'none')
+        and coalesce(nullif(current_setting('pgaudit.role', true), ''), '') = '')) as pgaudit_parameters_not_logged_ok,
+  (coalesce(nullif(current_setting('auto_explain.log_min_duration', true), ''), '-1') = '-1'
+    or (coalesce(nullif(current_setting('auto_explain.log_parameter_max_length', true), ''), '-1') = '0'
+        and coalesce(nullif(current_setting('auto_explain.log_verbose', true), ''), 'off') = 'off')) as auto_explain_parameters_not_logged_ok,
+  (not exists (select 1 from pg_settings where name in ('debug_print_parse', 'debug_print_rewritten', 'debug_print_plan') and setting = 'on')) as plans_not_printed_ok,
+  (not exists (select 1 from pg_db_role_setting s, unnest(s.setconfig) as cfg
+                where cfg ~ '^(log_statement|log_min_duration_|log_parameter_max_length|log_transaction_sample_rate|debug_print_|pgaudit\.|auto_explain\.)')) as no_role_or_database_override_ok;
 
--- 6. The same settings as they are, for the record (no expected value).
-select current_setting('log_statement') as log_statement,
+-- 6. The same settings as they are, and who asked, for the record (no
+--    expected value). Not covered by block 5, stated: the connection pooler's
+--    own statement log, if it keeps one; and a value inside an error's own
+--    text - a failing CHECK prints its row unless log_error_verbosity is
+--    terse. v65's guards refuse every such row of the confirmation tables
+--    first, with fixed texts (its migration header), so no value is expected
+--    there.
+select current_user as asked_as,
+       current_setting('log_statement') as log_statement,
        current_setting('log_min_duration_statement') as log_min_duration_statement,
        current_setting('log_min_duration_sample') as log_min_duration_sample,
+       current_setting('log_transaction_sample_rate') as log_transaction_sample_rate,
        current_setting('log_parameter_max_length') as log_parameter_max_length,
        current_setting('log_parameter_max_length_on_error') as log_parameter_max_length_on_error,
+       current_setting('log_error_verbosity') as log_error_verbosity,
        current_setting('pgaudit.log', true) as pgaudit_log,
+       current_setting('pgaudit.role', true) as pgaudit_role,
        current_setting('pgaudit.log_parameter', true) as pgaudit_log_parameter,
        current_setting('auto_explain.log_min_duration', true) as auto_explain_log_min_duration,
-       current_setting('auto_explain.log_parameter_max_length', true) as auto_explain_log_parameter_max_length;
+       current_setting('auto_explain.log_parameter_max_length', true) as auto_explain_log_parameter_max_length,
+       current_setting('auto_explain.log_verbose', true) as auto_explain_log_verbose;
 
 -- 7. A quiet moment. v66 takes SHARE ROW EXCLUSIVE on T4 and waits for a
 --    writer of T4 up to the runner's lock_timeout (30 s); a wait that runs out

@@ -46,9 +46,12 @@ touches the production database.
    - block 3: nothing of v66 exists yet; what it reads is there; the migrator's role owns T4;
    - block 4: **the versions the gate will stop.** `waiting_without_link` must be 0. If it is not, the owner decides
      before the deploy who disables or activates those versions; nothing is disabled automatically;
-   - block 5: **the server does not write a save's values to its log.** A refusal: if any column is `false`, there is
-     no deploy until the owner changes the setting, or the save is shown not to pass values as logged parameters;
-   - block 6: the same settings as they are, for the record;
+   - block 5: **the server does not write a save's values to its log.** It is run **as the application's
+     `DATABASE_URL` role**: the settings are those of the session that asks. A refusal: if any column is `false`,
+     there is no deploy until the owner changes the setting, or the save is shown not to pass values as logged
+     parameters. Its last column is `false` when any role or database carries an override of these settings;
+   - block 6: the same settings as they are and the role that asked, for the record. It also says what block 5 does
+     not cover: the pooler's own statement log, and a value inside an error's own text;
    - block 7: a quiet moment on T4.
 3. Both ★★ GOs on the exact head of 18-3, 18-4's GO, then the owner's order that names v66 and the file's sha256 (the
    post-check's block 1 carries it).

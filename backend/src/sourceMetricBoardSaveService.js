@@ -37,6 +37,8 @@ export const SAVE_REASONS = Object.freeze({
   system: "Switched on by drag and drop; OptiMove mapping.",
   club: "Switched on by drag and drop; the club's mapping.",
 });
+// One save at a time per binding (seed 0, its own prefix; taken after the hide locks).
+export const BINDING_SAVE_LOCK_SQL = `select pg_advisory_xact_lock(hashtextextended('board-save:' || $1::uuid::text, 0))`;
 const CONVERSION_NOTE = "Converted by OptiMove's active unit conversion.";
 
 const MESSAGES = {
@@ -116,7 +118,16 @@ function evaluate(world, pairIndex, rows) {
   const columns = columnsOf(world);
   let pair = null;
   const shared = { columns, pairOf: () => (pair ??= choosePair(world, columns, pairIndex)) };
-  // Every id of the body inside the workspace first: the identical 404 before any 409.
+  // Every id of EVERY row inside the workspace first: the identical 404 before any 409, whichever row carries it.
+  for (const row of rows) {
+    if (row.kind === "new") {
+      const variable = world.variables.find((v) => v.id === row.targetId);
+      if (!columns.some((c) => c.field.id === row.fieldId) || !variable || (variable.owner_scope === "system" && variable.hidden)) throw NOT_FOUND();
+    } else {
+      const v = world.versions.find((x) => x.id === row.mappingVersionId);
+      if (!v || !columns.some((c) => c.field.id === v.field_id) || !world.variables.some((x) => x.id === v.variable_id)) throw NOT_FOUND();
+    }
+  }
   const outcomes = rows.map((row) => (row.kind === "new"
     ? placementOf(world, pairIndex, { fieldId: row.fieldId, targetId: row.targetId }, shared).placement
     : preplacedOf(world, shared, row.mappingVersionId)));
@@ -211,6 +222,8 @@ const ACTOR_TEXTS = new Set([
   "source metric confirmation: the row names another user than the acting user",
   "source metric confirmation: the row belongs to another user's confirmation",
   "source metric activation: the acting user may not write this audit row",
+  "source metric activation: the acting user may not write this activation",
+  "source metric mapping: the acting user may not activate this mapping version",
   "source metric mapping: the acting user may not write this audit row",
   "source metric mapping: the acting user may not write this mapping",
   "source metric mapping: the basis is not the acting user's own",
@@ -231,6 +244,8 @@ const RACED_CONSTRAINTS = new Set([
   "source_metric_mapping_versions_one_active_target_per_owner",
   "source_metric_activations_one_open_per_field", "source_metric_activations_one_open_session_target", "source_metric_activations_one_open_drill_target",
 ]);
+// The mapped texts and constraint names, for the suite that holds each one to the migration that raises it.
+export const SAVE_DATABASE_REFUSALS = Object.freeze({ actorTexts: [...ACTOR_TEXTS], candidateTexts: [...CANDIDATE_TEXTS], racedConstraints: [...RACED_CONSTRAINTS] });
 export function classifySaveError(error) {
   if (error instanceof SourceMetricMappingError) return error;
   if (error?.code === "42501" && ACTOR_TEXTS.has(error.message)) {
@@ -285,8 +300,9 @@ export async function saveConfirmation({ ctx, body }) {
       const existing = new Map((await client.query(
         `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
            from training_load.source_metric_mappings m
-          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
-        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
+          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
+            and m.owner_scope = 'club' and m.owner_club_id = $3::uuid`,
+        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
       )).rows.map((m) => [`${m.field_id}:${m.variable_id}`, m.id]));
       await hold(client, "before_locks");
 
@@ -343,6 +359,10 @@ export async function saveConfirmation({ ctx, body }) {
       if (!(await bindingClubHolds(client, [clubId]))) throw NOT_FOUND();
       await hold(client, "before_hide_locks");
       await lockHides(client, first.plan.filter((p) => p.system).map((p) => ({ clubId, definitionId: p.variableId })));
+      // Last, one save at a time per binding: two admins' saves with crossed rows would otherwise meet on T5's
+      // open-row indexes in two orders (40P01). Only a save takes this key, after its last row lock, so it adds no
+      // cycle; the second save then reads what the first wrote and answers board_changed.
+      await client.query(BINDING_SAVE_LOCK_SQL, [seen.team.binding_id]);
 
       // Step 15: the states, on what is locked now. The candidate first: a
       // check finalized meanwhile, or an undone import, is board_changed.
@@ -350,15 +370,17 @@ export async function saveConfirmation({ ctx, body }) {
       const boardChanged = () => refusal(409, "board_changed", MESSAGES.board_changed);
       const world = await loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing: boardChanged });
       if (world.team.binding_id !== seen.team.binding_id) throw refusal(409, "binding_not_active", MESSAGES.binding_not_active);
-      if (world.candidate.bundle_hash !== seen.candidate.bundle_hash || world.candidate.last_seen_check_id !== seen.candidate.last_seen_check_id) throw boardChanged();
+      if (world.candidate.bundle_hash !== seen.candidate.bundle_hash || world.candidate.last_seen_check_id !== seen.candidate.last_seen_check_id
+          || world.candidate.status !== seen.candidate.status) throw boardChanged();
       const ended = ending.findIndex((e) => e.ended_at !== null);
       if (ended >= 0) throw rowRefusal("activation_changed", rows.findIndex((r) => r.replaces.includes(ending[ended].id)));
       // A mapping of a new row that another save created meanwhile: the board changed (section 4.4).
       const nowExisting = (await client.query(
         `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
            from training_load.source_metric_mappings m
-          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))`,
-        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)],
+          where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
+            and m.owner_scope = 'club' and m.owner_club_id = $3::uuid`,
+        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
       )).rows;
       if (nowExisting.length !== existing.size) throw boardChanged();
       const { plan, pair } = evaluate(world, pairIndex, rows);

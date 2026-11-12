@@ -476,6 +476,25 @@ test("3. through the routes: a club admin's A1 answers 409 confirmation_required
   assert.equal(await statusOf(sys.versionId), "active");
 });
 
+test("3b. a field WITH parameters is not gated: a club admin's A1 of its club's zone version works on the v66 schema as before (7h), through the real routes", async () => {
+  const fieldId = (await one(k, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'v66 zone field',$2) returning id`,
+    [`v66.test.zone.f${uid()}`, W.pa.id])).id;
+  const revId = await writeRevision(k, { fieldId, by: W.pa.id, valueShape: "zone_distance", parameterKind: "zone_bounds", evidenceRef: COMPAT, unit: "m", boundUnit: "m/s", unitRef: UNIT_REF, meaning: true, operator: ">=", meaningRef: MEANING_REF, state: "active" });
+  const created = await post("/variables", W.caA.cookie, { requestKey: key(), label: `Zone variable ${uid()}`, unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum",
+    condition: { kind: "zone", operator: ">=", value: "7", unit: "m/s" } });
+  assert.equal(created.status, 201, created.text);
+  const m = await post("/mappings", W.caA.cookie, { requestKey: key(), sourceMetricId: fieldId, metricDefinitionId: created.body.variable.id });
+  assert.equal(m.status, 201, m.text);
+  const v = await post(`/mappings/${m.body.mapping.id}/versions`, W.caA.cookie, { requestKey: key(), sourceRevisionId: revId, appliesToSession: true, appliesToDrill: true, sourceParameters: { lower: "7", upper: null } });
+  assert.equal(v.status, 201, v.text);
+  assert.equal((await post(`/mappings/${m.body.mapping.id}/versions/${v.body.version.id}/submit`, W.caA.cookie, { requestKey: key() })).status, 200);
+  const a = await post(`/mappings/${m.body.mapping.id}/versions/${v.body.version.id}/activate`, W.caA.cookie, { requestKey: key(), expectedActiveVersionId: null });
+  assert.equal(a.status, 200, a.text);
+  const row = await versionRow(v.body.version.id);
+  assert.deepEqual([row.status, row.activated_basis, row.parameter_kind], ["active", "club_admin", "zone_bounds"]);
+  assert.equal((await one(k, `select count(*)::int as n from ${T9I} where mapping_version_id = $1`, [row.id])).n, 0);
+});
+
 test("4. a copy of OptiMove's mapping (J15, C125): a club admin's A1 of the copied draft passes through its link, with no confirmation; once the linked system version is disabled it is refused", async () => {
   const currentVersionOf = async (variableId) => (await one(k, `select current_version_id from training_load.metric_definitions where id = $1`, [variableId])).current_version_id;
   const copyOf = async () => {
@@ -543,7 +562,9 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.deepEqual(pre[2][0], { update_guard_ok: true, actor_guard_ok: true, trigger_set_ok: true });
   assert.deepEqual(pre[3][0], { v66_objects: "0", relied_on_ok: true, owns_t4_ok: true, may_create_ok: true });
   assert.deepEqual(pre[4][0], { waiting_without_link: "0", waiting_with_link: "0" });
-  assert.deepEqual(pre[5][0], { statement_parameters_not_logged_ok: true, error_parameters_not_logged_ok: true, pgaudit_parameters_not_logged_ok: true, auto_explain_parameters_not_logged_ok: true });
+  assert.deepEqual(pre[5][0], { statement_parameters_not_logged_ok: true, error_parameters_not_logged_ok: true, pgaudit_parameters_not_logged_ok: true, auto_explain_parameters_not_logged_ok: true,
+    plans_not_printed_ok: true, no_role_or_database_override_ok: true });
+  assert.equal(pre[6][0].asked_as, (await one(r, "select current_user as u")).u);
   assert.deepEqual(pre[7][0], { t4_writers: "0", idle_in_transaction: "0" });
   // Each one flipped.
   const flipped = async (plant, block) => (await whilePlanted(r, plant, (c) => blocks(c, PREFLIGHT)))[block][0];
@@ -562,6 +583,16 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.equal((await logs([["log_parameter_max_length_on_error", "-1"]])).error_parameters_not_logged_ok, false);
   assert.equal((await logs([["pgaudit.log", "write"], ["pgaudit.log_parameter", "on"]])).pgaudit_parameters_not_logged_ok, false);
   assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "-1"]])).auto_explain_parameters_not_logged_ok, false);
+  assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "0"], ["auto_explain.log_verbose", "on"]])).auto_explain_parameters_not_logged_ok, false, "a verbose plan");
+  assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "0"]])).auto_explain_parameters_not_logged_ok, true);
+  // A sampled transaction logs its statements whatever the other settings say.
+  assert.equal((await logs([["log_transaction_sample_rate", "0.01"], ["log_parameter_max_length", "-1"]])).statement_parameters_not_logged_ok, false);
+  // pgaudit's object audit (its role) logs without pgaudit.log.
+  assert.equal((await logs([["pgaudit.log", "none"], ["pgaudit.role", "auditor"], ["pgaudit.log_parameter", "on"]])).pgaudit_parameters_not_logged_ok, false);
+  assert.equal((await logs([["pgaudit.log", "none"], ["pgaudit.role", "auditor"], ["pgaudit.log_parameter", "off"]])).pgaudit_parameters_not_logged_ok, true);
+  assert.equal((await logs([["debug_print_plan", "on"]])).plans_not_printed_ok, false);
+  // An override on a role or on the database, which another session would not see in its own settings.
+  assert.equal((await flipped((c) => c.query(`alter database ${rdb.name} set log_min_duration_statement = 0`), 5)).no_role_or_database_override_ok, false);
   // A waiting club version of a field without parameters is counted; a held T4 writer shows.
   const before = await catalog(r);
   const other = await client(rdb.url);

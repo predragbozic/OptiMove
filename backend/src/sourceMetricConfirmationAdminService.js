@@ -104,7 +104,16 @@ export async function removeExpiredConfirmationValues({ ctx, body }) {
     reread: (executor, record) => removalAnswer(executor, record.operation_id),
     body: async (client, operationId) => {
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
-      const ids = (await client.query(`select training_load.remove_expired_confirmation_values($1) as ids`, [REMOVAL_BATCH])).rows[0].ids;
+      const taken = (await client.query(`select training_load.remove_expired_confirmation_values($1) as ids`, [REMOVAL_BATCH])).rows[0].ids;
+      // Only the confirmations whose values THIS transaction removed: one that the schedule or an erasure emptied
+      // a moment earlier is returned by the function too (its row was free), with nothing left to remove.
+      const ids = (await client.query(
+        `select distinct i.confirmation_id as id from training_load.source_metric_confirmation_items i
+          where i.confirmation_id = any($1::uuid[]) and i.values_removed_kind = 'expired'
+            and i.xmin::text::bigint = training_load.source_metric_current_xmin()
+          order by 1`,
+        [taken],
+      )).rows.map((r) => r.id);
       // One row per confirmation whose values were removed, each after its
       // removal; the last one is the operation's keyed request record. A run
       // that removed nothing writes no row.

@@ -10,7 +10,7 @@
 --    Expected: v66_rows = 1, v66_checksum_ok = true, later_migrations = 0.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_rows,
-  (select bool_and(checksum = '01e9905d31a016cfe26382a2024fbae93dc4e437661ad9cbb40179cb208d9147') from public.schema_migrations
+  (select bool_and(checksum = '0fef63affe37f5c7c90961cb8c90e278ffe7e6ec3432fef418e54011b3d36dc0') from public.schema_migrations
     where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as later_migrations;
@@ -26,7 +26,7 @@ select
     where p.pronamespace = 'training_load'::regnamespace and p.proname = 'source_metric_mapping_versions_confirmation_gate') as gate_body_ok,
   coalesce((select t.tgenabled = 'O' and t.tgtype = 19 from pg_trigger t
     where t.tgrelid = 'training_load.source_metric_mapping_versions'::regclass and t.tgname = 'source_metric_mapping_versions_v66_confirmation_gate'), false) as gate_trigger_enabled_ok,
-  (select max(t.tgname::text) from pg_trigger t
+  (select max(t.tgname::text collate "C") from pg_trigger t
     where t.tgrelid = 'training_load.source_metric_mapping_versions'::regclass and not t.tgisinternal
       and (t.tgtype & 2) = 2 and (t.tgtype & 16) = 16 and (t.tgtype & 1) = 1) = 'source_metric_mapping_versions_v66_confirmation_gate' as gate_runs_last_ok,
   (select count(*) from pg_trigger t where t.tgrelid = 'training_load.source_metric_mapping_versions'::regclass and not t.tgisinternal) as t4_triggers,

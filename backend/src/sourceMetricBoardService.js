@@ -112,13 +112,13 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   const usable = `c.status <> 'superseded' and c.import_undone_at is null`;
   const candidateSql = (where, tail) => `
     with scoped as materialized (
-      select c.id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.bundle_hash, c.last_seen_check_id,
+      select c.id, c.status, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.bundle_hash, c.last_seen_check_id,
              c.raw_purged_at is not null as purged, c.raw_expires_at <= now() as expired, c.raw_bundle,
              k.status as check_status, k.source_path, k.source_binding_id
         from training_load.gpexe_import_candidates c
         left join training_load.gpexe_import_checks k on k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id
        where c.owner_team_id = $1::uuid and ${usable} and ${where} ${tail})
-    select s.id, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.bundle_hash, s.last_seen_check_id, s.purged, s.expired,
+    select s.id, s.status, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.bundle_hash, s.last_seen_check_id, s.purged, s.expired,
            s.check_status, s.source_path, s.source_binding_id, b.too_large,
            case when b.too_large is false and s.check_status = 'succeeded' and s.source_path = $3::text and s.source_binding_id = $2::uuid
                      and s.session_started_at is not null
