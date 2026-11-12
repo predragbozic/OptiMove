@@ -1578,6 +1578,16 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
   alone. The server log was checked by hand on the local server for the planted values (none found); the suite itself
   asserts the error's message, detail, hint and context.
 
+- **Two corrections of the migration's header comments** (the *Nezavisni revizor*'s L1 and L2 at the GO on
+  `92d745fb`; the frozen migration file is not reopened for wording, so the correct statements are these):
+  - **Savepoints (header lines 48-50).** "A write inside a savepoint is refused: every guard compares the xmin" holds
+    only for the guards that read T9 and for the deferred links. A T9s or T9i row written inside a savepoint after
+    a T9 row written outside it is not refused by its own guard; the deferred links decide at COMMIT.
+  - **Locks (header lines 76-77).** T8's `ACCESS EXCLUSIVE` and the `SHARE ROW EXCLUSIVE` locks on the foreign-key
+    targets are held until the migration's COMMIT, not "only for its own statements". The effect is the intended
+    one because T8 is taken last, so the migration never waits for another table while it holds T8. A failed
+    `NOWAIT` applies nothing and leaves the old instance serving; the deploy is simply repeated.
+
 ### 15.8 As built: 18-2, the board's reads
 
 Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links to these routes before 18-4.
