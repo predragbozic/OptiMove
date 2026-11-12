@@ -10,8 +10,8 @@ import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 const V63_FILE = "202611121000_training_load_v63_metric_value_estimates.sql";
 // Every migration but the error-tracking one (an injected failure would be recorded as a row); v63 last.
-// v64 (6b-B) is left out: this suite proves v63 itself; v64's suite builds on it.
-const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events") && !m.includes("_v64_"));
+// Through v63 only: a later migration (v65 and after) is not part of this suite's rehearsal, which expects v63 last.
+const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V63_FILE) + 1).filter((m) => !m.includes("app_error_events"));
 const UP_TO_V62 = MAIN_MIGRATIONS.filter((m) => m !== V63_FILE);
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
