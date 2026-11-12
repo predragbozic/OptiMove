@@ -17131,8 +17131,10 @@ p.muted.gpexe-approve-note {
   font-weight: 600;
   padding: 0 16px;
 }
-.gpexe-guide .primary-button:hover:not(:disabled) {
-  filter: brightness(0.92);
+@media (hover: hover) {
+  .gpexe-guide .primary-button:hover:not(:disabled) {
+    filter: brightness(0.92);
+  }
 }
 .gpexe-guide .primary-button:disabled {
   opacity: 0.55;
@@ -17143,7 +17145,7 @@ p.muted.gpexe-approve-note {
   background: var(--accent);
   color: #ffffff;
 }
-.gpexe-guide-done .gpexe-guide-num {
+.gpexe-guide-done:not(.gpexe-guide-current) .gpexe-guide-num {
   color: var(--success, #2e7d32);
 }
 .gpexe-guide-tag {
@@ -17154,6 +17156,12 @@ p.muted.gpexe-approve-note {
 .gpexe-guide-samples {
   margin: 4px 0 6px;
   padding-left: 18px;
+}
+.gpexe-guide-sample-values {
+  display: block;
+}
+.gpexe-guide-pair {
+  white-space: nowrap;
 }
 .gpexe-guide-info {
   color: var(--muted);

@@ -7,6 +7,13 @@
 // switch). A read that failed is "unknown" and is never counted as done.
 export const GUIDE_STEP_TITLES = ["Connect GPEXE", "Choose team", "Variables", "Athletes", "Ready"];
 
+// Evidence that a search already happened: a succeeded check, an athlete linked or seen, or a session seen. One rule
+// for every place that asks (the steps and the pair counts): a later failed or running search never undoes it.
+export function searchEvidence({ check, sourceAthletes, candidates }) {
+  const athletes = Array.isArray(sourceAthletes) ? sourceAthletes : null;
+  return check?.status === "succeeded" || Boolean(athletes && athletes.length) || Boolean(Array.isArray(candidates) && candidates.length);
+}
+
 // facts: { admin, conn: { status, connected, reconnect, bound }, check, candidates,
 //          sourceAthletes, sourceAthletesError, links, teamSwitch, vars, skipped,
 //          pairs: { exact, namesMissing } or null, identityLoad, teamName, switchData }
@@ -67,7 +74,7 @@ export function guideSteps(f) {
     variables = { state, total: v.total ?? 0, onCount: v.onCount ?? 0, skipped, canSwitchOn: v.status === "ready" && v.total > 0 && s2 === "done" };
     add(3, state, "", null, { variables });
   } else {
-    const evidence = checkDone || running || Boolean(list && list.length);
+    const evidence = running || searchEvidence(f);
     const state = evidence ? "done" : "waiting";
     steps.push({ id: 1, title: "Connect, team and variables", state, text: evidence ? "An administrator has connected GPEXE for this team." : "An administrator connects GPEXE for this team and chooses its variables.", action: null, merged: true });
     s1 = state; s2 = state;
@@ -81,7 +88,7 @@ export function guideSteps(f) {
   const pairs = athleteSuggestions(f, unlinked);
   // Evidence that a search already happened: a succeeded check, athletes or sessions seen. A later failed or running
   // search never undoes what is already linked (code review of U6b).
-  const searched = checkDone || linked > 0 || Boolean(athletes && athletes.length) || Boolean(list && list.length);
+  const searched = searchEvidence(f);
   const find = { kind: "check", label: "Find new sessions" };
   if (!searched) {
     s4 = running ? "running" : setupDone ? "next" : "waiting";

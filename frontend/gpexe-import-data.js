@@ -11,6 +11,7 @@ import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
 import { emptyGuideState, loadGuide } from "./gpexe-guide-data.js";
+import { searchEvidence } from "./gpexe-guide-steps.js";
 import { discardStateKeys, saveImportStates, statesOf } from "./gpexe-import-states-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
@@ -1585,7 +1586,8 @@ let guidePairsSeq = 0;
 export async function loadGuidePairs(render) {
   const gx = g();
   const teamId = gx.teamId ? String(gx.teamId) : null;
-  const searched = gx.status?.lastCheck?.status === "succeeded" || gx.check?.status === "succeeded";
+  const check = gx.check?.status === "succeeded" ? gx.check : gx.status?.lastCheck;
+  const searched = searchEvidence({ check, sourceAthletes: gx.sourceAthletes, candidates: gx.candidates });
   if (!teamId || !searched || !(gx.sourceAthletes || []).some((a) => a.status === "unlinked")) {
     gx.guidePairs = null;
     return;

@@ -154,7 +154,9 @@ export async function loadGuideVariables(render) {
     const items = candidates.filter((m) => !isOn(m) && !refused.has(String(m.id)))
       .map((m) => ({ mappingId: String(m.id), versionId: String(m.activeVersionId), label: variableLabel(m) }));
     // U6b (S4): the variables already on, to show two athletes' values from the stored preview.
-    const onItems = candidates.filter(isOn).map((m) => ({ mappingId: String(m.id), label: variableLabel(m), sourceKey: String(m.sourceMetric?.key || "") }));
+    // The versions switched on for each mapping: a sample is the value of exactly that variable, never another
+    // mapping's value of the same GPEXE field (code re-review LOW).
+    const onItems = candidates.filter(isOn).map((m) => ({ mappingId: String(m.id), label: variableLabel(m), versionIds: acts.items.filter((a) => String(a.mappingId) === String(m.id) || String(a.versionId) === String(m.activeVersionId)).map((a) => String(a.versionId)) }));
     gx.guide = { ...gx.guide, vars: { status: "ready", items, total: items.length, onCount: onItems.length, onItems } };
   } catch (error) {
     if (generation !== gx.generation || String(gx.teamId) !== teamId || seq !== varsSeq) return;
@@ -262,14 +264,15 @@ export function newestSampleCandidate(gx) {
   return list.filter((c) => c.status !== "superseded" && !c.importUndoneAt && c.sessionStartedAt)
     .sort((a, b) => (a.sessionStartedAt < b.sessionStartedAt ? 1 : -1))[0] || null;
 }
-export function athleteSamples(candidate, sourceKey) {
+export function athleteSamples(candidate, versionIds) {
   const out = [];
+  const ofVariable = (v) => versionIds.includes(String(v.mappingVersionId)) && v.value !== null && v.value !== undefined;
   for (const a of candidate?.preview?.athletes || []) {
     const name = a.athleteId ? candidate.athletes?.[a.athleteId]?.name : "";
     if (!name) continue;
-    const res = (a.results || []).find((r) => r.level !== "drill" && WRITING.has(r.outcome) && (r.values || []).some((v) => v.sourceMetricKey === sourceKey && v.value !== null && v.value !== undefined));
+    const res = (a.results || []).find((r) => r.level !== "drill" && WRITING.has(r.outcome) && (r.values || []).some(ofVariable));
     if (!res) continue;
-    const v = res.values.find((x) => x.sourceMetricKey === sourceKey && x.value !== null && x.value !== undefined);
+    const v = res.values.find(ofVariable);
     out.push({ name, value: v.value, unit: v.unit || "" });
     if (out.length === SAMPLE_ATHLETES) break;
   }
@@ -293,7 +296,7 @@ export async function loadGuideSamples(render) {
       const { candidate } = await api(`/api/training-load/gpexe/teams/${encodeURIComponent(teamId)}/candidates/${encodeURIComponent(pick.id)}`);
       if (stale()) return;
       for (const item of v.onItems) {
-        const values = athleteSamples(candidate, item.sourceKey);
+        const values = athleteSamples(candidate, item.versionIds);
         if (values.length) byMapping[item.mappingId] = { kind: "athletes", values };
       }
     } catch {

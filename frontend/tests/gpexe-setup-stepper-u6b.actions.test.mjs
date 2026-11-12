@@ -161,7 +161,7 @@ test("5. Athletes (S6): the exact pairs Review all would stage become Confirm N 
   reset({ athletes: [athlete(1, "linked")] });
   await open();
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-pair-suggestions")).length, 0, "nothing to link: no read");
-  reset({ athletes: unlinked3, lastCheck: null });
+  reset({ athletes: [], candidates: [], lastCheck: null });
   await open();
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-pair-suggestions")).length, 0, "no search yet: no read");
 });
@@ -230,7 +230,9 @@ test("8. a later failed or running search never undoes Athletes: what is linked 
 test("9. the counts follow a search finished in the stepper and come back after Link athletes closes (code review MEDIUM)", async () => {
   const oneExact = { state: "ok", exact: [{ gpexeAthleteId: "1", athleteId: "a1" }], ambiguous: [], dateConflicts: [] };
   const unlinked3 = [athlete(1, "unlinked"), athlete(2, "unlinked"), athlete(3, "unlinked")];
-  reset({ athletes: unlinked3, lastCheck: null, suggestions: oneExact, activations: ON, onCheck: () => ({ status: 201, body: { check: { id: "k", status: "running", startedAt: "2026-11-10T10:00:00Z" } } }) });
+  // Nothing seen before the first search; the search shows three athletes to link.
+  const seen = [];
+  reset({ athletes: seen, lastCheck: null, suggestions: oneExact, activations: ON, onCheck: () => { seen.push(...unlinked3); return { status: 201, body: { check: { id: "k", status: "running", startedAt: "2026-11-10T10:00:00Z" } } }; } });
   await open();
   await tick();
   assert.doesNotMatch(guideHtml(), /Confirm 1 match/, "before the first search there is nothing to count");
@@ -262,7 +264,7 @@ test("10. Variables (S4): two athletes' values for a variable already on, a coun
   const detail = {
     id: "cand-1",
     athletes: { a1: { name: "Zqone" }, a2: { name: "Zqtwo" }, a3: { name: "Zqthree" } },
-    preview: { version: 3, athletes: ["a1", "a2", "a3"].map((id, n) => ({ athleteId: id, results: [{ level: "session", outcome: "created", values: [{ sourceMetricKey: "key1", value: 6500 + n, unit: "m" }] }] })) },
+    preview: { version: 3, athletes: ["a1", "a2", "a3"].map((id, n) => ({ athleteId: id, results: [{ level: "session", outcome: "created", values: [{ sourceMetricKey: "key1", mappingVersionId: MAPPINGS[0].activeVersionId, value: 6500 + n, unit: "m" }] }] })) },
   };
   const previews = { [MAPPINGS[1].id]: { preview: { targetUnit: "min", levels: { session: { athletesWithValue: 13, minCanonical: "45", maxCanonical: "96.5" } } } } };
   const half = [{ id: "act", versionId: MAPPINGS[0].activeVersionId, mappingId: MAPPINGS[0].id }];
@@ -271,9 +273,9 @@ test("10. Variables (S4): two athletes' values for a variable already on, a coun
   await tick();
   const step = openStep(guideHtml());
   assert.match(step, /From the session of 10\.11\.2026:/);
-  assert.match(step, /Variable 1 from Source 1<\/strong> <span class="muted">Zqone 6\u2009500 m \u00b7 Zqtwo 6\u2009501 m</, "two athletes, never a third");
+  assert.match(step, /Variable 1 from Source 1<\/strong><span class="muted gpexe-guide-sample-values"><span class="gpexe-guide-pair">Zqone 6\u2009500 m<\/span> \u00b7 <span class="gpexe-guide-pair">Zqtwo 6\u2009501 m<\/span><\/span>/, "two athletes, never a third; each pair kept together");
   assert.doesNotMatch(step, /Zqthree/);
-  assert.match(step, /Variable 2 from Source 2<\/strong> <span class="muted">13 athletes \u00b7 45\u201396\.5 min</);
+  assert.match(step, /Variable 2 from Source 2<\/strong><span class="muted gpexe-guide-sample-values"><span class="gpexe-guide-pair">13 athletes \u00b7 45\u201396\.5 min</);
   assert.equal(fetchCalls.filter((c) => /\/preview\?candidateId=cand-1$/.test(c.url)).length, 1, "one aggregate read per variable not on");
 
   reset({ athletes: [athlete(1, "linked")], candidates: [], activations: half });
@@ -300,4 +302,48 @@ test("11. Connect and Choose team open Settings > Source connections (navigation
   assert.match(openStep(html), /data-tab="organization" data-settings-section="sourceConnections"[^>]*>Open Source connections</);
   assert.match(html, /<span class="visually-hidden">Step 1: <\/span><strong>Connect GPEXE/);
   assert.doesNotMatch(html, /server3/, "no host name in the stepper");
+});
+
+test("8b. a coach's merged row uses the same evidence as Athletes: linked athletes count, even after a failed search (code re-review LOW)", () => {
+  const r = guideSteps({ admin: false, check: { status: "failed" }, candidates: [], sourceAthletes: [athlete(1, "linked")], teamSwitch: { enabled: true } });
+  assert.equal(r.steps[0].state, "done");
+  assert.equal(r.steps.find((x) => x.id === 5).checklist.find((c) => c.id === "setup").ok, true);
+});
+
+test("9b. a later failed search keeps the counts (one evidence rule for the steps and the counts; code re-review LOW)", async () => {
+  const oneExact = { state: "ok", exact: [{ gpexeAthleteId: "1", athleteId: "a1" }], ambiguous: [], dateConflicts: [] };
+  reset({ athletes: [athlete(1, "unlinked"), athlete(2, "unlinked")], suggestions: oneExact, activations: ON, onCheck: () => ({ status: 201, body: { check: { id: "k", status: "running", startedAt: "2026-11-10T10:00:00Z" } } }) });
+  let failed = false;
+  const failedCheck = { id: "k", status: "failed", startedAt: "2026-11-10T10:00:00Z" };
+  responder = ((base) => async (call) => {
+    if (call.url.includes("/checks/")) { failed = true; return { status: 200, body: { check: failedCheck } }; }
+    const answer = await base(call);
+    // After the failed search the server's latest check is that failed one.
+    if (failed && call.url.endsWith("/status")) return { ...answer, body: { ...answer.body, lastCheck: failedCheck } };
+    return answer;
+  })(responder);
+  await open();
+  await tick();
+  assert.match(openStep(guideHtml()), />Confirm 1 match</);
+  await act("training-load-gpexe-check");
+  await tick();
+  assert.match(guideHtml(), /Confirm 1 match/, "the failed search did not clear the counts");
+});
+
+test("10b. a sample is the value of exactly that variable: two mappings of one GPEXE field never show each other's values (code re-review LOW)", async () => {
+  const twin = [MAPPINGS[0], { ...MAPPINGS[1], sourceMetric: MAPPINGS[0].sourceMetric }];
+  const cand = { id: "cand-1", status: "pending", sessionStartedAt: "2026-11-10T16:00:00Z", gpexeTeamSessionId: "5", sessionLabel: "S", reasons: [] };
+  const value = (versionId, v, unit) => ({ sourceMetricKey: "key1", mappingVersionId: versionId, value: v, unit });
+  const detail = {
+    id: "cand-1", athletes: { a1: { name: "Zqone" }, a2: { name: "Zqtwo" } },
+    preview: { version: 3, athletes: ["a1", "a2"].map((id) => ({ athleteId: id, results: [{ level: "session", outcome: "created", values: [value(twin[1].activeVersionId, 6.5, "km"), value(twin[0].activeVersionId, 6500, "m")] }] })) },
+  };
+  reset({ athletes: [athlete(1, "linked")], candidates: [cand], candidate: detail, activations: ON });
+  responder = ((base) => async (call) => (call.url.startsWith("/api/training-load/sources/metrics/mappings") && !call.url.includes("/preview") ? { status: 200, body: { mappings: twin, nextCursor: null } } : base(call)))(responder);
+  await open();
+  await tick();
+  await act("training-load-gpexe-guide-step", { step: "3" });
+  const step = openStep(guideHtml());
+  assert.match(step, /Variable 1 from Source 1<\/strong><span[^>]*><span class="gpexe-guide-pair">Zqone 6\u2009500 m</);
+  assert.match(step, /Variable 2 from Source 1<\/strong><span[^>]*><span class="gpexe-guide-pair">Zqone 6\.5 km</);
 });

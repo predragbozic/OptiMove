@@ -86,7 +86,7 @@ function variablesBodyHtml(gx, variables, busy) {
   const skippedLine = variables.skipped.length ? `<p class="muted">${escapeHtml(plural(variables.skipped.length, "variable was", "variables were"))} not accepted: ${escapeHtml(names)}. Switch ${variables.skipped.length === 1 ? "it" : "them"} on in Training Load > Data configuration > Mappings.</p>` : "";
   const purpose = variables.state === "next" ? `<p class="muted">These decide which numbers (for example distance) are taken from GPEXE.</p>` : "";
   const offer = variables.state === "next" && !g.confirm && !g.write;
-  const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button><span class="gpexe-guide-tag">Recommended</span>` : "";
+  const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" aria-describedby="gpexe-guide-recommended" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button><span class="gpexe-guide-tag" id="gpexe-guide-recommended">Recommended</span>` : "";
   // S5: "Choose my own" is the Mappings screen until the J18 board exists.
   const own = variables.state !== "waiting" && variables.state !== "unknown" && !g.confirm && !g.write
     ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" data-section="mappings" ${busy ? "disabled" : ""}>Choose my own</button>` : "";
@@ -106,7 +106,8 @@ const fmtNumber = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString("en-GB", { maximumFractionDigits: 2 }).replace(/,/g, "\u2009") : String(v);
 };
-const withUnit = (v, unit) => `${fmtNumber(v)}${unit ? ` ${unit}` : ""}`;
+// A count needs no unit word ("7", not "7 count"; ux re-review).
+const withUnit = (v, unit) => `${fmtNumber(v)}${unit && unit !== "count" ? ` ${unit}` : ""}`;
 
 // S4: beside each variable, values from the newest saved session - two athletes' values for a variable already on
 // (what the import writes), a count and a range for one not on yet (7e's aggregate, OD3). Nothing before a search.
@@ -117,12 +118,13 @@ function samplesHtml(gx) {
   const rows = [...(v.onItems || []), ...(v.items || [])].map((item) => {
     const x = sm.byMapping[item.mappingId];
     if (!x) return "";
-    const text = x.kind === "athletes"
-      ? x.values.map((a) => `${a.name} ${withUnit(a.value, a.unit)}`).join(" \u00b7 ")
-      : x.min !== null && x.max !== null
+    // Each "name value" stays together; the values sit on their own line under the variable (ux re-review).
+    const parts = x.kind === "athletes"
+      ? x.values.map((a) => `${a.name} ${withUnit(a.value, a.unit)}`)
+      : [x.min !== null && x.max !== null
         ? `${plural(x.count, "athlete", "athletes")} \u00b7 ${fmtNumber(x.min)}\u2013${withUnit(x.max, x.unit)}`
-        : `${plural(x.count, "athlete has", "athletes have")} a value`;
-    return `<li><strong>${escapeHtml(item.label)}</strong> <span class="muted">${escapeHtml(text)}</span></li>`;
+        : `${plural(x.count, "athlete has", "athletes have")} a value`];
+    return `<li><strong>${escapeHtml(item.label)}</strong><span class="muted gpexe-guide-sample-values">${parts.map((t) => `<span class="gpexe-guide-pair">${escapeHtml(t)}</span>`).join(" \u00b7 ")}</span></li>`;
   }).filter(Boolean);
   if (!rows.length) return "";
   const key = calendarDayKey(sm.startedAt);
