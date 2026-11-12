@@ -26614,7 +26614,7 @@ div.mb-slot-open { cursor: default; }
   .mb-sheet .om-card__actions { display: grid; }
   .mb-sheet .om-card__actions .om-btn { width: 100%; }
   .mb-check input { width: 24px; height: 24px; }
-  .mb-tech summary { display: flex; align-items: center; min-height: var(--om-tap-target); }
+  .mb-tech summary { display: list-item; box-sizing: border-box; min-height: var(--om-tap-target); padding-block: 12px; }
   .mb-col-item { gap: 0; }
   .mb-sheet .mb-notice { margin: 0; }
 }

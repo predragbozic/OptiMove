@@ -335,9 +335,9 @@ function switchOffHtml(s) {
   if (!x) return "";
   const team = teamOf(s);
   const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? ` — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}` : ""}?</strong> Sessions found from then on are imported without it.</p>
+    ${s.write?.kind === "switch-off" ? writeHtml(s) : ""}
     <div class="om-card__actions"><button type="button" class="om-btn om-btn--danger" data-action="metric-board-switch-off" ${s.write ? "disabled" : ""}>Switch off</button>
-      <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div>
-    ${s.write?.kind === "switch-off" ? writeHtml(s) : ""}`;
+      <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div>`;
   if (isPhone()) return sheet("mb-switch-off-title", body, "metric-board-dismiss");
   return `<div class="mb-notice is-warning" role="group" aria-labelledby="mb-switch-off-title">${body}</div>`;
 }
