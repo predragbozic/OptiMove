@@ -652,6 +652,17 @@ test("9b3. (S2, ux review) a wrong GPEXE password after the connection was saved
   assert.match(out, /GPEXE refused this username and password/);
   assert.match(out, /data-source-connections-form="credential"/);
   assert.ok(!out.includes("wrong") || !/value="wrong"/.test(out), "the password is not filled back in");
+
+  // GPEXE unavailable after the save: never called a wrong password.
+  await openClub({ list: [], writes: {
+    "POST ": () => ({ status: 201, body: { connection: connection() } }),
+    [`POST /${CONN}/connect`]: () => ({ status: 502, body: { error: "source_unavailable", message: "x" } }),
+  } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const down = html();
+  assert.doesNotMatch(down, /did not sign in with that username and password/);
+  assert.match(down, /The connection is saved, but connecting the account did not work \(see below\)\./);
 });
 
 test("9c. a workspace switch never shows the previous club's connections: the loaded list is treated as not loaded, the panel's one-shot read fires for the new club, and nothing fires while a write is in flight", async () => {

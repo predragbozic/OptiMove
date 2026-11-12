@@ -376,10 +376,13 @@ async function createAndConnect(render, { pair, retry }) {
   }
   if (created && pair && generation === d.generation) {
     await submitCredentials(render, pair);
-    // The account was not accepted: the connection stays saved, and the form asks for the pair again.
+    // Connect was refused: the connection stays saved and the form asks for the pair again; only a refused sign-in is
+    // called a wrong username or password (ux re-review).
     if (generation === d.generation && d.credentialError && d.credentialOpen?.connectionId === created) {
       d.noticeFor = created;
-      d.notice = `The connection is saved, but ${SOURCE_NAME} did not sign in with that username and password. Enter them again and press Connect.`;
+      d.notice = d.credentialError.code === "source_auth_rejected"
+        ? `The connection is saved, but ${SOURCE_NAME} did not sign in with that username and password. Enter them again and press Connect.`
+        : `The connection is saved, but connecting the account did not work (see below). Nothing else was stored; enter the ${SOURCE_NAME} username and password again when you are ready and press Connect.`;
       render();
     }
   }
