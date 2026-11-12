@@ -894,6 +894,11 @@ test("B6. the value rules are refused by the BEFORE trigger with fixed text that
   for (const over of [{ rawA: P1 }, { storedA: P2 }, { rawB: P1 }, { storedB: P2 }, { rule: "duration_mmss" }, { unit: "mm:ss" }]) {
     clean(refusedWith(await save(W.caA, { stored: s, items: [plainItem(v, over)], start: false }), "23514", PLAIN), "a row that was not compared");
   }
+  // A salt and a digest the writer supplies for a row that was not compared are dropped, not stored.
+  passes(await save(W.caA, { stored: s, items: [plainItem(v, { salt: Buffer.alloc(16, 7), digest: "0".repeat(64) })], then: async (c, out) => {
+    const it = await one(c, `select values_salt, values_digest from ${T9I} where id = $1`, [out.itemIds[0]]);
+    assert.deepEqual([it.values_salt, it.values_digest], [null, null]);
+  } }), "a supplied salt and digest on a row that was not compared");
   // The three rules of the registry, and nothing else.
   for (const [rule, unit] of [["duration_mmss", "mm:ss"], ["distance_m", "m"], ["speed_kmh", "km/h"]]) passes(await save(W.caA, { stored: s, items: [checkedItem(v, { rule, unit })] }), rule);
   assert.deepEqual((await one(k, `select training_load.source_metric_display_unit_ok(null, 'm') as a, training_load.source_metric_display_unit_ok('distance_m', null) as b, training_load.source_metric_display_unit_ok('distance_m', 'km') as c`)), { a: false, b: false, c: false });
@@ -976,6 +981,8 @@ test("B8. the deferred links at COMMIT: no keyed audit row, an unkeyed one, anot
   const FOLLOW = /^source_metric_audit: the audit row must follow its own confirmation in the same transaction$/;
   refusedWith(await save(W.caA, { ...base, keyed: false }), "23514", FOLLOW);
   refusedWith(await save(W.caA, { ...base, auditOperation: crypto.randomUUID() }), "23514", FOLLOW);
+  // The COMMIT link on its own (T8's revision guard off for this transaction): an unkeyed row does not count.
+  refusedWith(await save(W.caA, { ...base, keyed: false, before: (c) => c.query(`alter table ${T8} disable trigger source_metric_audit_v37_revision_guard`) }), "23514", KEYED);
   refusedWith(await save(W.caA, { ...base, auditTeam: W.bA2.teamId }), "23514", FOLLOW);
   refusedWith(await save(W.caA, { ...base, auditReason: "A reason." }), "23514", FOLLOW);
   refusedWith(await save(W.caA, { ...base, auditUser: W.caA2.id }), "42501", /^source metric mapping: the row names another user than the acting user$/);
@@ -991,6 +998,18 @@ test("B8. the deferred links at COMMIT: no keyed audit row, an unkeyed one, anot
   refusedWith(await save(W.caA, { ...base, start: false }), "23514", SWITCHED);
   // A version that is not active.
   refusedWith(await save(W.caA, { stored: await stored(await binding(W.clubA)), items: [checkedItem(W.vWaiting)], start: false }), "23514", SWITCHED);
+  // The COMMIT link on its own: an open activation of this transaction on a version that is not active
+  // (T5's guard never lets one start; planted with the triggers off) does not count.
+  const bw = await binding(W.clubA);
+  const waiting = await versionRow(W.vWaiting.versionId);
+  refusedWith(await save(W.caA, { stored: await stored(bw), items: [checkedItem(W.vWaiting)], start: false, before: async (c) => {
+    await replica(c);
+    await c.query(`insert into ${T5} (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint,
+                     source_team_binding_id, team_id, applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
+                   values ($1,$2,$3,$4,$5,$6,$7,true,true,'required',$8,'club_admin','Planted.')`,
+    [W.vWaiting.versionId, W.vWaiting.mappingId, waiting.source_metric_definition_id, waiting.metric_definition_id, waiting.parameter_fingerprint, bw.bindingId, bw.teamId, W.caA.id]);
+    await c.query("set local session_replication_role = origin");
+  } }), "23514", SWITCHED);
   // attested must say whether a row was compared.
   const b2 = await binding(W.clubA);
   const s2 = await stored(b2);
@@ -1040,6 +1059,15 @@ test("B9. T8: confirmation_id is set exactly for the three actions; an erasure c
     [done.id, W.pa.id, crypto.randomUUID()]), "23514", FOLLOW);
   refusedWith(await T(W.caA.id, `insert into ${T8} (action, confirmation_id, performed_by_user_id, basis, operation_id, reason) values ('confirmation_values_erased',$1,$2,'platform_admin',$3,'erasure_request')`,
     [done.id, W.caA.id, crypto.randomUUID()]), "42501", /^source metric (mapping|confirmation): the acting user may not write this audit row$/);
+  // The revision guard on its own (the insert guard and the actor guard off for this transaction): a removal
+  // row on another basis than the platform admin's is refused by it, as a right, before any CHECK.
+  const e0 = await committed(W.caA);
+  refusedWith(await tx(W.pa.id, async (c) => {
+    await c.query(`alter table ${T8} disable trigger source_metric_audit_insert_guard`);
+    await c.query(`alter table ${T8} disable trigger source_metric_audit_v35_actor_guard`);
+    await c.query(ERASE, [e0.id]);
+    await auditRemoval(c, "confirmation_values_erased", e0.id, W.pa.id, { reason: "erasure_request", basis: "club_admin" });
+  }, { commit: false }), "42501", /^source metric confirmation: the acting user may not write this audit row$/);
   // A club-admin confirmation row of a confirmation that does not exist.
   refusedWith(await T(W.caA.id, `insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('mapping_confirmation',$1,$2,$3,'club_admin',$4,$5,$6)`,
     [done.b.teamId, crypto.randomUUID(), W.caA.id, crypto.randomUUID(), key(), hash()]), "23514", /^source_metric_audit: a club-admin confirmation row names a club's confirmation$/);
