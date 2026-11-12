@@ -101,6 +101,9 @@ function resetGpexeTeamState(teamId) {
   gx.generation += 1;
   gx.batch = emptyBatch();
   gx.calendar = { month: "", day: "", open: null };
+  // IMP1: another team starts on its own default tab, with "Choose sessions" folded.
+  gx.tab = "";
+  gx.chooseOpen = null;
   gx.teamId = teamId;
   gx.status = null;
   gx.candidates = null;
@@ -1496,6 +1499,17 @@ export function calendarOpen(gx = g()) {
 // request, no change to the search dates, the shared week or the filtered day.
 export function calendarToggled(open) {
   g().calendar.open = Boolean(open);
+}
+
+// IMP1: whether "Choose sessions" (the checkboxes of the Ready list) is open: as the person left it; otherwise open
+// while sessions are selected, so a selection is never out of sight. Local only, like the calendar.
+export function chooseOpen(gx = g()) {
+  if (gx.chooseOpen === true || gx.chooseOpen === false) return gx.chooseOpen;
+  return Object.keys(gx.batch?.selected || {}).length > 0;
+}
+
+export function importsChooseToggled(open) {
+  g().chooseOpen = Boolean(open);
 }
 
 // U6a: the folded "Import settings" card was opened or folded by the person (its own "toggle" event, app.js); kept for the next repaint.

@@ -112,9 +112,14 @@ async function act(action, dataset = {}, extra = {}) {
   await handleTrainingLoadAction(fakeAction({ action, ...dataset }, extra), { renderTrainingLoad: render });
 }
 
+// IMP1: the buckets are tabs and the checkboxes of the Ready list are in "Choose sessions". These tests choose Ready
+// sessions, so they open on the Ready tab with "Choose sessions" open; a test that reads another bucket opens its tab.
 async function openImports() {
   await act("training-load-section", { section: "imports" });
+  gx().chooseOpen = true;
+  gx().tab = "ready";
 }
+const openTab = (tab) => act("training-load-gpexe-tab", { importTab: tab });
 
 function pick(candidateId, checked = true) {
   return act("training-load-gpexe-pick", { candidateId }, { checked });
@@ -374,7 +379,10 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   // The result stays until Done; the row of 6 carries the mark behind it.
   await act("training-load-gpexe-batch-done");
   assert.ok(!/imports-batch"/.test(html()));
+  // An unconfirmed row is something that needs the person: it is in the Needs you tab.
+  await openTab("attention");
   assert.match(html(), /<strong>[^<]*FULL TRAINING 6<\/strong>[\s\S]*?Result not confirmed/);
+  await openTab("ready");
   assert.ok(!/removed from the selection/.test(html()), "nothing to drop: the refused ones left with the answer, the not-tried one is still Ready with the same hash");
   assert.match(html(), /<strong>1 selected<\/strong>/);
 });
@@ -460,6 +468,7 @@ test("10. a lost answer never reads as failed: every session is 'not confirmed',
   assert.equal(importPosts().length, 1);
   // The uncertain state survives closing the panel: the row keeps its mark.
   await act("training-load-gpexe-batch-done");
+  await openTab("attention");
   assert.match(html(), /<strong>[^<]*FULL TRAINING 2<\/strong>[\s\S]*?Result not confirmed/);
   assert.ok(gx().uncertain["cand-2"]);
   // Three checks without confirmation: the coach is sent to a platform admin.
@@ -511,11 +520,13 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   gx().linkCheckStartedAt = "2026-09-25T09:00:00Z"; // only cand-2 was seen by a check after the link change
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
+  await openTab("attention");
+  assert.match(html(), /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
+  await openTab("ready");
   const page = html();
-  assert.match(page, /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   // U6a-2: the group says it; the state bar's "Import 1 ready" names what can be imported now.
-  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 1 ready</, "the main button names what can be imported now");
+  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 1 ready session</, "the main button names what can be imported now");
   assert.ok(!/imports-bucket-note/.test(page), "no lock note on the Ready bucket");
   assert.deepEqual(checkboxes(page).map((b) => b.id), ["cand-2"], "the fresh session has its checkbox, the stale one none");
   assert.deepEqual(gx().batch.selected, {}, "the stale choice was dropped");
@@ -684,7 +695,7 @@ test("13. the calendar marks every day with a found session, whatever its bucket
   await openImports();
   const page = html();
   assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "U6a: folded by default, on a desktop too");
-  assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Sessions calendar<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
+  assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
   assert.match(page, /Markers show sessions already found by OptiMove\. Other dates may not have been searched yet\./);
   assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 2 sessions found" aria-pressed="false"><span class="imports-cal-num">21<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-count">2<\/span>/);
@@ -709,11 +720,15 @@ test("14./15. a marked day filters the list locally (no request, the search date
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 1 session found, showing this day" aria-pressed="true"/);
   assert.match(page, /Showing the sessions of 21\.09\.2026 only \(1 of 3\)\./);
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  // U6a-2: the sessions that need a person stay grouped over every date (like the counts in the state bar), and say so.
-  assert.match(page, /<h3>Needs you \(1\)<\/h3><\/div>\s*<p class="muted">These cover every date, not only the day you picked\.<\/p>/);
-  assert.match(page, /data-candidate-id="cand-7"/);
   assert.match(page, /data-candidate-id="cand-21"/);
   assert.ok(!/data-candidate-id="cand-14"/.test(page));
+  // U6a-2: the sessions that need a person stay grouped over every date (like the counts in the state bar), and say so.
+  await openTab("attention");
+  const attention = html();
+  assert.match(attention, /<h3>Needs you \(1\)<\/h3><\/div>\s*<p class="muted">These cover every date, not only the day you picked\.<\/p>/);
+  assert.match(attention, /data-candidate-id="cand-7"/);
+  assert.match(attention, /Showing the sessions of 21\.09\.2026 only/, "the picked day is in sight on this tab too");
+  await openTab("ready");
   assert.match(page, /data-gpexe-field="from" value=""/, "the search dates stay empty");
   assert.equal(state.trainingLoad.dataAnalysisWeekStart, "", "the shared week is untouched");
   await act("training-load-gpexe-cal-all");
@@ -835,7 +850,7 @@ test("19. on a phone the calendar is folded by default with the month and a shor
     await openImports();
     let page = html();
     assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "folded on a phone");
-    assert.match(page, /Sessions calendar<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span>/);
+    assert.match(page, /Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span>/);
     const calls = fetchCalls.length;
     // The browser opens the <details> itself; its "toggle" event keeps the state (app.js).
     calendarToggled(true);
@@ -882,13 +897,15 @@ test("10f. a 'nothing new' session reviewed before a link change is a Needs-atte
   await openImports();
   gx().linkSeq = 1;
   gx().linkCheckStartedAt = "2026-09-25T09:00:00Z"; // only cand-2 was seen by a check after the link change
-  const page = html();
-  const attention = page.slice(page.indexOf('aria-label="Needs attention"'), page.indexOf('aria-label="Ready to import"'));
+  await openTab("attention");
+  const attention = html().slice(html().indexOf('aria-label="Needs attention"'));
   assert.match(attention, /<h3>Needs you \(1\)<\/h3>/);
   assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale 'nothing new' session is an attention item with its step");
   assert.ok(!attention.includes('data-candidate-id="cand-2"'));
-  const imported = page.slice(page.indexOf("<summary>Imported ("));
-  assert.match(imported, /^<summary>Imported \(1\)<\/summary>/, "only the fresh one is up to date");
+  await openTab("imported");
+  const page = html();
+  const imported = page.slice(page.indexOf("<h3>Imported ("));
+  assert.match(imported, /^<h3>Imported \(1\)<\/h3>/, "only the fresh one is up to date");
   assert.match(imported, /data-candidate-id="cand-2"[\s\S]*?nothing new/);
   assert.ok(!imported.includes('data-candidate-id="cand-1"'), "the stale one is not shown as done");
   assert.equal(checkboxes(page).length, 0, "neither is a batch candidate");
@@ -900,8 +917,8 @@ test("J19 U1: the daily line shows Ready and Needs you, and Import N ready selec
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), ready(3)], onImports: () => { sent += 1; return result({ imported: 0 }, []); } }));
   await openImports();
   assert.match(html(), /<h3>Ready to import \(3\)<\/h3>/);
-  assert.ok(!/Needs you/.test(html()), "the old counts line is gone: the groups and the button say it");
-  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
+  assert.ok(!/Needs you:|imports-daily-counts/.test(html()), "the old counts line is gone: the tabs and the button say it");
+  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready sessions</);
   await act("training-load-gpexe-import-ready");
   assert.deepEqual(Object.keys(gx().batch.selected), ["cand-1", "cand-2", "cand-3"]);
   assert.ok(gx().batch.confirming, "the one confirmation is open");
@@ -912,7 +929,7 @@ test("J19 U1: with more than fifty ready sessions the button says Import first 5
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: Array.from({ length: 53 }, (_, i) => ready(i + 1)) }));
   await openImports();
-  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import first 50 ready</);
+  assert.match(html(), /data-action="training-load-gpexe-import-ready"[^>]*>Import the first 50 ready sessions</);
   assert.match(html(), /3 more sessions stay for the next batch\./);
   await act("training-load-gpexe-import-ready");
   assert.equal(Object.keys(gx().batch.selected).length, 50);
@@ -948,8 +965,8 @@ test("J19 U1: while a day filter is active the daily line says its counts are fo
   await openImports();
   await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
   const page = html();
-  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready</);
-  assert.match(page, /Import 3 ready takes ready sessions of every date, not only of the day you picked\./, "the button says it is for all dates");
+  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready sessions</);
+  assert.match(page, /Import 3 ready sessions takes ready sessions of every date, not only of the day you picked\./, "the button says it is for all dates");
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
   await act("training-load-gpexe-import-ready");
   assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");

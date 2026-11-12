@@ -278,10 +278,12 @@ test("5. an undone row is history, never 'Imported': hidden by default, under re
   let page = html();
   assert.doesNotMatch(page, /data-candidate-id="cand-undone"/, "not listed by default");
   assert.doesNotMatch(page, /Imported \(1\)/, "not counted as imported");
+  // IMP1: the replaced and undone versions are shown in the Stays out tab; the Imported tab counts 0.
+  await act("training-load-gpexe-tab", { importTab: "out" });
   await act("training-load-gpexe-superseded");
   page = html();
   assert.match(page, /data-candidate-id="cand-undone"/);
-  assert.doesNotMatch(page, /Imported \(\d/, "never under Imported");
+  assert.match(page, /data-import-tab="imported">Imported \(0\)</, "never counted under Imported");
   assert.match(page, /Replaced or no longer found versions \(1\)/);
   assert.match(page, /gpexe-badge is-superseded">Import undone</);
   await openCandidate("cand-undone");
