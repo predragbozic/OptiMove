@@ -1422,6 +1422,11 @@ function candidateSummary(row, audience = "other") {
     // 4a): a batch approval sends it back, so it imports only what was seen.
     previewHash: preview && !(blockedForHash && level !== "platform") ? row.preview_hash : null,
     counts: preview?.counts ?? null,
+    // D5, additive: how many GPEXE athletes the session recorded (linked or not) and how many drills it has, from the
+    // stored preview the list already reads - no id or name, null when the snapshot is gone. A session the mapper's own
+    // gates refused (blockedByMapping) lists no athlete at all: its count is unknown, never 0.
+    athleteCount: Array.isArray(preview?.athletes) && !(preview.status === "blocked" && preview.athletes.length === 0) ? preview.athletes.length : null,
+    drillsCount: Number.isInteger(preview?.session?.drillsCount) ? preview.session.drillsCount : null,
     // The approval must carry acceptChanges = true when this is > 0.
     changesToImported: preview ? (preview.changesToImported?.length ?? 0) : null,
     firstSeenAt: row.first_seen_at,
