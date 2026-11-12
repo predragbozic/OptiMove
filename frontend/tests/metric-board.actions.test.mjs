@@ -140,8 +140,10 @@ test("4. tap a column, then a variable: one placement read, the proposed convers
   assert.equal(q.get("targetId"), TARGET);
   const t = text();
   assert.ok(t.includes("m → km (× 0.001)"));
-  assert.ok(t.includes("3000 m") && t.includes("3 km") && t.includes("3000.0 m"));
-  assert.ok(t.includes("1500 m") && t.includes("1.5 km") && t.includes("1500.0 m"));
+  assert.ok(t.includes("3000 m") && t.includes("3 km") && t.includes("1500 m") && t.includes("1.5 km"));
+  // What GPEXE sends, what OptiMove stores, what the GPEXE screen should show (whole metres, the server's rule).
+  const cells = [...content.querySelectorAll(".mb-table tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent.trim()));
+  assert.deepEqual(cells, [["Ana Example", "3000 m", "3 km", "3000 m"], ["Bojan Example", "1500 m", "1.5 km", "1500 m"]]);
   assert.equal(content.querySelector("[data-mb-tick]").checked, false, "never ticked for the admin");
   assert.equal(content.querySelector("[data-mb-required]").checked, true);
 });

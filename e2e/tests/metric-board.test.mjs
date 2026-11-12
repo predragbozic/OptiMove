@@ -49,6 +49,7 @@ async function checkAndSave(page, scope) {
   assert.match(panel, /Ana Example/);
   assert.match(panel, /3000 m/);
   assert.match(panel, /3 km/);
+  assert.doesNotMatch(panel, /3000\.0/, "a distance in metres shows no decimal");
   await tick.check();
   await page.click(`${scope} [data-action="metric-board-keep"]`);
   await page.click('[data-action="metric-board-review"]');
