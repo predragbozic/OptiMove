@@ -11,6 +11,7 @@ import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
 import { emptyGuideState, loadGuide } from "./gpexe-guide-data.js";
+import { searchEvidence } from "./gpexe-guide-steps.js";
 import { discardStateKeys, saveImportStates, statesOf } from "./gpexe-import-states-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
@@ -196,6 +197,8 @@ export async function loadGpexeTeam(render) {
     if (generation !== gx.generation) return;
     applySourceAthletesRead(gx, sourceAthletes);
     render();
+    // U6b: the setup stepper's Athletes step counts the suggested pairs (S6) once a search has seen athletes to link.
+    void loadGuidePairs(render);
     return;
   } catch (error) {
     if (generation !== gx.generation) return;
@@ -377,6 +380,8 @@ export async function pollGpexeCheck(render) {
       if (generation !== gx.generation) return;
       if (status) gx.status = status;
       render();
+      // U6b: the setup stepper's match counts follow the athletes this search showed.
+      void loadGuidePairs(render);
     }
   } finally {
     if (gx.polling === checkId) gx.polling = "";
@@ -1592,6 +1597,41 @@ export async function loadPairSuggestions(render, { inReview = false } = {}) {
     gx.suggestions = { status: errorInfo(error).status === 404 ? "unavailable" : "error", data: null };
   }
   render();
+}
+
+// U6b (S6): the setup stepper's counts of suggested pairs. Its own state (never gx.suggestions, which Link athletes
+// clears): only the ids of each exact pair and whether names are loaded - no name and no date of birth is kept.
+// Read after a succeeded search when athletes wait to be linked; refreshed after a search and when Link athletes closes.
+let guidePairsSeq = 0;
+export async function loadGuidePairs(render) {
+  const gx = g();
+  const teamId = gx.teamId ? String(gx.teamId) : null;
+  const check = gx.check?.status === "succeeded" ? gx.check : gx.status?.lastCheck;
+  const searched = searchEvidence({ check, sourceAthletes: gx.sourceAthletes, candidates: gx.candidates });
+  if (!teamId || !searched || !(gx.sourceAthletes || []).some((a) => a.status === "unlinked")) {
+    gx.guidePairs = null;
+    return;
+  }
+  const generation = gx.generation;
+  const seq = ++guidePairsSeq;
+  try {
+    const answer = await identityRequest(teamPath(teamId, "/athlete-pair-suggestions"));
+    if (generation !== gx.generation || seq !== guidePairsSeq || String(gx.teamId) !== teamId) return;
+    const data = suggestionData(answer);
+    gx.guidePairs = { teamId, state: data.state, exact: data.exact.map((p) => ({ gpexeAthleteId: p.gpexeAthleteId, athleteId: p.athleteId })) };
+  } catch {
+    if (generation !== gx.generation || seq !== guidePairsSeq || String(gx.teamId) !== teamId) return;
+    gx.guidePairs = null;
+  }
+  render();
+}
+
+// How many of the guide's exact pairs Review all would stage now: the same rule as stageableSuggestedPairs.
+export function guidePairCounts(gx = g()) {
+  const p = gx.guidePairs;
+  if (!p || String(p.teamId) !== String(gx.teamId)) return null;
+  const exact = stageableSuggestedPairs({ ...gx, suggestions: { status: "ready", data: { exact: p.exact } } }).length;
+  return { exact, namesMissing: p.state !== "ok" };
 }
 
 // The exact pairs the screen can still stage: the GPEXE athlete is unlinked in

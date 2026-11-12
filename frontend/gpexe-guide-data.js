@@ -21,9 +21,13 @@ const WRITE_BOUND_MS = 45_000;
 export const emptyGuideState = () => ({
   teamId: null,
   conn: { status: "idle", connected: false, reconnect: false, bound: false, bindingId: null, hostLabel: "", clubId: null },
-  vars: { status: "idle", items: [], total: 0, onCount: 0 },
+  vars: { status: "idle", items: [], total: 0, onCount: 0, onItems: [] },
+  // U6b (S4): sample values from the newest saved session: { status, candidateId, startedAt, byMapping }.
+  samples: { status: "idle", candidateId: null, startedAt: null, byMapping: {} },
   // Variables the server clearly refused in this session (memory only): never offered again, listed instead.
   skipped: [],
+  // U6b: the step the person opened (null = the first step that is not done).
+  step: null,
   // null = automatic (folded when all is done), true / false = the person's choice.
   open: null,
   // The review card of "Use OptiMove variables".
@@ -149,12 +153,17 @@ export async function loadGuideVariables(render) {
     const isOn = (m) => onVersions.has(String(m.activeVersionId)) || onMappings.has(String(m.id));
     const items = candidates.filter((m) => !isOn(m) && !refused.has(String(m.id)))
       .map((m) => ({ mappingId: String(m.id), versionId: String(m.activeVersionId), label: variableLabel(m) }));
-    gx.guide = { ...gx.guide, vars: { status: "ready", items, total: items.length, onCount: candidates.filter(isOn).length } };
+    // U6b (S4): the variables already on, to show two athletes' values from the stored preview.
+    // The versions switched on for each mapping: a sample is the value of exactly that variable, never another
+    // mapping's value of the same GPEXE field (code re-review LOW).
+    const onItems = candidates.filter(isOn).map((m) => ({ mappingId: String(m.id), label: variableLabel(m), versionIds: acts.items.filter((a) => String(a.mappingId) === String(m.id) || String(a.versionId) === String(m.activeVersionId)).map((a) => String(a.versionId)) }));
+    gx.guide = { ...gx.guide, vars: { status: "ready", items, total: items.length, onCount: onItems.length, onItems } };
   } catch (error) {
     if (generation !== gx.generation || String(gx.teamId) !== teamId || seq !== varsSeq) return;
-    gx.guide = { ...gx.guide, vars: { status: "error", items: [], total: 0, onCount: 0 } };
+    gx.guide = { ...gx.guide, vars: { status: "error", items: [], total: 0, onCount: 0, onItems: [] } };
   }
   render();
+  if (gx.guide.vars.status === "ready" && !gx.guide.write?.sending) void loadGuideSamples(render);
 }
 
 export function openVariablesConfirm() {
@@ -241,4 +250,70 @@ export function refusalSentence(refused, before = 0) {
 export function setGuideOpen(value) {
   const gx = g();
   gx.guide = { ...gx.guide, open: value };
+}
+
+// U6b (S4): sample values beside each variable, only after a search (a saved session exists), administrators only.
+// A variable already on: two athletes' values from the session's stored preview (what the import writes). A variable
+// not on yet: 7e's aggregate preview of its version over the same session - a count and a range, never one athlete's
+// value (OD3). One read per variable; a failed read leaves that variable without a sample, never a guess.
+let samplesSeq = 0;
+const SAMPLE_ATHLETES = 2;
+const WRITING = new Set(["created", "supplemented", "corrected", "unchanged"]);
+export function newestSampleCandidate(gx) {
+  const list = Array.isArray(gx.candidates) ? gx.candidates : [];
+  return list.filter((c) => c.status !== "superseded" && !c.importUndoneAt && c.sessionStartedAt)
+    .sort((a, b) => (a.sessionStartedAt < b.sessionStartedAt ? 1 : -1))[0] || null;
+}
+export function athleteSamples(candidate, versionIds) {
+  const out = [];
+  const ofVariable = (v) => versionIds.includes(String(v.mappingVersionId)) && v.value !== null && v.value !== undefined;
+  for (const a of candidate?.preview?.athletes || []) {
+    const name = a.athleteId ? candidate.athletes?.[a.athleteId]?.name : "";
+    if (!name) continue;
+    const res = (a.results || []).find((r) => r.level !== "drill" && WRITING.has(r.outcome) && (r.values || []).some(ofVariable));
+    if (!res) continue;
+    const v = res.values.find(ofVariable);
+    out.push({ name, value: v.value, unit: v.unit || "" });
+    if (out.length === SAMPLE_ATHLETES) break;
+  }
+  return out;
+}
+export async function loadGuideSamples(render) {
+  const gx = g();
+  const v = gx.guide?.vars;
+  if (!guideAdmin(gx) || v?.status !== "ready" || (!v.items.length && !v.onItems?.length)) return;
+  const pick = newestSampleCandidate(gx);
+  if (!pick) return;
+  const generation = gx.generation;
+  const teamId = String(gx.teamId);
+  const seq = ++samplesSeq;
+  const stale = () => generation !== gx.generation || String(gx.teamId) !== teamId || seq !== samplesSeq;
+  gx.guide = { ...gx.guide, samples: { status: "loading", candidateId: String(pick.id), startedAt: pick.sessionStartedAt, byMapping: {} } };
+  render();
+  const byMapping = {};
+  if (v.onItems?.length) {
+    try {
+      const { candidate } = await api(`/api/training-load/gpexe/teams/${encodeURIComponent(teamId)}/candidates/${encodeURIComponent(pick.id)}`);
+      if (stale()) return;
+      for (const item of v.onItems) {
+        const values = athleteSamples(candidate, item.versionIds);
+        if (values.length) byMapping[item.mappingId] = { kind: "athletes", values };
+      }
+    } catch {
+      if (stale()) return;
+    }
+  }
+  for (const item of v.items) {
+    try {
+      const answer = await api(`${METRICS}/mappings/${encodeURIComponent(item.mappingId)}/versions/${encodeURIComponent(item.versionId)}/preview?candidateId=${encodeURIComponent(pick.id)}`);
+      if (stale()) return;
+      const level = answer?.preview?.levels?.session;
+      if (level) byMapping[item.mappingId] = { kind: "aggregate", count: Number(level.athletesWithValue) || 0, min: level.minCanonical ?? null, max: level.maxCanonical ?? null, unit: answer.preview.targetUnit || "" };
+    } catch {
+      if (stale()) return;
+    }
+  }
+  if (stale()) return;
+  gx.guide = { ...gx.guide, samples: { status: "ready", candidateId: String(pick.id), startedAt: pick.sessionStartedAt, byMapping } };
+  render();
 }
