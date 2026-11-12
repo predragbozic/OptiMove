@@ -289,7 +289,20 @@ async function ensureParticipants(client, { eventId, participants, athleteIdByGp
     const existing = await client.query(`select id, athlete_timezone_snapshot from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [eventId, athleteId]);
     let id = existing.rows[0]?.id;
     if (id && existing.rows[0].athlete_timezone_snapshot !== participant.timezone) {
-      throw new GpexeImportError("participant_timezone_changed", `participant ${athleteId} was imported with timezone ${existing.rows[0].athlete_timezone_snapshot}, now ${participant.timezone}.`);
+      // v64 (6b-B): a participant an estimate created (the event's zone) takes the athlete's own zone when the real data
+      // arrives - only while every occasion it holds is an estimate with no source identity. The database holds the
+      // same rule (protect_participant_identity_once_measured).
+      const occasions = (await client.query(
+        `select count(*)::int as n,
+                count(*) filter (where entry_method = 'estimate' and source_identity_id is null)::int as estimates
+           from training_load.metric_measurement_occasions where event_participant_id = $1`,
+        [id],
+      )).rows[0];
+      if (occasions.n > 0 && occasions.n === occasions.estimates && participant.timezone) {
+        await client.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [id, participant.timezone]);
+      } else {
+        throw new GpexeImportError("participant_timezone_changed", `participant ${athleteId} was imported with timezone ${existing.rows[0].athlete_timezone_snapshot}, now ${participant.timezone}.`);
+      }
     }
     if (!id) {
       id = (await client.query(
@@ -581,6 +594,14 @@ async function importResult(client, { result, identity, participantId, segmentId
 export async function lockTeamForImport(client, ownerTeamId) {
   ownerTeamId = String(ownerTeamId).toLowerCase();
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, ${IMPORT_LOCK_SEED}))`, [`gpexe-import-team:${ownerTeamId}`]);
+}
+
+// The same lock without a wait (6b-B, the estimate save): true when taken, false while an import, a check or another write
+// of the team holds it.
+export async function tryLockTeamForImport(client, ownerTeamId) {
+  ownerTeamId = String(ownerTeamId).toLowerCase();
+  const r = await client.query(`select pg_try_advisory_xact_lock(hashtextextended($1, ${IMPORT_LOCK_SEED})) as locked`, [`gpexe-import-team:${ownerTeamId}`]);
+  return r.rows[0].locked === true;
 }
 
 function checkImportContext(plan, ctx) {
