@@ -55,21 +55,27 @@
 -- locks they take are the acting user's rights rows, through v54's
 -- source_metric_actor_basis (users first).
 -- The foreign keys of T9 take FOR KEY SHARE
--- on the binding and the connection, as T5's foreign key already does: an
--- Unbind's or a Reconnect's update of those rows (FOR NO KEY UPDATE) neither
--- blocks it nor waits for it.
+-- on the binding and the connection, as T5's foreign key to the binding
+-- already does: a Reconnect's update of the connection (FOR NO KEY UPDATE)
+-- neither blocks it nor waits for it, while an Unbind, which takes the binding
+-- FOR UPDATE, and the foreign key's check wait for each other, exactly as a
+-- T5 start and an Unbind already do (no new lock edge). Because the guard
+-- reads the binding without a lock, the writer (18-3) holds the binding FOR
+-- SHARE before its first write, as the contract's section 4.3 step 13 says.
 --
--- Locks: T4 SHARE ROW EXCLUSIVE (T9i's foreign key takes it anyway; taken
--- first, in the writers' order T4 -> T8), then T8 ACCESS EXCLUSIVE with
--- NOWAIT: this is the first migration that alters T8's table (a column, the
--- action CHECK, a CHECK and an index), and a queued ACCESS EXCLUSIVE request
--- would make every mapping write and replay read wait behind it, so a busy T8
--- fails the migration at once, nothing applied, the old instance serving. T5
--- is neither changed nor locked. The new tables' foreign keys take SHARE ROW
--- EXCLUSIVE on public.clubs, public.teams, public.users, the v27 connections
--- and bindings, the import checks and T2b within the runner's lock_timeout,
--- the accepted risk of v34, v36, v48 and v53; the preflight's quiet-moment
--- block is the gate.
+-- Locks: T4 SHARE ROW EXCLUSIVE first (T9i's foreign key takes it anyway; the
+-- writers' order is T4 -> T8). The new tables' foreign keys then take SHARE
+-- ROW EXCLUSIVE on public.clubs, public.teams, public.users, the v27
+-- connections and bindings, the import checks and T2b, each within the
+-- runner's lock_timeout, the accepted risk of v34, v36, v48 and v53. Only
+-- then, right before its own changes, T8 ACCESS EXCLUSIVE with NOWAIT: this
+-- is the first migration that alters T8's table (a column, the action CHECK,
+-- two CHECKs and an index), and a queued ACCESS EXCLUSIVE request would make
+-- every mapping write and replay read wait behind it, so a busy T8 fails the
+-- migration at once, nothing applied, the old instance serving. T8 is held
+-- exclusively only for its own statements, never while the migration waits
+-- for another table. T5 is neither changed nor locked. The preflight's
+-- quiet-moment block is the gate.
 --
 -- Rollback: docs/runbooks/source-metric-confirmations-v65-rollback.sql (it
 -- refuses once a confirmation or a row with a confirmation_id exists, when a
@@ -83,10 +89,9 @@
 -- the application's pool; it can only null values that are past their date.
 
 -- ---------------------------------------------------------------------------
--- 0. The locks, in the writers' order.
+-- 0. The first lock, in the writers' order (T8's comes in section 8).
 -- ---------------------------------------------------------------------------
 lock table training_load.source_metric_mapping_versions in share row exclusive mode;
-lock table training_load.source_metric_audit in access exclusive mode nowait;
 
 -- ---------------------------------------------------------------------------
 -- 1. This migration is written on the bodies and the CHECK in force: refuse
@@ -476,6 +481,12 @@ declare
   ver record;
   rev record;
 begin
+  -- Before anything else that could fail on a row holding values: the three
+  -- columns no other rule below reads (a NOT NULL or CHECK failure would
+  -- print the row).
+  if new.id is null or new.session_ordinal is null or new.item_no is null or new.item_no <= 0 then
+    raise exception 'source_metric_confirmation_items: a row names its id, its session and a positive number' using errcode = '23514';
+  end if;
   if new.values_removed_at is not null or new.values_removed_kind is not null or new.values_removed_by_user_id is not null then
     raise exception 'source_metric_confirmation_items: a row is created with no removal' using errcode = '23514';
   end if;
@@ -565,6 +576,13 @@ begin
   if tg_op = 'DELETE' then
     raise exception 'source_metric_confirmation_items: a row is never deleted' using errcode = '23514';
   end if;
+  -- The right first: the acting user, or none. A present but invalid setting
+  -- raises 42501; an acting user who is not an active platform admin changes
+  -- nothing here, whatever the change.
+  actor := training_load.source_metric_confirmation_actor_or_null();
+  if actor is not null and training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
+  end if;
   if new.id is distinct from old.id or new.confirmation_id is distinct from old.confirmation_id
      or new.session_ordinal is distinct from old.session_ordinal or new.item_no is distinct from old.item_no
      or new.item_kind is distinct from old.item_kind or new.checked is distinct from old.checked
@@ -588,8 +606,6 @@ begin
   if new.values_removed_kind is null or new.values_removed_kind not in ('expired', 'erased') then
     raise exception 'source_metric_confirmation_items: a removal is expired or erased' using errcode = '23514';
   end if;
-  -- The acting user, or none. A present but invalid setting raises 42501.
-  actor := training_load.source_metric_confirmation_actor_or_null();
   if new.values_removed_kind = 'expired' then
     select values_expire_at into expires from training_load.source_metric_confirmations where id = old.confirmation_id;
     if expires is null or expires > now() then
@@ -598,13 +614,9 @@ begin
     if not training_load.source_metric_confirmation_purge_marker_ok() then
       raise exception 'source_metric_confirmation_items: expired values are removed only by the removal function' using errcode = '23514';
     end if;
-    if actor is not null and training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
-      raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
-    end if;
-  else
-    if actor is null or training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
-      raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
-    end if;
+  elsif actor is null then
+    -- An erasure always has an acting user (a platform admin, checked above).
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
   end if;
   -- The record of the removal is the database's, never the writer's.
   new.values_removed_at := clock_timestamp();
@@ -660,9 +672,32 @@ comment on function training_load.remove_expired_confirmation_values(integer) is
 -- 7. At COMMIT (deferred): a confirmation is whole, and an acting user''s
 --    removal has its audit row.
 -- ---------------------------------------------------------------------------
-create function training_load.source_metric_confirmations_commit_link() returns trigger as $$
+-- The rows of a confirmation against its activations and its attested flag.
+create function training_load.source_metric_confirmation_rows_hold(p_confirmation uuid) returns void as $$
 declare
   here bigint := training_load.source_metric_current_xmin();
+  conf record;
+begin
+  select binding_id, confirmed_by_user_id, attested into conf from training_load.source_metric_confirmations where id = p_confirmation;
+  if exists (select 1 from training_load.source_metric_confirmation_items i
+              where i.confirmation_id = p_confirmation
+                and (not exists (select 1 from training_load.source_metric_mapping_versions v
+                                  where v.id = i.mapping_version_id and v.status = 'active')
+                     or not exists (select 1 from training_load.source_metric_mapping_activations a
+                                     where a.mapping_version_id = i.mapping_version_id
+                                       and a.source_team_binding_id = conf.binding_id and a.ended_at is null
+                                       and a.activated_by_user_id = conf.confirmed_by_user_id
+                                       and a.xmin::text::bigint = here))) then
+    raise exception 'source_metric_confirmations: every row''s mapping version is active and switched on for the binding in this transaction' using errcode = '23514';
+  end if;
+  if conf.attested is distinct from exists (select 1 from training_load.source_metric_confirmation_items i
+                                             where i.confirmation_id = p_confirmation and i.checked) then
+    raise exception 'source_metric_confirmations: a confirmation is attested exactly when a row was compared' using errcode = '23514';
+  end if;
+end;
+$$ language plpgsql;
+
+create function training_load.source_metric_confirmations_commit_link() returns trigger as $$
 begin
   if not exists (select 1 from training_load.source_metric_audit a
                   where a.action = 'mapping_confirmation' and a.confirmation_id = new.id
@@ -676,21 +711,7 @@ begin
   if not exists (select 1 from training_load.source_metric_confirmation_items i where i.confirmation_id = new.id) then
     raise exception 'source_metric_confirmations: a confirmation has at least one row' using errcode = '23514';
   end if;
-  if exists (select 1 from training_load.source_metric_confirmation_items i
-              where i.confirmation_id = new.id
-                and (not exists (select 1 from training_load.source_metric_mapping_versions v
-                                  where v.id = i.mapping_version_id and v.status = 'active')
-                     or not exists (select 1 from training_load.source_metric_mapping_activations a
-                                     where a.mapping_version_id = i.mapping_version_id
-                                       and a.source_team_binding_id = new.binding_id and a.ended_at is null
-                                       and a.activated_by_user_id = new.confirmed_by_user_id
-                                       and a.xmin::text::bigint = here))) then
-    raise exception 'source_metric_confirmations: every row''s mapping version is active and switched on for the binding in this transaction' using errcode = '23514';
-  end if;
-  if new.attested is distinct from exists (select 1 from training_load.source_metric_confirmation_items i
-                                            where i.confirmation_id = new.id and i.checked) then
-    raise exception 'source_metric_confirmations: a confirmation is attested exactly when a row was compared' using errcode = '23514';
-  end if;
+  perform training_load.source_metric_confirmation_rows_hold(new.id);
   return null;
 end;
 $$ language plpgsql;
@@ -699,6 +720,21 @@ create constraint trigger source_metric_confirmations_commit_link
   after insert on training_load.source_metric_confirmations
   deferrable initially deferred
   for each row execute function training_load.source_metric_confirmations_commit_link();
+
+-- Each row is checked at COMMIT too, so a row added after the confirmation's
+-- own link was forced early (SET CONSTRAINTS ... IMMEDIATE) is still held to
+-- the same rules.
+create function training_load.source_metric_confirmation_items_commit_link() returns trigger as $$
+begin
+  perform training_load.source_metric_confirmation_rows_hold(new.confirmation_id);
+  return null;
+end;
+$$ language plpgsql;
+
+create constraint trigger source_metric_confirmation_items_commit_link
+  after insert on training_load.source_metric_confirmation_items
+  deferrable initially deferred
+  for each row execute function training_load.source_metric_confirmation_items_commit_link();
 
 create function training_load.source_metric_confirmation_items_removal_link() returns trigger as $$
 begin
@@ -723,6 +759,8 @@ create constraint trigger source_metric_confirmation_items_removal_link
 -- ---------------------------------------------------------------------------
 -- 8. T8: the typed link to a confirmation, the three actions, once each.
 -- ---------------------------------------------------------------------------
+lock table training_load.source_metric_audit in access exclusive mode nowait;
+
 alter table training_load.source_metric_audit
   add column confirmation_id uuid
     constraint source_metric_audit_confirmation_fk
@@ -1108,7 +1146,8 @@ begin
     if not found or rev.written_in is distinct from here or rev.confirmed_by_user_id is distinct from actor
        or new.performed_by_user_id is distinct from actor or new.basis is distinct from rev.confirmed_basis
        or new.team_id is distinct from rev.team_id or new.operation_id is distinct from rev.operation_id
-       or new.request_key is null or new.reason is not null or new.evidence_ref is not null then
+       or new.request_key is null or new.reason is not null or new.evidence_ref is not null
+       or new.performed_at is distinct from now() then
       raise exception 'source_metric_audit: the audit row must follow its own confirmation in the same transaction' using errcode = '23514';
     end if;
     if exists (select 1 from training_load.source_metric_audit
@@ -1128,7 +1167,7 @@ begin
        or training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
       raise exception 'source metric confirmation: the acting user may not write this audit row' using errcode = '42501';
     end if;
-    if new.evidence_ref is not null
+    if new.evidence_ref is not null or new.performed_at is distinct from now()
        or not exists (select 1 from training_load.source_metric_confirmation_items i
                        where i.confirmation_id = new.confirmation_id and i.values_removed_at is not null
                          and i.xmin::text::bigint = here and i.values_removed_by_user_id = actor
@@ -1143,8 +1182,8 @@ begin
     end if;
     return new;
   end if;
-  -- M-A (J18) end
 
+  -- M-A (J18) end
   if new.action not in ('source_metric_unit_verified', 'source_metric_meaning_verified') then
     raise exception 'source_metric_audit: no writer of this action exists yet' using errcode = '23514';
   end if;

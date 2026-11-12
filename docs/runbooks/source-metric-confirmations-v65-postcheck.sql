@@ -17,7 +17,7 @@
 --    Expected: v65_rows = 1, v65_checksum_ok = true, later_migrations = 0.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as v65_rows,
-  (select bool_and(checksum = '9af6bdc3ea9fc96f0955492dd5e3ce17552bd3a8d735c4b5f563625ceca6f8d7') from public.schema_migrations
+  (select bool_and(checksum = 'a8cbce20d0c1d168194abaa2753e9281d5ca379668b73fc2177ac5396c1b4ac5') from public.schema_migrations
     where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as v65_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as later_migrations;
@@ -30,16 +30,27 @@ select count(*) filter (where md5(p.prosrc) = want.digest) as bodies_v65
           ('source_metric_audit_row_ok', '0ef48fd391a5380f70c92d96f47f894a'),
           ('source_metric_audit_actor_guard', 'b1b324ff092858d677a6635893646b1c'),
           ('source_metric_audit_insert_guard', 'cbfa726d60658dbba0198ab97192219e'),
-          ('source_metric_audit_revision_guard', 'c2e8814af337acb6a2355b77a0bc1b1e')) as want(name, digest)
+          ('source_metric_audit_revision_guard', '942b806526756311a5289b42c27e4918')) as want(name, digest)
   join pg_proc p on p.proname = want.name and p.pronamespace = 'training_load'::regnamespace;
 
--- 3. The three tables, T8's new column, its three constraints and its index
---    exist; T8's action CHECK lists nineteen actions; T8's comment is v65's.
---    Expected: tables = 3, audit_column = 1, audit_constraints = 3,
---    audit_index = 1, action_check_is_v65 = true, comment_is_v65 = true.
+-- 3. The three tables, the fifteen functions v65 created, T8's new column,
+--    its three constraints and its index exist; T8's action CHECK lists
+--    nineteen actions; T8's comment is v65's.
+--    Expected: tables = 3, new_functions = 15, audit_column = 1,
+--    audit_constraints = 3, audit_index = 1, action_check_is_v65 = true,
+--    comment_is_v65 = true.
 select
   (select count(*) from pg_class c where c.relnamespace = 'training_load'::regnamespace and c.relkind = 'r'
      and c.relname in ('source_metric_confirmations', 'source_metric_confirmation_sessions', 'source_metric_confirmation_items')) as tables,
+  (select count(*) from pg_proc p where p.pronamespace = 'training_load'::regnamespace
+     and p.proname in ('source_metric_confirmation_actor_or_null', 'source_metric_confirmation_purge_marker_ok',
+                       'source_metric_display_unit_ok', 'source_metric_confirmation_number_ok',
+                       'source_metric_confirmations_insert_guard', 'source_metric_confirmation_of_this_transaction',
+                       'source_metric_confirmation_sessions_insert_guard', 'source_metric_confirmation_item_digest',
+                       'source_metric_confirmation_items_insert_guard', 'source_metric_confirmation_items_update_guard',
+                       'remove_expired_confirmation_values', 'source_metric_confirmations_commit_link',
+                       'source_metric_confirmation_items_removal_link', 'source_metric_confirmation_rows_hold',
+                       'source_metric_confirmation_items_commit_link')) as new_functions,
   (select count(*) from pg_attribute where attrelid = 'training_load.source_metric_audit'::regclass and attname = 'confirmation_id' and not attisdropped) as audit_column,
   (select count(*) from pg_constraint where conrelid = 'training_load.source_metric_audit'::regclass and convalidated
      and conname in ('source_metric_audit_confirmation_fk', 'source_metric_audit_confirmation_iff', 'source_metric_audit_erased_reason_check')) as audit_constraints,
@@ -51,8 +62,8 @@ select
     = 'v34 (D10, T8): append-only record of every source metric, mapping, activation, unit conversion and source instance operation, and from v65 of every confirmation and of an acting user''s removal of its values. No metadata column; reason and evidence_ref are bounded, format-checked and never name an athlete or carry a value; confirmation_id is a typed link, never a value.', false) as comment_is_v65;
 
 -- 4. Every trigger of the three tables and of T8 is there by name, enabled,
---    and calls its function (v65 created eleven; T8 keeps its seven).
---    Expected: expected_enabled = 18, triggers_total = 18.
+--    and calls its function (v65 created twelve; T8 keeps its seven).
+--    Expected: expected_enabled = 19, triggers_total = 19.
 select
   (select count(*)
      from (values
@@ -67,6 +78,7 @@ select
              ('source_metric_confirmation_items', 'source_metric_confirmation_items_update_guard', 'source_metric_confirmation_items_update_guard'),
              ('source_metric_confirmation_items', 'source_metric_confirmation_items_no_truncate', 'source_metric_no_truncate'),
              ('source_metric_confirmation_items', 'source_metric_confirmation_items_removal_link', 'source_metric_confirmation_items_removal_link'),
+             ('source_metric_confirmation_items', 'source_metric_confirmation_items_commit_link', 'source_metric_confirmation_items_commit_link'),
              ('source_metric_audit', 'source_metric_audit_append_only', 'source_metric_append_only'),
              ('source_metric_audit', 'source_metric_audit_insert_guard', 'source_metric_audit_insert_guard'),
              ('source_metric_audit', 'source_metric_audit_no_truncate', 'source_metric_no_truncate'),

@@ -324,9 +324,9 @@ async function save(actor, o = {}) {
     if (o.savepoint) await c.query("savepoint s1");
     out.id = (await one(c, `insert into ${T9} (operation_id, kind, owner_scope, owner_club_id, binding_id, team_id, credential_connection_id, confirmed_by_user_id,
                                confirmed_basis, confirmed_at, attested, display_registry_version, values_expire_at)
-                             values ($1,$2,'club',$3,$4,$5,$6,$7,$8,$9,$10,1,$11) returning id`,
+                             values ($1,$2,$12,$3,$4,$5,$6,$7,$8,$9,$10,$13,$11) returning id`,
     [operationId, o.kind ?? "team_mapping", o.clubId ?? b.clubId, o.bindingId ?? b.bindingId, o.teamId ?? b.teamId, o.connectionId ?? b.connectionId,
-      o.confirmedBy ?? actor.id, basis, o.confirmedAt ?? "2001-01-01T00:00:00Z", o.attested ?? items.some((it) => it.checked), o.expireAt ?? "2001-01-02T00:00:00Z"])).id;
+      o.confirmedBy ?? actor.id, basis, o.confirmedAt ?? "2001-01-01T00:00:00Z", o.attested ?? items.some((it) => it.checked), o.expireAt ?? "2001-01-02T00:00:00Z", o.ownerScope ?? "club", o.registryVersion ?? 1])).id;
     if (o.savepoint) await c.query("release savepoint s1");
     if (o.afterConfirmation) await o.afterConfirmation(c, out.id);
     if (o.session !== false) {
@@ -464,7 +464,7 @@ async function migrationRefused(promise, pattern, label) {
 // ---------------------------------------------------------------------------
 test("A1. before v65: every expected value of the read-only preflight, each hard assertion flipped by a plant or a held lock; the rollback refuses without v65", async () => {
   const pre = await blocks(r, PREFLIGHT);
-  assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   assert.equal(pre[1][0].pg15_or_later, true);
   assert.deepEqual(pre[2][0], { previous_rows: "1", previous_checksum_ok: true, v65_rows: "0", at_or_after_v65: "0", last_migration: PREVIOUS_NAME });
   assert.deepEqual(pre[3][0], { row_ok_is_v52: true, actor_guard_is_v52: true, insert_guard_is_v48: true, revision_guard_is_v50: true });
@@ -472,8 +472,9 @@ test("A1. before v65: every expected value of the read-only preflight, each hard
   assert.deepEqual(pre[5][0], { v65_tables: "0", v65_functions: "0", v65_audit_objects: "0", disabled_triggers: "0", t8_triggers: "7", replaced_functions: "4", relied_on_functions: "7" });
   assert.deepEqual(pre[6][0], { owns_t8: true, owned_functions: "4", may_create: true });
   assert.deepEqual(pre[7][0], { setting_defaults: "0" });
-  assert.deepEqual(pre[8][0], { t8_locks: "0", t4_writers: "0", running_checks: "0", running_identity_loads: "0", idle_in_transaction: "0" });
+  assert.deepEqual(pre[8][0], { t8_locks: "0", t4_writers: "0", fk_table_writers: "0", running_checks: "0", running_identity_loads: "0", idle_in_transaction: "0" });
   assert.deepEqual(pre[9][0], { new_action_rows: "0" });
+  assert.deepEqual(Object.keys(pre[10][0]), ["log_statement", "log_min_duration_statement", "log_parameter_max_length", "log_parameter_max_length_on_error"]);
   const flipped = async (plant, block) => {
     await r.query("begin");
     try {
@@ -507,8 +508,10 @@ test("A1. before v65: every expected value of the read-only preflight, each hard
     await holder.query("begin");
     await holder.query(`select 1 from ${T8} limit 1`);
     await holder.query(`lock table ${T4} in row exclusive mode`);
+    await holder.query(`lock table public.teams in row exclusive mode`);
+    await holder.query(`lock table training_load.source_team_bindings in row exclusive mode`);
     const b8 = (await blocks(r, PREFLIGHT))[8][0];
-    assert.deepEqual([b8.t8_locks, b8.t4_writers, b8.idle_in_transaction], ["1", "1", "1"]);
+    assert.deepEqual([b8.t8_locks, b8.t4_writers, b8.fk_table_writers, b8.idle_in_transaction], ["1", "1", "2", "1"]);
   } finally {
     await holder.query("rollback").catch(() => {});
     await holder.end();
@@ -531,6 +534,34 @@ test("A2. v65 refuses, with nothing applied: a busy T8 (NOWAIT, at once), each o
   } finally {
     await holder.query("rollback").catch(() => {});
     await holder.end();
+  }
+  assert.deepEqual(await catalog(r), W.before, "nothing applied");
+  // While v65 waits for a writer of a table its foreign keys reference, it does not hold T8: a reader of T8 is not blocked.
+  const writer = await client(rdb.url);
+  const reader = await client(rdb.url);
+  try {
+    await writer.query("begin");
+    await writer.query(`lock table public.teams in row exclusive mode`);
+    const waiting = migrate(rdb.url, [...BEFORE_V65, V65]);
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      if ((await one(r, `select count(*)::int as n from pg_locks where not granted`)).n > 0) break;
+      assert.ok(Date.now() < deadline, "v65 waits for the writer of public.teams");
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    await reader.query("set lock_timeout = '2s'");
+    assert.equal((await reader.query(`select count(*)::int as n from ${T8}`)).rows.length, 1, "T8 is readable while v65 waits");
+    assert.equal((await one(r, `select count(*)::int as n from pg_locks l where l.relation = '${T8}'::regclass and l.mode = 'AccessExclusiveLock'`)).n, 0, "no exclusive lock on T8 yet");
+    // The reader now holds nothing; a holder of T8 at the moment v65 reaches it fails it at once.
+    await reader.query("begin");
+    await reader.query(`select 1 from ${T8} limit 1`);
+    await writer.query("commit");
+    await migrationRefused(waiting, /SQLSTATE 55P03/, "T8 busy when v65 reaches it");
+  } finally {
+    await writer.query("rollback").catch(() => {});
+    await reader.query("rollback").catch(() => {});
+    await writer.end();
+    await reader.end();
   }
   assert.deepEqual(await catalog(r), W.before, "nothing applied");
   for (const name of REPLACED) {
@@ -561,7 +592,7 @@ test("A2. v65 refuses, with nothing applied: a busy T8 (NOWAIT, at once), each o
   assert.deepEqual(await catalog(r), W.before, "a failing v65 leaves nothing");
 });
 
-test("A3. v65 through the runner - waiting for a writer of T4 - adds exactly its three tables, T8's column, three constraints and index, thirteen functions and eleven triggers; the four bodies are the old ones plus the marked lines, byte for byte; every expected value of the post-check, which names the file's sha256", async () => {
+test("A3. v65 through the runner - waiting for a writer of T4 - adds exactly its three tables, T8's column, three constraints and index, fifteen functions and twelve triggers; the four bodies are the old ones plus the marked lines, byte for byte; every expected value of the post-check, which names the file's sha256", async () => {
   const holder = await client(rdb.url);
   try {
     await holder.query("begin");
@@ -596,16 +627,16 @@ test("A3. v65 through the runner - waiting for a writer of T4 - adds exactly its
   assert.deepEqual(before.constraints.filter((x) => !after.constraints.some((y) => conKey(y) === conKey(x))), [], "no constraint removed");
   assert.deepEqual(after.indexes.filter((x) => !isNew(x) && !before.indexes.some((y) => y.indexname === x.indexname)).map((x) => x.indexname), ["source_metric_audit_v65_confirmation_once"]);
   assert.deepEqual(after.triggers.filter((x) => !isNew(x)), before.triggers, "no trigger outside the new tables changed");
-  assert.equal(after.triggers.filter(isNew).length, 11);
+  assert.equal(after.triggers.filter(isNew).length, 12);
   const fnKey = (x) => `${x.nspname}.${x.proname}(${x.args})`;
-  assert.equal(after.functions.filter((x) => !before.functions.some((y) => fnKey(y) === fnKey(x))).length, 13, "thirteen new functions");
+  assert.equal(after.functions.filter((x) => !before.functions.some((y) => fnKey(y) === fnKey(x))).length, 15, "fifteen new functions");
   assert.deepEqual(before.functions.filter((x) => !after.functions.some((y) => fnKey(y) === fnKey(x))), [], "no function removed");
   assert.deepEqual(after.functions.filter((x) => before.functions.some((y) => fnKey(y) === fnKey(x) && y.digest !== x.digest)).map((x) => x.proname).sort(), [...REPLACED].sort());
   assert.deepEqual(after.migrations, [...before.migrations, V65_NAME].sort());
   // Byte for byte: the new body without its marked lines is the old body.
   W.newBodies = await bodies(r);
   for (const name of REPLACED) {
-    const marked = W.newBodies[name].match(/^ *-- M-A \(J18\) begin\n[\s\S]*?^ *-- M-A \(J18\) end\n\n?/gm) ?? [];
+    const marked = W.newBodies[name].match(/^ *-- M-A \(J18\) begin\n[\s\S]*?^ *-- M-A \(J18\) end\n/gm) ?? [];
     assert.ok(marked.length >= 1, `${name} carries its marked lines`);
     let stripped = W.newBodies[name];
     for (const part of marked) stripped = stripped.replace(part, "");
@@ -615,8 +646,8 @@ test("A3. v65 through the runner - waiting for a writer of T4 - adds exactly its
   assert.deepEqual(Object.keys(post).map(Number), [1, 2, 3, 4, 5, 6]);
   assert.deepEqual(post[1][0], { v65_rows: "1", v65_checksum_ok: true, later_migrations: "0" });
   assert.deepEqual(post[2][0], { bodies_v65: "4" });
-  assert.deepEqual(post[3][0], { tables: "3", audit_column: "1", audit_constraints: "3", audit_index: "1", action_check_is_v65: true, comment_is_v65: true });
-  assert.deepEqual(post[4][0], { expected_enabled: "18", triggers_total: "18" });
+  assert.deepEqual(post[3][0], { tables: "3", new_functions: "15", audit_column: "1", audit_constraints: "3", audit_index: "1", action_check_is_v65: true, comment_is_v65: true });
+  assert.deepEqual(post[4][0], { expected_enabled: "19", triggers_total: "19" });
   assert.deepEqual(post[5][0], { confirmations: "0", sessions: "0", items: "0", audit_rows: "0" });
   assert.deepEqual(post[6][0], { table_locks: "0", migrator_lock: "0", idle_in_transaction: "0" });
   const sha = crypto.createHash("sha256").update(await fsp.readFile(V65_FILE)).digest("hex");
@@ -775,9 +806,9 @@ test("B3. the binding's facts: an ended binding, another team, a connection that
   // The guards read with plain reads: a peer that holds the binding and the
   // connection the way an Unbind's or a Reconnect's update does (FOR NO KEY
   // UPDATE), and the check and the candidate FOR UPDATE, does not make a save
-  // wait. (The foreign keys of T9 and T5 take FOR KEY SHARE on the binding and
-  // the connection, which such an update does not block; a guard's FOR SHARE
-  // would wait here.)
+  // wait: a guard's FOR SHARE would. (The foreign keys of T9 and T5 take FOR
+  // KEY SHARE on the binding and the connection; an Unbind itself takes the
+  // binding FOR UPDATE, which those foreign keys wait for, as a T5 start does.)
   const peer = await client();
   try {
     await peer.query("begin");
@@ -883,6 +914,22 @@ test("B6. the value rules are refused by the BEFORE trigger with fixed text that
   await V({ rawA: "NaN", rawB: P1 }, /^source_metric_confirmation_items: a compared row stores four finite values$/);
   await V({ rawB: "Infinity", rawA: P1 }, /^source_metric_confirmation_items: a compared row stores four finite values$/);
   await V({ storedA: "-Infinity", rawA: P1 }, /^source_metric_confirmation_items: a compared row stores four finite values$/);
+  // The three columns no other rule reads: refused by the trigger, never by NOT NULL or a CHECK that prints the row.
+  const NAMES = /^source_metric_confirmation_items: a row names its id, its session and a positive number$/;
+  for (const itemNo of [0, -3]) await V({ itemNo, rawA: P1, storedA: "123.1875" }, NAMES);
+  const rawRow = async (column, value) => {
+    const res = await save(W.caA, { stored: s, items: [], start: false, then: async (c, out) => {
+      const row = await versionRow(v.versionId);
+      const cols = { id: crypto.randomUUID(), session_ordinal: 1, item_no: 1, [column]: value };
+      await c.query(`insert into ${T9I} (id, confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, mapping_version_id, parameter_fingerprint,
+                       source_unit, target_unit, scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b)
+                     values ($1,$2,$3,$4,'club_mapping',true,$5,$6,$7,$8,$9,$10,$11,$12,'session','duration_mmss','mm:ss',$13,$14,'300','5')`,
+      [cols.id, out.id, cols.session_ordinal, cols.item_no, row.source_metric_version_id, v.versionId, row.parameter_fingerprint, row.source_unit, row.target_unit,
+        row.scale, row.scale_divisor, row.offset, P1, "123.1875"]);
+    } });
+    clean(refusedWith(res, "23514", NAMES), `${column} null`);
+  };
+  for (const column of ["id", "session_ordinal", "item_no"]) await rawRow(column, null);
   const DISPLAY = /^source_metric_confirmation_items: a compared row names a display rule and a unit of that rule$/;
   await V({ rule: null, rawA: P1 }, DISPLAY);
   await V({ unit: null, rawA: P1 }, DISPLAY);
@@ -903,12 +950,11 @@ test("B6. the value rules are refused by the BEFORE trigger with fixed text that
   for (const [rule, unit] of [["duration_mmss", "mm:ss"], ["distance_m", "m"], ["speed_kmh", "km/h"]]) passes(await save(W.caA, { stored: s, items: [checkedItem(v, { rule, unit })] }), rule);
   assert.deepEqual((await one(k, `select training_load.source_metric_display_unit_ok(null, 'm') as a, training_load.source_metric_display_unit_ok('distance_m', null) as b, training_load.source_metric_display_unit_ok('distance_m', 'km') as c`)), { a: false, b: false, c: false });
   // The backstops, each on its own: the insert guard off, inside a transaction that is rolled back.
-  const backstop = async (item, constraint, { removal = false } = {}) => {
+  const backstop = async (item, constraint) => {
     const res = await save(W.caA, { stored: s, items: [item], start: false, afterConfirmation: (c) => c.query(`alter table ${T9I} disable trigger source_metric_confirmation_items_insert_guard`) });
     assert.equal(res.ok, false, constraint);
     assert.equal(res.error.code, "23514", res.error.message);
     assert.equal(res.error.constraint, constraint, res.error.message);
-    assert.ok(removal || true);
   };
   const salt = Buffer.alloc(16, 1);
   const digest = "a".repeat(64);
@@ -929,6 +975,19 @@ test("B6. the value rules are refused by the BEFORE trigger with fixed text that
   await backstop(full({ removedBy: W.pa.id }), "source_metric_confirmation_items_removed_by_check");
   await backstop(full({ rawA: null, storedA: null, rawB: null, storedB: null, salt: null, removedAt: new Date().toISOString(), removedKind: "erased" }), "source_metric_confirmation_items_erased_by_check");
   await backstop(full({ level: "drill" }), "source_metric_confirmation_items_level_check");
+  await backstop(full({ itemNo: 0 }), "source_metric_confirmation_items_item_no_check");
+  await backstop({ ...full(), kind: "field_unit" }, "source_metric_confirmation_items_kind_check");
+  await backstop(full({ digest: "not-a-digest" }), "source_metric_confirmation_items_digest_format");
+  await backstop(full({ rawA: null, storedA: null, rawB: null, storedB: null, salt: null, removedAt: new Date().toISOString(), removedKind: "lost", removedBy: W.pa.id }), "source_metric_confirmation_items_removed_kind_check");
+  // T9s's own backstops, its insert guard off.
+  const t9s = async (over, constraint) => {
+    const res = await save(W.caA, { stored: s, items: [checkedItem(v)], start: false, ...over, afterConfirmation: (c) => c.query(`alter table ${T9S} disable trigger source_metric_confirmation_sessions_insert_guard`) });
+    assert.equal(res.error?.constraint, constraint, res.error?.message);
+  };
+  await t9s({ sessionFacts: { hash: "ABC" } }, "source_metric_confirmation_sessions_hash_format");
+  await t9s({ sessionFacts: { sessionId: "abc" } }, "source_metric_confirmation_sessions_session_format");
+  await t9s({ pairIndex: -1 }, "source_metric_confirmation_sessions_pair_check");
+  await t9s({ sessions: 2 }, "source_metric_confirmation_sessions_ordinal_check");
   // T9's own backstops, its insert guard off.
   const t9 = async (over, constraint) => {
     const res = await save(W.caA, { stored: s, items: [checkedItem(v)], start: false, ...over, before: (c) => c.query(`alter table ${T9} disable trigger source_metric_confirmations_insert_guard`) });
@@ -939,6 +998,8 @@ test("B6. the value rules are refused by the BEFORE trigger with fixed text that
   await t9({ ...times, basis: "team_coach" }, "source_metric_confirmations_basis_check");
   await t9({ confirmedAt: "2026-01-01T00:00:00Z", expireAt: "2026-01-02T00:00:00Z" }, "source_metric_confirmations_expiry_check");
   await t9({ ...times, teamId: W.bA2.teamId }, "source_metric_confirmations_binding_fk");
+  await t9({ ...times, ownerScope: "system" }, "source_metric_confirmations_owner_scope_check");
+  await t9({ ...times, registryVersion: 0 }, "source_metric_confirmations_registry_version_check");
 });
 
 test("B7. append-only: a confirmation and its session never change; a row changes only by the removal of its values; nothing is deleted or truncated", async () => {
@@ -1017,6 +1078,13 @@ test("B8. the deferred links at COMMIT: no keyed audit row, an unkeyed one, anot
   const ATTESTED = /^source_metric_confirmations: a confirmation is attested exactly when a row was compared$/;
   refusedWith(await save(W.caA, { stored: s2, items: [checkedItem(v2)], attested: false }), "23514", ATTESTED);
   refusedWith(await save(W.caA, { stored: s2, items: [plainItem(v2)], attested: true }), "23514", ATTESTED);
+  // A row added after the confirmation's own link was forced early is still held to the rules at COMMIT.
+  const v3 = await activeVersion(W.caA);
+  refusedWith(await save(W.caA, { stored: s2, items: [checkedItem(v2)], then: async (c, out) => {
+    await c.query("set constraints all immediate");
+    await c.query("set constraints all deferred");
+    await itemRow(c, out.id, 2, checkedItem(v3));
+  } }), "23514", SWITCHED);
   // A second audit row for one confirmation.
   const twice = await save(W.caA, { stored: s2, items: [checkedItem(v2)], then: (c, out) => c.query(`insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash)
     values ('mapping_confirmation',$1,$2,$3,'club_admin',$4,$5,$6)`, [b2.teamId, out.id, W.caA.id, out.operationId, key(), hash()]) });
@@ -1074,6 +1142,18 @@ test("B9. T8: confirmation_id is set exactly for the three actions; an erasure c
   // A later confirmation row for an earlier confirmation, by its own writer.
   refusedWith(await T(W.caA.id, `insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('mapping_confirmation',$1,$2,$3,'club_admin',$4,$5,$6)`,
     [done.b.teamId, done.id, W.caA.id, done.operationId, key(), hash()]), "23514", /^source_metric_audit: the audit row must follow its own confirmation in the same transaction$/);
+  // The audit row's time is the transaction's, not the writer's.
+  const bt = await binding(W.clubA);
+  const st = await stored(bt);
+  const vt = await activeVersion(W.caA);
+  refusedWith(await save(W.caA, { stored: st, items: [checkedItem(vt)], audit: false, then: (c, out) => c.query(
+    `insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash, performed_at) values ('mapping_confirmation',$1,$2,$3,'club_admin',$4,$5,$6,'2001-01-01')`,
+    [bt.teamId, out.id, W.caA.id, out.operationId, key(), hash()]) }), "23514", /^source_metric_audit: the audit row must follow its own confirmation in the same transaction$/);
+  const et = await committed(W.caA);
+  refusedWith(await tx(W.pa.id, async (c) => {
+    await c.query(ERASE, [et.id]);
+    await c.query(`insert into ${T8} (action, confirmation_id, performed_by_user_id, basis, operation_id, reason, performed_at) values ('confirmation_values_erased',$1,$2,'platform_admin',$3,'erasure_request','2001-01-01')`, [et.id, W.pa.id, crypto.randomUUID()]);
+  }, { commit: false }), "23514", FOLLOW);
   // The existing actions still pass through the real routes (the 7h and 7d suites cover them in full).
   const v = await activeVersion(W.caA);
   assert.deepEqual((await rows(k, `select action, to_status from ${T8} where mapping_version_id = $1 order by performed_at, id`, [v.versionId])).map((x) => `${x.action}:${x.to_status}`),
@@ -1103,6 +1183,9 @@ test("B10. the removal of expired values: only past the date, only inside the re
   } finally {
     await k.query(`select set_config('optimove.source_metric_confirmation_purge', '', false)`);
   }
+  // The right comes first: a club admin, and an invalid actor setting, are 42501 whatever the change.
+  refusedWith(await tx(W.caA.id, (c) => c.query(EXPIRE, [old1.id])), "42501", /^source metric confirmation: the acting user may not remove these values$/);
+  refusedWith(await tx(W.caA.id, (c) => c.query(`update ${T9I} set raw_a = 1 where confirmation_id = $1`, [old1.id])), "42501", /^source metric confirmation: the acting user may not remove these values$/);
   // Under a valid marker set by hand, a row that is not past its date is still refused.
   refusedWith(await tx(null, async (c) => { await c.query(`select set_config('optimove.source_metric_confirmation_purge', pg_current_xact_id()::text, true)`); await c.query(EXPIRE, [fresh.id]); }), "23514",
     /^source_metric_confirmation_items: the values are not past their date$/);

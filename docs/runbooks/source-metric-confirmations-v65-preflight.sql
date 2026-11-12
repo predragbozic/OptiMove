@@ -17,7 +17,8 @@
 --
 -- The deploy follows block 8 at once: v65 takes T8 with NOWAIT, so a T8 that
 -- is busy at that moment fails the migration with nothing applied, and the
--- deploy is repeated at a quiet moment.
+-- deploy is repeated at a quiet moment. Block 10 is information for 18-3, not
+-- a condition of this deploy.
 
 -- 1. PostgreSQL 15 or later, as v41 already needs (v65 also needs numeric
 --    infinity, PostgreSQL 14, and sha256(), PostgreSQL 11).
@@ -112,17 +113,16 @@ select count(*) as setting_defaults
   from pg_db_role_setting s, unnest(s.setconfig) as cfg
  where cfg like 'optimove.source_metric_actor=%' or cfg like 'optimove.source_metric_confirmation_purge=%';
 
--- 8. A quiet moment. v65 takes SHARE ROW EXCLUSIVE on T4, which waits for a
---    writer of T4 up to the runner's lock_timeout, then ACCESS EXCLUSIVE on T8
---    with NOWAIT, so any lock on T8 (a reader included: the Mappings screen, a
---    replay, every mapping write) fails it at once. Its foreign keys then take
---    SHARE ROW EXCLUSIVE on public.clubs, public.teams, public.users, the
---    source connections and bindings, the import checks and the source
---    revisions, each waiting for a writer up to the runner's lock_timeout. No
---    check and no identity load is running, and no session is idle in a
---    transaction.
---    Expected: t8_locks = 0, t4_writers = 0, running_checks = 0,
---    running_identity_loads = 0, idle_in_transaction = 0. A non-zero lock
+-- 8. A quiet moment. v65 takes SHARE ROW EXCLUSIVE on T4, then, through its
+--    new foreign keys, on public.clubs, public.teams, public.users, the source
+--    connections and bindings, the import checks and the source revisions,
+--    each waiting for a writer of that table up to the runner's lock_timeout.
+--    Only then it takes ACCESS EXCLUSIVE on T8 with NOWAIT, so any lock on T8
+--    at that moment (a reader included: the Mappings screen, a replay, every
+--    mapping write) fails it at once. No check and no identity load is
+--    running, and no session is idle in a transaction.
+--    Expected: t8_locks = 0, t4_writers = 0, fk_table_writers = 0,
+--    running_checks = 0, running_identity_loads = 0, idle_in_transaction = 0. A non-zero lock
 --    count that is gone when the block is run again a few seconds later was an
 --    ordinary short read or write, not a blocker; the deploy then follows the
 --    clean run at once.
@@ -140,6 +140,13 @@ select
       and l.database = (select oid from pg_database where datname = current_database())
       and l.relation = 'training_load.source_metric_mapping_versions'::regclass
       and l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')) as t4_writers,
+  (select count(*) from pg_locks l
+    where l.pid <> pg_backend_pid()
+      and l.database = (select oid from pg_database where datname = current_database())
+      and l.relation in ('public.clubs'::regclass, 'public.teams'::regclass, 'public.users'::regclass,
+                         'training_load.source_credential_connections'::regclass, 'training_load.source_team_bindings'::regclass,
+                         'training_load.gpexe_import_checks'::regclass, 'training_load.source_metric_definition_versions'::regclass)
+      and l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')) as fk_table_writers,
   (select count(*) from training_load.gpexe_import_checks where status = 'running') as running_checks,
   (select count(*) from training_load.gpexe_athlete_identity_requests where status = 'running') as running_identity_loads,
   (select count(*) from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()) as idle_in_transaction;
@@ -151,3 +158,14 @@ select
 select count(*) as new_action_rows
   from training_load.source_metric_audit
  where action in ('mapping_confirmation', 'confirmation_values_expired', 'confirmation_values_erased');
+
+-- 10. Information, not a condition of v65 (nothing writes a value before
+--     J18's 18-3): how the server logs statements. From 18-3 on, a save
+--     inserts two athletes' values with bind parameters; a server that logs
+--     statements with their parameters would write those values to its log.
+--     Expected: nothing; report the four values to the *Rukovodilac* for
+--     18-3.
+select current_setting('log_statement') as log_statement,
+       current_setting('log_min_duration_statement') as log_min_duration_statement,
+       current_setting('log_parameter_max_length') as log_parameter_max_length,
+       current_setting('log_parameter_max_length_on_error') as log_parameter_max_length_on_error;

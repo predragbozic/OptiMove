@@ -25,10 +25,10 @@ later migration that ships with the board's backend (18-3) and frontend (18-4) i
     `confirmation_values_expired` and `confirmation_values_erased`, one row per confirmation and action, and the four
     bodies (every existing line byte for byte; the new lines sit between the `M-A (J18)` marks).
   - **Not in it:** the gate (M-B), T2b's observation columns and the observed acts (18-P), any code.
-  - **Locks:** T4 `SHARE ROW EXCLUSIVE` (it waits for a writer up to the runner's `lock_timeout`, 30 s), then T8
-    `ACCESS EXCLUSIVE` with `NOWAIT`; T5 is not locked. The new foreign keys take `SHARE ROW EXCLUSIVE` on
-    `public.clubs`, `public.teams`, `public.users`, the source connections and bindings, the import checks and the
-    source revisions, each within the runner's `lock_timeout`.
+  - **Locks:** T4 `SHARE ROW EXCLUSIVE` first (it waits for a writer up to the runner's `lock_timeout`, 30 s). The
+    new foreign keys then take `SHARE ROW EXCLUSIVE` on `public.clubs`, `public.teams`, `public.users`, the source
+    connections and bindings, the import checks and the source revisions, each within the runner's `lock_timeout`.
+    Only then T8 `ACCESS EXCLUSIVE` with `NOWAIT`, held for T8's own statements only. T5 is not locked.
 
 The runner applies the migration in its own transaction and stops at the first failure (`backend/src/migrate.js`).
 `npm start` runs the migrations before the server.
@@ -55,9 +55,10 @@ Supabase connector tool and never touches the production database.
    - block 5 shows nothing of v65 exists yet, every trigger of T8 enabled (7), and the functions v65 relies on;
    - block 6 shows the migrator's role owns T8 and the four functions and may create in `training_load`;
    - block 7 shows no default for the actor setting or the purge marker;
-   - block 8 shows a quiet moment: no lock on T8, no writer on T4, no running check or identity load, no session idle
-     in a transaction;
-   - block 9 is a sanity line: no T8 row of the three new actions.
+   - block 8 shows a quiet moment: no lock on T8, no writer on T4 or on the seven tables the new foreign keys
+     reference, no running check or identity load, no session idle in a transaction;
+   - block 9 is a sanity line: no T8 row of the three new actions;
+   - block 10 is information for 18-3, not a condition: how the server logs statements and their parameters.
 3. Both ★★ GOs on the exact head, then the owner's order that names v65 and the file's sha256 (the post-check's
    block 1 carries it).
 
@@ -72,9 +73,10 @@ No PR is merged into `main` from the merge until the deploy and the post-check h
 
 ### If the deploy fails on a lock
 
-v65 takes the audit table (T8) with `NOWAIT`: if anyone reads or writes it at that moment (the Mappings screen, a
-mapping write, a replay), the migration fails at once with *could not obtain lock on relation* (SQLSTATE `55P03`). The
-other tables wait at most 30 seconds; a longer holder fails it with *canceling statement due to lock timeout*. In both
+v65 first waits, at most 30 seconds each, for writers of T4 and of the tables its foreign keys reference; a longer
+holder fails it with *canceling statement due to lock timeout*. It then takes the audit table (T8) with `NOWAIT`: if
+anyone reads or writes it at that moment (the Mappings screen, a mapping write, a replay), the migration fails at once
+with *could not obtain lock on relation* (SQLSTATE `55P03`). In both
 cases:
 
 1. **Nothing is applied**: the migration is one transaction, v65 is not recorded in `schema_migrations`, and the
@@ -85,8 +87,8 @@ cases:
 ## After the deploy
 
 - The post-check's six blocks: v65 recorded once with its checksum as the last migration; the four bodies are v65's;
-  the tables, the column, the constraints and the index exist; all 18 triggers are enabled; nothing is written; nothing
-  is left locked.
+  the tables, the fifteen functions, the column, the constraints and the index exist; all 19 triggers are enabled;
+  nothing is written; nothing is left locked.
 - **Backups.** From 18-3 on, the values of a confirmation live in T9i for 90 days. A backup keeps them for its own
   retention; before a restored copy is used, `select training_load.remove_expired_confirmation_values(200)` is run
   until it returns an empty list (the v32 rule for GPEXE names).
@@ -100,7 +102,7 @@ database, after a restore-verified backup, and only once the deployed commit no 
   rolled back first); once a confirmation or a T8 row of a confirmation exists; when a v65 object is missing, a trigger
   is disabled, or a body in force is not v65's.
 - Otherwise, in one transaction, it restores v34's action CHECK and T8 comment and the four bodies byte for byte,
-  drops the column, the three tables and the thirteen functions, and removes the v65 record.
+  drops the column, the three tables and the fifteen functions, and removes the v65 record.
 - Rehearsed on a disposable database by `backend/tests/source-metric-confirmations-v65.test.mjs`: apply → rollback →
   the identical catalog → apply again.
 

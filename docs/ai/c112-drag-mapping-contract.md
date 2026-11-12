@@ -1516,8 +1516,11 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
   `-- M-A (J18) begin` and `-- M-A (J18) end`. The suite strips the marked lines and compares the rest with the old
   body, byte for byte.
 - **Departures from the text above, each for the *Rukovodilac*'s review of 18-1:**
-  - **Locks.** Section 15.3 said T4, T5 and T8. M-A locks T4 (`SHARE ROW EXCLUSIVE`, which T9i's foreign key takes
-    anyway) and then T8 (`ACCESS EXCLUSIVE`, `NOWAIT`). It neither changes nor locks T5.
+  - **Locks.** Section 15.3 said T4, T5 and T8. M-A locks T4 first (`SHARE ROW EXCLUSIVE`, which T9i's foreign key
+    takes anyway), creates its tables (their foreign keys take `SHARE ROW EXCLUSIVE` on the clubs, teams, users,
+    connections, bindings, checks and revisions, each within the runner's `lock_timeout`), and only then takes T8
+    (`ACCESS EXCLUSIVE`, `NOWAIT`) right before T8's own statements. So T8 is never held exclusively while the migration
+    waits for another table (the database review's finding). It neither changes nor locks T5.
   - **The display registry in the database.** Section 5.3 asks that a checked row's display unit is "a unit from that
     rule's closed list". The lists are a function, `source_metric_display_unit_ok(rule, unit)`, with the three rules
     R5 allows and the one unit each has evidence for: `duration_mmss` → `mm:ss`, `distance_m` → `m`, `speed_kmh` →
@@ -1535,9 +1538,29 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
     setting `optimove.source_metric_confirmation_purge`.
   - **T8's shapes:** `mapping_confirmation` names the team and the confirmation only; the two removal rows name the
     confirmation only. T8's table comment now mentions confirmations; the rollback restores v34's text.
-  - **Foreign keys.** T9's foreign keys take `FOR KEY SHARE` on the binding and the connection, as T5's already does.
-    An Unbind's update of those rows neither blocks them nor waits for them; the guards themselves read them with
-    plain reads (section 5.4).
+  - **Foreign keys.** T9's foreign keys take `FOR KEY SHARE` on the binding and the connection, as T5's foreign key
+    to the binding already does. A Reconnect's update of the connection does not conflict with it. An Unbind takes the
+    binding `FOR UPDATE`, so it and the foreign key's check wait for each other, exactly as a T5 start and an Unbind
+    already do: no new lock edge. The guards themselves read both rows with plain reads (section 5.4).
+  - **The removal guard checks the right first:** an acting user who is not an active platform admin, and a present
+    but invalid actor setting, get `42501` on every update of T9i, before any refusal about the row.
+  - **T8's new rows carry the transaction's time:** the two new chains of the revision guard refuse a `performed_at`
+    other than `now()`.
+  - **A row added late is still checked.** T9i has its own deferred link, which holds every row to the activation and
+    `attested` rules at COMMIT, also when the confirmation's own link was forced early.
+  - **A club admin's removal audit row** is refused by T8's insert guard first ("a club-admin row names a club
+    mapping", `23514`), as for every platform-only action before it; the right itself is refused `42501` on T9i.
+- **For 18-3, from the reviews of 18-1** (acceptance items there, none of them a change of M-A):
+  - the save holds the binding `FOR SHARE` before its first write (step 13), because the T9 guard reads it without a
+    lock; its recorded-SQL-order test covers it;
+  - route 6 takes the confirmation's T9 row `FOR UPDATE` before it touches T9i (section 5.8), with a recorded-order
+    test: an eraser that updates rows first can deadlock with the removal function;
+  - a route never forwards a database error's `detail` or `constraint` (a unique or foreign-key violation prints
+    ids), and every value travels as a bind parameter;
+  - the preflight's block 10 reports how the server logs statements; if it logs bind parameters, the values of a save
+    would reach the server log, which is decided before 18-3 is deployed;
+  - the removal function's scan walks every expired confirmation on each call; negligible now, recorded;
+  - the digest's canonical text joins fields with `|` and no escaping; sound for an append-only row, recorded.
 - **Tests** (`backend/tests/source-metric-confirmations-v65.test.mjs`, disposable databases, 17 tests): the preflight
   and every flipped block; the `NOWAIT`, md5 and CHECK refusals; the exact catalog change; the post-check; every
   refusal of the rollback; apply → rollback → the identical catalog → apply again; and the guards of sections 9.1

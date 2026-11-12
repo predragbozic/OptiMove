@@ -68,7 +68,7 @@ declare
     ['source_metric_audit_row_ok', '0ef48fd391a5380f70c92d96f47f894a'],
     ['source_metric_audit_actor_guard', 'b1b324ff092858d677a6635893646b1c'],
     ['source_metric_audit_insert_guard', 'cbfa726d60658dbba0198ab97192219e'],
-    ['source_metric_audit_revision_guard', 'c2e8814af337acb6a2355b77a0bc1b1e']];
+    ['source_metric_audit_revision_guard', '942b806526756311a5289b42c27e4918']];
   reasons text[] := '{}';
   i integer;
 begin
@@ -99,7 +99,7 @@ begin
        where t.tgrelid in ('training_load.source_metric_confirmations'::regclass,
                            'training_load.source_metric_confirmation_sessions'::regclass,
                            'training_load.source_metric_confirmation_items'::regclass)
-         and not t.tgisinternal) <> 11 then
+         and not t.tgisinternal) <> 12 then
     reasons := array_append(reasons, 'a trigger of the v65 tables is missing');
   end if;
   if exists (select 1 from pg_trigger t
@@ -127,7 +127,8 @@ begin
                            'source_metric_confirmation_sessions_insert_guard', 'source_metric_confirmation_item_digest',
                            'source_metric_confirmation_items_insert_guard', 'source_metric_confirmation_items_update_guard',
                            'remove_expired_confirmation_values', 'source_metric_confirmations_commit_link',
-                           'source_metric_confirmation_items_removal_link')) <> 13 then
+                           'source_metric_confirmation_items_removal_link', 'source_metric_confirmation_rows_hold',
+                           'source_metric_confirmation_items_commit_link')) <> 15 then
     reasons := array_append(reasons, 'a v65 function is missing');
   end if;
   for i in 1 .. array_length(expected, 1) loop
@@ -512,6 +513,8 @@ drop function training_load.source_metric_confirmation_of_this_transaction(uuid)
 drop table training_load.source_metric_confirmations;
 drop function training_load.source_metric_confirmations_insert_guard();
 drop function training_load.source_metric_confirmations_commit_link();
+drop function training_load.source_metric_confirmation_items_commit_link();
+drop function training_load.source_metric_confirmation_rows_hold(uuid);
 drop function training_load.source_metric_confirmation_items_update_guard();
 drop function training_load.source_metric_confirmation_items_removal_link();
 drop function training_load.source_metric_confirmation_actor_or_null();
