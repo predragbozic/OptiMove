@@ -38,7 +38,7 @@ let eventService;
 const raws = [];
 
 before(async () => {
-  env = await startCalendarApp({ label: "k2b" });
+  env = await startCalendarApp({ label: "k2b", migrations: calendarMigrations({ upTo: V51 }) });
   settingsService = await import("../src/calendarSettingsService.js");
   eventService = await import("../src/calendarEventService.js");
   m = await calendarRoleMatrix(env, "k2b");
@@ -290,7 +290,7 @@ test("1a. v51 is recorded once, with its objects and the seed exactly; the post-
 });
 
 test("1b. the rollback rehearsal: the preflight on v50, apply -> rollback -> the v50 catalog digest identical -> re-apply; every refusal leaves v51 in place", async () => {
-  const before51 = calendarMigrations().filter((x) => x !== V51);
+  const before51 = calendarMigrations({ upTo: V51 }).filter((x) => x !== V51);
   const other = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "k2brb", migrations: before51 });
   const client = new pg.Client({ connectionString: other.url });
   await client.connect();
