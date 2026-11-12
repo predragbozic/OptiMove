@@ -300,6 +300,15 @@ function lostAnswer(info) {
 // it is the caller's two locals, handed through for one Connect. A Create that is not confirmed drops the pair, and
 // after Check result the Connect form asks for the password again.
 export async function createConnection(render, { pair = null, retry = null } = {}) {
+  try {
+    await createAndConnect(render, { pair, retry });
+  } finally {
+    // The pair is dropped on every path, an early return included.
+    if (pair) pair.username = pair.password = "";
+  }
+}
+
+async function createAndConnect(render, { pair, retry }) {
   const d = sc();
   const clubId = activeClubId();
   const draft = retry ? retry.draft : (d.createDraft || {});
@@ -325,8 +334,10 @@ export async function createConnection(render, { pair = null, retry = null } = {
     d.credentialOpen = { connectionId: created, action: "connect" };
     d.noticeFor = created;
     d.notice = retry
-      ? `The connection is created${response.replayed ? " (the earlier request had gone through)" : ""}. Enter the ${SOURCE_NAME} username and password again to connect and test it.`
-      : `The connection is created. Connect the account to store its access token.`;
+      ? `The connection is saved${response.replayed ? " (the earlier request had gone through)" : ""}. Enter the ${SOURCE_NAME} username and password again and press Connect.`
+      : pair
+        ? `The connection is saved. Signing in to ${SOURCE_NAME} and reading its teams...`
+        : `The connection is saved. Connect the account to store its access token.`;
   } catch (error) {
     if (generation !== d.generation) return;
     const info = errorInfo(error);
@@ -334,14 +345,25 @@ export async function createConnection(render, { pair = null, retry = null } = {
       // The row may exist: Check result sends the same Create with the same key. The pair is not kept.
       resetSourceConnectionsForms();
       d.unconfirmed = { action: "create", connectionId: null, requestKey, draft: { hostKey: draft.hostKey, accountLabel: draft.accountLabel } };
-    } else if (retry && info.code === "try_again") {
-      // A repeat refused as "try again" decides nothing: the marker and Check result stay.
+    } else if (retry && (info.code === "try_again" || info.status >= 500)) {
+      // A repeat that does not confirm the original's outcome (try_again, any 5xx - internal_error included) decides
+      // nothing: the marker, its key and Check result stay; a new key is never offered meanwhile.
       d.notice = TRY_AGAIN_NOTICE;
       d.noticeFor = "";
     } else if (retry) {
-      // Check result was refused for a reason the server stated: the marker goes, the reason is shown.
+      // Check result refused for a reason the server stated (a 4xx): the marker goes, the reason is shown, and the
+      // club's list is read so a row of the first attempt is shown rather than the empty state.
       d.unconfirmed = null;
       d.createError = info;
+      try {
+        const response = await request(`${BASE}?clubId=${encodeURIComponent(d.clubId)}`);
+        if (generation === d.generation) d.connections = Array.isArray(response.connections) ? response.connections : d.connections;
+      } catch {
+        if (generation === d.generation) {
+          d.notice = "The club's connections could not be read just now. Open Source connections again before creating a connection, so the club does not get a second one.";
+          d.noticeFor = "";
+        }
+      }
     } else {
       d.createError = info;
     }
@@ -352,10 +374,14 @@ export async function createConnection(render, { pair = null, retry = null } = {
       render();
     }
   }
-  try {
-    if (created && pair && generation === d.generation) await submitCredentials(render, pair);
-  } finally {
-    if (pair) pair.username = pair.password = "";
+  if (created && pair && generation === d.generation) {
+    await submitCredentials(render, pair);
+    // The account was not accepted: the connection stays saved, and the form asks for the pair again.
+    if (generation === d.generation && d.credentialError && d.credentialOpen?.connectionId === created) {
+      d.noticeFor = created;
+      d.notice = `The connection is saved, but ${SOURCE_NAME} did not sign in with that username and password. Enter them again and press Connect.`;
+      render();
+    }
   }
 }
 

@@ -392,7 +392,9 @@ export async function createConnection({ ctx, sourceSystem, body }) {
       released = true;
       release();
     }
-    if (error?.code === "55P03") throw refusal(409, "try_again", "Another change of this club or host is running. Try again when it has finished.");
+    // S2: a bounded wait or statement that ran out (55P03, 57014) wrote nothing: try_again, so a Check result of a lost
+    // Create keeps its key instead of reading a 500 as a settled refusal.
+    if (error?.code === "55P03" || error?.code === "57014") throw refusal(409, "try_again", "Another change of this club or host is running. Try again when it has finished.");
     if (error instanceof SourceConnectionError) throw error;
     throw internal("create", error);
   } finally {

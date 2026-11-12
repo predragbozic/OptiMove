@@ -603,8 +603,55 @@ test("9b. (S2) a lost Create: the form closes and the pair is dropped; no second
   assert.equal(state.sourceConnections.unconfirmed, null);
   assert.deepEqual(state.sourceConnections.credentialOpen, { connectionId: CONN, action: "connect" });
   out = html();
-  assert.match(out, /The connection is created \(the earlier request had gone through\)\. Enter the GPEXE username and password again to connect and test it\./);
+  assert.match(out, /The connection is saved \(the earlier request had gone through\)\. Enter the GPEXE username and password again and press Connect\./);
   assert.match(out, /data-source-connections-form="credential"/, "the Connect form asks for the pair again");
+});
+
+test("9b2. (S2, code review HIGH) a lost Create whose Check result answers 500 internal_error (or any 5xx) keeps the marker and its key, never says nothing was changed and never offers a new create; only a confirming answer settles it; a stated 4xx refusal drops the marker and reads the club's list", async () => {
+  await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const key = fetchCalls[1].body.requestKey;
+  for (const answer of [{ status: 500, body: { error: "internal_error", message: "x" } }, { status: 503, body: { error: "database_busy", message: "x" } }]) {
+    installFetch(() => answer);
+    await act("source-connections-check-result");
+    assert.equal(state.sourceConnections.unconfirmed?.action, "create", `${answer.status}: the marker stays`);
+    assert.equal(state.sourceConnections.unconfirmed?.requestKey, key);
+    assert.doesNotMatch(html(), /Nothing was changed/);
+    assert.match(html(), /data-action="source-connections-create-open"[^>]*disabled/, "no new create (no new key) is offered");
+  }
+  installFetch(responder({ list: [], writes: { "POST ": () => ({ status: 200, body: { connection: connection(), replayed: true } }) } }).handler);
+  await act("source-connections-check-result");
+  assert.equal(fetchCalls[0].body.requestKey, key, "the same key");
+  assert.equal(state.sourceConnections.unconfirmed, null);
+
+  // A stated refusal (404: the right or the club is gone) drops the marker and reads the list, so a row of the first
+  // attempt is shown instead of the empty state.
+  await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const r = responder({ list: [connection()], writes: { "POST ": () => ({ status: 404, body: { error: "notFound" } }) } });
+  installFetch(r.handler);
+  await act("source-connections-check-result");
+  assert.deepEqual(calls(), [`POST ${BASE}`, `GET ${BASE}?clubId=${CLUB}`]);
+  assert.equal(state.sourceConnections.unconfirmed, null);
+  assert.equal(state.sourceConnections.connections.length, 1, "the list is read again");
+});
+
+test("9b3. (S2, ux review) a wrong GPEXE password after the connection was saved: the connection stays, the Connect form is open with the refusal, and one sentence says the account was not accepted and what to do; the password is asked again", async () => {
+  await openClub({ list: [], writes: {
+    "POST ": () => ({ status: 201, body: { connection: connection() } }),
+    [`POST /${CONN}/connect`]: () => ({ status: 409, body: { error: "source_auth_rejected", message: "x" } }),
+  } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: "wrong" });
+  assert.deepEqual(fetchCalls.filter((c) => c.method === "POST").map((c) => c.url), [BASE, `${BASE}/${CONN}/connect`]);
+  assert.deepEqual(state.sourceConnections.credentialOpen, { connectionId: CONN, action: "connect" });
+  const out = html();
+  assert.match(out, /The connection is saved, but GPEXE did not sign in with that username and password\. Enter them again and press Connect\./);
+  assert.match(out, /GPEXE refused this username and password/);
+  assert.match(out, /data-source-connections-form="credential"/);
+  assert.ok(!out.includes("wrong") || !/value="wrong"/.test(out), "the password is not filled back in");
 });
 
 test("9c. a workspace switch never shows the previous club's connections: the loaded list is treated as not loaded, the panel's one-shot read fires for the new club, and nothing fires while a write is in flight", async () => {

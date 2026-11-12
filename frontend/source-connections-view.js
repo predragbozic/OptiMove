@@ -39,6 +39,9 @@ export function connectionMessage(info, context = "") {
   if (code === "source_auth_rejected" && context === "credential") {
     return `${SOURCE_NAME} refused this username and password. Nothing was stored; check them and try once more (every attempt counts toward 5 in 15 minutes).`;
   }
+  if (code === "request_key_reused" && context === "create") {
+    return "This attempt could not be repeated. Press Connect and test again.";
+  }
   const BY_CODE = {
     try_again: "OptiMove is busy right now: another change of this connection or of one of its teams may be running (a test, a reconnect, a bind, an unbind, a check or an import), or the server is under load. Nothing was changed. Try again in a moment.",
     rights_changed: "Your administrator rights changed while the request ran. Nothing was stored. Reload the app.",
@@ -214,9 +217,9 @@ function renderEmptyHtml(d, clubName) {
         <h4>${escapeHtml(SOURCE_NAME)}</h4>
         <span class="data-sources-state is-off">Not connected</span>
       </div>
-      <p class="muted">${escapeHtml(clubName || "This club")} has no ${escapeHtml(SOURCE_NAME)} connection yet. Its teams cannot read ${escapeHtml(SOURCE_NAME)} through a club account until one is created, connected, tested and bound.</p>
+      <p class="muted">${escapeHtml(clubName || "This club")} has no ${escapeHtml(SOURCE_NAME)} connection yet. Its teams cannot read ${escapeHtml(SOURCE_NAME)} through a club account until its ${escapeHtml(SOURCE_NAME)} account is connected and its teams are bound.</p>
       ${d.createOpen ? renderCreateFormHtml(d) : `<button class="plain-button data-sources-primary" type="button" data-action="source-connections-create-open" ${writeInFlight() ? "disabled" : ""}>Connect and test</button>`}
-      ${d.createOpen ? "" : errorHtml(d.createError)}
+      ${d.createOpen ? "" : errorHtml(d.createError, "create")}
     </section>
   `;
 }
@@ -243,11 +246,11 @@ function renderCreateFormHtml(d) {
       <label class="search-field"><span>${escapeHtml(SOURCE_NAME)} password</span>
         <input name="password" type="password" required maxlength="512" autocomplete="current-password" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
       </label>
-      <p class="source-connections-note source-connections-check">Check that both fields hold the ${escapeHtml(SOURCE_NAME)} account's username and password, not your OptiMove sign-in. If your browser filled either field, clear both and type them yourself.</p>
-      <p class="muted source-connections-note">OptiMove creates the connection, then exchanges the password once for an access token and stores only that token, encrypted. It does not retain the username or password. ${escapeHtml(SOURCE_NAME)} is read once to test the token and list its teams; nothing is imported.</p>
-      ${errorHtml(d.createError, "credential")}
+      <p class="source-connections-note source-connections-check">Before you press Connect and test, check that both fields hold the ${escapeHtml(SOURCE_NAME)} account's username and password, not your OptiMove sign-in. If your browser filled either field, clear both and type the ${escapeHtml(SOURCE_NAME)} username and password yourself.</p>
+      <p class="muted source-connections-note">OptiMove uses the password once to get an access key from ${escapeHtml(SOURCE_NAME)} and keeps only that key, encrypted. OptiMove does not retain the username or password after this request. Your browser or password manager may handle them according to its own settings. ${escapeHtml(SOURCE_NAME)} is then read once to check the account and list its teams; nothing is imported.</p>
+      ${errorHtml(d.createError, "create")}
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="submit" ${d.createBusy ? "disabled" : ""}>${d.createBusy ? "Creating..." : "Connect and test"}</button>
+        <button class="plain-button data-sources-primary" type="submit" ${d.createBusy ? "disabled" : ""}>${d.createBusy ? "Connecting and testing..." : "Connect and test"}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.createBusy ? "disabled" : ""}>Cancel</button>
       </div>
     </form>
@@ -341,7 +344,7 @@ function renderCredentialFormHtml(d, connection, clubName) {
       <p class="muted source-connections-note">The password is exchanged for an access token right away; OptiMove stores only that token, encrypted. OptiMove does not retain the username or password after this request. Your browser or password manager may handle them according to its own settings. ${escapeHtml(SOURCE_NAME)} is read once to check the token${bound ? " and every bound team" : ""}; nothing is imported.</p>
       ${errorHtml(d.credentialError, "credential")}
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="submit" ${d.credentialBusy ? "disabled" : ""}>${d.credentialBusy ? (reconnect ? "Reconnecting..." : "Connecting...") : (reconnect ? "Reconnect" : "Connect")}</button>
+        <button class="plain-button data-sources-primary" type="submit" ${d.credentialBusy ? "disabled" : ""}>${d.credentialBusy ? (reconnect ? "Reconnecting..." : "Connecting and testing...") : (reconnect ? "Reconnect" : "Connect")}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-cancel" ${d.credentialBusy ? "disabled" : ""}>Cancel</button>
       </div>
     </form>
@@ -373,7 +376,9 @@ function renderUnconfirmedHtml(d, pending) {
   if (idempotent) {
     return `
       <div class="data-sources-error source-connections-unconfirmed" role="alert">
-        <p><strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost, so this screen cannot say whether it was made. Check result asks the server for the same request again - it is never done twice.${pending.action === "create" ? ` The ${escapeHtml(SOURCE_NAME)} password was not kept: once the connection is confirmed, enter the username and password again to connect and test it.` : ""}</p>
+        <p>${pending.action === "create"
+          ? `<strong>Result not confirmed.</strong> The server's answer was lost, so this screen cannot tell yet whether the connection was created. <strong>Check result</strong> asks again; it never creates a second connection. Your ${escapeHtml(SOURCE_NAME)} password was not kept: once the connection is confirmed, you type the username and password again.`
+          : `<strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost, so this screen cannot say whether it was made. Check result asks the server for the same request again - it is never done twice.`}</p>
         ${noticeHere}
         <div class="data-sources-form-actions">
           <button class="plain-button data-sources-primary" type="button" data-action="source-connections-check-result" ${d.checkBusy ? "disabled" : ""}>${d.checkBusy ? "Checking..." : "Check result"}</button>

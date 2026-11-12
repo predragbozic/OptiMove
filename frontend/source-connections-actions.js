@@ -216,7 +216,6 @@ export async function submitSourceConnectionsForm(form, { render }) {
     const accountLabel = fieldValue(form, "accountLabel");
     let username = fieldValue(form, "username");
     let password = fieldValue(form, "password", { trim: false });
-    clearField(form, "password");
     d.createDraft = { hostKey, accountLabel };
     let refusal = null;
     if (!HOST_PROFILES.some((host) => host.hostKey === hostKey)) refusal = "host_not_allowed";
@@ -230,6 +229,8 @@ export async function submitSourceConnectionsForm(form, { render }) {
       return;
     }
     d.createError = null;
+    // The password field is blanked only once a request is going (a local refusal keeps what was typed).
+    clearField(form, "password");
     try {
       await createConnection(render, { pair: { username, password } });
     } finally {

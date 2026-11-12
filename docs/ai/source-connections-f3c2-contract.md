@@ -604,7 +604,7 @@ as a non-existent id (ADR-006).
 
 | Route | Purpose | Writes |
 |---|---|---|
-| `POST /api/training-load/sources/:source/connections` | create a connection: `ownerScope`, `ownerClubId` / `ownerTeamId`, `hostKey` (must be approved in the catalog AND resolvable), `accountLabel`, `credentialKind` | one `not_connected` row + audit `create` |
+| `POST /api/training-load/sources/:source/connections` | create a connection: `ownerScope`, `ownerClubId` / `ownerTeamId`, `hostKey` (must be approved in the catalog AND resolvable), `accountLabel`, `credentialKind`; since S2 an optional `requestKey` (a UUID) | one `not_connected` row + audit `create` (`201`). With a `requestKey` (S2): the audit row's `request_id` / `request_hash` is the request record, read behind the per-user lock before any insert; the same key and body replay the saved connection (`200`, `replayed: true`, nothing written) only while the club is visible in the caller's workspace and the right holds, otherwise the identical 404; another body, club or source with the key is `409 request_key_reused`; a refusal is not a record; without a key, as before |
 | `POST …/connections/:id/connect` | attach a credential: `{ token }` (api_token) or `{ username, password }` (exchanged_token; both used once, never stored, never logged); then Test | ciphertext + state + audit `connect` |
 | `POST …/connections/:id/test` | one read on the chosen host | state + audit `test` |
 | `POST …/connections/:id/reconnect` | replace the credential (same as connect, on an existing one) | ciphertext + state + audit `reconnect` |
@@ -1109,8 +1109,8 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
   whose post-write read failed is shown as settled with a "facts may be out of date" note.
   Reconnect first names the source, the owning club, the account label and host, and the
   number of bound teams, and sends that as the `confirmation` the route requires; the old
-  credential is never shown. **A lost Connect, Reconnect, Test or create is never confirmed by a
-  read** (owner's external review of PR #138): *Result not confirmed* offers **Read current
+  credential is never shown. **A lost Connect, Reconnect or Test is never confirmed by a
+  read** (owner's external review of PR #138; a lost create is settled by Check result since S2, below): *Result not confirmed* offers **Read current
   state**, which reads the connection (`GET …/:id`) or the club's list again and refreshes what is
   shown but keeps the marker — a read cannot tell whether the lost attempt landed (a Reconnect on
   a verified connection looks the same before and after; the server may still be finishing the
@@ -1118,12 +1118,13 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
   revision to compare, so nothing is invented. While the marker stands every other write control
   stays locked. Only the explicit **Acknowledge uncertainty and continue** (a confirmation that says
   the server may still be finishing the previous request and that a new Connect or Reconnect can
-  change the credential) clears the marker — locally, sending nothing; for a lost create it also
-  says that creating again can make a second connection this screen cannot remove (the create
-  route has no idempotency key and v27 no per-club uniqueness for connections). A read that fails
-  says so and replaces an older read's sentence; a create's read reads the club's list directly and
-  never resets the club. The pair is never sent a
-  second time. A bind and an Unbind keep **Check result**: the same pair / the same `requestKey`
+  change the credential) clears the marker — locally, sending nothing. A read that fails
+  says so and replaces an older read's sentence. The pair is never sent a
+  second time. **A lost create (S2)** is settled like a bind: the create carries a `requestKey`, and
+  **Check result** sends the same create with the same key, which the server answers once (never a
+  second connection); the password was not kept, so once the create is confirmed the Connect form asks
+  for the username and password again. A repeat that does not confirm the outcome (`try_again`, any
+  5xx) keeps the marker and its key; a stated 4xx refusal drops it and reads the club's list. A bind and an Unbind keep **Check result**: the same pair / the same `requestKey`
   again, which the server answers idempotently; a repeat refused as `try_again` decides nothing and
   keeps the marker. After a workspace switch a marker of the previous club is shown as one sentence
   only, and neither a read, a repeat nor the acknowledgement runs from another club's context.
