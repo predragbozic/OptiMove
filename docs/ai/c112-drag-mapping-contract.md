@@ -1768,8 +1768,10 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
     9-B's concurrency apply v66 in their last test and run the same route for what stays allowed (a platform admin's
     A1 in the club's workspace, the club admin's S1 and S2, an import through the club's mapping), and see the club
     admin's A1 refused with `confirmation_required`.
-  - **Follow-up, recorded:** the LO-1 suite has no such test yet. Its tests 7 and 8 fail on `main` too and leave
-    connections holding a `users` row, so a test added after them waits on it.
+  - **The LO-1 suite has it too** (added once PR #504 fixed its tests 7 and 8, which had left connections holding a
+    `users` row): its last test applies v66 and runs a platform admin's A1 against the real revocation in both
+    orders, a club admin's A1 queued behind its own revocation (the identical 404) and a club admin's A1 alone
+    (`confirmation_required`, nothing written), with no `40P01`.
 - **The schedule and test databases.** The removal schedule starts nothing under node's test runner, under the T1
   runner, without a readable `DATABASE_URL`, or when the database's name begins with `optimove_tests_` (the e2e
   world starts a real server process on such a database). It would be harmless there: it only nulls values already
