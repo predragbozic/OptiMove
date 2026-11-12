@@ -884,8 +884,10 @@ test("9. route 7 and the scheduled removal: values past their date are removed i
     assert.equal((await running).failed, false);
   } finally { removal.setRemovalFaultForTests(null); }
   // The schedule itself: nothing inside the test runner, nothing without a database; otherwise unref'd timers that can be stopped.
-  assert.ok(process.env.NODE_TEST_CONTEXT, "this suite runs under node:test");
+  assert.ok(process.env.NODE_TEST_CONTEXT || process.env.OPTIMOVE_TEST_RUNNER, "this suite runs under node --test or the T1 runner");
   assert.equal(removal.startConfirmationRemovalSchedule().started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { NODE_TEST_CONTEXT: "child", DATABASE_URL: "postgres://example.invalid/x" } }).started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { OPTIMOVE_TEST_RUNNER: "1", DATABASE_URL: "postgres://example.invalid/x" } }).started, false);
   assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "" } }).started, false);
   assert.equal(removal.startConfirmationRemovalSchedule({ env: {} }).started, false);
   const on = removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "postgres://example.invalid/x" }, startupDelayMs: 3_600_000 });

@@ -93,7 +93,8 @@ export async function runExpiredRemoval({ limit = REMOVAL_BATCH, maxBatches = MA
 // In the web server process only (server.js). Never inside the test runner
 // and never without a database: it then starts nothing. Timers are unref'd.
 export function startConfirmationRemovalSchedule({ intervalHours = REMOVAL_INTERVAL_HOURS, startupDelayMs = 60_000, env = process.env } = {}) {
-  if (env.NODE_TEST_CONTEXT || !env.DATABASE_URL) return { started: false, stop: () => {} };
+  // node:test's own marker, the T1 runner's marker (scripts/test-runner.mjs), or no database: nothing is started.
+  if (env.NODE_TEST_CONTEXT || env.OPTIMOVE_TEST_RUNNER || !env.DATABASE_URL) return { started: false, stop: () => {} };
   const tick = () => runExpiredRemoval().catch((error) => console.error(`[source-metric-board] expired_values_removal_failed (${error?.code ?? error?.name ?? "error"})`));
   const first = setTimeout(tick, startupDelayMs);
   first.unref();
