@@ -387,6 +387,9 @@ test("3. the importer's specs come only from the extractor registry: the mapping
       const spec = /\{\s*metricSpecs\s*:\s*([\s\S]*?)(?:\s*,\s*teamTimezone)?\s*\}\s*$/.exec(call.args)?.[1] ?? null;
       const ok = spec === "[]"
         || (g.rel === "gpexeImportMapper.js" && caller?.name === "gpexeLevelValues" && /^\[\{\s*raw\s*:\s*true\s*,[\s\S]*\bextract\s*\}\]$/.test(spec ?? ""))
+        // J18 (18-3): the board's one plan of several raw specs, each one of its `extracts`, at the session level only.
+        || (g.rel === "gpexeImportMapper.js" && caller?.name === "gpexeSessionValuesKeyed"
+          && /^extracts\.map\(\(extract, index\) => \(\{ raw: true, key: String\(index\), levels: \{ full: true, drill: false \}, extract \}\)\)$/.test(spec ?? ""))
         || (caller !== null && spec !== null && fromMapped(bodyOf(g, caller), spec));
       plans.push(`${g.rel} ${caller?.name}: ${spec}`);
       assert.ok(ok, `${where(g, call.index)}: a plan built from specs that are not the mapping's (${spec})`);
@@ -397,14 +400,8 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   // The 7e raw spec's extract is gpexeLevelValues' parameter, and every caller
   // passes a registry entry's extract.
   // v62: the one other parameter is the options object carrying the team's session time zone (no spec, no value).
-  // J18 (18-2): `keyed` only adds each athlete's internal key to the answer; gpexeLevelValuesKeyed is the same read with
-  // it set (one call of gpexeLevelValues passing its own parameters through), and its callers are held to the same rule.
-  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\},\s*keyed\s*=\s*false\)/);
-  assert.match(mapper.code, /export function gpexeLevelValuesKeyed\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)\s*\{\s*return gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*\},\s*true\);\s*\}/);
-  const keyedCalls = files.flatMap((g) => callsOf(g, "gpexeLevelValuesKeyed").map((call) => ({ g, call })));
-  assert.deepEqual([...new Set(keyedCalls.map(({ g }) => g.rel))], ["sourceMetricBoardService.js"], "only the board reads the keyed values");
-  const levelCalls = [...keyedCalls, ...files.flatMap((g) => callsOf(g, "gpexeLevelValues").map((call) => ({ g, call })))
-    .filter(({ g, call }) => !(g.rel === "gpexeImportMapper.js" && enclosing(g, call.index, { named: true })?.name === "gpexeLevelValuesKeyed"))];
+  assert.match(mapper.code, /export function gpexeLevelValues\(bundle,\s*extract,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)/);
+  const levelCalls = files.flatMap((g) => callsOf(g, "gpexeLevelValues").map((call) => ({ g, call })));
   assert.ok(levelCalls.length >= 1, "gpexeLevelValues has a caller");
   for (const { g, call } of levelCalls) {
     const entry = /^\s*[\w$.]+\s*,\s*\(\s*input\s*\)\s*=>\s*([A-Za-z_$][\w$]*)\.extract\s*\(/.exec(call.args)?.[1];
@@ -419,14 +416,27 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   assert.deepEqual(files.filter((f) => f.rel !== "sourceMetricExtractors.js" && /\bEXTRACTORS\b/.test(f.code)).map((f) => f.rel), [], "the registry table read around extractorFor");
   assert.deepEqual(files.filter((f) => /\bextract\s*:/.test(f.code)).map((f) => f.rel), ["gpexeImportMapper.js"], "an extract property (a spec) defined outside the mapper");
   assert.deepEqual(files.filter((f) => callsOf(f, "setExtractorFallbackForTests").length > 0).map((f) => f.rel), [], "the registry's test fallback is set by a source module");
-  // J18 (18-2): the board's two test seams are never set by a source module either, and the internal athlete key is
-  // asked for only through gpexeLevelValuesKeyed (no other call of gpexeLevelValues passes a fourth argument).
-  for (const seam of ["setDisplayRuleFallbackForTests", "setBoardRemovalFaultForTests"]) {
+  // J18: the board's keyed read (gpexeSessionValuesKeyed) is called by the board only, with a list it fills, in the
+  // calling function itself, with nothing but extracts of registry entries (extractorFor); the internal athlete key
+  // is returned by no other function of the mapper.
+  assert.match(mapper.code, /export function gpexeSessionValuesKeyed\(bundle,\s*extracts,\s*\{\s*teamTimezone\s*=\s*null\s*\}\s*=\s*\{\}\)/);
+  assert.equal(count(mapper.code, /\bkey\s*:\s*participant\.gpexeAthleteId\b/), 1, "one place returns the internal athlete key");
+  const keyedCalls = files.flatMap((g) => callsOf(g, "gpexeSessionValuesKeyed").map((call) => ({ g, call })));
+  assert.deepEqual([...new Set(keyedCalls.map(({ g }) => g.rel))], ["sourceMetricBoardService.js"], "only the board reads the keyed values");
+  for (const { g, call } of keyedCalls) {
+    const caller = enclosing(g, call.index, { named: true });
+    const body = caller ? bodyOf(g, caller) : "";
+    assert.match(call.args, /^\s*[\w$.?]+\s*,\s*extracts\s*,/, `${where(g, call.index)}: the keyed read takes the caller's own extracts`);
+    assert.match(body, /\bconst extracts = \[\];/, `${where(g, call.index)}: extracts starts empty in the caller`);
+    assert.match(body, /\bconst extractor = extractorFor\s*\(/, `${where(g, call.index)}: each extract is a registry entry's`);
+    assert.deepEqual([...body.matchAll(/\bextracts\s*(?:\.\s*(\w+)|=)/g)].map((m) => m[1] ?? "=").filter((use) => use !== "length"), ["=", "push"], `${where(g, call.index)}: extracts is declared once and only pushed to`);
+    assert.match(body, /extracts\.push\(\(input\) => extractor\.extract\(input, \{\}\)\);/, `${where(g, call.index)}: the pushed function is the registry entry's extract`);
+  }
+  // The board's two test seams and the removal's are never set by a source module (the board service re-exports one).
+  for (const seam of ["setDisplayRuleFallbackForTests", "setBoardRemovalFaultForTests", "setBoardSaveHoldForTests"]) {
     assert.deepEqual(files.filter((f) => callsOf(f, seam).length > 0).map((f) => f.rel), [], `${seam} is set by a source module`);
   }
-  for (const { g, call } of levelCalls.filter((c) => !keyedCalls.includes(c))) {
-    assert.doesNotMatch(call.args, /\}\s*,\s*[^,]+$/, `${where(g, call.index)}: gpexeLevelValues is asked for the internal key outside gpexeLevelValuesKeyed`);
-  }
+  assert.deepEqual(files.filter((f) => callsOf(f, "setRemovalFaultForTests").length > 0).map((f) => f.rel), ["sourceMetricBoardService.js"], "the removal's fault is passed on only by the board's own seam");
   assert.deepEqual(files.filter((f) => /\bfrom\s+["'][^"']*(?:\/tests\/|gpexe-legacy-specs|test-extractors)/.test(f.text)).map((f) => f.rel), [], "a source module imports test support");
 });
 

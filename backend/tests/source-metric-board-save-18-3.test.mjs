@@ -855,3 +855,21 @@ test("9. route 7 and the scheduled removal: values past their date are removed i
   assert.equal(on.started, true);
   on.stop();
 });
+
+test("10. the size cap of a board read: a stored session with more athlete rows x readable columns than the cap is refused with 409 board_too_large on the board, a placement and a save, before any value is read", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const row = await newRow(W.caA, t, cand, f, target);
+  const readable = ok(await boardOf(W.caA, t)).board.columns.filter((c) => c.rawA !== null || c.rawB !== null).length;
+  assert.ok(readable >= 4, "several readable columns");
+  // The same session with many more athlete rows (empty objects: the cap is checked before any row is read).
+  const { BOARD_MAX_CELLS } = boardService;
+  const rowsNeeded = Math.floor(BOARD_MAX_CELLS / readable) + 1;
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', (select jsonb_agg('{}'::jsonb) from generate_series(1, $2::int))) where id = $1`, [cand.id, rowsNeeded]);
+  refused(await boardOf(W.caA, t), 409, "board_too_large");
+  refused(await placement(W.caA, t, cand.id, f, target), 409, "board_too_large");
+  await nothingWritten(async () => { refused(await save(W.caA, t, cand, [row]), 409, "board_too_large"); });
+  // A foreign id is still the identical 404 first.
+  assert.deepEqual(shape(await placement(W.caA, t, cand.id, f, W.vB)), NOT_FOUND);
+});

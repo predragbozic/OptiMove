@@ -18,7 +18,7 @@
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
 import { adminWriteKit } from "./sourceMetricMappingService.js";
-import { GPEXE_SOURCE_SYSTEM, gpexeLevelValuesKeyed } from "./gpexeImportMapper.js";
+import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
@@ -39,6 +39,7 @@ const BOARD_MESSAGES = {
   candidate_too_large: "The saved session is too large to read.",
   candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
   candidate_not_importable: "The import would not take this GPEXE session.",
+  board_too_large: "This session has too many athletes and columns to compare at once.",
   session_start_unknown: "This saved session has no start time.",
   not_enough_athletes: "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them.",
   pair_out_of_range: "No other athletes have values for all your columns.",
@@ -270,24 +271,32 @@ function columnsOf(world) {
   });
 }
 
+// A board read does at most this much extraction work: readable columns x
+// athlete rows of the stored session (drill rows included). More is refused,
+// never read in part.
+export const BOARD_MAX_CELLS = 60_000;
+
 function sessionValues(world, columns) {
-  // Per readable column, each athlete's session-level value (the import's own gates).
-  const byAthlete = new Map();
+  // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
+  const ids = [];
+  const extracts = [];
   for (const col of columns) {
     if (!col.readable) continue;
     // The registry's own entry, taken here (the importer's architecture guard: a value is read only through extractorFor).
     const extractor = extractorFor({ sourceSystem: col.field.source_system, apiFamily: col.field.api_family, sourceMetricKey: col.field.source_metric_key });
     if (!extractor) continue;
-    const out = gpexeLevelValuesKeyed(world.candidate.raw_bundle, (input) => extractor.extract(input, {}), { teamTimezone: world.teamTimezone });
-    if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
-    for (const athlete of out.athletes) {
-      const key = String(athlete.key);
-      if (!byAthlete.has(key)) byAthlete.set(key, { key, named: world.names.has(key), values: new Map() });
-      const value = athlete.session.length === 1 ? canonicalDecimal(athlete.session[0]) : null;
-      byAthlete.get(key).values.set(col.field.id, value);
-    }
+    ids.push(col.field.id);
+    extracts.push((input) => extractor.extract(input, {}));
   }
-  return [...byAthlete.values()];
+  const rowCount = Array.isArray(world.candidate.raw_bundle?.athleteSessions) ? world.candidate.raw_bundle.athleteSessions.length : 0;
+  if (extracts.length * rowCount > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
+  const out = gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
+  if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
+  return out.athletes.map((athlete) => {
+    const key = String(athlete.key);
+    const values = new Map(ids.map((id, index) => [id, athlete.session[index].length === 1 ? canonicalDecimal(athlete.session[index][0]) : null]));
+    return { key, named: world.names.has(key), values };
+  });
 }
 
 function choosePair(world, columns, pairIndex) {
