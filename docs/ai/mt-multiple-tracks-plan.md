@@ -271,10 +271,8 @@ read by the same preview and written from the same row of the session review.
   tracks, if the count of section 2 shows such sessions.
 - **O5.** Who chooses: whoever may approve (recommended), or also the team's coach without an approver grant.
 - **T1.** Whether T6 marks a combined value (section 6). Recommended: no new column.
-- **MT-0 (owner).** Identical tracks are taken as one recording automatically (section 11). The *Rukovodilac* is asking the
-  owner.
-- **E1 (owner-run evidence).** Whether GPEXE's details count a duplicate track twice (burst and brake). Until that comparison is
-  done, a deduplicated athlete's details-derived values are left out (section 11).
+- **MT-0 (owner): decided, yes** (2026-11-12). Identical tracks are taken as one recording automatically (section 11).
+- **E1: decided** (2026-11-12). A deduplicated athlete's burst and brake are imported as the details give them (section 11).
 - **O6 (owner).** `scale_recording`: max variables stay measured (recommended, as the owner asked), and avg variables are left
   out of a scaled athlete in v1 (section 10, Q-avg).
 
@@ -372,16 +370,21 @@ for "None".
 Anything different in any of these fields leaves the athlete as today (`multiple_tracks`).
 
 **The details** (`tot_burst_events`, `tot_brake_events`) are one entry per athlete, not per track
-(`backend/src/gpexeImportMapper.js:317`). They cannot be compared between the tracks, and **whether GPEXE counts a duplicate
-track twice there is unknown (E1).** Recommended for v1: an athlete taken as one recording gets its details-derived values left
-out, with the reason `duplicate_track_details_unverified`, never zero. This holds until the owner compares one such athlete's
-burst and brake with the GPEXE screen. If they match, a follow-up drops the exclusion.
+(`backend/src/gpexeImportMapper.js:317`), so they cannot be compared between the tracks. The question was whether GPEXE counts a
+duplicate track twice there (E1).
+
+**E1 is decided (2026-11-12): imported normally.** For a deduplicated athlete, burst and brake are imported exactly as the details
+give them, like any other athlete's. They are not left out and not divided.
+- **The evidence** (the *Rukovodilac*'s read of the five production athletes with two identical tracks, 2026-11-12):
+  - burst 17, 10, 4, 21 and 19; brake 12, 12, 4, 22 and 9;
+  - four of the ten values are odd, so they cannot be twice a whole count (doubled values would all be even);
+  - every value lies inside the range of the session's other athletes, per hour.
+- So GPEXE counts the recording once. The reason `duplicate_track_details_unverified` and its switch are not built.
 
 **Which track is used.** The lowest track id, with its rows. **The identity** is the one a single-track import of that track
 has: `athlete_session:<its whole row id>:full` and `athlete_session:<its drill row id>:drill:<i>`.
-- A later GPEXE cleanup that removes the other track keeps the same identities and values. The athlete then has one track,
-  so the details E1 left out are added (`supplemented`, shown under the changes to imported results). It is never a new result
-  and never a block (MT-0's route test 2).
+- A later GPEXE cleanup that removes the other track keeps the same identities and the same values: the results are
+  `unchanged`, never a new result and never a block (MT-0's route test 2).
 - A cleanup that removes the lowest track leaves a row with another id, so a new identity. That is today's
   `identities_missing_from_source` block, resolved by the undo, as for any changed row.
 - Choosing by the lowest id is deterministic. It cannot know which track GPEXE will keep.
@@ -397,15 +400,15 @@ review reads "Duplicate track ignored (2 identical tracks)".
   - its finalization recomputes the preview, now importing that athlete, and so a new hash;
   - an approval sent with the old hash answers `preview_changed` and the session is reviewed again. This is the existing rule
     (9-B's refresh), and nothing is imported twice.
-- **An imported session** whose duplicate athlete was left out: the next search shows that athlete as importable (new results).
+- **An imported session** whose duplicate athlete was left out (as `multiple_tracks`, before MT-0): the next search shows that athlete as importable (new results).
   Importing it adds the athlete, as for an athlete linked later.
 
-**No choice, no migration, no route.** It is automatic, so it needs the owner's yes, which the *Rukovodilac* is asking for.
+**No choice, no migration, no route.** It is automatic, so it needed the owner's yes, given on 2026-11-12.
 
 **Tests (MT-0):**
 - the fixture with two identical tracks gives one participant from the lowest track, with the native identities and the label;
 - one differing field in any compared group (track, row, `/more/`) gives `multiple_tracks`, with a case per field group;
-- the details exclusion;
+- a deduplicated athlete's burst and brake imported exactly as the details give them, once, with nothing left out (E1);
 - a session without duplicates gives a byte-for-byte unchanged plan and preview;
 - the stored candidate's refresh (`preview_changed`, then the import);
 - a later cleanup in both directions (unchanged, or blocked).
