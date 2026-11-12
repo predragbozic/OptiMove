@@ -294,42 +294,95 @@ function lostAnswer(info) {
 // Create
 // ---------------------------------------------------------------------------
 
-export async function createConnection(render) {
+// S2: Create carries a request key, so a lost answer is settled by Check result (the same key again, answered once by
+// the server - never a second connection). With `pair` (the one "Connect and test" form), a confirmed Create is
+// followed at once by Connect with the pair; the pair is never in the Create request and never in this module's state:
+// it is the caller's two locals, handed through for one Connect. A Create that is not confirmed drops the pair, and
+// after Check result the Connect form asks for the password again.
+export async function createConnection(render, { pair = null, retry = null } = {}) {
+  try {
+    await createAndConnect(render, { pair, retry });
+  } finally {
+    // The pair is dropped on every path, an early return included.
+    if (pair) pair.username = pair.password = "";
+  }
+}
+
+async function createAndConnect(render, { pair, retry }) {
   const d = sc();
   const clubId = activeClubId();
-  const draft = d.createDraft || {};
+  const draft = retry ? retry.draft : (d.createDraft || {});
   if (!clubId || d.createBusy) return;
   const generation = d.generation;
+  const requestKey = retry ? retry.requestKey : newRequestKey();
   d.createBusy = true;
+  if (retry) d.checkBusy = true;
   d.createError = null;
   render();
+  let created = null;
   try {
     const response = await request(BASE, {
       method: "POST",
-      body: JSON.stringify({ ownerScope: "club", ownerClubId: clubId, hostKey: draft.hostKey, accountLabel: draft.accountLabel, credentialKind: CREDENTIAL_KIND }),
+      body: JSON.stringify({ ownerScope: "club", ownerClubId: clubId, hostKey: draft.hostKey, accountLabel: draft.accountLabel, credentialKind: CREDENTIAL_KIND, requestKey }),
     });
     if (generation !== d.generation) return;
     replaceConnection(response.connection);
     resetSourceConnectionsForms();
-    // The next step is the account: the Connect form opens on the new row.
-    d.credentialOpen = { connectionId: String(response.connection.id), action: "connect" };
-    d.noticeFor = String(response.connection.id);
-    d.notice = "The connection is created. Connect the account to store its access token.";
+    d.unconfirmed = null;
+    created = String(response.connection.id);
+    // The next step is the account: the Connect form opens on the new row (and, with the pair, is sent at once).
+    d.credentialOpen = { connectionId: created, action: "connect" };
+    d.noticeFor = created;
+    d.notice = retry
+      ? `The connection is saved${response.replayed ? " (the earlier request had gone through)" : ""}. Enter the ${SOURCE_NAME} username and password again and press Connect.`
+      : pair
+        ? `The connection is saved. Signing in to ${SOURCE_NAME} and reading its teams...`
+        : `The connection is saved. Connect the account to store its access token.`;
   } catch (error) {
     if (generation !== d.generation) return;
     const info = errorInfo(error);
     if (lostAnswer(info)) {
-      // The row may exist and the route has no idempotency key: the form is
-      // closed, nothing can be sent again, and Check result reads the club's
-      // list - the only honest answer.
+      // The row may exist: Check result sends the same Create with the same key. The pair is not kept.
       resetSourceConnectionsForms();
-      d.unconfirmed = { action: "create", connectionId: null };
+      d.unconfirmed = { action: "create", connectionId: null, requestKey, draft: { hostKey: draft.hostKey, accountLabel: draft.accountLabel } };
+    } else if (retry && (info.code === "try_again" || info.status >= 500)) {
+      // A repeat that does not confirm the original's outcome (try_again, any 5xx - internal_error included) decides
+      // nothing: the marker, its key and Check result stay; a new key is never offered meanwhile.
+      d.notice = TRY_AGAIN_NOTICE;
+      d.noticeFor = "";
+    } else if (retry) {
+      // Check result refused for a reason the server stated (a 4xx): the marker goes, the reason is shown, and the
+      // club's list is read so a row of the first attempt is shown rather than the empty state.
+      d.unconfirmed = null;
+      d.createError = info;
+      try {
+        const response = await request(`${BASE}?clubId=${encodeURIComponent(d.clubId)}`);
+        if (generation === d.generation) d.connections = Array.isArray(response.connections) ? response.connections : d.connections;
+      } catch {
+        if (generation === d.generation) {
+          d.notice = "The club's connections could not be read just now. Open Source connections again before creating a connection, so the club does not get a second one.";
+          d.noticeFor = "";
+        }
+      }
     } else {
       d.createError = info;
     }
   } finally {
     if (generation === d.generation) {
       d.createBusy = false;
+      if (retry) d.checkBusy = false;
+      render();
+    }
+  }
+  if (created && pair && generation === d.generation) {
+    await submitCredentials(render, pair);
+    // Connect was refused: the connection stays saved and the form asks for the pair again; only a refused sign-in is
+    // called a wrong username or password (ux re-review).
+    if (generation === d.generation && d.credentialError && d.credentialOpen?.connectionId === created) {
+      d.noticeFor = created;
+      d.notice = d.credentialError.code === "source_auth_rejected"
+        ? `The connection is saved, but ${SOURCE_NAME} did not sign in with that username and password. Enter them again and press Connect.`
+        : `The connection is saved, but connecting the account did not work (see below). Nothing else was stored; enter the ${SOURCE_NAME} username and password again when you are ready and press Connect.`;
       render();
     }
   }
@@ -627,7 +680,7 @@ export async function unbindTeam(render, { fromUnconfirmed = false } = {}) {
 // backend returns no attempt revision to compare against, so nothing here
 // pretends to - the marker stays, every other write stays locked, until the
 // administrator acknowledges the uncertainty explicitly (a local step).
-export const IDEMPOTENT_ACTIONS = Object.freeze(["bind", "unbind"]);
+export const IDEMPOTENT_ACTIONS = Object.freeze(["bind", "unbind", "create"]);
 export const isIdempotentPending = (pending) => Boolean(pending) && IDEMPOTENT_ACTIONS.includes(pending.action);
 // The question before the acknowledgement names the consequence of acting
 // again for that action: a new Connect / Reconnect can change the stored
@@ -636,12 +689,10 @@ export const isIdempotentPending = (pending) => Boolean(pending) && IDEMPOTENT_A
 // can be removed from this screen).
 export function acknowledgeQuestion(pending) {
   const head = "The server may still be finishing the previous request, and its outcome stays unknown. Continuing only removes this warning and unlocks the other changes on this screen - nothing is sent and nothing is checked. A new Connect or Reconnect can change the stored credential.";
-  const create = pending?.action === "create" ? " If the connection was created after all, creating it again makes a second connection, which this screen cannot remove." : "";
-  return `${head}${create} Continue?`;
+  return `${head} Continue?`;
 }
 const TRY_AGAIN_NOTICE = "Check result could not run: another change of this connection or of one of its teams may be in progress (for example a test, a check or an import), or the server is busy. Nothing was decided and the result is still not confirmed. Try Check result again in a minute.";
 const READ_FAILED_NOTICE = "The current state could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
-const LIST_READ_FAILED_NOTICE = "The club's connections could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
 const ACK_NOUN = Object.freeze({ connect: "Connect", reconnect: "Reconnect", test: "test" });
 
 // "Check result" for a lost bind or Unbind: the same request again. A marker
@@ -657,6 +708,8 @@ export async function checkUnconfirmed(render) {
   if (!pending || d.checkBusy || !loadedForActiveClub()) return;
   if (!isIdempotentPending(pending)) return;
   if (pending.action === "unbind") return unbindTeam(render, { fromUnconfirmed: true });
+  // S2: a lost Create is settled the same way - the same request key again, answered once.
+  if (pending.action === "create") return createConnection(render, { retry: pending });
   const generation = d.generation;
   d.checkBusy = true;
   render();
@@ -688,8 +741,8 @@ export async function checkUnconfirmed(render) {
   }
 }
 
-// "Read current state" for a lost Connect, Reconnect, Test or create: the
-// connection (or the club's list) is read and shown; the marker is NOT
+// "Read current state" for a lost Connect, Reconnect or Test (a create is idempotent since S2): the
+// connection is read and shown; the marker is NOT
 // cleared - this read proves nothing about the lost attempt - and nothing is
 // sent again.
 export async function readCurrentState(render) {
@@ -700,31 +753,10 @@ export async function readCurrentState(render) {
   d.checkBusy = true;
   render();
   try {
-    if (pending.action === "create") {
-      // The club's list, read directly: never through loadSourceConnections,
-      // whose club reset would drop the marker (a platform admin's club that
-      // left the picker meanwhile).
-      let response;
-      try {
-        response = await request(`${BASE}?clubId=${encodeURIComponent(d.clubId)}`);
-      } catch {
-        // The list could not be read either: nothing is known yet, and an
-        // older read's sentence is replaced so it never reads as this one.
-        if (generation !== d.generation) return;
-        d.notice = LIST_READ_FAILED_NOTICE;
-        d.noticeFor = "";
-        return;
-      }
-      if (generation !== d.generation) return;
-      d.connections = Array.isArray(response.connections) ? response.connections : [];
-      d.notice = "The connections below are what the server holds now. Whether one of them came from the lost request is not known; the server may still be finishing it.";
-      d.noticeFor = "";
-    } else {
-      const connection = await reloadConnection(pending.connectionId);
-      if (generation !== d.generation) return;
-      d.noticeFor = String(pending.connectionId);
-      d.notice = `Read current state: the connection is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. Nothing was sent again. The state can look the same whether or not the ${ACK_NOUN[pending.action] || pending.action} went through, and the server may still be finishing it, so the result stays not confirmed.`;
-    }
+    const connection = await reloadConnection(pending.connectionId);
+    if (generation !== d.generation) return;
+    d.noticeFor = String(pending.connectionId);
+    d.notice = `Read current state: the connection is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. Nothing was sent again. The state can look the same whether or not the ${ACK_NOUN[pending.action] || pending.action} went through, and the server may still be finishing it, so the result stays not confirmed.`;
   } catch (error) {
     if (generation !== d.generation) return;
     const info = errorInfo(error);
@@ -749,9 +781,7 @@ export function acknowledgeUncertainty() {
   if (!pending || isIdempotentPending(pending) || d.checkBusy || !loadedForActiveClub()) return false;
   d.unconfirmed = null;
   d.noticeFor = pending.connectionId ? String(pending.connectionId) : "";
-  d.notice = pending.action === "create"
-    ? "You continued without knowing whether the connection was created. The list may be out of date: before creating a connection, choose Source connections again in Settings to read it, so the club does not get a second one."
-    : `You continued without knowing whether the ${ACK_NOUN[pending.action] || pending.action} went through; its outcome stays unknown. A new Connect or Reconnect can change the stored credential. What is shown may be out of date: before the next change, choose Source connections again in Settings to read it.`;
+  d.notice = `You continued without knowing whether the ${ACK_NOUN[pending.action] || pending.action} went through; its outcome stays unknown. A new Connect or Reconnect can change the stored credential. What is shown may be out of date: before the next change, choose Source connections again in Settings to read it.`;
   return true;
 }
 

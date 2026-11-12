@@ -176,7 +176,7 @@ test("2. a platform admin chooses a club and that club alone is read; a club adm
   let out = html();
   assert.match(out, /FK Borac/);
   assert.match(out, /has no GPEXE connection yet/);
-  assert.match(out, /Create connection/);
+  assert.match(out, /Connect and test/);
 
   await openClub({ list: [verified()] }, { who: asClubAdmin });
   assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`]);
@@ -200,25 +200,45 @@ test("2. a platform admin chooses a club and that club alone is read; a club adm
   assert.match(out, /data-action="source-connections-reload"/);
 });
 
-test("3. Create: the form offers the approved host profile only, needs an account name, sends exactly the body the route takes, and opens the Connect form on the new row", async () => {
-  await openClub({ list: [], writes: { "POST ": (call) => ({ status: 201, body: { connection: connection({ accountLabel: call.body.accountLabel }) } }) } });
+test("3. (S2) Connect and test: one form - host profile, account name, username, password; Create carries the label and a request key and never the pair; the pair goes once, only with the Connect that follows; the result is the verified connection with its teams; a refused form sends nothing", async () => {
+  let pairInStateDuringCreate = null;
+  const writes = {
+    "POST ": (call) => {
+      pairInStateDuringCreate = JSON.stringify(state.sourceConnections).includes(PASSWORD) || html().includes(PASSWORD);
+      return { status: 201, body: { connection: connection({ accountLabel: call.body.accountLabel }) } };
+    },
+    [`POST /${CONN}/connect`]: () => ({ status: 200, body: { result: okResult("connect"), connection: verified() } }),
+  };
+  await openClub({ list: [], writes });
   await act("source-connections-create-open");
   let out = html();
-  assert.match(out, /data-source-connections-form="create"/);
+  assert.match(out, /data-source-connections-form="create"[^>]*method="post"/);
+  assert.match(out, /Connect and test GPEXE/);
+  assert.match(out, /name="username"/);
+  assert.match(out, /name="password" type="password"[^>]*autocomplete="current-password"/);
   assert.match(out, /<option value="server3"/);
   assert.doesNotMatch(out, /e03/, "only the approved profile is offered");
-  await submit("create", { hostKey: "server3", accountLabel: "   " });
+  await submit("create", { hostKey: "server3", accountLabel: "   ", username: USERNAME, password: PASSWORD });
   assert.equal(state.sourceConnections.createError.code, "account_label_required");
-  assert.equal(fetchCalls.length, 1, "nothing sent on a refused form");
-  await submit("create", { hostKey: "evil", accountLabel: "Club account" });
+  await submit("create", { hostKey: "evil", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
   assert.equal(state.sourceConnections.createError.code, "host_not_allowed");
-  assert.equal(fetchCalls.length, 1);
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
-  assert.deepEqual(fetchCalls[1], { method: "POST", url: BASE, body: { ownerScope: "club", ownerClubId: CLUB, hostKey: "server3", accountLabel: "Club account", credentialKind: "exchanged_token" } });
-  assert.deepEqual(state.sourceConnections.credentialOpen, { connectionId: CONN, action: "connect" });
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: "" });
+  assert.equal(state.sourceConnections.createError.code, "credentials_required");
+  assert.equal(fetchCalls.length, 1, "nothing sent on a refused form");
+  const form = { dataset: { sourceConnectionsForm: "create" }, elements: { hostKey: { value: "server3" }, accountLabel: { value: "Club account" }, username: { value: USERNAME }, password: { value: PASSWORD } } };
+  await Promise.all([submitSourceConnectionsForm(form, { render }), submitSourceConnectionsForm(form, { render })]);
+  assert.equal(form.elements.password.value, "", "the password field is blanked on submit");
+  const posts = fetchCalls.filter((c) => c.method === "POST");
+  assert.deepEqual(posts.map((c) => c.url), [BASE, `${BASE}/${CONN}/connect`], "one Create, then one Connect (a double submit sends one of each)");
+  const { requestKey, ...createBody } = posts[0].body;
+  assert.deepEqual(createBody, { ownerScope: "club", ownerClubId: CLUB, hostKey: "server3", accountLabel: "Club account", credentialKind: "exchanged_token" }, "Create never carries the pair");
+  assert.match(requestKey, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.deepEqual(posts[1].body, { username: USERNAME, password: PASSWORD }, "the pair goes only with Connect");
+  assert.equal(pairInStateDuringCreate, false, "while Create runs the pair is in no state and no HTML");
   out = html();
-  assert.match(out, /Connect the GPEXE account/);
-  assert.match(out, /The connection is created\. Connect the account/);
+  assert.match(out, /Verified/);
+  assert.match(out, /The connection is verified/);
+  assert.ok(!JSON.stringify(state.sourceConnections).includes(PASSWORD) && !out.includes(PASSWORD), "the password is nowhere afterwards");
 });
 
 test("4. Connect: the username and password travel in exactly one request (a double submit sends one), appear in no state, HTML, URL or notice, the password field never carries a value and asks the browser not to save it; a verified answer shows the badge, the notice and the server's GPEXE teams - and nothing beyond them", async () => {
@@ -558,25 +578,91 @@ test("9a. a write's outcome is never claimed when it is unknown: an uncoded 5xx 
   assert.match(out, /name="password"[^>]*data-bwignore/);
 });
 
-test("9b. Create with a lost answer: the form closes, no second create can be sent before Check result, and Check result reads the club's list (the route has no idempotency key)", async () => {
+test("9b. (S2) a lost Create: the form closes and the pair is dropped; no second create can be sent; Check result repeats the same Create with the same request key and no pair, and once it is confirmed the Connect form asks for the password again (nothing more is sent by itself)", async () => {
   await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
   await act("source-connections-create-open");
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const pending = state.sourceConnections.unconfirmed;
+  assert.equal(pending?.action, "create");
   assert.equal(state.sourceConnections.createOpen, false, "the form closes");
+  assert.ok(!JSON.stringify(state.sourceConnections).includes(PASSWORD) && !JSON.stringify(state.sourceConnections).includes(USERNAME), "the pair is not kept");
   let out = html();
   assert.doesNotMatch(out, /data-source-connections-form="create"/);
   assert.match(out, /Result not confirmed/);
+  assert.match(out, /data-action="source-connections-check-result"/);
+  assert.doesNotMatch(out, /data-action="source-connections-acknowledge"/, "the idempotent Check result replaces the acknowledgement");
   assert.match(out, /data-action="source-connections-create-open"[^>]*disabled/, "no new create while the outcome is unconfirmed");
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
   await act("source-connections-create-open");
   assert.equal(fetchCalls.filter((c) => c.method === "POST").length, 1, "exactly one POST");
-  installFetch(responder({ list: [connection()] }).handler);
-  await act("source-connections-read-state");
-  assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`], "a read of the list, never a second create");
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "the list is refreshed, the attempt's outcome stays unknown");
-  assert.match(html(), /Club account/);
-  assert.match(html(), /Whether one of them came from the lost request is not known/);
+  const firstKey = fetchCalls[1].body.requestKey;
+  installFetch(responder({ list: [], writes: { "POST ": () => ({ status: 200, body: { connection: connection(), replayed: true } }) } }).handler);
+  await act("source-connections-check-result");
+  assert.deepEqual(calls(), [`POST ${BASE}`], "the same Create again, nothing else");
+  assert.deepEqual(fetchCalls[0].body, { ownerScope: "club", ownerClubId: CLUB, hostKey: "server3", accountLabel: "Club account", credentialKind: "exchanged_token", requestKey: firstKey });
+  assert.equal(state.sourceConnections.unconfirmed, null);
+  assert.deepEqual(state.sourceConnections.credentialOpen, { connectionId: CONN, action: "connect" });
+  out = html();
+  assert.match(out, /The connection is saved \(the earlier request had gone through\)\. Enter the GPEXE username and password again and press Connect\./);
+  assert.match(out, /data-source-connections-form="credential"/, "the Connect form asks for the pair again");
+});
+
+test("9b2. (S2, code review HIGH) a lost Create whose Check result answers 500 internal_error (or any 5xx) keeps the marker and its key, never says nothing was changed and never offers a new create; only a confirming answer settles it; a stated 4xx refusal drops the marker and reads the club's list", async () => {
+  await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const key = fetchCalls[1].body.requestKey;
+  for (const answer of [{ status: 500, body: { error: "internal_error", message: "x" } }, { status: 503, body: { error: "database_busy", message: "x" } }]) {
+    installFetch(() => answer);
+    await act("source-connections-check-result");
+    assert.equal(state.sourceConnections.unconfirmed?.action, "create", `${answer.status}: the marker stays`);
+    assert.equal(state.sourceConnections.unconfirmed?.requestKey, key);
+    assert.doesNotMatch(html(), /Nothing was changed/);
+    assert.match(html(), /data-action="source-connections-create-open"[^>]*disabled/, "no new create (no new key) is offered");
+  }
+  installFetch(responder({ list: [], writes: { "POST ": () => ({ status: 200, body: { connection: connection(), replayed: true } }) } }).handler);
+  await act("source-connections-check-result");
+  assert.equal(fetchCalls[0].body.requestKey, key, "the same key");
+  assert.equal(state.sourceConnections.unconfirmed, null);
+
+  // A stated refusal (404: the right or the club is gone) drops the marker and reads the list, so a row of the first
+  // attempt is shown instead of the empty state.
+  await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const r = responder({ list: [connection()], writes: { "POST ": () => ({ status: 404, body: { error: "notFound" } }) } });
+  installFetch(r.handler);
+  await act("source-connections-check-result");
+  assert.deepEqual(calls(), [`POST ${BASE}`, `GET ${BASE}?clubId=${CLUB}`]);
+  assert.equal(state.sourceConnections.unconfirmed, null);
+  assert.equal(state.sourceConnections.connections.length, 1, "the list is read again");
+});
+
+test("9b3. (S2, ux review) a wrong GPEXE password after the connection was saved: the connection stays, the Connect form is open with the refusal, and one sentence says the account was not accepted and what to do; the password is asked again", async () => {
+  await openClub({ list: [], writes: {
+    "POST ": () => ({ status: 201, body: { connection: connection() } }),
+    [`POST /${CONN}/connect`]: () => ({ status: 409, body: { error: "source_auth_rejected", message: "x" } }),
+  } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: "wrong" });
+  assert.deepEqual(fetchCalls.filter((c) => c.method === "POST").map((c) => c.url), [BASE, `${BASE}/${CONN}/connect`]);
+  assert.deepEqual(state.sourceConnections.credentialOpen, { connectionId: CONN, action: "connect" });
+  const out = html();
+  assert.match(out, /The connection is saved, but GPEXE did not sign in with that username and password\. Enter them again and press Connect\./);
+  assert.match(out, /GPEXE refused this username and password/);
+  assert.match(out, /data-source-connections-form="credential"/);
+  assert.ok(!out.includes("wrong") || !/value="wrong"/.test(out), "the password is not filled back in");
+
+  // GPEXE unavailable after the save: never called a wrong password.
+  await openClub({ list: [], writes: {
+    "POST ": () => ({ status: 201, body: { connection: connection() } }),
+    [`POST /${CONN}/connect`]: () => ({ status: 502, body: { error: "source_unavailable", message: "x" } }),
+  } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
+  const down = html();
+  assert.doesNotMatch(down, /did not sign in with that username and password/);
+  assert.match(down, /The connection is saved, but connecting the account did not work \(see below\)\./);
 });
 
 test("9c. a workspace switch never shows the previous club's connections: the loaded list is treated as not loaded, the panel's one-shot read fires for the new club, and nothing fires while a write is in flight", async () => {
@@ -650,18 +736,22 @@ test("9d2. a failed re-read after binding_already_ended is said, never hidden un
   state.sourceConnections.credentialBusy = false;
 });
 
-test("9d3. a lost Create whose Check result cannot read the list either claims nothing: the outcome stays unconfirmed and Check result stays offered; a bind refused because the stored credential was refused closes the review, reads the card again (Needs reconnect) and names Reconnect as the next step", async () => {
+test("9d3. a lost Create whose Check result is lost again or refused as try_again claims nothing: the outcome stays unconfirmed and Check result stays offered; a bind refused because the stored credential was refused closes the review, reads the card again (Needs reconnect) and names Reconnect as the next step", async () => {
   await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
   await act("source-connections-create-open");
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
   assert.equal(state.sourceConnections.unconfirmed?.action, "create");
-  installFetch(() => ({ status: 500, body: { error: "internal_error", message: "boom" } }));
-  await act("source-connections-read-state");
+  // Check result lost again (an uncoded 502, a proxy): still unconfirmed, Check result still offered; a try_again keeps it too.
+  installFetch(() => ({ status: 502, body: {} }));
+  await act("source-connections-check-result");
   assert.equal(state.sourceConnections.unconfirmed?.action, "create", "still unconfirmed");
+  installFetch(() => ({ status: 409, body: { error: "try_again", message: "x" } }));
+  await act("source-connections-check-result");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "a try_again decides nothing");
   let out = html();
   assert.doesNotMatch(out, /That change was made|what the server holds now/);
   assert.match(out, /Result not confirmed/);
-  assert.match(out, /data-action="source-connections-read-state"/);
+  assert.match(out, /data-action="source-connections-check-result"/);
   // The bind refused by the source's 401: the server moved the connection to needs_reconnect.
   const needs = verified({ state: "needs_reconnect", lastErrorCode: "source_auth_rejected", lastErrorAt: "2026-10-05T10:00:00.000Z" });
   const r = await openClub({
@@ -780,7 +870,7 @@ test("10. a lost answer is never resent blindly: after a lost Connect, Check res
   assert.match(html(), /First team reads from GPEXE team 980 \(the earlier request had gone through\)/);
 });
 
-test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read: a lost Reconnect on a verified connection followed by an identical verified row keeps the marker and every write locked; a lost Connect followed by not_connected keeps it; a lost create refreshes the list but keeps it; only the explicit acknowledgement - asked first, sending nothing - lifts the lock; a bind and an Unbind keep the idempotent Check result", async () => {
+test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read: a lost Reconnect on a verified connection followed by an identical verified row keeps the marker and every write locked; a lost Connect followed by not_connected keeps it; a lost create (idempotent since S2) offers only Check result; only the explicit acknowledgement - asked first, sending nothing - lifts the lock; a bind and an Unbind keep the idempotent Check result", async () => {
   // (a) lost Reconnect on a verified connection; the GET answers the identical verified row.
   await openClub({ list: [verified({ boundTeams: [BOUND] })], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } });
   await act("source-connections-reconnect-open", { connectionId: CONN });
@@ -834,31 +924,21 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   assert.equal(state.sourceConnections.unconfirmed?.action, "connect", "not_connected now does not mean the lost Connect will not land");
   assert.match(html(), /Read current state: the connection is Not connected/);
   assert.ok(writeInFlight());
-  // (c) lost create; the list read refreshes the display but the attempt's outcome stays unknown.
+  // (c) since S2 a lost create is idempotent like a bind: no Read current state and no acknowledgement (both send and
+  // change nothing), only Check result with the same key; the marker and the lock stay meanwhile.
   await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
   await act("source-connections-create-open");
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
   installFetch(responder({ list: [connection()] }).handler);
-  await act("source-connections-read-state");
-  assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`]);
-  assert.equal(state.sourceConnections.connections.length, 1, "the list is refreshed");
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "which row the lost attempt created is not known");
-  assert.match(html(), /Whether one of them came from the lost request is not known/);
-  assert.match(html(), /data-action="source-connections-connect-open"[^>]*disabled/, "the new row's writes stay locked");
-  // The acknowledgement of a lost create names its own consequence: a second connection.
   question = "";
-  globalThis.window.confirm = (message) => { question = message; return false; };
+  globalThis.window.confirm = (message) => { question = message; return true; };
+  await act("source-connections-read-state");
   await act("source-connections-acknowledge");
-  assert.match(question, /may still be finishing the previous request/);
-  assert.match(question, /creating it again makes a second connection, which this screen cannot remove/);
-  assert.match(question, /A new Connect or Reconnect can change the stored credential/, "the owner's required warning stays in every variant");
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "declined changes nothing");
-  globalThis.window.confirm = () => true;
-  const sentBefore = fetchCalls.length;
-  await act("source-connections-acknowledge");
-  assert.equal(fetchCalls.length, sentBefore, "acknowledging a create sends nothing");
-  assert.equal(state.sourceConnections.unconfirmed, null);
-  assert.match(html(), /before creating a connection, choose Source connections again in Settings to read it, so the club does not get a second one/);
+  assert.deepEqual(calls(), [], "nothing is read or sent for an idempotent marker");
+  assert.equal(question, "", "the acknowledgement is not asked");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create");
+  assert.match(html(), /data-action="source-connections-check-result"/);
+  assert.ok(writeInFlight(), "every write stays locked until Check result settles it");
   // (e) a bind and an Unbind keep Check result: the same pair / key again, and the acknowledgement is not offered.
   await openClub({ list: [verified({ boundTeams: [BOUND] })], writes: { [`POST /${CONN}/bindings/${BINDING}/unbind`]: () => new TypeError("Failed to fetch") } });
   await act("source-connections-unbind-open", { connectionId: CONN, bindingId: BINDING, teamId: TEAM, teamName: "First team", sourceTeamId: "980" });
@@ -914,7 +994,7 @@ test("16. a marker of another club is never read, repeated or acknowledged from 
     if (lost === "create") {
       await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
       await act("source-connections-create-open");
-      await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+      await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
     } else if (lost === "reconnect") {
       await openClub({ list: [verified()], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
       await act("source-connections-reconnect-open", { connectionId: CONN });
@@ -936,7 +1016,7 @@ test("16. a marker of another club is never read, repeated or acknowledged from 
     assert.equal(state.sourceConnections.unconfirmed?.action, lost, `${lost}: club A's marker is kept`);
     assert.equal(state.sourceConnections.clubId, CLUB, `${lost}: club A's list is not replaced`);
     backToClub();
-    assert.match(html(), lost === "unbind" ? /data-action="source-connections-check-result"/ : /data-action="source-connections-read-state"/, `${lost}: reachable again in club A`);
+    assert.match(html(), lost === "reconnect" ? /data-action="source-connections-read-state"/ : /data-action="source-connections-check-result"/, `${lost}: reachable again in club A (a create and an Unbind are idempotent since S2)`);
   }
 
   // (b) the acknowledgement is not asked while Read current state runs.
@@ -1020,24 +1100,19 @@ test("16. a marker of another club is never read, repeated or acknowledged from 
   assert.match(out, /data-action="source-connections-check-result"/);
 });
 
-test("17. a platform admin's Read current state after a lost create never resets the club, even when the club left the picker meanwhile: the marker stays", async () => {
+test("17. a platform admin's Check result after a lost create never resets the club, even when the club left the picker meanwhile: the marker stays while the answer is lost again; a connection's failed read keeps its marker", async () => {
   await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
   await act("source-connections-create-open");
-  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+  await submit("create", { hostKey: "server3", accountLabel: "Club account", username: USERNAME, password: PASSWORD });
   assert.equal(state.sourceConnections.unconfirmed?.action, "create");
   // The organization data was refreshed and the club is no longer offered (archived meanwhile).
   state.organization.data = orgData({ clubs: [{ id: OTHER_CLUB, name: "FK Drugi" }], manageableClubIds: [OTHER_CLUB] });
-  installFetch(responder({ list: [] }).handler);
-  await act("source-connections-read-state");
-  assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`], "the same club's list, read directly");
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "the marker is never dropped by a read");
+  installFetch(() => new TypeError("Failed to fetch"));
+  await act("source-connections-check-result");
+  assert.deepEqual(calls(), [`POST ${BASE}`], "the same Create, for the same club");
+  assert.equal(fetchCalls[0].body.ownerClubId, CLUB);
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "the marker is never dropped by a lost answer");
   assert.equal(state.sourceConnections.clubId, CLUB);
-  // A read that fails keeps it as well, and says so.
-  installFetch(() => ({ status: 404, body: { error: "notFound" } }));
-  await act("source-connections-read-state");
-  assert.equal(state.sourceConnections.unconfirmed?.action, "create");
-  assert.match(html(), /The club.{1,6}s connections could not be read just now\. Nothing was sent again, and the result is still not confirmed/);
-  assert.doesNotMatch(html(), /The connections below are what the server holds now/, "an older read's sentence never reads as this one");
 
   // A connection's read that fails replaces the older read's sentence; the marker stays.
   await openClub({ list: [verified()], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } });

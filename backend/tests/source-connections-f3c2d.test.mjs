@@ -1261,3 +1261,101 @@ test("26. the plaintext pair leaves the request body object as soon as it is rea
     service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
   }
 });
+
+// ---------------------------------------------------------------------------
+// S2: an idempotent Create (the request key), so "Connect and test" can retry a lost Create without a second connection.
+// ---------------------------------------------------------------------------
+test("27. S2 create with a requestKey: the successful Create's audit row is the request record; the same key and body replay the saved connection (200, replayed, one row, one audit); another label, host or club with the same key is request_key_reused; a refused Create is no record; two concurrent Creates with one key make one row; the key is per user; a replay is the identical 404 once the club is not visible in this workspace or the right is gone; no key behaves as before", async () => {
+  const { club } = await org();
+  const { club: club2 } = await org();
+  const pa = await platformAdmin();
+  const count = async (c) => Number((await q(`select count(*) from training_load.source_credential_connections where owner_club_id = $1`, [c]))[0].count);
+  const create = (body, cookie = pa.cookie) => api("/gpexe/connections", { method: "POST", cookie, body });
+  const key = crypto.randomUUID();
+  assert.equal((await create(CREATE(club, { requestKey: "not-a-uuid" }))).body.error, "invalid_body");
+  // A refused Create is not a record: the same key then creates.
+  assert.equal((await create(CREATE(club, { requestKey: key, hostKey: "e03" }))).body.error, "exchange_not_supported");
+  const first = await create(CREATE(club, { requestKey: key }));
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const id = first.body.connection.id;
+  const audit = await auditOf(id);
+  assert.equal(audit.length, 1);
+  assert.deepEqual([audit[0].action, audit[0].metadata.request_id, typeof audit[0].metadata.request_hash], ["create", key, "string"]);
+  // The same key and body: the saved connection, nothing written.
+  const again = await create(CREATE(club, { requestKey: key.toUpperCase() }));
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.deepEqual([again.body.replayed, again.body.connection.id, again.body.connection.replayed], [true, id, true]);
+  assert.equal(await count(club), 1);
+  assert.equal((await auditOf(id)).length, 1, "a replay writes no audit row");
+  // Another body with the same key: refused, nothing written.
+  assert.equal((await create(CREATE(club, { requestKey: key, accountLabel: "Another label" }))).body.error, "request_key_reused");
+  assert.equal((await create(CREATE(club2, { requestKey: key }))).body.error, "request_key_reused", "the same key for another club is never a replay");
+  assert.equal(await count(club2), 0);
+  // The key is the user's: another admin with the same key creates a connection of its own.
+  const pa2 = await platformAdmin();
+  const other = await create(CREATE(club, { requestKey: key }), pa2.cookie);
+  assert.equal(other.status, 201);
+  assert.notEqual(other.body.connection.id, id);
+  // Two concurrent Creates with one fresh key: the first is held after its INSERT, before its COMMIT; the second waits
+  // on the per-user lock (it never reads before the first commits) and then replays: one row, one 201, one 200.
+  const k2 = crypto.randomUUID();
+  let releaseFirst;
+  let heldOnce = false;
+  const held = new Promise((resolve) => {
+    service.setSourceCreateCommitHoldForTests(async () => {
+      if (heldOnce) return;
+      heldOnce = true;
+      resolve();
+      await new Promise((r) => { releaseFirst = r; });
+    });
+  });
+  let both;
+  try {
+    const firstCall = create(CREATE(club2, { requestKey: k2 }));
+    await held;
+    const secondCall = create(CREATE(club2, { requestKey: k2 }));
+    await new Promise((r) => setTimeout(r, 300));
+    const waiting = Number((await q(`select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`))[0].count);
+    assert.ok(waiting >= 1, "the second Create waits on the per-user lock");
+    releaseFirst();
+    both = await Promise.all([firstCall, secondCall]);
+  } finally {
+    service.setSourceCreateCommitHoldForTests(null);
+    if (releaseFirst) releaseFirst();
+  }
+  assert.deepEqual(both.map((r) => r.status), [201, 200]);
+  assert.equal(both[0].body.connection.id, both[1].body.connection.id);
+  assert.equal(await count(club2), 1);
+  // A replay from another workspace (the platform admin in another club's workspace) is the identical 404.
+  const notFoundBody = (await api(`/gpexe/connections/${crypto.randomUUID()}`, { cookie: pa.cookie })).body;
+  await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [pa.id, club2]);
+  await setWorkspace(pa.id, "club", club2);
+  const elsewhere = await create(CREATE(club, { requestKey: key }));
+  assert.equal(elsewhere.status, 404);
+  assert.deepEqual(elsewhere.body, notFoundBody, "never a confirmation that the connection exists");
+  await setWorkspace(pa.id, "platform", null);
+  // The right revoked between the request record and the replay's re-check: the identical 404.
+  service.setSourceCreateReplayHoldForTests(async () => {
+    await q(`update public.user_global_roles set is_active = false where user_id = $1 and role = 'platform_admin'`, [pa.id]);
+  });
+  try {
+    const revoked = await create(CREATE(club, { requestKey: key }));
+    assert.equal(revoked.status, 404, JSON.stringify(revoked.body));
+    assert.deepEqual(revoked.body, notFoundBody);
+  } finally {
+    service.setSourceCreateReplayHoldForTests(null);
+    await q(`update public.user_global_roles set is_active = true where user_id = $1 and role = 'platform_admin'`, [pa.id]);
+  }
+  assert.equal(await count(club), 2, "nothing more was created");
+  // A club admin's key: replayed in its own club workspace.
+  const ca = await clubAdmin(club2);
+  const k3 = crypto.randomUUID();
+  const c1 = await create(CREATE(club2, { requestKey: k3 }), ca.cookie);
+  assert.equal(c1.status, 201);
+  const c2 = await create(CREATE(club2, { requestKey: k3 }), ca.cookie);
+  assert.deepEqual([c2.status, c2.body.connection.id], [200, c1.body.connection.id]);
+  // No key: as before (a second Create makes a second connection).
+  assert.equal((await create(CREATE(club2))).status, 201);
+  assert.equal((await create(CREATE(club2))).status, 201);
+  assert.equal(await count(club2), 4);
+});
