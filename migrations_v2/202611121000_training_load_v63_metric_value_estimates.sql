@@ -26,7 +26,8 @@
 --      insert has already locked the participant and the event (v13's occasion trigger); the update locks the estimate
 --      occasion's row; the import and the estimate save both take the team's import lock first. v13 leaves an occasion's
 --      revision fields updatable by any path; for an estimate occasion a guard narrows them: superseded once, only by a
---      whole-session occasion of the same participant, never a conflict status.
+--      whole-session occasion of the same participant that is effective and holds the same variable, never a conflict
+--      status. An estimate occasion holds exactly one value by COMMIT.
 --   5. The dashboards' series source_policy CHECK also takes 'estimate' (the policy that shows estimates; 6b-D leaves them
 --      out under every other policy).
 --   6. The session undo (v60's two bodies, replaced under an md5 gate): the scope counts estimateOccasionCount and
@@ -225,6 +226,21 @@ create constraint trigger metric_values_estimate_provenance
   deferrable initially deferred
   for each row execute function training_load.check_estimate_has_provenance();
 
+-- An estimate occasion holds exactly one value by COMMIT (an empty one would be noise in the undo's counts).
+create function training_load.check_estimate_occasion_has_value() returns trigger as $$
+begin
+  if exists (select 1 from training_load.metric_measurement_occasions o where o.id = new.id and o.entry_method = 'estimate')
+     and (select count(*) from training_load.metric_values v where v.occasion_id = new.id) <> 1 then
+    raise exception 'estimate: an estimate occasion holds one value' using errcode = '23514';
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+create constraint trigger metric_measurement_occasions_estimate_value
+  after insert on training_load.metric_measurement_occasions
+  deferrable initially deferred
+  for each row when (new.entry_method = 'estimate') execute function training_load.check_estimate_occasion_has_value();
+
 -- The provenance row: of that value and occasion, by its author, with a method the variable allows.
 create function training_load.validate_metric_value_estimate() returns trigger as $$
 declare
@@ -297,7 +313,8 @@ create trigger metric_values_supersede_estimate
 
 -- v13 leaves the revision fields of an occasion updatable by any path (corrections set them; only identity and content are
 -- frozen, v13:134-148). For an estimate occasion this narrows them: it is superseded once, and only by a whole-session
--- occasion of the same participant (a measured, effective one, or another estimate); its conflict status stays null.
+-- occasion of the same participant (a measured, effective one, or another estimate) that holds a value of the same
+-- variable; its conflict status stays null.
 create function training_load.guard_estimate_occasion_revision() returns trigger as $$
 declare
   v_by record;
@@ -314,11 +331,15 @@ begin
   if old.superseded_by_occasion_id is not null then
     raise exception 'estimate: an estimate is superseded once' using errcode = '23514';
   end if;
-  select o.event_participant_id, o.segment_id, o.entry_method, o.import_conflict_status into v_by
+  select o.event_participant_id, o.segment_id, o.entry_method, o.import_conflict_status, o.superseded_by_occasion_id into v_by
     from training_load.metric_measurement_occasions o where o.id = new.superseded_by_occasion_id;
+  -- The superseding occasion is effective and holds a value of the same variable (M3: only the same variable's later value).
   if not found or new.superseded_by_occasion_id = old.id or v_by.event_participant_id is distinct from old.event_participant_id
-     or v_by.segment_id is not null or v_by.import_conflict_status is not null
-     or v_by.entry_method not in ('api_import', 'csv_import', 'estimate') then
+     or v_by.segment_id is not null or v_by.import_conflict_status is not null or v_by.superseded_by_occasion_id is not null
+     or v_by.entry_method not in ('api_import', 'csv_import', 'estimate')
+     or not exists (select 1 from training_load.metric_values e
+                      join training_load.metric_values b on b.metric_definition_id = e.metric_definition_id
+                     where e.occasion_id = old.id and b.occasion_id = new.superseded_by_occasion_id) then
     raise exception 'estimate: an estimate is superseded only by a whole-session value of the same athlete' using errcode = '23514';
   end if;
   return new;
@@ -743,7 +764,7 @@ begin
       -- v63: an estimate's provenance row goes before its value (it references it).
       delete from training_load.metric_value_estimates where occasion_id = any(v_occ);
       get diagnostics v_n = row_count;
-      v_removed := training_load.session_undo_add(v_removed, 'metric_value_estimates', v_n);
+      v_removed := training_load.session_undo_add(v_removed, 'estimates_removed', v_n);
       delete from training_load.metric_values where occasion_id = any(v_occ);
       get diagnostics v_n = row_count;
       v_removed := training_load.session_undo_add(v_removed, 'metric_values', v_n);

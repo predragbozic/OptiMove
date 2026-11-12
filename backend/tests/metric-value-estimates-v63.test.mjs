@@ -185,8 +185,8 @@ async function withSwitchOn(fn) {
 }
 
 // One session found, reviewed and imported through the real batch approval. Returns the imported candidate.
-async function importSession(team, sessionId, { hour = 8 } = {}) {
-  await checkNow(team, [cleanBundle({ sessionId, hour })]);
+async function importSession(team, sessionId, { hour = 8, ids } = {}) {
+  await checkNow(team, [cleanBundle({ sessionId, hour, ...(ids ? { ids } : {}) })]);
   const cand = (await listFor(team)).find((c) => c.gpexeTeamSessionId === String(sessionId) && c.status === "pending");
   assert.ok(cand, "a pending candidate");
   const imported = await withSwitchOn(async () => api(`/teams/${team.teamId}/imports`, {
@@ -352,7 +352,8 @@ test("2. the guards: no acting user or another user (42501); a segment or a sour
     await c.query("begin");
     await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
     const seg = (await admin.query(`select id from training_load.metric_event_segments where event_id = $1 limit 1`, [s.eventId])).rows[0]?.id;
-    if (seg) assert.match(await code(c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method, recorded_by_user_id) values ($1,$2,'estimate',$3)`, [pc, seg, team.coach.id])), /^23514:estimate: an estimate occasion is a whole-session/);
+    assert.ok(seg, "the imported event has a segment");
+    assert.match(await code(c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method, recorded_by_user_id) values ($1,$2,'estimate',$3)`, [pc, seg, team.coach.id])), /^23514:estimate: an estimate occasion is a whole-session/);
     await c.query("rollback");
     // a max variable cannot be estimated
     assert.match(await code(writeEstimate(c, { participantId: pc, def: facts.max, actor: team.coach.id })), /^23514:estimate: this variable cannot be estimated/);
@@ -368,7 +369,8 @@ test("2. the guards: no acting user or another user (42501); a segment or a sour
     occ = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [pc, team.coach.id])).rows[0].id;
     await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1)`, [occ, facts.sum.def, facts.sum.ver]);
     const other = facts.defs.find((d) => d.def !== facts.sum.def && d.agg === "sum");
-    if (other) assert.match(await code(c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1)`, [occ, other.def, other.ver])), /^23514:estimate: an estimate occasion holds one value/);
+    assert.ok(other, "the imported event has a second sum variable");
+    assert.match(await code(c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1)`, [occ, other.def, other.ver])), /^23514:estimate: an estimate occasion holds one value/);
     await c.query("rollback");
     // a basis that is not the method's closed shape, and a method outside the list
     assert.match(await code(writeEstimate(c, { participantId: pc, def: facts.sum, actor: team.coach.id, method: "team_average", basis: { athletes: 2 } })), /^23514:.*basis_shape/);
@@ -402,6 +404,77 @@ test("2b. the method a variable allows: avg takes copy_athlete and team_average,
   }
 });
 
+test("2c. every branch of the occasion, value and provenance guards, one by one", async () => {
+  const { team, s, facts } = await imported();
+  const pc = await participantFor(s, team.athleteIds[3]);
+  const c = await newClient();
+  const withActor = async (fn, actor = team.coach.id) => {
+    await c.query("begin");
+    try {
+      await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [actor]);
+      return await fn();
+    } finally {
+      await c.query("rollback");
+    }
+  };
+  const occInsert = (col, val) => code(c.query(
+    `insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id, ${col}) values ($1,'estimate',$2,$3)`, [pc, team.coach.id, val]));
+  try {
+    const identity = (await admin.query(`select source_identity_id from training_load.metric_measurement_occasions where source_identity_id is not null limit 1`)).rows[0]?.source_identity_id;
+    const batch = (await admin.query(`select import_batch_id from training_load.metric_measurement_occasions where import_batch_id is not null limit 1`)).rows[0]?.import_batch_id;
+    const anyOcc = (await admin.query(`select id from training_load.metric_measurement_occasions limit 1`)).rows[0].id;
+    const occasionCases = [["import_conflict_status", "needs_review"], ["content_hash", "h"], ["row_number", 1], ["source_reported_at", "2026-09-14T08:00:00Z"],
+      ["supersedes_occasion_id", anyOcc], ["superseded_by_occasion_id", anyOcc]];
+    if (identity) occasionCases.push(["source_identity_id", identity]);
+    if (batch) occasionCases.push(["import_batch_id", batch]);
+    assert.ok(identity, "the import wrote a source identity to test against");
+    for (const [col, val] of occasionCases) {
+      assert.match(await withActor(() => occInsert(col, val)), /^23514:estimate: an estimate occasion is a whole-session/, col);
+    }
+    const valueCases = [["aggregation_role", "source_total"], ["coverage", "complete"], ["computed_by_ref", JSON.stringify({ ref: "x" })]];
+    for (const [col, val] of valueCases) {
+      const got = await withActor(async () => {
+        const occ = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [pc, team.coach.id])).rows[0].id;
+        return code(c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, ${col}) values ($1,$2,$3,1,$4)`, [occ, facts.sum.def, facts.sum.ver, val]));
+      });
+      assert.match(got, /^23514:estimate: an estimated value is a standalone/, col);
+    }
+    // the provenance row: on a measured value, with another occasion, by another user than the occasion's author
+    const measuredVal = (await admin.query(
+      `select v.id, v.occasion_id from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id where o.entry_method = 'api_import' limit 1`)).rows[0];
+    assert.match(await withActor(() => code(c.query(
+      `insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`,
+      [measuredVal.id, measuredVal.occasion_id, team.coach.id]))), /^23514:.*belongs to an estimated value/);
+    assert.match(await withActor(async () => {
+      const occ = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [pc, team.coach.id])).rows[0].id;
+      const val = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [occ, facts.sum.def, facts.sum.ver])).rows[0].id;
+      return code(c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [val, anyOcc, team.coach.id]));
+    }), /^23514:.*belongs to an estimated value/);
+    assert.match(await withActor(async () => {
+      const occ = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [pc, team.coach.id])).rows[0].id;
+      const val = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [occ, facts.sum.def, facts.sum.ver])).rows[0].id;
+      return code(c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [val, occ, team.padmin.id]));
+    }), /^42501/);
+  } finally {
+    await c.end();
+  }
+});
+
+test("2d. an estimate occasion without a value is refused at COMMIT", async () => {
+  const { team, s } = await imported();
+  const pc = await participantFor(s, team.athleteIds[3]);
+  const c = await newClient();
+  try {
+    await c.query("begin");
+    await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2)`, [pc, team.coach.id]);
+    assert.match(await code(c.query("commit")), /^23514:estimate: an estimate occasion holds one value/);
+    assert.equal((await admin.query(`select count(*)::int n from training_load.metric_measurement_occasions where event_participant_id = $1 and entry_method = 'estimate'`, [pc])).rows[0].n, 0);
+  } finally {
+    await c.end();
+  }
+});
+
 test("3. M2: an estimate is never written for a variable that has an effective measured whole-session value for that athlete; another variable can be", async () => {
   const { team, s, facts } = await imported();
   const pa = facts.participant[team.athleteIds[0]];
@@ -409,6 +482,55 @@ test("3. M2: an estimate is never written for a variable that has an effective m
   const c = await newClient();
   try {
     assert.match(await code(writeEstimate(c, { participantId: pa, def: facts.sum, actor: team.coach.id })), /^23514:estimate_measured_exists$/);
+  } finally {
+    await c.end();
+  }
+});
+
+test("3b. M2 allows an estimate when the only measured value of the variable is not effective, and for another variable", async () => {
+  const { team, s, facts } = await imported();
+  const other = facts.defs.find((d) => d.def !== facts.sum.def && d.agg === "sum");
+  assert.ok(other);
+  const fresh = async (name) => participantFor(s, (await admin.query(`insert into public.athletes (full_name, display_name, device_timezone) values ($1,$1,'Europe/Sarajevo') returning id`, [name])).rows[0].id);
+  const seg = (await admin.query(`select id from training_load.metric_event_segments where event_id = $1 limit 1`, [s.eventId])).rows[0].id;
+  const c = await newClient();
+  try {
+    // (a) the only measured value is flagged for review
+    const pa = await fresh("Zq M2a");
+    await c.query("begin"); await writeMeasured(c, { participantId: pa, def: facts.sum, conflict: "needs_review" }); await c.query("commit");
+    assert.equal(await code(writeEstimate(c, { participantId: pa, def: facts.sum, actor: team.coach.id })), "ok", "a flagged value");
+    // (b) the only measured value is a drill value
+    const pb = await fresh("Zq M2b");
+    const drillOcc = (await admin.query(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'api_import') returning id`, [pb, seg])).rows[0].id;
+    await admin.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,5)`, [drillOcc, facts.sum.def, facts.sum.ver]);
+    assert.equal(await code(writeEstimate(c, { participantId: pb, def: facts.sum, actor: team.coach.id })), "ok", "a drill value");
+    // (c) the only measured value was superseded (by a flagged one, so nothing effective is left)
+    const pcc = await fresh("Zq M2c");
+    await c.query("begin");
+    const m1 = await writeMeasured(c, { participantId: pcc, def: facts.sum });
+    const m2 = await writeMeasured(c, { participantId: pcc, def: facts.sum, conflict: "needs_review" });
+    await c.query("commit");
+    await admin.query(`update training_load.metric_measurement_occasions set superseded_by_occasion_id = $1 where id = $2`, [m2, m1]);
+    assert.equal(await code(writeEstimate(c, { participantId: pcc, def: facts.sum, actor: team.coach.id })), "ok", "a superseded value");
+    // (d) a measured value that is not its source identity's current occasion
+    const identityOcc = (await admin.query(
+      `select o.id, o.event_participant_id p, v.metric_definition_id def from training_load.metric_measurement_occasions o
+         join training_load.metric_values v on v.occasion_id = o.id
+        where o.source_identity_id is not null and o.segment_id is null and o.event_participant_id = $1 and v.metric_definition_id = $2 limit 1`,
+      [facts.participant[team.athleteIds[1]], facts.sum.def])).rows[0];
+    assert.ok(identityOcc, "the import's occasion of athlete B");
+    await admin.query(`alter table training_load.metric_source_identities disable trigger user`);
+    try {
+      await admin.query(`update training_load.metric_source_identities set current_occasion_id = null where current_occasion_id = $1`, [identityOcc.id]);
+    } finally {
+      await admin.query(`alter table training_load.metric_source_identities enable trigger user`);
+    }
+    assert.equal(await code(writeEstimate(c, { participantId: identityOcc.p, def: facts.sum, actor: team.coach.id })), "ok", "not the identity's current occasion");
+    // (e) another variable for an athlete with an effective measured value of the first one only
+    const pe = await fresh("Zq M2e");
+    await c.query("begin"); await writeMeasured(c, { participantId: pe, def: facts.sum }); await c.query("commit");
+    assert.match(await code(writeEstimate(c, { participantId: pe, def: facts.sum, actor: team.coach.id })), /^23514:estimate_measured_exists$/);
+    assert.equal(await code(writeEstimate(c, { participantId: pe, def: other, actor: team.coach.id, value: 7 })), "ok", "another variable");
   } finally {
     await c.end();
   }
@@ -464,11 +586,24 @@ test("4b. what v13 allows on the supersede column: any path may set it on a meas
     assert.match(await set("import_conflict_status", "needs_review"), /^23514:estimate: an estimate occasion has no conflict status/);
     assert.match(await set("supersedes_occasion_id", otherOcc), /^23514:estimate: an estimate occasion has no conflict status and supersedes nothing/);
     assert.ok(await effective(e.occ), "nothing was changed");
-    // a whole-session occasion of the same athlete: allowed once (the trigger's own path), never re-pointed
+    // the same athlete's whole-session occasion of another variable: refused (M3 is the same variable only)
     await c.query("begin");
-    const m1 = await writeMeasured(c, { participantId: p, def: facts.defs.find((d) => d.def !== facts.sum.def && d.agg === "sum") ?? facts.max });
+    const mOther = await writeMeasured(c, { participantId: p, def: facts.defs.find((d) => d.def !== facts.sum.def && d.agg === "sum") });
     await c.query("commit");
-    assert.equal(await set("superseded_by_occasion_id", m1), "ok", "the same athlete's whole-session occasion: allowed");
+    assert.match(await set("superseded_by_occasion_id", mOther), /^23514:estimate: an estimate is superseded only by/, "another variable");
+    // the same variable but a superseded (not effective) occasion: refused
+    await c.query("begin");
+    const mFlag = await writeMeasured(c, { participantId: p, def: facts.sum, conflict: "needs_review" });
+    await c.query("commit");
+    await admin.query(`update training_load.metric_measurement_occasions set superseded_by_occasion_id = $1 where id = $2`, [mOther, mFlag]);
+    await admin.query(`update training_load.metric_measurement_occasions set import_conflict_status = null where id = $1`, [mFlag]);
+    assert.match(await set("superseded_by_occasion_id", mFlag), /^23514:estimate: an estimate is superseded only by/, "a superseded occasion");
+    assert.ok(await effective(e.occ), "nothing was changed");
+    // the same variable, effective: the trigger's own path supersedes it once; it is never re-pointed
+    await c.query("begin");
+    const m1 = await writeMeasured(c, { participantId: p, def: facts.sum });
+    await c.query("commit");
+    assert.equal((await admin.query(`select superseded_by_occasion_id s from training_load.metric_measurement_occasions where id = $1`, [e.occ])).rows[0].s, m1, "superseded by the same variable's value");
     await c.query("begin");
     const m2 = await writeMeasured(c, { participantId: p, def: facts.max });
     await c.query("commit");
@@ -479,6 +614,38 @@ test("4b. what v13 allows on the supersede column: any path may set it on a meas
   } finally {
     await c.end();
   }
+});
+
+test("4c. M3 through the real import: a re-import that records the athlete supersedes the estimate, and the canonical reader shows the measured value only", async () => {
+  const team = await setupTeam();
+  // The first import records athlete A only; athlete B gets an estimate; the re-import then records B (fixture athlete 103 has two
+  // whole-session rows on purpose and is held for review, so B is the clean one).
+  const s = await importSession(team, 9301, { ids: [101] });
+  const facts = await eventFacts(s);
+  const athleteC = team.athleteIds[1];
+  const c = await newClient();
+  let est;
+  try {
+    const p = await participantFor(s, athleteC);
+    est = await writeEstimate(c, { participantId: p, def: facts.sum, actor: team.coach.id, value: 1234 });
+  } finally {
+    await c.end();
+  }
+  await checkNow(team, [cleanBundle({ sessionId: 9301, ids: [101, 102], updatedOn: "2026-09-15T09:00:00.000" })]);
+  const cand = (await listFor(team)).find((x) => x.gpexeTeamSessionId === "9301" && x.status === "pending");
+  assert.ok(cand, "the changed session is a pending candidate");
+  const r = await withSwitchOn(async () => api(`/teams/${team.teamId}/imports`, {
+    method: "POST", cookie: team.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } },
+  }));
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.results[0].outcome, "imported", r.text);
+  assert.equal(await effective(est.occ), false, "the import's value superseded the estimate");
+  const by = (await admin.query(`select o.entry_method from training_load.metric_measurement_occasions e join training_load.metric_measurement_occasions o on o.id = e.superseded_by_occasion_id where e.id = $1`, [est.occ])).rows[0];
+  assert.equal(by.entry_method, "api_import");
+  const rows = (await admin.query(`select fact_kind, detail from training.canonical_activity_results($1) where athlete_id = $2`, [s.activityId, athleteC])).rows;
+  assert.ok(rows.length > 0, "the canonical reader shows athlete B's imported values");
+  assert.equal(JSON.stringify(rows).includes("estimate"), false, "and no estimate");
+  assert.equal(JSON.stringify(rows).includes("1234"), false);
 });
 
 test("5. M3 lock order, both orders: an import writing the athlete's value and an estimate save serialize on the participant; whoever commits first wins, the other is refused or superseded, and nothing deadlocks", async () => {
@@ -533,9 +700,10 @@ test("7. the session undo lists the estimates in its preview, removes them with 
   const s = await importSession(team, 9201);
   const facts = await eventFacts(s);
   const c = await newClient();
+  let w;
   try {
     const p = await participantFor(s, team.athleteIds[2]);
-    await writeEstimate(c, { participantId: p, def: facts.sum, actor: team.coach.id });
+    w = await writeEstimate(c, { participantId: p, def: facts.sum, actor: team.coach.id });
   } finally {
     await c.end();
   }
@@ -543,13 +711,15 @@ test("7. the session undo lists the estimates in its preview, removes them with 
   assert.deepEqual([scope.estimateOccasionCount, scope.estimateValueCount, scope.manualOccasionCount], [1, 1, 0]);
   const r = await undo(team, s);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.undo.removedCounts.metric_value_estimates, 1, JSON.stringify(r.body));
+  // The key the contract names (rule 8).
+  const contractKey = fs.readFileSync(new URL("../../docs/ai/phase5b-estimates-contract.md", import.meta.url), "utf8").match(/records `([a-z_]+)` in `removed_counts`/)[1];
+  assert.equal(contractKey, "estimates_removed");
+  assert.equal(r.body.undo.removedCounts[contractKey], 1, JSON.stringify(r.body));
   const log = (await admin.query(`select removed_counts from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0];
-  assert.equal(log.removed_counts.metric_value_estimates, 1);
-  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_measurement_occasions where entry_method = 'estimate' and event_participant_id = $1`, [s.eventId])).rows[0].n, 0);
-  assert.equal((await admin.query(
-    `select count(*)::int n from training_load.metric_value_estimates e join training_load.metric_measurement_occasions o on o.id = e.occasion_id
-      join training_load.metric_event_participants p on p.id = o.event_participant_id where p.event_id = $1`, [s.eventId])).rows[0].n, 0);
+  assert.equal(log.removed_counts[contractKey], 1);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_measurement_occasions where id = $1`, [w.occ])).rows[0].n, 0, "the estimate occasion is gone");
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_values where id = $1`, [w.val])).rows[0].n, 0, "its value is gone");
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_value_estimates where metric_value_id = $1`, [w.val])).rows[0].n, 0, "its provenance is gone");
 });
 
 test("8. the dashboards' series policy takes 'estimate' (6b-D shows estimates only under it)", async () => {
@@ -597,7 +767,7 @@ test("9. migration v63: the preflight passes on v62, the post-check on v63; the 
     assert.deepEqual(await catalogOf(client), v62Catalog, "the rollback restores the v62 catalog exactly");
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
     assert.deepEqual(await catalogOf(client), v63Catalog, "re-applied: the same catalog");
-    // Once an estimate exists the rollback refuses and changes nothing (an occasion row is enough).
+    // Once an estimate exists the rollback refuses and changes nothing.
     const u = (await client.query(`insert into public.users (email, full_name, display_name) values ('rb63@test.local','R','R') returning id`)).rows[0].id;
     const ath = (await client.query(`insert into public.athletes (full_name, display_name, device_timezone) values ('R','R','Europe/Sarajevo') returning id`)).rows[0].id;
     const ev = (await client.query(`insert into training_load.metric_events (owner_scope, owner_user_id, scope_level, occurred_date) values ('user',$1,'session','2026-09-14') returning id`, [u])).rows[0].id;
@@ -605,7 +775,13 @@ test("9. migration v63: the preflight passes on v62, the post-check on v63; the 
       const p = (await client.query(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Sarajevo') returning id`, [ev, ath])).rows[0].id;
       await client.query("begin");
       await client.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [u]);
-      await client.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2)`, [p, u]);
+      const defId = (await client.query(`insert into training_load.metric_definitions (key, label, owner_scope, owner_user_id) values ('rb63_sum','RB sum','user',$1) returning id`, [u])).rows[0].id;
+      const verId = (await client.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, value_type, unit, daily_aggregation_method) values ($1,1,'numeric','m','sum') returning id`, [defId])).rows[0].id;
+      await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [defId]);
+      const def = { def: defId, ver: verId };
+      const o = (await client.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [p, u])).rows[0].id;
+      const v = (await client.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [o, def.def, def.ver])).rows[0].id;
+      await client.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [v, o, u]);
       await client.query("commit");
       await assert.rejects(client.query(fs.readFileSync(RUNBOOK("metric-value-estimates-v63-rollback.sql"), "utf8")), /v63 rollback refused: an estimate exists/);
       await client.query("rollback").catch(() => {});

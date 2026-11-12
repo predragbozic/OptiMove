@@ -48,7 +48,7 @@ begin
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'session_undo_scope') is distinct from '4d33a3379faaf918243b8db11de12c81'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'training_load' and p.proname = 'undo_imported_session') is distinct from '495c140602f6625874cbd34e5823b375' then
+       where n.nspname = 'training_load' and p.proname = 'undo_imported_session') is distinct from 'cf208f99e3e4db738670dec2567dc8fc' then
     raise exception 'v63 rollback refused: the session undo bodies in force are not v63''s';
   end if;
 end $$;
@@ -562,6 +562,7 @@ drop trigger metric_measurement_occasions_estimate_revision on training_load.met
 drop trigger metric_values_supersede_estimate on training_load.metric_values;
 drop trigger metric_values_estimate_provenance on training_load.metric_values;
 drop trigger metric_values_estimate_guard on training_load.metric_values;
+drop trigger metric_measurement_occasions_estimate_value on training_load.metric_measurement_occasions;
 drop trigger metric_measurement_occasions_estimate_guard on training_load.metric_measurement_occasions;
 drop table training_load.metric_value_estimates;
 drop function training_load.guard_estimate_occasion_revision();
@@ -569,6 +570,7 @@ drop function training_load.supersede_estimate_on_value();
 drop function training_load.protect_metric_value_estimates();
 drop function training_load.validate_metric_value_estimate();
 drop function training_load.check_estimate_has_provenance();
+drop function training_load.check_estimate_occasion_has_value();
 drop function training_load.validate_estimate_value();
 drop function training_load.estimate_measured_exists(uuid, uuid);
 drop function training_load.validate_estimate_occasion();
@@ -589,6 +591,13 @@ begin
      or to_regprocedure('training_load.supersede_estimate_on_value()') is not null
      or to_regprocedure('training_load.estimate_context_actor()') is not null then
     raise exception 'v63 rollback failed: a v63 object is still there';
+  end if;
+  -- v60's undo bodies, exactly (a CRLF checkout of this file would change them).
+  if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'training_load' and p.proname = 'session_undo_scope') is distinct from 'b6f34358816e7ae382f1385b650b95f0'
+     or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'training_load' and p.proname = 'undo_imported_session') is distinct from '3d78cc86dfa3be3c25d2cb0dc0a858e0' then
+    raise exception 'v63 rollback failed: the restored undo bodies are not v60''s';
   end if;
 end $$;
 

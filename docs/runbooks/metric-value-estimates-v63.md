@@ -14,17 +14,23 @@
   - It holds one value, and that value is numeric, standalone, not derived and not_applicable.
   - It is refused while an effective measured whole-session value of the same variable exists for the same participant
     (`estimate_measured_exists`).
-  - Its provenance row is required by COMMIT.
+  - Its provenance row is required by COMMIT, and the occasion holds exactly one value by COMMIT.
   - The method must be allowed by the variable's daily aggregation:
     - `sum`: every method;
     - `avg`: `copy_athlete` and `team_average`;
     - `max`, `last`, `none`: never.
 - **M3.** A later whole-session value of the same variable for the same participant supersedes the estimate occasion. This holds
-  for a measured, effective value and for another estimate.
+  for a measured, effective value and for another estimate. Any other path that sets an estimate occasion's
+  `superseded_by_occasion_id` must name an effective whole-session occasion of the same participant that holds the same variable.
+- **"Measured" is `api_import` and `csv_import`** (the contract's rule 4). A `manual` whole-session value neither refuses an
+  estimate nor supersedes it.
+- **Known limit, accepted.** The supersede runs when the measured value is inserted. If that occasion is later flagged with a
+  conflict status, or never becomes its source identity's current occasion, the estimate stays superseded (an estimate is
+  superseded once, by design); the athlete then has neither value for that variable until it is entered again.
 - The dashboards' series `source_policy` takes `estimate` (6b-D shows estimates only under it).
 - **The session undo** keeps v60's bodies, replaced under an md5 gate:
   - the scope counts `estimateOccasionCount` and `estimateValueCount`;
-  - the undo deletes the provenance rows before the values and records `metric_value_estimates` in `removed_counts`;
+  - the undo deletes the provenance rows before the values and records `estimates_removed` in `removed_counts` (contract rule 8);
   - estimates never block it.
 
 Nothing writes an estimate until 6b-B, and its route stays behind `ESTIMATES_ENABLED` (off) until 6b-D is merged and deployed.
@@ -47,8 +53,8 @@ After v62 (#493): v63 refuses to run without v62's table. Merge #493 first.
 
 `metric-value-estimates-v63-postcheck.sql`, read-only, checks:
 - v63 is recorded once and is the last migration;
-- the undo bodies are v63's (md5 `4d33a337…` and `495c1406…`);
-- the 8 triggers are enabled;
+- the undo bodies are v63's (md5 `4d33a337…` and `cf208f99…`);
+- the 9 triggers are enabled, the two COMMIT-time ones deferred;
 - both CHECKs carry `estimate`;
 - no estimate exists;
 - there is no idle transaction and no lock wait.
@@ -63,6 +69,6 @@ objects and removes the record. It refuses when:
 - a series uses the `estimate` policy;
 - the undo bodies are not v63's.
 
-Rehearsed on disposable databases (`backend/tests/metric-value-estimates-v63.test.mjs`, test 9): apply, then rollback, then the
+The rollback ends by checking that v60's two undo bodies are back by md5 (`b6f34358…`, `3d78cc86…`). Rehearsed on disposable databases (`backend/tests/metric-value-estimates-v63.test.mjs`, test 9): apply, then rollback, then the
 v62 catalog exactly, then re-apply. Run anywhere real only with the owner's approval for that database, after a fresh
 restore-verified backup, on a commit that no longer contains the migration.

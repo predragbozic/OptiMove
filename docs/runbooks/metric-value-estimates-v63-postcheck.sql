@@ -10,7 +10,7 @@ select (select count(*) from public.schema_migrations where migration_name = 'mi
 select (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training_load' and p.proname = 'session_undo_scope') = '4d33a3379faaf918243b8db11de12c81' as scope_is_v63,
        (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-         where n.nspname = 'training_load' and p.proname = 'undo_imported_session') = '495c140602f6625874cbd34e5823b375' as undo_is_v63;
+         where n.nspname = 'training_load' and p.proname = 'undo_imported_session') = 'cf208f99e3e4db738670dec2567dc8fc' as undo_is_v63;
 
 -- 3. The table and its guards, every trigger enabled.
 select to_regclass('training_load.metric_value_estimates') is not null as table_ok,
@@ -18,7 +18,11 @@ select to_regclass('training_load.metric_value_estimates') is not null as table_
          where not t.tgisinternal and t.tgenabled = 'O' and t.tgname in (
            'metric_measurement_occasions_estimate_guard', 'metric_values_estimate_guard', 'metric_values_estimate_provenance',
            'metric_values_supersede_estimate', 'metric_value_estimates_validate', 'metric_value_estimates_protect',
-           'metric_value_estimates_no_truncate', 'metric_measurement_occasions_estimate_revision')) = 8 as triggers_ok;
+           'metric_value_estimates_no_truncate', 'metric_measurement_occasions_estimate_revision',
+           'metric_measurement_occasions_estimate_value')) = 9 as triggers_ok,
+       (select count(*) from pg_trigger t
+         where not t.tgisinternal and t.tgdeferrable and t.tginitdeferred and t.tgname in (
+           'metric_values_estimate_provenance', 'metric_measurement_occasions_estimate_value')) = 2 as deferred_ok;
 
 -- 4. The two widened CHECKs.
 select pg_get_constraintdef((select oid from pg_constraint where conname = 'metric_measurement_occasions_entry_method_check'
