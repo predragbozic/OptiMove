@@ -253,7 +253,7 @@ export const BOARD_ERROR = {
   canonical_version_changed: "A variable was changed since you read the board. Nothing was saved. Compare the marked column again.",
   activation_changed: "A mapping this save replaces is no longer on for the team. Nothing was saved.",
   binding_not_active: "The team is no longer linked to GPEXE. Nothing was saved.",
-  request_key_reused: "Nothing was saved. Press Save again.",
+  request_key_reused: "Nothing was saved. Compare the columns again, then save.",
   invalid_body: "The board could not be saved as it is. Nothing was saved. Read the board again.",
 };
 export const boardErrorText = (info) => BOARD_ERROR[info?.code] || (info?.status === 404 ? BOARD_ERROR.notFound : "Something went wrong. Nothing was changed.");

@@ -234,6 +234,7 @@ test("9. Switch off asks first, sends the activation's end once, and reads the b
   assert.deepEqual(Object.keys(posts()[0].body).sort(), ["expectedState", "reason", "requestKey"]);
   assert.equal(posts()[0].body.expectedState, "open");
   assert.equal(calls.at(-1).url, `${B}/board?teamId=${TEAM}`);
+  assert.match(content.querySelector("#mb-outcome").textContent.replace(/\s+/g, " "), /Switched off\. .+ → .+ is off for First team\./);
 });
 
 test("10. leaving with an unsaved placement asks; Cancel removes it; Escape closes the panel", async () => {
@@ -455,10 +456,10 @@ test("22. the team list's 404 is the same neutral sentence, with nothing to retr
 
 test("23. a used column says why it does not move; a ticked row offers View check, not Compare", async () => {
   await open();
-  assert.ok(text().includes("Already on for the team. Switch it off on the right to place it again."));
+  assert.ok(text().includes("Already on for the team. Switch it off under Variables to place it again."));
   await place();
   tick("[data-mb-tick]", true);
   await click('[data-action="metric-board-keep"]');
   assert.equal(content.querySelector(`[data-action="metric-board-compare"][data-field-id="${FIELD}"]`).textContent.trim(), "View check");
-  assert.ok(text().includes("Placed. Remove it on the right to place it elsewhere."));
+  assert.ok(text().includes("Placed. Remove it under Variables to place it elsewhere."));
 });

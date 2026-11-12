@@ -81,7 +81,7 @@ function columnHtml(s, c, drag) {
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
-    const why = use === "on" ? "Already on for the team. Switch it off on the right to place it again." : "Placed. Remove it on the right to place it elsewhere.";
+    const why = use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
     const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
@@ -304,7 +304,7 @@ function reviewBody(s) {
 }
 function reviewHtml(s) {
   if (!s.review) return "";
-  if (isPhone()) return sheet("mb-review-title", reviewBody(s), "metric-board-review-close");
+  if (isPhone()) return sheet("mb-review-title", reviewBody(s), "metric-board-dismiss");
   return `<section class="om-card mb-panel mb-review" aria-labelledby="mb-review-title">${reviewBody(s)}</section>`;
 }
 
@@ -323,6 +323,9 @@ function savedHtml(s) {
   const saved = s.saved;
   if (!saved) return "";
   const list = (rows) => rows.map((r) => `${name(r.column)} → ${name(r.variable)}`).join(", ");
+  if (saved.switchedOff !== undefined) {
+    return `<div class="mb-notice is-success" role="status" id="mb-outcome" tabindex="-1"><p><strong>Switched off.</strong> ${name(saved.switchedOff)} is off for ${name(saved.team)}. Sessions found from now on are imported without it.</p></div>`;
+  }
   const free = s.board.columns.some((c) => c.placeable && !columnUse(s, c.fieldId));
   return `<div class="mb-notice is-success" role="status" id="mb-outcome" tabindex="-1"><p><strong>Saved.</strong> Switched on for ${name(saved.team)}: ${list(saved.rows)}.
     ${saved.checked.length ? `Checked by you on ${escapeHtml(dateOnly(saved.at))} with two athletes: ${saved.checked.map((r) => name(r.column)).join(", ")}.` : ""}

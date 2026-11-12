@@ -260,9 +260,10 @@ async function send(render) {
     else await endActivation(w.activationId, w.body);
     if (!live(s, generation)) return;
     const summary = w.kind === "save" ? w.summary : null;
+    const offLabel = s.switchOff?.label || "";
     s.write = null;
     s.switchOff = null;
-    s.saved = summary;
+    s.saved = summary || { switchedOff: offLabel, team: s.board?.team?.name || "" };
     s.notice = "";
     s.live = summary ? `Saved. Switched on for ${summary.team}.` : "Switched off.";
     s.history = emptyBoardState().history;
