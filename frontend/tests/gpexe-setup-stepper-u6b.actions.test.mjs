@@ -82,7 +82,15 @@ function reset(opts = {}) {
 }
 const act = (action, extra = {}) => handleTrainingLoadAction({ dataset: { action, ...extra } }, { renderTrainingLoad: render });
 const open = async () => { await act("training-load-section", { section: "imports" }); await new Promise((r) => setTimeout(r, 30)); };
-const guideHtml = () => renderTrainingLoadCoachHtml().match(/<section class="gpexe-guide[\s\S]*?<\/section>/)?.[0] || "";
+// IMP1: the stepper sits above the banner while Connect, Choose team or Variables is open; after that it lives in the
+// Search tab. The helper reads it where it is, opening the Search tab when the stepper is not above the banner.
+const findGuide = () => renderTrainingLoadCoachHtml().match(/<section class="gpexe-guide[\s\S]*?<\/section>/)?.[0] || "";
+const guideHtml = () => {
+  const above = findGuide();
+  if (above) return above;
+  if (state.trainingLoad.gpexe) state.trainingLoad.gpexe.tab = "search";
+  return findGuide();
+};
 const openStep = (html) => html.match(/<li class="[^"]*gpexe-guide-current[^"]*"[\s\S]*?<\/div><\/li>/)?.[0] || "";
 const facts = (over = {}) => ({ admin: true, conn: { status: "ready", connected: true, bound: true }, check: { status: "succeeded" }, candidates: [], sourceAthletes: [athlete(1, "linked")], vars: { status: "ready", total: 0, onCount: 2 }, teamSwitch: { enabled: true }, teamName: "First", ...over });
 
@@ -346,4 +354,29 @@ test("10b. a sample is the value of exactly that variable: two mappings of one G
   const step = openStep(guideHtml());
   assert.match(step, /Variable 1 from Source 1<\/strong><span[^>]*><span class="gpexe-guide-pair">Zqone 6\u2009500 m</);
   assert.match(step, /Variable 2 from Source 1<\/strong><span[^>]*><span class="gpexe-guide-pair">Zqone 6\.5 km</);
+});
+
+test("12. placement in IMP1's tabs: above the banner while Variables is open; once it is done, only in the Search tab, for an administrator and a coach alike", async () => {
+  const above = () => findGuide();
+  const tabPanel = () => renderTrainingLoadCoachHtml().match(/<div class="imports-tab-panel" data-imports-tab="([^"]+)">([\s\S]*)/);
+  // Variables not switched on yet: the stepper is above the tabs, whatever tab is chosen.
+  reset({ athletes: [athlete(1, "unlinked")] });
+  await open();
+  await tick();
+  assert.match(above(), /Set up GPEXE imports/);
+  assert.ok(renderTrainingLoadCoachHtml().indexOf("gpexe-guide") < renderTrainingLoadCoachHtml().indexOf("imports-tabs"), "above the tabs");
+  for (const viewer of ["admin", "coach"]) {
+    reset({ viewer, athletes: [athlete(1, "unlinked")], activations: ON });
+    await open();
+    await tick();
+    const [, tab, panel] = tabPanel();
+    assert.notEqual(tab, "search", `${viewer}: the list tab is the default`);
+    assert.doesNotMatch(panel, /gpexe-guide/, `${viewer}: not in the list tab`);
+    assert.ok(renderTrainingLoadCoachHtml().indexOf("gpexe-guide") === -1, `${viewer}: not above the banner once Variables is done`);
+    await act("training-load-gpexe-tab", { importTab: "search" });
+    const [, now, searchPanel] = tabPanel();
+    assert.equal(now, "search");
+    assert.match(searchPanel, /<section class="gpexe-guide/, `${viewer}: in the Search tab`);
+    assert.match(searchPanel, /Athletes/);
+  }
 });
