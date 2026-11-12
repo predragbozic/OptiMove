@@ -445,6 +445,9 @@ All routes are under `/api/training-load/sources/metrics`, behind `requireAuth`,
 **The hashes.** `placementHash` is a SHA-256 over:
 - the candidate's `bundle_hash`;
 - the pair index;
+- the pair's two names, as the board shows them (18-2: the index alone does not say who the pair is). A rename of
+  either athlete between the read and the save therefore makes the hash stale: the save answers `board_changed`, and
+  the admin compares again under the new name;
 - the field revision;
 - the target version (or the system mapping version);
 - the conversion row (or "same");
@@ -1574,3 +1577,93 @@ the owner's order (runbook `docs/runbooks/source-metric-confirmations-v65.md`).
   is a backstop behind the revision guard and the actor guard, which refuse every case first; no test reaches it
   alone. The server log was checked by hand on the local server for the planted values (none found); the suite itself
   asserts the error's message, detail, hint and context.
+
+- **Two corrections of the migration's header comments** (the *Nezavisni revizor*'s L1 and L2 at the GO on
+  `92d745fb`; the frozen migration file is not reopened for wording, so the correct statements are these):
+  - **Savepoints (header lines 48-50).** "A write inside a savepoint is refused: every guard compares the xmin" holds
+    only for the guards that read T9 and for the deferred links. A T9s or T9i row written inside a savepoint after
+    a T9 row written outside it is not refused by its own guard; the deferred links decide at COMMIT.
+  - **Locks (header lines 76-77).** T8's `ACCESS EXCLUSIVE` and the `SHARE ROW EXCLUSIVE` locks on the foreign-key
+    targets are held until the migration's COMMIT, not "only for its own statements". The effect is the intended
+    one because T8 is taken last, so the migration never waits for another table while it holds T8. A failed
+    `NOWAIT` applies nothing and leaves the old instance serving; the deploy is simply repeated.
+
+### 15.8 As built: 18-2, the board's reads
+
+Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links to these routes before 18-4.
+
+- **Routes** (`backend/src/routes/sourceMetrics.js`, under `/api/training-load/sources/metrics`), each `GET`,
+  `Cache-Control: no-store`, a strict query (an unknown or repeated key, a malformed id, a `pair` that is not a
+  non-negative integer is `400 invalid_query`, and only for a caller who is admitted):
+  - route 1, `/board?teamId[&candidateId][&pair]`: the board of a team;
+  - route 2, `/board/placement?teamId&candidateId&pair&fieldId&targetId`: one placement;
+  - route 4, `/confirmations?teamId[&cursor]` (50 per page) and route 5, `/confirmations/:confirmationId`.
+  Route 3 (the save) is 18-3.
+- **Audience.** Routes 1 and 2: the active admin of the team's club, or a platform admin, **in that club's
+  workspace** only. Routes 4 and 5 also admit a platform admin in the platform workspace (History, after an Unbind
+  or an archive). Everyone and everything else is the identical `404 {"error":"notFound"}`: a coach, no role,
+  another club's admin, an unknown, archived, unbound or other club's team, an unknown or other club's candidate,
+  an undone (v57) or superseded candidate, another club's or a hidden variable, an unknown field. A refusal about
+  the session or the pair is given only after all of that holds: on route 2 the column and the variable are
+  resolved before the session's own `409` and before the pair is chosen. Routes 4 and 5 use one predicate; a
+  platform admin in the platform workspace lists and reads a team's History after a team or a club archive.
+- **Modules.** `backend/src/sourceMetricBoard.js` is pure: the display registry (version 1; `total_time` in s as
+  `mm:ss`, `total_distance` in whole metres (no evidence says the GPEXE screen shows a decimal of a metre, so one rule), `max_v` in m/s as km/h to one decimal, exact decimal arithmetic),
+  the pair rule and the placement hash. `backend/src/sourceMetricBoardService.js` reads the database through the
+  M2 kit's bounded read. `gpexeImportMapper.js` gains `gpexeLevelValuesKeyed` (the 7e raw read with each athlete's
+  internal key); the importer's architecture guard holds its one caller, the board, to the registry's extractors.
+- **The stored session.** The newest by its start among the team's candidates that are not undone or superseded,
+  whose snapshot is present and not expired, whose check ran through the team's current binding and whose start is
+  known. Chosen by id, each state has its own answer: `409 snapshot_expired` (`current.reason` `expired` or
+  `purged`), `409 session_start_unknown`, `409 candidate_source_mismatch`, `409 candidate_too_large`,
+  `409 candidate_not_importable` (the import's own gate, with its code). No candidate: `409 no_stored_session`.
+- **The pair** (section 6.1, R6). Only athletes OptiMove can name: a link's athlete name first, then the stored
+  GPEXE identity's `display_name` (never its date of birth; the identity service is not called). Pairs are ranked
+  by how many placeable columns they can prove (both values there, non-zero and different), ties by the internal
+  key, at most 200. `pair` is an index in that order; the answer carries `{ index, count, labels }` and never an
+  athlete id or a GPEXE athlete id. Fewer than two such athletes, or no pair that proves a column:
+  `409 not_enough_athletes`; an index past the end: `409 pair_out_of_range` with the count. No distance fallback.
+- **The board** (`board`): `team`, `session`, `pair`, `displayRegistryVersion`; `columns` (every `gpexe` /
+  `rest_v1` field with its label, its proven unit or none, `placeable`, one `reason` of `field_not_confirmed`,
+  `field_has_parameters`, `source_metric_unsupported`, `display_rule_missing`, `no_value_for_pair`, the display rule
+  and units, and the pair's two raw values); `variables` (the club's, then OptiMove's that the club does not hide;
+  an OptiMove variable is a target only through OptiMove's own active mapping); `on` (open activations of the
+  team); `preplaced` (OptiMove's and the club's active versions that are not on, not switched off by an
+  administrator and not on a hidden variable, each with the pair's raw and stored values and a placement hash);
+  `replaceable` (the same, when it collides with something that is on, with what it would replace); `switchedOff` (the mapping's latest activation on this binding was ended by an administrator: who and when;
+  never placed again by itself, Q9; a mapping switched on again and then ended another way is pre-placed again).
+- **A placement** is `200` for an admitted caller with known ids and a usable session and pair: either
+  `placeable: false` with one code (`target_scope_mismatch`, `activation_exists` (the same contract is already on
+  for the team, OptiMove's or the club's own), the column's reason, `target_not_usable`, `condition_mismatch`,
+  `conversion_unavailable`, `level_not_allowed`, `source_metric_target_taken`, `mapping_version_active`,
+  `pair_not_distinct`, `value_outside_limits`; a refusal carries no value) or the proposal: the conversion (the one
+  active one, or `same_unit`), the levels, the two athletes' raw and stored values, what the GPEXE screen shows per
+  display unit, one `placementHashes[unit]`, `reusesVersionId` when the club's own active version is the same
+  contract, and the `collisions` with what is on for the team.
+- **The placement hash** is sha256 over the candidate's bundle hash, the pair index and the pair's two names (the
+  index alone does not say who the pair is), the field revision, the target
+  version or the mapping version, the conversion, the display rule and unit, and the four values. It is a
+  concurrency token, not a secret; nothing stores it. 18-3 recomputes it on the save.
+- **History.** A row's `valuesState` is `present`, `expired`, `erased` or `not_compared`. A value is never returned
+  past `values_expire_at`, removed or not. The confirmer is returned by name, never by id. The page cursor
+  carries the last row's time in microseconds as text from SQL; anything but that exact form is `400 invalid_query`.
+- **The one write.** Before a board read (route 1) and a History read (routes 4 and 5), never before a placement,
+  the service runs one batch of `remove_expired_confirmation_values` in its own short transaction on its own
+  connection: `statement_timeout` 2 s, `lock_timeout` 0.5 s, and a 4 s client bound that closes the connection. A
+  failure or a stall is logged by its code only and never fails the read.
+- **Never:** a GPEXE request, an identity load, a date of birth, a write other than that removal batch, a lock.
+- **Tests:** `backend/tests/source-metric-board-18-2.test.mjs` (disposable database, the real HTTP stack, 9 tests:
+  the audience matrix, the board, the session states, placements with the 404 before any 409, what exists on the
+  team, a hidden variable, History with expiry, a failed and a stalled removal, History's pages, cursor, erased
+  values and archives, and the leak scan of every answer and log line) and
+  `backend/tests/source-metric-board.unit.test.mjs` (7 tests, the pure module and the keyed read). The importer's
+  architecture guard also holds that no source module sets the board's two test seams and that the internal key
+  is asked for only through `gpexeLevelValuesKeyed`.
+- **Not covered, stated:** no test counts the calls of `resolveActiveWorkspace` (the routes go through the
+  router's existing `adminContext`, once per request); `candidate_too_large`, `candidate_not_importable` and
+  `target_not_usable` have no test of their own; a `replaceable` row is asserted only as absent; no test holds an
+  item row's lock against the removal batch (the stalled batch is a planted one); the routes were not run against
+  a real GPEXE bundle.
+- **For 18-3:** a board replacement ends the replaced activation as `admin_ended`, so the replaced mapping then
+  reads as switched off by an administrator, not as pre-placed. Whether that is Q9's intent for a replacement is
+  decided with the save.

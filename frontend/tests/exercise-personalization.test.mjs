@@ -103,7 +103,7 @@ test("video-only effective media can be opened without requiring an image", () =
   const html = renderExerciseLibraryHtml({ exercises: [{ id: "copy", video_url: "https://source.test/video" }], itemIds: ["item"],
     markedExerciseIds: new Set(), search: { filters: {}, view: "details" }, tagEditor: {} });
   assert.match(html, /data-video="https:\/\/source.test\/video"/);
-  assert.match(html, /media-fallback/);
+  assert.match(html, /<button[^>]*data-action="open-media"[^>]*data-image=""[^>]*data-video="https:\/\/source.test\/video"/);
 });
 
 test("Tile, Big, List and Details retain personal actions and the same Edit/Copy/archive permissions", () => {

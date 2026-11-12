@@ -30,7 +30,11 @@ for (const role of ["platform_admin", "club_admin", "team_coach"]) for (const wi
     const h = await header(page);
     assert.ok(h.switcher[1] >= 44, `the switcher is ${h.switcher[1]} px tall`);
     for (const key of ["notifications", "messages", "signOut"]) assert.deepEqual(h[key], [44, 44], key);
-    if (width > 760) assert.deepEqual(h.pill, [104, 31], "the Online pill keeps its size");
+    if (width > 760) {
+      assert.equal(h.pill[0], 104, "the Online pill keeps its width");
+      // Chrome measured 32 px on Windows and 31 px on Linux.
+      assert.ok(Math.abs(h.pill[1] - 31) <= 1, "the Online pill keeps its height within one pixel");
+    }
     else assert.deepEqual(h.pill, [12, 12], "the Online dot keeps its size on a phone");
     assert.equal(h.overflow, 0);
     assert.deepEqual(pageErrors, []);
