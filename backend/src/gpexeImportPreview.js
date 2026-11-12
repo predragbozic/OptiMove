@@ -592,6 +592,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     // participation is recorded), and is marked so the review never shows that
     // athlete as imported with data - only with the Left-out entries and reasons.
     if (participant && entry.skippedValues.length > 0 && participant.results.every((r) => r.values.length === 0)) entry.allValuesLeftOut = true;
+    // MT-0: identical duplicate tracks were taken as one recording; present only then, so every other preview is unchanged.
+    if (participant?.duplicateTracks) entry.duplicateTracks = { ...participant.duplicateTracks, ignoredTrackIds: [...participant.duplicateTracks.ignoredTrackIds] };
     athletes.push(entry);
   }
 

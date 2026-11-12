@@ -32,6 +32,14 @@ import { convertAtStorageScale } from "./sourceMetricPreview.js";
 
 export const GPEXE_SOURCE_SYSTEM = "gpexe";
 
+// MT-0 (the owner's yes, 2026-11-12; docs/ai/mt-multiple-tracks-plan.md section 11): an athlete whose tracks are identical
+// copies of one recording is imported once, from the lowest track id. Its details (burst, brake: one entry per athlete) are
+// read as for any athlete: E1 is decided (2026-11-12) - GPEXE counts a duplicate track once (the parity evidence of section 11).
+// The athlete-session fields the mapper consumes (BUNDLE_FIELDS.athleteSession without the identity fields), compared across
+// the tracks; the /more/ of each row is compared whole, apart from its own identity keys.
+const DUPLICATE_ROW_FIELDS = Object.freeze(["is_stats_valid", "total_time", "total_distance", "max_v", "drill"]);
+const DUPLICATE_TRACK_FIELDS = Object.freeze(["utc_timestamp", "timestamp", "timezone"]);
+
 // Only categories whose meaning is confirmed for the pilot are importable.
 const ACTIVITY_TYPE_BY_CATEGORY = new Map([["FULL TRAINING", "training_session"]]);
 
@@ -222,6 +230,50 @@ export function mappedMetricSpecs(rows) {
   return { block: null, specs };
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  return JSON.stringify(value === undefined ? null : value);
+}
+// A /more/ record's identity keys (its own row and track); everything else in it is content and compared whole, so the mapper
+// names no zone or event field here (those are read only through the extractor registry).
+const MORE_IDENTITY_KEYS = new Set(["athletesession_id", "track_id", "id"]);
+const moreContent = (more) => canonicalJson(Object.fromEntries(Object.entries(more).filter(([k]) => !MORE_IDENTITY_KEYS.has(k))));
+const levelKey = (row) => (row.drill === null || row.drill === undefined ? "full" : `drill:${row.drill}`);
+
+// MT-0: the tracks of one athlete are one recording when every track is the athlete's own, starts at the same instant in the same zone, holds the
+// same levels (one row each), and the rows of each level are equal in every consumed field, their /more/ included. Anything
+// else (a missing track or /more/, a second row of a level, any difference) is not identical: null, and today's rule applies.
+export function identicalTracks(bundle, athleteRows, trackIds) {
+  const tracks = trackIds.map((id) => bundle.tracks?.[id]);
+  if (tracks.some((t) => !t)) return null;
+  // Every track must be this athlete's own (only the used one is checked later, as track_athlete_mismatch).
+  if (tracks.some((t) => String(t.athlete) !== String(athleteRows[0]?.athlete))) return null;
+  for (const field of DUPLICATE_TRACK_FIELDS) {
+    if (tracks.some((t) => canonicalJson(t[field]) !== canonicalJson(tracks[0][field]))) return null;
+  }
+  const byTrack = new Map(trackIds.map((id) => [id, new Map()]));
+  for (const row of athleteRows) {
+    const levels = byTrack.get(String(row.track));
+    if (!levels || levels.has(levelKey(row))) return null;
+    levels.set(levelKey(row), row);
+  }
+  const first = byTrack.get(trackIds[0]);
+  for (const [, levels] of byTrack) {
+    if (levels.size !== first.size || [...levels.keys()].some((k) => !first.has(k))) return null;
+    for (const [key, row] of levels) {
+      const other = first.get(key);
+      if (DUPLICATE_ROW_FIELDS.some((f) => canonicalJson(row[f]) !== canonicalJson(other[f]))) return null;
+      const moreA = bundle.more?.[String(row.id)];
+      const moreB = bundle.more?.[String(other.id)];
+      if (!moreA || !moreB) return null;
+      if (moreContent(moreA) !== moreContent(moreB)) return null;
+    }
+  }
+  const sorted = [...trackIds].sort((a, b) => Number(a) - Number(b) || (a < b ? -1 : a > b ? 1 : 0));
+  return { count: trackIds.length, usedTrackId: sorted[0], ignoredTrackIds: sorted.slice(1) };
+}
+
 // bundle = {
 //   teamSession: GET team_session/:id/,
 //   athleteSessions: [GET athlete_session/:id/, ...] (whole + drill rows),
@@ -259,7 +311,8 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
   if (foreignRows > 0) anomalies.push({ kind: "foreign_athlete_session_ignored", detail: `${foreignRows} row(s) belong to another team_session` });
 
   // Group by athlete; an athlete recorded on more than one track in the
-  // same session (e.g. a device restart) is reported and not imported.
+  // same session (e.g. a device restart) is reported and not imported,
+  // unless the tracks are identical copies of one recording (MT-0).
   const byAthlete = new Map();
   for (const row of rows) {
     const athleteId = String(row.athlete);
@@ -273,11 +326,19 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
   const timezones = new Set();
   const participants = [];
   const leftOut = [];
-  for (const [gpexeAthleteId, athleteRows] of [...byAthlete.entries()].sort(([a], [b]) => Number(a) - Number(b))) {
-    const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
+  for (const [gpexeAthleteId, allRows] of [...byAthlete.entries()].sort(([a], [b]) => Number(a) - Number(b))) {
+    let athleteRows = allRows;
+    let trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
+    let duplicateTracks = null;
     if (trackIds.length > 1) {
-      anomalies.push({ kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review` });
-      continue;
+      duplicateTracks = identicalTracks(bundle, athleteRows, trackIds);
+      if (!duplicateTracks) {
+        anomalies.push({ kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review` });
+        continue;
+      }
+      // MT-0: one recording, from the lowest track id, with that track's own rows (their native identities).
+      athleteRows = athleteRows.filter((r) => String(r.track) === duplicateTracks.usedTrackId);
+      trackIds = [duplicateTracks.usedTrackId];
     }
     const track = bundle.tracks?.[trackIds[0]];
     if (!track) throw new GpexeMappingError("track_missing", `track ${trackIds[0]} for athlete ${gpexeAthleteId} was not fetched.`);
@@ -383,7 +444,7 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
         }
       }
     }
-    participants.push({ gpexeAthleteId, timezone: track.timezone, results });
+    participants.push({ gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}) });
   }
 
   const mixed = timezones.size > 1;
