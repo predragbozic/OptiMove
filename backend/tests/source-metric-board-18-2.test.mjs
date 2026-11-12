@@ -761,5 +761,9 @@ test("8. no answer or log line of this suite carries an athlete id, a GPEXE athl
     assert.equal(code(source).includes(forbidden), false, `the board service has no "${forbidden}"`);
     assert.equal(code(pure).includes(forbidden), false, `the pure module has no "${forbidden}"`);
   }
-  assert.equal((code(source).match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
+  // The one write of a read is the removal batch, in its own module (18-3), which sends that one statement and no other write.
+  assert.equal(/\bpool\b|remove_expired_confirmation_values/.test(code(source)), false, "the board service holds no connection of its own");
+  const removal = code(await fsp.readFile(path.resolve(__dirname, "../src/sourceMetricConfirmationRemoval.js"), "utf8"));
+  assert.equal((removal.match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
+  for (const forbidden of ["insert into", "update ", "delete from", "birth_date", "fetch("]) assert.equal(removal.includes(forbidden), false, `the removal module has no "${forbidden}"`);
 });

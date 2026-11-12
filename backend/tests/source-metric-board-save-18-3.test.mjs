@@ -741,3 +741,117 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   assert.ok(writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")) < firstOf("+source_metric_mapping_activations"), "the versions active before the starts");
   assert.equal(writes.at(-1), "+source_metric_audit:mapping_confirmation", "the keyed request record is the last write");
 });
+
+// ---------------------------------------------------------------------------
+// 4. The stored values afterwards: erasure, the on-demand and the scheduled removal
+// ---------------------------------------------------------------------------
+// A saved confirmation of a fresh team with one checked row.
+async function savedConfirmation() {
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const id = ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, f, target)])).confirmation.id;
+  return { t, id };
+}
+const expire = (ids) => planted(() => k.query(`update ${T9} set confirmed_at = confirmed_at - interval '2184 hours', values_expire_at = values_expire_at - interval '2184 hours' where id = any($1::uuid[])`, [ids]));
+const valuesOf = async (id) => one(`select raw_a is not null as held, values_salt is not null as salt, values_digest is not null as digest, values_removed_kind as kind, values_removed_by_user_id as by from ${T9I} where confirmation_id = $1 and checked`, [id]);
+
+test("8. route 6, erasure on request: only a platform admin in the platform workspace (the confirmer and the club's admins get the identical 404); a fixed reason code, never text; the values and the salt are gone, the digest, who and when stay; once", async () => {
+  const { id } = await savedConfirmation();
+  const erase = (who, body, target = id) => post(`/confirmations/${target}/erase-values`, who, body);
+  await nothingWritten(async () => {
+    for (const who of [W.caA, W.caA2, W.caB, W.paA]) assert.deepEqual(shape(await erase(who, { requestKey: key(), reasonCode: "erasure_request" })), NOT_FOUND);
+    assert.deepEqual(shape(await erase(W.pa, { requestKey: key(), reasonCode: "erasure_request" }, crypto.randomUUID())), NOT_FOUND);
+    assert.deepEqual(shape(await erase(W.pa, { requestKey: key(), reasonCode: "erasure_request" }, "not-a-uuid")), NOT_FOUND);
+    for (const body of [{}, { requestKey: key() }, { requestKey: key(), reasonCode: "because" }, { requestKey: key(), reasonCode: "The athlete asked." }, { requestKey: key(), reasonCode: "erasure_request", note: "x" }]) {
+      refused(await erase(W.pa, body), 400, "invalid_body");
+    }
+  });
+  assert.deepEqual(await valuesOf(id), { held: true, salt: true, digest: true, kind: null, by: null });
+  const requestKey = key();
+  const res = await erase(W.pa, { requestKey, reasonCode: "erasure_request" });
+  const body = ok(res);
+  assert.deepEqual(body.confirmation.rows.map((r) => [r.valuesState, r.values]), [["erased", null]]);
+  assert.equal(res.text.includes("1200"), false);
+  assert.deepEqual(await valuesOf(id), { held: false, salt: false, digest: true, kind: "erased", by: W.pa.id });
+  assert.deepEqual(await one(`select action, reason, basis, performed_by_user_id from ${T8} where confirmation_id = $1 and action = 'confirmation_values_erased'`, [id]),
+    { action: "confirmation_values_erased", reason: "erasure_request", basis: "platform_admin", performed_by_user_id: W.pa.id });
+  // A replay; another body under the key; a second erasure.
+  assert.equal(ok(await nothingWritten(() => erase(W.pa, { requestKey, reasonCode: "erasure_request" }))).replayed, true);
+  refused(await erase(W.pa, { requestKey, reasonCode: "wrong_confirmation" }), 409, "request_key_reused");
+  refused(await nothingWritten(() => erase(W.pa, { requestKey: key(), reasonCode: "wrong_confirmation" })), 409, "values_already_removed");
+});
+
+test("9. route 7 and the scheduled removal: values past their date are removed in batches, under the admin's identity with one audit row per confirmation (the last keyed) or by the schedule with none; two runs never remove the same confirmation; a run that removes nothing writes nothing; the schedule starts nothing inside the test runner or without a database", async () => {
+  const removal = await import("../src/sourceMetricConfirmationRemoval.js");
+  const remove = (who, body = { requestKey: key() }) => post("/confirmations/expired-values/remove", who, body);
+  // Start clean: whatever earlier tests left past its date is removed first.
+  await removal.runExpiredRemoval();
+  await nothingWritten(async () => {
+    for (const who of [W.caA, W.caB, W.paA]) assert.deepEqual(shape(await remove(who)), NOT_FOUND);
+    refused(await remove(W.pa, {}), 400, "invalid_body");
+    refused(await remove(W.pa, { requestKey: key(), limit: 5 }), 400, "invalid_body");
+    // Nothing is past its date: nothing removed, no row written.
+    assert.deepEqual(ok(await remove(W.pa)), { removed: 0, more: false, replayed: false });
+  });
+  // Route 7: two expired confirmations, one not expired.
+  const a = await savedConfirmation();
+  const b = await savedConfirmation();
+  const fresh = await savedConfirmation();
+  await expire([a.id, b.id]);
+  const requestKey = key();
+  const out = ok(await remove(W.pa, { requestKey }));
+  assert.deepEqual(out, { removed: 2, more: false, replayed: false });
+  for (const id of [a.id, b.id]) assert.deepEqual(await valuesOf(id), { held: false, salt: false, digest: true, kind: "expired", by: W.pa.id });
+  assert.deepEqual(await valuesOf(fresh.id), { held: true, salt: true, digest: true, kind: null, by: null });
+  const audit = await rows_(`select confirmation_id, request_key from ${T8} where action = 'confirmation_values_expired' and confirmation_id = any($1::uuid[]) order by request_key nulls first`, [[a.id, b.id]]);
+  assert.deepEqual(audit.map((r) => r.request_key), [null, requestKey]);
+  assert.deepEqual(ok(await nothingWritten(() => remove(W.pa, { requestKey }))), { removed: 2, more: false, replayed: true });
+  // The schedule: no acting user, no audit row, batch after batch until none is left.
+  const many = [];
+  for (let i = 0; i < 5; i += 1) many.push((await savedConfirmation()).id);
+  await expire(many);
+  const before = await counts();
+  assert.deepEqual(await removal.runExpiredRemoval({ limit: 2 }), { skipped: false, removed: 5, batches: 3, failed: false });
+  assert.equal((await counts()).t8, before.t8, "the schedule writes no audit row");
+  for (const id of many) assert.deepEqual(await valuesOf(id), { held: false, salt: false, digest: true, kind: "expired", by: null });
+  assert.deepEqual(await removal.runExpiredRemoval({ limit: 2 }), { skipped: false, removed: 0, batches: 1, failed: false });
+  // Two runs at once (two server processes): the second skips what the first holds and removes only the rest.
+  const three = [];
+  for (let i = 0; i < 3; i += 1) three.push((await savedConfirmation()).id);
+  await expire(three);
+  const first = new pg.Client({ connectionString: db.url });
+  await first.connect();
+  try {
+    await first.query("begin");
+    const held = (await first.query(`select training_load.remove_expired_confirmation_values(2) as ids`)).rows[0].ids;
+    assert.equal(held.length, 2);
+    assert.equal(await removal.removeExpiredBatch({ limit: 10 }), 1, "the other run takes only the confirmation the first does not hold");
+    await first.query("commit");
+    assert.equal(await removal.removeExpiredBatch({ limit: 10 }), 0);
+  } finally {
+    await first.query("rollback").catch(() => {});
+    await first.end();
+  }
+  for (const id of three) assert.equal((await valuesOf(id)).kind, "expired");
+  assert.equal((await one(`select count(*)::int as n from ${T9I} where confirmation_id = any($1::uuid[]) and values_removed_at is not null`, [three])).n, 3, "each removed once");
+  // A failing batch ends the run without throwing; one run at a time in a process.
+  removal.setRemovalFaultForTests(() => { throw Object.assign(new Error("planted"), { code: "57014" }); });
+  try { assert.deepEqual(await removal.runExpiredRemoval(), { skipped: false, removed: 0, batches: 0, failed: true }); } finally { removal.setRemovalFaultForTests(null); }
+  let release;
+  removal.setRemovalFaultForTests(() => new Promise((resolve) => { release = resolve; }), { boundMs: 5_000 });
+  try {
+    const running = removal.runExpiredRemoval();
+    assert.deepEqual(await removal.runExpiredRemoval(), { skipped: true, removed: 0, batches: 0 });
+    release();
+    assert.equal((await running).failed, false);
+  } finally { removal.setRemovalFaultForTests(null); }
+  // The schedule itself: nothing inside the test runner, nothing without a database; otherwise unref'd timers that can be stopped.
+  assert.ok(process.env.NODE_TEST_CONTEXT, "this suite runs under node:test");
+  assert.equal(removal.startConfirmationRemovalSchedule().started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "" } }).started, false);
+  assert.equal(removal.startConfirmationRemovalSchedule({ env: {} }).started, false);
+  const on = removal.startConfirmationRemovalSchedule({ env: { DATABASE_URL: "postgres://example.invalid/x" }, startupDelayMs: 3_600_000 });
+  assert.equal(on.started, true);
+  on.stop();
+});

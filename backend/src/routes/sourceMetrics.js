@@ -30,6 +30,7 @@ import * as previews from "../sourceMetricPreviewService.js";
 import * as instances from "../sourceInstanceEndService.js";
 import * as board from "../sourceMetricBoardService.js";
 import * as boardSave from "../sourceMetricBoardSaveService.js";
+import * as confirmationAdmin from "../sourceMetricConfirmationAdminService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -139,6 +140,24 @@ router.post("/confirmations", handle(async (req, res) => {
   if (!board.mayUseBoard(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await boardSave.saveConfirmation({ ctx, body: req.body }), 200);
+}));
+// Routes 6 and 7 (section 5.8): an active platform admin in the platform
+// workspace erases one confirmation's values on request, or removes one batch
+// of values past their date. API only in J18 (the runbook says how).
+// Registered before the :confirmationId read, so "expired-values" is never an id.
+router.post("/confirmations/expired-values/remove", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!confirmationAdmin.mayRemoveConfirmationValues(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await confirmationAdmin.removeExpiredConfirmationValues({ ctx, body: req.body }), 200);
+}));
+router.post("/confirmations/:confirmationId/erase-values", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!confirmationAdmin.mayRemoveConfirmationValues(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await confirmationAdmin.eraseConfirmationValues({ ctx, confirmationId: req.params.confirmationId, body: req.body }), 200);
 }));
 router.get("/confirmations/:confirmationId", handle(async (req, res) => {
   const ctx = await adminContext(req, res);

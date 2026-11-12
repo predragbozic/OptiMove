@@ -17,12 +17,12 @@
 // service); return, log or put into a URL an athlete id or a GPEXE athlete
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
-import { pool } from "./db.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeLevelValuesKeyed } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
+import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
 const { boundedRead, refusal, NOT_FOUND, UUID } = adminWriteKit;
@@ -31,11 +31,6 @@ const { boundedRead, refusal, NOT_FOUND, UUID } = adminWriteKit;
 export const BOARD_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 export const CONFIRMATIONS_PAGE = 50;
 const SOURCE_CONNECTION_PATH = "source_connection";
-const REMOVAL_BATCH = 200;
-// The removal batch's bounds: its statement and lock waits in the database, and the whole step on the client.
-const REMOVAL_STATEMENT_MS = 2000;
-const REMOVAL_LOCK_MS = 500;
-const REMOVAL_BOUND_MS = 4000;
 
 const BOARD_MESSAGES = {
   invalid_query: "The query carries a parameter this route does not take, or a value it cannot read.",
@@ -52,48 +47,13 @@ const BOARD_MESSAGES = {
 // made (sections 3.5 and 4.2). Codes only: the screen owns the sentences.
 export const COLUMN_REASONS = Object.freeze(["field_not_confirmed", "field_has_parameters", "source_metric_unsupported", "display_rule_missing", "no_value_for_pair"]);
 
-// Test seam: the removal batch that runs before a board or history read.
-let removalFault = null;
-let removalBoundMs = REMOVAL_BOUND_MS;
-export function setBoardRemovalFaultForTests(fn, { boundMs = REMOVAL_BOUND_MS } = {}) { removalFault = fn ?? null; removalBoundMs = fn ? boundMs : REMOVAL_BOUND_MS; }
-
 // Section 5.8: before every board or history read, ONE batch of the removal of
 // expired values, in its own call before the read's transaction (a read
-// transaction is read-only). Its failure is logged by code only and never
-// fails the read: no route returns a value past its date anyway.
-async function removeExpiredBatch() {
-  // Bounded twice: the statement and its lock waits in the database, and the
-  // whole step by a client bound that closes the connection, so a stalled
-  // batch delays a read by at most the bound and never fails it.
-  let client = null;
-  let abandoned = false;
-  let timer;
-  const close = (destroy) => { const c = client; client = null; if (c) c.release(destroy); };
-  const work = (async () => {
-    if (removalFault) await removalFault();
-    const c = await pool.connect();
-    if (abandoned) { c.release(true); return; }
-    client = c;
-    await c.query("begin");
-    await c.query(`set local statement_timeout = ${REMOVAL_STATEMENT_MS}`);
-    await c.query(`set local lock_timeout = ${REMOVAL_LOCK_MS}`);
-    await c.query(`select training_load.remove_expired_confirmation_values($1)`, [REMOVAL_BATCH]);
-    await c.query("commit");
-    close(false);
-  })();
-  work.catch(() => {});
-  try {
-    await Promise.race([work, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error("removal bound"), { code: "removal_bound_exceeded" })), removalBoundMs);
-    })]);
-  } catch (error) {
-    abandoned = true;
-    close(true); // the connection is closed, so nothing of the batch stays open
-    console.error(`[source-metric-board] expired_values_removal_failed (${error?.code ?? error?.name ?? "error"})`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+// transaction is read-only). Its failure or stall is logged by code only and
+// never fails the read: no route returns a value past its date anyway.
+const removeExpiredBatch = () => removeExpiredValuesBatch();
+// Test seam (the tests of 18-2): the removal module's own.
+export function setBoardRemovalFaultForTests(fn, options) { setRemovalFaultForTests(fn, options); }
 
 // The query, from the raw query string (never Express's parsed req.query).
 // A parameter the route does not take, a repeated one or a malformed value
@@ -689,13 +649,20 @@ export async function readConfirmation({ ctx, confirmationId }) {
   if (typeof confirmationId !== "string" || !UUID.test(confirmationId)) throw NOT_FOUND();
   await removeExpiredBatch();
   return boundedRead(async (client) => {
-    const row = (await client.query(`select ${CONFIRMATION_COLUMNS} ${SCOPE_SQL} and c.id = $3::uuid`, [ctx.owner.scope, ctx.owner.clubId, confirmationId.toLowerCase()])).rows[0];
-    if (!row) throw NOT_FOUND();
-    const items = await itemsOf(client, [row.id]);
-    return { confirmation: confirmationOut(row, items.get(row.id) ?? []) };
+    const found = await confirmationById(client, ctx, confirmationId.toLowerCase());
+    if (!found) throw NOT_FOUND();
+    return found;
   });
 }
 
 // What the save (sourceMetricBoardSaveService.js) reuses, so that it
 // recomputes exactly what the reads showed.
-export const boardKit = Object.freeze({ loadWorld, columnsOf, choosePair, placementOf, preplacedOf, BOARD_MESSAGES, removeExpiredBatch });
+// One confirmation in the caller's History scope, on the caller's executor: { confirmation } or null.
+async function confirmationById(executor, ctx, confirmationId) {
+  if (!mayReadConfirmations(ctx)) return null;
+  const row = (await executor.query(`select ${CONFIRMATION_COLUMNS} ${SCOPE_SQL} and c.id = $3::uuid`, [ctx.owner.scope, ctx.owner.clubId, confirmationId])).rows[0];
+  if (!row) return null;
+  const items = await itemsOf(executor, [row.id]);
+  return { confirmation: confirmationOut(row, items.get(row.id) ?? []) };
+}
+export const boardKit = Object.freeze({ loadWorld, columnsOf, choosePair, placementOf, preplacedOf, BOARD_MESSAGES, removeExpiredBatch, confirmationById });
