@@ -10,7 +10,12 @@
   - Every row of one save carries the same key and hash. The service answers a repeated key from these rows (the replay), so a
     lost answer can be retried with the same key and is never saved twice.
   - A key used with another hash is `409 request_key_reused`. The provenance guard (v63's `validate_metric_value_estimate`,
-    replaced under an md5 gate) also refuses a second hash for an (author, key) in the database.
+    replaced under an md5 gate) also refuses a second hash for an (author, key) in the database. It first takes a
+    transaction-scoped advisory lock of that (author, key) (seed 64), and the save takes the same lock before its replay read,
+    so two saves of one key on two teams' sessions at once are decided one after the other (the team lock does not serialise
+    them): the second is `request_key_reused`.
+  - The session undo deletes an estimate's provenance rows with the session, and with them its key: the same key can then save
+    anew, the same way a refused save leaves its key free.
   - The table must be empty: 6b-B is its first writer, so the columns need no default.
 - **The participant's time zone (Q2 (a)).** v12's `protect_participant_identity_once_measured`, replaced under an md5 gate:
   - an estimate save creates the athlete's event participant in the **event's zone** (`event_timezone_snapshot`, which is the
@@ -43,7 +48,7 @@ After v63: v64 refuses to run without v63's table, or while that table holds a r
 
 `metric-value-estimates-v64-postcheck.sql`, read-only, checks:
 - v64 is recorded once and is the last migration;
-- the two bodies are v64's (`2064f10c…` for the participant guard, `a774e02c…` for the provenance guard);
+- the two bodies are v64's (`2064f10c…` for the participant guard, `d4fdb1a8…` for the provenance guard);
 - both request columns are `NOT NULL`, the hash CHECK and the index are there;
 - the two triggers that run these bodies are enabled;
 - no estimate exists, and there is no idle transaction.

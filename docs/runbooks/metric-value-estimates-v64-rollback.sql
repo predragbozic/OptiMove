@@ -43,7 +43,7 @@ begin
     raise exception 'v64 rollback refused: an estimate exists';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'training_load' and p.proname = 'validate_metric_value_estimate') is distinct from 'a774e02c6c33a3a80c468108334ee322'
+       where n.nspname = 'training_load' and p.proname = 'validate_metric_value_estimate') is distinct from 'd4fdb1a813a4560651493af644632ea3'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'protect_participant_identity_once_measured') is distinct from '2064f10c42b0754659e29b7855fe36df' then
     raise exception 'v64 rollback refused: the bodies in force are not v64''s';

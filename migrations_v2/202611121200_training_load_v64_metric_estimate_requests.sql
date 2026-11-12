@@ -9,7 +9,8 @@
 --      with another hash is request_key_reused. A plain index on (estimated_by_user_id, request_key) serves that lookup.
 --      The table must be empty (6b-B is the first writer), so the columns need no default.
 --   2. The provenance guard (v63's validate_metric_value_estimate, replaced under an md5 gate) also refuses a row whose
---      (author, key) is already used with another hash.
+--      (author, key) is already used with another hash, under a transaction-scoped advisory lock of that (author, key)
+--      (seed 64; the save takes the same lock before its replay read).
 --   3. v12's protect_participant_identity_once_measured (replaced under an md5 gate): a participant's
 --      athlete_timezone_snapshot may change after measurements exist only when every occasion of that participant is an
 --      estimate occasion (effective or superseded) with no source identity, and nothing else of the row changes. An
@@ -87,7 +88,9 @@ begin
           or (v_val.daily_aggregation_method = 'avg' and new.method in ('copy_athlete', 'team_average'))) then
     raise exception 'estimate: this method is not allowed for this variable' using errcode = '23514';
   end if;
-  -- v64: one request key names one request.
+  -- v64: one request key names one request. The (author, key) lock serialises two saves of one key (two teams' sessions
+  -- at once, where the team lock does not serialise them); the check below then reads in a new snapshot.
+  perform pg_advisory_xact_lock(hashtextextended('estimate-request:' || new.estimated_by_user_id::text || ':' || new.request_key::text, 64));
   if exists (select 1 from training_load.metric_value_estimates e
               where e.estimated_by_user_id = new.estimated_by_user_id and e.request_key = new.request_key
                 and e.request_hash is distinct from new.request_hash) then

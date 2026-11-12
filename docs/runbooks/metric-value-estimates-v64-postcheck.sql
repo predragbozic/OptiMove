@@ -1,5 +1,5 @@
 -- Read-only POST-CHECK for migration v64 (migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql); run after the deploy that applied it (the Rukovodilac, each block in a
--- read-only transaction). Changes nothing. Every block returns ok = true.
+-- read-only transaction). Changes nothing. Every boolean column of every block must be true.
 
 -- 1. v64 is recorded once and is the last migration.
 select (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql') = 1 as recorded_once,
@@ -9,7 +9,7 @@ select (select count(*) from public.schema_migrations where migration_name = 'mi
 select (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training_load' and p.proname = 'protect_participant_identity_once_measured') = '2064f10c42b0754659e29b7855fe36df' as protect_is_v64,
        (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-         where n.nspname = 'training_load' and p.proname = 'validate_metric_value_estimate') = 'a774e02c6c33a3a80c468108334ee322' as guard_is_v64;
+         where n.nspname = 'training_load' and p.proname = 'validate_metric_value_estimate') = 'd4fdb1a813a4560651493af644632ea3' as guard_is_v64;
 
 -- 3. The request columns (NOT NULL), the hash shape CHECK and the index.
 select (select count(*) from information_schema.columns where table_schema = 'training_load' and table_name = 'metric_value_estimates'

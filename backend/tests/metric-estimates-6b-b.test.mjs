@@ -336,6 +336,8 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   assert.equal((await proposal(team, s, "not-a-uuid")).body.error, "invalid_athlete");
   assert.equal((await proposal(team, s, team.athleteIds[DAN], { extra: "&minutes=0" })).body.error, "invalid_minutes");
   assert.equal((await proposal(team, s, team.athleteIds[DAN], { extra: "&minutes=601" })).body.error, "invalid_minutes");
+  // The bounds hold after rounding to 2 decimals: 0.004 is 0.
+  assert.equal((await proposal(team, s, team.athleteIds[DAN], { extra: "&minutes=0.004" })).body.error, "invalid_minutes");
   const stranger = (await admin.query(`insert into public.athletes (full_name, display_name, device_timezone) values ('X','X','Europe/Sarajevo') returning id`)).rows[0].id;
   assert.deepEqual([(await proposal(team, s, stranger)).status, (await proposal(team, s, stranger)).body.error], [409, "athlete_not_on_roster"]);
   assert.equal((await proposal(team, s, team.athleteIds[DAN], { extra: `&sourceAthleteId=${team.athleteIds[EVA]}` })).body.methods.copy_athlete.reason, "copy_source_not_usable");
@@ -345,6 +347,10 @@ const round3 = (x) => Math.round(x * 1000) / 1000;
 
 test("4. the save (team_average): one occasion per variable with its provenance, the request key and hash on every row, the participant in the event's zone with its confirmed activity link; the canonical reader shows the estimate", async () => {
   const { team, s, distance, maxSpeed } = await historyWorld();
+  // Dan's own zone differs from the event's: the participant must take the event's.
+  await admin.query(`update public.athletes set device_timezone = $2 where id = $1`, [team.athleteIds[DAN], OTHER_TZ]);
+  const eventZone = (await admin.query(`select event_timezone_snapshot z from training_load.metric_events where id = $1`, [s.eventId])).rows[0].z;
+  assert.notEqual(eventZone, OTHER_TZ);
   const requestKey = key();
   const r = await save(team, s, { requestKey, athleteId: team.athleteIds[DAN], method: "team_average", note: "  left early  " });
   assert.equal(r.status, 201, r.text);
@@ -359,7 +365,7 @@ test("4. the save (team_average): one occasion per variable with its provenance,
   assert.equal(rows.length, r.body.estimates.length);
   assert.equal(new Set(rows.map((x) => x.occasion_id)).size, rows.length, "one occasion per variable");
   assert.equal(new Set(rows.map((x) => x.request_hash)).size, 1, "one hash per save");
-  assert.equal(rows.every((x) => x.estimated_by_user_id === team.coach.id && x.athlete_timezone_snapshot === TZ), true);
+  assert.equal(rows.every((x) => x.estimated_by_user_id === team.coach.id && x.athlete_timezone_snapshot === eventZone), true, "the participant is in the event's zone, not the athlete's own");
   const link = (await admin.query(
     `select ap.participation_status, l.link_status from training_load.metric_event_participants p
        join training.activity_participant_metric_participant_links l on l.metric_event_participant_id = p.id
@@ -410,6 +416,7 @@ test("6. the stable refusals, each writing nothing: the body (400s), an athlete 
     [{ athleteId: dan, method: "guess" }, 400, "invalid_method"],
     [{ athleteId: dan, method: "proportional", minutes: 0 }, 400, "invalid_minutes"],
     [{ athleteId: dan, method: "proportional", minutes: 601 }, 400, "invalid_minutes"],
+    [{ athleteId: dan, method: "proportional", minutes: 0.004 }, 400, "invalid_minutes"],
     [{ athleteId: dan, method: "team_average", minutes: 30 }, 400, "invalid_minutes"],
     [{ athleteId: dan, method: "copy_athlete" }, 400, "invalid_source_athlete"],
     [{ athleteId: dan, method: "copy_athlete", sourceAthleteId: dan }, 400, "invalid_source_athlete"],
@@ -645,6 +652,11 @@ test("12. migration v64: the preflight passes on v63, the post-check on v64; the
     await assert.rejects(applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS), /v64_metric_estimate_requests\.sql" \(SQLSTATE 23514\)/);
     await client.query(src64);
     assert.deepEqual(await catalogOf(client), v63Catalog, "nothing of v64 was applied");
+    const guardSrc = (await client.query(`select pg_get_functiondef('training_load.validate_metric_value_estimate()'::regprocedure) d`)).rows[0].d;
+    await client.query(guardSrc.replace("$function$\ndeclare", "$function$\n-- changed\ndeclare"));
+    await assert.rejects(applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS), /v64_metric_estimate_requests\.sql" \(SQLSTATE 23514\)/);
+    await client.query(guardSrc);
+    assert.deepEqual(await catalogOf(client), v63Catalog, "nothing of v64 was applied over the changed guard either");
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
     const post = await booleansOf(client, fs.readFileSync(RUNBOOK("metric-value-estimates-v64-postcheck.sql"), "utf8"));
     assert.ok(post.length >= 9, `the post-check returned its booleans (${post.length})`);
@@ -677,7 +689,35 @@ test("12. migration v64: the preflight passes on v63, the post-check on v64; the
     await client.end();
     await rb.drop();
   }
-  // Without v63, or with a row already in v63's table, v64 refuses and applies nothing.
+  // A row already in v63's table: v64 refuses and applies nothing.
+  const withRow = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est64row", migrations: UP_TO_V63 });
+  try {
+    const c = new pg.Client({ connectionString: withRow.url });
+    await c.connect();
+    try {
+      const u = (await c.query(`insert into public.users (email, full_name, display_name) values ('row64@test.local','R','R') returning id`)).rows[0].id;
+      const ath = (await c.query(`insert into public.athletes (full_name, display_name, device_timezone) values ('R','R','Europe/Sarajevo') returning id`)).rows[0].id;
+      const ev = (await c.query(`insert into training_load.metric_events (owner_scope, owner_user_id, scope_level, occurred_date) values ('user',$1,'session','2026-09-14') returning id`, [u])).rows[0].id;
+      const p = (await c.query(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Sarajevo') returning id`, [ev, ath])).rows[0].id;
+      await c.query("begin");
+      await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [u]);
+      const defId = (await c.query(`insert into training_load.metric_definitions (key, label, owner_scope, owner_user_id) values ('row64_sum','Row sum','user',$1) returning id`, [u])).rows[0].id;
+      const verId = (await c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, value_type, unit, daily_aggregation_method) values ($1,1,'numeric','m','sum') returning id`, [defId])).rows[0].id;
+      await c.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [defId]);
+      const o = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [p, u])).rows[0].id;
+      const v = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [o, defId, verId])).rows[0].id;
+      await c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id) values ($1,$2,'team_average','{"athletes":3}',$3)`, [v, o, u]);
+      await c.query("commit");
+      const sql = fs.readFileSync(new URL(`../../migrations_v2/${V64_FILE}`, import.meta.url), "utf8");
+      await assert.rejects(c.query(sql), /v64 refused: metric_value_estimates already holds a row/);
+      assert.equal((await c.query(`select count(*)::int n from information_schema.columns where table_schema = 'training_load' and table_name = 'metric_value_estimates' and column_name = 'request_key'`)).rows[0].n, 0);
+    } finally {
+      await c.end();
+    }
+  } finally {
+    await withRow.drop();
+  }
+  // Without v63, v64 refuses and applies nothing.
   const without = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est64no63", migrations: UP_TO_V63.filter((m) => !m.includes("v63_metric_value_estimates")) });
   try {
     const c = new pg.Client({ connectionString: without.url });
@@ -691,4 +731,97 @@ test("12. migration v64: the preflight passes on v63, the post-check on v64; the
   } finally {
     await without.drop();
   }
+});
+
+// A team whose session's units report two zones: the event takes the team's zone (v62), Europe/Berlin here.
+let berlin;
+async function berlinWorld() {
+  if (berlin) return berlin;
+  const team = await setupTeam();
+  await admin.query(`insert into training_load.gpexe_team_session_timezones (owner_team_id, timezone, set_by_user_id, reason) values ($1,'Europe/Berlin',$2,'test')`, [team.teamId, team.padmin.id]);
+  const s = await importSession(team, bundleOf({ sessionId: 9801, ids: [101, 102, 104], zones: { 102: OTHER_TZ } }));
+  berlin = { team, s };
+  return berlin;
+}
+
+test("13. Q2 with v62: in a session whose units report two zones the event is in the team's zone, and the estimate participant takes that zone (not the athlete's own, not a fixture default)", async () => {
+  const { team, s } = await berlinWorld();
+  assert.equal((await admin.query(`select event_timezone_snapshot z from training_load.metric_events where id = $1`, [s.eventId])).rows[0].z, "Europe/Berlin");
+  await admin.query(`update public.athletes set device_timezone = $2 where id = $1`, [team.athleteIds[DAN], OTHER_TZ]);
+  const r = await save(team, s, { athleteId: team.athleteIds[DAN], method: "team_average" });
+  assert.equal(r.status, 201, r.text);
+  const p = (await admin.query(`select athlete_timezone_snapshot z from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [s.eventId, team.athleteIds[DAN]])).rows[0];
+  assert.equal(p.z, "Europe/Berlin");
+});
+
+test("14. one key, two teams at once: a platform admin's two saves with one requestKey and different bodies on two teams' sessions are decided one after the other - the second is request_key_reused, never a second hash or a 500", async () => {
+  const a = await historyWorld();
+  const b = await berlinWorld();
+  const padmin = a.team.padmin;
+  const requestKey = key();
+  let release;
+  const paused = new Promise((resolve) => { release = resolve; });
+  let reached;
+  const atCommit = new Promise((resolve) => { reached = resolve; });
+  let calls = 0;
+  estimates.setEstimateTestHooks({
+    durationKey: a.timeKey,
+    beforeCommit: async () => { calls += 1; if (calls === 1) { reached(); await paused; } },
+  });
+  try {
+    const first = save(a.team, a.s, { requestKey, athleteId: a.team.athleteIds[EVA], method: "team_average" }, { cookie: padmin.cookie });
+    await atCommit;
+    const second = save(b.team, b.s, { requestKey, athleteId: b.team.athleteIds[DAN], method: "team_average" }, { cookie: padmin.cookie });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    release();
+    const [r1, r2] = await Promise.all([first, second]);
+    assert.equal(r1.status, 201, r1.text);
+    assert.deepEqual([r2.status, r2.body.error], [409, "request_key_reused"], r2.text);
+  } finally {
+    release();
+    estimates.setEstimateTestHooks({ durationKey: a.timeKey });
+  }
+  const hashes = (await admin.query(`select count(distinct request_hash)::int n from training_load.metric_value_estimates where request_key = $1`, [requestKey])).rows[0].n;
+  assert.equal(hashes, 1);
+});
+
+test("15. v64's guard serialises one (author, key) in the database: a second transaction with another hash waits for the first and is then refused", async () => {
+  // Two events of two teams (the occasion trigger locks the event row, so one event would serialise them anyway): only the
+  // guard's (author, key) lock orders the two transactions.
+  const { team, s } = await historyWorld();
+  const other = await berlinWorld();
+  assert.equal((await save(team, s, { athleteId: team.athleteIds[EVA], method: "team_average" })).status, 201);
+  assert.equal((await save(other.team, other.s, { athleteId: other.team.athleteIds[DAN], method: "team_average" }, { cookie: other.team.padmin.cookie })).status, 201);
+  const partOf = async (eventId, athleteId) => (await admin.query(
+    `select id from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [eventId, athleteId])).rows[0].id;
+  const parts = [await partOf(s.eventId, team.athleteIds[EVA]), await partOf(other.s.eventId, other.team.athleteIds[DAN])];
+  const def = (await admin.query(
+    `select v.metric_definition_id d, v.metric_definition_version_id ver from training_load.metric_value_estimates e join training_load.metric_values v on v.id = e.metric_value_id order by e.estimated_at desc limit 1`,
+  )).rows[0];
+  const k = key();
+  const write = async (c, participantId, hash) => {
+    await c.query("begin");
+    await c.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    const o = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'estimate',$2) returning id`, [participantId, team.coach.id])).rows[0].id;
+    const v = (await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,1) returning id`, [o, def.d, def.ver])).rows[0].id;
+    return c.query(`insert into training_load.metric_value_estimates (metric_value_id, occasion_id, method, basis, estimated_by_user_id, request_key, request_hash) values ($1,$2,'team_average','{"athletes":3}',$3,$4,$5)`, [v, o, team.coach.id, k, hash]);
+  };
+  const ca = new pg.Client({ connectionString: db.url });
+  const cb = new pg.Client({ connectionString: db.url });
+  await ca.connect();
+  await cb.connect();
+  try {
+    await write(ca, parts[0], "a".repeat(64));
+    let settled = false;
+    const pending = write(cb, parts[1], "b".repeat(64)).then(() => "ok", (e) => e.message).finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(settled, false, "the second waits for the first");
+    await ca.query("commit");
+    assert.match(await pending, /a request key names one request/);
+    await cb.query("rollback");
+  } finally {
+    await ca.end();
+    await cb.end();
+  }
+  assert.equal((await admin.query(`select count(distinct request_hash)::int n from training_load.metric_value_estimates where request_key = $1`, [k])).rows[0].n, 1);
 });

@@ -208,7 +208,8 @@ a save writes one occasion for each variable it estimates.
 **Migration v64** (`migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql`; runbook
 `docs/runbooks/metric-value-estimates-v64.md`):
 - `metric_value_estimates.request_key` and `request_hash`, both `NOT NULL`, with an index on `(estimated_by_user_id,
-  request_key)`. The provenance guard refuses a second hash for an (author, key).
+  request_key)`. The provenance guard refuses a second hash for an (author, key), under a transaction-scoped advisory lock of
+  that (author, key).
 - v12's participant guard allows a change of `athlete_timezone_snapshot` alone, and only while every occasion of the participant
   is an estimate with no source identity.
 
@@ -224,19 +225,21 @@ a save writes one occasion for each variable it estimates.
     - the session's variables, each `estimable` or with its reason (`not_estimable` for a non-numeric or `max` / `last` / `none`
       variable, `measured_exists` for a variable with the athlete's own real value);
     - the three methods' numbers per variable, or why one cannot run (`too_few_athletes`, `too_few_sessions`,
-      `minutes_required`, `duration_not_available`, `method_not_for_variable`, `source_has_no_value`);
+      `minutes_required`, `duration_not_available`, `method_not_for_variable`, `source_has_no_value`, and `invalid_history` for
+      a negative rate from a source's negative values);
     - the default minutes (the median of the other athletes' measured durations) and the minutes used;
     - the copy sources: roster athletes with a measured value of an estimable variable.
 - `POST /api/training-activity/:activityId/estimates` `{ requestKey, athleteId, method, minutes?, sourceAthleteId?, note? }`
   - **Validation:**
-    - `minutes` belongs to `proportional` only (above 0, at most 600; default: the median as above);
+    - `minutes` belongs to `proportional` only (above 0 and at most 600 after rounding to 2 decimals; default: the median as
+      above);
     - `sourceAthleteId` belongs to `copy_athlete` only and is never the athlete;
     - `note` is one trimmed line of at most 500 visible characters.
   - **One transaction, in this lock order:**
     1. `training.lock_activity_decider` (`403 not_a_team_coach`);
     2. the team's import lock, try-lock (`409 try_again`);
     3. the alias set;
-    4. the replay;
+    4. the (author, request key) advisory lock (v64's guard takes the same one), then the replay;
     5. the checks under the locks;
     6. the participant in the event's zone and its confirmed activity link
        (`training.materialize_activity_group_from_metric_event`);
@@ -276,13 +279,14 @@ a save writes one occasion for each variable it estimates.
 - the audience;
 - the proposal;
 - the save with its rows and link;
-- the request key;
+- the request key, and one key sent to two teams' sessions at once (`request_key_reused`, never a second hash);
 - the refusals;
 - rule 7;
 - the try-lock;
 - the COMMIT outcomes;
 - Q2 through a real re-import (the zone re-snapshot, the supersede, the preview's list, and the frozen zone with a manual value);
-- v64's participant guard;
+- v64's participant guard, and its (author, key) lock between two transactions on two events;
+- the participant in the event's zone when the athlete's own zone differs, and in the v62 team zone for a mixed session;
 - the migration's preflight, post-check and rehearsed rollback.
 
 **Not in 6b-B:** the screens (6b-C) and the dashboards (6b-D).

@@ -1,5 +1,5 @@
 -- Read-only PREFLIGHT for migration v64 (migrations_v2/202611121200_training_load_v64_metric_estimate_requests.sql); run before the deploy that applies it (the Rukovodilac, Supabase SQL Editor,
--- each block in a read-only transaction). Changes nothing. Every block returns rows with ok = true.
+-- each block in a read-only transaction). Changes nothing. Every boolean column of every block must be true.
 
 -- 1. v63 is the last applied migration and v64 is not recorded.
 select (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%')

@@ -13,6 +13,7 @@
 //   1. training.lock_activity_decider(user, team, basis)      (42501 -> 403 not_a_team_coach)
 //   2. the team's import lock, try-lock                        (taken by an import or check -> 409 try_again)
 //   3. the alias set's activity rows FOR KEY SHARE (lockAliasSet)
+//   3b. the (author, request key) advisory lock (v64's guard takes the same one)
 //   4. the request key's rows (the replay), then the checks under the locks
 //   5. the event participant and its confirmed activity link (training.materialize_activity_group_from_metric_event)
 //   6. per variable: the estimate occasion, its one value, its provenance row (v63's guards; M3 supersedes an older
@@ -66,10 +67,12 @@ const round = (value, digits) => {
 function minutesOf(value) {
   if (value === undefined || value === null || value === "") return null;
   const n = typeof value === "string" ? Number(value) : value;
-  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0 || n > MAX_MINUTES) {
+  // The bounds hold for the value that is used and stored (rounded to 2 decimals): 0.004 is 0, refused.
+  const used = typeof n === "number" && Number.isFinite(n) ? round(n, 2) : NaN;
+  if (!(used > 0) || used > MAX_MINUTES) {
     throw bad("invalid_minutes", `minutes must be a number above 0 and at most ${MAX_MINUTES}.`);
   }
-  return round(n, 2);
+  return used;
 }
 
 export function validateProposalQuery(query) {
@@ -280,6 +283,8 @@ async function proportional(client, ctx, minutes) {
     if (used.length < PROPORTIONAL_MIN_SESSIONS) return { variable: v, value: null, reason: "too_few_sessions", basis: null };
     const rate = used.reduce((s, u) => s + u.val, 0) / used.reduce((s, u) => s + u.dur, 0);
     const ratePerMinute = round(rate, 6);
+    // A negative history (a source's negative values) gives no rate (v63's basis holds ratePerMinute >= 0).
+    if (!(ratePerMinute >= 0)) return { variable: v, value: null, reason: "invalid_history", basis: null };
     return { variable: v, value: round(ratePerMinute * minutes, 3), reason: null, basis: { minutes, ratePerMinute, sessions: used.length } };
   });
 }
@@ -470,6 +475,12 @@ export async function saveEstimate(ctx, activityId, body) {
       const again = await resolveRosterTarget(client, ctx, canonicalId, { deferGate: true });
       if (String(again.team.id) !== teamId || again.basis !== target.basis) throw notFound();
     }
+    // The (author, key) lock v64's guard takes: two saves of one key on two teams' sessions (the team lock does not
+    // serialise them) are decided one after the other, so the replay below sees the other's committed rows.
+    await client.query(
+      `select pg_advisory_xact_lock(hashtextextended('estimate-request:' || $1::uuid::text || ':' || $2::uuid::text, 64))`,
+      [ctx.userId, input.requestKey],
+    );
 
     // The replay: a saved answer wins over the present state.
     const prior = await readSaved(client, ctx.userId, input.requestKey);
