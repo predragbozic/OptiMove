@@ -271,7 +271,7 @@ test("IMP2 1: the confirmation asks one question over one light list; what happe
   await act("training-load-gpexe-import-ready");
   const d = dialog();
   assert.match(d, /<p class="imports-batch-question"><strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong><\/p>\s*<ul class="imports-batch-list">/, "the question comes first, the list right under it");
-  assert.match(d, /<details class="imports-batch-more"><summary>What happens<\/summary><p class="muted">Each session is imported on its own/);
+  assert.match(d, /<p class="muted imports-batch-warning">Results imported under the wrong athlete can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>\s*<details class="imports-batch-more"><summary>What happens<\/summary><p class="muted">Each session is imported on its own/, "the lasting consequence stays in sight; how it runs is folded");
   assert.match(d, /data-action="training-load-gpexe-batch-back" >Cancel<\/button>\s*<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-send" >Import 2 sessions</);
 });
 
@@ -285,10 +285,10 @@ test("IMP2 2: the result says what was imported and where to see it in one line,
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
   const d = dialog();
-  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities\.<\/p>/);
+  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and in the Imported tab\.<\/p>/);
   assert.doesNotMatch(d, /listed under Imported below/, "Imported is a tab since IMP1");
   assert.equal((d.match(/<details class="gpexe-tech">/g) || []).length, 1, "one Technical details for the whole result");
-  assert.match(d, /<dt>Session cand-1<\/dt><dd>imported · approval appr-cand-1<\/dd>/);
+  assert.match(d, /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-cand-1<\/dd>/);
 });
 
 test("IMP2 3: the dialog's CSS is coach-side only and draws light rows with the outcome's dot", () => {
@@ -301,5 +301,21 @@ test("IMP2 3: the dialog's CSS is coach-side only and draws light rows with the 
   assert.match(block, /\.imports-batch \.imports-batch-list li \{[^}]*border: 0;[^}]*border-bottom: 1px solid var\(--line\);/);
   assert.match(block, /li\.is-imported \.imports-batch-outcome::before \{\n  background: var\(--om-success\);/);
   assert.match(block, /\.imports-batch-more > summary::after \{\n  content: "\\25B8";/, "'What happens' reads as a fold");
-  assert.match(block, /\.imports-tab-title \+ \.imports-attn-group \{\n  border-top: 0;/, "no line above the first group (the hidden title is the first child)");
+  assert.match(block, /\.imports-tab-panel \.imports-attn-group \{\n  border-top: 0;/, "no line above the first group, also with a day picked");
+});
+
+test("IMP2 4: a mixed result names only the imported ones in its Activities sentence", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2)],
+    onImports: () => ({ status: 200, body: { summary: { imported: 1, alreadyImported: 0, refused: 1, unknown: 0, notAttempted: 0 }, results: [
+      { candidateId: "cand-1", outcome: "imported", code: null, approvalId: "appr-1", commitConfirmation: "confirmed" },
+      { candidateId: "cand-2", outcome: "refused", code: "preview_changed", approvalId: null },
+    ] } }),
+  }));
+  await openImports();
+  await act("training-load-gpexe-import-ready");
+  await act("training-load-gpexe-batch-send");
+  assert.match(dialog(), /You can see the imported ones in Training Load → Activities and in the Imported tab\./);
+  assert.match(dialog(), /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-1<\/dd>/, "the raw GPEXE name stays under Technical details");
 });

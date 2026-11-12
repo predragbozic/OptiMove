@@ -372,9 +372,11 @@ function sessionTitle(c) {
   return label.replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
 }
 
-// The session's name in plain words for the review's heading: "GPEXE FULL
-// TRAINING" reads "Full training". The raw GPEXE name stays in an
-// administrator's Technical details.
+// The session's name in plain words: "GPEXE FULL TRAINING" reads "Full training". IMP2: the one rule for every place a
+// session is named (the review's heading, the Imports rows, the import dialog, Link athletes); a number in the name
+// stays ("Full training 2"), and every place shows the day and the time beside it, so two sessions of one day never
+// read the same. The raw GPEXE name stays under Technical details (the review's for an administrator, the import
+// dialog's for everyone).
 function niceSessionName(c) {
   let label = sessionTitle(c).replace(/^GPEXE\s+/i, "").replace(/\s+\d{1,2}\.\d{1,2}\.(?:\d{2,4})?$/, "").trim();
   if (!label || label === "session") label = "Session";
@@ -983,14 +985,14 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   if (pick && batchSelectable(c, gx)) {
     const checked = Object.hasOwn(gx.batch.selected, c.id);
     const full = !checked && Object.keys(gx.batch.selected).length >= BATCH_MAX;
-    box = `<label class="imports-pick"><input type="checkbox" data-action="training-load-gpexe-pick" data-candidate-id="${escapeAttr(c.id)}" aria-label="Select ${escapeAttr(sessionTitle(c))} ${escapeAttr(fmtDateTime(c.sessionStartedAt))}" ${checked ? "checked" : ""} ${full || gx.batch.sending ? "disabled" : ""}></label>`;
+    box = `<label class="imports-pick"><input type="checkbox" data-action="training-load-gpexe-pick" data-candidate-id="${escapeAttr(c.id)}" aria-label="Select ${escapeAttr(niceSessionName(c))} ${escapeAttr(fmtDateTime(c.sessionStartedAt))}" ${checked ? "checked" : ""} ${full || gx.batch.sending ? "disabled" : ""}></label>`;
   }
   return `
     <li class="${box ? "imports-pick-row" : ""}">
       ${box}
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
-          <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), sessionTitle(c)].filter(Boolean).join(" · "))}</strong>
+          <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · "))}</strong>
           <span class="muted">${escapeHtml(sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt))}</span>
         </span>
         ${badge}
@@ -1149,7 +1151,7 @@ function batchFacts(c) {
 
 function batchSessionLine(c, candidateId) {
   if (!c) return `<strong>Session</strong> <span class="muted">(no longer in the list)</span>`;
-  return `<strong>${escapeHtml(sessionTitle(c))}</strong> <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>`;
+  return `<strong>${escapeHtml(niceSessionName(c))}</strong> <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>`;
 }
 
 function renderBatchOverlayHtml(gx) {
@@ -1208,15 +1210,17 @@ function batchTeamName(gx) {
 function renderBatchReviewHtml(gx, items) {
   const b = gx.batch;
   const busy = b.sending ? "disabled" : "";
-  // IMP2 (the sketch's one-line confirmation): the question first, the sessions as one light list, what happens folded.
+  // IMP2 (the sketch's one-line confirmation): the question first, the sessions as one light list; the one lasting
+  // consequence (a wrong athlete link) stays in sight, how the import runs is folded.
   return `
     <p class="imports-batch-question"><strong>Import ${escapeHtml(plural(items.length, "session", "sessions"))}${batchTeamName(gx) ? ` into ${escapeHtml(batchTeamName(gx))}` : ""}? Their values appear in Training Load right away.</strong></p>
     <ul class="imports-batch-list">
       ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
-    <details class="imports-batch-more"><summary>What happens</summary><p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p></details>
+    <p class="muted imports-batch-warning">Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    <details class="imports-batch-more"><summary>What happens</summary><p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others.</p></details>
     ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
-    ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")]])}
+    ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")], ["GPEXE session names", items.map((i) => i.candidate?.label).filter(Boolean).join("; ")]])}
     <div class="gpexe-link-actions imports-batch-actions">
       <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-back" ${busy}>Cancel</button>
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-send" ${busy || b.error ? "disabled" : ""}>${b.sending ? "Importing..." : `Import ${plural(items.length, "session", "sessions")}`}</button>
@@ -1268,13 +1272,15 @@ function renderBatchResultsHtml(gx) {
     return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}</li>`;
   });
   // IMP2: every session's ids and codes in ONE Technical details at the end, not one per row.
-  const rowsTech = (b.results || []).map((r) => [`Session ${r.candidateId}`, [r.outcome, r.code, r.approvalId ? `approval ${r.approvalId}` : ""].filter(Boolean).join(" · ")]);
+  const rowsTech = (b.results || []).map((r) => [`Session ${r.candidateId}`, [byId.get(r.candidateId)?.label, r.outcome, r.code, r.approvalId ? `approval ${r.approvalId}` : ""].filter(Boolean).join(" · ")]);
   // While the import goes on, the sessions not reached yet are "waiting", not "not tried"; the progress block counts.
   const summary = b.sending ? "" : batchSummaryText(b.summary);
   const stopped = b.error ? `<div class="gpexe-refused" role="alert"><p><strong>${escapeHtml(batchStoppedText(b.error))}</strong></p>${errorTech(b.error)}</div>` : "";
   const still = b.sending ? 0 : batchSelection(gx).length;
   // IMP2 (the sketch): "Imported N sessions. You can see them in Training Load → Activities." first, in one line.
-  const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported) ? " You can see them in Training Load → Activities." : "";
+  // A mixed result names only the imported ones (the refused ones are not in Activities).
+  const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported)
+    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and in the Imported tab.` : "";
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(`${onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary}.${seen}`)}</p>` : ""}
     ${stopped}
@@ -1437,7 +1443,7 @@ function mapLastSeenText(a) {
   const s = a.lastSeen;
   if (!s) return "Not seen in any session that is still available.";
   const when = s.sessionStartedAt ? fmtDateTime(s.sessionStartedAt) : "";
-  const title = sessionTitle({ label: s.sessionLabel, gpexeTeamSessionId: s.gpexeTeamSessionId });
+  const title = niceSessionName({ label: s.sessionLabel, gpexeTeamSessionId: s.gpexeTeamSessionId });
   const raw = s.evidence === "raw_snapshot" ? " · this session can't be imported, so it gives no values" : "";
   return `Last seen ${[when, title].filter(Boolean).join(" · ")}${raw}`;
 }

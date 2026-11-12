@@ -248,8 +248,8 @@ test("4./5./6. Review shows the sessions (no hash, id or code in the open), Back
   // U6a-2 (D7): the confirmation is one question.
   assert.match(d, /<strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong>/);
   assert.match(d, /exactly as found in the last search/);
-  assert.match(d, /<strong>FULL TRAINING 1<\/strong> <span class="muted">01\.09\.2026 /);
-  assert.match(d, /<strong>FULL TRAINING 3<\/strong>/);
+  assert.match(d, /<strong>Full training 1<\/strong> <span class="muted">01\.09\.2026 /);
+  assert.match(d, /<strong>Full training 3<\/strong>/);
   assert.match(d, /one that can.t be imported does not stop the others/);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!open.includes("cand-1") && !open.includes("cand-3"), "ids only under Technical details");
@@ -286,9 +286,9 @@ test("D32: a Ready session that leaves values out says how many on its row and i
   await pick("cand-3");
   await act("training-load-gpexe-batch-review");
   const d = dialog();
-  assert.match(d, /<strong>FULL TRAINING 1<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
-  assert.match(d, /<strong>FULL TRAINING 2<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
-  assert.match(d, /<strong>FULL TRAINING 3<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results<\/span>/);
+  assert.match(d, /<strong>Full training 1<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
+  assert.match(d, /<strong>Full training 2<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
+  assert.match(d, /<strong>Full training 3<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results<\/span>/);
   assert.equal(importPosts().length, 0, "the confirmation sends nothing");
 });
 
@@ -359,13 +359,13 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   const d = dialog();
   assert.match(d, /aria-label="Import result"/);
   assert.match(d, /1 imported · 1 already imported · 3 not imported · 1 not confirmed · 1 not tried\./);
-  assert.match(d, /FULL TRAINING 1<\/strong>[\s\S]*?Imported \(the confirmation arrived late, but the import is in OptiMove\)\./);
-  assert.match(d, /FULL TRAINING 2<\/strong>[\s\S]*?Already imported, nothing more was written\./);
-  assert.match(d, /FULL TRAINING 3<\/strong>[\s\S]*?Session changed - review it again\.<\/span><button [^>]*data-candidate-id="cand-3">Review again</);
-  assert.match(d, /FULL TRAINING 4<\/strong>[\s\S]*?Open and review the changes individually\.<\/span><button [^>]*data-candidate-id="cand-4">Open</);
-  assert.match(d, /FULL TRAINING 5<\/strong>[\s\S]*?Not imported: it is not ready any more - see its row under Needs attention\./);
-  assert.match(d, /FULL TRAINING 6<\/strong>[\s\S]*?Import result not confirmed - check it before doing anything else\.[^<]*<\/span><button [^>]*data-candidate-id="cand-6">Check result</);
-  assert.match(d, /FULL TRAINING 7<\/strong>[\s\S]*?Not imported: the import stopped before this session\./);
+  assert.match(d, /Full training 1<\/strong>[\s\S]*?Imported \(the confirmation arrived late, but the import is in OptiMove\)\./);
+  assert.match(d, /Full training 2<\/strong>[\s\S]*?Already imported, nothing more was written\./);
+  assert.match(d, /Full training 3<\/strong>[\s\S]*?Session changed - review it again\.<\/span><button [^>]*data-candidate-id="cand-3">Review again</);
+  assert.match(d, /Full training 4<\/strong>[\s\S]*?Open and review the changes individually\.<\/span><button [^>]*data-candidate-id="cand-4">Open</);
+  assert.match(d, /Full training 5<\/strong>[\s\S]*?Not imported: it is not ready any more - see its row under Needs attention\./);
+  assert.match(d, /Full training 6<\/strong>[\s\S]*?Import result not confirmed - check it before doing anything else\.[^<]*<\/span><button [^>]*data-candidate-id="cand-6">Check result</);
+  assert.match(d, /Full training 7<\/strong>[\s\S]*?Not imported: the import stopped before this session\./);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/failed|nothing was imported/i.test(open), "never 'failed' or 'nothing imported'");
   assert.ok(!/preview_changed|import_outcome_unknown|not_ready|appr-6/.test(open), "codes and ids only under Technical details");
@@ -381,7 +381,7 @@ test("8./11. every outcome is one understandable line; the list is read again ex
   assert.ok(!/imports-batch"/.test(html()));
   // An unconfirmed row is something that needs the person: it is in the Needs you tab.
   await openTab("attention");
-  assert.match(html(), /<strong>[^<]*FULL TRAINING 6<\/strong>[\s\S]*?Result not confirmed/);
+  assert.match(html(), /<strong>[^<]*Full training 6<\/strong>[\s\S]*?Result not confirmed/);
   await openTab("ready");
   assert.ok(!/removed from the selection/.test(html()), "nothing to drop: the refused ones left with the answer, the not-tried one is still Ready with the same hash");
   assert.match(html(), /<strong>1 selected<\/strong>/);
@@ -454,8 +454,8 @@ test("10. a lost answer never reads as failed: every session is 'not confirmed',
   assert.match(d, /aria-label="Import result not confirmed"/);
   assert.match(d, /The answer to the import did not arrive\.<\/strong> Some of these sessions may already be imported\./);
   assert.match(d, /1 of 2 confirmed as imported so far\./);
-  assert.match(d, /FULL TRAINING 1<\/strong>[\s\S]*?Imported - confirmed by the list\./);
-  assert.match(d, /FULL TRAINING 2<\/strong>[\s\S]*?Not confirmed yet\./);
+  assert.match(d, /Full training 1<\/strong>[\s\S]*?Imported - confirmed by the list\./);
+  assert.match(d, /Full training 2<\/strong>[\s\S]*?Not confirmed yet\./);
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/failed|nothing was imported|not imported/i.test(open), "never failed / nothing imported");
   assert.match(d, /class="primary-button gpexe-button" data-action="training-load-gpexe-batch-check" >Check again</, "checking is the main action");
@@ -469,7 +469,7 @@ test("10. a lost answer never reads as failed: every session is 'not confirmed',
   // The uncertain state survives closing the panel: the row keeps its mark.
   await act("training-load-gpexe-batch-done");
   await openTab("attention");
-  assert.match(html(), /<strong>[^<]*FULL TRAINING 2<\/strong>[\s\S]*?Result not confirmed/);
+  assert.match(html(), /<strong>[^<]*Full training 2<\/strong>[\s\S]*?Result not confirmed/);
   assert.ok(gx().uncertain["cand-2"]);
   // Three checks without confirmation: the coach is sent to a platform admin.
   gx().batch.unknown = { candidateIds: ["cand-2"], error: { status: 0, code: "Failed to fetch" }, checks: 3 };
@@ -521,7 +521,7 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
   await openTab("attention");
-  assert.match(html(), /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*FULL TRAINING 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
+  assert.match(html(), /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*Full training 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
   await openTab("ready");
   const page = html();
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
@@ -535,7 +535,7 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   await act("training-load-gpexe-batch-review");
   await act("training-load-gpexe-batch-send");
   assert.equal(importPosts().length, 1);
-  assert.match(dialog(), /FULL TRAINING 2<\/strong>[\s\S]*?Imported\./);
+  assert.match(dialog(), /Full training 2<\/strong>[\s\S]*?Imported\./);
 });
 
 test("10d. the browser is asked before a reload or close only while an import runs or an outcome is not confirmed", async () => {
@@ -808,8 +808,8 @@ test("18. a selection hidden by the date filter is still counted and named; Sele
   await act("training-load-gpexe-batch-review");
   const d = dialog();
   assert.match(d, /aria-label="Import 2 sessions"/);
-  assert.match(d, /<strong>FULL TRAINING 21<\/strong>/);
-  assert.match(d, /<strong>FULL TRAINING 14<\/strong>/, "the hidden one is listed too");
+  assert.match(d, /<strong>Full training 21<\/strong>/);
+  assert.match(d, /<strong>Full training 14<\/strong>/, "the hidden one is listed too");
 });
 
 test("leaving Training Load with a selection or a running import asks first; declined stays", async () => {

@@ -26358,12 +26358,24 @@ body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more[open
   content: "\25BE";
 }
 
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-warning {
+  margin: 0;
+  font-size: var(--om-text-sm);
+}
+
+body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more,
+body:not(.athlete-mode):not(.login-mode) .imports-batch .gpexe-tech {
+  margin: 0;
+}
+
 body:not(.athlete-mode):not(.login-mode) .imports-batch .imports-batch-more > p {
   margin: 0 0 8px;
 }
 
 /* The last light cards: no line above the first group, and "Pick a day" a plain fold row until it is opened. */
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-tab-title + .imports-attn-group {
+/* No line above the first group (also when a day is picked and a note comes first); IMP1's
+   ".imports-attn-group + .imports-attn-group" rule is more specific and keeps the line between groups. */
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-attn-group {
   border-top: 0;
 }
 
