@@ -44,7 +44,7 @@ Supabase connector tool and never touches the production database.
 
 1. Right before the merge, on the merge tree: the 12-digit prefixes are unique (`.claude/rules/migrations.md`), and the
    md5 of the four bodies on `main` is still the list of the preflight's block 3 (another migration may have replaced
-   one while this pull request was open). If the last migration on `main` is no longer v63, block 2 of the preflight is
+   one while this pull request was open). If the last migration on `main` is no longer v64, block 2 of the preflight is
    re-issued with that migration's name and checksum first.
 2. The *Rukovodilac* runs `docs/runbooks/source-metric-confirmations-v65-preflight.sql` read-only, one block at a time,
    on the same UTC day as the merge. Every value must be the expected one:

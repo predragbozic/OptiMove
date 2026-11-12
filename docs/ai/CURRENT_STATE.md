@@ -4490,14 +4490,12 @@ pre-existing; pass/fail counts don't belong in this file
     required by the owner's decision (turn `bdb881f2`, „Ne treba pravni osnov”; the owner's assessment, not a legal
     confirmation).
 
-- **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
-  external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
-  idempotency key, so after a lost answer a second Create can leave a duplicate connection that no
-  screen can remove (no Disconnect / Delete). The recommended fix is a `requestKey` with an
-  idempotent POST Create (the same key replays the saved answer), **not** a unique rule "one
-  connection per club" — a club may later legitimately hold several source accounts or servers.
-  Until then the UI names the risk in the acknowledgement, and the owner pilot stops on a lost
-  Create (`docs/runbooks/gpexe-owner-pilot-f3c3.md`, step 2).
+- **Backend hardening: an idempotent Create of a source connection — done in S2** (PR #502, merged as `cc20f63` on
+  2026-11-12 from head `8f8b523`, after the *Rukovodilac*'s GO and the *Nezavisni revizor*'s GO with no findings). The Create
+  takes an optional `requestKey`: the same key and body replays the saved answer, another body is `request_key_reused`, and the
+  Source connections screen sends Connect and Test as one step (`docs/ai/source-connections-f3c2-contract.md`, the Create row
+  and section 2.9; `docs/ai/gps-import-flow-contract.md`, S2). No unique rule "one connection per club" was added. A Create sent
+  without a key keeps the old behaviour.
 
 - **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
   review of PR #137): **done**, PR #146 merged and deployed (see the active phase).
