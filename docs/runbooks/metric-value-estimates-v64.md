@@ -26,6 +26,21 @@
     with no source identity, only the zone changes, and the new zone is not null;
   - a participant with any real occasion (manual, api_import, csv_import) keeps v12's rule: its zone is frozen, and the import
     is blocked as before (`participant_timezone_changed`).
+- **The linked activity participant follows (the *Nezavisni revizor*'s M1).** v1's `training.protect_participant_identity_once_linked`,
+  replaced under an md5 gate, lets the estimate participant's `training.activity_participants` row change its
+  `timezone_snapshot` and `local_date`, in the same transaction as the metric participant. It allows this only:
+  - to the metric participant's new zone, and to the day `materialize_activity_group_from_metric_event` computes in it
+    (`occurred_instant` at that zone, or the event's date without an instant);
+  - while the row is canonical, no alias, with no session link or component;
+  - while every linked metric participant holds estimate occasions only, with no source identity.
+
+  The writer does both updates. After a re-snapshot both layers equal a direct import's rows; near midnight UTC the day moves
+  with the zone. Nothing keys on the day: the row's unique keys are `(activity_id, athlete_id)`, `(id, athlete_id)` and
+  `(id, activity_id)` (v1:319-321), its `after update` roster trigger reacts only to `activity_id` and merges (v26:425-455), and
+  the day is read only by the activities list and the fuzzy match of later materializations.
+- **Known limit (I1).** A coach's manual value on an estimate participant whose zone differs from the athlete's own blocks that
+  session's re-import (`participant_timezone_changed`), since a real occasion freezes the zone. Remedy: remove the manual value,
+  then find the session again and import it.
 
 Nothing writes an estimate while `ESTIMATES_ENABLED` is off (the default). It is turned on only after 6b-D is merged and
 deployed, by a separate owner order.
@@ -40,7 +55,8 @@ After v63: v64 refuses to run without v63's table, or while that table holds a r
 2. `metric-value-estimates-v64-preflight.sql`, block by block in read-only transactions: every `ok` must be true.
    - v63 is the last migration and v64 is not recorded.
    - `metric_value_estimates` is empty and has no request column yet.
-   - The two bodies in force are v12's (`8c56c995…`) and v63's (`fa6e027c…`).
+   - The three bodies in force are v12's (`8c56c995…`), v63's (`fa6e027c…`) and v1's `protect_participant_identity_once_linked`
+     (`4a77025e…`).
    - It is a quiet moment, and the role may create in the schema.
 3. Deploy; the migrator applies v64 at start-up.
 
@@ -48,21 +64,22 @@ After v63: v64 refuses to run without v63's table, or while that table holds a r
 
 `metric-value-estimates-v64-postcheck.sql`, read-only, checks:
 - v64 is recorded once and is the last migration;
-- the two bodies are v64's (`2064f10c…` for the participant guard, `d4fdb1a8…` for the provenance guard);
+- the three bodies are v64's (`2064f10c…` for the participant guard, `d4fdb1a8…` for the provenance guard, `a652f66a…` for the
+  activity participant guard);
 - both request columns are `NOT NULL`, the hash CHECK and the index are there;
-- the two triggers that run these bodies are enabled;
+- the three triggers that run these bodies are enabled;
 - no estimate exists, and there is no idle transaction.
 
 ## Rollback
 
-`metric-value-estimates-v64-rollback.sql`, one transaction. It restores v12's and v63's bodies, drops the index and the two
-columns, and removes the record. It refuses when:
+`metric-value-estimates-v64-rollback.sql`, one transaction. It restores v1's, v12's and v63's bodies, drops the index and the
+two columns, and removes the record. It refuses when:
 - the migrator is running;
 - v64 is not recorded, or a later migration is;
 - any provenance row exists (its key would be lost);
-- the two bodies are not v64's.
+- the three bodies are not v64's.
 
-It ends by checking that v12's and v63's bodies are back by md5. Rehearsed on disposable databases
+It ends by checking that v1's, v12's and v63's bodies are back by md5. Rehearsed on disposable databases
 (`backend/tests/metric-estimates-6b-b.test.mjs`, test 12): apply, then rollback, then the v63 catalog exactly, then re-apply.
 Run anywhere real only with the owner's approval for that database, after a fresh restore-verified backup, on a commit that no
 longer contains the migration.

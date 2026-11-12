@@ -300,6 +300,18 @@ async function ensureParticipants(client, { eventId, participants, athleteIdByGp
       )).rows[0];
       if (occasions.n > 0 && occasions.n === occasions.estimates && participant.timezone) {
         await client.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [id, participant.timezone]);
+        // The linked activity participant follows (v64's exception of v1's guard): the zone and the day that
+        // materialize_activity_group_from_metric_event computes in it, so both layers equal a direct import's rows.
+        await client.query(
+          `update training.activity_participants ap
+              set timezone_snapshot = $2,
+                  local_date = coalesce((e.occurred_instant at time zone $2)::date, e.occurred_date)
+             from training.activity_participant_metric_participant_links l
+             join training_load.metric_event_participants mp on mp.id = l.metric_event_participant_id
+             join training_load.metric_events e on e.id = mp.event_id
+            where l.metric_event_participant_id = $1 and ap.id = l.activity_participant_id`,
+          [id, participant.timezone],
+        );
       } else {
         throw new GpexeImportError("participant_timezone_changed", `participant ${athleteId} was imported with timezone ${existing.rows[0].athlete_timezone_snapshot}, now ${participant.timezone}.`);
       }

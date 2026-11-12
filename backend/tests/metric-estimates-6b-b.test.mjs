@@ -215,6 +215,10 @@ async function importSession(team, bundle) {
 }
 
 const key = () => crypto.randomUUID();
+async function activityParticipant(activityId, athleteId) {
+  const r = (await admin.query(`select timezone_snapshot tz, local_date::text as "day" from training.activity_participants where activity_id = $1 and athlete_id = $2`, [activityId, athleteId])).rows[0];
+  return r ? { tz: r.tz, day: r.day } : null;
+}
 const proposal = (team, s, athleteId, { cookie = team.coach.cookie, extra = "" } = {}) =>
   tapi(`/${s.activityId}/estimates/proposal?athleteId=${athleteId}${extra}`, { cookie });
 const save = (team, s, body, { cookie = team.coach.cookie } = {}) =>
@@ -534,14 +538,16 @@ test("10. Q2: an estimate participant takes the athlete's own zone when the impo
   const team = await setupTeam();
   // The team's zone lets a session whose units report two zones through (v62).
   await admin.query(`insert into training_load.gpexe_team_session_timezones (owner_team_id, timezone, set_by_user_id, reason) values ($1,$2,$3,'test')`, [team.teamId, TZ, team.padmin.id]);
-  const s = await importSession(team, bundleOf({ sessionId: 9701, ids: [101, 102, 104] }));
+  const s = await importSession(team, bundleOf({ sessionId: 9701, hour: 1, ids: [101, 102, 104] }));
   // Without an estimate the preview carries no supersededEstimates key at all (an existing preview hash stays as it was).
   const firstPreview = (await api(`/teams/${team.teamId}/candidates/${s.candidateId}`, { cookie: team.padmin.cookie })).body.candidate.preview;
   assert.equal(Object.hasOwn(firstPreview, "supersededEstimates"), false);
   const saved = await save(team, s, { athleteId: team.athleteIds[DAN], method: "team_average" });
   assert.equal(saved.status, 201, saved.text);
   // Dan's real data arrives, from a unit in another zone.
-  await checkNow(team, [bundleOf({ sessionId: 9701, ids: [101, 102, 104, 105], zones: { 105: OTHER_TZ }, updatedOn: "2026-09-15T09:00:00.000" })]);
+  const actBefore = await activityParticipant(s.activityId, team.athleteIds[DAN]);
+  assert.deepEqual([actBefore.tz, actBefore.day], [TZ, "2026-09-14"], "the estimate participant is in the event's zone and day");
+  await checkNow(team, [bundleOf({ sessionId: 9701, hour: 1, ids: [101, 102, 104, 105], zones: { 105: OTHER_TZ }, updatedOn: "2026-09-15T09:00:00.000" })]);
   const cand = await pendingCandidate(team, 9701);
   assert.ok(cand, "the changed session is a pending candidate");
   const detail = (await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: team.padmin.cookie })).body.candidate;
@@ -555,11 +561,22 @@ test("10. Q2: an estimate participant takes the athlete's own zone when the impo
   assert.equal(r.body.results[0].outcome, "imported", r.text);
   const p = (await admin.query(`select athlete_timezone_snapshot from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [s.eventId, team.athleteIds[DAN]])).rows[0];
   assert.equal(p.athlete_timezone_snapshot, OTHER_TZ, "the participant took the athlete's own zone");
+  // Both layers equal a direct import of the same session: the activity participant took the zone and its day (the 13th in
+  // New York at 01:08 UTC).
+  const direct = await setupTeam();
+  await admin.query(`insert into training_load.gpexe_team_session_timezones (owner_team_id, timezone, set_by_user_id, reason) values ($1,$2,$3,'test')`, [direct.teamId, TZ, direct.padmin.id]);
+  const d = await importSession(direct, bundleOf({ sessionId: 9711, hour: 1, ids: [101, 102, 104, 105], zones: { 105: OTHER_TZ } }));
+  const viaEstimate = await activityParticipant(s.activityId, team.athleteIds[DAN]);
+  const viaDirect = await activityParticipant(d.activityId, direct.athleteIds[DAN]);
+  assert.deepEqual([viaEstimate.tz, viaEstimate.day], [viaDirect.tz, viaDirect.day]);
+  assert.deepEqual([viaEstimate.tz, viaEstimate.day], [OTHER_TZ, "2026-09-13"], "the day changed with the zone");
+  const directMetric = (await admin.query(`select athlete_timezone_snapshot z from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [d.eventId, direct.athleteIds[DAN]])).rows[0].z;
+  assert.equal(p.athlete_timezone_snapshot, directMetric);
   const rows = (await estimateRows(team.teamId)).filter((x) => x.athlete_id === team.athleteIds[DAN]);
   assert.equal(rows.every((x) => x.superseded_by_occasion_id !== null), true, "every estimate of a variable the import measured is superseded");
 
   // With a real value on the participant (a coach's manual value), the zone stays frozen: the import is refused.
-  const s2 = await importSession(team, bundleOf({ sessionId: 9702, ids: [101, 102, 104] }));
+  const s2 = await importSession(team, bundleOf({ sessionId: 9702, hour: 1, ids: [101, 102, 104] }));
   assert.equal((await save(team, s2, { athleteId: team.athleteIds[DAN], method: "team_average" })).status, 201);
   const p2 = (await admin.query(`select id from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [s2.eventId, team.athleteIds[DAN]])).rows[0].id;
   const anyDef = (await admin.query(`select v.metric_definition_id, v.metric_definition_version_id from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id join training_load.metric_event_participants p on p.id = o.event_participant_id where p.event_id = $1 and o.entry_method = 'api_import' and o.segment_id is null limit 1`, [s2.eventId])).rows[0];
@@ -570,12 +587,16 @@ test("10. Q2: an estimate participant takes the athlete's own zone when the impo
   assert.ok(anyDef);
   const mo = (await admin.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'manual',$2) returning id`, [p2, team.coach.id])).rows[0].id;
   await admin.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,5)`, [mo, own, ownVer]);
-  await checkNow(team, [bundleOf({ sessionId: 9702, ids: [101, 102, 104, 105], zones: { 105: OTHER_TZ }, updatedOn: "2026-09-15T09:00:00.000" })]);
+  const act2Before = await activityParticipant(s2.activityId, team.athleteIds[DAN]);
+  await checkNow(team, [bundleOf({ sessionId: 9702, hour: 1, ids: [101, 102, 104, 105], zones: { 105: OTHER_TZ }, updatedOn: "2026-09-15T09:00:00.000" })]);
   const cand2 = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "9702" && c.status !== "imported" && c.status !== "superseded");
   assert.ok(cand2);
   const detail2 = (await api(`/teams/${team.teamId}/candidates/${cand2.id}`, { cookie: team.padmin.cookie })).body.candidate;
   assert.equal(detail2.preview.status, "blocked");
   assert.equal(detail2.preview.blocked.code, "participant_timezone_changed");
+  // Neither layer moved.
+  assert.deepEqual(await activityParticipant(s2.activityId, team.athleteIds[DAN]), act2Before);
+  assert.equal((await admin.query(`select athlete_timezone_snapshot z from training_load.metric_event_participants where id = $1`, [p2])).rows[0].z, TZ);
 });
 
 test("11. v64's participant guard in the database: the zone of a participant whose every occasion is an estimate may change (and only the zone); with a real occasion, or another field, it may not", async () => {
@@ -611,6 +632,28 @@ test("11. v64's participant guard in the database: the zone of a participant who
     const mo = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'manual',$2) returning id`, [est, team.coach.id])).rows[0].id;
     await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,5)`, [mo, own, ownVer]);
     await assert.rejects(c.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [est, OTHER_TZ]), /identity\/snapshot fields are immutable/);
+    await c.query("rollback");
+    // v1's guard: the activity participant follows only the metric participant's zone, to the day materialize computes.
+    const ap = (await admin.query(`select ap.id from training.activity_participants ap join training.activity_participant_metric_participant_links l on l.activity_participant_id = ap.id where l.metric_event_participant_id = $1`, [est])).rows[0].id;
+    const dayIn = async (zone) => (await admin.query(`select coalesce((occurred_instant at time zone $2)::date, occurred_date)::text d from training_load.metric_events where id = $1`, [s.eventId, zone])).rows[0].d;
+    const immutable = /immutable once load-bearing/;
+    await c.query("begin");
+    await assert.rejects(c.query(`update training.activity_participants set timezone_snapshot = $2, local_date = $3 where id = $1`, [ap, OTHER_TZ, await dayIn(OTHER_TZ)]), immutable, "not before the metric participant moved");
+    await c.query("rollback");
+    await c.query("begin");
+    await c.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [est, OTHER_TZ]);
+    await assert.rejects(c.query(`update training.activity_participants set timezone_snapshot = $2, local_date = date '2001-01-01' where id = $1`, [ap, OTHER_TZ]), immutable, "not to another day");
+    await c.query("rollback");
+    await c.query("begin");
+    await c.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [est, OTHER_TZ]);
+    await c.query(`update training.activity_participants set timezone_snapshot = $2, local_date = $3 where id = $1`, [ap, OTHER_TZ, await dayIn(OTHER_TZ)]);
+    await c.query("rollback");
+    await c.query("begin");
+    // The metric participant moves first (estimates only), then a real occasion arrives: the activity participant may not follow.
+    await c.query(`update training_load.metric_event_participants set athlete_timezone_snapshot = $2 where id = $1`, [est, OTHER_TZ]);
+    const mo2 = (await c.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'manual',$2) returning id`, [est, team.coach.id])).rows[0].id;
+    await c.query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric) values ($1,$2,$3,5)`, [mo2, own, ownVer]);
+    await assert.rejects(c.query(`update training.activity_participants set timezone_snapshot = $2, local_date = $3 where id = $1`, [ap, OTHER_TZ, await dayIn(OTHER_TZ)]), immutable, "not with a real occasion");
     await c.query("rollback");
   } finally {
     await c.end();
@@ -824,4 +867,41 @@ test("15. v64's guard serialises one (author, key) in the database: a second tra
     await cb.end();
   }
   assert.equal((await admin.query(`select count(distinct request_hash)::int n from training_load.metric_value_estimates where request_key = $1`, [k])).rows[0].n, 1);
+});
+
+test("16. the undo after an estimate saved through the route: not blocked, estimates_removed in the log (UNKNOWN 15); on a roster already Complete the estimate's link turns it to needs_review, and the undo then asks for the roster confirmation (I2)", async () => {
+  const team = await setupTeam();
+  const undoBody = (s, extra = {}) => ({ requestKey: key(), reason: "wrong athlete link", expected: { eventId: s.eventId }, ...extra });
+  const undoPath = (s) => `/teams/${team.teamId}/candidates/${s.candidateId}/undo-import`;
+  const estimatesRemoved = async (s) => (await admin.query(`select removed_counts from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0]?.removed_counts?.estimates_removed;
+
+  // A plain session: the estimate never blocks the undo.
+  const plain = await importSession(team, bundleOf({ sessionId: 9901, ids: [101, 102, 104] }));
+  const saved = await save(team, plain, { athleteId: team.athleteIds[DAN], method: "team_average" });
+  assert.equal(saved.status, 201, saved.text);
+  const u = await api(undoPath(plain), { method: "POST", cookie: team.padmin.cookie, body: undoBody(plain) });
+  assert.equal(u.status, 200, u.text);
+  assert.equal(await estimatesRemoved(plain), saved.body.estimates.length);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_value_estimates e join training_load.metric_measurement_occasions o on o.id = e.occasion_id join training_load.metric_event_participants p on p.id = o.event_participant_id where p.event_id = $1`, [plain.eventId])).rows[0].n, 0);
+
+  // A Complete roster: the estimate's activity link is a roster change (needs_review), so the undo asks for the confirmation.
+  const s = await importSession(team, bundleOf({ sessionId: 9902, ids: [101, 102, 104] }));
+  const rosterOf = async () => (await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body;
+  let roster = await rosterOf();
+  for (const a of roster.athletes.filter((x) => x.group === "needs_state")) {
+    const r = await tapi(`/${s.activityId}/roster/${a.athleteId}/decision`, { method: "PUT", cookie: team.coach.cookie, body: { kind: "participated_no_values", expectedDecisionId: null, requestKey: key() } });
+    assert.equal(r.status, 200, r.text);
+  }
+  roster = await rosterOf();
+  const done = await tapi(`/${s.activityId}/roster/complete`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), expectedRevision: roster.completion.revision, expectedFingerprint: roster.rosterFingerprint } });
+  assert.equal(done.status, 200, done.text);
+  assert.equal((await rosterOf()).completion.status, "complete");
+  assert.equal((await save(team, s, { athleteId: team.athleteIds[DAN], method: "team_average" })).status, 201);
+  assert.equal((await rosterOf()).completion.status, "needs_review", "the estimate's link is a roster change");
+  const asked = await api(undoPath(s), { method: "POST", cookie: team.padmin.cookie, body: undoBody(s) });
+  assert.deepEqual([asked.status, asked.body.error], [409, "roster_work_needs_confirmation"], asked.text);
+  const fingerprint = asked.body.rosterWork.laterWork.fingerprint;
+  const confirmed = await api(undoPath(s), { method: "POST", cookie: team.padmin.cookie, body: undoBody(s, { laterRosterFingerprint: fingerprint }) });
+  assert.equal(confirmed.status, 200, confirmed.text);
+  assert.ok(await estimatesRemoved(s) > 0);
 });

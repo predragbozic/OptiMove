@@ -212,6 +212,9 @@ a save writes one occasion for each variable it estimates.
   that (author, key).
 - v12's participant guard allows a change of `athlete_timezone_snapshot` alone, and only while every occasion of the participant
   is an estimate with no source identity.
+- v1's activity participant guard lets the linked `training.activity_participants` row follow, in the same transaction: its zone
+  and its day, to exactly what `materialize_activity_group_from_metric_event` computes, under the same condition. Both layers
+  then equal a direct import (the *Nezavisni revizor*'s M1, the *Rukovodilac*'s fix (b)).
 
 **The routes** (`backend/src/metricEstimateService.js`, `backend/src/routes/trainingActivity.js`). Both are behind
 `ESTIMATES_ENABLED` (default off); off, both are the router's identical 404.
@@ -267,8 +270,11 @@ a save writes one occasion for each variable it estimates.
   - Values are rounded to 3 decimals, the rate to 6.
 
 **The import** (rule 6):
-- **The writer:** `ensureParticipants` re-snapshots an estimate participant's zone to the athlete's own (the database's v64
-  condition); any other zone change stays `participant_timezone_changed`.
+- **The writer:** `ensureParticipants` re-snapshots an estimate participant's zone to the athlete's own, and its linked activity
+  participant's zone and day (the database's v64 conditions); any other zone change stays `participant_timezone_changed`.
+- **A Complete roster (I2, intended).** An estimate for an athlete without a metric participant adds the participant's confirmed
+  activity link, which is a roster change: a Complete roster turns to `needs_review` (the roster changed). The session undo then
+  lists that work and asks for `roster_work_needs_confirmation`, as for any later roster work.
 - **The preview:** the preview lists the estimates the import would replace in `supersededEstimates` (`athleteId`,
   `metricDefinitionId`). The field is present only when there are some, so an existing preview hash is unchanged. It never
   blocks and is never part of `acceptChanges`. An estimate saved after a check changes the approval's recomputed preview, so the
@@ -284,7 +290,9 @@ a save writes one occasion for each variable it estimates.
 - rule 7;
 - the try-lock;
 - the COMMIT outcomes;
-- Q2 through a real re-import (the zone re-snapshot, the supersede, the preview's list, and the frozen zone with a manual value);
+- Q2 through a real re-import near midnight UTC (both layers equal a direct import, the day moves with the zone; the supersede;
+  the preview's list; the frozen zone in both layers with a manual value);
+- the undo after an estimate saved through the route (not blocked, `estimates_removed`), and on a Complete roster (I2);
 - v64's participant guard, and its (author, key) lock between two transactions on two events;
 - the participant in the event's zone when the athlete's own zone differs, and in the v62 team zone for a mixed session;
 - the migration's preflight, post-check and rehearsed rollback.

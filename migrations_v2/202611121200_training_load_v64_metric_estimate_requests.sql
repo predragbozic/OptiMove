@@ -17,6 +17,11 @@
 --      estimate participant is created in the event's zone; a later import of that athlete brings the athlete's own zone,
 --      and the import writer re-snapshots it under the same condition (gpexeImportWriter.ensureParticipants). A
 --      participant with any real occasion keeps v12's rule unchanged.
+--   4. v1's protect_participant_identity_once_linked (replaced under an md5 gate): the linked activity participant follows
+--      that re-snapshot in the same transaction - its timezone_snapshot and local_date may change only to the new zone and
+--      to the day materialize_activity_group_from_metric_event computes in it, only while it is canonical, no alias, with
+--      no session link or component, and every linked metric participant is in that zone and holds estimate occasions only
+--      with no source identity. So a re-snapshot ends with both layers equal to a direct import's rows.
 --
 -- Order: after v63. This migration refuses to run without v63's table, or while that table holds a row.
 -- Rollback: docs/runbooks/metric-value-estimates-v64-rollback.sql (refuses once a provenance row exists, or a later
@@ -29,7 +34,8 @@ do $$
 declare
   expected text[][] := array[
     array['training_load', 'protect_participant_identity_once_measured', '8c56c9950666a874f1fb5c464aa47e58'],
-    array['training_load', 'validate_metric_value_estimate', 'fa6e027caca7ea8dfc28f624d81b0e96']
+    array['training_load', 'validate_metric_value_estimate', 'fa6e027caca7ea8dfc28f624d81b0e96'],
+    array['training', 'protect_participant_identity_once_linked', '4a77025e17227d8efd1408676e461400']
   ];
   i integer;
 begin
@@ -133,6 +139,80 @@ begin
   select exists (select 1 from training_load.metric_measurement_occasions where event_participant_id = old.id) into has_measurements;
   if has_measurements then
     raise exception 'metric_event_participants (id=%) has dependent measurements: identity/snapshot fields are immutable', old.id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+-- ---------------------------------------------------------------------------
+-- 4. The linked activity participant follows the re-snapshot
+-- ---------------------------------------------------------------------------
+create or replace function training.protect_participant_identity_once_linked() returns trigger as $$
+declare
+  is_load_bearing boolean;
+begin
+  if new.athlete_id is not distinct from old.athlete_id
+     and new.timezone_snapshot is not distinct from old.timezone_snapshot
+     and new.local_date is not distinct from old.local_date then
+    -- fall through to the merge-status/activity_id write-once checks below
+    null;
+  else
+    -- v64 (6b-B, Q2): an estimate participant's activity participant follows its metric participant's re-snapshot. Only the
+    -- zone and the day change, to exactly what materialize_activity_group_from_metric_event computes for that zone, and
+    -- every linked metric participant is already in the new zone and holds estimate occasions only, with no source identity.
+    if new.athlete_id is not distinct from old.athlete_id
+       and new.activity_id is not distinct from old.activity_id
+       and new.timezone_snapshot is not null and new.local_date is not null
+       and old.merge_status = 'canonical' and new.merge_status is not distinct from old.merge_status
+       and old.superseded_by_participant_id is null and new.superseded_by_participant_id is null
+       and not exists (select 1 from training.activity_participant_session_links where activity_participant_id = old.id)
+       and not exists (select 1 from training.activity_participant_components where activity_participant_id = old.id)
+       and not exists (select 1 from training.activity_participants where superseded_by_participant_id = old.id)
+       and exists (select 1 from training.activity_participant_metric_participant_links where activity_participant_id = old.id)
+       and not exists (
+             select 1 from training.activity_participant_metric_participant_links l
+               join training_load.metric_event_participants mp on mp.id = l.metric_event_participant_id
+               join training_load.metric_events e on e.id = mp.event_id
+              where l.activity_participant_id = old.id
+                and (mp.athlete_timezone_snapshot is distinct from new.timezone_snapshot
+                     or new.local_date is distinct from coalesce((e.occurred_instant at time zone new.timezone_snapshot)::date, e.occurred_date)))
+       and not exists (
+             select 1 from training.activity_participant_metric_participant_links l
+               join training_load.metric_measurement_occasions o on o.event_participant_id = l.metric_event_participant_id
+              where l.activity_participant_id = old.id
+                and (o.entry_method is distinct from 'estimate' or o.source_identity_id is not null)) then
+      return new;
+    end if;
+    select
+      exists (select 1 from training.activity_participant_session_links where activity_participant_id = old.id)
+      or exists (select 1 from training.activity_participant_metric_participant_links where activity_participant_id = old.id)
+      or exists (select 1 from training.activity_participant_components where activity_participant_id = old.id)
+      or old.merge_status = 'superseded'
+      or exists (select 1 from training.activity_participants where superseded_by_participant_id = old.id)
+      into is_load_bearing;
+    if is_load_bearing then
+      raise exception 'training.activity_participants (id=%): athlete_id/timezone_snapshot/local_date are immutable once load-bearing (linked, itself an alias, or the target of an incoming alias) — reparent the ACTIVITY instead, never the athlete identity', old.id;
+    end if;
+  end if;
+
+  -- activity_id may only be changed by reparent_activity_participant()
+  -- (v4), gated behind the same session-local GUC every other
+  -- sanctioned-function-only field in this schema uses.
+  if new.activity_id is distinct from old.activity_id
+     and current_setting('training.allow_reparent_write', true) is distinct from 'on' then
+    raise exception 'training.activity_participants (id=%): activity_id may only be changed by reparent_activity_participant()', old.id;
+  end if;
+
+  if old.superseded_by_participant_id is not null and new.superseded_by_participant_id is distinct from old.superseded_by_participant_id then
+    raise exception 'training.activity_participants (id=%): superseded_by_participant_id is write-once', old.id;
+  end if;
+  if new.superseded_by_participant_id is not null and old.superseded_by_participant_id is null
+     and current_setting('training.allow_participant_merge_write', true) is distinct from 'on' then
+    raise exception 'training.activity_participants (id=%): superseded_by_participant_id may only be set by merge_activity_participants()', old.id;
+  end if;
+  if new.merge_status is distinct from old.merge_status
+     and current_setting('training.allow_participant_merge_write', true) is distinct from 'on' then
+    raise exception 'training.activity_participants (id=%): merge_status may only be changed by merge_activity_participants()', old.id;
   end if;
   return new;
 end;
