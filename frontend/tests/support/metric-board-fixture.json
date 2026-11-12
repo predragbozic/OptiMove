@@ -1,0 +1,1097 @@
+{
+ "connections": {
+  "connections": [
+   {
+    "id": "ec10e447-4d79-444c-a677-a2a651e098be",
+    "sourceSystem": "gpexe",
+    "hostKey": "server3",
+    "hostLabel": "GPEXE server3",
+    "ownerScope": "club",
+    "ownerClubId": "dd4ad473-6eda-40e4-80ad-29c458689ae6",
+    "accountLabel": "Club account (label only)",
+    "credentialKind": "exchanged_token",
+    "state": "verified",
+    "hasCredential": true,
+    "lastVerifiedAt": "2026-11-12T20:15:11.424Z",
+    "lastErrorCode": null,
+    "lastErrorAt": null,
+    "boundTeams": [
+     {
+      "bindingId": "004d6f82-699d-4dec-9565-eb7a818cedb1",
+      "teamId": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+      "teamName": "First team",
+      "sourceTeamId": "7001",
+      "state": "active",
+      "boundAt": "2026-11-12T20:15:11.455Z",
+      "teamActive": true
+     }
+    ],
+    "createdAt": "2026-11-12T20:15:11.406Z",
+    "updatedAt": "2026-11-12T20:15:11.424Z"
+   }
+  ]
+ },
+ "board": {
+  "board": {
+   "displayRegistryVersion": 1,
+   "team": {
+    "id": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+    "name": "First team",
+    "sourceTeamId": "7001"
+   },
+   "session": {
+    "candidateId": "0cd934f5-8f04-4805-8971-54c671ffaa22",
+    "label": "GPEXE FULL TRAINING 2026-11-04 10:08",
+    "startedAt": "2026-11-04T09:08:12.000Z"
+   },
+   "pair": {
+    "index": 0,
+    "count": 1,
+    "labels": [
+     "Ana Example",
+     "Bojan Example"
+    ]
+   },
+   "columns": [
+    {
+     "fieldId": "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3",
+     "revisionId": "451775c2-321f-4b98-8f77-1314d637a19e",
+     "key": "athlete_session.max_v",
+     "label": "SPEEDmax",
+     "unit": "m/s",
+     "unitProven": true,
+     "expectedUnit": "m/s",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "speed_kmh",
+     "displayUnits": [
+      "km/h"
+     ],
+     "rawA": "7.5",
+     "rawB": "6.2"
+    },
+    {
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "revisionId": "ba0d0bd7-5ef9-4912-ae52-fa1e1502da5f",
+     "key": "athlete_session.total_distance",
+     "label": "TotDist",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "distance_m",
+     "displayUnits": [
+      "m"
+     ],
+     "rawA": "3000",
+     "rawB": "1500"
+    },
+    {
+     "fieldId": "7588caae-f909-40d3-9e7e-05fbaffbf36c",
+     "revisionId": "c24cec23-9cd6-4217-9ebb-22e77873676f",
+     "key": "athlete_session.total_time",
+     "label": "TIME",
+     "unit": "s",
+     "unitProven": true,
+     "expectedUnit": "s",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "duration_mmss",
+     "displayUnits": [
+      "mm:ss"
+     ],
+     "rawA": "2400",
+     "rawB": "1200"
+    },
+    {
+     "fieldId": "dcac9b78-c2b9-4dde-b91f-76eaf685244a",
+     "revisionId": "c46ae4d8-60cd-42e5-828c-8e06a0ab33dd",
+     "key": "details.players.tot_brake_events",
+     "label": "Brake events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "display_rule_missing",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": "7",
+     "rawB": "2"
+    },
+    {
+     "fieldId": "362b62cf-53dc-41ab-b2bf-fb81235fe6ab",
+     "revisionId": "e372c6aa-65c8-4bdb-96a0-7b5c96dea2ec",
+     "key": "details.players.tot_burst_events",
+     "label": "Burst events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "display_rule_missing",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": "9",
+     "rawB": "2"
+    },
+    {
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "revisionId": "04890f97-aceb-4bcd-9c38-afa4f3b51840",
+     "key": "more.complementary_data.power.distance",
+     "label": "Power zone distance",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "4922c614-b422-4b98-9372-1e0dbef5a948",
+     "revisionId": "5acc4b1d-2f1a-4297-8504-0977183432b9",
+     "key": "more.complementary_data.power.distance.open_top",
+     "label": "Power zone distance (open top zone)",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "b04f4153-6c28-458f-be96-df52b59df981",
+     "revisionId": "955c20dd-b986-4323-8e67-f864485adbff",
+     "key": "more.complementary_data.speed.distance",
+     "label": "Speed zone distance",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "0eb5ba81-3399-4284-97e1-1b058a60418c",
+     "revisionId": "2691663c-0f0f-4417-8272-0b8a4797ca38",
+     "key": "more.events.acceleration_events_count",
+     "label": "Acceleration events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "84a5ab97-2492-41d9-bc19-51eea3cc26d6",
+     "revisionId": "5c0a94df-a90e-456b-b698-c1b71f93d59d",
+     "key": "more.events.deceleration_events_count",
+     "label": "Deceleration events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    }
+   ],
+   "variables": [
+    {
+     "id": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+     "ownerScope": "club",
+     "key": "total_distance_km",
+     "label": "Total distance (km)",
+     "versionId": "8ae3b649-d60d-474d-ab43-6ea67c7b0008",
+     "unit": "km",
+     "placeable": true,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "76cd0779-b99f-4171-af2c-812a34569f59",
+     "ownerScope": "system",
+     "key": "gpexe_acceleration_events_2bd7ef",
+     "label": "GPEXE acceleration events 2bd7ef",
+     "versionId": "5ea7163f-f592-481c-b921-4004a1e89301",
+     "unit": "count",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "f00dc808-8525-432f-b3bb-2cdef0aca691",
+     "ownerScope": "system",
+     "key": "gpexe_brake_events_edcf99",
+     "label": "GPEXE brake events edcf99",
+     "versionId": "a5868f41-2d2e-402b-a178-88ff389b92b6",
+     "unit": "count",
+     "placeable": true,
+     "filledByFieldIds": [
+      "dcac9b78-c2b9-4dde-b91f-76eaf685244a"
+     ]
+    },
+    {
+     "id": "b8a43d4f-b3d3-4656-9d14-d958d1e54929",
+     "ownerScope": "system",
+     "key": "gpexe_burst_events_c5cb1c",
+     "label": "GPEXE burst events c5cb1c",
+     "versionId": "299abcb6-5a81-45ba-94db-f62d02758bf4",
+     "unit": "count",
+     "placeable": true,
+     "filledByFieldIds": [
+      "362b62cf-53dc-41ab-b2bf-fb81235fe6ab"
+     ]
+    },
+    {
+     "id": "7b468e85-a4aa-4451-9e6c-8ca95319e2bc",
+     "ownerScope": "system",
+     "key": "gpexe_deceleration_events_2cb70d",
+     "label": "GPEXE deceleration events 2cb70d",
+     "versionId": "429983a6-9ae9-4d54-aa9e-e8402ae10cee",
+     "unit": "count",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "82312211-3056-4764-ba6a-d019892a8082",
+     "ownerScope": "system",
+     "key": "gpexe_max_speed_1e835e",
+     "label": "GPEXE max speed 1e835e",
+     "versionId": "d6062f55-b1d8-40ef-9da1-cdfeb9ec7b75",
+     "unit": "km/h",
+     "placeable": true,
+     "filledByFieldIds": [
+      "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3"
+     ]
+    },
+    {
+     "id": "e6aaa2a7-ee73-404f-9ef5-c19fe952d0cd",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_25_60_distance_b799c5",
+     "label": "GPEXE power zone 25 60 distance b799c5",
+     "versionId": "0c17a85d-3aa4-4ea5-bba7-23e7c99704f6",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "c8e0a7bd-e76d-4230-9ea8-4607d23be3d0",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_60_75_distance_59d00a",
+     "label": "GPEXE power zone 60 75 distance 59d00a",
+     "versionId": "e4dea072-deb1-411e-adea-fcac3a6646fe",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "fc1e0c7a-daa1-42a6-96dd-fb0a3466c189",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_75_plus_distance_638dd4",
+     "label": "GPEXE power zone 75 plus distance 638dd4",
+     "versionId": "06855951-1f79-4908-8189-856d5ff0f517",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "505f15b5-9f7e-478f-ae6a-e10093229788",
+     "ownerScope": "system",
+     "key": "gpexe_sprint_distance_7mps_7b81b0",
+     "label": "GPEXE sprint distance 7mps 7b81b0",
+     "versionId": "673a7f33-f15f-441b-a244-10fffc75c63c",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "b71d8832-b110-4d07-b153-a9eb36bf6289",
+     "ownerScope": "system",
+     "key": "gpexe_time_min_d77992",
+     "label": "GPEXE time min d77992",
+     "versionId": "0e1238f9-ade3-4de4-8b41-66dbd03f4983",
+     "unit": "min",
+     "placeable": true,
+     "filledByFieldIds": [
+      "7588caae-f909-40d3-9e7e-05fbaffbf36c"
+     ]
+    },
+    {
+     "id": "48960567-419e-4f74-badd-6fcf2e4ce5d3",
+     "ownerScope": "system",
+     "key": "gpexe_total_distance_1ff5e7",
+     "label": "GPEXE total distance 1ff5e7",
+     "versionId": "8b452db0-0c90-4f2f-a6b0-91be687cf6e5",
+     "unit": "m",
+     "placeable": true,
+     "filledByFieldIds": [
+      "dc98aeac-22e6-4a07-ad98-ddf41e034f01"
+     ]
+    }
+   ],
+   "on": [
+    {
+     "activationId": "20cf52c4-3330-4bd3-91d2-79f09d17f98b",
+     "mappingVersionId": "03ea7d53-1bcd-46fa-b4f8-00531b0f5cb4",
+     "fieldId": "0eb5ba81-3399-4284-97e1-1b058a60418c",
+     "variableId": "76cd0779-b99f-4171-af2c-812a34569f59",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "272f7bba-2955-45c6-b85f-119e030345ae",
+     "mappingVersionId": "dae136d1-70de-44c4-963b-f8e6eb5a1582",
+     "fieldId": "4922c614-b422-4b98-9372-1e0dbef5a948",
+     "variableId": "fc1e0c7a-daa1-42a6-96dd-fb0a3466c189",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "60698c47-bbff-4457-9701-a4b2cb40b555",
+     "mappingVersionId": "144a491b-c07f-4d45-a70d-20341ae4455d",
+     "fieldId": "7588caae-f909-40d3-9e7e-05fbaffbf36c",
+     "variableId": "b71d8832-b110-4d07-b153-a9eb36bf6289",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "6e4193f8-4730-4c83-b38b-9d2c09d63643",
+     "mappingVersionId": "984f97b5-1396-455a-97c4-459abd9712b7",
+     "fieldId": "dcac9b78-c2b9-4dde-b91f-76eaf685244a",
+     "variableId": "f00dc808-8525-432f-b3bb-2cdef0aca691",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "9121b0f8-1c2a-4295-a97d-3b157bd38169",
+     "mappingVersionId": "0b3f6158-5b00-4e1d-bc34-7f6c753334cc",
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "variableId": "c8e0a7bd-e76d-4230-9ea8-4607d23be3d0",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "91a1878d-d770-4c80-84b0-11ef4dcadb7a",
+     "mappingVersionId": "78be5b50-8acf-494f-8e85-650b0cdf8711",
+     "fieldId": "b04f4153-6c28-458f-be96-df52b59df981",
+     "variableId": "505f15b5-9f7e-478f-ae6a-e10093229788",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "9a56683d-353d-4c8e-85ed-5aa7dd98255d",
+     "mappingVersionId": "c0a27a2b-12df-4443-a369-d394a85f387e",
+     "fieldId": "362b62cf-53dc-41ab-b2bf-fb81235fe6ab",
+     "variableId": "b8a43d4f-b3d3-4656-9d14-d958d1e54929",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "b7eaf73c-2465-4213-8fae-6c1ac578b5b4",
+     "mappingVersionId": "e42681d3-7a9a-46c3-8ee3-a32c62bc39b3",
+     "fieldId": "84a5ab97-2492-41d9-bc19-51eea3cc26d6",
+     "variableId": "7b468e85-a4aa-4451-9e6c-8ca95319e2bc",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "c180afd6-b068-43e1-a795-75f43c1a9968",
+     "mappingVersionId": "b1285d86-8a23-40e8-8235-e99fa103c553",
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "variableId": "e6aaa2a7-ee73-404f-9ef5-c19fe952d0cd",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "f5e4c8ce-3750-4598-a366-7ba733fb95d2",
+     "mappingVersionId": "a23ed2b3-73f2-4f68-ae02-952a23114bd6",
+     "fieldId": "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3",
+     "variableId": "82312211-3056-4764-ba6a-d019892a8082",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    }
+   ],
+   "preplaced": [],
+   "replaceable": [],
+   "switchedOff": [
+    {
+     "mappingVersionId": "83d2f4ad-6b2f-498a-a86e-aeb40a3022f2",
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "variableId": "48960567-419e-4f74-badd-6fcf2e4ce5d3",
+     "badge": "optimove_mapping",
+     "endedBy": "Club Admin Example",
+     "endedAt": "2026-11-12T20:15:19.280Z"
+    }
+   ]
+  }
+ },
+ "placement": {
+  "placement": {
+   "placeable": true,
+   "kind": "new",
+   "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+   "targetId": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+   "revisionId": "ba0d0bd7-5ef9-4912-ae52-fa1e1502da5f",
+   "expectedTargetVersionId": "8ae3b649-d60d-474d-ab43-6ea67c7b0008",
+   "reusesVersionId": null,
+   "sourceUnit": "m",
+   "targetUnit": "km",
+   "conversion": {
+    "kind": "converted",
+    "scale": "0.001",
+    "divisor": "1",
+    "offset": "0"
+   },
+   "levels": {
+    "session": true,
+    "drill": false
+   },
+   "displayRule": "distance_m",
+   "displayUnits": [
+    "m"
+   ],
+   "values": {
+    "a": {
+     "raw": "3000",
+     "stored": "3"
+    },
+    "b": {
+     "raw": "1500",
+     "stored": "1.5"
+    }
+   },
+   "display": {
+    "m": {
+     "a": "3000.0",
+     "b": "1500.0"
+    }
+   },
+   "collisions": [],
+   "placementHashes": {
+    "m": "658080327fedaf5495bdad2b02fd6896fad12116c95eee1bd7b5428701ab8079"
+   }
+  }
+ },
+ "saveRequest": {
+  "requestKey": "9f637256-293b-4243-abb8-d8b0acdbbdc2",
+  "teamId": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+  "candidateId": "0cd934f5-8f04-4805-8971-54c671ffaa22",
+  "pair": 0,
+  "rows": [
+   {
+    "kind": "new",
+    "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+    "targetId": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+    "expectedTargetVersionId": "8ae3b649-d60d-474d-ab43-6ea67c7b0008",
+    "displayUnit": "m",
+    "placementHash": "658080327fedaf5495bdad2b02fd6896fad12116c95eee1bd7b5428701ab8079",
+    "checked": true,
+    "requirement": "required",
+    "replaces": []
+   }
+  ]
+ },
+ "saveAnswer": {
+  "confirmation": {
+   "id": "29fcb69d-8545-45c3-8ad3-ec0e2e5ec736",
+   "teamId": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+   "confirmedAt": "2026-11-12T20:15:34.130Z",
+   "rows": [
+    {
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "variableId": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+     "mappingId": "71d6e8c1-5878-41e1-926d-2decbeaa0ca5",
+     "versionId": "4897f03b-6e66-42d3-83f5-90d8f93a6044",
+     "activationId": "4a550f32-d884-40aa-8210-94796cc0b22b",
+     "requirement": "required"
+    }
+   ]
+  },
+  "replayed": false
+ },
+ "boardAfter": {
+  "board": {
+   "displayRegistryVersion": 1,
+   "team": {
+    "id": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+    "name": "First team",
+    "sourceTeamId": "7001"
+   },
+   "session": {
+    "candidateId": "0cd934f5-8f04-4805-8971-54c671ffaa22",
+    "label": "GPEXE FULL TRAINING 2026-11-04 10:08",
+    "startedAt": "2026-11-04T09:08:12.000Z"
+   },
+   "pair": {
+    "index": 0,
+    "count": 1,
+    "labels": [
+     "Ana Example",
+     "Bojan Example"
+    ]
+   },
+   "columns": [
+    {
+     "fieldId": "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3",
+     "revisionId": "451775c2-321f-4b98-8f77-1314d637a19e",
+     "key": "athlete_session.max_v",
+     "label": "SPEEDmax",
+     "unit": "m/s",
+     "unitProven": true,
+     "expectedUnit": "m/s",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "speed_kmh",
+     "displayUnits": [
+      "km/h"
+     ],
+     "rawA": "7.5",
+     "rawB": "6.2"
+    },
+    {
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "revisionId": "ba0d0bd7-5ef9-4912-ae52-fa1e1502da5f",
+     "key": "athlete_session.total_distance",
+     "label": "TotDist",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "distance_m",
+     "displayUnits": [
+      "m"
+     ],
+     "rawA": "3000",
+     "rawB": "1500"
+    },
+    {
+     "fieldId": "7588caae-f909-40d3-9e7e-05fbaffbf36c",
+     "revisionId": "c24cec23-9cd6-4217-9ebb-22e77873676f",
+     "key": "athlete_session.total_time",
+     "label": "TIME",
+     "unit": "s",
+     "unitProven": true,
+     "expectedUnit": "s",
+     "placeable": true,
+     "reason": null,
+     "displayRule": "duration_mmss",
+     "displayUnits": [
+      "mm:ss"
+     ],
+     "rawA": "2400",
+     "rawB": "1200"
+    },
+    {
+     "fieldId": "dcac9b78-c2b9-4dde-b91f-76eaf685244a",
+     "revisionId": "c46ae4d8-60cd-42e5-828c-8e06a0ab33dd",
+     "key": "details.players.tot_brake_events",
+     "label": "Brake events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "display_rule_missing",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": "7",
+     "rawB": "2"
+    },
+    {
+     "fieldId": "362b62cf-53dc-41ab-b2bf-fb81235fe6ab",
+     "revisionId": "e372c6aa-65c8-4bdb-96a0-7b5c96dea2ec",
+     "key": "details.players.tot_burst_events",
+     "label": "Burst events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "display_rule_missing",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": "9",
+     "rawB": "2"
+    },
+    {
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "revisionId": "04890f97-aceb-4bcd-9c38-afa4f3b51840",
+     "key": "more.complementary_data.power.distance",
+     "label": "Power zone distance",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "4922c614-b422-4b98-9372-1e0dbef5a948",
+     "revisionId": "5acc4b1d-2f1a-4297-8504-0977183432b9",
+     "key": "more.complementary_data.power.distance.open_top",
+     "label": "Power zone distance (open top zone)",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "b04f4153-6c28-458f-be96-df52b59df981",
+     "revisionId": "955c20dd-b986-4323-8e67-f864485adbff",
+     "key": "more.complementary_data.speed.distance",
+     "label": "Speed zone distance",
+     "unit": "m",
+     "unitProven": true,
+     "expectedUnit": "m",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "0eb5ba81-3399-4284-97e1-1b058a60418c",
+     "revisionId": "2691663c-0f0f-4417-8272-0b8a4797ca38",
+     "key": "more.events.acceleration_events_count",
+     "label": "Acceleration events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    },
+    {
+     "fieldId": "84a5ab97-2492-41d9-bc19-51eea3cc26d6",
+     "revisionId": "5c0a94df-a90e-456b-b698-c1b71f93d59d",
+     "key": "more.events.deceleration_events_count",
+     "label": "Deceleration events",
+     "unit": "count",
+     "unitProven": true,
+     "expectedUnit": "count",
+     "placeable": false,
+     "reason": "field_has_parameters",
+     "displayRule": null,
+     "displayUnits": [],
+     "rawA": null,
+     "rawB": null
+    }
+   ],
+   "variables": [
+    {
+     "id": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+     "ownerScope": "club",
+     "key": "total_distance_km",
+     "label": "Total distance (km)",
+     "versionId": "8ae3b649-d60d-474d-ab43-6ea67c7b0008",
+     "unit": "km",
+     "placeable": true,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "76cd0779-b99f-4171-af2c-812a34569f59",
+     "ownerScope": "system",
+     "key": "gpexe_acceleration_events_2bd7ef",
+     "label": "GPEXE acceleration events 2bd7ef",
+     "versionId": "5ea7163f-f592-481c-b921-4004a1e89301",
+     "unit": "count",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "f00dc808-8525-432f-b3bb-2cdef0aca691",
+     "ownerScope": "system",
+     "key": "gpexe_brake_events_edcf99",
+     "label": "GPEXE brake events edcf99",
+     "versionId": "a5868f41-2d2e-402b-a178-88ff389b92b6",
+     "unit": "count",
+     "placeable": true,
+     "filledByFieldIds": [
+      "dcac9b78-c2b9-4dde-b91f-76eaf685244a"
+     ]
+    },
+    {
+     "id": "b8a43d4f-b3d3-4656-9d14-d958d1e54929",
+     "ownerScope": "system",
+     "key": "gpexe_burst_events_c5cb1c",
+     "label": "GPEXE burst events c5cb1c",
+     "versionId": "299abcb6-5a81-45ba-94db-f62d02758bf4",
+     "unit": "count",
+     "placeable": true,
+     "filledByFieldIds": [
+      "362b62cf-53dc-41ab-b2bf-fb81235fe6ab"
+     ]
+    },
+    {
+     "id": "7b468e85-a4aa-4451-9e6c-8ca95319e2bc",
+     "ownerScope": "system",
+     "key": "gpexe_deceleration_events_2cb70d",
+     "label": "GPEXE deceleration events 2cb70d",
+     "versionId": "429983a6-9ae9-4d54-aa9e-e8402ae10cee",
+     "unit": "count",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "82312211-3056-4764-ba6a-d019892a8082",
+     "ownerScope": "system",
+     "key": "gpexe_max_speed_1e835e",
+     "label": "GPEXE max speed 1e835e",
+     "versionId": "d6062f55-b1d8-40ef-9da1-cdfeb9ec7b75",
+     "unit": "km/h",
+     "placeable": true,
+     "filledByFieldIds": [
+      "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3"
+     ]
+    },
+    {
+     "id": "e6aaa2a7-ee73-404f-9ef5-c19fe952d0cd",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_25_60_distance_b799c5",
+     "label": "GPEXE power zone 25 60 distance b799c5",
+     "versionId": "0c17a85d-3aa4-4ea5-bba7-23e7c99704f6",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "c8e0a7bd-e76d-4230-9ea8-4607d23be3d0",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_60_75_distance_59d00a",
+     "label": "GPEXE power zone 60 75 distance 59d00a",
+     "versionId": "e4dea072-deb1-411e-adea-fcac3a6646fe",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "fc1e0c7a-daa1-42a6-96dd-fb0a3466c189",
+     "ownerScope": "system",
+     "key": "gpexe_power_zone_75_plus_distance_638dd4",
+     "label": "GPEXE power zone 75 plus distance 638dd4",
+     "versionId": "06855951-1f79-4908-8189-856d5ff0f517",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "505f15b5-9f7e-478f-ae6a-e10093229788",
+     "ownerScope": "system",
+     "key": "gpexe_sprint_distance_7mps_7b81b0",
+     "label": "GPEXE sprint distance 7mps 7b81b0",
+     "versionId": "673a7f33-f15f-441b-a244-10fffc75c63c",
+     "unit": "m",
+     "placeable": false,
+     "filledByFieldIds": []
+    },
+    {
+     "id": "b71d8832-b110-4d07-b153-a9eb36bf6289",
+     "ownerScope": "system",
+     "key": "gpexe_time_min_d77992",
+     "label": "GPEXE time min d77992",
+     "versionId": "0e1238f9-ade3-4de4-8b41-66dbd03f4983",
+     "unit": "min",
+     "placeable": true,
+     "filledByFieldIds": [
+      "7588caae-f909-40d3-9e7e-05fbaffbf36c"
+     ]
+    },
+    {
+     "id": "48960567-419e-4f74-badd-6fcf2e4ce5d3",
+     "ownerScope": "system",
+     "key": "gpexe_total_distance_1ff5e7",
+     "label": "GPEXE total distance 1ff5e7",
+     "versionId": "8b452db0-0c90-4f2f-a6b0-91be687cf6e5",
+     "unit": "m",
+     "placeable": true,
+     "filledByFieldIds": [
+      "dc98aeac-22e6-4a07-ad98-ddf41e034f01"
+     ]
+    }
+   ],
+   "on": [
+    {
+     "activationId": "20cf52c4-3330-4bd3-91d2-79f09d17f98b",
+     "mappingVersionId": "03ea7d53-1bcd-46fa-b4f8-00531b0f5cb4",
+     "fieldId": "0eb5ba81-3399-4284-97e1-1b058a60418c",
+     "variableId": "76cd0779-b99f-4171-af2c-812a34569f59",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "272f7bba-2955-45c6-b85f-119e030345ae",
+     "mappingVersionId": "dae136d1-70de-44c4-963b-f8e6eb5a1582",
+     "fieldId": "4922c614-b422-4b98-9372-1e0dbef5a948",
+     "variableId": "fc1e0c7a-daa1-42a6-96dd-fb0a3466c189",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "4a550f32-d884-40aa-8210-94796cc0b22b",
+     "mappingVersionId": "4897f03b-6e66-42d3-83f5-90d8f93a6044",
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "variableId": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+     "requirement": "required",
+     "badge": "club_mapping",
+     "levels": {
+      "session": true,
+      "drill": false
+     }
+    },
+    {
+     "activationId": "60698c47-bbff-4457-9701-a4b2cb40b555",
+     "mappingVersionId": "144a491b-c07f-4d45-a70d-20341ae4455d",
+     "fieldId": "7588caae-f909-40d3-9e7e-05fbaffbf36c",
+     "variableId": "b71d8832-b110-4d07-b153-a9eb36bf6289",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "6e4193f8-4730-4c83-b38b-9d2c09d63643",
+     "mappingVersionId": "984f97b5-1396-455a-97c4-459abd9712b7",
+     "fieldId": "dcac9b78-c2b9-4dde-b91f-76eaf685244a",
+     "variableId": "f00dc808-8525-432f-b3bb-2cdef0aca691",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "9121b0f8-1c2a-4295-a97d-3b157bd38169",
+     "mappingVersionId": "0b3f6158-5b00-4e1d-bc34-7f6c753334cc",
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "variableId": "c8e0a7bd-e76d-4230-9ea8-4607d23be3d0",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "91a1878d-d770-4c80-84b0-11ef4dcadb7a",
+     "mappingVersionId": "78be5b50-8acf-494f-8e85-650b0cdf8711",
+     "fieldId": "b04f4153-6c28-458f-be96-df52b59df981",
+     "variableId": "505f15b5-9f7e-478f-ae6a-e10093229788",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "9a56683d-353d-4c8e-85ed-5aa7dd98255d",
+     "mappingVersionId": "c0a27a2b-12df-4443-a369-d394a85f387e",
+     "fieldId": "362b62cf-53dc-41ab-b2bf-fb81235fe6ab",
+     "variableId": "b8a43d4f-b3d3-4656-9d14-d958d1e54929",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "b7eaf73c-2465-4213-8fae-6c1ac578b5b4",
+     "mappingVersionId": "e42681d3-7a9a-46c3-8ee3-a32c62bc39b3",
+     "fieldId": "84a5ab97-2492-41d9-bc19-51eea3cc26d6",
+     "variableId": "7b468e85-a4aa-4451-9e6c-8ca95319e2bc",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "c180afd6-b068-43e1-a795-75f43c1a9968",
+     "mappingVersionId": "b1285d86-8a23-40e8-8235-e99fa103c553",
+     "fieldId": "aa21e925-0be1-47c5-b59f-eb8b7c0da590",
+     "variableId": "e6aaa2a7-ee73-404f-9ef5-c19fe952d0cd",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    },
+    {
+     "activationId": "f5e4c8ce-3750-4598-a366-7ba733fb95d2",
+     "mappingVersionId": "a23ed2b3-73f2-4f68-ae02-952a23114bd6",
+     "fieldId": "c3cc5ac1-a2e5-4b5f-b2e1-0c40f82386c3",
+     "variableId": "82312211-3056-4764-ba6a-d019892a8082",
+     "requirement": "optional",
+     "badge": "optimove_mapping",
+     "levels": {
+      "session": true,
+      "drill": true
+     }
+    }
+   ],
+   "preplaced": [],
+   "replaceable": [],
+   "switchedOff": [
+    {
+     "mappingVersionId": "83d2f4ad-6b2f-498a-a86e-aeb40a3022f2",
+     "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+     "variableId": "48960567-419e-4f74-badd-6fcf2e4ce5d3",
+     "badge": "optimove_mapping",
+     "endedBy": "Club Admin Example",
+     "endedAt": "2026-11-12T20:15:19.280Z"
+    }
+   ]
+  }
+ },
+ "confirmations": {
+  "confirmations": [
+   {
+    "id": "29fcb69d-8545-45c3-8ad3-ec0e2e5ec736",
+    "teamId": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+    "confirmedAt": "2026-11-12T20:15:34.130Z",
+    "confirmedBy": "Club Admin Example",
+    "sessionStartedAt": "2026-11-04T09:08:12.000Z",
+    "rows": [
+     {
+      "itemNo": 1,
+      "kind": "club_mapping",
+      "checked": true,
+      "mappingVersionId": "4897f03b-6e66-42d3-83f5-90d8f93a6044",
+      "fieldId": "dc98aeac-22e6-4a07-ad98-ddf41e034f01",
+      "column": {
+       "key": "athlete_session.total_distance",
+       "label": "TotDist"
+      },
+      "variableId": "b8376f7c-56d1-4032-a139-3c3e68cc0873",
+      "variable": {
+       "label": "Total distance (km)"
+      },
+      "sourceUnit": "m",
+      "targetUnit": "km",
+      "conversion": {
+       "kind": "converted",
+       "scale": "0.001",
+       "divisor": "1",
+       "offset": "0"
+      },
+      "displayRule": "distance_m",
+      "displayUnit": "m",
+      "valuesState": "present",
+      "values": {
+       "a": {
+        "raw": "3000",
+        "stored": "3"
+       },
+       "b": {
+        "raw": "1500",
+        "stored": "1.5"
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "nextCursor": null
+ },
+ "endRequest": {
+  "requestKey": "2fdb65bb-85ad-49cc-bc02-756d4ff0770d",
+  "expectedState": "open",
+  "reason": "Switched off on the drag-and-drop board."
+ },
+ "endAnswer": {
+  "activation": {
+   "id": "8dae8745-1611-4669-b1bd-8f7831173e09",
+   "mappingId": "33685d11-c512-436e-8c66-7c6c3eee24cb",
+   "versionId": "83d2f4ad-6b2f-498a-a86e-aeb40a3022f2",
+   "bindingId": "004d6f82-699d-4dec-9565-eb7a818cedb1",
+   "bindingState": "active",
+   "teamId": "e85ada7a-3ba2-4448-9d8c-246fdbfc1ffd",
+   "requirement": "optional",
+   "appliesToSession": true,
+   "appliesToDrill": true,
+   "basis": "platform_admin",
+   "activatedAt": "2026-11-12T20:15:12.313Z",
+   "endedAt": "2026-11-12T20:15:19.280Z",
+   "endReason": "admin_ended"
+  },
+  "replayed": false
+ }
+}

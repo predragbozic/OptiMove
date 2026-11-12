@@ -254,13 +254,13 @@ async function send(render) {
 
 function startSave(render) {
   const s = boardState();
-  if (s.write || !s.board) return;
-  if (newRows(s).some((p) => !p.checked)) return;
+  if (s.write || !s.board) return null;
+  if (newRows(s).some((p) => !p.checked)) return null;
   const body = saveBody(s, newRequestKey());
-  if (body.rows.length === 0) return;
+  if (body.rows.length === 0) return null;
   s.write = { kind: "save", body, summary: savedSummary(s, body), sending: false, unconfirmed: false };
   s.saved = null;
-  void send(render);
+  return send(render);
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +364,7 @@ export async function handleBoardAction(action, { render }) {
     s.review = false;
     render();
   } else if (act === "save") {
-    startSave(render);
+    await startSave(render);
   } else if (act === "check-result") {
     if (s.write?.unconfirmed) { s.write.checkedOnce = true; s.write.unconfirmed = false; await send(render); }
   } else if (act === "switch-off-open") {

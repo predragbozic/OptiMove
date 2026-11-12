@@ -42,7 +42,7 @@ import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./ico
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
-import { dropFieldOnVariable, handleBoardAction, handleBoardInput } from "./metric-board-actions.js";
+import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput } from "./metric-board-actions.js";
 import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -694,6 +694,8 @@ function bindEvents() {
     if (state.activeTab === "training-load" && closeActivityRosterOverlay()) {
       renderTrainingLoad();
     }
+    // J18: the board's sheet, panel or review closes on Escape (never while a save is in flight).
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "board") closeBoardOverlay(renderActiveTrainingLoadSurface);
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
