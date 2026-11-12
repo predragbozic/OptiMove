@@ -140,9 +140,11 @@ async function rereadPlacements(render) {
         const answer = await fetchPlacement({ teamId: s.teamId, candidateId: board.session.candidateId, pair: board.pair.index, fieldId: p.fieldId, targetId: p.targetId });
         if (!stillThis()) return;
         if (s.placements[p.fieldId]) s.placements[p.fieldId] = { ...s.placements[p.fieldId], placement: answer.placement, checked: false, again: true };
-      } catch {
+      } catch (error) {
         if (!stillThis()) return;
-        delete s.placements[p.fieldId];
+        // Only "no such thing here" removes the admin's row; a busy or failed read keeps it, unticked, to compare again.
+        if (errorInfo(error).status === 404) delete s.placements[p.fieldId];
+        else if (!s.notice) s.notice = "A column could not be read again. Open it with Compare before saving.";
       }
     }
   } finally {
@@ -293,6 +295,7 @@ async function send(render) {
     s.review = false;
     if (info.status === 404) info.code = "notFound";
     s.notice = boardErrorText(info);
+    s.panel = null;
     await reloadKeeping(render);
     if (!live(s, generation)) return;
     render();

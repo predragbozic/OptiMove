@@ -463,3 +463,49 @@ test("23. a used column says why it does not move; a ticked row offers View chec
   assert.equal(content.querySelector(`[data-action="metric-board-compare"][data-field-id="${FIELD}"]`).textContent.trim(), "View check");
   assert.ok(text().includes("Placed. Remove it under Variables to place it elsewhere."));
 });
+
+test("24. a placement that cannot be read again for now is kept, unticked; only a 404 removes it; a refusal closes the open panel", async () => {
+  await open();
+  await place();
+  tick("[data-mb-tick]", true);
+  const on = FX.board.board.on[0];
+  await click(`[data-action="metric-board-switch-off-open"][data-activation-id="${on.activationId}"]`);
+  overrides = [(c) => (c.method === "POST" ? { status: 409, body: { error: "activation_not_open" } } : null), (c) => (c.url.includes("/board/placement?") ? { status: 409, body: { error: "try_again" } } : null)];
+  await click('[data-action="metric-board-switch-off"]');
+  let s = state.trainingLoad.board;
+  assert.equal(s.panel, null, "the panel with the values read before does not stay open");
+  assert.ok(s.placements[FIELD], "a busy re-read keeps the row");
+  assert.equal(s.placements[FIELD].checked, false);
+  overrides = [(c) => (c.url.includes("/board/placement?") ? { status: 404, body: { error: "not_found" } } : null)];
+  await actions.handleBoardAction({ dataset: { action: "metric-board-reload" }, getAttribute: () => null }, { render });
+  assert.equal(state.trainingLoad.board.placements[FIELD], undefined, "a 404 removes it");
+});
+
+test("25. Other athletes that fails leaves the pair on record: Try again reads that pair, with the placement kept", async () => {
+  await open();
+  await place();
+  await click('[data-action="metric-board-keep"]');
+  overrides = [(c) => (c.url.startsWith(`${B}/board?`) ? { status: 500, body: { error: "internal_error" } } : null)];
+  await actions.handleBoardAction({ dataset: { action: "metric-board-other-athletes" }, getAttribute: () => null }, { render });
+  assert.match(calls.at(-1).url, /pair=1/);
+  overrides = [];
+  await click('[data-action="metric-board-reload"]');
+  const boardRead = calls.filter((c) => c.url.startsWith(`${B}/board?`)).at(-1);
+  assert.ok(!boardRead.url.includes("pair="), "the first pair again, not the next one");
+  assert.ok(state.trainingLoad.board.placements[FIELD], "the unsaved placement is kept");
+  assert.equal(state.trainingLoad.board.placements[FIELD].again, true);
+});
+
+test("26. leaving after a save drops the Saved notice too", async () => {
+  await open();
+  await place();
+  tick("[data-mb-tick]", true);
+  await click('[data-action="metric-board-keep"]');
+  await click('[data-action="metric-board-review"]');
+  await click('[data-action="metric-board-save"]');
+  assert.ok(state.trainingLoad.board.saved);
+  actions.dropBoardForms();
+  assert.equal(state.trainingLoad.board.saved, null);
+  render();
+  assert.ok(!text().includes("Saved."));
+});
