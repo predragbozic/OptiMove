@@ -575,7 +575,7 @@ Each migration takes the next free number when its pull request is opened. It is
 
 ### 5.1 T9 `training_load.source_metric_confirmations` — the act
 
-**18-A2:** M-A builds the `team_mapping` shape only (section 15.3). Everything in sections 5.1–5.4, 5.6 and 9.1 that exists only for `field_observation` (the kind itself, `source_metric_version_id` on T9, a second session, the `field_unit` item kind, the fourth deferred check, the two observed T8 acts, test items on them) belongs to 18-P's later migration, which widens the CHECKs; so do sections 6.2, 9.2 and 9.5 where they name `field_observation`. This shape is 18-A2's proposal, following from R1 (no 18-P), for the *Rukovodilac*'s confirmation before 18-1.
+**18-A2:** M-A builds the `team_mapping` shape only (section 15.3). Everything in sections 5.1–5.4, 5.6 and 9.1 that exists only for `field_observation` (the kind itself, `source_metric_version_id` on T9, a second session, the `field_unit` item kind, the fourth deferred check, the two observed T8 acts, test items on them) belongs to 18-P's later migration, which widens the CHECKs; so do sections 6.2, 9.2 and 9.5 where they name `field_observation`. Decided by the *Rukovodilac* on 2026-11-12 (section 15.2).
 
 | Column | Rule |
 |---|---|
@@ -601,6 +601,7 @@ There is no free text, and no athlete data.
 | `candidate_id` | uuid, **no foreign key**. The candidate row is never pinned, because v22 allows deleting a candidate that was not imported (`v22:296-303`). |
 | `candidate_bundle_hash` | 64 lower-case hex characters, copied from the candidate |
 | `gpexe_team_session_id` | The canonical session id, copied. It is a session, not a person. |
+| `session_started_at` | **18-A2 (the *Rukovodilac*, 2026-11-12):** the session's start, copied from the candidate at the save, so History never reads the candidate row. A session fact, not a person's. |
 | `check_id` | A foreign key to `gpexe_import_checks`, which are never deleted (`v24:336`). The check must have succeeded for this team. For `team_mapping`, through this binding (`gpexe_import_checks.source_binding_id`, `v31:71-72`), as the importer requires (`phase9-importer-mappings-contract.md:175-179`). For `field_observation`, through `source_connection` on a host of the field's family. |
 | `team_id` | The session's team |
 | `pair_index` | Zero or more: the server's pair order. No athlete id. |
@@ -1338,11 +1339,9 @@ and the list may move while a ★★ pull request is open.
   `import_undone_at is null`:** route 1's default and chosen session, route 2, step 5, step 15's re-read and the T9s
   guard (sections 4.4 and 5.4, marked in place). An imported candidate is still never deleted, and a check row is
   still never deleted.
-  - **The one read without it is History** (routes 4 and 5). A saved confirmation names its candidate by id (T9s, no
-    foreign key), and an undo keeps that row and marks it. History reads the session's date from that row by id,
-    whatever its status or undo mark, and shows no date when the row is gone (a candidate that was never imported may
-    be deleted). Open for the *Rukovodilac* before 18-1: T9s could instead copy the session's start at the save, which
-    removes this read.
+  - **History reads no candidate** (routes 4 and 5; the *Rukovodilac*, 2026-11-12). T9s copies the session's start
+    at the save (`session_started_at`, section 5.2), so History shows the session's date from T9s and never reads the
+    candidate row, which an undo marks and, when it was never imported, a purge may delete.
 - **The mapper (v62).** `gpexeLevelValues` takes the team's session time zone
   (`backend/src/gpexeImportMapper.js:490`). The board and the save pass it, so a session whose devices report more than
   one time zone passes the same gates as its import.
@@ -1392,6 +1391,7 @@ and the list may move while a ★★ pull request is open.
   *Rukovodilac*.
 - **R9.** As written: a board version keeps the levels both the field and the variable allow, and the session-level
   comparison covers the drill level of the same version.
+- **M-A's shape, History's date and the joint deploy.** M-A builds the `team_mapping` shape only (section 5.1's note); T9s copies the session's start, so History reads no candidate (section 15.1); 18-3's merge waits for 18-4's GO and the two go out in one deploy (section 15.3).
 - **The gate has no gap.** The refusal `confirmation_required` must not reach production before the board's backend.
   So the gate is its own migration, M-B, in 18-3's pull request and deploy.
 - **U4's button stays.** Section 15.4.
@@ -1421,9 +1421,10 @@ and the list may move while a ★★ pull request is open.
   disposable database (apply → rollback → identical catalog → apply again). M-A's rollback refuses once a T9 row exists
   or a later migration is recorded (M-B included, so M-B is rolled back first); M-B's refuses under a later migration and drops only its trigger and function.
   Neither is applied by the executor: only on the owner's order naming the file.
-- **Between 18-3 and 18-4** a club admin's activation of such a version exists only as the board's API, and J16's
-  *Save and activate* answers `409 confirmation_required` with its sentence but without the link. The two are deployed
-  close together; the *Rukovodilac* decides whether 18-3's deploy waits for 18-4's GO.
+- **18-3 and 18-4 are deployed together** (the *Rukovodilac*, 2026-11-12). M-B is applied only in the deploy that
+  also carries the board's frontend. M-B stays in 18-3's pull request, where the gate and the service's
+  `confirmation_required` mapping are tested together, and **18-3's merge waits for 18-4's GO**: the two are merged one
+  after the other and go out in one deploy. So a club admin never meets the refusal without the board and its link.
 - **The prefix rule.** Before each migration pull request is opened, and again before its merge, the 12-digit prefixes
   of the merge tree are checked for a duplicate (`.claude/rules/migrations.md`).
 
@@ -1452,8 +1453,8 @@ and the list may move while a ★★ pull request is open.
   clause between the first write and the COMMIT.
 - **Candidates:** an undone import is never the board's session, on any of the reads of section 15.1, route 2
   included; a session with an undone row and a live row uses the live one; an undo between step 5 and the T9s insert
-  answers `board_changed` with nothing written; a confirmation whose candidate was undone afterwards still shows its
-  session date in History; after an undo that leaves no live row, route 1 answers `no_stored_session`, never the
+  answers `board_changed` with nothing written; a confirmation whose candidate was undone or deleted afterwards still shows its
+  session date in History, from T9s, and History's queries read no candidate row (a query spy); after an undo that leaves no live row, route 1 answers `no_stored_session`, never the
   undone row. **The T9s guard alone** (a direct insert, past the service) refuses an undone candidate with its fixed
   `23514` message, added to section 9.1 item 3, with its mutation.
 - **The time zone:** a mixed-zone session of a team with a session time zone is readable by the board exactly when it
