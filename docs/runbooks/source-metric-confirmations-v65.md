@@ -28,7 +28,10 @@ later migration that ships with the board's backend (18-3) and frontend (18-4) i
   - **Locks:** T4 `SHARE ROW EXCLUSIVE` first (it waits for a writer up to the runner's `lock_timeout`, 30 s). The
     new foreign keys then take `SHARE ROW EXCLUSIVE` on `public.clubs`, `public.teams`, `public.users`, the source
     connections and bindings, the import checks and the source revisions, each within the runner's `lock_timeout`.
-    Only then T8 `ACCESS EXCLUSIVE` with `NOWAIT`, held for T8's own statements only. T5 is not locked.
+    Only then T8 `ACCESS EXCLUSIVE` with `NOWAIT`. T8's lock and the `SHARE ROW EXCLUSIVE` locks before it are held
+    until the migration's COMMIT (the migration file's header says "only for its own statements"; that is
+    inexact). T8 is taken last, so the migration never waits for another table while it holds T8. A failed
+    `NOWAIT` applies nothing and leaves the old instance serving: the deploy is simply repeated. T5 is not locked.
 
 The runner applies the migration in its own transaction and stops at the first failure (`backend/src/migrate.js`).
 `npm start` runs the migrations before the server.
