@@ -76,18 +76,90 @@ export function reasonOfErrorEvent(event) {
   return event?.message === "Script error." ? "script_error" : "no_error_object";
 }
 
+// ---- the device of a report (v70): six facts, each a word of the server's closed lists ----
+// Reduced HERE, in the browser: the User-Agent string is read to choose a word and is never sent or stored.
+export const DEVICE_LISTS = Object.freeze({
+  class: Object.freeze(["phone", "tablet", "desktop", "unknown"]),
+  os: Object.freeze(["ios", "android", "windows", "macos", "linux", "chromeos", "other"]),
+  browser: Object.freeze(["safari", "chrome", "firefox", "edge", "samsung", "webview", "other"]),
+  viewport: Object.freeze(["lt_360", "360_479", "480_767", "768_1023", "1024_1439", "ge_1440"]),
+});
+export function viewportBucket(width) {
+  if (!Number.isFinite(width) || width <= 0) return null;
+  if (width < 360) return "lt_360";
+  if (width < 480) return "360_479";
+  if (width < 768) return "480_767";
+  if (width < 1024) return "768_1023";
+  if (width < 1440) return "1024_1439";
+  return "ge_1440";
+}
+function majorOf(ua, pattern) {
+  const n = Number((ua.match(pattern) || [])[1]);
+  return Number.isInteger(n) && n >= 1 && n <= 999 ? n : null;
+}
+// { class, os, browser, major?, viewport?, touch } from a navigator and a window; never throws, never the UA itself.
+export function deviceOf(nav = globalThis.navigator, win = globalThis.window) {
+  try {
+    const ua = typeof nav?.userAgent === "string" ? nav.userAgent : "";
+    const touchPoints = Number(nav?.maxTouchPoints) || 0;
+    // An iPad asks for the desktop site as a Mac: a "Mac" with a touch screen is an iPad.
+    const ipad = /iPad/.test(ua) || (/Macintosh/.test(ua) && touchPoints > 1);
+    let os = "other";
+    if (/iPhone|iPod/.test(ua) || ipad) os = "ios";
+    else if (/Android/.test(ua)) os = "android";
+    else if (/CrOS/.test(ua)) os = "chromeos";
+    else if (/Windows/.test(ua)) os = "windows";
+    else if (/Macintosh|Mac OS X/.test(ua)) os = "macos";
+    else if (/Linux|X11/.test(ua)) os = "linux";
+    let browser = "other"; let major = null;
+    // A Chromium browser with its own name and no word in the list is "other", not Chrome.
+    if (/OPR\/|YaBrowser\/|UCBrowser\//.test(ua)) { browser = "other"; }
+    else if (/SamsungBrowser\//.test(ua)) { browser = "samsung"; major = majorOf(ua, /SamsungBrowser\/(\d+)/); }
+    else if (/Edg(?:e|A|iOS)?\//.test(ua)) { browser = "edge"; major = majorOf(ua, /Edg(?:e|A|iOS)?\/(\d+)/); }
+    else if (/Firefox\/|FxiOS\//.test(ua)) { browser = "firefox"; major = majorOf(ua, /(?:Firefox|FxiOS)\/(\d+)/); }
+    // An app's own in-app browser: Android's "; wv)", or iOS WebKit without the Safari token.
+    else if (/; wv\)/.test(ua) || (os === "ios" && /AppleWebKit/.test(ua) && !/Safari\//.test(ua))) { browser = "webview"; }
+    else if (/Chrome\/|CriOS\//.test(ua)) { browser = "chrome"; major = majorOf(ua, /(?:Chrome|CriOS)\/(\d+)/); }
+    else if (/Safari\//.test(ua) && /Version\//.test(ua)) { browser = "safari"; major = majorOf(ua, /Version\/(\d+)/); }
+    let cls = "unknown";
+    if (ipad || (os === "android" && !/Mobile/.test(ua))) cls = "tablet";
+    else if (/iPhone|iPod/.test(ua) || (os === "android" && /Mobile/.test(ua))) cls = "phone";
+    else if (["windows", "macos", "linux", "chromeos"].includes(os)) cls = "desktop";
+    const device = { class: cls, os, browser };
+    // A browser that does not say how many touch points it has is unknown, not "no touch".
+    if (typeof nav?.maxTouchPoints === "number") device.touch = touchPoints > 0;
+    if (major) device.major = major;
+    const viewport = viewportBucket(Number(win?.innerWidth));
+    if (viewport) device.viewport = viewport;
+    return device;
+  } catch {
+    return null;
+  }
+}
+// Exactly the server's shape, or nothing: a value outside a list is dropped whole rather than sent.
+function checkedDevice(device) {
+  if (!device || typeof device !== "object") return null;
+  const out = {};
+  for (const key of ["class", "os", "browser", "viewport"]) if (DEVICE_LISTS[key].includes(device[key])) out[key] = device[key];
+  if (Number.isInteger(device.major) && device.major >= 1 && device.major <= 999 && out.browser) out.major = device.major;
+  if (typeof device.touch === "boolean") out.touch = device.touch;
+  return Object.keys(out).length ? out : null;
+}
+
 // The report body, exactly the keys the server accepts, or null.
-export function buildReport({ screen, action, code, status, error, reason }) {
+export function buildReport({ screen, action, code, status, error, reason, device }) {
   const body = { screen: wordOf(screen, "app").replace(/[.]/g, "-"), code: wordOf(code, "js_error") };
   if (REASONS.includes(reason)) body.reason = reason;
   if (action) body.action = wordOf(action, "unknown");
   if (Number.isInteger(status) && status >= 100 && status <= 599) body.status = status;
   const sig = stackSigOf(error);
   if (sig) body.stackSig = sig;
+  const dev = checkedDevice(device);
+  if (dev) body.device = dev;
   return body;
 }
 
-export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS } = {}) {
+export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS, getDevice = deviceOf } = {}) {
   // The default sender needs a signed-in page; an injected sender (a test) decides for itself.
   const send = sendIn || defaultSend;
   const isSignedIn = signedIn || (sendIn ? () => true : () => Boolean(context.getUser()));
@@ -97,7 +169,7 @@ export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () =>
   return function report(input) {
     try {
       if (!isSignedIn()) return false; // before any slot is spent: an error before sign-in must not hide the same one after it
-      const body = buildReport(input);
+      const body = buildReport({ ...input, device: getDevice() });
       const t = now();
       if (t - windowStart >= 60_000) { windowStart = t; inWindow = 0; }
       if (inWindow >= perMinute) return false;

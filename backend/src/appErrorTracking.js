@@ -22,7 +22,7 @@ const PURGE_INTERVAL_HOURS = 6;
 const WORD = /^[a-z0-9_.-]{1,60}$/;
 const SCREEN = /^[a-z0-9_-]{1,60}$/;
 const COMMIT = /^[0-9a-f]{7,40}$/;
-const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release", "reason"]);
+const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release", "reason", "device"]);
 // What failed, as one word of a closed list: the kind of the rejection's reason or of the error object (its `name`,
 // never its message). A native rejection (an aborted request, a refused play() or full screen) has no script frames,
 // so without this word such an error says nothing about itself. Only the codes below take one; it is stored as the
@@ -31,9 +31,99 @@ export const CLIENT_REASONS = Object.freeze(["aborterror", "notallowederror", "n
   "timeouterror", "quotaexceedederror", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "other_error", "non_error", "none", "script_error", "no_error_object"]);
 export const CODES_WITH_REASON = Object.freeze(["unhandled_rejection", "js_error", "handler_error"]);
 
+// Version 1 of the user hash (v58): unkeyed. No new row gets it from v70 on; it stays so the rows written before the
+// keyed hash can still be matched until they age out (30 days).
 export function userHash(userId) {
   if (!userId) return null;
   return crypto.createHash("sha256").update(`app-error-user:${String(userId)}`).digest("hex").slice(0, 12);
+}
+
+// ---- the keyed user hash (v70; docs/ai/app-health-device-person-plan.md, 10.1) ----
+// The key ring: "2:<base64 of at least 32 bytes>;3:<...>". The highest version is the one new rows get; an older one
+// stays in the ring for 30 days after a rotation so its rows still resolve. Version 1 is the unkeyed hash and can
+// never be a key's version. The keys are read when a hash is made, never logged and never sent to the database.
+export const USER_HASH_KEYS_ENV = "APP_ERROR_USER_HASH_KEYS";
+export const FIRST_KEYED_VERSION = 2;
+const MIN_KEY_BYTES = 32;
+let ringCache = { spec: null, ring: null };
+export function parseUserHashKeys(spec) {
+  if (typeof spec !== "string" || !spec.trim()) return null;
+  const keys = new Map();
+  for (const part of spec.split(";").map((x) => x.trim()).filter(Boolean)) {
+    const m = part.match(/^(\d{1,3}):([A-Za-z0-9+/]+={0,2})$/);
+    if (!m) return null;
+    const version = Number(m[1]);
+    const key = Buffer.from(m[2], "base64");
+    if (version < FIRST_KEYED_VERSION || version > 999 || key.length < MIN_KEY_BYTES || keys.has(version)) return null;
+    keys.set(version, key);
+  }
+  if (!keys.size) return null;
+  return { keys, current: Math.max(...keys.keys()) };
+}
+function userHashRing() {
+  const spec = process.env[USER_HASH_KEYS_ENV] ?? "";
+  if (ringCache.spec !== spec) ringCache = { spec, ring: parseUserHashKeys(spec) };
+  return ringCache.ring;
+}
+// Whether people can be counted and shown: "keyed" with a usable ring, else "not_configured".
+export function userHashKeyState() { return userHashRing() ? "keyed" : "not_configured"; }
+let warnedNoKey = false;
+export function resetUserHashWarningForTests() { warnedNoKey = false; ringCache = { spec: null, ring: null }; }
+// The keyed hash of a user for one version of the ring, or null (no user, or no such key).
+export function keyedUserHash(userId, version) {
+  const key = userId ? userHashRing()?.keys.get(version) : null;
+  if (!key) return null;
+  return crypto.createHmac("sha256", key).update(`app-error-user:${String(userId)}`).digest("hex").slice(0, 12);
+}
+// Said once per process, at the server's start and again at the first row should the ring go missing later: the
+// variable's name only, never a part of its value.
+export function warnIfUserHashKeyMissing() {
+  if (userHashRing() || warnedNoKey) return;
+  warnedNoKey = true;
+  console.warn(`[app-errors] people cannot be counted or shown: ${USER_HASH_KEYS_ENV} is not set or not readable`);
+}
+// What a new row stores: the current key's hash and its version. Without a usable ring the row is stored WITHOUT a
+// hash - never with the unkeyed one: a silent return to the weaker scheme is what the key is there to prevent.
+export function userHashForNewRow(userId) {
+  const ring = userHashRing();
+  if (!ring) {
+    warnIfUserHashKeyMissing();
+    return { hash: null, version: FIRST_KEYED_VERSION };
+  }
+  return { hash: keyedUserHash(userId, ring.current), version: ring.current };
+}
+// Every version of the ring, newest first (the resolution of AH-3 tries each).
+export function userHashVersions() { return [...(userHashRing()?.keys.keys() ?? [])].sort((a, b) => b - a); }
+
+// ---- the device facts of a browser report (v70): closed lists only, reduced in the browser ----
+export const DEVICE_LISTS = Object.freeze({
+  class: Object.freeze(["phone", "tablet", "desktop", "unknown"]),
+  os: Object.freeze(["ios", "android", "windows", "macos", "linux", "chromeos", "other"]),
+  browser: Object.freeze(["safari", "chrome", "firefox", "edge", "samsung", "webview", "other"]),
+  viewport: Object.freeze(["lt_360", "360_479", "480_767", "768_1023", "1024_1439", "ge_1440"]),
+});
+const DEVICE_KEYS = new Set(["class", "os", "browser", "major", "viewport", "touch"]);
+// The device of a report: exactly the allowed keys, each a word of its list (a number 1-999, a boolean), or null
+// for a report that is refused. A report without the key has no device (an older page).
+export function sanitizeDevice(device) {
+  if (device === undefined || device === null) return {};
+  if (typeof device !== "object" || Array.isArray(device)) return null;
+  for (const key of Object.keys(device)) if (!DEVICE_KEYS.has(key)) return null;
+  const out = {};
+  for (const key of ["class", "os", "browser", "viewport"]) {
+    if (device[key] == null) continue;
+    if (typeof device[key] !== "string" || !DEVICE_LISTS[key].includes(device[key])) return null;
+    out[key] = device[key];
+  }
+  if (device.major != null) {
+    if (!Number.isInteger(device.major) || device.major < 1 || device.major > 999 || !out.browser) return null;
+    out.major = device.major;
+  }
+  if (device.touch != null) {
+    if (typeof device.touch !== "boolean") return null;
+    out.touch = device.touch;
+  }
+  return out;
 }
 
 // A route pattern: ids (uuids, numbers, long tokens) become :id, anything outside the segment shape becomes :x,
@@ -111,6 +201,8 @@ export function sanitizeClientReport(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   for (const key of Object.keys(body)) if (!CLIENT_KEYS.has(key)) return null;
   const { screen, action, code, status, stackSig, release, reason } = body;
+  const device = sanitizeDevice(body.device);
+  if (device === null) return null;
   if (reason != null && (typeof reason !== "string" || !CLIENT_REASONS.includes(reason) || !CODES_WITH_REASON.includes(code))) return null;
   if (typeof screen !== "string" || !SCREEN.test(screen)) return null;
   if (action != null && (typeof action !== "string" || !WORD.test(action))) return null;
@@ -120,7 +212,7 @@ export function sanitizeClientReport(body) {
   if (release != null && typeof release !== "string") return null;
   const stackSignature = stackSig == null ? null : cleanStackSignature(stackSig);
   if (stackSig != null && stackSignature === null) return null;
-  return { source: "client", screen, routeTemplate: null, action: action ?? null, code: reason == null ? code : `${code}.${reason}`, status: status ?? null, stackSignature, release: releaseOf(release) };
+  return { source: "client", screen, routeTemplate: null, action: action ?? null, code: reason == null ? code : `${code}.${reason}`, status: status ?? null, stackSignature, release: releaseOf(release), device };
 }
 
 // ---- per-user rate limit (in memory, bounded) ----
@@ -144,6 +236,12 @@ export function resetRateLimitForTests() { buckets.clear(); }
 export async function writeEvent(event, { executor = pool } = {}) {
   const fingerprint = fingerprintOf({ source: event.source, where: event.screen || event.routeTemplate, action: event.action, code: event.code, status: event.status, stackSignature: event.stackSignature });
   const hash = event.userHash ?? null;
+  // A hash is stored only with the version that says how it was made: a keyed hash labelled unkeyed could never be resolved.
+  if (hash !== null && event.userHashVersion == null) throw new Error("writeEvent: a user hash needs its version");
+  const hashVersion = event.userHashVersion ?? 1;
+  // The device of a browser report; a server error has none (the table refuses one).
+  const d = event.source === "client" ? event.device || {} : {};
+  const device = [d.class ?? null, d.os ?? null, d.browser ?? null, d.major ?? null, d.viewport ?? null, d.touch ?? null];
   const client = await executor.connect();
   try {
     await client.query("begin");
@@ -155,9 +253,12 @@ export async function writeEvent(event, { executor = pool } = {}) {
           set repeat_count = repeat_count + 1, last_seen_at = greatest(last_seen_at, clock_timestamp())
         where id = (select id from public.app_error_events
                      where fingerprint = $1 and user_hash is not distinct from $2 and last_seen_at > now() - interval '${REPEAT_WINDOW}'
+                       and user_hash_version = $3
+                       and device_class is not distinct from $4 and os_family is not distinct from $5 and browser_family is not distinct from $6
+                       and browser_major is not distinct from $7::smallint and viewport_bucket is not distinct from $8 and touch is not distinct from $9::boolean
                      order by last_seen_at desc limit 1)
         returning id`,
-      [fingerprint, hash],
+      [fingerprint, hash, hashVersion, ...device],
     );
     let outcome = "counted";
     if (!bumped.rowCount) {
@@ -169,9 +270,11 @@ export async function writeEvent(event, { executor = pool } = {}) {
         outcome = "dropped";
       } else {
         await client.query(
-          `insert into public.app_error_events (fingerprint, source, screen, route_template, action, error_code, http_status, role, release_commit, user_hash, stack_signature)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [fingerprint, event.source, event.screen ?? null, event.routeTemplate ?? null, event.action ?? null, event.code, event.status ?? null, event.role, event.release ?? null, hash, event.stackSignature ?? null],
+          `insert into public.app_error_events (fingerprint, source, screen, route_template, action, error_code, http_status, role, release_commit, user_hash, stack_signature,
+                                                user_hash_version, device_class, os_family, browser_family, browser_major, viewport_bucket, touch)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          [fingerprint, event.source, event.screen ?? null, event.routeTemplate ?? null, event.action ?? null, event.code, event.status ?? null, event.role, event.release ?? null, hash, event.stackSignature ?? null,
+            hashVersion, ...device],
         );
         outcome = "stored";
       }
@@ -188,7 +291,8 @@ export async function writeEvent(event, { executor = pool } = {}) {
 
 // A browser report from a signed-in user.
 export async function recordClientError(req, report) {
-  return writeEvent({ ...report, role: roleOf(req.authz), userHash: userHash(req.user?.id) });
+  const who = userHashForNewRow(req.user?.id);
+  return writeEvent({ ...report, role: roleOf(req.authz), userHash: who.hash, userHashVersion: who.version });
 }
 
 const recentServer = new Map();
@@ -212,10 +316,13 @@ export function recordServerError(req, error, status, { executor = pool } = {}) 
     }
     const rawCode = typeof error?.code === "string" ? error.code.toLowerCase() : "";
     const code = WORD.test(rawCode) ? rawCode : "internal_error";
-    const event = { source: "server", screen: null, routeTemplate, action: null, code, status, stackSignature: stackSignatureFromError(error), role: roleOf(req.authz), userHash: userHash(req.user?.id), release: releaseOf(null) };
+    const who = userHashForNewRow(req.user?.id);
+    const event = { source: "server", screen: null, routeTemplate, action: null, code, status, stackSignature: stackSignatureFromError(error), role: roleOf(req.authz), userHash: who.hash, userHashVersion: who.version, release: releaseOf(null) };
     // A 5xx storm must not become a second storm on the pool: an in-memory repeat filter and a bound on writes in flight.
     const fp = fingerprintOf({ source: "server", where: routeTemplate, action: null, code, status, stackSignature: event.stackSignature });
-    const key = `${event.userHash || "none"}:${fp}`;
+    // Per user by the id itself (in memory only, never stored): without the hashing key every hash is null, and two
+    // people hitting the same error must still both count.
+    const key = `${req.user?.id || "none"}:${fp}`;
     const now = Date.now();
     if (recentServer.size > 2000) for (const [k2, t] of recentServer) if (now - t > DEDUPE_MS) recentServer.delete(k2);
     if (now - (recentServer.get(key) ?? 0) < DEDUPE_MS || inFlight >= MAX_IN_FLIGHT) return;
@@ -290,8 +397,32 @@ export async function purgeAppErrorEvents({ executor = pool, days = RETENTION_DA
   return total;
 }
 
+// "Who looked" (public.app_error_person_lookups, v70) is kept one year; the table's own guard refuses a younger row.
+export const LOOKUP_RETENTION_DAYS = 365;
+export async function purgePersonLookups({ executor = pool } = {}) {
+  const client = await executor.connect();
+  try {
+    await client.query("begin");
+    await client.query("set local statement_timeout = '10s'");
+    await client.query("set local lock_timeout = '2s'");
+    const deleted = (await client.query(
+      `delete from public.app_error_person_lookups where id in (select id from public.app_error_person_lookups where looked_at < now() - make_interval(days => $1) order by id limit ${PURGE_BATCH})`,
+      [LOOKUP_RETENTION_DAYS],
+    )).rowCount;
+    await client.query("commit");
+    return deleted;
+  } catch (error) {
+    try { await client.query("rollback"); } catch { /* the connection is released below */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function startAppErrorRetentionSchedule({ intervalHours = PURGE_INTERVAL_HOURS, startupDelayMs = 60_000 } = {}) {
-  const tick = () => purgeAppErrorEvents().catch((e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`));
+  const failed = (e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`);
+  const tick = () => purgeAppErrorEvents().catch(failed).then(() => purgePersonLookups()).catch(failed);
+  warnIfUserHashKeyMissing();
   const first = setTimeout(tick, startupDelayMs);
   first.unref();
   const every = setInterval(tick, intervalHours * 3_600_000);

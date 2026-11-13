@@ -21,8 +21,9 @@ const { renderSettingsNavHtml } = await import("../navigation.js");
 C.setCaptureContext({ getUser: () => state.currentUser, getScreen: () => state.activeTab });
 
 const KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release"]);
+// The device of a report has its own test (app-errors-capture.test.mjs, 7); the reporters here leave it out.
 let sent;
-const capture = () => { sent = []; C.setReporterForTests(C.createReporter({ send: async (b) => { sent.push(b); } })); };
+const capture = () => { sent = []; C.setReporterForTests(C.createReporter({ send: async (b) => { sent.push(b); }, getDevice: () => null })); };
 
 test("1. the report is a closed shape", () => {
   const err = new Error(`failed for ${SECRET} token=abc`);
@@ -53,7 +54,7 @@ test("1. the report is a closed shape", () => {
 test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a failed send is silent", async () => {
   let t = 1_000_000;
   const out = [];
-  const r = C.createReporter({ send: async (b) => { out.push(b); }, now: () => t, perMinute: 3 });
+  const r = C.createReporter({ send: async (b) => { out.push(b); }, now: () => t, perMinute: 3, getDevice: () => null });
   assert.equal(r({ screen: "home", code: "js_error" }), true);
   assert.equal(r({ screen: "home", code: "js_error" }), false, "the same error within a minute");
   for (const code of ["a", "b"]) assert.equal(r({ screen: "home", code }), true);
@@ -68,7 +69,7 @@ test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a f
   assert.equal(throwing({ screen: "home", code: "x" }), false);
   // an error before sign-in spends no slot: the same error after sign-in is still sent
   let earlySignedIn = false; const sent2 = [];
-  const early = C.createReporter({ send: async (b) => { sent2.push(b); }, isSignedIn: () => earlySignedIn });
+  const early = C.createReporter({ send: async (b) => { sent2.push(b); }, isSignedIn: () => earlySignedIn, getDevice: () => null });
   assert.equal(early({ screen: "home", code: "boot_error" }), false);
   earlySignedIn = true;
   assert.equal(early({ screen: "home", code: "boot_error" }), true);
@@ -88,7 +89,8 @@ test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a f
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/app-errors");
   assert.equal(calls[0].options.method, "POST");
-  assert.deepEqual(JSON.parse(calls[0].options.body), { screen: "home", code: "js_error" });
+  // The default reporter adds the device it reads itself: here this process's own navigator, which is no browser.
+  assert.deepEqual(JSON.parse(calls[0].options.body), { screen: "home", code: "js_error", device: { class: "unknown", os: "other", browser: "other" } });
   state.currentUser = null;
 });
 
@@ -209,6 +211,18 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   const afterEntry = painted;
   state.activeTab = "weekly"; releaseLate(); await flush(); await flush();
   assert.equal(painted, afterEntry, "no repaint once the person is on another tab");
+  // the server cannot tell people apart (its hashing key is not set): said in one line, with the glyph, and gone once it can
+  globalThis.fetch = async () => ({ ok: true, status: 200, statusText: "", json: async () => ({ people: "not_configured", groups: [GROUPS[0]] }) });
+  state.activeTab = "organization"; state.appHealth = D.emptyAppHealth();
+  await D.loadAppHealth(() => {});
+  assert.equal(state.appHealth.people, "not_configured");
+  assert.match(renderAppHealthPanelHtml(), /app-health-people-off[^>]*>⚠ People are not counted for new errors/);
+  globalThis.fetch = async () => ({ ok: true, status: 200, statusText: "", json: async () => ({ people: "keyed", groups: [GROUPS[0]] }) });
+  await D.loadAppHealth(() => {});
+  assert.ok(!/app-health-people-off/.test(renderAppHealthPanelHtml()));
+  globalThis.fetch = async () => ({ ok: true, status: 200, statusText: "", json: async () => ({ groups: [GROUPS[0]] }) });
+  await D.loadAppHealth(() => {});
+  assert.ok(!/app-health-people-off/.test(renderAppHealthPanelHtml()), "an older server says nothing and nothing is claimed");
   // the tab
   assert.match(renderSettingsNavHtml({ isPlatformAdmin: true }), /data-section="appHealth"/);
   assert.ok(!/appHealth/.test(renderSettingsNavHtml({ isPlatformAdmin: false })));
