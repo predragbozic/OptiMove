@@ -574,3 +574,37 @@ Only an athlete with two or more tracks that MT-0 does not take as one recording
 1. The CLI / test writer path: refuse with `track_choice_not_supported` (recommended) or apply the choice too.
 2. The 7e aggregate preview stays without choices (recommended).
 3. The Activities label goes into MT-C with the review row (recommended), not MT-B.
+
+### 12.9 Decided (the *Rukovodilac*, 2026-11-13)
+
+**Decisions:**
+1. The CLI / test writer path (`importGpexeBundleLocked`) refuses a session that has a current choice, with
+   `track_choice_not_supported`.
+2. The 7e aggregate preview stays without choices.
+3. The Activities label goes into MT-C.
+
+**Addition: `none` lifts no other blocker.** A `none` choice only replaces that athlete's own `multiple_tracks` reason. The
+session stays as blocked or as not ready as its other facts make it:
+- a whole-session block;
+- another athlete's manual review, missing link or membership;
+- changes to imported results that need acceptance.
+
+Test: a session with a `none` athlete and an unlinked athlete stays not ready in the batch.
+
+**Addition: consistency with 6b.** A `none` athlete has no GPEXE value, so:
+- the coach may set an activity-level state (*Participated · no device data*) and, from it, an estimate (6b rule 4, M2);
+- nothing in MT-B writes over that state or that estimate.
+
+The cases follow the existing rules:
+- The choice is final while the session is imported (MT-A).
+- If the import is undone (U5 removes its estimates and roster work, v60 / v63) and the athlete is then given `track`, the
+  next import writes real values. M3 supersedes an estimate still effective at that point, and it is listed in the
+  preview's `supersededEstimates` (6b-B).
+- An estimate never makes the athlete importable or blocks the session.
+
+Test: a `none` athlete imported as left out, then an estimate saved for that athlete, is still its only value. The next
+search of the unchanged session changes neither the estimate nor the state.
+
+**Order:**
+- No MT-B code before v67 (MT-A, #513) is deployed and post-checked.
+- This section goes to a docs pull request after #513 is merged, so it merges without a conflict.
