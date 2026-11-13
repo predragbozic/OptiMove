@@ -2797,6 +2797,7 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  if (type?.startsWith('training-load-simple-') && action.matches('input, select, textarea')) return;
   // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
   // the tiny native calendar-icon glyph) opens the date picker. The label
   // wraps the input, so a click on the "From"/"To" text also lands here via

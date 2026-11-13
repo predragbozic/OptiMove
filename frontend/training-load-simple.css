@@ -1,0 +1,85 @@
+.tl-simple-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 55%);
+}
+
+.tl-simple-editor {
+  box-sizing: border-box;
+  width: min(56rem, 100%);
+  min-width: 0;
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: var(--surface, #fff);
+  color: var(--text, #172033);
+  box-shadow: 0 1rem 4rem rgb(0 0 0 / 25%);
+  overflow-wrap: anywhere;
+}
+
+.tl-simple-editor header,
+.tl-simple-navigation,
+.tl-simple-dates {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.tl-simple-editor h2 { margin: 0; }
+.tl-simple-editor fieldset { min-width: 0; margin: 1rem 0; padding: 1rem; border: 1px solid #b8c2d1; border-radius: .5rem; }
+.tl-simple-editor .tl-simple-editable { padding: 0; border: 0; }
+.tl-simple-editor legend { font-weight: 600; }
+.tl-simple-editor input,
+.tl-simple-editor select,
+.tl-simple-editor button { font: inherit; }
+.tl-simple-editor button,
+.tl-simple-editor input:not([type="radio"]):not([type="checkbox"]),
+.tl-simple-editor select { min-height: 2.75rem; padding: .65rem .85rem; border: 1px solid #8996a9; border-radius: .4rem; background: #fff; color: #172033; box-sizing: border-box; }
+.tl-simple-editor button { cursor: pointer; }
+.tl-simple-editor :disabled { cursor: default; opacity: .6; }
+.tl-simple-editor :focus-visible { outline: 3px solid #215dc7; outline-offset: 3px; }
+.tl-simple-field { display: flex; flex-direction: column; gap: .4rem; margin: 1rem 0; flex: 1; min-width: 0; }
+.tl-simple-field input,
+.tl-simple-field select { width: 100%; }
+.tl-simple-choice { display: flex; align-items: center; gap: .65rem; min-height: 2.75rem; }
+.tl-simple-choice input { flex-shrink: 0; width: 1.15rem; height: 1.15rem; }
+.tl-simple-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr)); gap: .75rem; }
+.tl-simple-editor .tl-simple-metric { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.tl-simple-editor .tl-simple-metric[aria-pressed="true"] { border: 2px solid #215dc7; background: #edf3ff; }
+.tl-simple-category { font-size: .85rem; }
+.tl-simple-steps { display: flex; gap: 2rem; flex-wrap: wrap; padding-left: 1.5rem; }
+.tl-simple-steps [aria-current="step"] { font-weight: 700; }
+.tl-simple-message { white-space: pre-wrap; }
+.tl-simple-message[role="alert"] { border-left: .25rem solid #a53023; padding: .75rem; background: #fff1ef; color: #78271f; }
+.tl-simple-preview { padding-top: 1rem; border-top: 1px solid #b8c2d1; }
+.tl-simple-content,
+.tl-simple-preview { min-width: 0; }
+.tl-simple-table-scroll { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; margin: 1rem 0; }
+.tl-simple-table-scroll table { border-collapse: collapse; width: 100%; min-width: 36rem; }
+.tl-simple-table-scroll caption { text-align: left; font-weight: 600; margin-bottom: .5rem; }
+.tl-simple-table-scroll th,
+.tl-simple-table-scroll td { text-align: left; vertical-align: top; padding: .6rem; border: 1px solid #b8c2d1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tl-simple-table-scroll th { min-width: 6rem; white-space: normal; overflow-wrap: normal; word-break: normal; }
+.tl-simple-table-scroll td { min-width: 4rem; }
+.tl-simple-table-scroll .tl-simple-number { white-space: nowrap; overflow-wrap: normal; word-break: normal; font-variant-numeric: tabular-nums; }
+.tl-simple-raw pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tl-simple-editor footer { margin-top: 1.5rem; }
+.tl-simple-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 40rem) {
+  .tl-simple-backdrop { padding: .5rem; }
+  .tl-simple-editor { max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: .6rem; }
+  .tl-simple-dates { display: block; }
+  .tl-simple-steps { gap: .5rem 1.5rem; }
+  .tl-simple-navigation > button { flex: 1; }
+}
+
+.tl-simple-preview-status { color: #78271f; }
+.tl-simple-preview-status[data-ready="true"] { color: #24653b; }
