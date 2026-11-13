@@ -716,8 +716,8 @@ test("A5. the rollback returns the catalog before v65 exactly (comments included
 
 test("A6. the three runbook SQL files and the migration are bound to LF by .gitattributes (git check-attr eol) and carry no CR", async () => {
   const files = [ROLLBACK, PREFLIGHT, POSTCHECK, V65_FILE].map((f) => path.relative(ROOT, f));
-  const out = execFileSync("git", ["check-attr", "eol", "--", ...files], { cwd: ROOT, encoding: "utf8" });
-  for (const f of files) assert.match(out, new RegExp(`^${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: eol: lf$`, "m"), f);
+  const out = execFileSync("git", ["check-attr", "-z", "eol", "--", ...files], { cwd: ROOT, encoding: "utf8" });
+  assert.deepEqual(out.split("\0"), [...files.flatMap((f) => [f, "eol", "lf"]), ""]);
   for (const f of [ROLLBACK, PREFLIGHT, POSTCHECK, V65_FILE]) assert.ok(!(await fsp.readFile(f, "utf8")).includes("\r"), `${path.basename(f)} has LF line endings`);
 });
 
