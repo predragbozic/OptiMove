@@ -12,12 +12,25 @@ const ROLE_LABEL = Object.fromEntries(ROLES);
 const CODE_LABEL = {
   js_error: "A page crashed",
   unhandled_rejection: "A background task failed",
+  handler_error: "An action failed",
   no_response: "No answer from the server",
   unexpected_response: "An answer the app could not read",
   internal_error: "Server error",
 };
+// What failed, for the codes that carry it as their second part ("unhandled_rejection.aborterror").
+const REASON_LABEL = {
+  aborterror: "a request or playback was stopped", notallowederror: "the browser did not allow it", notsupportederror: "the browser cannot do it",
+  invalidstateerror: "it was not ready yet", securityerror: "the browser blocked it", networkerror: "the network failed", timeouterror: "it took too long",
+  quotaexceedederror: "the device's storage is full", typeerror: "a value was missing", referenceerror: "a name was missing", rangeerror: "a value was out of range",
+  syntaxerror: "text could not be read", other_error: "another error", non_error: "no error object was given", none: "no reason was given",
+  script_error: "the browser hid the error of a foreign script", no_error_object: "the browser gave no error object",
+};
 export function codeWords(code, status) {
-  return CODE_LABEL[code] || (status >= 500 ? "Server error" : "Error");
+  const [base, reason] = String(code || "").split(".");
+  // Own keys only: a code is a word a signed-in browser chose ("constructor", "__proto__" fit its shape).
+  const own = (map, key) => (typeof key === "string" && Object.hasOwn(map, key) ? map[key] : null);
+  const label = own(CODE_LABEL, code) || (own(REASON_LABEL, reason) && own(CODE_LABEL, base) ? `${own(CODE_LABEL, base)}: ${own(REASON_LABEL, reason)}` : null);
+  return label || (status >= 500 ? "Server error" : "Error");
 }
 // The groups read asks for at most this many (GET /api/app-errors/groups, the server's default limit).
 export const APP_HEALTH_GROUP_CAP = 100;

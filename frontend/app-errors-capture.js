@@ -47,9 +47,39 @@ export function stackSigOf(error) {
   return sig && STACK_SIGNATURE.test(sig) ? sig : null;
 }
 
+// What failed, as one word of the server's closed list (backend/src/appErrorTracking.js CLIENT_REASONS): the `name` of
+// the error or of the rejection's reason, never its message. A native rejection - an aborted request, a refused
+// play() or full screen - carries no script frames, so this word is all it can say about itself.
+// The names an error object can report as its own word; every other value falls into one of the fixed words after them.
+export const NAMED_REASONS = Object.freeze(["aborterror", "notallowederror", "notsupportederror", "invalidstateerror", "securityerror", "networkerror",
+  "timeouterror", "quotaexceedederror", "typeerror", "referenceerror", "rangeerror", "syntaxerror"]);
+export const REASONS = Object.freeze([...NAMED_REASONS, "other_error", "non_error", "none", "script_error", "no_error_object"]);
+const NAMED = new Set(NAMED_REASONS);
+// The word for a thrown or rejected value: none (nothing), non_error (a value that is not an error object), the
+// error's own name when it is one of the list, other_error for any other error object.
+export function reasonOf(value) {
+  if (value === undefined || value === null) return "none";
+  if (typeof value !== "object" && typeof value !== "function") return "non_error";
+  // Reading a hostile value (a throwing getter, a revoked proxy) never throws out of the capture.
+  try {
+    const name = typeof value.name === "string" ? value.name.toLowerCase() : "";
+    if (NAMED.has(name)) return name;
+    return name || value instanceof Error ? "other_error" : "non_error";
+  } catch {
+    return "non_error";
+  }
+}
+// The word for a window "error" event: its error object's, or - with no object - whether the browser hid the error
+// of a script it treats as foreign ("Script error.") or gave nothing at all.
+export function reasonOfErrorEvent(event) {
+  if (event?.error !== undefined && event?.error !== null) return reasonOf(event.error);
+  return event?.message === "Script error." ? "script_error" : "no_error_object";
+}
+
 // The report body, exactly the keys the server accepts, or null.
-export function buildReport({ screen, action, code, status, error }) {
+export function buildReport({ screen, action, code, status, error, reason }) {
   const body = { screen: wordOf(screen, "app").replace(/[.]/g, "-"), code: wordOf(code, "js_error") };
+  if (REASONS.includes(reason)) body.reason = reason;
   if (action) body.action = wordOf(action, "unknown");
   if (Number.isInteger(status) && status >= 100 && status <= 599) body.status = status;
   const sig = stackSigOf(error);
@@ -71,7 +101,7 @@ export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () =>
       const t = now();
       if (t - windowStart >= 60_000) { windowStart = t; inWindow = 0; }
       if (inWindow >= perMinute) return false;
-      const key = [body.screen, body.action || "", body.code, body.status ?? "", body.stackSig || ""].join("|");
+      const key = [body.screen, body.action || "", body.code, body.reason || "", body.status ?? "", body.stackSig || ""].join("|");
       if (t - (seen.get(key) ?? -Infinity) < dedupeMs) return false;
       if (seen.size >= MAX_KEYS) for (const [k, ts] of seen) if (t - ts >= dedupeMs) seen.delete(k);
       if (seen.size >= MAX_KEYS) return false;
@@ -105,15 +135,43 @@ export function reportApiFailure({ code, status }) {
   report({ screen: currentScreen(), action: currentAction() || "api_call", code, status });
 }
 
+// A click handler that threw or whose promise rejected (app.js wraps its two async click listeners with guardHandler):
+// reported with the control that was really used and the handler's own frames, instead of surfacing later as an
+// anonymous unhandled rejection labelled with whatever was tapped last.
+export function reportHandlerError(error, action) {
+  try { globalThis.console?.error?.(error); } catch { /* reporting never throws */ }
+  if (!active) return;
+  // Only the control of this very click, or none: never the one tapped last, which may be another.
+  report({ screen: currentScreen(), action: wordOf(action, ""), code: "handler_error", error: error instanceof Error ? error : null, reason: reasonOf(error) });
+}
+// A promise nobody waits for (a tab's load started from a click): its rejection is reported, never left unhandled.
+export function detached(promise, action = "") {
+  Promise.resolve(promise).then(undefined, (error) => reportHandlerError(error, action));
+}
+// Wraps an event listener, sync or async: a throw or a rejection is reported once and goes no further.
+export function guardHandler(handler) {
+  return function guarded(event) {
+    const action = event?.target?.closest?.("[data-action]")?.dataset?.action || "";
+    try {
+      const result = handler.call(this, event);
+      if (result && typeof result.then === "function") result.then(undefined, (error) => reportHandlerError(error, action));
+      return result;
+    } catch (error) {
+      reportHandlerError(error, action);
+      return undefined;
+    }
+  };
+}
+
 export function installAppErrorCapture({ getUser, getScreen } = {}, target = globalThis.window, doc = globalThis.document) {
   if (getUser || getScreen) setCaptureContext({ ...(getUser ? { getUser } : {}), ...(getScreen ? { getScreen } : {}) });
   if (!target?.addEventListener) return;
   active = true;
   target.addEventListener("error", (event) => {
-    report({ screen: currentScreen(), action: currentAction(), code: "js_error", error: event?.error });
+    report({ screen: currentScreen(), action: currentAction(), code: "js_error", error: event?.error, reason: reasonOfErrorEvent(event) });
   });
   target.addEventListener("unhandledrejection", (event) => {
-    report({ screen: currentScreen(), action: currentAction(), code: "unhandled_rejection", error: event?.reason instanceof Error ? event.reason : null });
+    report({ screen: currentScreen(), action: currentAction(), code: "unhandled_rejection", error: event?.reason instanceof Error ? event.reason : null, reason: reasonOf(event?.reason) });
   });
   doc?.addEventListener?.("click", (event) => {
     const el = event?.target?.closest?.("[data-action]");
