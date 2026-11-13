@@ -112,7 +112,9 @@ export function deviceOf(nav = globalThis.navigator, win = globalThis.window) {
     else if (/Macintosh|Mac OS X/.test(ua)) os = "macos";
     else if (/Linux|X11/.test(ua)) os = "linux";
     let browser = "other"; let major = null;
-    if (/SamsungBrowser\//.test(ua)) { browser = "samsung"; major = majorOf(ua, /SamsungBrowser\/(\d+)/); }
+    // A Chromium browser with its own name and no word in the list is "other", not Chrome.
+    if (/OPR\/|YaBrowser\/|UCBrowser\//.test(ua)) { browser = "other"; }
+    else if (/SamsungBrowser\//.test(ua)) { browser = "samsung"; major = majorOf(ua, /SamsungBrowser\/(\d+)/); }
     else if (/Edg(?:e|A|iOS)?\//.test(ua)) { browser = "edge"; major = majorOf(ua, /Edg(?:e|A|iOS)?\/(\d+)/); }
     else if (/Firefox\/|FxiOS\//.test(ua)) { browser = "firefox"; major = majorOf(ua, /(?:Firefox|FxiOS)\/(\d+)/); }
     // An app's own in-app browser: Android's "; wv)", or iOS WebKit without the Safari token.

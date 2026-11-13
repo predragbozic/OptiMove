@@ -224,6 +224,8 @@ test("7. the device: six words of the closed lists chosen in the browser; the Us
   assert.deepEqual(d(UAS.windowsFirefox, 10, 1366), { class: "desktop", os: "windows", browser: "firefox", touch: true, major: 127, viewport: "1024_1439" });
   assert.deepEqual(d(UAS.linuxChrome, 0, 1920), { class: "desktop", os: "linux", browser: "chrome", touch: false, major: 126, viewport: "ge_1440" });
   assert.deepEqual(d(UAS.chromeOs, 0, 1366), { class: "desktop", os: "chromeos", browser: "chrome", touch: false, major: 126, viewport: "1024_1439" });
+  assert.deepEqual(d("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 OPR/111.0.0.0", 0, 1280),
+    { class: "desktop", os: "windows", browser: "other", touch: false, viewport: "1024_1439" }, "a Chromium browser outside the list is not called Chrome");
   // Nothing readable: the fallback words, no width, never a throw.
   assert.deepEqual(C.deviceOf({}, {}), { class: "unknown", os: "other", browser: "other", touch: false });
   assert.deepEqual(C.deviceOf(null, null), { class: "unknown", os: "other", browser: "other", touch: false });

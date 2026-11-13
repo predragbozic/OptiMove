@@ -62,13 +62,27 @@ the server. The key never reaches the database, a log or an answer.
 
 ## Deploy
 
-1. The owner's order naming the v70 file. Before the deploy the owner sets `APP_ERROR_USER_HASH_KEYS` on the service
-   (step 2 works without it, with the behaviour above).
-2. The Rukovodilac runs `app-error-events-v70-preflight.sql` read-only, block by block. The file-name prefix is
+1. **The owner sets the secret on Render, before the deploy, himself** (Render dashboard, the service's Environment;
+   never through a chat, a terminal someone else reads, a screenshot or the repository):
+   * name: `APP_ERROR_USER_HASH_KEYS`;
+   * value: `2:` followed by the base64 of 32 random bytes, for example the one line printed by
+     `node -e "console.log('2:' + require('crypto').randomBytes(32).toString('base64'))"`
+     (or `openssl rand -base64 32` with `2:` typed in front);
+   * the value is kept by the owner like any other secret of the service; whoever has it and the user list can
+     tell which user a hash is. Losing it loses only the link from stored hashes to people; a new key is then a
+     rotation (version 3).
+
+   If it is not set at the deploy, or is not readable (a version below 2, a key shorter than 32 bytes, a stray
+   character - the whole ring is then refused): the app starts and records errors as before, each new row
+   **without a user hash** and never with the old unkeyed one; people are not counted for those rows; App health
+   says so in one line; "Show person" (AH-3) is refused. Setting the variable later and restarting is enough;
+   rows written meanwhile stay without a hash.
+2. The owner's order naming the v70 file.
+3. The Rukovodilac runs `app-error-events-v70-preflight.sql` read-only, block by block. The file-name prefix is
    re-checked against `main` at that time (the runner refuses a shared prefix; it applies by file name and does not
    refuse a file older than the last one applied).
-3. Deploy; the migrator applies v70 before the server starts.
-4. The Rukovodilac runs `app-error-events-v70-postcheck.sql` read-only. Block 4 with `signed_in_without_hash > 0` on
+4. Deploy; the migrator applies v70 before the server starts.
+5. The Rukovodilac runs `app-error-events-v70-postcheck.sql` read-only. Block 4 with `signed_in_without_hash > 0` on
    version 2 means the key is missing or unreadable.
 
 ## Rollback

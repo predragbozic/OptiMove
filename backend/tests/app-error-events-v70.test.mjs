@@ -152,6 +152,14 @@ test("4. ingest: the device is stored, one error on two devices is two rows, a r
   assert.deepEqual([all[1].device_class, all[1].touch], ["desktop", false]);
   assert.deepEqual([all[2].device_class, all[2].os_family, all[2].touch], [null, null, null]);
   for (const r of all) assert.deepEqual([r.user_hash, r.user_hash_version], [M.keyedUserHash(coach.id, 2), 2]);
+  // Each of the six facts alone makes another row: a repeat is counted only on the very same device.
+  await clear();
+  const variants = [PHONE, { ...PHONE, class: "tablet" }, { ...PHONE, os: "android" }, { ...PHONE, browser: "chrome" }, { ...PHONE, major: 18 }, { ...PHONE, viewport: "480_767" }, { ...PHONE, touch: false }];
+  for (const device of [...variants, ...variants]) assert.equal(await M.writeEvent({ ...M.sanitizeClientReport({ ...GOOD, device }), role: "coach", userHash: M.keyedUserHash(coach.id, 2), userHashVersion: 2 }) !== "dropped", true);
+  assert.deepEqual((await rows()).map((r) => r.repeat_count), [2, 2, 2, 2, 2, 2, 2]);
+  await clear();
+  for (const device of [PHONE, PHONE, DESK]) await call("/api/app-errors", { method: "POST", body: { ...GOOD, device }, cookie: coach.cookie });
+  await call("/api/app-errors", { method: "POST", body: GOOD, cookie: coach.cookie });
   const UA = "Mozilla/5.0 (Linux; Android 14; SM-G991B) AppleWebKit/537.36";
   for (const device of [{ ...PHONE, ua: UA }, { class: UA }, UA, { major: 3 }]) {
     const res = await call("/api/app-errors", { method: "POST", body: { ...GOOD, device }, cookie: coach.cookie });
@@ -232,6 +240,14 @@ test("7. a rotation: new rows get the new version; a row of the old version is n
   const after = await rows();
   assert.equal(after.length, 4);
   assert.equal(after.find((r) => r.user_hash_version === 1).repeat_count, 1);
+  // The version is part of the match on its own: a row without a hash from before v70 (version 1) is not raised by a
+  // report that has no hash because the key is missing (version 2).
+  await clear();
+  const noHash = { ...M.sanitizeClientReport({ ...GOOD, device: PHONE }), role: "coach", userHash: null };
+  await M.writeEvent({ ...noHash, userHashVersion: 1 });
+  await M.writeEvent({ ...noHash, userHashVersion: 2 });
+  await M.writeEvent({ ...noHash, userHashVersion: 2 });
+  assert.deepEqual((await rows()).map((r) => [r.user_hash_version, r.repeat_count]), [[1, 1], [2, 2]]);
   setKeys(`2:${KEY_A}`);
 });
 
