@@ -664,3 +664,48 @@ test("7. the code review's MEDIUMs: an athlete left out of a subset import gets 
     estimates.setEstimateTestHooks({ durationKey: timeKey });
   }
 });
+
+test("8. the Independent's L1: a stored preview entry marked notImported gets no scaled estimate even though it carries scaleRecording and the athlete is on the roster (defense in depth: a non-member refuses the whole session at approval, so no route reaches this state today)", async () => {
+  const team = await setupTeam();
+  await useWorldMinutes();
+  // Today's route: a scaled athlete who left the team keeps scaleRecording in the preview, and the session is refused.
+  const gone = await candidateOf(team, 6801, { without103: true });
+  assert.equal((await scale(team, gone.id, "102", 40, { trackId: "68012" })).status, 201);
+  await admin.query(`update public.athlete_memberships set status = 'archived' where athlete_id = $1 and team_id = $2 and membership_type = 'team'`, [team.athleteIds[1], team.teamId]);
+  await recompute(team, gone.id);
+  const entryOf = async (id) => (await admin.query(`select preview from training_load.gpexe_import_candidates where id = $1`, [id])).rows[0].preview.athletes.find((a) => String(a.gpexeAthleteId) === "102");
+  const refusedEntry = await entryOf(gone.id);
+  assert.equal(refusedEntry.notImported?.code, "athlete_not_in_team");
+  assert.ok(refusedEntry.scaleRecording?.values, "the refused athlete's entry still carries scaleRecording");
+  const refused = await approve(team, (await candidates(team)).find((c) => c.id === gone.id));
+  assert.equal(refused.body.results?.[0]?.code, "not_ready", refused.text);
+
+  // The guard itself: an imported candidate whose stored entry for 102 says notImported.
+  const team2 = await setupTeam();
+  const cand = await candidateOf(team2, 6802, { without103: true });
+  assert.equal((await scale(team2, cand.id, "102", 40, { trackId: "68022" })).status, 201);
+  await recompute(team2, cand.id);
+  assert.equal((await approve(team2, (await candidates(team2)).find((c) => c.id === cand.id))).body.results?.[0]?.outcome, "imported");
+  const activityId = (await admin.query(`select activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id])).rows[0].activity_id;
+  const roster = (await admin.query(`select athlete_id from training.activity_roster($1)`, [activityId])).rows.map((r) => String(r.athlete_id));
+  assert.ok(roster.includes(String(team2.athleteIds[1])), "102 is on the session's roster");
+  const c = admin;
+  try {
+    await c.query("begin");
+    await c.query("set local session_replication_role = replica");
+    await c.query(
+      `update training_load.gpexe_import_candidates
+          set preview = jsonb_set(preview, '{athletes}', (select jsonb_agg(case when a->>'gpexeAthleteId' = '102'
+            then a || '{"notImported":{"code":"athlete_not_in_team","message":"test"}}'::jsonb else a end) from jsonb_array_elements(preview->'athletes') a))
+        where id = $1`, [cand.id]);
+    await c.query("commit");
+  } catch (error) {
+    await c.query("rollback");
+    throw error;
+  }
+  const edited = await entryOf(cand.id);
+  assert.ok(edited.notImported && edited.scaleRecording?.values);
+  const saved = await tapi(`/${activityId}/estimates`, { method: "POST", cookie: team2.coach.cookie, body: { requestKey: key(), athleteId: team2.athleteIds[1], method: "scale_recording" } });
+  assert.deepEqual([saved.status, saved.body.error], [409, "scale_not_chosen"], saved.text);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_value_estimates where method = 'scale_recording' and estimated_by_user_id = $1`, [team2.coach.id])).rows[0].n, 0);
+});
