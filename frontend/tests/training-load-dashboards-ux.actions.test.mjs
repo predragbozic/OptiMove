@@ -188,7 +188,6 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   assert.deepEqual(items, [
     ["training-load-analysis-rename-dashboard", "Rename"],
     ["training-load-analysis-set-active", "Active dashboard"],
-    ["training-load-analysis-toggle-edit", "Edit layout"],
     ["training-load-analysis-archive", "Archive"],
     ["training-load-analysis-delete-dashboard", "Delete permanently"],
   ]);
@@ -1298,7 +1297,7 @@ function twoWidgets() {
   ];
 }
 
-test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (in and out of layout mode) with Settings / Advanced settings / Edit layout / Delete widget; one popover at a time, Escape closes it; read-only dashboards have none", async () => {
+test("widget menu keeps deletion without duplicating Settings or the visible layout control; read-only dashboards have none", async () => {
   resetState();
   loadedDashboard();
   installFetchMock(responder());
@@ -1314,11 +1313,12 @@ test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (i
   assert.doesNotMatch(html, /role="menu" aria-label="Dashboard actions"/);
   assert.match(html, /class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="Actions for Average RPE"/);
   assert.deepEqual(menuItems(html), [
-    ["training-load-analysis-edit-widget", "Settings"],
-    ["training-load-analysis-open-advanced", "Advanced settings"],
-    ["training-load-analysis-toggle-edit", "Edit layout"],
     ["training-load-analysis-delete-widget", "Delete widget"],
   ]);
+  assert.equal((html.match(/data-action="training-load-analysis-toggle-edit"/g)||[]).length, 1, "one visible layout entry for the Page");
+  assert.equal((html.match(/data-action="training-load-analysis-edit-widget"/g)||[]).length, 1, "one Settings entry per widget");
+  assert.match(html, />Edit layout</);
+  assert.doesNotMatch(html, /data-action="training-load-analysis-open-advanced"/, "advanced options live inside Settings");
   assert.match(html, new RegExp(`class="tl-menu-item is-danger"[^>]*data-action="training-load-analysis-delete-widget" data-widget-id="${widgetId}"`));
   assert.equal(closeTrainingLoadAnalysisOverlay(), true);
   assert.equal(a.menu, "");
@@ -1326,8 +1326,6 @@ test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (i
   a.editMode = true;
   a.menu = `widget:${widgetId}`;
   assert.deepEqual(menuItems(renderTrainingLoadAnalysisHtml()).map(([action]) => action), [
-    "training-load-analysis-edit-widget",
-    "training-load-analysis-open-advanced",
     "training-load-analysis-delete-widget",
   ], "in layout mode the menu has no 'Edit layout'");
 
@@ -1396,7 +1394,7 @@ test("H2 layout mode: a layout bar (Cancel + Done until something moves, then 'U
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
   assert.equal(a.editMode, true);
   html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /class="tl-layout-bar" role="region" aria-label="Layout editing"/);
+  assert.match(html, /class="tl-layout-bar" role="region" aria-label="Editing layout"/);
   assert.match(html, /No changes yet/);
   assert.match(html, /data-action="training-load-analysis-cancel-layout"/);
   assert.match(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
@@ -1503,7 +1501,8 @@ test("H2 while a layout draft is unsaved, the widget menu disables Settings / Ad
   a.menu = `widget:${widgetId}`;
   const html = renderTrainingLoadAnalysisHtml();
   assert.match(html, /Save or cancel the layout changes first\./);
-  for (const action of ["edit-widget", "open-advanced", "delete-widget"]) {
+  assert.doesNotMatch(html, /data-action="training-load-analysis-edit-widget"|data-action="training-load-analysis-open-advanced"/);
+  for (const action of ["delete-widget"]) {
     assert.match(html, new RegExp(`data-action="training-load-analysis-${action}" data-widget-id="${widgetId}"\\s+disabled`), `${action} disabled`);
   }
   let prompted = false;

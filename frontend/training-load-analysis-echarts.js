@@ -1,3 +1,5 @@
+import { bindDashboardChartInteractions, chartPointText } from './training-load-chart-interactions.js';
+
 let libraryPromise;
 
 function loadLibrary() {
@@ -29,8 +31,45 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
             if (chart) chart.resize();
             else {
               chart = this.chart = library.init(container, null, { renderer: "svg" });
-              plot.option.tooltip.valueFormatter = value => typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
+              plot.option.tooltip.valueFormatter = value => plot.enhanced && plot.settings.tooltip === 'exact' ? String(value) : typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
+              if(plot.enhanced) {
+                plot.option.tooltip.formatter = event => chartPointText(plot.rowsBySeries[event.seriesIndex]?.[event.dataIndex],plot.precision,plot.settings.tooltip==='formatted');
+                for(const series of plot.option.series)series.label.formatter=event=>{
+                  const value=series.type==='heatmap'?event.value?.[2]:series.type==='scatter'?event.value?.[1]:event.value;
+                  return typeof value==='number' ? Number.isInteger(value)?String(value):value.toFixed(plot.precision) : '';
+                };
+              }
+              if (plot.radarDetails) {
+                plot.option.tooltip.formatter = event => (plot.radarDetails[event.dataIndex] ?? '').replace(/[{}]/g, '');
+                chart.on('click', event => {
+                  const series = plot.option.series[0].data[event.dataIndex];
+                  if (event.componentType === 'series' && series) {
+                    chart.dispatchAction({ type: 'legendToggleSelect', name: series.name });
+                  }
+                });
+              }
               chart.setOption(plot.option, { notMerge: true });
+              if (plot.radarDetails) {
+                const controls = this.ownerDocument.createElement('div');
+                controls.className = 'tl-chart-controls';
+                controls.setAttribute('role', 'group');
+                controls.setAttribute('aria-label', 'Radar series visibility');
+                for (const { name } of plot.option.series[0].data) {
+                  const button = this.ownerDocument.createElement('button');
+                  button.type = 'button';
+                  button.className = 'plain-button compact-button';
+                  button.textContent = name;
+                  button.setAttribute('aria-pressed', 'true');
+                  button.addEventListener('click', () => chart.dispatchAction({ type: 'legendToggleSelect', name }));
+                  chart.on('legendselectchanged', event => button.setAttribute('aria-pressed', String(event.selected[name] !== false)));
+                  controls.append(button);
+                }
+                this.radarControls = controls;
+                const values = this.closest('.tl-analysis-widget-body')?.querySelector('[data-radar-series-controls]');
+                if (values) values.append(controls);
+                else container.before(controls);
+              }
+              if(plot.enhanced)this.interactions = bindDashboardChartInteractions(this,chart,plot,scope);
             }
           } catch {
             this.showFailure();
@@ -58,6 +97,10 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
     }
 
     release() {
+      this.radarControls?.remove();
+      this.radarControls = null;
+      this.interactions?.();
+      this.interactions = null;
       this.observer?.disconnect();
       this.observer = null;
       if (this.resize) scope.removeEventListener("resize", this.resize);

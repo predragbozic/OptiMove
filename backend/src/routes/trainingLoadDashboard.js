@@ -14,6 +14,7 @@
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
+import { randomUUID } from 'node:crypto';
 import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
@@ -25,6 +26,8 @@ import {
 } from "../trainingLoadDashboardWidgets.js";
 import { queryDashboard } from "../trainingLoadDashboardQuery.js";
 import { query } from "../db.js";
+import { validateContract } from "../dashboardSimple/schema.js";
+import { requireLegacySinglePage } from '../dashboardPages/legacyGuard.js';
 
 const router = Router();
 
@@ -97,6 +100,11 @@ function validDisplayConfig(value) {
   if (!Object.prototype.hasOwnProperty.call(value, "schemaVersion")) return false;
   return Number.isSafeInteger(value.schemaVersion) && value.schemaVersion >= 1;
 }
+function validPresentationMode(value, operation) {
+  if (!validateContract("presentationMode", value).valid) return false;
+  if (operation === "create" && value.mode !== "replace") return false;
+  return !value.value?.tableFormatting?.rules?.length;
+}
 // Mirrors the DB's own validate_template_metric_key_hints_shape trigger
 // (v16) at the Node layer — a bare string element, a missing/empty `key`,
 // or an out-of-enum valueType/scopeLevel is rejected here, before ever
@@ -144,7 +152,7 @@ function hasDuplicates(values) {
 // error that must never leak its own message (constraint/table names,
 // owner_scope/club/team ids, SQLSTATEs) to the client; only a small,
 // stable, generic {error: code} body is returned for those.
-const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02", "22003"]);
+const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02", "22003", "S2C02", "S2C03", "S2C05", "S2C07"]);
 // A default STABLE code per HTTP status, used whenever an httpError() call
 // site didn't pass an explicit one — this is what lets every EXISTING
 // httpError(404, "human text") / httpError(403, "...") call across access/
@@ -157,6 +165,8 @@ const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02",
 // field to the client at all).
 const DEFAULT_CODE_FOR_STATUS = { 400: "invalidRequest", 403: "forbidden", 404: "notFound", 409: "conflict" };
 function respondToServiceError(res, next, error) {
+  if(['outcomeUnknown','cloneUnavailable'].includes(error?.code))return res.status(503).json({error:error.code});
+  if (error?.code === 'P4P01') return res.status(409).json({ error: 'pagesClientRequired' });
   if (error?.httpStatus) {
     const code = error.code || DEFAULT_CODE_FOR_STATUS[error.httpStatus] || "requestFailed";
     return res.status(error.httpStatus).json({ error: code, message: error.message });
@@ -216,6 +226,7 @@ async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) 
   const row = r.rows[0];
   if (!row) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
   if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
+  await requireLegacySinglePage(query, row);
   if (row.status === "archived") { res.status(409).json({ error: "dashboardArchived" }); return null; }
   return row;
 }
@@ -470,7 +481,7 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
 // Widgets
 // ------------------------------------------------------------
 
-const CREATE_WIDGET_KEYS = ["expectedDashboardRevision", "widgetType", "title", "widgetOrder", "x", "y", "width", "height", "mobileOrder", "groupBy", "displayConfig", "localFilterOverride"];
+const CREATE_WIDGET_KEYS = ["expectedDashboardRevision", "widgetType", "title", "widgetOrder", "x", "y", "width", "height", "mobileOrder", "groupBy", "displayConfig", "localFilterOverride", "presentation"];
 router.post("/:dashboardId/widgets", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
@@ -488,6 +499,7 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
     if (!validNonNegInt(b.mobileOrder)) return res.status(400).json({ error: "invalidRequest", message: "mobileOrder is required and must be a non-negative integer." });
     if (b.groupBy !== undefined && !validEnum(b.groupBy, GROUP_BY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `groupBy must be one of ${[...GROUP_BY_VALUES].join("|")}.` });
     if (b.displayConfig !== undefined && !validDisplayConfig(b.displayConfig)) return res.status(400).json({ error: "invalidRequest", message: "displayConfig must be a plain object with a positive integer schemaVersion." });
+    if (Object.prototype.hasOwnProperty.call(b, "presentation") && !validPresentationMode(b.presentation, "create")) return res.status(400).json({ error: "invalidRequest", message: "presentation must replace a supported V1 configuration; table rules are not supported." });
     if (b.localFilterOverride !== undefined && !validFilterShape(b.localFilterOverride)) return res.status(400).json({ error: "invalidRequest", message: "localFilterOverride is invalid." });
     if (!(await widgetTypeIsActive(b.widgetType))) return res.status(400).json({ error: "invalidRequest", message: "Unknown or inactive widgetType." });
     const dataWorkspace = await requireDataWorkspace(req, res);
@@ -499,7 +511,7 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
   }
 });
 
-const UPDATE_WIDGET_CONTENT_KEYS = ["expectedWidgetRevision", "widgetType", "title", "groupBy", "state", "displayConfig", "localFilterOverride"];
+const UPDATE_WIDGET_CONTENT_KEYS = ["expectedWidgetRevision", "widgetType", "title", "groupBy", "state", "displayConfig", "localFilterOverride", "presentation"];
 router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
@@ -508,6 +520,7 @@ router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing localFilterOverride is done by sending it as null, not a separate clear flag).` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
     if (!hasAnyOtherKey(b, ["expectedWidgetRevision"])) return res.status(400).json({ error: "invalidRequest", message: "This PATCH carries no actual change." });
+    if (Object.prototype.hasOwnProperty.call(b, "presentation") && !validPresentationMode(b.presentation, "update")) return res.status(400).json({ error: "invalidRequest", message: "presentation must preserve, clear or replace a supported V1 configuration; table rules are not supported." });
     // widgetType/title/groupBy/state/displayConfig are all NON-nullable —
     // an explicit null for any of them is a controlled 400, never a
     // silent no-op (finding #3).
@@ -801,7 +814,8 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     if (Object.prototype.hasOwnProperty.call(b, "componentId")) requestFilter.componentId = b.componentId;
 
     const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter });
-    res.json({ dashboardRevision: dashboard.revision, widgets: result });
+    const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
+    res.json({ queryId:randomUUID(), resolvedPeriod:{dateFrom:b.dateFrom,dateTo:b.dateTo}, dashboardRevision: dashboard.revision, widgets: result.map((widget) => ({ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

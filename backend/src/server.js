@@ -39,7 +39,14 @@ import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { appErrorsRouter } from "./routes/appErrors.js";
 import { recordServerError, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
-import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
+import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
+import { createSimpleRuntime, SIMPLE_RUNTIME_PATH, PAGE_SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
+import { createPagesService } from './dashboardPages/service.js';
+import { createPagesRouter } from './dashboardPages/router.js';
+import { createPageAdvancedService } from './dashboardPages/advancedService.js';
+import { createPageAdvancedRouter } from './dashboardPages/advancedRouter.js';
+import { authorizePages, assertPageFilterVisible } from './dashboardPages/access.js';
+import { queryDashboard } from './trainingLoadDashboardQuery.js';
 import { realtimeRouter } from "./realtime.js";
 import { assertEmailConfigValid } from "./email.js";
 
@@ -71,6 +78,11 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 // An error report is tiny: this route parses at most 4 KB (a larger body is 413 body_too_large from the error handler); the global parser then skips an already parsed body.
 app.use("/api/app-errors", express.json({ limit: "4kb" }));
+const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
+if (simpleRuntime.router) app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
+if (simpleRuntime.router) app.use(PAGE_SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
+app.use('/api/training-load/dashboards/:dashboardId/pages/:pageId/advanced', authMiddleware, attachAuthorizationContext, requireAuth, createPageAdvancedRouter({ service: createPageAdvancedService({ pool, authorize: authorizePages, assertFilterVisible: assertPageFilterVisible }) }));
+app.use('/api/training-load/dashboards/:dashboardId/pages', authMiddleware, attachAuthorizationContext, requireAuth, createPagesRouter({ service: createPagesService({ pool, authorize: authorizePages, assertFilterVisible: assertPageFilterVisible, queryDashboard }) }));
 app.use(express.json());
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);

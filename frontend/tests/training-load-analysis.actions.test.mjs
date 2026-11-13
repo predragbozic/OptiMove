@@ -918,7 +918,7 @@ test("Analysis chart body controls never start a delegated or directly bound lay
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   const { widgetEl, listeners } = analysisElementStub(widgetId);
-  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: () => [widgetEl] }, renderTrainingLoad);
+  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: selector => selector === "[data-analysis-widget-id]" ? [widgetEl] : [] }, renderTrainingLoad);
   const event = widgetBodyMouseEvent(widgetId, 0, 0);
   const originalClosest = event.target.closest;
   event.target.closest = selector => selector.includes(".tl-analysis-widget-body") ? {} : originalClosest(selector);
@@ -937,7 +937,7 @@ test("Analysis direct widget bindings start drag from the rendered card but igno
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
   const { widgetEl, listeners } = analysisElementStub(widgetId);
-  const root = { querySelectorAll: () => [widgetEl] };
+  const root = { querySelectorAll: selector => selector === "[data-analysis-widget-id]" ? [widgetEl] : [] };
 
   bindTrainingLoadAnalysisLayoutInteractions(root, renderTrainingLoad);
   listeners.get("widget:mousedown")({
@@ -976,7 +976,7 @@ test("Analysis delegated DOM pointer flow changes local drag and resize draft wi
     throw new Error("Drag/resize must not send requests");
   });
 
-  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: () => [widgetEl] }, renderTrainingLoad);
+  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: selector => selector === "[data-analysis-widget-id]" ? [widgetEl] : [] }, renderTrainingLoad);
   dragHandle.dispatchEvent(dispatchedPointerEvent("pointerdown", 41, 0, 0));
   dispatchBrowserEvent("pointermove", dispatchedPointerEvent("pointermove", 41, 110, 60));
   dispatchBrowserEvent("pointerup", dispatchedPointerEvent("pointerup", 41, 110, 60));

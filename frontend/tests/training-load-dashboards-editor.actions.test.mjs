@@ -94,6 +94,8 @@ function installServer(initial, { onCall = () => null, loseResponse = () => fals
       if (body.title !== undefined) w.title = body.title;
       w.widget_type = type;
       if (body.groupBy !== undefined) w.group_by = body.groupBy;
+      if (body.presentation?.mode === 'replace') w.presentation_config = body.presentation.value;
+      if (body.presentation?.mode === 'clear') w.presentation_config = null;
       if (body.localFilterOverride !== undefined) w.local_filter_override = body.localFilterOverride;
       w.revision += 1;
       return ok({ widget: { widget_id: w.id, widget_revision: w.revision } });
@@ -599,4 +601,70 @@ test("H3 (re-review MEDIUM): line chart -> table with a unit-changing replace sa
   assert.deepEqual(server.series.map((s) => s.built_in_series_key).sort(), ["session_count", "srpe"]);
   assert.equal(writes().filter((c) => c.method === "POST").length, 1, "no refused add and no restore");
   assert.equal(writes()[0].method === "PATCH" && writes()[0].url === WIDGET_URL, true, "the type change comes first");
+});
+
+
+test('combined stages two rows, labels axes and writes presentation last with current revision', async () => {
+  const { server, draft } = await openEditor(widget({ widget_type: 'bar_chart' }));
+  state.trainingLoad.analysis.editor.combinedAvailable = true;
+  await act('widget-display-mode', {}, 'combined');
+  assert.equal(writes().length, 0);
+  assert.equal(draft().series.length, 2);
+  assert.deepEqual(draft().series.map(entry => entry.fields.axis), ['primary', 'secondary']);
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /Bar \+ line \(two axes\)/); assert.match(html, /Primary: bars on the left axis/);
+  assert.equal(analysisEditorProblem(draft()), '');
+  const plan = analysisEditorPlan(server, draft());
+  assert.equal(plan.at(-1).body.presentation.value.chartComposition, 'metrics-v1');
+  await act('editor-save');
+  const sent = writes();
+  assert.equal(sent.at(-1).body.presentation.value.chartVariant, 'combined');
+  assert.ok(sent.findIndex(call => call.method === 'POST' && call.url.endsWith('/series')) < sent.length - 1);
+  assert.equal(server.series.length, 2); assert.equal(server.widget_type, 'line_chart');
+  assert.equal(server.presentation_config.chartInteractions.yAxis.mode, 'auto');
+});
+
+test('failed second-series add leaves presentation untouched; retry completes without duplicate series', async () => {
+  let refuseAdd = true;
+  const { server, draft, editor } = await openEditor(widget({ widget_type: 'line_chart' }), {
+    onCall: call => refuseAdd && call.method === 'POST' && call.url.endsWith('/series') ? { status: 400, body: { error: 'invalidRequest' } } : null,
+  });
+  editor().combinedAvailable = true;
+  await act('widget-display-mode', {}, 'combined'); await act('editor-save');
+  assert.equal(editor().open, true); assert.equal(server.presentation_config, undefined);
+  assert.equal(writes().some(call => call.body?.presentation), false);
+  assert.equal(draft().presentation.value.chartVariant, 'combined');
+  refuseAdd = false; await act('editor-save');
+  assert.equal(server.series.length, 2); assert.equal(server.presentation_config.chartVariant, 'combined');
+});
+
+
+test('horizontal bars convert with explicit clear on type change, then enable combined last', async () => {
+  const { server, draft } = await openEditor(widget({ widget_type: 'bar_chart', presentation_config: { schemaVersion: 1, chartVariant: 'horizontal-bar', chartInteractions: { yAxis: { mode: 'auto' } } } }));
+  state.trainingLoad.analysis.editor.combinedAvailable = true;
+  await act('widget-display-mode', {}, 'combined');
+  const plan = analysisEditorPlan(server, draft());
+  const typeChange = plan.find(op => op.body?.widgetType);
+  assert.deepEqual(typeChange.body.presentation, { mode: 'clear' });
+  assert.equal(plan.at(-1).body.presentation.value.chartVariant, 'combined');
+  await act('editor-save');
+  assert.equal(server.widget_type, 'line_chart'); assert.equal(server.presentation_config.chartVariant, 'combined');
+});
+
+
+test('combined lost add response rebases the new row and retry never duplicates it', async () => {
+  let lost = false;
+  const { server, editor } = await openEditor(widget({ widget_type: 'line_chart' }), {
+    loseResponse: call => {
+      if (!lost && call.method === 'POST' && call.url.endsWith('/series')) { lost = true; return true; }
+      return false;
+    },
+  });
+  editor().combinedAvailable = true;
+  await act('widget-display-mode', {}, 'combined'); await act('editor-save');
+  assert.equal(server.series.length, 2); assert.equal(server.presentation_config, undefined);
+  assert.equal(editor().draft.series[1].id, server.series[1].id);
+  await act('editor-save');
+  assert.equal(server.series.length, 2); assert.equal(server.presentation_config.chartVariant, 'combined');
+  assert.equal(writes().filter(call => call.method === 'POST' && call.url.endsWith('/series')).length, 1);
 });
