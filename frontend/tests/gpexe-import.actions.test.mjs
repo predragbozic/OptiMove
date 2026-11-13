@@ -119,6 +119,7 @@ function render() {
 
 function resetState(workspace = { type: "club", scopeId: "club-1" }) {
   adminViewOn = false;
+  platformViewOn = false;
   clearAllViewCache();
   state.currentUser = { id: "coach-1", activeWorkspace: workspace };
   state.trainingLoad = emptyTrainingLoadState();
@@ -130,13 +131,16 @@ function resetState(workspace = { type: "club", scopeId: "club-1" }) {
 
 // A test that reads the administrator's Technical details calls adminView(); resetState() ends it.
 let adminViewOn = false;
+// P1: the platform admin keeps the full review (owner 2026-11-13, O1); the club admin (adminView) gets the coach's.
+let platformViewOn = false;
+function platformView() { adminViewOn = true; platformViewOn = true; }
 function adminView() { adminViewOn = true; }
 function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: "980" }, lastCheck = null, identityAdmin = adminViewOn } = {}) {
   return {
     settings,
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
     lastCheck,
-    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false, ...(identityAdmin ? { identityAdmin: true } : {}) },
+    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: platformViewOn, ...(identityAdmin ? { identityAdmin: true } : {}) },
     approvalAvailable: true,
   };
 }
@@ -298,6 +302,8 @@ test("GPEXE imports: in a team workspace only that team is shown; in a club work
 
 test("GPEXE imports: the review shows participation and GPS apart, a left-out value is never a zero, and team athletes without a record are listed (a v2 preview stored before 9-B keeps its rendering)", async () => {
   resetState();
+  // P1: the per-athlete list with each athlete's own sentence is the platform admin's (the coach's is folded, see P1 1).
+  platformView();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { identityAdmin: true } },  onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({ previewVersion: 2 }) } }) }));
   await openImports();
   await openCandidate();
@@ -555,7 +561,7 @@ test("approve: a coach without the right sees why, and no approve button", async
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Approving needs a platform admin or an explicit approver grant/);
+  assert.match(html, /You can(?:'|&#039;)t import this session\. Ask your club administrator\./, "P1: who to ask, in a coach's words, always true");
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html));
 });
 
@@ -846,7 +852,7 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
 
 test("blocked steps speak to the coach: no field names or runbook paths in the main text, the server's wording only in Technical details", async () => {
   resetState();
-  adminView();
+  platformView(); // P1: the platform admin's own wording (O5); the coach's is P1 3
   const serverStep = 'Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.';
   installFetchMock(gpexeServer({
     onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({
@@ -866,7 +872,7 @@ test("blocked steps speak to the coach: no field names or runbook paths in the m
 
 test("a failed outcome check is listed in Technical details", async () => {
   resetState();
-  adminView();
+  platformView(); // P1: the platform admin's own wording (O5); the coach's is P1 3
   installFetchMock(gpexeServer({
     teamStatus: { [TEAM_A]: { enabled: true } },
     onApprove: () => ({ status: 503, body: { error: "import_outcome_unknown", message: "...", verify: { candidateId: "cand-1", approvalId: "appr-3", candidateHref: "/c", approvalHref: "/a" } } }),
@@ -898,7 +904,7 @@ test("blocked sessions: the coach reads why and what to do; the server's message
   ];
   for (const k of cases) {
     resetState();
-  adminView();
+  platformView(); // P1: the platform admin's own wording (O5); the coach's is P1 3
     installFetchMock(gpexeServer({
       onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: blockedSummary(k.code, { label: "GPEXE OFFICIAL MATCH 2026-09-16T17:00:00", sessionType: k.session?.categoryName || null }) }),
         preview: { ...candidateDetail().preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: k.session || {}, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } }),
@@ -1000,7 +1006,7 @@ test("data setup (9-B): a coach reads one sentence and one step for every mappin
   await openImports();
   let html = renderTrainingLoadCoachHtml();
   const step = setupRowStep(html);
-  assert.equal(step, "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.");
+  assert.equal(step, "Ask your club administrator to finish the data setup of this team, then find new sessions.", "P1 (O5): a coach asks the club administrator");
   await openCandidate("c-setup");
   html = renderTrainingLoadCoachHtml();
   const block = setupBlock(html);
@@ -1094,7 +1100,7 @@ test("blocked sessions in the list: sorted from the list's own code with no deta
   html = renderTrainingLoadCoachHtml();
   assert.match(html, /<strong>Not imported\.<\/strong> &quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./);
   assert.match(html, /<strong>What to do:<\/strong> No action needed - it stays out of OptiMove\./);
-  assert.match(html, /gpexe-detail-meta">\s*<span class="gpexe-badge is-excluded">Not imported<\/span>/, "the review's badge is the list's");
+  assert.match(html, /gpexe-detail-meta">\s*<span class="gpexe-badge is-excluded">Stays out<\/span>/, "the review's badge is the list's (P1: the tab's word)");
   assert.ok(!/gpexe-approve-note|Cannot be approved|Blocked - open it/.test(html), "the match asks for nothing");
 });
 
@@ -1194,8 +1200,9 @@ test("link: no athlete is preselected, the session's values only help to find th
   const select = html.match(/<select class="gpexe-select" data-gpexe-link-select="104">([\s\S]*?)<\/select>/)[1];
   assert.match(select, /<option value="" selected>Choose an athlete of the team<\/option>/);
   assert.equal((select.match(/selected/g) || []).length, 1, "only the empty choice is selected");
-  assert.match(html, /<strong>Find athlete 104 in GPEXE first\. Link only if you are sure\.<\/strong>/);
-  assert.match(html, /The values in this row help you find them in GPEXE\. They do not prove who it is\./);
+  // P1: the how-to is said once above the table, not on every row.
+  assert.match(html, /Link each GPEXE athlete to the right athlete of your team\. The values on the row help you find them in GPEXE; if you are not sure, check there first\./);
+  assert.ok(!/Link only if you are sure|They do not prove who it is/.test(html), "no per-row repetition");
   // J20-A2 follow-up: the link box in the review row is light; the values the server read
   // are in the row's own cells, not repeated in the box.
   const rowOf = html.slice(html.indexOf('class="gpexe-review-row is-needs_link"'));
@@ -1265,8 +1272,8 @@ test("link: the confirmation shows the exact GPEXE id and the athlete's full nam
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /<p class="gpexe-link-pair"><strong>GPEXE athlete 104<\/strong> → <strong>Dario Petrov Example<\/strong><\/p>/);
   // The consequence covers this session AND every session imported later.
-  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? The review updates right away\. When you approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
-  assert.match(html, /<p>You can unlink it before an import is approved\. Unlinking doesn(?:'|&#039;)t change results that are already imported: if the link turns out wrong after an import, those results can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
+  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? The review updates right away\. When this session is imported, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
+  assert.match(html, /<p>You can unlink it before the session is imported\. Unlinking doesn(?:'|&#039;)t change results that are already imported: if the link turns out wrong after an import, those results can(?:'|&#039;)t be changed here — ask your club administrator\.<\/p>/, "P1: a coach asks the club administrator");
   assert.ok(!/Future GPEXE sessions/.test(html), "not only 'future' sessions");
   assert.ok(!/move their results|correct wrongly/.test(html), "no promise of a move or correct function");
 
@@ -1394,7 +1401,7 @@ test("uncertain outcome: it stays visible after the review is closed - in the li
   const row = html.slice(rowIdx(html, "cand-1"), html.indexOf("</button>", rowIdx(html, "cand-1")));
   assert.match(row, /<span class="gpexe-badge is-unknown">Result not confirmed<\/span>/);
   assert.ok(!/gpexe-candidate-next/.test(row), "the row does not repeat its group's step (P3)");
-  assert.ok(!/Waiting for approval/.test(row), "not shown as simply waiting");
+  assert.ok(!/gpexe-badge is-pending">Not imported yet/.test(row), "not shown as simply waiting (the badge P1 calls Not imported yet)");
   assert.ok(!/class="gpexe-next"/.test(html), "no next-step line repeats the list");
   assert.match(html, /The answer to an import did not arrive\. Check the result before doing anything else\.[\s\S]*?>Check the result</);
 
@@ -1513,10 +1520,10 @@ test("approve: a calm note to check the athletes shows when the session imports 
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
   const approveArea = html.slice(html.indexOf('class="gpexe-approve"'));
-  assert.match(approveArea, /<p class="muted gpexe-approve-names">Check that each athlete is the right person\. Results imported under the wrong athlete can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
+  assert.match(approveArea, /<p class="muted gpexe-approve-names">Check that each athlete is the right person\. If one is wrong after the import, ask your club administrator\.<\/p>/);
   assert.ok(approveArea.indexOf("gpexe-approve-names") < approveArea.indexOf('data-action="training-load-gpexe-approve"'), "before the Approve button");
   // D32: the values left out are named before an approval, like the athletes.
-  assert.match(approveArea, /<p class="muted">Approving imports this whole session exactly as shown\. Athletes and values left out stay out\.<\/p>/);
+  assert.match(approveArea, /<p class="muted">Import adds this session to Training Load as shown\. Athletes left out stay out\.<\/p>/);
   assert.ok(!/gpexe-warning/.test(approveArea.slice(0, approveArea.indexOf("</div>"))), "not styled as a warning");
 });
 
@@ -1526,6 +1533,7 @@ test("9-B internal review (UX M3, L2, D32; mobile note on fmtValue): the review 
     [1, /Approving imports this whole session exactly as shown\. 1 value is left out \(listed under each athlete\); it is not imported and never stored as a zero\. Athletes left out stay out\./],
   ]) {
     resetState();
+    platformView(); // P1: the full review and its sentence are the platform admin's; the coach's is P1 3
     const d = candidateDetail();
     const a101 = {
       ...d.preview.athletes[0],
@@ -1918,7 +1926,7 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
 
 test("Imports: every kind of row is sorted into its bucket from the list answer alone - zero detail reads, and no raw code on the screen", async () => {
   resetState();
-  adminView();
+  platformView(); // P1: the platform admin's own wording (O5); the coach's is P1 3
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
@@ -2671,7 +2679,7 @@ test("J20-A2: an athlete whose results all write nothing (unchanged) is 'Nothing
   assert.match(html, />Import 1 athlete<\/button>/);
 });
 
-test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows no code, server message, step or id - one sentence says the administrator has them; an administrator sees them as before", async () => {
+test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows no code, server message, step or id, and since P1 no line about them either; an administrator sees them as before", async () => {
   const blocked = { code: "other", message: "Server says no (athlete 104).", resolution: [{ action: "relink_athlete", step: "do it" }] };
   const sentence = "Your administrator can see the technical details of this session.";
   for (const admin of [false, true]) {
@@ -2691,7 +2699,7 @@ test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows n
       assert.match(dialog, /give them the Technical details/);
     } else {
       assert.ok(!/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/.test(dialog), `nothing technical for a coach: ${(dialog.match(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) || [])[0]} near ${dialog.slice(Math.max(0, dialog.search(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) - 150), dialog.search(/gpexe-tech|Server message|Server says no|relink_athlete|give them the Technical details/) + 60)}`);
-      assert.ok(dialog.includes(sentence), "the one sentence instead");
+      assert.ok(!dialog.includes(sentence), "P1: no line about technical details for a coach");
     }
   }
   // An approval outcome in the same dialog follows the same rule.
@@ -2709,7 +2717,7 @@ test("J20-A2 (owner: a coach, not an engineer): a coach's session review shows n
     const html = renderTrainingLoadCoachHtml();
     const dialog = html.slice(html.indexOf('role="dialog"'));
     if (admin) assert.match(dialog, /<dd>preview_changed<\/dd>/);
-    else assert.ok(!/preview_changed/.test(dialog) && dialog.includes(sentence), "no code in a coach's outcome");
+    else assert.ok(!/preview_changed/.test(dialog) && !dialog.includes(sentence), "no code, and no line about it, in a coach's outcome");
   }
 });
 
@@ -2777,17 +2785,17 @@ test("J20-A2 H1: a recompute that is refused leaves the review as it was and off
   assert.match(html, />Import 2 athletes<\/button>/);
 });
 
-test("J20-A2 M1/H2: chips with counts (Needs a person by default), the three value columns, and the fine rows folded", async () => {
+test("J20-A2 M1/H2: chips with counts (Needs you by default), the three value columns, and the fine rows folded", async () => {
   resetState();
   installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
   await openImports();
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
   // J20-C: a viewer who may approve chooses attendance on the no-data rows, so they are people to act on too.
-  assert.match(html, /aria-pressed="true">Needs a person <span class="gpexe-chip-count">3<\/span>/);
+  assert.match(html, /aria-pressed="true">Needs you <span class="gpexe-chip-count">3<\/span>/);
   assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["needs_link", "no_record", "no_record"], "the default view holds what needs a person - with the attendance chooser, the no-data rows too");
   assert.match(html, /data-filter="not_linked"[^>]*aria-pressed="false">Not linked <span class="gpexe-chip-count">1<\/span>/);
-  assert.match(html, /data-filter="no_data"[^>]*>No data <span class="gpexe-chip-count">2<\/span>/);
+  assert.match(html, /data-filter="no_data"[^>]*>No GPS <span class="gpexe-chip-count">2<\/span>/);
   assert.match(html, /data-filter="all"[^>]*>All <span class="gpexe-chip-count">4<\/span>/);
   assert.match(html, /<th scope="col" role="columnheader">Duration<\/th><th scope="col" role="columnheader">Total distance<\/th><th scope="col" role="columnheader">Max running speed<\/th>/);
   const fine = html.slice(html.indexOf('<details class="gpexe-fine"'), html.indexOf("</details>", html.indexOf('<details class="gpexe-fine"')));
@@ -2872,7 +2880,7 @@ test("J20-A2 / J20-C: with nobody to link, the no-data rows are what needs a per
   await openImports();
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /data-filter="needs"[^>]*aria-pressed="true">Needs a person <span class="gpexe-chip-count">1<\/span>/);
+  assert.match(html, /data-filter="needs"[^>]*aria-pressed="true">Needs you <span class="gpexe-chip-count">1<\/span>/);
   assert.deepEqual(reviewRows(html.slice(0, html.indexOf('<details class="gpexe-fine"'))).map((r) => r.status), ["no_record"]);
   assert.match(html, /data-action="training-load-gpexe-state"/, "the no-data row carries the attendance chooser");
 });
@@ -2981,4 +2989,79 @@ test("follow-up: when nothing can be imported the explanation is outside the bar
   const html = renderTrainingLoadCoachHtml();
   assert.match(html, /gpexe-approve-note[\s\S]*<div class="gpexe-approve-bar is-idle">/, "the note comes first, the bar is idle");
   assert.ok(!/gpexe-approve-note/.test(html.slice(html.indexOf('class="gpexe-approve-bar'))), "the note is not inside the bar");
+});
+
+// P1 (owner 2026-11-13: "simplify to the maximum for the coach and the club admin"; O1, O2, O3, O5).
+test("P1 1: the coach and the club admin get the simple review; the platform admin keeps the full one", async () => {
+  const views = { coach: () => {}, "club admin": adminView, "platform admin": platformView };
+  for (const [who, setUp] of Object.entries(views)) {
+    resetState();
+    setUp();
+    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true, canApprove: false } }, onCandidate: () => ({ status: 200, body: { candidate: candidateDetail() } }) }));
+    await openImports();
+    await openCandidate();
+    const html = renderTrainingLoadCoachHtml();
+    const full = who === "platform admin";
+    // O2: the GPEXE retention date only for the platform admin.
+    assert.equal(/GPEXE data kept until/.test(html), full, `${who}: retention date`);
+    // O3: no second list of the table's athletes; each athlete's values and left-out reasons stay, folded (D32).
+    assert.equal(/Details by athlete/.test(html), full, `${who}: Details by athlete`);
+    if (!full) {
+      const fold = html.match(/<details class="[^"]*imports-values-fold[^"]*">\s*<summary>Values by athlete \((\d+)\) · 1 left out<\/summary>([\s\S]*)/);
+      assert.ok(fold, `${who}: the values are folded`);
+      assert.equal(fold[1], "1", "only the linked athlete with values; the unlinked one is in the table");
+      assert.match(fold[2], /<li>Whole session · Bursts - drill details not in GPEXE yet<\/li>/, "the left-out value is still named, with its reason (D32)");
+    }
+    // The how-to of linking, once above the table.
+    assert.equal((html.match(/Link each GPEXE athlete to the right athlete of your team\./g) || []).length, 1, `${who}: said once`);
+    assert.ok(!/Link only if you are sure|They do not prove who it is/.test(html), `${who}: not repeated on the row`);
+    // O5: who to ask, and who imports.
+    const imports = { coach: "You can't import this session. Ask your club administrator.", "club admin": "You can't import this session. Contact OptiMove support.", "platform admin": "Approving needs a platform admin or an explicit approver grant for this team." }[who];
+    assert.ok(html.includes(imports), `${who}: ${imports}`);
+    // The chips speak the tab's word.
+    assert.match(html, /data-filter="needs"[^>]*>Needs you </, `${who}: Needs you`);
+    assert.ok(!/Needs a person/.test(html));
+  }
+});
+
+test("P1 2: an approver is told who to ask about a wrong athlete after the import - a coach the club administrator, a club admin OptiMove support", async () => {
+  const views = { coach: [() => {}, "ask your club administrator"], "club admin": [adminView, "contact OptiMove support"] };
+  for (const [who, [setUp, ask]] of Object.entries(views)) {
+    resetState();
+    setUp();
+    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } }));
+    await openImports();
+    await openCandidate();
+    const approveArea = renderTrainingLoadCoachHtml().slice(renderTrainingLoadCoachHtml().indexOf('class="gpexe-approve"'));
+    assert.ok(approveArea.includes(`Check that each athlete is the right person. If one is wrong after the import, ${ask}.`), `${who}: ${ask}`);
+    assert.ok(!/contact a platform administrator/.test(approveArea), `${who}: no platform administrator`);
+  }
+});
+
+test("P1 3: every 'who to ask' in the review speaks to its reader, and a left-out count matches what the reader can see (D32)", async () => {
+  // A blocked session whose step names who to ask (code review M2), and left-out values on a linked AND an unlinked athlete (M1).
+  for (const [who, setUp, ask] of [["coach", () => {}, "Ask your club administrator"], ["club admin", adminView, "Contact OptiMove support"], ["platform admin", platformView, "Ask a platform admin"]]) {
+    resetState();
+    setUp();
+    installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: blockedSummary("binding_conflict") }),
+      preview: { ...candidateDetail().preview, status: "blocked", blocked: { code: "binding_conflict", message: "event bound elsewhere" }, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } }) }));
+    await openImports();
+    await openCandidate();
+    const block = renderTrainingLoadCoachHtml().slice(renderTrainingLoadCoachHtml().indexOf('class="gpexe-blocked"'));
+    assert.ok(block.includes(`${ask} to look at it`), `${who}: ${ask}`);
+    if (who !== "platform admin") assert.ok(!/platform admin/i.test(block.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), `${who}: no platform admin`);
+    // The club admin keeps the Technical details in the review until P2 (identityAdmin); the coach has none.
+    assert.equal(block.includes('<details class="gpexe-tech">'), who !== "coach", `${who}: Technical details`);
+  }
+  resetState();
+  const d = candidateDetail();
+  const unlinked = { ...d.preview.athletes[1], skippedValues: [{ level: "full", drillIndex: null, label: "Top speed", unit: "km/h", sourceMetricKey: "athlete_session.max_v", reason: "canonical_value_out_of_range", message: "Outside the variable's limits." }] };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, counts: { created: 4, skippedValues: 2 }, athletes: [d.preview.athletes[0], unlinked] } } } }) }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /2 values are left out \(see Values by athlete\)/);
+  const fold = html.slice(html.indexOf("imports-values-fold"));
+  assert.match(fold, /<summary>Values by athlete \(2\) · 2 left out<\/summary>/, "both athletes with a left-out value are listed");
+  assert.equal((fold.match(/<li>(Whole session|Drill \d+) · /g) || []).length, 2, "the count in the sentence is what the coach can see");
 });

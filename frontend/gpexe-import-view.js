@@ -67,9 +67,9 @@ export { candidateGroup, inboxBucket };
 // Why a session can't be approved right now, in the coach's words (blocked
 // and expired sessions explain themselves above the approve area).
 const BLOCKER_TEXT = {
-  import_switch_off: "Importing is switched off in this environment, so it can't be approved here.",
+  import_switch_off: "Importing is switched off in this environment, so it can't be imported here.",
   // U2 (v56): the team's own switch.
-  team_import_switch_off: "Imports are switched off for this team, so it can't be approved here.",
+  team_import_switch_off: "Imports are switched off for this team, so it can't be imported here.",
   superseded_by_newer_data: "GPEXE has newer data for this session. Open the newer version.",
   // v33: the coach's sentence; an administrator reads notConfirmedText.
   not_confirmed_for_import: "Not confirmed for import yet. Find new sessions again, then review it.",
@@ -81,9 +81,9 @@ const BLOCKER_TEXT = {
 
 // One badge per group, the same in the list and in the review.
 const GROUP_BADGE = {
-  decision: ["pending", "Waiting for approval"],
+  decision: ["pending", "Not imported yet"],
   notyet: ["blocked", "Can't be imported yet"],
-  excluded: ["excluded", "Not imported"],
+  excluded: ["excluded", "Stays out"],
   uptodate: ["uptodate", "Up to date"],
   imported: ["imported", "Imported"],
   replaced: ["superseded", "Replaced"],
@@ -202,8 +202,8 @@ const GPS_TEXT = {
 const REFUSAL_TEXT = {
   import_undone: "Not imported: the import of this session was undone. Find new sessions to review it again.",
   import_switch_off: "Not imported: importing is switched off in this environment.",
-  team_import_switch_off: "Not imported: imports are switched off for this team. A platform administrator can turn them on (the club administrator too, in team mode).",
-  not_an_approver: "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right.",
+  get team_import_switch_off() { return `Not imported: imports are switched off for this team. ${switchOnWho()}`; },
+  get not_an_approver() { return platformViewer() ? "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right." : `Not imported: you can't import this session. ${AskWho()}.`; },
   superseded_by_newer_data: "Not imported: GPEXE has newer data for this session. Open the newer version.",
   blocked: "Not imported: this session must be fixed first. See what to fix above.",
   snapshot_expired_check_again: "Not imported: the GPEXE data is too old. Find new sessions, then review it again.",
@@ -258,12 +258,12 @@ const SKIP_TEXT = {
 // stays in Technical details.
 function coachStep(s, c) {
   const name = s.previousAthleteId ? athleteName(c, s.previousAthleteId, null) : "the athlete";
-  const undo = "Or ask a platform admin to undo the earlier import.";
+  const undo = platformViewer() ? "Or ask a platform admin to undo the earlier import." : `Or ${askWho()} to undo the earlier import.`;
   if (s.action === "relink_athlete") return `Link ${gpexeWho(s.gpexeAthleteId)} again to ${name} (the athlete their earlier results belong to), then find new sessions.`;
   if (s.action === "restore_team_membership") return `Make ${name} an active member of the team again, then find new sessions. ${undo}`;
   if (s.action === "fix_in_gpexe_or_undo") return `Fix this athlete's data in GPEXE (one track, valid statistics), then find new sessions. ${undo}`;
-  if (s.action === "undo_earlier_import") return "GPEXE no longer lists some results that were imported earlier. Ask a platform admin to undo the earlier import.";
-  return "Ask a platform admin what to do (see Technical details).";
+  if (s.action === "undo_earlier_import") return `GPEXE no longer lists some results that were imported earlier. ${platformViewer() ? "Ask a platform admin" : AskWho()} to undo the earlier import.`;
+  return platformViewer() ? "Ask a platform admin what to do (see Technical details)." : `${AskWho()}.`;
 }
 
 // `extra` is markup that belongs to support, not to the coach's flow (the
@@ -282,11 +282,21 @@ function adminTechHtml(entries, extra = "") {
 
 // The session review's technical lines: an administrator reads them; a coach
 // reads one sentence instead and never a code, a server message or a step.
-const COACH_TECH_NOTE = "Your administrator can see the technical details of this session.";
+// P1: a coach reads no line about technical details at all (it gave them nothing to do).
 function reviewTechHtml(entries, extra = "") {
-  if (maskGpexeIds()) return techHtml(entries, extra);
-  return entries.some(([, v]) => v !== undefined && v !== null && v !== "") ? `<p class="muted gpexe-admin-note">${COACH_TECH_NOTE}</p>` : "";
+  return maskGpexeIds() ? techHtml(entries, extra) : "";
 }
+// P1 (owner 2026-11-13, O1/O2/O3/O5): the coach and the club admin get the simple review; the platform admin keeps the full
+// one. The status's own fact: viewer.isPlatformAdmin.
+const platformViewer = () => state.trainingLoad.gpexe?.status?.viewer?.isPlatformAdmin === true;
+// Who the reader asks when something is not theirs to do: a coach their club administrator, a club administrator OptiMove.
+// Who turns a team's imports on, in the reader's words (the club admin can, in the team's own mode; the coach asks).
+const switchOnWho = () => (platformViewer()
+  ? "A platform administrator can turn them on (the club administrator too, in team mode)."
+  : `${AskWho()}.`);
+// The same, opening a sentence.
+const AskWho = () => askWho().replace(/^./, (ch) => ch.toUpperCase());
+const askWho = () => (platformViewer() ? "contact a platform administrator" : state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true ? "contact OptiMove support" : "ask your club administrator");
 function reviewErrorTech(error) {
   if (!error) return "";
   return reviewTechHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
@@ -1114,8 +1124,8 @@ function batchOutcomeText(r) {
   if (code === "snapshot_expired_check_again") return { cls: "is-refused", text: "Not imported: the GPEXE data is too old. Find new sessions, then import it." };
   if (code === "nothing_to_import") return { cls: "is-refused", text: "Nothing to import: GPEXE has nothing new for this session." };
   if (code === "import_switch_off") return { cls: "is-refused", text: "Not imported: importing was switched off in this environment." };
-  if (code === "team_import_switch_off") return { cls: "is-refused", text: "Not imported: imports were switched off for this team. A platform administrator can turn them on (the club administrator too, in team mode)." };
-  if (code === "not_an_approver") return { cls: "is-refused", text: "Not imported: you may not approve imports for this team any more. Ask a platform admin." };
+  if (code === "team_import_switch_off") return { cls: "is-refused", text: `Not imported: imports were switched off for this team. ${switchOnWho()}` };
+  if (code === "not_an_approver") return { cls: "is-refused", text: platformViewer() ? "Not imported: you may not approve imports for this team any more. Ask a platform admin." : `Not imported: you can't import for this team any more. ${AskWho()}.` };
   if (code === "internal_error") return { cls: "is-refused", text: "Not imported: the server failed before writing anything. Try again later." };
   if (code === "try_again") return { cls: "is-refused", text: "Not imported: another check, import or change of this team was running, or the server was busy. Try again in a moment." };
   if (code === "notFound") return { cls: "is-refused", text: "Not imported: this session is not available." };
@@ -1140,8 +1150,8 @@ function batchStoppedText(error) {
 function batchRefusalText(error) {
   const code = error?.code;
   if (code === "import_switch_off") return "Not imported: importing is switched off in this environment.";
-  if (code === "team_import_switch_off") return "Not imported: imports are switched off for this team. A platform administrator can turn them on (the club administrator too, in team mode).";
-  if (code === "not_an_approver") return "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right.";
+  if (code === "team_import_switch_off") return `Not imported: imports are switched off for this team. ${switchOnWho()}`;
+  if (code === "not_an_approver") return platformViewer() ? "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right." : `Not imported: you can't import for this team. ${AskWho()}.`;
   if (error?.status === 404) return "Not imported: one of the sessions is not available in this team any more. Find new sessions, then choose again.";
   if (code === "internal_error") return "Not imported: the server failed before writing anything. Try again later.";
   if (error?.status === 400) return "Not imported: the selection is out of date. Choose the sessions again.";
@@ -1901,7 +1911,7 @@ function renderCandidateBodyHtml(c, detail, status) {
     <p class="gpexe-detail-meta">
       ${badgeHtml(c)}
       <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
-      ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
+      ${c.snapshot?.available && platformViewer() ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
     ${renderTeamZoneNoteHtml(preview)}
     ${adminTechHtml([["GPEXE session name", c.label]])}
@@ -1953,7 +1963,8 @@ function renderApprovalRecordHtml(c) {
 // in OptiMove.
 const SETUP_COACH_TEXT = Object.freeze({
   reason: "This session can't be imported until an administrator finishes its data setup.",
-  step: "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.",
+  // P1 (O5): a coach asks the club administrator (who may finish the club's own setup or pass it on).
+  get step() { return platformViewer() || state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true ? "Ask a club or platform administrator to finish the data setup of this team, then find new sessions." : "Ask your club administrator to finish the data setup of this team, then find new sessions."; },
 });
 // 7h-F (decision 1 at 7h-B's GO): the ux-design-reviewer's wording, for the
 // club's admin who usually reads it.
@@ -1985,7 +1996,7 @@ function blockedCoachText(c) {
   // administrator's Technical details.
   if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
     const day = c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : "";
-    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: `It is not imported until the team has a time zone. Ask a platform administrator to set it in Settings > Data sources, then find new sessions again${day}.` };
+    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: platformViewer() ? `It is not imported until the team has a time zone. Ask a platform administrator to set it in Settings > Data sources, then find new sessions again${day}.` : `It is not imported until the team has a time zone. ${AskWho()}, then find new sessions again${day}.` };
   }
   const precise = setupBlockCode(c);
   if (precise) {
@@ -2012,10 +2023,10 @@ function blockedCoachText(c) {
     return { reason: "No athlete in this session can be imported.", step: "Link the athletes to OptiMove athletes or fix their data in GPEXE, then find new sessions." };
   }
   if (code === "source_data_inconsistent") {
-    return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: `Find new sessions again later. If it stays like this, ask a platform admin${giveTech()}.` };
+    return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: `Find new sessions again later. If it stays like this, ${platformViewer() ? "ask a platform admin" : askWho()}${giveTech()}.` };
   }
   // conflicts_with_existing_data, other, or no code at all.
-  return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: `Ask a platform admin to look at it${giveTech()}.` };
+  return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: `${platformViewer() ? "Ask a platform admin" : AskWho()} to look at it${giveTech()}.` };
 }
 
 function renderBlockedHtml(preview, c) {
@@ -2094,6 +2105,19 @@ function renderAthletesHtml(preview, c) {
   // Two team athletes with the same name can't be told apart here.
   const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
   for (const o of unlinkedChoices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  if (!platformViewer()) {
+    // P1 (owner 2026-11-13, O3): the coach and the club admin don't get a second list of the table's athletes. What only this
+    // list holds - each athlete's values and the values left out with their reasons (D32) - stays, folded, for the athletes
+    // that have any; an athlete waiting for a link has nothing here that the table doesn't say.
+    const withValues = athletes.filter((a) => (a.skippedValues || []).length || (a.athleteId && !a.notImported && (a.results || []).length));
+    if (!withValues.length) return "";
+    return `
+    <details class="gpexe-fine imports-values-fold gpexe-athletes">
+      <summary>Values by athlete (${withValues.length})${(() => { const n = withValues.reduce((k, a) => k + (a.skippedValues || []).length, 0); return n ? ` · ${n} left out` : ""; })()}</summary>
+      ${withValues.map((a) => renderAthleteHtml(a, c, unlinkedChoices)).join("")}
+    </details>
+  `;
+  }
   return `
     <section class="gpexe-athletes" aria-label="Athletes in this session">
       <h4>Details by athlete (${athletes.length})</h4>
@@ -2167,9 +2191,9 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
     return `
       <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
         <p class="gpexe-link-pair"><strong>${escapeHtml(maskGpexeIds() ? gpexeAthleteLabel(id) : `GPEXE athlete ${id}`)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
-        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When you approve the import, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When this session is imported, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
-        ${(() => { const wrong = `<p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
+        ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
@@ -2182,10 +2206,10 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   }
   return `
     <div class="gpexe-link">
-      <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
+      ${compact ? "" : `<p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>`}
       ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
       ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
-      ${compact ? (compactHasValues(a, c) ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
+      ${compact ? (compactHasValues(a, c) ? "" : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
@@ -2282,7 +2306,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
 const ROW_STATUS = Object.freeze({
   importable: { label: "Importable", note: "Ready to import.", counts: true },
   participation: { label: "Participation only", note: "Present in this session; no value is imported.", counts: true },
-  needs_link: { label: "Needs a link", note: "Not imported until you link this athlete.", counts: false },
+  needs_link: { label: "Needs a link", note: "Not imported until linked.", counts: false },
   blocked: { label: "Blocks the session", note: "The whole session waits until this is fixed.", counts: false },
   not_imported: { label: "Not imported", note: "", counts: false },
   nothing_new: { label: "Nothing new", note: "Already in OptiMove; nothing new to import.", counts: false },
@@ -2412,7 +2436,7 @@ function reviewRowsOf(preview, c) {
     const status = reviewRowStatus(a, preview);
     const info = ROW_STATUS[status];
     const n = changes.get(a.athleteId ? `a:${a.athleteId}` : `g:${a.gpexeAthleteId}`) || 0;
-    const note = status === "not_imported" ? `Not imported: ${a.notImported?.message || "open its row under Details by athlete"}` : info.note;
+    const note = status === "not_imported" ? `Not imported: ${a.notImported?.message || (platformViewer() ? "open its row under Details by athlete" : "see why under Values by athlete")}` : info.note;
     return { a, name: athleteName(c, a.athleteId, a.gpexeAthleteId), status, label: info.label, note, changes: n };
   });
   for (const t of preview.teamAthletesWithoutGpexeRecord || []) rows.push({ a: null, athleteId: t.athleteId, name: athleteName(c, t.athleteId, null), status: "no_record", label: ROW_STATUS.no_record.label, note: ROW_STATUS.no_record.note, changes: 0 });
@@ -2516,7 +2540,7 @@ function reviewTableOf(rows, c, choices, lo = { offered: false, chosen: new Set(
   </table></div>`;
 }
 
-const REVIEW_CHIPS = [["needs", "Needs a person"], ["not_linked", "Not linked"], ["short", "Short recording"], ["no_data", "No data"], ["review", "Needs review"], ["all", "All"]];
+const REVIEW_CHIPS = [["needs", "Needs you"], ["not_linked", "Not linked"], ["short", "Short recording"], ["no_data", "No GPS"], ["review", "Needs review"], ["all", "All"]];
 // The chip a row belongs to: its problem, or "short" for a row the import would write whose time is short (6a).
 // A flagged row the coach ticked to leave out loses its flag but stays shown until its attendance is chosen (the note's second step).
 const rowKind = (r) => PROBLEM_KIND[r.status] || (r.short || r.awaitingState ? "short" : null);
@@ -2561,6 +2585,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
       ${updating}${updateError}
       ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
       ${lo.states && stateAthleteIds(c, detail).length ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
+      ${needLink ? `<p class="muted gpexe-review-howto">Link each GPEXE athlete to the right athlete of your team.${c?.helperValues ? " The values on the row help you find them in GPEXE; if you are not sure, check there first." : ""}</p>` : ""}
       <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
       ${shown.length ? reviewTableOf(shown, c, choices, lo) : ""}
       ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices, lo)}</details>` : ""}
@@ -2605,9 +2630,9 @@ function renderOutcomeHtml(detail) {
     return `
       <div class="gpexe-unknown" role="alert">
         <p><strong>We can't tell yet whether this session was imported.</strong> Don't enter the data by hand and don't assume either way - check the result first.</p>
-        ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Approving again is safe: the server never imports the same session twice.</p>` : ""}
+        ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Importing again is safe: the server never imports the same session twice.</p>` : ""}
         ${verified === "still_unknown" ? `<p>Still not clear. Check again in a moment.</p>` : ""}
-        ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> Ask a platform admin to check this import${giveTech()}. Until then, don't enter the data by hand.</p>` : ""}
+        ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> ${platformViewer() ? "Ask a platform admin" : AskWho()} to check this import${giveTech()}. Until then, don't enter the data by hand.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : verified ? "Check again" : "Check the result"}</button>
         ${reviewTechHtml([["HTTP status", o.error?.status || "no answer"], ["Code", o.error?.code], ["Server message", o.error?.message], ["Approval id", o.verify?.approvalId], ["Check error", o.verifyError ? `${o.verifyError.status || "no answer"} ${o.verifyError.code || ""}`.trim() : undefined]])}
       </div>
@@ -2639,7 +2664,12 @@ export function importsLinkedAthletes(c) {
 // D32 (9-B): the number of values left out is named before an approval.
 function approveLeftOutText(c) {
   const left = Number(c?.preview?.counts?.skippedValues ?? c?.counts?.skippedValues);
-  if (Number.isInteger(left) && left > 0) {
+  const some = Number.isInteger(left) && left > 0;
+  if (!platformViewer()) {
+    // P1: the coach's words; the count stays named before the import (D32), the list is under Values by athlete.
+    return `Import adds this session to Training Load as shown.${some ? ` ${left === 1 ? "1 value is" : `${left} values are`} left out (see Values by athlete).` : ""} Athletes left out stay out.`;
+  }
+  if (some) {
     return `Approving imports this whole session exactly as shown. ${left === 1 ? "1 value is" : `${left} values are`} left out (listed under each athlete); ${left === 1 ? "it is" : "they are"} not imported and never stored as a zero. Athletes left out stay out.`;
   }
   return "Approving imports this whole session exactly as shown. Athletes and values left out stay out.";
@@ -2789,8 +2819,8 @@ function renderApproveHtml(c, detail, status) {
   const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");
   // U2: the person may hold the right while the team's switch is off - say that, not "needs an approver".
   if (!viewer.canApprove && viewer.hasApprovalRight === true && status?.teamImportSwitch?.enabled !== true) return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.team_import_switch_off)}</p>`;
-  if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">Approving needs a platform admin or an explicit approver grant for this team.</p>`;
-  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
+  if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">${platformViewer() ? "Approving needs a platform admin or an explicit approver grant for this team." : viewer.identityAdmin === true ? "You can't import this session. Contact OptiMove support." : "You can't import this session. Ask your club administrator."}</p>`;
+  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be imported right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;
   const importN = importableAthleteCount(c.preview);
   // J20-B: with athletes ticked as "Leave out" the approval is the SUBSET's: it is reviewed first (one deliberate step that
@@ -2800,7 +2830,7 @@ function renderApproveHtml(c, detail, status) {
   return `
     <div class="gpexe-approve">
       <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
-      ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
+      ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">${platformViewer() ? "Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator." : `Check that each athlete is the right person. If one is wrong after the import, ${askWho()}.`}</p>` : ""}
       ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
       ${statesLineHtml(c, detail)}
       <div class="gpexe-approve-bar${importN === 0 ? " is-idle" : ""}">
