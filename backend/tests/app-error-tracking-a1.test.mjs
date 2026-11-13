@@ -13,6 +13,7 @@ import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
+const V70_FILE = "202611131400_app_error_events_v70_device_and_keyed_hash.sql";
 let db, k, server, base, T, M;
 const uid = () => crypto.randomBytes(4).toString("hex");
 const SECRET = "ana.example@example.invalid";
@@ -34,7 +35,9 @@ const rows = async () => (await k.query(`select * from public.app_error_events o
 const GOOD = { screen: "training-load", action: "open-imports", code: "js_error", stackSig: "renderImports@gpexe-import-view.js > start@app.js" };
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1) }); // up to v58 (v58 must be the last migration here; v59 and later are left out)
+  // v58 and, on top of it, v70 (the code writes v70's columns). Test 7 takes v70 off again before it rehearses v58's own rollback.
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1), V70_FILE] });
+  process.env.APP_ERROR_USER_HASH_KEYS = `2:${crypto.randomBytes(32).toString("base64")}`;
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
@@ -156,7 +159,8 @@ test("3. ingest: login, closed body, repeat count, per-user rows, role, size and
   assert.deepEqual(withReason.map((r) => [r.error_code, r.action, r.stack_signature]), [["unhandled_rejection.aborterror", "open-media", null]]);
   assert.equal((await rows()).length, rowsBeforeReason + 1);
   await k.query(`delete from public.app_error_events where screen = 'weekly'`);
-  assert.equal(all[0].user_hash, M.userHash(coach.id));
+  assert.equal(all[0].user_hash, M.keyedUserHash(coach.id, 2));
+  assert.equal(all[0].user_hash_version, 2);
   assert.ok(!JSON.stringify(all[0]).includes(coach.id));
   await call("/api/app-errors", { method: "POST", body: GOOD, cookie: other.cookie });
   await call("/api/app-errors", { method: "POST", body: { ...GOOD, code: "http_500", status: 500 }, cookie: admin.cookie });
@@ -319,6 +323,10 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   const dir = new URL("../../docs/runbooks/", import.meta.url);
   const MIG = "migrations_v2/202611091000_app_error_events.sql";
   const blocks = (sql) => sql.split(/^-- \d+\./m).slice(1).map((b) => b.split("\n").slice(1).filter((l) => !l.startsWith("--")).join("\n").trim()).filter(Boolean);
+  // v70 comes off first (its own rehearsal is app-error-events-v70.test.mjs); its rollback refuses while a keyed hash is stored, so the rows go first.
+  const v70Rollback = await fs.readFile(new URL("app-error-events-v70-rollback.sql", dir), "utf8");
+  await k.query(`delete from public.app_error_events`);
+  await k.query(v70Rollback);
   const post = blocks(await fs.readFile(new URL("app-error-events-v58-postcheck.sql", dir), "utf8"));
   assert.equal(post.length, 7);
   const r1 = (await k.query(post[0])).rows[0];

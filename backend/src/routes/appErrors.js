@@ -5,7 +5,7 @@
 //                   same 404 as an unknown route (info-hiding).
 import express from "express";
 import { isPlatformAdministrator } from "../authz.js";
-import { MAX_REPORT_BYTES, allowReport, listErrorGroups, recordClientError, sanitizeClientReport } from "../appErrorTracking.js";
+import { MAX_REPORT_BYTES, allowReport, listErrorGroups, recordClientError, sanitizeClientReport, userHashKeyState } from "../appErrorTracking.js";
 
 export const appErrorsRouter = express.Router();
 
@@ -32,7 +32,8 @@ appErrorsRouter.get("/groups", async (req, res, next) => {
     const days = req.query.days === undefined ? 7 : Number(req.query.days);
     if (!Number.isInteger(days) || days < 1 || days > 30) return res.status(400).json({ error: "invalid_days" });
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ days, groups: await listErrorGroups({ days }) });
+    // people: whether distinct people can be counted for new rows (the hashing key is set) - never the key or its name.
+    return res.json({ days, people: userHashKeyState(), groups: await listErrorGroups({ days }) });
   } catch (error) {
     return next(error);
   }
