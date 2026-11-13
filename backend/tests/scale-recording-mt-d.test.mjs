@@ -640,9 +640,10 @@ test("7. the code review's MEDIUMs: an athlete left out of a subset import gets 
   assert.ok([200, 201].includes(approved.status), approved.text);
   const activityId = (await admin.query(`select activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id])).rows[0].activity_id;
   const left = await tapi(`/${activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), athleteId: team.athleteIds[1], method: "scale_recording" } });
-  // 102 left out: either not on the session's roster for an estimate, or not scaled - never a scaled estimate.
-  assert.equal(left.status, 409, left.text);
-  assert.ok(["scale_not_chosen", "athlete_not_on_roster"].includes(left.body.error), left.text);
+  // 102 is on the session's roster (the J20-B left-out athlete is), so the refusal is the scale's own.
+  const roster = (await admin.query(`select athlete_id from training.activity_roster($1)`, [activityId])).rows.map((r) => String(r.athlete_id));
+  assert.ok(roster.includes(String(team.athleteIds[1])), "102 is on the roster");
+  assert.deepEqual([left.status, left.body.error], [409, "scale_not_chosen"], left.text);
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_value_estimates where method = 'scale_recording' and estimated_by_user_id = $1`, [team.coach.id])).rows[0].n, 0);
 
   // A sum variable keyed as the save's minutes variable but not in minutes (here: the distance) is scaled, not set to 40.
