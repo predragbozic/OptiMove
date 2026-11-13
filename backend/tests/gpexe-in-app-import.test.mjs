@@ -423,6 +423,45 @@ test("check: GPEXE refusing the token fails the check with a stable code, and th
   assert.equal(missing.body.error, "gpexe_token_missing");
 });
 
+test("status: lastSucceededCheck is the newest succeeded check of the team - not a running or failed one, not another team's - the same for a coach and a platform admin, with no error or counts", async () => {
+  const team = await setupTeam({ path: "legacy" });
+  const status = async (cookie = team.coach.cookie) => (await api(`/teams/${team.teamId}/status`, { cookie })).body;
+  assert.equal((await status()).lastSucceededCheck, null, "no check yet");
+
+  // A running check is not a succeeded one.
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7011 })], gate }));
+  const running = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: {} });
+  assert.equal(running.status, 202);
+  assert.deepEqual([(await status()).lastCheck.status, (await status()).lastSucceededCheck], ["running", null]);
+  open();
+  assert.equal((await waitForCheck(team.teamId, running.body.check.id, team.coach.cookie)).status, "succeeded");
+  // A second succeeded check: the newest one is reported.
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [] }));
+  const succeeded = await checkNow(team);
+  assert.equal(succeeded.status, "succeeded");
+  assert.notEqual(succeeded.id, running.body.check.id);
+
+  // A later failed check: the latest check is the failed one, the last succeeded one stays.
+  service.setGpexeClientFactory(fakeGpexe({ error: new GpexeClientError("unauthorized", "refused", { status: 401 }) }));
+  const failed = await checkNow(team);
+  assert.equal(failed.status, "failed");
+  const row = (await admin.query(`select window_from, window_to, finished_at from training_load.gpexe_import_checks where id = $1`, [succeeded.id])).rows[0];
+  const expected = { id: succeeded.id, window: { from: row.window_from, to: row.window_to }, finishedAt: row.finished_at };
+  const asCoach = await status();
+  assert.equal(asCoach.lastCheck.id, failed.id);
+  assert.deepEqual(asCoach.lastSucceededCheck, JSON.parse(JSON.stringify(expected)));
+  assert.deepEqual(Object.keys(asCoach.lastSucceededCheck).sort(), ["finishedAt", "id", "window"], "no error, no counts");
+  assert.deepEqual((await status(team.padmin.cookie)).lastSucceededCheck, asCoach.lastSucceededCheck, "the same for a platform admin");
+
+  // Another team's newer succeeded check is not this team's.
+  const other = await setupTeam({ path: "legacy" });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [] }));
+  assert.equal((await checkNow(other)).status, "succeeded");
+  assert.equal((await status()).lastSucceededCheck.id, succeeded.id);
+});
+
 test("check: one at a time per team; a check that stopped reporting is closed as abandoned", async () => {
   // A never-bound team (the legacy fake client's gate holds the run inside its
   // list request; the stand-in row below is a legacy_env check, which the
