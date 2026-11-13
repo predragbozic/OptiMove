@@ -66,6 +66,27 @@ The default target is the session's longest recorded time.
 4. Run `scale-recording-v68-v69-postcheck.sql`. Every boolean must be true. Block 4 must show nothing scaled.
 5. Smoke without a login: `PUT …/track-choices/1` and `POST /api/training-activity/<zero>/estimates` answer 401.
 
+## If v68 applies and v69 fails
+
+The runner applies each file in its own transaction (`backend/src/migrate.js`: `begin`, the file, its record, `commit`). So if v69
+fails, v68 stays committed and recorded, nothing of v69 remains, and the start command (`node src/migrate.js && node
+src/server.js`) stops. The new server does not start, and Render keeps the previous deploy serving.
+
+**That is a safe state.**
+- The previous code (MT-B) never selects `scale_target_minutes`.
+- It never writes a one-track or scaled choice. Its multi-track rows pass v68's CHECKs, and the wider fingerprint CHECK accepts
+  every v67 row.
+- Every check, recompute, approval and track-choice PUT works as before.
+
+**The remedy:**
+1. Read the runner's `ABORT applying …v69…` line (SQLSTATE and message) in the deploy log.
+2. If a v69 precondition refused (another body of `estimate_basis_ok`, or the method CHECK missing or renamed): stop. Find out
+   what changed the function or the CHECK before any new deploy. The *Rukovodilac* re-runs preflight block 3.
+3. If it was a lock wait (`55P03`, the runner's 30 s `lock_timeout`): deploy the same commit again at a quiet moment. The runner
+   skips the recorded v68 and applies v69.
+4. If MT-D is abandoned instead: deploy a commit without MT-D's code and files, then run `scale-recording-v68-rollback.sql`. It
+   refuses nothing at this point, because no scale or one-track choice can exist yet.
+
 **Rollback:** first `scale-recording-v69-rollback.sql`, then `scale-recording-v68-rollback.sql`.
 - Each refuses once what it removes is in use (a scaled estimate; a scaled or one-track choice) or a later migration is
   recorded.
