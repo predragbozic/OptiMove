@@ -15,10 +15,10 @@ lock table training_load.dashboard_widgets, training_load.dashboard_widget_serie
 do $guard$
 begin
   if not exists (select 1 from public.schema_migrations
-      where migration_name = 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql')
+      where migration_name = 'migrations_v2/202611131000_training_load_v66_dashboard_simple_atomic_save.sql')
     or exists (select 1 from public.schema_migrations
       where migration_name like 'migrations_v2/%'
-        and migration_name > 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql') then
+        and migration_name > 'migrations_v2/202611131000_training_load_v66_dashboard_simple_atomic_save.sql') then
     raise exception 'v64 rollback refused: v64 is not the last applied v2 migration';
   end if;
   if (select md5(prosrc) from pg_proc where oid =
@@ -94,5 +94,5 @@ drop function training_load.dashboard_simple_object;
 
 drop table training_load.dashboard_simple_requests;
 delete from public.schema_migrations
-where migration_name = 'migrations_v2/202611121100_training_load_v64_dashboard_simple_atomic_save.sql';
+where migration_name = 'migrations_v2/202611131000_training_load_v66_dashboard_simple_atomic_save.sql';
 commit;
