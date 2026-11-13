@@ -1,7 +1,7 @@
 # App health: the device, and who hit an error (plan note)
 
-**Status: a plan, not a contract.** No code, migration or route exists for anything below. It becomes work only after
-the *Rukovodilac* accepts it and the owner decides the open points of section 9.
+**Status: accepted as the plan** (the *Rukovodilac*, 2026-11-13), with the decisions of section 10. No code, migration
+or route exists yet for anything below; the slices are built in the order AH-1, AH-2, AH-3, each with its own reviews.
 
 | | |
 |---|---|
@@ -186,7 +186,7 @@ AH-2 and AH-3 are independent of each other after AH-1. AH-1 is useful alone: th
   is built in from PostgreSQL 11; the preflight would assert it.
 - The legal side of naming a minor on a debugging screen. That is the owner's to decide (O1).
 
-## 9. Open points for the owner
+## 9. Open points for the owner (as asked; decided in section 10)
 
 | | Question | My recommendation |
 |---|---|---|
@@ -196,3 +196,48 @@ AH-2 and AH-3 are independent of each other after AH-1. AH-1 is useful alone: th
 | O4 | Device facts for the server's own errors too, from the request's User-Agent? | Not in the first step |
 | O5 | The device in the one-hour match (two devices, two rows)? | Yes |
 | O6 | Connection type as a seventh fact? | No; Chromium only |
+
+## 10. Decisions (2026-11-13, relayed by the *Rukovodilac*)
+
+| | Decision |
+|---|---|
+| O1 | **Yes.** The owner said yes to "Show person" for a platform admin. Every limit of section 4 is mandatory: platform admins only, display name and role only, one kind of error at a time, a limit per hour, every use recorded. **Standing precondition, the owner's to state, like C123:** the legal side of showing a minor's name on a debugging screen. AH-3 is not used in production before the owner states it |
+| O2 | **Yes: a keyed hash with a version column, in AH-1** (section 10.1) |
+| O3 | The audit of "who looked" is kept **one year** |
+| O4 | Device facts for the server's own errors: **not now** |
+| O5 | **Yes:** the device enters the one-hour match, so two devices are two rows |
+| O6 | Connection type: **no** |
+| Slices | AH-1, then AH-2, then AH-3; AH-1 first |
+| Migration | **v70**, with a prefix after `202611131310` (v66 is J18's, v67 is on production, v68 and v69 are MT-D's, in review). Re-checked when the pull request is opened |
+| Follow-up inside AH-1 | The tab loads handed to `detached()` (PR #528) carry the fixed action word `open-tab` |
+
+### 10.1 The keyed hash (O2), as it will be built
+
+- **Two versions, told apart by a column.** `user_hash_version` (smallint, not null, default 1) on
+  `public.app_error_events`:
+  - **1** is today's: the first 12 hex of `sha256("app-error-user:" + user id)`, no key. Every existing row is version 1.
+  - **2** is keyed: the first 12 hex of `HMAC-SHA256(key, "app-error-user:" + user id)`.
+- **The key** comes from a server secret, an environment variable holding a small key ring in the shape the source
+  credentials already use (`<version>:<base64 key>`, one or more, the highest version is the one new rows get; at
+  least 32 random bytes each). It is read when a hash is computed, never logged, never sent to the database: the hash
+  is computed in the server, not in SQL, so the key cannot reach a statement log.
+- **How old rows resolve.** A version 1 row is resolved as section 4.2 says, by the unkeyed expression, until it ages
+  out: after 30 days no version 1 row is left and that path can be removed. A version 2 row is resolved by the server
+  computing the keyed hash for each user of one bounded read of `public.users` and matching in memory.
+- **The same person across the change** is two people in the counts for at most one hour of rows and up to 30 days
+  of history: a version 1 row and a version 2 row of one user never match each other. Accepted; the screen says
+  "people" as a count of hashes, as it does today.
+- **When the key is missing or unreadable** (my recommendation, for the *Rukovodilac* to confirm in AH-1's review):
+  - **Show person fails closed:** it answers that the person cannot be shown and names nobody, for version 2 rows.
+    Version 1 rows still resolve while they exist.
+  - **Ingest still records the error, without a hash** (`user_hash` null, version 2). It never falls back to the
+    unkeyed scheme: a silent return to the weaker hash is exactly what the key is there to prevent. The error itself
+    stays visible; only the count of distinct people is lost for those rows, and the existing cap for rows without a
+    user applies to them.
+  - The server says so once at start-up, by a fixed line without the variable's value, and App health shows one
+    sentence for the platform admin ("People cannot be counted or shown: the hashing key is not set").
+- **A rotation** adds a key with the next version to the ring and keeps the old one for 30 days, so rows of both
+  versions resolve; removing the old key after that loses nothing.
+- **The rollback** of v70 refuses once a version 2 row exists (it cannot be turned back into version 1: the user id
+  is not stored), which makes the migration forward-only from the first keyed row; the runbook says so.
+
