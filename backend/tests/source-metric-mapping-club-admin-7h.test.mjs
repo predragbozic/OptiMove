@@ -20,7 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
-import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { applyGpexeTestMigrations, createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS, GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE } from "./_gpexe-disposable-db.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
 
@@ -85,7 +85,9 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.indexOf(V52) > 0, "v52 follows v51 (v53, phase 7i-B, comes after it)");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52rb", migrations: UP_TO_V51 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52" }),
+    // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields
+    // have none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });
@@ -1761,4 +1763,35 @@ test("21. R6 (J14 sections 2.3 and 10.2): club A's admin's A2 and replacement en
   assert.deepEqual([zRow.ended_basis, zRow.ended_by_user_id, zRow.end_reason], ["club_admin", zAdm.id, "mapping_version_disabled"]);
   assert.deepEqual((await auditOf(`action = 'activation_end' and activation_id = $1`, [zAct.id])).map((r) => [r.basis, r.performed_by_user_id, r.reason]), [["club_admin", zAdm.id, zReason]]);
   noDeadlock();
+});
+
+// ---------------------------------------------------------------------------
+// The full schema (the Rukovodilac's condition for 18-3): this file's database
+// was built through v65. The LAST test applies every later migration (v66,
+// J18's gate) and runs the same route once more for what stays allowed.
+// ---------------------------------------------------------------------------
+test("Z. on the full schema (v66 applied now): a platform admin's A1 of a system version and of a club's version in the club's workspace still work through the same route, with a listed start; a club admin's A1 of a field without parameters is 409 confirmation_required and changes nothing; the club admin still switches an active version on (S1) and off (S2)", async () => {
+  await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS);
+  assert.equal((await one(k, `select count(*)::int as n from pg_trigger where tgname = 'source_metric_mapping_versions_v66_confirmation_gate'`)).n, 1, "the gate is in force");
+  const b = await binding(W.clubA);
+  // A system version, in the platform workspace.
+  const sys = await version(await field(), { target: await variable(W.pa) });
+  ok(await activate(sys, W.pa.cookie));
+  assert.equal(await statusOf(sys), "active");
+  // The club's version: refused for its admin, activated by a platform admin in the club's workspace.
+  const waiting = await clubWaiting(W.caA);
+  const before = await counts();
+  refused(await activate(waiting, W.caA.cookie), 409, "confirmation_required");
+  assert.deepEqual(await counts(), before, "nothing written");
+  assert.equal(await statusOf(waiting), "needs_review");
+  const paA = await platformAdmin(["club", W.clubA]);
+  ok(await activate(waiting, paA.cookie, { starts: listed([b]) }));
+  const row = await versionRow(waiting.versionId);
+  assert.deepEqual([row.status, row.activated_basis], ["active", "platform_admin"]);
+  const open = await openOn(waiting);
+  assert.equal(open.length, 1);
+  // The club admin's own S2 and S1 on the active version are unchanged.
+  ok(await end(W.caA, open[0].id));
+  ok(await start(W.caA, waiting, listed([b])), 201);
+  assert.deepEqual((await openOn(waiting)).map((a) => a.activated_basis), ["club_admin"]);
 });

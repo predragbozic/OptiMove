@@ -206,6 +206,12 @@ async function field(kind, { unit = { time: "s", dist: "m", speed: "m/s", burst:
   const revId = await writeRevision(k, { fieldId, by: W.pa.id, valueShape, parameterKind, evidenceRef: COMPAT, unit, ...(parameterKind === "zone_bounds" ? { boundUnit: "W/kg", operator: "between" } : {}), unitRef: UNIT_REF, meaning: verified, meaningRef: verified ? MEANING_REF : undefined, state: "active" });
   return { fieldId, revId, label };
 }
+const activators = new Map();
+async function activatorOf(owner) {
+  if (owner.basis !== "club_admin") return owner;
+  if (!activators.has(owner.clubId)) activators.set(owner.clubId, await platformAdmin(["club", owner.clubId], "activating-platform-admin"));
+  return activators.get(owner.clubId);
+}
 // An active mapping version through the real routes, by `owner`.
 async function activeVersion(owner, f, target, { activate = true, drill = true } = {}) {
   const m = await post("/mappings", owner, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id });
@@ -215,7 +221,9 @@ async function activeVersion(owner, f, target, { activate = true, drill = true }
   assert.equal(v.status, 201, v.text);
   const versionId = v.body.version.id;
   ok(await post(`/mappings/${mappingId}/versions/${versionId}/submit`, owner, { requestKey: key() }));
-  if (activate) ok(await post(`/mappings/${mappingId}/versions/${versionId}/activate`, owner, { requestKey: key(), expectedActiveVersionId: null }));
+  // v66 (M-B): a club admin activates a version of a field without parameters only from the board, so a club's
+  // version is activated here by a platform admin in that club's workspace (the basis stays platform_admin).
+  if (activate) ok(await post(`/mappings/${mappingId}/versions/${versionId}/activate`, await activatorOf(owner), { requestKey: key(), expectedActiveVersionId: null }));
   return { mappingId, versionId, ...f, target };
 }
 const start = (who, v, t, requirement = "required") => post("/activations", who, { requestKey: key(), mappingId: v.mappingId, versionId: v.versionId, bindings: [{ bindingId: t.bindingId, requirement }], reason: `Start ${uid()}.` });
@@ -779,6 +787,27 @@ test("7c. the refusals no other test reaches: a session too large to read, a ses
   assert.deepEqual(board.on.map((o) => o.activationId), [activationId]);
 });
 
+test("7d. a team bound through a team-owned connection (v27 allows it) has no board: the identical 404 on the board and on a placement, for the club's admin and for a platform admin", async () => {
+  // The same team, athletes and stored session as a board that works; only the connection's owner differs.
+  const t = await gpexeTeam(W.clubA, { bound: false });
+  const connectionId = (await one(
+    `insert into training_load.source_credential_connections (source_system, owner_scope, owner_team_id, host_key, account_label, credential_kind, created_by_user_id, state,
+                                                              credential_ciphertext, credential_nonce, credential_auth_tag, credential_key_version, last_verified_at)
+     values ('gpexe','team',$1,'server3','18-2 team-owned','exchanged_token',$2,'verified',$3,$4,$5,1, now()) returning id`,
+    [t.teamId, W.pa.id, crypto.randomBytes(24), crypto.randomBytes(12), crypto.randomBytes(16)])).id;
+  const bindingId = (await one(
+    `insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id)
+     values ($1,$2,'gpexe',$3,$4,$1) returning id`, [t.teamId, connectionId, t.sourceTeamId, W.pa.id])).id;
+  Object.assign(t, { connectionId, bindingId });
+  for (const n of [1, 2]) await link(t, n, `Fourth ${NAMES[n]}`);
+  const cand = await candidate(t);
+  for (const who of [W.caA, W.paA, W.pa]) {
+    assert.deepEqual(shape(await boardOf(who, t)), NOT_FOUND, "the board");
+    assert.deepEqual(shape(await boardOf(who, t, { candidateId: cand.id })), NOT_FOUND, "the board of a chosen session");
+    assert.deepEqual(shape(await placement(who, t, cand.id, W.fTime, W.vMin)), NOT_FOUND, "a placement");
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 5. What never leaves, and what the service never does
 // ---------------------------------------------------------------------------
@@ -797,5 +826,9 @@ test("8. no answer or log line of this suite carries an athlete id, a GPEXE athl
     assert.equal(code(source).includes(forbidden), false, `the board service has no "${forbidden}"`);
     assert.equal(code(pure).includes(forbidden), false, `the pure module has no "${forbidden}"`);
   }
-  assert.equal((code(source).match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
+  // The one write of a read is the removal batch, in its own module (18-3), which sends that one statement and no other write.
+  assert.equal(/\bpool\b|remove_expired_confirmation_values/.test(code(source)), false, "the board service holds no connection of its own");
+  const removal = code(await fsp.readFile(path.resolve(__dirname, "../src/sourceMetricConfirmationRemoval.js"), "utf8"));
+  assert.equal((removal.match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
+  for (const forbidden of ["insert into", "update ", "delete from", "birth_date", "fetch("]) assert.equal(removal.includes(forbidden), false, `the removal module has no "${forbidden}"`);
 });

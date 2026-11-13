@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
-import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { applyGpexeTestMigrations, createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS, GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE } from "./_gpexe-disposable-db.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
 
@@ -44,7 +44,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo1" });
+  // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
+  // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
+  // The last test (Z) applies v66 and runs the same races on the full schema.
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo1", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
@@ -706,5 +709,48 @@ test("10. a rename holding its right (users first) while the real revocation of 
   assert.ok([200, 404].includes(res2.status), res2.text);
   assert.deepEqual({ ...(await lastRename(s2.variableId)) }, { basis: "team_coach", requested_by_user_id: s2.coach.id }, "the rename committed");
   assert.equal((await revoking2).status, 200);
+  noDeadlock(from);
+});
+
+// ---------------------------------------------------------------------------
+// Z. The full schema: v66's gate (J18, M-B) changes no lock order
+// ---------------------------------------------------------------------------
+test("Z. on the full schema (v66 applied now): a platform admin's A1 against the real revocation, both orders, ends as before; a club admin's A1 queued behind its own revocation is still the identical 404; alone it is refused by the gate with nothing written - no 40P01 anywhere", async () => {
+  await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS);
+  assert.equal((await one(k, `select count(*)::int as n from pg_trigger where tgname = 'source_metric_mapping_versions_v66_confirmation_gate'`)).n, 1, "the gate is in force");
+  const from = logLines.length;
+  // A platform admin, the revocation first: the identical 404, nothing written.
+  const pa = await platformAdmin();
+  const v1 = await waitingVersion(pa);
+  const first = await revocationFirst({ target: pa, revoke: () => revokePlatform(pa), writerPattern: "for share of", write: () => activate(v1, pa) });
+  assert.equal(first.revoked.status, 200, first.revoked.text);
+  assert.deepEqual([first.written.status, first.written.body], [404, { error: "notFound" }], first.written.text);
+  assert.equal((await statusOf(v1)).status, "needs_review");
+  // A platform admin holding its right first: A1 commits through the gate (it leaves a platform admin alone).
+  const pb = await platformAdmin();
+  const v2 = await waitingVersion(pb);
+  const wh = holdWrite("mapping_version_activate");
+  const a1 = activate(v2, pb);
+  await until(() => wh.state.entered, "A1 holds after its right");
+  const revoking = revokePlatform(pb);
+  await waiters("for update of u, g");
+  wh.g.open();
+  const res = await a1;
+  assert.ok([200, 404].includes(res.status), res.text);
+  assert.deepEqual(await statusOf(v2), { status: "active", activated_basis: "platform_admin" });
+  assert.equal((await revoking).status, 200);
+  // A club admin: queued behind its own revocation, the identical 404 (the right is gone before the gate is reached).
+  const { clubId, admins } = await freshClub(2);
+  const [ca, other] = admins;
+  const v3 = await waitingVersion(ca);
+  const third = await revocationFirst({ target: ca, revoke: () => revokeClub(ca, clubId), writerPattern: "for share of", write: () => activate(v3, ca) });
+  assert.equal(third.revoked.status, 200, third.revoked.text);
+  assert.deepEqual([third.written.status, third.written.body], [404, { error: "notFound" }], third.written.text);
+  assert.equal((await statusOf(v3)).status, "needs_review");
+  // The club's other admin, alone: the gate's refusal, by name, nothing written.
+  const v4 = await waitingVersion(other);
+  const gated = await activate(v4, other);
+  assert.deepEqual([gated.status, gated.body.error], [409, "confirmation_required"], gated.text);
+  assert.deepEqual(await statusOf(v4), { status: "needs_review", activated_basis: null });
   noDeadlock(from);
 });

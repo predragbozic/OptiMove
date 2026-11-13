@@ -36,6 +36,7 @@ import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
+import { startConfirmationRemovalSchedule } from "./sourceMetricConfirmationRemoval.js";
 import { appErrorsRouter } from "./routes/appErrors.js";
 import { recordServerError, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
@@ -286,6 +287,8 @@ if (isMainModule) {
   // is for an external scheduler, and an expired snapshot is treated as gone
   // even before it is purged.
   startGpexeRetentionSchedule();
+  // Removes the two athletes' values of a board confirmation past their 90 days (J18, C118).
+  startConfirmationRemovalSchedule();
   startAppErrorRetentionSchedule();
 }
 

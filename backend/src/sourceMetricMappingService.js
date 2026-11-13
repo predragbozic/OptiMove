@@ -338,6 +338,9 @@ const TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_versions: the source revision must be active and verified", [409, "revision_not_verified"]],
   ["source_metric_mapping_versions: the canonical definition must be active with the pinned version current", [409, "canonical_version_changed"]],
   ["source_metric_mapping_versions: a mapping version with an open activation is not disabled", [409, "activation_open"]],
+  // J18 (M-B, v66): a club admin's activation of a version of a field without
+  // parameters outside a drag-and-drop save (contract section 5.5).
+  ["source_metric_mapping_versions: a club admin switches a version of a field without parameters on from the drag-and-drop board", [409, "confirmation_required"]],
   // Phase 7d (J10, section 3.7): v34's T5 texts, the backstop of the starts' own checks.
   ...[...ACTIVATION_TRIGGER_REFUSALS].map(([text, code]) => [text, [409, code]]),
 ]);
@@ -364,6 +367,7 @@ const MESSAGES = {
   active_version_changed: "The mapping's active version is not the one this request names; read the mapping again.",
   version_status_changed: "The version is not in the status this request names; read the mapping again.",
   revision_not_verified: "The source revision of this version is not active and verified.",
+  confirmation_required: "Switch this version on from Map by drag and drop.",
   canonical_version_changed: "The canonical variable has a newer current version than this mapping version pins; create a new mapping version.",
   source_metric_target_taken: "Another mapping of this owner already has an active version for this source field and parameters.",
   activation_open: "The mapping version has an open activation; it is not changed before the activation ends.",

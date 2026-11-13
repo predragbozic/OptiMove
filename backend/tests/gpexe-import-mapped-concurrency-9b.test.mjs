@@ -47,7 +47,7 @@ import { GpexeImportError, importGpexeBundle, importGpexeBundleLocked, lockTeamF
 import { ImportMappingChangedError, setImportMappingHoldForTests, setSourceInstanceHoldForTests } from "../src/gpexeImportMapping.js";
 import { setImportTransactionBoundsForTests } from "../src/gpexeImportPreview.js";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
-import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
+import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS, GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
@@ -78,7 +78,9 @@ const errorLines = [];
 const originalConsoleError = console.error;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b" });
+  // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
+  // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -1640,5 +1642,43 @@ test("12. 7i: the real approval against a club admin's switch to the copy, both 
   } finally {
     delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   }
+  assert.deepEqual(deadlockLines(logFrom), []);
+});
+
+// ---------------------------------------------------------------------------
+// The full schema (the Rukovodilac's condition for 18-3): this file's database
+// was built through v65. The LAST test applies every later migration (v66,
+// J18's gate) and runs the same route once more for what stays allowed.
+// ---------------------------------------------------------------------------
+test("Z. on the full schema (v66 applied now): a club's own mapping activated by a platform admin in the club's scope and switched on by the club's admin is written through by an import, as in 11a; the club admin's own A1 of that field without parameters is refused with confirmation_required", async () => {
+  await applyGpexeTestMigrations(db.url, GPEXE_TEST_MIGRATIONS);
+  const logFrom = errorLines.length;
+  const org = await createGpexePilotOrg(admin, { athleteNames: ["Z101", "Z102", "Z103"] });
+  const sourceTeamId = nextSourceTeamId();
+  const bound = await mappedBinding(admin, { teamId: org.teamId, clubId: org.clubId, sourceTeamId, activate: false });
+  const { mappings, variables } = await registryWriters();
+  const pa = await worldPlatformAdmin(admin, "9b-conc-full");
+  const world = await ensureMappedSystem(admin, { platformAdminId: pa });
+  const spec = SPEC_REGISTRY[CLUB_KEY];
+  const m = world[CLUB_KEY];
+  const ctx = await clubAdminOf(org.clubId);
+  const variable = (await variables.createVariable({ ctx, body: { requestKey: rk(), label: `Club distance ${crypto.randomBytes(3).toString("hex")}`, unit: spec.targetUnit, levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
+  const mapping = (await mappings.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: m.fieldId, metricDefinitionId: variable.id } })).mapping;
+  const v = (await mappings.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: m.revId, appliesToSession: true, appliesToDrill: true } })).version;
+  await mappings.submitVersion({ ctx, mappingId: mapping.id, versionId: v.id, body: { requestKey: rk() } });
+  // The club admin's own A1: refused by the gate with its stable code.
+  await assert.rejects(mappings.activateVersion({ ctx, mappingId: mapping.id, versionId: v.id, body: { requestKey: rk(), expectedActiveVersionId: null } }),
+    (error) => error.status === 409 && error.code === "confirmation_required");
+  assert.equal(await versionStatus(v.id), "needs_review");
+  // A platform admin in the club's scope activates it; the club's admin switches it on; an import writes through it.
+  const paCtx = { userId: String(pa), basis: "platform_admin", owner: { scope: "club", clubId: String(org.clubId) } };
+  await mappings.activateVersion({ ctx: paCtx, mappingId: mapping.id, versionId: v.id, body: { requestKey: rk(), expectedActiveVersionId: null } });
+  const started = await activations.startActivations({ ctx, body: { requestKey: rk(), mappingId: mapping.id, versionId: v.id, bindings: [{ bindingId: String(bound.bindingId), requirement: "optional" }], reason: "Full schema club start." } });
+  const activationId = String(started.activations[0].id ?? started.activations[0].activationId);
+  const full = { ...org, ...bound, sourceTeamId, club: { variableId: String(variable.id), activationId }, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
+  const bundle = writerBundle(full);
+  const client = await newClient();
+  const summary = await importGpexeBundle(client, bundle, writerCtx(full)).finally(() => client.end().catch(() => {}));
+  await assertImportedThroughClub(full, bundle, summary);
   assert.deepEqual(deadlockLines(logFrom), []);
 });

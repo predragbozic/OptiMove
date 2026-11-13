@@ -1667,3 +1667,140 @@ Backend only, no migration, no write route. Stacked on 18-1 (v65). Nothing links
 - **For 18-3:** a board replacement ends the replaced activation as `admin_ended`, so the replaced mapping then
   reads as switched off by an administrator, not as pre-placed. Whether that is Q9's intent for a replacement is
   decided with the save.
+
+### 15.9 As built: 18-3, the board's writes and migration M-B (v66)
+
+Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the two go out in one deploy.
+
+- **R8: the save is one transaction.** The first thing built was the test: the whole of section 4.3 step 16 written
+  as raw SQL in its order, committed for real with every guard, the gate and every deferred link on
+  (`club-activation-confirmation-gate-v66.test.mjs`, test 1: two new mappings, their versions through both
+  transitions, a replaced activation, the confirmation, the starts, the keyed row; one xmin). It passes, so no
+  fallback of R8 exists.
+- **M-B, v66** (`migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql`; runbook
+  `docs/runbooks/club-activation-confirmation-gate-v66.md` with its preflight, post-check and rehearsed rollback).
+  - One function and one `BEFORE UPDATE` trigger on T4, `source_metric_mapping_versions_v66_confirmation_gate`,
+    which sorts after v34's update guard and v35's actor guard. It replaces no body, alters no table, changes no row.
+  - It fires on `needs_review → active` with `activated_basis = 'club_admin'` and `parameter_kind = 'none'`, and
+    passes with a T9i row (`club_mapping`, checked, this version) of a confirmation of **this transaction** by the
+    activating user for the version's club, or with v53's copy link to a system version that is still active.
+    Otherwise `23514` with one fixed text, mapped to `409 confirmation_required`.
+  - "This transaction" is v35's xmin comparison. A confirmation of an earlier, committed transaction by the same
+    admin does not pass. A confirmation written inside a savepoint of the same transaction does not pass either (a
+    subtransaction has its own xid): the gate fails closed, and v65's own guards refuse such a write before it.
+  - Its precondition pins the md5 of T4's update guard and actor guard and T4's six triggers, all enabled.
+  - The preflight's block 4 counts the club `draft` and `needs_review` versions of fields without parameters, apart
+    for those with a copy link. Its block 5 is a refusal, run as the application's role: each column says whether a
+    save's bind parameters could reach the server log - statement, duration and sampled-transaction logging,
+    logging on error, pgaudit by class or by its object-audit role, auto_explain with parameters or a verbose plan,
+    a printed plan, and any role or database override of these settings. Not covered by it, stated in block 6: the
+    pooler's own log, and a value inside an error's text (v65's guards refuse such rows first with fixed texts).
+- **Route 3, the save** (`backend/src/sourceMetricBoardSaveService.js`), as section 4.3, with these points:
+  - It recomputes with the board's own read functions, twice: on plain reads, to answer a stale or refused row
+    before any lock, and again after every lock, which is the answer that counts.
+  - Every foreign or unknown id of the body (team, candidate, field, variable, mapping version, listed activation of
+    another binding), in whichever row, is the identical 404 before any 409: all rows' ids are resolved first.
+    (A body that is not valid JSON is `400 invalid_json` from the application's parser, before any route, for every
+    caller alike.)
+  - A refusal names its row: `409 <code>` with `current.rowIndex`. The codes are the placement's own, plus
+    `board_changed`, `canonical_version_changed`, `activation_changed`, `activation_exists`,
+    `variable_taken_on_binding`, `variable_hidden`, `binding_not_active`, and the read's `409`s (`board_too_large`
+    among them).
+  - A row's `replaces` must be exactly what is on and in its way. The club's own version that is already on for the
+    team is `activation_exists`, never an end and a start of the same contract.
+  - An OptiMove variable is saved only as a `preplaced` row. The club's own active version is switched on for
+    another team as a `preplaced` row too, unchecked (R4).
+  - A mapping whose active version is the same contract is reused: no version is written, and the confirmation's
+    checked row names the reused version.
+  - The request hash covers identities only. No value, name or hash is written to T8, logged or returned.
+  - The candidate is compared again after the locks by its `bundle_hash`, `last_seen_check_id` and `status`; an
+    undone or superseded one is no longer found. Each is `board_changed`.
+  - The database's refusals are mapped, each text held word for word to the migration that raises it (the save
+    suite's test 11): a lost right under a guard of v35, v48, v52 or v65 is the 404; a candidate that changed under
+    the save, and a row another save wrote first (the T3 pair key, the one-active indexes, T5's open-row indexes),
+    are `board_changed`.
+  - A replay checks the scope of routes 4 and 5 again under `FOR SHARE`. It answers after an Unbind and is the 404
+    once the team is archived.
+- **The lock order** is section 4.4's, proven by the SQL the save sends (the save suite's test 7): conversions,
+  fields, revisions, mappings, versions, variables, their levels, the activations to end, the binding, the team, the
+  users row before the role row, the club, the hide locks, and last one advisory lock per binding
+  (`board-save:<binding>`); then the first write, and no locking clause after it. The mappings are locked one by
+  one in ascending id, whatever the order of the body's rows. The candidate, the team import lock and the v11
+  connection are never locked.
+  - **One save per binding.** Two admins' saves with crossed rows would meet on T5's open-row indexes in two orders
+    (a `40P01`). Only a save takes the binding's key, after its last row lock, so it adds no cycle; the second save
+    reads what the first wrote and answers a 409 of the board. Proven on free-running connections (test 12).
+  - **Foreign keys.** Three rows the save does not lock are key-share locked by a foreign key after the first write:
+    the variable's version (T4's), the connection (T9's) and the check (T9s's). Key share conflicts only with a
+    delete or a `FOR UPDATE`; Connect, Reconnect, Test and Unbind take the connection `FOR NO KEY UPDATE`, and A1
+    has the same edge on T4.
+  - **A replay** locks the users row before the team and the club (both `FOR SHARE`); a save locks the team first.
+    No writer holds a team row exclusively and then waits for a users row, so no cycle forms.
+- **A replacement is not a switch-off** (the *Rukovodilac*, 2026-11-12, option B). The end keeps `admin_ended`; the
+  board reads "switched off by an administrator" only when the mapping's latest activation on the binding ended
+  `admin_ended` and its `activation_end` row's operation holds no `mapping_confirmation` row. A replaced mapping
+  that is still eligible is offered as a replacement of what replaced it. No end reason was added.
+- **Routes 6 and 7** (`backend/src/sourceMetricConfirmationAdminService.js`): API only in J18, for an active platform
+  admin in the platform workspace; the runbook says how they are called. Route 6 takes a fixed reason code and
+  locks the confirmation's row first. Route 7 runs the removal function under the admin's identity and writes one
+  audit row per confirmation whose values this transaction removed (a confirmation the schedule emptied a moment
+  earlier is returned by the function too and gets no row), the last keyed; a call that removes nothing writes
+  nothing.
+- **The scheduled removal** (`backend/src/sourceMetricConfirmationRemoval.js`, started by `server.js`): every 6 hours
+  and one minute after the start, batch after batch of 200 until none is left, at most 200 batches a run. Each batch
+  is its own transaction with `statement_timeout` 2 s, `lock_timeout` 0.5 s and a 4 s client bound that closes the
+  connection. It is the one implementation; the board's reads call the same batch. Two server processes cannot
+  remove the same confirmation: the function takes each confirmation's row `FOR UPDATE SKIP LOCKED`. One run at a
+  time in a process. It starts nothing inside the test runner or without a database.
+- **One plan per board read.** A read built one import plan per readable column. It builds one for all of them
+  (`gpexeSessionValuesKeyed`, session level only; the importer's architecture guard holds its one caller to the
+  registry's extractors). The plan's session and athlete gates run as before; no extractor is called on a drill
+  row any more, and no extractor refuses a session. Measured on this machine on a synthetic session of 40 athletes with two drills each,
+  per board read: 3 columns 11.8 ms → 3.9 ms; 30 columns 111.5 ms → 5.4 ms; 120 columns 448.1 ms → 9.2 ms. A read
+  of more than 60 000 cells (readable columns × athlete rows of the session, drill rows included) is refused with
+  `409 board_too_large`, before any value is read.
+- **v67 (MT-A) reaches production before v66** (it was merged after it, and sorts after it by file name). The runner
+  applies by file name and takes v66 all the same, so nothing in the deploy changes. What this slice changed for it:
+  the preflight's block 1 expects v67 recorded with its checksum and as the last migration and no OTHER migration
+  after v66; the post-check's block 1 expects v67 recorded and no other later migration; the rollback tolerates
+  exactly v67 (another table, it does not read the gate and is not rolled back with it) and refuses any other later
+  migration. The suites that build "before the gate" take every migration but v66, so the rehearsal database holds
+  v67 when v66 is applied -
+  production's own order - while a database built from the whole list in one run gets v66 first, a fresh deploy's
+  order. The migration file itself is unchanged.
+- **Suites of other slices.** After v66 a club admin's A1 on a field without parameters is refused by design. The
+  suites of 7h, LO-1 and 9-B's concurrency exercise a club admin's A1, A2 and replacement on test fields without
+  parameters; they build their database without the gate. Those code paths are unchanged and stay in force for zones and
+  thresholds: a club admin's A1 of a zone version runs through the real routes on the v66 schema in the gate's
+  suite (test 3b). M2's architecture test lists the save and the two removals as writers.
+  - **Each such file keeps a test on the full schema** (the *Rukovodilac*, 2026-11-12): the suites of 7h and of
+    9-B's concurrency apply v66 in their last test and run the same route for what stays allowed (a platform admin's
+    A1 in the club's workspace, the club admin's S1 and S2, an import through the club's mapping), and see the club
+    admin's A1 refused with `confirmation_required`.
+  - **Each condition of the gate has a behavioural test** (the *Nezavisni revizor*'s L2; gate suite test 4b): the
+    item's own xmin (the item written inside a savepoint of the transaction that holds the confirmation), the
+    confirmation's own xmin (the confirmation committed earlier, only its item written here), `item_kind` (a
+    `system_mapping` row for the version does not pass) and the copy link's system side (a link whose other side is
+    the club's own active version). Each case is a refusal with the gate's own text and nothing changed, and each is
+    paired with the same rows made to pass. **Stated:** `item_kind` and `checked` cannot be separated behaviourally
+    - v65's `source_metric_confirmation_items_system_unchecked` forbids a checked system row, which the test asserts
+    - so removing `item_kind` alone from the gate is still killed only by the md5 pin of test 5; the other three
+    conditions are killed by 4b itself (four mutations run, four killed).
+  - **The LO-1 suite has it too** (added once PR #504 fixed its tests 7 and 8, which had left connections holding a
+    `users` row): its last test applies v66 and runs a platform admin's A1 against the real revocation in both
+    orders, a club admin's A1 queued behind its own revocation (the identical 404) and a club admin's A1 alone
+    (`confirmation_required`, nothing written), with no `40P01`.
+- **The schedule and test databases.** The removal schedule starts nothing under node's test runner, under the T1
+  runner, without a readable `DATABASE_URL`, or when the database's name begins with `optimove_tests_` (the e2e
+  world starts a real server process on such a database). It would be harmless there: it only nulls values already
+  past their date, which no route returns.
+- **Tests:** `club-activation-confirmation-gate-v66.test.mjs` (6: R8, the gate, the routes, a zone version not
+  gated, the copy link, the migration's rehearsal) and `source-metric-board-save-18-3.test.mjs` (12: the save, the
+  body and the audience, refusals by row, reuse and replacement, races through a hold seam before the locks and
+  before the first write, the COMMIT outcomes, the recorded lock order, routes 6 and 7, the scheduled removal, the
+  size cap, the mapped database refusals, two admins' crossed saves on free-running connections).
+- **Not covered, stated:**
+  - the races but the crossed saves and the two-run removal use a hold seam inside the save;
+  - route 7 against a removal that lands between the function's snapshot and its lock is not raced;
+  - `test:backend:shared` was not run (no local development database);
+  - the save was not run against a real GPEXE bundle.
