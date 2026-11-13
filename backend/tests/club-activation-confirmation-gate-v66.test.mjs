@@ -27,7 +27,11 @@ const ROOT = path.resolve(__dirname, "../..");
 const V66 = "202611131000_training_load_v66_club_activation_confirmation_gate.sql";
 const V66_NAME = `migrations_v2/${V66}`;
 const BEFORE_V66 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V66));
-const PREVIOUS_NAME = `migrations_v2/${BEFORE_V66.at(-1)}`;
+const V65_NAME = `migrations_v2/${BEFORE_V66.find((m) => m.includes("_v65_"))}`;
+// MT-A's migration: merged after v66 and on production before it, and later than v66 by file name. The rehearsal
+// database therefore holds it before v66 is applied, exactly as production does.
+const V67 = "202611131200_training_load_v67_gpexe_track_choices.sql";
+const V67_NAME = `migrations_v2/${V67}`;
 const V66_FILE = path.resolve(ROOT, "migrations_v2", V66);
 const RUNBOOKS = path.resolve(ROOT, "docs/runbooks");
 const ROLLBACK = path.join(RUNBOOKS, "club-activation-confirmation-gate-v66-rollback.sql");
@@ -63,7 +67,8 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V66), "v66 is a test migration");
-  assert.ok(BEFORE_V66.at(-1).includes("_v65_"), "v66 follows v65");
+  assert.equal(BEFORE_V66.at(-1), V67, "the database v66 is applied to holds v67, as production's does");
+  assert.ok(BEFORE_V66.at(-2).includes("_v65_"), "v66's own previous migration is v65");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66rb", migrations: BEFORE_V66 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66", migrations: [...BEFORE_V66, V66] }),
@@ -520,6 +525,86 @@ test("4. a copy of OptiMove's mapping (J15, C125): a club admin's A1 of the copi
   assert.equal(await statusOf(b.draft.versionId), "needs_review");
 });
 
+test("4b. each remaining condition of the gate, behaviourally: the item's own xmin, the confirmation's own xmin, item_kind, and the copy link's system side", async () => {
+  // The four conditions the md5 pin alone covered (the Nezavisni revizor's L2). Each case plants rows the service
+  // itself never writes (session_replication_role = replica), then runs the activating UPDATE in the same
+  // transaction, so only the named condition differs from a passing save.
+  const confirmationRow = async (c, { by = W.caA.id, clubId = W.clubA } = {}) => (await one(c,
+    `insert into ${T9} (operation_id, kind, owner_scope, owner_club_id, binding_id, team_id, credential_connection_id, confirmed_by_user_id, confirmed_basis, confirmed_at, attested, display_registry_version, values_expire_at)
+       values (gen_random_uuid(),'team_mapping','club',$1,$2,$3,$4,$5,'club_admin',now(),true,1,now() + interval '2160 hours') returning id`,
+    [clubId, W.bA.bindingId, W.bA.teamId, W.bA.connectionId, by])).id;
+  // A checked row carries the values and the digest; an unchecked one carries none of them (v65's own CHECKs).
+  const itemRow = async (c, confirmationId, versionId, { kind = "club_mapping", checked = true } = {}) => {
+    const f = await one(c, `select * from ${T4} where id = $1`, [versionId]);
+    await c.query(`insert into ${T9I} (confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, mapping_version_id, parameter_fingerprint, source_unit, target_unit,
+                     scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b, values_salt, values_digest)
+                   values ($1,1,1,$10,$11,$2,$3,$4,$5,$6,$7,$8,$9,'session',
+                           case when $11 then 'duration_mmss' end, case when $11 then 'mm:ss' end,
+                           case when $11 then 120 end, case when $11 then 2 end, case when $11 then 300 end, case when $11 then 5 end,
+                           case when $11 then substring(sha256('salt'::bytea) from 1 for 16) end, case when $11 then repeat('a',64) end)`,
+      [confirmationId, f.source_metric_version_id, f.id, f.parameter_fingerprint, f.source_unit, f.target_unit, f.scale, f.scale_divisor, f.offset, kind, checked]);
+  };
+  // Runs `plant` and then the activation in one transaction; returns the error or null.
+  const activateWith = async (versionId, plant) => {
+    const c = await client();
+    try {
+      await c.query("begin");
+      await c.query(CTX, [W.caA.id]);
+      await planted(c, () => plant(c));
+      await c.query(`update ${T4} set status = 'active', activated_by_user_id = $2, activated_at = clock_timestamp(), activated_basis = 'club_admin' where id = $1`, [versionId, W.caA.id]);
+      return null;
+    } catch (error) { return error; } finally { await c.query("rollback").catch(() => {}); await c.end(); }
+  };
+  const refused = async (versionId, plant, label) => {
+    const e = await activateWith(versionId, plant);
+    assert.deepEqual([e?.code, e?.message], ["23514", GATE_TEXT], label);
+    assert.equal(await statusOf(versionId), "needs_review", `${label}: nothing changed`);
+  };
+
+  // (1) item_kind: the same confirmation of this transaction, but the item is a system_mapping row. v65's own CHECK
+  //     (source_metric_confirmation_items_system_unchecked) forbids a CHECKED system row, so the two conditions
+  //     cannot be separated behaviourally: the pair is closed by that CHECK and by this case.
+  const v1 = await waiting(W.caA);
+  await refused(v1.versionId, async (c) => itemRow(c, await confirmationRow(c), v1.versionId, { kind: "system_mapping", checked: false }), "item_kind is not club_mapping");
+  const checkedSystem = await activateWith(v1.versionId, async (c) => itemRow(c, await confirmationRow(c), v1.versionId, { kind: "system_mapping", checked: true }));
+  assert.match(checkedSystem?.message ?? "", /source_metric_confirmation_items_system_unchecked/, "a checked system row cannot exist at all");
+  assert.equal(await activateWith(v1.versionId, async (c) => itemRow(c, await confirmationRow(c), v1.versionId)), null, "the same rows as club_mapping pass");
+
+  // (2) the item's own xmin: the confirmation is written in this transaction, its item inside a savepoint, so the
+  //     item carries the subtransaction's xid while the confirmation carries the transaction's own.
+  const v2 = await waiting(W.caA);
+  await refused(v2.versionId, async (c) => {
+    const id = await confirmationRow(c);
+    await c.query("savepoint s_item");
+    await itemRow(c, id, v2.versionId);
+    await c.query("release savepoint s_item");
+  }, "the item is of a subtransaction");
+
+  // (3) the confirmation's own xmin: the confirmation is committed by an earlier transaction and only its item is
+  //     written in this one.
+  const v3 = await waiting(W.caA);
+  let earlier;
+  await k.query("begin");
+  try { earlier = await planted(k, () => confirmationRow(k)); await k.query("commit"); } catch (error) { await k.query("rollback"); throw error; }
+  await refused(v3.versionId, (c) => itemRow(c, earlier, v3.versionId), "the confirmation is of an earlier transaction");
+
+  // (4) the copy link's system side: a link whose "system" version is in fact the club's own active version.
+  const v4 = await waiting(W.caA);
+  // The stand-in: the club's own version, made active without the gate (the gate is what this case is about).
+  const clubActive = await waiting(W.caA);
+  await k.query("begin");
+  try {
+    await planted(k, () => k.query(`update ${T4} set status = 'active', activated_by_user_id = $2, activated_at = now(), activated_basis = 'club_admin' where id = $1`, [clubActive.versionId, W.caA.id]));
+    await k.query("commit");
+  } catch (error) { await k.query("rollback"); throw error; }
+  assert.deepEqual([(await versionRow(clubActive.versionId)).owner_key, await statusOf(clubActive.versionId)], [W.clubA, "active"], "the stand-in is the club's own active version");
+  await refused(v4.versionId, (c) => c.query(`insert into training_load.source_metric_mapping_version_copies (club_version_id, system_version_id, operation_id) values ($1,$2,gen_random_uuid())`,
+    [v4.versionId, clubActive.versionId]), "the copy's other side is not a system version");
+  const sys = await activeVersion(W.pa);
+  assert.equal(await activateWith(v4.versionId, (c) => c.query(`insert into training_load.source_metric_mapping_version_copies (club_version_id, system_version_id, operation_id) values ($1,$2,gen_random_uuid())`,
+    [v4.versionId, sys.versionId])), null, "the same link to an active system version passes");
+});
+
 // ---------------------------------------------------------------------------
 // 3. The migration: preflight, refusals, post-check, rollback (the rehearsal database)
 // ---------------------------------------------------------------------------
@@ -558,7 +643,7 @@ test("5. the migration: every expected value of the read-only preflight and each
   // --- Before v66: the preflight.
   const pre = await blocks(r, PREFLIGHT);
   assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7]);
-  assert.deepEqual(pre[1][0], { previous_rows: "1", previous_checksum_ok: true, v66_rows: "0", at_or_after_v66: "0", last_migration: PREVIOUS_NAME });
+  assert.deepEqual(pre[1][0], { v65_rows: "1", v65_checksum_ok: true, v67_rows: "1", v67_checksum_ok: true, v66_rows: "0", other_after_v66: "0", last_migration: V67_NAME });
   assert.deepEqual(pre[2][0], { update_guard_ok: true, actor_guard_ok: true, trigger_set_ok: true });
   assert.deepEqual(pre[3][0], { v66_objects: "0", relied_on_ok: true, owns_t4_ok: true, may_create_ok: true });
   assert.deepEqual(pre[4][0], { waiting_without_link: "0", waiting_with_link: "0" });
@@ -573,7 +658,10 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.equal((await flipped((c) => c.query(`alter table ${T4} disable trigger source_metric_mapping_versions_v35_actor_guard`), 2)).trigger_set_ok, false);
   assert.equal((await flipped((c) => c.query(`create trigger zz_extra before update on ${T4} for each row execute function training_load.source_metric_mapping_versions_update_guard()`), 2)).trigger_set_ok, false);
   assert.equal((await flipped((c) => c.query(`create function training_load.source_metric_mapping_versions_confirmation_gate() returns trigger as $$ begin return new; end; $$ language plpgsql`), 3)).v66_objects, "1");
-  assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [PREVIOUS_NAME]), 1)).previous_checksum_ok, false);
+  assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [V65_NAME]), 1)).v65_checksum_ok, false);
+  assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [V67_NAME]), 1)).v67_checksum_ok, false);
+  // Another migration after v66 - v67 is the only one tolerated.
+  assert.equal((await flipped((c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912312359_training_load_v99_test_only.sql', repeat('0', 64), 'test')`), 1)).other_after_v66, "1");
   // The log settings: each way a save's values could reach the server log.
   const logs = async (settings) => flipped(async (c) => { for (const [n, v] of settings) await c.query(`select set_config($1, $2, true)`, [n, v]); }, 5);
   assert.equal((await logs([["log_statement", "all"], ["log_parameter_max_length", "-1"]])).statement_parameters_not_logged_ok, false);
@@ -617,7 +705,8 @@ test("5. the migration: every expected value of the read-only preflight and each
   // --- Apply, post-check, the gate in force.
   await migrate(rdb.url, [...BEFORE_V66, V66]);
   const post1 = await blocks(r, POSTCHECK);
-  assert.deepEqual(post1[1][0], { v66_rows: "1", v66_checksum_ok: true, later_migrations: "0" });
+  assert.deepEqual(post1[1][0], { v66_rows: "1", v66_checksum_ok: true, v67_rows: "1", other_later_migrations: "0" });
+  assert.equal((await whilePlanted(r, (c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912312359_training_load_v99_test_only.sql', repeat('0', 64), 'test')`), (c) => blocks(c, POSTCHECK)))[1][0].other_later_migrations, "1");
   assert.equal((await one(r, `select checksum from public.schema_migrations where migration_name = $1`, [V66_NAME])).checksum, sha);
   assert.deepEqual(post1[2][0], { gate_body_ok: true, gate_trigger_enabled_ok: true, gate_runs_last_ok: true, t4_triggers: "7", disabled_triggers: "0", update_guard_ok: true, actor_guard_ok: true });
   assert.deepEqual(post1[4][0], { idle_in_transaction: "0", waiting_locks: "0" });
