@@ -240,4 +240,3 @@ AH-2 and AH-3 are independent of each other after AH-1. AH-1 is useful alone: th
   versions resolve; removing the old key after that loses nothing.
 - **The rollback** of v70 refuses once a version 2 row exists (it cannot be turned back into version 1: the user id
   is not stored), which makes the migration forward-only from the first keyed row; the runbook says so.
-
