@@ -3050,6 +3050,8 @@ test("P1 3: every 'who to ask' in the review speaks to its reader, and a left-ou
     const block = renderTrainingLoadCoachHtml().slice(renderTrainingLoadCoachHtml().indexOf('class="gpexe-blocked"'));
     assert.ok(block.includes(`${ask} to look at it`), `${who}: ${ask}`);
     if (who !== "platform admin") assert.ok(!/platform admin/i.test(block.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), `${who}: no platform admin`);
+    // The club admin keeps the Technical details in the review until P2 (identityAdmin); the coach has none.
+    assert.equal(block.includes('<details class="gpexe-tech">'), who !== "coach", `${who}: Technical details`);
   }
   resetState();
   const d = candidateDetail();

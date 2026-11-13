@@ -270,7 +270,7 @@ test("8. a refused approval for the team's switch reads as one sentence naming w
   // P1 (O5): the sentence names who turns them on in the reader's words - an administrator reads the platform and club roles,
   // a coach asks the club administrator.
   assert.match(src, /get team_import_switch_off\(\) \{ return `Not imported: imports are switched off for this team\. \$\{switchOnWho\(\)\}`; \}/);
-  assert.match(src, /const switchOnWho = \(\) => \(state\.trainingLoad\.gpexe\?\.status\?\.viewer\?\.identityAdmin === true\s*\? "A platform administrator can turn them on \(the club administrator too, in team mode\)\."\s*: "Ask your club administrator\."\);/);
+  assert.match(src, /const switchOnWho = \(\) => \(platformViewer\(\)\s*\? "A platform administrator can turn them on \(the club administrator too, in team mode\)\."\s*: `\$\{AskWho\(\)\}\.`\);/);
 });
 
 test("9. a platform administrator who holds the approval right but whose team is switched off is told so in the review - not that approving needs a platform admin", async () => {

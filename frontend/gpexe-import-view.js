@@ -291,9 +291,9 @@ function reviewTechHtml(entries, extra = "") {
 const platformViewer = () => state.trainingLoad.gpexe?.status?.viewer?.isPlatformAdmin === true;
 // Who the reader asks when something is not theirs to do: a coach their club administrator, a club administrator OptiMove.
 // Who turns a team's imports on, in the reader's words (the club admin can, in the team's own mode; the coach asks).
-const switchOnWho = () => (state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true
+const switchOnWho = () => (platformViewer()
   ? "A platform administrator can turn them on (the club administrator too, in team mode)."
-  : "Ask your club administrator.");
+  : `${AskWho()}.`);
 // The same, opening a sentence.
 const AskWho = () => askWho().replace(/^./, (ch) => ch.toUpperCase());
 const askWho = () => (platformViewer() ? "contact a platform administrator" : state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true ? "contact OptiMove support" : "ask your club administrator");
@@ -1125,7 +1125,7 @@ function batchOutcomeText(r) {
   if (code === "nothing_to_import") return { cls: "is-refused", text: "Nothing to import: GPEXE has nothing new for this session." };
   if (code === "import_switch_off") return { cls: "is-refused", text: "Not imported: importing was switched off in this environment." };
   if (code === "team_import_switch_off") return { cls: "is-refused", text: `Not imported: imports were switched off for this team. ${switchOnWho()}` };
-  if (code === "not_an_approver") return { cls: "is-refused", text: "Not imported: you may not approve imports for this team any more. Ask a platform admin." };
+  if (code === "not_an_approver") return { cls: "is-refused", text: platformViewer() ? "Not imported: you may not approve imports for this team any more. Ask a platform admin." : `Not imported: you can't import for this team any more. ${AskWho()}.` };
   if (code === "internal_error") return { cls: "is-refused", text: "Not imported: the server failed before writing anything. Try again later." };
   if (code === "try_again") return { cls: "is-refused", text: "Not imported: another check, import or change of this team was running, or the server was busy. Try again in a moment." };
   if (code === "notFound") return { cls: "is-refused", text: "Not imported: this session is not available." };
@@ -1151,7 +1151,7 @@ function batchRefusalText(error) {
   const code = error?.code;
   if (code === "import_switch_off") return "Not imported: importing is switched off in this environment.";
   if (code === "team_import_switch_off") return `Not imported: imports are switched off for this team. ${switchOnWho()}`;
-  if (code === "not_an_approver") return "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right.";
+  if (code === "not_an_approver") return platformViewer() ? "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right." : `Not imported: you can't import for this team. ${AskWho()}.`;
   if (error?.status === 404) return "Not imported: one of the sessions is not available in this team any more. Find new sessions, then choose again.";
   if (code === "internal_error") return "Not imported: the server failed before writing anything. Try again later.";
   if (error?.status === 400) return "Not imported: the selection is out of date. Choose the sessions again.";
@@ -1963,7 +1963,8 @@ function renderApprovalRecordHtml(c) {
 // in OptiMove.
 const SETUP_COACH_TEXT = Object.freeze({
   reason: "This session can't be imported until an administrator finishes its data setup.",
-  step: "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.",
+  // P1 (O5): a coach asks the club administrator (who may finish the club's own setup or pass it on).
+  get step() { return platformViewer() || state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true ? "Ask a club or platform administrator to finish the data setup of this team, then find new sessions." : "Ask your club administrator to finish the data setup of this team, then find new sessions."; },
 });
 // 7h-F (decision 1 at 7h-B's GO): the ux-design-reviewer's wording, for the
 // club's admin who usually reads it.
@@ -2629,7 +2630,7 @@ function renderOutcomeHtml(detail) {
     return `
       <div class="gpexe-unknown" role="alert">
         <p><strong>We can't tell yet whether this session was imported.</strong> Don't enter the data by hand and don't assume either way - check the result first.</p>
-        ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Approving again is safe: the server never imports the same session twice.</p>` : ""}
+        ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Importing again is safe: the server never imports the same session twice.</p>` : ""}
         ${verified === "still_unknown" ? `<p>Still not clear. Check again in a moment.</p>` : ""}
         ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> ${platformViewer() ? "Ask a platform admin" : AskWho()} to check this import${giveTech()}. Until then, don't enter the data by hand.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : verified ? "Check again" : "Check the result"}</button>
@@ -2819,7 +2820,7 @@ function renderApproveHtml(c, detail, status) {
   // U2: the person may hold the right while the team's switch is off - say that, not "needs an approver".
   if (!viewer.canApprove && viewer.hasApprovalRight === true && status?.teamImportSwitch?.enabled !== true) return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.team_import_switch_off)}</p>`;
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">${platformViewer() ? "Approving needs a platform admin or an explicit approver grant for this team." : viewer.identityAdmin === true ? "You can't import this session. Contact OptiMove support." : "You can't import this session. Ask your club administrator."}</p>`;
-  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
+  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be imported right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;
   const importN = importableAthleteCount(c.preview);
   // J20-B: with athletes ticked as "Leave out" the approval is the SUBSET's: it is reviewed first (one deliberate step that
