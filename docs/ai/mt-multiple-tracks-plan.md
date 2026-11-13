@@ -262,7 +262,7 @@ and the choice row say it.
 | Slice | Content | Mark | Reviewers |
 |---|---|---|---|
 | **MT-0** | This plan (docs) | ★ | the *Rukovodilac* |
-| **MT-0** | Section 11: identical tracks are one recording. Mapper and preview only, no migration, no choice | ★★ (trigger 3: the mapper's identity) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor*; the owner's yes (it is automatic) |
+| **MT-0** | Section 11: identical tracks are one recording. Mapper and preview only, no migration, no choice. **Merged** as PR #510 (`aa0794a`) | ★★ (trigger 3: the mapper's identity) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor*; the owner's yes (it is automatic) |
 | **MT-A** | Migration (the next free number at PR time): `gpexe_track_choices` (`track`, `none`, `cleared`), append-only, its actor guard, preflight, post-check, rollback; the GET / PUT routes; tests (audience, identical 404, replay, a stale fingerprint, the lock order) | ★★ (triggers 1, 2, 4) | `db-reviewer`, `security-reviewer`, `code-reviewer`; the *Nezavisni revizor* |
 | **MT-B** | Mapper, preview, writer: apply the current choice ("Use one track", "None"); the combined identity (only with MT-E); avg / last / none left out; `trackChoice` in the preview and its hash; `track_choice_stale` in the blocking resolution; a characterisation test that a single-track session is byte-for-byte unchanged | ★★ (triggers 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
 | **MT-D** | Section 10: the `scale_recording` method in the 6b save (backend; its own migration: the method, its basis shape, the choice CHECK widened and `scale_target_minutes`), the mapper's "max only" result for a scaled athlete, the preview's `scaleRecording` entry | ★★ (triggers 1, 3, 4) | `code-reviewer`, `db-reviewer`; the *Nezavisni revizor* |
@@ -357,6 +357,8 @@ for "None".
 **The label:** "Estimate · scaled 25 → 56 min" (recorded → target), with the author and the time from the provenance row.
 
 ## 11. MT-0: identical tracks are one recording
+
+**Built and merged** (2026-11-12): PR #510, merge commit `aa0794a`, exactly from head `e3490ee`, after both GOs (the *Rukovodilac*; the *Nezavisni revizor*, no findings). It waits for the owner's deploy.
 
 **Why first.** Section 2's production count: every multi-track athlete today has two identical tracks (a duplicate).
 
