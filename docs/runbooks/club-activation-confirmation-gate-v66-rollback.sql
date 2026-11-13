@@ -16,8 +16,11 @@
 -- confirmation again (7h's behaviour); the board's save keeps working, since
 -- it never depended on the gate. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026 of backend/src/migrate.js);
---   * v66 is not recorded on the database, or any later migrations_v2
---     migration is;
+--   * v66 is not recorded on the database, or a later migrations_v2
+--     migration other than v67 is. v67 (MT-A, another track) touches another
+--     table, does not read the gate and reaches production before v66, so it
+--     sits "after" v66 by file name only; removing the gate leaves it
+--     untouched and it is not rolled back first;
 --   * the gate's function or trigger is missing, the trigger is disabled, or
 --     the function's body is not v66's (by md5).
 --
@@ -40,12 +43,15 @@ lock table training_load.source_metric_mapping_versions in share row exclusive m
 do $$
 declare
   v66 constant text := 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql';
+  -- MT-A's migration: later by file name, independent of the gate (another table), on production before v66.
+  v67 constant text := 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql';
   reasons text[] := '{}';
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v66) then
     raise exception 'v66 rollback refused: v66 is not recorded on this database';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v66) then
+  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v66
+               and migration_name <> v67) then
     reasons := reasons || 'a later migration is recorded'::text;
   end if;
   if not exists (select 1 from pg_proc p where p.pronamespace = 'training_load'::regnamespace

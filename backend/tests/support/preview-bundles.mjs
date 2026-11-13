@@ -29,7 +29,7 @@ const athlete = (n, whole, drills = []) => ({
 });
 
 // Three athletes the import keeps (athlete 1 with two drills, 2 and 3 with one
-// each) and a fourth it leaves out (recorded on two tracks). Athlete 1's
+// each) and a fourth it leaves out (recorded on two different tracks). Athlete 1's
 // whole-session time and max speed and its drill times sit one unit past the
 // 9th decimal, so their canonical values round at the 10th place.
 export function previewAthletes() {
@@ -41,7 +41,9 @@ export function previewAthletes() {
     {
       id: Number(`${PLANTED.athletePrefix}04`),
       tracks: [Number(`${PLANTED.trackPrefix}04`), Number(`${PLANTED.trackPrefix}05`)],
-      parts: [{ drill: null, track: Number(`${PLANTED.trackPrefix}04`), ...BASE }, { drill: null, track: Number(`${PLANTED.trackPrefix}05`), ...BASE }],
+      // Two different recordings (the second track is shorter), so it stays multiple_tracks: two identical tracks would be
+      // one recording since MT-0 and imported.
+      parts: [{ drill: null, track: Number(`${PLANTED.trackPrefix}04`), ...BASE }, { drill: null, track: Number(`${PLANTED.trackPrefix}05`), ...BASE, time: 1200, distance: 1500 }],
     },
   ];
 }

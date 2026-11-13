@@ -1759,15 +1759,33 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
   per board read: 3 columns 11.8 ms → 3.9 ms; 30 columns 111.5 ms → 5.4 ms; 120 columns 448.1 ms → 9.2 ms. A read
   of more than 60 000 cells (readable columns × athlete rows of the session, drill rows included) is refused with
   `409 board_too_large`, before any value is read.
+- **v67 (MT-A) reaches production before v66** (it was merged after it, and sorts after it by file name). The runner
+  applies by file name and takes v66 all the same, so nothing in the deploy changes. What this slice changed for it:
+  the preflight's block 1 expects v67 recorded with its checksum and as the last migration and no OTHER migration
+  after v66; the post-check's block 1 expects v67 recorded and no other later migration; the rollback tolerates
+  exactly v67 (another table, it does not read the gate and is not rolled back with it) and refuses any other later
+  migration. The suites that build "before the gate" take every migration but v66, so the rehearsal database holds
+  v67 when v66 is applied -
+  production's own order - while a database built from the whole list in one run gets v66 first, a fresh deploy's
+  order. The migration file itself is unchanged.
 - **Suites of other slices.** After v66 a club admin's A1 on a field without parameters is refused by design. The
   suites of 7h, LO-1 and 9-B's concurrency exercise a club admin's A1, A2 and replacement on test fields without
-  parameters; they build their database through v65. Those code paths are unchanged and stay in force for zones and
+  parameters; they build their database without the gate. Those code paths are unchanged and stay in force for zones and
   thresholds: a club admin's A1 of a zone version runs through the real routes on the v66 schema in the gate's
   suite (test 3b). M2's architecture test lists the save and the two removals as writers.
   - **Each such file keeps a test on the full schema** (the *Rukovodilac*, 2026-11-12): the suites of 7h and of
     9-B's concurrency apply v66 in their last test and run the same route for what stays allowed (a platform admin's
     A1 in the club's workspace, the club admin's S1 and S2, an import through the club's mapping), and see the club
     admin's A1 refused with `confirmation_required`.
+  - **Each condition of the gate has a behavioural test** (the *Nezavisni revizor*'s L2; gate suite test 4b): the
+    item's own xmin (the item written inside a savepoint of the transaction that holds the confirmation), the
+    confirmation's own xmin (the confirmation committed earlier, only its item written here), `item_kind` (a
+    `system_mapping` row for the version does not pass) and the copy link's system side (a link whose other side is
+    the club's own active version). Each case is a refusal with the gate's own text and nothing changed, and each is
+    paired with the same rows made to pass. **Stated:** `item_kind` and `checked` cannot be separated behaviourally
+    - v65's `source_metric_confirmation_items_system_unchecked` forbids a checked system row, which the test asserts
+    - so removing `item_kind` alone from the gate is still killed only by the md5 pin of test 5; the other three
+    conditions are killed by 4b itself (four mutations run, four killed).
   - **The LO-1 suite has it too** (added once PR #504 fixed its tests 7 and 8, which had left connections holding a
     `users` row): its last test applies v66 and runs a platform admin's A1 against the real revocation in both
     orders, a club admin's A1 queued behind its own revocation (the identical 404) and a club admin's A1 alone

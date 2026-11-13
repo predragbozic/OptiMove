@@ -13,20 +13,27 @@
 -- other value means: stop, change nothing, report the block, the column and
 -- the value.
 
--- 1. The migration state: the migration before v66 recorded once with the
---    repository's checksum as the last migration; v66 absent.
---    Expected: previous_rows = 1, previous_checksum_ok = true, v66_rows = 0,
---    at_or_after_v66 = 0,
---    last_migration = migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql.
---    (If another migration is merged before v66, this block is re-issued with
---    that migration's name and checksum before the preflight is run.)
+-- 1. The migration state: v66 absent; the two migrations it relies on
+--    recorded once each with the repository's checksum. v67 (MT-A, another
+--    track, another table) was merged after v66 but reaches production
+--    first, so it is the last migration here and v66 is applied after it;
+--    the runner applies by file name and takes v66 all the same.
+--    Expected: v65_rows = 1, v65_checksum_ok = true, v67_rows = 1,
+--    v67_checksum_ok = true, v66_rows = 0, other_after_v66 = 0,
+--    last_migration = migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql.
+--    (If another migration is merged before v66 is deployed, this block is
+--    re-issued with that migration's name and checksum first.)
 select
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as previous_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as v65_rows,
   (select bool_and(checksum = 'a8cbce20d0c1d168194abaa2753e9281d5ca379668b73fc2177ac5396c1b4ac5') from public.schema_migrations
-    where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as previous_checksum_ok,
+    where migration_name = 'migrations_v2/202611121800_training_load_v65_source_metric_confirmations.sql') as v65_checksum_ok,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as v67_rows,
+  (select bool_and(checksum = '9f9b7d2529230c436d3b5f8b7e3db451bd3c81bca75514a54329bcc2cd1147cd') from public.schema_migrations
+    where migration_name = 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as v67_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
-    and migration_name >= 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as at_or_after_v66,
+    and migration_name > 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql'
+    and migration_name <> 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as other_after_v66,
   (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
 -- 2. T4's guards are the ones the gate was written on (the migration checks

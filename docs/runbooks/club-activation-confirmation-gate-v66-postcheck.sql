@@ -5,15 +5,19 @@
 -- Any value other than the expected one means: stop, change nothing, report
 -- the block, the column and the value.
 
--- 1. v66 recorded once, with the repository's checksum, as the last
---    migrations_v2 migration.
---    Expected: v66_rows = 1, v66_checksum_ok = true, later_migrations = 0.
+-- 1. v66 recorded once, with the repository's checksum. v67 (MT-A, another
+--    track, another table) is recorded too and sorts after v66 by file name,
+--    so it stays the last migration; no OTHER migration may have arrived.
+--    Expected: v66_rows = 1, v66_checksum_ok = true, v67_rows = 1,
+--    other_later_migrations = 0.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_rows,
   (select bool_and(checksum = '0fef63affe37f5c7c90961cb8c90e278ffe7e6ec3432fef418e54011b3d36dc0') from public.schema_migrations
     where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_checksum_ok,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as v67_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
-    and migration_name > 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as later_migrations;
+    and migration_name > 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql'
+    and migration_name <> 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as other_later_migrations;
 
 -- 2. The gate exists with its body, its trigger is enabled and runs last
 --    among T4's row triggers before an update, and T4's other guards are
