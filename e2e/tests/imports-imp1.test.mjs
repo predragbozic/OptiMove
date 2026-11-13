@@ -76,9 +76,11 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         // A search repaints the screen every 2 s: the tab stays, and on a phone the tab row keeps where it was scrolled
         // (Ready is still in view, so nothing needs to move it).
         const scrolled = await page.evaluate(() => { const row = document.querySelector(".imports-tabs"); row.scrollLeft = 24; return row.scrollLeft; });
-        await page.click('[data-action="training-load-gpexe-check"]');
-        await page.waitForSelector('[data-action="training-load-gpexe-check"][disabled]', { timeout: 20_000 }).catch(() => {});
-        await page.waitForSelector('[data-action="training-load-gpexe-check"]:not([disabled])', { timeout: 60_000 });
+        // P4: the search starts from the period chooser ("Search what's missing").
+        await page.click('[data-action="training-load-gpexe-period-toggle"]');
+        await page.click(".imports-period .period-missing");
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"][disabled]', { timeout: 20_000 }).catch(() => {});
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 60_000 });
         assert.equal(await page.locator('.imports-tab-panel[data-imports-tab="ready"]').count(), 1, "still on Ready after the search");
         if (width < 500) assert.equal(await page.evaluate(() => document.querySelector(".imports-tabs").scrollLeft), scrolled, "the tab row kept its place");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);

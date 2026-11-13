@@ -809,12 +809,9 @@ export const emptyGpexeImportState = () => ({
   // sentence about choices dropped after a reload; a refusal of the whole
   // request.
   batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false, stopReason: "" },
-  // The local sessions calendar: the month shown ("" = the newest found
-  // session's month, or today's), the day the list is filtered to ("" =
-  // every day), and whether the panel is open (null = the default: open on
-  // a desktop, folded on a phone, open while a day is filtered). Local to
-  // Imports; never the shared Training Load week.
-  calendar: { month: "", day: "", open: null },
+  // P4: the period chooser under "Find new sessions" (gpexe-period-data.js): open, the month shown, the first day
+  // tapped, the chosen days and the day whose sessions are listed. Local to Imports; never the shared week.
+  period: { open: false, month: "", anchor: "", from: "", to: "", day: "" },
   // U6a: whether the person opened the folded "Import settings" card (kept across repaints).
   settingsOpen: false,
 });

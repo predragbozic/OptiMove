@@ -1,7 +1,7 @@
 // Imports phase 4b: choosing clean Ready sessions, one confirmation, ONE
 // POST /imports for the whole selection, one understandable result per
-// session (never "failed" or "nothing imported" for an unconfirmed one), and
-// the local sessions calendar built from the candidates list alone. Driven
+// session (never "failed" or "nothing imported" for an unconfirmed one). The
+// calendar became the P4 period chooser (gpexe-period-p4.actions.test.mjs). Driven
 // through handleTrainingLoadAction with a fake fetch, like the other
 // Training Load suites.
 import { test } from "node:test";
@@ -27,7 +27,7 @@ const { handleTrainingLoadAction, confirmLeaveTrainingLoad, handleTrainingLoadBe
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, calendarDayKey, calendarToggled, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -684,135 +684,6 @@ test("12b. a refused session leaves the selection with the answer even when the 
   assert.deepEqual(Object.keys(gx().batch.selected), ["cand-2"], "the refused one is gone, the not-tried one waits for a fresh list");
 });
 
-test("13. the calendar marks every day with a found session, whatever its bucket, with the count and a spoken label; nothing else is marked", async () => {
-  resetState();
-  const list = [
-    ready(21),
-    ready(22, { id: "cand-21b", sessionStartedAt: "2026-09-21T09:00:00Z", status: "imported", importedAt: "2026-09-22T12:00:00Z" }),
-    ready(14, { reasons: [{ code: "athletes_not_linked", count: 1 }] }),
-    ready(3, { status: "superseded", supersededByCandidateId: "cand-14" }),
-  ];
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
-  await openImports();
-  const page = html();
-  assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "U6a: folded by default, on a desktop too");
-  assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
-  assert.match(page, /A dot or a number marks the sessions found so far on a day\./, "the note names both kinds of mark (a dot for one session, a number for more)");
-  assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
-  assert.match(page, /data-day="2026-09-21" aria-label="21 September, 2 sessions found" aria-pressed="false"><span class="imports-cal-num">21<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-count">2<\/span>/);
-  assert.match(page, /data-day="2026-09-14" aria-label="14 September, 1 session found" aria-pressed="false"><span class="imports-cal-num">14<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-dot"><\/span>/);
-  assert.match(page, /<span class="imports-cal-day" aria-label="15 September, nothing found yet"><span class="imports-cal-num">15<\/span><\/span>/);
-  assert.ok(!/data-day="2026-09-03"/.test(page), "a replaced version is not a marker");
-  await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
-  assert.match(html(), /Showing the sessions of 21\.09\.2026 only \(2 of 3\)\./, "the count is what the buckets show, without the hidden replaced version");
-  await act("training-load-gpexe-cal-all");
-  assert.equal((page.match(/data-action="training-load-gpexe-cal-day"/g) || []).length, 2);
-  assert.equal((page.match(/class="imports-cal-weekday"/g) || []).length, 7);
-});
-
-test("14./15. a marked day filters the list locally (no request, the search dates untouched); Show all dates brings every session back", async () => {
-  resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(14), ready(7, { reasons: [{ code: "athletes_not_linked", count: 1 }] })] }));
-  await openImports();
-  const calls = fetchCalls.length;
-  await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
-  assert.equal(fetchCalls.length, calls, "no request");
-  let page = html();
-  assert.match(page, /data-day="2026-09-21" aria-label="21 September, 1 session found, showing this day" aria-pressed="true"/);
-  assert.match(page, /Showing the sessions of 21\.09\.2026 only \(1 of 3\)\./);
-  assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  assert.match(page, /data-candidate-id="cand-21"/);
-  assert.ok(!/data-candidate-id="cand-14"/.test(page));
-  // U6a-2: the sessions that need a person stay grouped over every date (like the counts in the state bar), and say so.
-  await openTab("attention");
-  const attention = html();
-  assert.match(attention, /<h3>Needs you \(1\)<\/h3><\/div>\s*<p class="muted">These cover every date, not only the day you picked\.<\/p>/);
-  assert.match(attention, /data-candidate-id="cand-7"/);
-  assert.match(attention, /Showing the sessions of 21\.09\.2026 only/, "the picked day is in sight on this tab too");
-  await openTab("ready");
-  assert.match(page, /data-gpexe-field="from" value=""/, "the search dates stay empty");
-  assert.equal(state.trainingLoad.dataAnalysisWeekStart, "", "the shared week is untouched");
-  await act("training-load-gpexe-cal-all");
-  page = html();
-  assert.equal(gx().calendar.day, "");
-  assert.match(page, /<h3>Ready to import \(2\)<\/h3>/);
-  assert.match(page, /Needs you \(1\)/);
-  assert.ok(!/Showing the sessions of/.test(page));
-  assert.equal(fetchCalls.length, calls);
-  // The same day again also clears the filter.
-  await act("training-load-gpexe-cal-day", { day: "2026-09-14" });
-  await act("training-load-gpexe-cal-day", { day: "2026-09-14" });
-  assert.equal(gx().calendar.day, "");
-});
-
-test("16. Prev/Next month turn the page without a request, and touch neither the shared week nor the search dates", async () => {
-  resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21)] }));
-  await openImports();
-  const calls = fetchCalls.length;
-  await act("training-load-gpexe-cal-prev");
-  assert.match(html(), /imports-cal-month" aria-live="polite">August 2026</);
-  await act("training-load-gpexe-cal-prev");
-  assert.match(html(), /imports-cal-month" aria-live="polite">July 2026</);
-  await act("training-load-gpexe-cal-next");
-  await act("training-load-gpexe-cal-next");
-  await act("training-load-gpexe-cal-next");
-  assert.match(html(), /imports-cal-month" aria-live="polite">October 2026</);
-  assert.ok(!/data-action="training-load-gpexe-cal-day"/.test(html()), "no marker in a month without sessions");
-  assert.equal(fetchCalls.length, calls);
-  assert.equal(state.trainingLoad.dataAnalysisWeekStart, "");
-  assert.match(html(), /data-gpexe-field="from" value=""/);
-  // December -> January crosses the year.
-  gx().calendar.month = "2026-12";
-  await act("training-load-gpexe-cal-next");
-  assert.equal(gx().calendar.month, "2027-01");
-  // No session found yet: this month.
-  resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [] }));
-  await openImports();
-  const now = new Date();
-  assert.match(html(), new RegExp(`imports-cal-month" aria-live="polite">${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][now.getMonth()]} ${now.getFullYear()}<`));
-});
-
-test("17. a session close to midnight is marked on the same day its row shows (the local clock), never on the UTC day", async () => {
-  resetState();
-  const iso = "2026-09-21T22:30:00Z";
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21, { sessionStartedAt: iso })] }));
-  await openImports();
-  const d = new Date(iso);
-  const two = (n) => String(n).padStart(2, "0");
-  const localDay = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-  assert.equal(calendarDayKey(iso), localDay);
-  const page = html();
-  assert.match(page, new RegExp(`data-day="${localDay}" aria-label="${d.getDate()} September, 1 session found`));
-  // The row shows the same day.
-  assert.match(page, new RegExp(`<strong>[A-Z][a-z]{2} ${two(d.getDate())}\\.09\\. · [^<]*</strong>\\s*<span class="muted">${two(d.getHours())}:30</span>`));
-  const utcDay = iso.slice(0, 10);
-  if (utcDay !== localDay) assert.ok(!page.includes(`data-day="${utcDay}"`), "the UTC day is not marked");
-  // The filter uses the same key.
-  await act("training-load-gpexe-cal-day", { day: localDay });
-  assert.match(html(), /<h3>Ready to import \(1\)<\/h3>/);
-});
-
-test("18. a selection hidden by the date filter is still counted and named; Select all adds only visible sessions; the confirmation lists every chosen one", async () => {
-  resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(20), ready(14)] }));
-  await openImports();
-  await pick("cand-14");
-  await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
-  let page = html();
-  assert.match(page, /<strong>1 selected<\/strong> · maximum 50 · 1 selected session is hidden by the date filter/);
-  await act("training-load-gpexe-batch-select");
-  assert.deepEqual(Object.keys(gx().batch.selected).sort(), ["cand-14", "cand-21"], "only the visible session was added");
-  page = html();
-  assert.match(page, /<strong>2 selected<\/strong> · maximum 50 · 1 selected session is hidden by the date filter/);
-  await act("training-load-gpexe-batch-review");
-  const d = dialog();
-  assert.match(d, /aria-label="Import 2 sessions"/);
-  assert.match(d, /<strong>Full training 21<\/strong>/);
-  assert.match(d, /<strong>Full training 14<\/strong>/, "the hidden one is listed too");
-});
-
 test("leaving Training Load with a selection or a running import asks first; declined stays", async () => {
   resetState();
   let release;
@@ -840,50 +711,6 @@ test("leaving Training Load with a selection or a running import asks first; dec
   release();
   await sending;
   assert.equal(confirmLeaveTrainingLoad("weekly"), true, "a result waiting behind Done asks nothing");
-});
-
-test("19. on a phone the calendar is folded by default with the month and a short count in its summary; opening it sends nothing and changes neither the dates, the shared week nor the filtered day; a filtered day opens it", async () => {
-  resetState();
-  const desktopMatchMedia = globalThis.window.matchMedia;
-  globalThis.window.matchMedia = (q) => ({ matches: q === "(max-width: 760px)" });
-  try {
-    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(14), ready(13, { sessionStartedAt: "2026-09-14T09:00:00Z" })] }));
-    await openImports();
-    let page = html();
-    assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "folded on a phone");
-    assert.match(page, /Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span>/);
-    const calls = fetchCalls.length;
-    // The browser opens the <details> itself; its "toggle" event keeps the state (app.js).
-    calendarToggled(true);
-    page = html();
-    assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/);
-    assert.equal(fetchCalls.length, calls, "no request");
-    assert.match(page, /data-gpexe-field="from" value=""/);
-    assert.equal(state.trainingLoad.dataAnalysisWeekStart, "");
-    assert.equal(gx().calendar.day, "");
-    calendarToggled(false);
-    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "folded again");
-    assert.equal(fetchCalls.length, calls);
-    // Opened, then a day filtered: it stays open across the repaint.
-    calendarToggled(true);
-    await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
-    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/, "a repaint keeps the coach's choice");
-    await act("training-load-gpexe-cal-all");
-    // A day filter opens it by default (the coach did not fold it after that).
-    gx().calendar.open = null;
-    await act("training-load-gpexe-cal-day", { day: "2026-09-14" });
-    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/);
-    assert.match(html(), /Showing the sessions of 14\.09\.2026 only \(2 of 3\)\./);
-    // Prev: a month without sessions says so in the summary.
-    await act("training-load-gpexe-cal-prev");
-    assert.match(html(), /imports-cal-brief"> · August · nothing found yet</);
-    // The day filter's line stays in sight when the calendar is folded.
-    await act("training-load-gpexe-cal-next");
-    calendarToggled(false);
-    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >[\s\S]*?<\/details>\s*<p class="imports-cal-filter" role="status">Showing the sessions of 14\.09\.2026 only/);
-  } finally {
-    globalThis.window.matchMedia = desktopMatchMedia;
-  }
 });
 
 test("10f. a 'nothing new' session reviewed before a link change is a Needs-attention item (find it again); a fresh 'nothing new' session stays Imported / up to date", async () => {
@@ -958,19 +785,6 @@ test("J19 U1: a batch result with batch_time_budget says it ran out of time and 
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
   assert.match(html(), /Not imported yet: time ran out\. Nothing was saved for this session - import it again from the Ready list\./);
-});
-
-test("J19 U1: while a day filter is active the daily line says its counts are for all dates; the button still imports the whole list", async () => {
-  resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(14), ready(7)] }));
-  await openImports();
-  await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
-  const page = html();
-  assert.match(page, /data-action="training-load-gpexe-import-ready"[^>]*>Import 3 ready sessions</);
-  assert.match(page, /Import 3 ready sessions takes ready sessions of every date, not only of the day you picked\./, "the button says it is for all dates");
-  assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
-  await act("training-load-gpexe-import-ready");
-  assert.equal(Object.keys(gx().batch.selected).length, 3, "the hidden sessions are chosen too and named in the confirmation");
 });
 
 test("J19 U1: a ready session that cannot be chosen is named under the button; review-only shows its reason under the counts", async () => {

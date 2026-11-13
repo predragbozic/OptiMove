@@ -88,7 +88,8 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -557,7 +558,7 @@ function bindEvents() {
     }
     const settings = panel?.classList?.contains("imports-settings");
     const choose = panel?.classList?.contains("imports-choose");
-    if (!settings && !choose && !panel?.classList?.contains("imports-calendar")) return;
+    if (!settings && !choose) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
@@ -569,8 +570,7 @@ function bindEvents() {
       els.content.querySelector(".imports-choose > summary")?.focus({ preventScroll: true });
       return;
     }
-    if (settings) importSettingsToggled(panel.open);
-    else importsCalendarToggled(panel.open);
+    importSettingsToggled(panel.open);
   }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
@@ -594,6 +594,8 @@ function bindEvents() {
   // not #content, since the pointer can be released/cancelled anywhere -
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
+  // Imports P4: a mouse or pen drag across the period chooser's days (two taps do the same).
+  bindPeriodDrag(els.content, () => renderActiveTrainingLoadSurface());
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
   els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });

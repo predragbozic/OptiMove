@@ -49,8 +49,7 @@ function renderTrainingLoadCoachHtml() {
     const other = renderTrainingLoadPage();
     const at = other.indexOf('<div class="imports-tab-panel"');
     panels.push(other.slice(at)
-      .replace(/<details class="gpexe-panel imports-calendar"[\s\S]*?<\/details>/, "")
-      .replace(/<p class="imports-cal-filter"[\s\S]*?<\/p>/, ""));
+      .replace(/<section class="gpexe-panel imports-period"[\s\S]*?<\/section>/, ""));
   }
   gx.tab = keep;
   return `${page}\n${panels.join("\n")}`;
@@ -579,8 +578,8 @@ test("check now: sends the chosen window, follows the check until it ends, then 
   }));
   await openImports();
   const before = fetchCalls.filter((c) => c.url.includes("/candidates")).length;
-  queried = { "[data-gpexe-field='from']": { value: "2026-09-01" }, "[data-gpexe-field='to']": { value: "2026-09-14" } };
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
+  // P4: the days come with the button (the period chooser's "Search ..."), never from a field.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check", from: "2026-09-01", to: "2026-09-14" }), { renderTrainingLoad: render });
   const start = fetchCalls.find((c) => c.url.endsWith("/checks") && c.method === "POST");
   assert.deepEqual(start.body, { from: "2026-09-01", to: "2026-09-14" });
   assert.equal(polls, 2);
@@ -686,7 +685,7 @@ test("check: leaving the tab mid-check and coming back resumes it, and a finishe
   serverCheck = { ...serverCheck, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 1, candidatesNew: 1 };
   await openImports();
   assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
-  assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
+  assert.ok(renderTrainingLoadCoachHtml().includes('data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the check button is enabled again");
 });
 
 test("check (J19 U1): a failed poll keeps the running search on screen with a note, is tried again a bounded number of times, and then stops without clearing the search", async () => {
@@ -705,7 +704,7 @@ test("check (J19 U1): a failed poll keeps the running search on screen with a no
   assert.match(page, /Reading sessions from GPEXE\.\.\. 4 sessions found so far\./);
   assert.match(page, /role="progressbar"/);
   assert.match(page, /Progress is no longer refreshing\. The search may still be running - do not start another one; use Refresh status\./);
-  assert.match(page, /data-action="training-load-gpexe-check"[^>]*disabled/, "Find new sessions stays off while the search is running");
+  assert.match(page, /data-action="training-load-gpexe-period-toggle"[^>]*disabled/, "Find new sessions stays off while the search is running");
   assert.match(page, /data-action="training-load-gpexe-refresh-status"[^>]*>Refresh status</);
   assert.equal(state.trainingLoad.gpexe.check?.id, "chk-2", "the check is not cleared");
 });
@@ -1757,8 +1756,9 @@ test("Imports: the source card shows the source name, the connection, when sessi
   assert.match(card, /<strong>GPEXE<\/strong>/);
   assert.match(card, /imports-state is-on">Connected</);
   assert.match(card, /Sessions from the last successful search are listed below\./, "no search recorded, but sessions are listed");
-  assert.match(card, /data-action="training-load-gpexe-check"[^>]*>Find new sessions</);
-  assert.match(card, /<summary>Choose dates<\/summary>/);
+  // P4: one button opens the period chooser; the From/To fields are gone.
+  assert.ok(card.includes('data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "one button: Find new sessions");
+  assert.ok(!/Choose dates|data-gpexe-field/.test(card), "no From/To fields");
   const open = card.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/980|approvalBasis|team_grant|pending|Show replaced versions/.test(open), "nothing technical in the open");
   assert.match(card, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
@@ -1864,8 +1864,9 @@ test("Imports: a stale review after a link change says so on its row, and the da
   const html = renderTrainingLoadCoachHtml();
   // U6a-2: the review is updated in place (J20-A1), so no dates are set for it and no search is asked for.
   assert.match(html, /Athlete links changed after this session was reviewed\. Update its review before importing\./);
-  assert.ok(!/<details class="imports-dates" open>/.test(html), "a stale review needs no dates");
-  assert.match(html, /data-gpexe-field="from" value=""/);
+  // P4: nothing needs other dates, so opening the chooser chooses no days.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-period-toggle" }), { renderTrainingLoad: render });
+  assert.ok(!/class="period-range"/.test(renderTrainingLoadCoachHtml()), "a stale review needs no dates");
 });
 
 test("Imports: a team with no connection shows neither the dates nor a search hint - only the one sentence and the Next step", async () => {
@@ -2010,12 +2011,13 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
     return base(call);
   });
   await openImports();
+  // U6a-2: two expired sessions 45 days apart (a stale review no longer sets dates: it is updated in place). P4: opening
+  // the chooser chooses the latest 31 days and says so; the search button carries exactly those days.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-period-toggle" }), { renderTrainingLoad: render });
   let html = renderTrainingLoadCoachHtml();
-  // U6a-2: two expired sessions 45 days apart (a stale review no longer sets dates: it is updated in place), so the latest
-  // 31 days are set and the hint says so.
-  assert.match(html, /data-gpexe-field="from" value="2026-08-15"/);
-  assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
-  assert.match(html, /latest 31 days of the sessions that need finding again \(15\.08\.2026 - 14\.09\.2026\); search the earlier ones afterwards\./);
+  assert.match(html, /data-action="training-load-gpexe-check" data-from="2026-08-15" data-to="2026-09-14"/);
+  assert.match(html, /These are the latest 31 days of the sessions that need finding again; search the earlier ones afterwards\./);
+  assert.match(html, /class="period-range-text">[^<]*31 days</);
 
   // A stale session with no start date: the sentence does not point at dates that are not set.
   resetState();
@@ -2031,7 +2033,8 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   html = renderTrainingLoadCoachHtml();
   assert.match(html, /Athlete links changed after this session was reviewed\. Update its review before importing\./);
   assert.ok(!/The dates are set above/.test(html), "next step: " + (html.match(/class="gpexe-next"[^>]*>([^<]*)/) || [])[1]);
-  assert.ok(!/<details class="imports-dates" open>/.test(html), "hint: " + (html.match(/gpexe-hint">([^<]*)/) || [])[1]);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-period-toggle" }), { renderTrainingLoad: render });
+  assert.ok(!/class="period-range"/.test(renderTrainingLoadCoachHtml()), "no days chosen for a session without a date");
 });
 
 test("Imports: the notice after an import never points to a bucket the row is not in, and is gone after another review is opened", async () => {
@@ -2354,7 +2357,7 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   assert.equal(state.trainingLoad.gpexe.error, null, "no page-level error");
   assert.ok(!/class="gpexe-error"/.test(html), "no page-level error block");
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
-  assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
+  assert.ok(html.includes('data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is available");
   assert.ok(state.trainingLoad.gpexe.links.length > 0, "the links are still loaded");
   assert.match(html, /<strong>Ana Example<\/strong>[\s\S]*?data-action="training-load-gpexe-unlink"/, "U6a: while Link athletes is off, the links are listed here with Unlink");
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the ready session is listed; nothing about linking replaces it");

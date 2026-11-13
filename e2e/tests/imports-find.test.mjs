@@ -19,9 +19,11 @@ const OPEN = '[data-action="training-load-gpexe-open"]';
 async function findThroughUi(page) {
   await openTrainingLoad(page);
   await page.click('[data-action="training-load-section"][data-section="imports"]');
-  await page.waitForSelector('[data-action="training-load-gpexe-check"]', { timeout: 20_000 });
+  await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]', { timeout: 20_000 });
   assert.equal(await page.locator(OPEN).count(), 0, "nothing has been found yet");
-  await page.click('[data-action="training-load-gpexe-check"]');
+  // P4: "Find new sessions" opens the period chooser; with no search yet its first button searches the last 14 days.
+  await page.click('[data-action="training-load-gpexe-period-toggle"]');
+  await page.click(".imports-period .period-missing");
   // The sessions appear when the check ends (the screen polls the check).
   await page.waitForSelector(OPEN, { timeout: 60_000 });
 }

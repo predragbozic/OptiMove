@@ -414,7 +414,7 @@ test("11. (D2) the search button keeps its name, and the line under the bar says
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [] }));
   await openImports();
   const page = html();
-  assert.match(page, /data-action="training-load-gpexe-check" >Find new sessions</);
+  assert.ok(page.includes('data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search button keeps its name");
   // IMP1: no long sentence up front - the line is the first one of the Search tab.
   assert.ok(!page.includes("does not import anything"), "not on the default tab");
   await act("training-load-gpexe-tab", { importTab: "search" });
@@ -509,7 +509,7 @@ test("16. with nothing ready, the first group's button is the one main action wh
     await openImports();
     const page = html();
     const groupBtn = page.match(/<div class="imports-attn-actions"><button type="button" class="(\w+)-button/)[1];
-    const findBtn = page.match(/class="(\w+)-button gpexe-button" data-action="training-load-gpexe-check" /)[1];
+    const findBtn = page.match(/class="(\w+)-button gpexe-button" data-action="training-load-gpexe-period-toggle" /)[1];
     assert.equal(groupBtn, groupMain ? "primary" : "plain", JSON.stringify(list.map((c) => c.id)));
     if (groupMain) assert.equal(findBtn, "plain");
     assert.equal(primaries(page.slice(0, page.indexOf('aria-label="Ready to import"'))), 1, "one main action");

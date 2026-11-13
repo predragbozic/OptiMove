@@ -7,6 +7,7 @@
 // A response for a team the coach has since switched away from is dropped
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
+import { emptyPeriod, localDay } from "./gpexe-period-data.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
@@ -101,7 +102,8 @@ function resetGpexeTeamState(teamId) {
   const gx = g();
   gx.generation += 1;
   gx.batch = emptyBatch();
-  gx.calendar = { month: "", day: "", open: null };
+  // P4: another team starts with the period chooser folded and no days chosen.
+  gx.period = emptyPeriod();
   // IMP1: another team starts on its own default tab, with "Choose sessions" folded.
   gx.tab = "";
   gx.chooseOpen = null;
@@ -1152,12 +1154,6 @@ export function batchSelectableList(gx = g()) {
   return (gx.candidates || []).filter((c) => batchSelectable(c, gx));
 }
 
-// The rows the list shows under the local date filter (all of them without one).
-export function calendarFiltered(list, gx = g()) {
-  const day = gx.calendar?.day;
-  if (!day) return list;
-  return list.filter((c) => calendarDayKey(c.sessionStartedAt) === day);
-}
 
 // The chosen sessions in the list's order, each with the hash chosen with
 // it (never a hash read later: a changed session is dropped, not resent).
@@ -1189,8 +1185,7 @@ export function toggleBatchPick(candidateId, checked) {
   return true;
 }
 
-// "Select all" / "Select first N": the visible sessions that can be chosen
-// (a local date filter never adds a hidden one), in the list's order, until
+// "Select all" / "Select first N": the sessions that can be chosen, in the list's order, until
 // the batch is full. Already chosen ones stay chosen.
 export function selectBatchVisible(visible) {
   const gx = g();
@@ -1447,73 +1442,11 @@ export function finishBatchResults() {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// The local sessions calendar (Imports phase 4b)
-// ---------------------------------------------------------------------------
-
-// The day a session belongs to, on the same local clock the row's date and
-// time use (never toISOString, which can move a late session to the next
-// UTC day). "" when the value is not a date.
-export function calendarDayKey(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  const two = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-}
-
-export function calendarMonthKey(value) {
-  const key = calendarDayKey(value);
-  return key ? key.slice(0, 7) : "";
-}
-
-// The month on screen: the one chosen with Prev/Next, else the month of the
-// newest session found, else this month.
-export function calendarMonthShown(gx = g(), now = new Date()) {
-  if (gx.calendar?.month) return gx.calendar.month;
-  const days = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx)).map((c) => calendarDayKey(c.sessionStartedAt)).filter(Boolean).sort();
-  if (days.length) return days[days.length - 1].slice(0, 7);
-  return calendarMonthKey(now);
-}
-
-// Prev/Next: local only, no request.
-export function moveCalendarMonth(delta) {
-  const gx = g();
-  const [y, m] = calendarMonthShown(gx).split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  gx.calendar.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-// A marked day filters the list to that day; the same day again, or "Show
-// all dates", removes the filter. Never the dates of "Find new sessions".
-export function setCalendarDay(day) {
-  const gx = g();
-  gx.calendar.day = gx.calendar.day === day ? "" : day;
-}
-
-export function clearCalendarDay() {
-  g().calendar.day = "";
-}
-
-// Whether the calendar panel is open: as the coach left it; otherwise folded
-// on every screen (U6a: the list is the day's work), and open while a day is
-// filtered so the "Show all dates" line is in sight.
-export function calendarOpen(gx = g()) {
-  const open = gx.calendar?.open;
-  if (open === true || open === false) return open;
-  if (gx.calendar?.day) return true;
-  return false;
-}
-
-// The panel was opened or folded (the <details> element's own "toggle"
-// event, app.js): its state is kept for the next repaint. Local only - no
-// request, no change to the search dates, the shared week or the filtered day.
-export function calendarToggled(open) {
-  g().calendar.open = Boolean(open);
-}
+// A session's local day (never toISOString, which can move a late session to the next UTC day); the period chooser's.
+export const calendarDayKey = localDay;
 
 // IMP1: whether "Choose sessions" (the checkboxes of the Ready list) is open: as the person left it; otherwise open
-// while sessions are selected, so a selection is never out of sight. Local only, like the calendar.
+// while sessions are selected, so a selection is never out of sight. Local only.
 export function chooseOpen(gx = g()) {
   if (gx.chooseOpen === true || gx.chooseOpen === false) return gx.chooseOpen;
   return Object.keys(gx.batch?.selected || {}).length > 0;

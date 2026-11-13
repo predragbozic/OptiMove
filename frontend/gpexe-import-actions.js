@@ -17,18 +17,14 @@ import {
   setGpexeLeaveOut,
   backFromTeamMappingConfirm,
   batchSelectableList,
-  calendarFiltered,
   checkBatchAgain,
   clearBatchSelection,
-  clearCalendarDay,
   closeBatchReview,
   finishBatchResults,
-  moveCalendarMonth,
   openBatchReview,
   selectBatchVisible,
   sendBatch,
   stopBatchSeries,
-  setCalendarDay,
   toggleBatchPick,
   chooseTeamMapping,
   closeGpexeCandidate,
@@ -61,6 +57,9 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
+import { clearPeriod, periodOf, periodRange, pickDay, setPeriod, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
+import { takePeriodDragClick } from "./gpexe-period-drag.js";
+import { datesNeededFor } from "./gpexe-import-view.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -116,9 +115,12 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
+    // P4: the chooser folds once a search starts; the chosen days stay for the next time it opens.
+    setPeriodOpen(false);
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
-    await startGpexeCheck(own || { from: fieldValue("[data-gpexe-field='from']"), to: fieldValue("[data-gpexe-field='to']") }, renderTrainingLoad);
+    // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
+    await startGpexeCheck(own || {}, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
@@ -511,7 +513,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-batch-select") {
     if (gx.batch.sending) return true;
-    selectBatchVisible(calendarFiltered(batchSelectableList(gx), gx));
+    selectBatchVisible(batchSelectableList(gx));
     renderTrainingLoad();
     return true;
   }
@@ -562,19 +564,32 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
     return true;
   }
-  // The local sessions calendar: no request for any of these.
-  if (type === "training-load-gpexe-cal-prev" || type === "training-load-gpexe-cal-next") {
-    moveCalendarMonth(type.endsWith("prev") ? -1 : 1);
+  // P4, the period chooser: local only, no request for any of these.
+  if (type === "training-load-gpexe-period-toggle") {
+    const open = !periodOf(gx).open;
+    // A step that needs other dates (a stale review, an expired snapshot) fills them in, unless days are chosen already.
+    if (open && !periodRange(gx)) {
+      const dated = datesNeededFor(gx.candidates || [], gx);
+      if (dated) setPeriod(dated.from, dated.to, gx, dated.clipped
+        ? "These are the latest 31 days of the sessions that need finding again; search the earlier ones afterwards."
+        : "These days hold the sessions that need finding again.");
+    }
+    setPeriodOpen(open);
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-gpexe-cal-day") {
-    setCalendarDay(action.dataset.day || "");
+  if (type === "training-load-gpexe-period-day") {
+    if (takePeriodDragClick()) return true;
+    if (pickDay(action.dataset.day || "")) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-period-month") {
+    turnMonth(Number(action.dataset.delta) < 0 ? -1 : 1);
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-gpexe-cal-all") {
-    clearCalendarDay();
+  if (type === "training-load-gpexe-period-clear") {
+    clearPeriod();
     renderTrainingLoad();
     return true;
   }
