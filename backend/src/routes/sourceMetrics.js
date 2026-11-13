@@ -28,6 +28,7 @@ import * as conversions from "../unitConversionService.js";
 import * as activations from "../sourceMetricActivationService.js";
 import * as previews from "../sourceMetricPreviewService.js";
 import * as instances from "../sourceInstanceEndService.js";
+import * as board from "../sourceMetricBoardService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -101,6 +102,39 @@ async function editorContext(req, res) {
   if (!ctx) notFound(res);
   return ctx;
 }
+
+// The drag-and-drop board (J18, docs/ai/c112-drag-mapping-contract.md, section
+// 4.2; the reads, slice 18-2). The query is read from the raw query string.
+const rawQuery = (req) => {
+  const url = String(req.originalUrl || "");
+  const at = url.indexOf("?");
+  return at === -1 ? "" : url.slice(at + 1);
+};
+// Route 1: { board } - the columns, the variables, what is on, what is
+// pre-placed, the two athletes of the pair (live names, never an id).
+router.get("/board", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await board.readBoard({ ctx, queryString: rawQuery(req) }));
+}));
+// Route 2: { placement } - one column on one variable: the proposal, the two
+// athletes' three values and a placement hash per display unit, or a code.
+router.get("/board/placement", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await board.readPlacement({ ctx, queryString: rawQuery(req) }));
+}));
+// Routes 4 and 5: the stored confirmations of a team, and one of them.
+router.get("/confirmations", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await board.listConfirmations({ ctx, queryString: rawQuery(req) }));
+}));
+router.get("/confirmations/:confirmationId", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await board.readConfirmation({ ctx, confirmationId: req.params.confirmationId }));
+}));
 
 router.get("/fields", handle(async (req, res) => {
   const ctx = await adminContext(req, res);

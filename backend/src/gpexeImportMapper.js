@@ -548,7 +548,7 @@ export function wholeRowHelperValues(row) {
 // returned. `extract` gets the plan's per-row input and returns { value } or
 // { skip }.
 // v62: `teamTimezone` is the candidate team's session time zone, so a mixed session passes the same gates as its import.
-export function gpexeLevelValues(bundle, extract, { teamTimezone = null } = {}) {
+export function gpexeLevelValues(bundle, extract, { teamTimezone = null } = {}, keyed = false) {
   let plan;
   try {
     plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ raw: true, key: "preview", levels: { full: true, drill: true }, extract }], teamTimezone });
@@ -561,6 +561,14 @@ export function gpexeLevelValues(bundle, extract, { teamTimezone = null } = {}) 
     .flatMap((result) => result.values.map((entry) => entry.value));
   return {
     code: null,
-    athletes: plan.participants.map((participant) => ({ session: valuesAt(participant, "full"), drill: valuesAt(participant, "drill") })),
+    athletes: plan.participants.map((participant) => ({ ...(keyed ? { key: participant.gpexeAthleteId } : {}), session: valuesAt(participant, "full"), drill: valuesAt(participant, "drill") })),
   };
+}
+
+// J18 (the drag-and-drop board, contract section 4.3 step 6): the same values
+// with each athlete's GPEXE athlete id as an internal key, so the board can
+// choose two athletes and name them. The key never leaves the board's
+// service: no answer, URL, log line or stored row carries it.
+export function gpexeLevelValuesKeyed(bundle, extract, { teamTimezone = null } = {}) {
+  return gpexeLevelValues(bundle, extract, { teamTimezone }, true);
 }

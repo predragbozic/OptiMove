@@ -4346,7 +4346,14 @@ order): `migrations_v2/202611121800_training_load_v65_source_metric_confirmation
 (section D10) the nullable `confirmation_id`, the actions `mapping_confirmation`, `confirmation_values_expired` and
 `confirmation_values_erased`, two CHECKs, one index and the four bodies (v52's row shape and actor guard, v48's insert
 guard, v50's revision guard) with the new lines marked. D10's "no value-bearing column" holds: `confirmation_id` is a
-typed link. No code writes these tables before 18-3, and the gate is M-B. The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
+typed link. No code writes these tables before 18-3, and the gate is M-B.
+
+**18-2, the board's reads, as built** (J18 section 15.8; verified against `308320c7`; backend only, no migration): four `GET` routes of the metrics
+router (`/board`, `/board/placement`, `/confirmations`, `/confirmations/:confirmationId`), the pure module
+`backend/src/sourceMetricBoard.js` (display registry version 1, the pair rule, the placement hash) and
+`backend/src/sourceMetricBoardService.js`. The mapper gains `gpexeLevelValuesKeyed`, the 7e raw read with each
+athlete's internal key, called by the board only. The one write is the expiry batch of v65 before a History read.
+ The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
 
 ## K. Open, but not blocking M1
 
