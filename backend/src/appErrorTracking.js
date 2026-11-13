@@ -290,8 +290,23 @@ export async function writeEvent(event, { executor = pool } = {}) {
 }
 
 // A browser report from a signed-in user.
+// Without the hashing key every signed-in row is a row "without a user" and shares one cap (MAX_ROWS_WITHOUT_USER_WINDOW
+// an hour in all). So that one person cannot use it up for everyone, each user's reports are then counted in memory,
+// by the id itself (never stored): beyond NO_KEY_REPORTS_PER_USER_WINDOW an hour a report is dropped silently.
+export const NO_KEY_REPORTS_PER_USER_WINDOW = 40;
+const noKeyReports = new Map();
+export function resetNoKeyReportsForTests() { noKeyReports.clear(); }
+function allowNoKeyReport(userId, nowMs = Date.now()) {
+  const hour = Math.floor(nowMs / 3_600_000);
+  if (noKeyReports.size > 5000) for (const [k2, v] of noKeyReports) if (v.hour !== hour) noKeyReports.delete(k2);
+  const entry = noKeyReports.get(userId);
+  if (!entry || entry.hour !== hour) { noKeyReports.set(userId, { hour, n: 1 }); return true; }
+  entry.n += 1;
+  return entry.n <= NO_KEY_REPORTS_PER_USER_WINDOW;
+}
 export async function recordClientError(req, report) {
   const who = userHashForNewRow(req.user?.id);
+  if (who.hash === null && req.user?.id && !allowNoKeyReport(String(req.user.id))) return "dropped";
   return writeEvent({ ...report, role: roleOf(req.authz), userHash: who.hash, userHashVersion: who.version });
 }
 
@@ -337,6 +352,7 @@ export function recordServerError(req, error, status, { executor = pool } = {}) 
 }
 
 // What the platform admin reads: groups by fingerprint over the last `days` days (1 to 30).
+export const MAX_DEVICE_LINES = 3;
 export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor = pool } = {}) {
   const d = Math.min(Math.max(Number.isInteger(days) ? days : 7, 1), RETENTION_DAYS);
   const l = Math.min(Math.max(Number.isInteger(limit) ? limit : 100, 1), 200);
@@ -354,7 +370,8 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
             count(distinct user_hash)::int as users,
             min(first_seen_at) as first_seen_at,
             max(last_seen_at) as last_seen_at,
-            array_agg(distinct role) as roles
+            array_agg(distinct role) as roles,
+            coalesce(sum(repeat_count) filter (where source = 'client' and device_class is null and os_family is null and browser_family is null), 0)::int as no_device
        from public.app_error_events
       where last_seen_at > now() - make_interval(days => $1)
       group by fingerprint
@@ -362,11 +379,38 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
       limit $2`,
     [d, l],
   )).rows;
-  return rows.map((r) => ({
-    fingerprint: r.fingerprint, source: r.source, screen: r.screen, routeTemplate: r.route_template, action: r.action, code: r.error_code,
-    status: r.http_status, release: r.release_commit, stackSignature: r.stack_signature, occurrences: r.occurrences, users: r.users,
-    firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, roles: r.roles,
-  }));
+  // The devices of the listed kinds of error, in the same period: per kind the MAX_DEVICE_LINES most frequent
+  // (class, system, browser, version), how many other combinations there are, and how often no device was recorded
+  // (a row from before v70 or from an older page). Browser reports only: a server error has no device.
+  const devices = rows.length ? (await executor.query(
+    `select fingerprint, device_class, os_family, browser_family, browser_major, n, combos, rn
+       from (select fingerprint, device_class, os_family, browser_family, browser_major, sum(repeat_count)::int as n,
+                    (count(*) over (partition by fingerprint))::int as combos,
+                    (row_number() over (partition by fingerprint order by sum(repeat_count) desc, max(last_seen_at) desc,
+                                         device_class, os_family, browser_family, browser_major))::int as rn
+               from public.app_error_events
+              where last_seen_at > now() - make_interval(days => $1) and source = 'client' and fingerprint = any($2::text[])
+                and (device_class is not null or os_family is not null or browser_family is not null)
+              group by fingerprint, device_class, os_family, browser_family, browser_major) d
+      where rn <= ${MAX_DEVICE_LINES}
+      order by fingerprint, rn`,
+    [d, rows.map((r) => r.fingerprint)],
+  )).rows : [];
+  const byKind = new Map();
+  for (const row of devices) {
+    const entry = byKind.get(row.fingerprint) || { list: [], combos: row.combos };
+    entry.list.push({ class: row.device_class, os: row.os_family, browser: row.browser_family, major: row.browser_major, occurrences: row.n });
+    byKind.set(row.fingerprint, entry);
+  }
+  return rows.map((r) => {
+    const dev = byKind.get(r.fingerprint);
+    return {
+      fingerprint: r.fingerprint, source: r.source, screen: r.screen, routeTemplate: r.route_template, action: r.action, code: r.error_code,
+      status: r.http_status, release: r.release_commit, stackSignature: r.stack_signature, occurrences: r.occurrences, users: r.users,
+      firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, roles: r.roles,
+      devices: dev ? dev.list : [], otherDevices: dev ? Math.max(dev.combos - dev.list.length, 0) : 0, deviceNotRecorded: r.no_device,
+    };
+  });
 }
 
 // Retention: rows whose last sighting is older than RETENTION_DAYS, in short batches.

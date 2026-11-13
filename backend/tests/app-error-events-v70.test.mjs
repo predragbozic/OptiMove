@@ -33,7 +33,7 @@ async function call(path, { method = "GET", body, cookie } = {}) {
   return { status: res.status, body: json, text };
 }
 const rows = async () => (await k.query(`select * from public.app_error_events order by id`)).rows;
-const clear = async () => { await k.query(`delete from public.app_error_events`); M.resetRateLimitForTests(); };
+const clear = async () => { await k.query(`delete from public.app_error_events`); M.resetRateLimitForTests(); M.resetNoKeyReportsForTests(); };
 const GOOD = { screen: "training-load", action: "open-imports", code: "js_error", stackSig: "renderImports@gpexe-import-view.js > start@app.js" };
 const PHONE = { class: "phone", os: "ios", browser: "safari", major: 17, viewport: "360_479", touch: true };
 const DESK = { class: "desktop", os: "windows", browser: "chrome", major: 131, viewport: "ge_1440", touch: false };
@@ -230,6 +230,21 @@ test("6. without the key: the row is stored with no hash - never the unkeyed one
     for (const id of [crypto.randomUUID(), crypto.randomUUID()]) M.recordServerError({ baseUrl: "", route: { path: "/:id/x" }, originalUrl: "/api/things/1/x", user: { id }, authz: null }, new Error("boom"), 500);
     for (let i = 0; i < 100 && (await rows())[0]?.repeat_count !== 2; i += 1) await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual((await rows()).map((r) => [r.user_hash, r.repeat_count]), [[null, 2]]);
+    // One person cannot use up the shared cap of rows without a user: their reports are counted in memory and dropped beyond the limit.
+    await clear();
+    setKeys(null);
+    const noisy = { user: { id: crypto.randomUUID() }, authz: null }; const quiet = { user: { id: crypto.randomUUID() }, authz: null };
+    const outcomes = [];
+    for (let i = 0; i < M.NO_KEY_REPORTS_PER_USER_WINDOW + 5; i += 1) outcomes.push(await M.recordClientError(noisy, M.sanitizeClientReport({ ...GOOD, action: `n${i}` })));
+    assert.equal(outcomes.filter((o) => o === "stored").length, M.NO_KEY_REPORTS_PER_USER_WINDOW);
+    assert.deepEqual(outcomes.slice(-5), ["dropped", "dropped", "dropped", "dropped", "dropped"]);
+    assert.equal(await M.recordClientError(quiet, M.sanitizeClientReport({ ...GOOD, action: "q1" })), "stored", "another person still reports");
+    assert.equal((await rows()).length, M.NO_KEY_REPORTS_PER_USER_WINDOW + 1);
+    assert.ok(M.NO_KEY_REPORTS_PER_USER_WINDOW * 2 < M.MAX_ROWS_WITHOUT_USER_WINDOW, "two people cannot fill the shared cap");
+    // With the key the in-memory count does not apply (the per-user cap of rows in the table does).
+    await clear();
+    setKeys(`2:${KEY_A}`);
+    for (let i = 0; i < M.NO_KEY_REPORTS_PER_USER_WINDOW + 5; i += 1) assert.equal(await M.recordClientError(noisy, M.sanitizeClientReport({ ...GOOD, action: `n${i}` })), "stored");
     setKeys(`2:${KEY_A}`);
     warned.length = 0;
     M.startAppErrorRetentionSchedule({ startupDelayMs: 3_600_000 })();
@@ -270,6 +285,58 @@ test("7. a rotation: new rows get the new version; a row of the old version is n
   setKeys(`2:${KEY_A}`);
 });
 
+test("7b. AH-2, the groups read: per kind of browser error the three most frequent devices with their counts, how many others, how often none was recorded", async () => {
+  await clear();
+  setKeys(`2:${KEY_A}`);
+  const admin = await user("Admin Example", { platform: true });
+  const coach = await user("Coach Example");
+  const ev = async (device, n, over = {}) => {
+    for (let i = 0; i < n; i += 1) await M.writeEvent({ ...M.sanitizeClientReport({ ...GOOD, ...over, ...(device ? { device } : {}) }), role: "coach", userHash: M.keyedUserHash(coach.id, 2), userHashVersion: 2 });
+  };
+  const TABLET = { class: "tablet", os: "android", browser: "samsung", major: 25, viewport: "768_1023", touch: true };
+  const FOX = { class: "desktop", os: "linux", browser: "firefox", major: 127, viewport: "ge_1440", touch: false };
+  await ev(PHONE, 3); await ev(DESK, 5); await ev(TABLET, 1); await ev(FOX, 2); await ev(null, 4);
+  // The viewport and touch do not split a device: the same phone turned sideways is still one line.
+  await ev({ ...PHONE, viewport: "480_767" }, 2);
+  await ev(PHONE, 1, { action: "other-kind" });
+  M.recordServerError({ baseUrl: "", route: { path: "/:id/x" }, originalUrl: "/api/things/1/x", user: { id: coach.id }, authz: null }, new Error("boom"), 500);
+  for (let i = 0; i < 100 && (await rows()).every((r) => r.source !== "server"); i += 1) await new Promise((r) => setTimeout(r, 20));
+  const res = await call("/api/app-errors/groups?days=7", { cookie: admin.cookie });
+  assert.equal(res.status, 200);
+  const main = res.body.groups.find((g) => g.action === "open-imports");
+  assert.equal(main.occurrences, 17);
+  assert.deepEqual(main.devices.map((d) => d.occurrences), [5, 5, 2], "most frequent first, three at most");
+  assert.deepEqual(new Set(main.devices.slice(0, 2).map((d) => d.os)), new Set(["windows", "ios"]));
+  assert.deepEqual(main.devices[2], { class: "desktop", os: "linux", browser: "firefox", major: 127, occurrences: 2 });
+  assert.deepEqual(Object.keys(main.devices[0]).sort(), ["browser", "class", "major", "occurrences", "os"], "no viewport, touch, hash or id");
+  assert.deepEqual([main.otherDevices, main.deviceNotRecorded], [1, 4]);
+  const other = res.body.groups.find((g) => g.action === "other-kind");
+  assert.deepEqual([other.devices, other.otherDevices, other.deviceNotRecorded], [[{ class: "phone", os: "ios", browser: "safari", major: 17, occurrences: 1 }], 0, 0], "each kind has its own devices");
+  const server = res.body.groups.find((g) => g.source === "server");
+  assert.deepEqual([server.devices, server.otherDevices, server.deviceNotRecorded], [[], 0, 0], "a server error has no device and is not counted as unrecorded");
+  // A kind whose every row predates the change.
+  await clear();
+  await ev(null, 2);
+  const old = (await call("/api/app-errors/groups?days=7", { cookie: admin.cookie })).body.groups[0];
+  assert.deepEqual([old.devices, old.otherDevices, old.deviceNotRecorded], [[], 0, 2]);
+  // The period applies to the devices as to the counts: a device last seen before it is not listed.
+  await clear();
+  await ev(DESK, 1);
+  await k.query(`alter table public.app_error_events disable trigger app_error_events_guard_update`);
+  await k.query(`alter table public.app_error_events disable trigger app_error_events_guard_insert`);
+  await k.query(`insert into public.app_error_events (fingerprint, source, screen, action, error_code, role, stack_signature, device_class, os_family, browser_family, first_seen_at, last_seen_at)
+                 select fingerprint, source, screen, action, error_code, role, stack_signature, 'phone', 'ios', 'safari', now() - interval '5 days', now() - interval '3 days' from public.app_error_events limit 1`);
+  await k.query(`alter table public.app_error_events enable trigger app_error_events_guard_insert`);
+  await k.query(`alter table public.app_error_events enable trigger app_error_events_guard_update`);
+  const day = (await call("/api/app-errors/groups?days=1", { cookie: admin.cookie })).body.groups[0];
+  assert.deepEqual([day.occurrences, day.devices.map((d) => d.os)], [1, ["windows"]]);
+  const week = (await call("/api/app-errors/groups?days=7", { cookie: admin.cookie })).body.groups[0];
+  assert.deepEqual([week.occurrences, week.devices.map((d) => d.os).sort()], [2, ["ios", "windows"]]);
+  // Still a platform admin's read only.
+  assert.equal((await call("/api/app-errors/groups?days=7", { cookie: coach.cookie })).status, 404);
+  assert.equal(M.MAX_DEVICE_LINES, 3);
+});
+
 test("8. who looked: append-only, recorded at its own time, kept one year, purged after it", async () => {
   const looker = crypto.randomUUID();
   const ins = (over = {}) => {
@@ -296,9 +363,15 @@ test("8. who looked: append-only, recorded at its own time, kept one year, purge
   await k.query(`alter table public.app_error_person_lookups disable trigger app_error_person_lookups_guard_insert`);
   await ins({ looked_at: new Date(Date.now() - 366 * 86400000) });
   await ins({ looked_at: new Date(Date.now() - 364 * 86400000) });
+  await ins({ looked_at: new Date(Date.now() - 30 * 86400000) });
   await k.query(`alter table public.app_error_person_lookups enable trigger app_error_person_lookups_guard_insert`);
-  assert.equal(await M.purgePersonLookups(), 1);
-  assert.equal((await k.query(`select count(*)::int as n from public.app_error_person_lookups`)).rows[0].n, 3);
+  assert.equal(await M.purgePersonLookups(), 1, "the 366-day-old row goes; the 364-day-old and the 30-day-old stay");
+  const ages = (await k.query(`select round(extract(epoch from now() - looked_at) / 86400)::int as days from public.app_error_person_lookups order by looked_at`)).rows.map((r) => r.days);
+  assert.deepEqual(ages, [364, 30, 0, 0]);
+  // The table itself keeps the year whatever the purge asks for: a 30-day-old row refuses deletion, by anyone.
+  await assert.rejects(k.query(`delete from public.app_error_person_lookups where looked_at < now() - interval '29 days' and looked_at > now() - interval '31 days'`), /kept for one year/);
+  await assert.rejects(k.query(`delete from public.app_error_person_lookups where looked_at < now() - interval '363 days'`), /kept for one year/);
+  assert.equal((await k.query(`select count(*)::int as n from public.app_error_person_lookups`)).rows[0].n, 4);
   assert.equal(M.LOOKUP_RETENTION_DAYS, 365);
   const cols = (await k.query(`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'app_error_person_lookups' order by 1`)).rows.map((r) => r.column_name);
   assert.deepEqual(cols, ["fingerprint", "id", "looked_at", "looked_by_user_id", "outcome", "people_named", "request_key"], "no name, no hash, no device");

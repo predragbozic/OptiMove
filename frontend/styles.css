@@ -23606,6 +23606,16 @@ p.coach-home-library-note.muted:not([role="status"]) {
   font-size: var(--om-text-xs);
   overflow-wrap: anywhere;
 }
+/* App health: the devices of a browser error, a full-width line under the row's counts. */
+.app-health-devices {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.app-health-devices-label {
+  font-weight: 600;
+}
 /* App health: the "most recently seen" note reads as a note, not an error. */
 .app-health-truncated {
   padding: var(--om-space-2) var(--om-space-3);
