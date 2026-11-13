@@ -4,7 +4,7 @@ set local lock_timeout = '5s';
 do $guard$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v64 rollback refused: the migrator is running';
+    raise exception 'v66 rollback refused: the migrator is running';
   end if;
 end
 $guard$;
@@ -19,15 +19,15 @@ begin
     or exists (select 1 from public.schema_migrations
       where migration_name like 'migrations_v2/%'
         and migration_name > 'migrations_v2/202611131000_training_load_v66_dashboard_simple_atomic_save.sql') then
-    raise exception 'v64 rollback refused: v64 is not the last applied v2 migration';
+    raise exception 'v66 rollback refused: v66 is not the last applied v2 migration';
   end if;
   if (select md5(prosrc) from pg_proc where oid =
       to_regprocedure('training_load.dashboard_widgets_bump_revision()')) is distinct from 'a845d879d38d8a6dccf443736a34fe8f' then
-    raise exception 'v64 rollback refused: unexpected revision function';
+    raise exception 'v66 rollback refused: unexpected revision function';
   end if;
   if exists (select 1 from training_load.dashboard_simple_requests)
     or exists (select 1 from training_load.dashboard_widgets where presentation_config is not null) then
-    raise exception 'v64 rollback refused: dashboard presentation or save receipts exist';
+    raise exception 'v66 rollback refused: dashboard presentation or save receipts exist';
   end if;
 end
 $guard$;
