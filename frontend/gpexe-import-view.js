@@ -1375,7 +1375,7 @@ function renderCalendarHtml(gx) {
         <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
         <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
       </div>
-      <p class="muted imports-cal-note">A dot marks a day with sessions found so far.</p>
+      <p class="muted imports-cal-note">A dot or a number marks the sessions found so far on a day.</p>
       <div class="imports-cal-grid" role="group" aria-label="${escapeAttr(`${MONTH_NAMES[m - 1]} ${y}`)}">
         ${WEEKDAY_NAMES.map((w) => `<span class="imports-cal-weekday" aria-hidden="true">${w}</span>`).join("")}
         ${cells.join("")}

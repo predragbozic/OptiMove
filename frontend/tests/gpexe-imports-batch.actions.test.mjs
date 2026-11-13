@@ -697,7 +697,7 @@ test("13. the calendar marks every day with a found session, whatever its bucket
   const page = html();
   assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "U6a: folded by default, on a desktop too");
   assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
-  assert.match(page, /A dot marks a day with sessions found so far\./);
+  assert.match(page, /A dot or a number marks the sessions found so far on a day\./, "the note names both kinds of mark (a dot for one session, a number for more)");
   assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 2 sessions found" aria-pressed="false"><span class="imports-cal-num">21<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-count">2<\/span>/);
   assert.match(page, /data-day="2026-09-14" aria-label="14 September, 1 session found" aria-pressed="false"><span class="imports-cal-num">14<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-dot"><\/span>/);
