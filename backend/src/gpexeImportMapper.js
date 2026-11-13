@@ -290,7 +290,25 @@ export function identicalTracks(bundle, athleteRows, trackIds) {
 // teamTimezone (v62, mixed_timezones (b)): the team's session time zone, set by a platform admin. It is used only when the
 // tracks report more than one zone; a session whose tracks agree keeps its own zone (an away match keeps its real local
 // time). Without it a mixed session is refused as before.
-export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null } = {}) {
+// MT-B: the track set of one athlete's rows as a fingerprint - '<track>:<row>,<row>;<track>:...', tracks and rows in ascending
+// numeric order - or null when a track or row id is not a canonical GPEXE id (no choice can name such a set). The one function
+// the track-choice service stores and the mapper compares (gpexeTrackChoiceService.js).
+const CANONICAL_GPEXE_ID = /^(0|[1-9][0-9]{0,11})$/;
+const byNumericId = (a, b) => Number(a) - Number(b) || (a < b ? -1 : a > b ? 1 : 0);
+export function trackSetFingerprint(athleteRows) {
+  const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))].sort(byNumericId);
+  if (!trackIds.every((t) => CANONICAL_GPEXE_ID.test(t)) || !athleteRows.every((r) => CANONICAL_GPEXE_ID.test(String(r.id)))) return null;
+  return trackIds
+    .map((t) => `${t}:${athleteRows.filter((r) => String(r.track) === t).map((r) => String(r.id)).sort(byNumericId).join(",")}`)
+    .join(";");
+}
+
+// trackChoices (MT-B, plan section 12): a Map of GPEXE athlete id -> the athlete's current track choice
+// { choiceId, kind: 'track' | 'none' | 'cleared', trackId, fingerprint }, read by previewLocked under the team lock. It
+// matters only for an athlete with more than one track that is not one recording (MT-0): a 'track' or 'none' choice whose
+// fingerprint equals the athlete's track set is applied; any other is ignored (a stale one is marked). Without a choice the
+// plan is exactly the one before MT-B.
+export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null, trackChoices = null } = {}) {
   if (!Array.isArray(metricSpecs)) throw new TypeError("metricSpecs must be an array");
   const session = bundle?.teamSession;
   if (!session?.id) throw new GpexeMappingError("session_missing", "teamSession is required.");
@@ -330,15 +348,39 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
     let athleteRows = allRows;
     let trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
     let duplicateTracks = null;
+    let trackChoice = null;
     if (trackIds.length > 1) {
       duplicateTracks = identicalTracks(bundle, athleteRows, trackIds);
       if (!duplicateTracks) {
-        anomalies.push({ kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review` });
-        continue;
+        // MT-B: the reviewer's choice for these tracks, applied only while it names exactly this track set.
+        const choice = trackChoices instanceof Map ? (trackChoices.get(gpexeAthleteId) ?? null) : null;
+        const live = choice && (choice.kind === "track" || choice.kind === "none") ? choice : null;
+        const fingerprint = live ? trackSetFingerprint(athleteRows) : null;
+        const applies = live && fingerprint !== null && live.fingerprint === fingerprint
+          && (live.kind === "none" || trackIds.includes(String(live.trackId)));
+        if (applies && live.kind === "none") {
+          anomalies.push({
+            kind: "no_track_by_choice", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — none used by choice`,
+            trackChoice: { choiceId: String(live.choiceId), kind: "none", trackId: null, trackCount: trackIds.length, stale: false },
+          });
+          continue;
+        }
+        if (!applies) {
+          anomalies.push({
+            kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review`,
+            ...(live ? { trackChoice: { choiceId: String(live.choiceId), kind: live.kind, trackId: live.trackId ?? null, trackCount: trackIds.length, stale: true } } : {}),
+          });
+          continue;
+        }
+        // 'track': that track's own rows, as a single-track athlete (their native identities).
+        trackChoice = { choiceId: String(live.choiceId), kind: "track", trackId: String(live.trackId), trackCount: trackIds.length, stale: false };
+        athleteRows = athleteRows.filter((r) => String(r.track) === trackChoice.trackId);
+        trackIds = [trackChoice.trackId];
+      } else {
+        // MT-0: one recording, from the lowest track id, with that track's own rows (their native identities).
+        athleteRows = athleteRows.filter((r) => String(r.track) === duplicateTracks.usedTrackId);
+        trackIds = [duplicateTracks.usedTrackId];
       }
-      // MT-0: one recording, from the lowest track id, with that track's own rows (their native identities).
-      athleteRows = athleteRows.filter((r) => String(r.track) === duplicateTracks.usedTrackId);
-      trackIds = [duplicateTracks.usedTrackId];
     }
     const track = bundle.tracks?.[trackIds[0]];
     if (!track) throw new GpexeMappingError("track_missing", `track ${trackIds[0]} for athlete ${gpexeAthleteId} was not fetched.`);
@@ -444,7 +486,7 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
         }
       }
     }
-    participants.push({ gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}) });
+    participants.push({ gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}), ...(trackChoice ? { trackChoice } : {}) });
   }
 
   const mixed = timezones.size > 1;

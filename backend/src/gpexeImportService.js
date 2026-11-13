@@ -2733,17 +2733,23 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
     // A fast refusal only; the values read under the row lock below are the
     // authoritative ones.
     const early = (await client.query(
-      `select status, preview_hash from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`,
+      `select status, preview_hash, gpexe_team_session_id from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`,
       [candidateId, teamId],
     )).rows[0];
     if (!early) throw refusal(404, "notFound", "Not found.");
     // The same stored hash asked for again within the interval is a repeat,
-    // not a deliberate step (the key holds the stored hash and the team's link set, so a link
-    // is a deliberate step and is not throttled).
+    // not a deliberate step (the key holds the stored hash, the team's link set and - MT-B - the session's current track
+    // choices, so a link or a choice is a deliberate step and is not throttled).
     const linkSet = (await client.query(
       `select md5(coalesce(string_agg(id::text || ':' || coalesce(unlinked_at::text, ''), ',' order by id), '')) as fingerprint
          from training_load.gpexe_athlete_links where owner_team_id = $1`, [teamId])).rows[0].fingerprint;
-    const key = `${candidateId}:${early.preview_hash}:${linkSet}`;
+    const choiceSet = (await client.query(
+      `select md5(coalesce(string_agg(c.id::text, ',' order by c.id), '')) as fingerprint
+         from training_load.gpexe_track_choices c
+        where c.owner_team_id = $1 and c.gpexe_team_session_id = $2
+          and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`,
+      [teamId, early.gpexe_team_session_id])).rows[0].fingerprint;
+    const key = `${candidateId}:${early.preview_hash}:${linkSet}:${choiceSet}`;
     const nowMs = Date.now();
     const last = recomputeSeen.get(key);
     if (last !== undefined && nowMs - last < recomputeMinIntervalMs) {

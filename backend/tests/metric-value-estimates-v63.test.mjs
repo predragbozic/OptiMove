@@ -38,7 +38,9 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est63", migrations: MAIN_MIGRATIONS });
+  // MT-B: the preview reads v67's track choices, so the suite's main database carries v67 too (the v63 rehearsal keeps
+  // MAIN_MIGRATIONS, ending at v63).
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est63", migrations: [...MAIN_MIGRATIONS, "202611131200_training_load_v67_gpexe_track_choices.sql"] });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

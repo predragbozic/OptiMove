@@ -13,7 +13,8 @@
 //     replaced by one stable code and sentence, no activation, mapping
 //     version or parameter fingerprint, no source reason, a club variable's
 //     name only where C99 admits the viewer to it (R17), and of the source
-//     fields only the count of those not switched on.
+//     fields only the count of those not switched on, and of a track choice
+//     (MT-B) only its kind, track and staleness, not its id.
 // A missing or unknown level is "other". The projection never writes: it
 // returns a copy. The preview hash stays the one of the stored preview.
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
@@ -88,6 +89,8 @@ export function projectPreview(preview, level, { namesClubVariables = false } = 
   for (const athlete of out.athletes ?? []) {
     for (const result of athlete.results ?? []) result.values = values(result.values);
     athlete.skippedValues = values(athlete.skippedValues);
+    // MT-B: a coach reads what was chosen (the kind, the track, stale), never which choice row or who chose it.
+    if (athlete.trackChoice) delete athlete.trackChoice.choiceId;
   }
   for (const change of out.changesToImported ?? []) change.values = values(change.values);
   delete out.unmappedSourceFields;

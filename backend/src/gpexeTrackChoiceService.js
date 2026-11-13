@@ -23,7 +23,7 @@
 import { pool } from "./db.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { ApprovalTeamGoneError, canApproveGpexeImport, lockApprovalTeam } from "./gpexeImportAccess.js";
-import { identicalTracks } from "./gpexeImportMapper.js";
+import { identicalTracks, trackSetFingerprint } from "./gpexeImportMapper.js";
 import { isImportWaitError, isSessionEndedError, setImportTransactionBounds } from "./gpexeImportPreview.js";
 import {
   COMMIT_ANSWER_TIMEOUT_MS, NOTHING_SAVED, OUTCOME_UNKNOWN, UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
@@ -72,7 +72,9 @@ export function trackSetOf(bundle, athleteRows) {
   const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))].sort(byNumber);
   if (trackIds.length < 2) return null;
   if (identicalTracks(bundle, athleteRows, trackIds)) return null;
-  const readable = trackIds.every((t) => GPEXE_ID.test(t)) && athleteRows.every((r) => GPEXE_ID.test(String(r.id)));
+  // MT-B: the mapper's own fingerprint - one function, so the stored fingerprint and the mapper's comparison cannot drift.
+  const fingerprint = trackSetFingerprint(athleteRows);
+  const readable = fingerprint !== null;
   const tracks = trackIds.map((trackId) => {
     const rows = athleteRows.filter((r) => String(r.track) === trackId);
     const whole = rows.filter((r) => r.drill === null || r.drill === undefined);
@@ -88,7 +90,6 @@ export function trackSetOf(bundle, athleteRows) {
       drillIndexes: rows.filter((r) => r.drill !== null && r.drill !== undefined).map((r) => Number(r.drill)).sort((a, b) => a - b),
     };
   });
-  const fingerprint = readable ? tracks.map((t) => `${t.trackId}:${t.rowIds.join(",")}`).join(";") : null;
   return { tracks, fingerprint, readable };
 }
 
@@ -100,12 +101,14 @@ function choiceView(row) {
     trackId: row.chosen_track_id ?? null,
     fingerprint: row.track_set_fingerprint,
     chosenAt: new Date(row.chosen_at).toISOString(),
-    chosenByUserId: String(row.chosen_by_user_id),
+    // MT-B (L4): who chose, by name only - the approver's audience; never the user id.
+    chosenBy: { name: row.chosen_by_name ?? null },
     supersedesChoiceId: row.supersedes_choice_id ? String(row.supersedes_choice_id) : null,
   };
 }
 
-const CURRENT_SQL = `select c.* from training_load.gpexe_track_choices c
+const CHOSEN_BY_NAME = `(select coalesce(u.display_name, u.full_name) from public.users u where u.id = c.chosen_by_user_id) as chosen_by_name`;
+const CURRENT_SQL = `select c.*, ${CHOSEN_BY_NAME} from training_load.gpexe_track_choices c
   where c.owner_team_id = $1 and c.gpexe_team_session_id = $2 and c.gpexe_athlete_id = $3
     and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`;
 
@@ -193,7 +196,7 @@ export function validateTrackChoiceBody(body) {
 
 async function readByRequest(client, userId, requestKey) {
   return (await client.query(
-    `select * from training_load.gpexe_track_choices where chosen_by_user_id = $1 and request_key = $2`,
+    `select c.*, ${CHOSEN_BY_NAME} from training_load.gpexe_track_choices c where c.chosen_by_user_id = $1 and c.request_key = $2`,
     [userId, requestKey],
   )).rows[0] ?? null;
 }
@@ -235,8 +238,8 @@ async function findStoredChoice(userId, requestKey, hash, ms) {
 
 export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { userId, body, expectedClubId = undefined }) {
   if (!GPEXE_ID.test(String(gpexeAthleteId))) throw notFound();
-  const input = validateTrackChoiceBody(body);
-  const hash = requestHash({ operation: "track_choice", teamId, candidateId, gpexeAthleteId: String(gpexeAthleteId), ...input, requestKey: undefined });
+  let input = null;
+  let hash = null;
   const client = await pool.connect();
   let commitSent = false;
   let broken = false;
@@ -248,6 +251,9 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
     await setImportTransactionBounds(client);
     // The route's audience, unlocked (the fast 404); the right that counts is the one locked at step 5.
     await assertTrackChoiceAudience(client, userId, teamId);
+    // MT-B (L3): the body only after the audience, so a malformed body outside it is the identical 404 too.
+    input = validateTrackChoiceBody(body);
+    hash = requestHash({ operation: "track_choice", teamId, candidateId, gpexeAthleteId: String(gpexeAthleteId), ...input, requestKey: undefined });
     // 1. The (author, key) lock and the replay.
     await client.query(
       `select pg_advisory_xact_lock(hashtextextended('track-choice-request:' || $1::uuid::text || ':' || $2::uuid::text, ${REQUEST_LOCK_SEED}))`,
@@ -305,7 +311,7 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
       throw error;
     }
     // 6. The athlete's current choice, FOR UPDATE.
-    const current = (await client.query(`${CURRENT_SQL} for update`, [teamId, row.gpexe_team_session_id, String(gpexeAthleteId)])).rows[0] ?? null;
+    const current = (await client.query(`${CURRENT_SQL} for update of c`, [teamId, row.gpexe_team_session_id, String(gpexeAthleteId)])).rows[0] ?? null;
     const currentId = current ? String(current.id) : null;
     if (currentId !== input.expectedChoiceId) {
       throw refusal(409, "choice_changed", "The choice was changed since you opened it; review it again.", { currentChoice: choiceView(current) });
@@ -318,16 +324,18 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
       `insert into training_load.gpexe_track_choices
          (owner_team_id, gpexe_team_session_id, gpexe_athlete_id, track_set_fingerprint, choice, chosen_track_id,
           chosen_by_user_id, chosen_basis, chosen_grant_id, supersedes_choice_id, request_key, request_hash)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id`,
       [teamId, row.gpexe_team_session_id, String(gpexeAthleteId), set.fingerprint, input.choice, input.trackId,
         userId, right.basis, right.grant_id ?? null, currentId, input.requestKey, hash],
     )).rows[0];
+    const saved = await readByRequest(client, userId, input.requestKey);
+    if (!saved || String(saved.id) !== String(inserted.id)) throw new Error("the inserted choice was not read back");
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, teamId });
     commitSent = true;
     const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
     committing.catch(() => {});
     await withinBound(committing, testHooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
-    return { status: 201, body: { choice: choiceView(inserted) } };
+    return { status: 201, body: { choice: choiceView(saved) } };
   } catch (error) {
     if (!commitSent) {
       await client.query("rollback").catch(() => { broken = true; });
