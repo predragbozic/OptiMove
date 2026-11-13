@@ -84,7 +84,8 @@ const ACTIVATIONS_SQL = `
          r.state as revision_state, r.evidence_status,
          md.key as definition_key, md.label as definition_label, md.owner_scope as definition_owner_scope,
          md.state as definition_state, md.current_version_id,
-         mv.value_type, trim_scale(mv.min_value)::text as min_value, trim_scale(mv.max_value)::text as max_value
+         mv.value_type, trim_scale(mv.min_value)::text as min_value, trim_scale(mv.max_value)::text as max_value,
+         mv.daily_aggregation_method
     from training_load.source_metric_mapping_activations a
     join training_load.source_metric_mapping_versions v on v.id = a.mapping_version_id
     join training_load.source_metric_mappings m on m.id = a.mapping_id
@@ -133,6 +134,8 @@ function rowOf(r) {
     definitionState: r.definition_state,
     definitionCurrentVersionId: r.current_version_id === null ? null : String(r.current_version_id),
     valueType: r.value_type,
+    // MT-D: which values of a scaled athlete are scaled (sum), left out (avg) or kept measured (max, last, none).
+    dailyAggregation: r.daily_aggregation_method,
     minValue: r.min_value,
     maxValue: r.max_value,
   };

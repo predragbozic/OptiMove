@@ -31,7 +31,7 @@ import {
 import { boundedText } from "./metricTextRules.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average"]);
+export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording"]);
 // The proportional method's history (owner's answer 3): the last 5 measured sessions of the same category, within 90 days,
 // at least 3.
 export const PROPORTIONAL_SESSIONS = 5;
@@ -125,7 +125,8 @@ const EFFECTIVE = `o.segment_id is null and o.superseded_by_occasion_id is null 
 // The one imported metric event of the activity's alias set (rule 4: only a session that came from an import).
 async function importedEventOf(client, canonicalId) {
   const rows = (await client.query(
-    `select distinct e.id, e.occurred_date::text as occurred_date, e.occurred_instant, e.event_timezone_snapshot, e.owner_team_id
+    `select distinct e.id, e.occurred_date::text as occurred_date, e.occurred_instant, e.event_timezone_snapshot, e.owner_team_id,
+            e.source_external_id
        from training.activity_metric_event_links l
        join training_load.metric_events e on e.id = l.metric_event_id
       where l.activity_id in (select activity_id from training.activity_alias_ids($1)) and l.link_status = 'confirmed'
@@ -192,7 +193,7 @@ export async function loadEstimateContext(client, { canonicalId, activity, team,
       where d.owner_scope = 'system' and d.key = $1`,
     [testHooks.durationKey ?? DURATION_KEY],
   )).rows[0] ?? null;
-  return { roster, measured, variables, durationDef, athleteId, event, activity, team };
+  return { roster, measured, variables, durationDef, athleteId, event, activity, team, real };
 }
 
 const sameUnit = (a, b) => (a ?? null) === (b ?? null);
@@ -289,6 +290,53 @@ async function proportional(client, ctx, minutes) {
   });
 }
 
+// MT-D (plan sections 10 and 13): the recorded part of a short recording scaled to the target the coach chose before the
+// import. The values come from the imported candidate's stored preview (scaleRecording, bound by the approval's preview hash),
+// never from a second mapper run; after the retention purge they are gone (scale_basis_expired). Each sum value becomes
+// measured x target / recorded; the duration becomes the target. Only a `sum` variable is scaled (v63/v64 refuse the rest).
+async function scaleRecording(client, ctx) {
+  const session = /^team_session:([0-9]{1,12})$/.exec(String(ctx.event.source_external_id ?? ""));
+  if (!session) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
+  const candidate = (await client.query(
+    `select preview from training_load.gpexe_import_candidates
+      where owner_team_id = $1 and gpexe_team_session_id = $2 and status = 'imported' and import_undone_at is null
+      order by imported_at desc limit 1`,
+    [ctx.event.owner_team_id, session[1]],
+  )).rows[0];
+  if (!candidate) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
+  if (!candidate.preview) throw conflict("scale_basis_expired", "The data of this import has expired; its recorded part can no longer be scaled.");
+  const scaled = (candidate.preview.athletes ?? []).find((a) => String(a.athleteId) === ctx.athleteId)?.scaleRecording ?? null;
+  if (!scaled) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
+  if (scaled.notPossible) throw conflict("scale_not_possible", "This recording could not be scaled.", { reason: scaled.notPossible });
+  const recordedMinutes = Number(scaled.recordedMinutes);
+  const targetMinutes = Number(scaled.targetMinutes);
+  const defIds = [...new Set((scaled.values ?? []).map((v) => String(v.metricDefinitionId)))];
+  const defs = new Map((await client.query(
+    `select d.id, d.key, d.label, d.short_label, d.current_version_id, dv.unit, dv.value_type, dv.daily_aggregation_method,
+            (d.owner_scope <> 'club' or d.owner_club_id = $2) as named
+       from training_load.metric_definitions d
+       join training_load.metric_definition_versions dv on dv.id = d.current_version_id
+      where d.id = any($1::uuid[])`,
+    [defIds, ctx.team.club_id],
+  )).rows.map((d) => [String(d.id), d]));
+  return (scaled.values ?? []).map((v) => {
+    const d = defs.get(String(v.metricDefinitionId));
+    const def = String(v.metricDefinitionId);
+    const variable = {
+      metricDefinitionId: def, versionId: d ? String(d.current_version_id) : null, key: d?.key ?? null, label: d?.label ?? null,
+      shortLabel: d?.short_label ?? null, unit: d?.unit ?? null, aggregation: d?.daily_aggregation_method ?? null,
+    };
+    let reason = null;
+    if (!d || !d.named || d.value_type !== "numeric" || d.daily_aggregation_method !== "sum") reason = "not_estimable";
+    else if (String(d.current_version_id) !== String(v.metricDefinitionVersionId) || !sameUnit(d.unit, v.unit)) reason = "definition_changed";
+    else if (ctx.real.has(def)) reason = "measured_exists";
+    const measured = Number(v.value);
+    if (reason || !Number.isFinite(measured)) return { variable, value: null, reason: reason ?? "not_estimable", basis: null };
+    const value = d.key === (testHooks.durationKey ?? DURATION_KEY) ? targetMinutes : round(measured * targetMinutes / recordedMinutes, 3);
+    return { variable, value, reason: null, basis: { measured, recordedMinutes, targetMinutes } };
+  });
+}
+
 function methodView(entries, reasonWhenEmpty) {
   const values = entries.map((e) => ({
     metricDefinitionId: e.variable.metricDefinitionId, value: e.value, reason: e.reason, basis: e.basis,
@@ -334,6 +382,14 @@ export async function getEstimateProposal(ctx, activityId, query) {
         proportional: methodView(await proportional(client, ectx, minutes), "nothing_to_estimate"),
         copy_athlete: { ...copy, sourceAthleteId: input.sourceAthleteId, sources },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
+        // MT-D: only where a scale was chosen before the import; otherwise not available with the reason.
+        scale_recording: await scaleRecording(client, ectx).then(
+          (entries) => methodView(entries, "nothing_to_estimate"),
+          (error) => {
+            if (error instanceof RosterError && error.status === 409) return { available: false, reason: error.code, values: [] };
+            throw error;
+          },
+        ),
       },
     };
     await client.query("commit");
@@ -500,7 +556,9 @@ export async function saveEstimate(ctx, activityId, body) {
 
     let entries;
     let minutes = null;
-    if (input.method === "team_average") {
+    if (input.method === "scale_recording") {
+      entries = await scaleRecording(client, ectx);
+    } else if (input.method === "team_average") {
       entries = teamAverage(ectx);
     } else if (input.method === "copy_athlete") {
       if (!copySources(ectx).some((s) => s.athleteId === input.sourceAthleteId)) {

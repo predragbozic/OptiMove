@@ -62,3 +62,5 @@ docs/runbooks/source-metric-confirmations-v65*.sql text eol=lf
 
 docs/runbooks/activity-roster-v26-rollback.sql text eol=lf
 docs/runbooks/gpexe-check-finalization-v33-rollback.sql text eol=lf
+# MT-D (v68, v69): the v69 rollback restores v63's estimate_basis_ok body, which the preflight compares by md5; new files only.
+docs/runbooks/scale-recording-v6*.sql text eol=lf
