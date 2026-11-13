@@ -89,6 +89,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611121000_training_load_v63_metric_value_estimates.sql",
   "202611121200_training_load_v64_metric_estimate_requests.sql",
   "202611121800_training_load_v65_source_metric_confirmations.sql",
+  "202611131200_training_load_v67_gpexe_track_choices.sql",
   "202611131000_training_load_v66_club_activation_confirmation_gate.sql",
 ];
 
@@ -267,7 +268,9 @@ function assertDisposableName(name, url) {
 // save are tested in club-activation-confirmation-gate-v66 and source-metric-board-save-18-3. The suites of phase 7h,
 // LO-1 and 9-B's concurrency exercise a club admin's A1, A2 and replacement - code paths that are unchanged and stay
 // in force for fields with parameters (zones and thresholds) - on test fields without parameters, so they build
-// their database through v65.
+// their database without the gate. v67 (MT-A) is listed before v66 because it reaches production first; the runner
+// itself applies by file name, so a database built from the whole list gets v66 before v67 (a fresh deploy) and one
+// built from this list and then brought up to date gets v67 before v66 (production's own order).
 export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf("202611131000_training_load_v66_club_activation_confirmation_gate.sql"));
 
 export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
