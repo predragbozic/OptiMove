@@ -1764,7 +1764,8 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
   the preflight's block 1 expects v67 recorded with its checksum and as the last migration and no OTHER migration
   after v66; the post-check's block 1 expects v67 recorded and no other later migration; the rollback tolerates
   exactly v67 (another table, it does not read the gate and is not rolled back with it) and refuses any other later
-  migration. v67 is listed before v66 in the test list, so the rehearsal database holds it when v66 is applied -
+  migration. The suites that build "before the gate" take every migration but v66, so the rehearsal database holds
+  v67 when v66 is applied -
   production's own order - while a database built from the whole list in one run gets v66 first, a fresh deploy's
   order. The migration file itself is unchanged.
 - **Suites of other slices.** After v66 a club admin's A1 on a field without parameters is refused by design. The

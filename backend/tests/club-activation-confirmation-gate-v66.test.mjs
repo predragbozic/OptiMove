@@ -26,7 +26,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
 const V66 = "202611131000_training_load_v66_club_activation_confirmation_gate.sql";
 const V66_NAME = `migrations_v2/${V66}`;
-const BEFORE_V66 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V66));
+const BEFORE_V66 = GPEXE_TEST_MIGRATIONS.filter((m) => m !== V66);
 const V65_NAME = `migrations_v2/${BEFORE_V66.find((m) => m.includes("_v65_"))}`;
 // MT-A's migration: merged after v66 and on production before it, and later than v66 by file name. The rehearsal
 // database therefore holds it before v66 is applied, exactly as production does.
