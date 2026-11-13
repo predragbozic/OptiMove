@@ -218,6 +218,7 @@ export function mappedMetricSpecs(rows) {
       sourceLabel: activation.sourceLabel,
       sourceParameterFingerprint: activation.sourceParameterFingerprint,
       requirement: activation.requirement,
+      aggregation: activation.dailyAggregation ?? null,
       levels: Object.freeze({ full: activation.appliesToSession === true, drill: activation.appliesToDrill === true }),
       factors: Object.freeze({ scale: canonicalDecimal(activation.scale), divisor: canonicalDecimal(activation.scaleDivisor), offset: canonicalDecimal(activation.offset) }),
       range: Object.freeze({
@@ -303,6 +304,46 @@ export function trackSetFingerprint(athleteRows) {
     .join(";");
 }
 
+// MT-D (plan sections 10 and 13): a scaled athlete's whole-session result. The recorded minutes are the athlete's whole-session
+// duration (the system variable `duration`, in minutes) of the same plan. With it, and recorded < target: every `sum` value is
+// taken out of the result into scaleRecording.values (left out as scaled_by_choice; the save after the import writes it as an
+// estimate, measured x target / recorded), every `avg` value is left out as not_scaled (O6), and max / last / none stay measured.
+// Drill results are never touched (D2). Without a duration, or when the recording is not shorter than the target, nothing is
+// scaled and the athlete is imported as without a choice: { notPossible } says why (D3).
+export const SCALE_DURATION_KEY = "duration";
+let scaleDurationKey = SCALE_DURATION_KEY;
+// Tests name their own minutes variable (the disposable worlds have no `duration`); null restores it.
+export function setScaleDurationKeyForTests(key) {
+  scaleDurationKey = key ?? SCALE_DURATION_KEY;
+}
+function scaleWholeSession({ results, metricSpecs, leftOut, gpexeAthleteId, targetMinutes }) {
+  const whole = results.find((r) => r.level === "full");
+  const specOf = new Map(metricSpecs.filter((s) => !s.raw).map((s) => [s.activationId, s]));
+  const duration = whole?.values.find((v) => v.variableKey === scaleDurationKey && v.variableScope === "system" && v.unit === "min");
+  if (!duration) return { notPossible: "no_duration", targetMinutes };
+  const recordedMinutes = Number(duration.value);
+  if (!(Number.isFinite(recordedMinutes) && recordedMinutes > 0 && recordedMinutes < targetMinutes)) return { notPossible: "not_shorter", targetMinutes, recordedMinutes };
+  const kept = [];
+  const values = [];
+  for (const v of whole.values) {
+    const aggregation = specOf.get(v.activationId)?.aggregation ?? null;
+    const at = { gpexeAthleteId, athleteSessionId: whole.athleteSessionId, level: "full", drillIndex: null, activationId: v.activationId, category: "scaled" };
+    if (aggregation === "sum") {
+      values.push({
+        metricDefinitionId: v.metricDefinitionId, metricDefinitionVersionId: v.metricDefinitionVersionId,
+        variableKey: v.variableKey, variableScope: v.variableScope, label: v.label, unit: v.unit, value: v.value,
+      });
+      leftOut.push({ ...at, code: "scaled_by_choice" });
+    } else if (aggregation === "avg") {
+      leftOut.push({ ...at, code: "not_scaled" });
+    } else {
+      kept.push(v);
+    }
+  }
+  whole.values = kept;
+  return { targetMinutes, recordedMinutes, values };
+}
+
 // trackChoices (MT-B, plan section 12): a Map of GPEXE athlete id -> the athlete's current track choice
 // { choiceId, kind: 'track' | 'none' | 'cleared', trackId, fingerprint }, read by previewLocked under the team lock. It
 // matters only for an athlete with more than one track that is not one recording (MT-0): a 'track' or 'none' choice whose
@@ -349,6 +390,25 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
     let trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
     let duplicateTracks = null;
     let trackChoice = null;
+    // MT-D: the target minutes of a scale chosen for this athlete's recording, applied only with the choice itself.
+    let scaleTargetMinutes = null;
+    const scaleOf = (choice) => {
+      const n = choice?.scaleTargetMinutes === null || choice?.scaleTargetMinutes === undefined ? null : Number(choice.scaleTargetMinutes);
+      return n !== null && Number.isFinite(n) && n > 0 && n <= 600 ? n : null;
+    };
+    if (trackIds.length === 1 && trackChoices instanceof Map) {
+      // MT-D: a one-track athlete holds a choice only for a scale ('track' with scaleTargetMinutes); applied while it names
+      // exactly this track and these rows. Otherwise it is void: the athlete is imported as without a choice, marked stale.
+      const choice = trackChoices.get(gpexeAthleteId) ?? null;
+      if (choice && choice.kind === "track" && scaleOf(choice) !== null) {
+        const applies = trackSetFingerprint(athleteRows) === choice.fingerprint && String(choice.trackId) === trackIds[0];
+        scaleTargetMinutes = applies ? scaleOf(choice) : null;
+        trackChoice = {
+          choiceId: String(choice.choiceId), kind: "track", trackId: String(choice.trackId), trackCount: 1, stale: !applies,
+          scaleTargetMinutes: scaleOf(choice),
+        };
+      }
+    }
     if (trackIds.length > 1) {
       duplicateTracks = identicalTracks(bundle, athleteRows, trackIds);
       if (!duplicateTracks) {
@@ -374,6 +434,11 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
         }
         // 'track': that track's own rows, as a single-track athlete (their native identities).
         trackChoice = { choiceId: String(live.choiceId), kind: "track", trackId: String(live.trackId), trackCount: trackIds.length, stale: false };
+        // MT-D: a scale rides on the 'track' choice; the key is present only with a scale, so MT-B's previews are unchanged.
+        if (scaleOf(live) !== null) {
+          scaleTargetMinutes = scaleOf(live);
+          trackChoice.scaleTargetMinutes = scaleTargetMinutes;
+        }
         athleteRows = athleteRows.filter((r) => String(r.track) === trackChoice.trackId);
         trackIds = [trackChoice.trackId];
       } else {
@@ -486,7 +551,11 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
         }
       }
     }
-    participants.push({ gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}), ...(trackChoice ? { trackChoice } : {}) });
+    const scaleRecording = scaleTargetMinutes === null ? null : scaleWholeSession({ results, metricSpecs, leftOut, gpexeAthleteId, targetMinutes: scaleTargetMinutes });
+    participants.push({
+      gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}), ...(trackChoice ? { trackChoice } : {}),
+      ...(scaleRecording ? { scaleRecording } : {}),
+    });
   }
 
   const mixed = timezones.size > 1;

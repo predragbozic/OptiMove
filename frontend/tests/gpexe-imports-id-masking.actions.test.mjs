@@ -152,8 +152,10 @@ function assertMasked(html, where, ids = ALL_IDS) {
   const out = exposed(html);
   for (const id of ids) assert.ok(!new RegExp(`\\b${id}\\b`).test(out), `${where}: GPEXE id ${id} is visible outside Technical details`);
 }
+// P2 (owner 2026-11-13, O1): Technical details in Imports are the platform admin's only; a club admin has none at all.
 function assertInTech(html, id, where) {
-  assert.match(insideTech(html), new RegExp(`<dd>${id}</dd>`), `${where}: id ${id} is under Technical details`);
+  if (state.trainingLoad.gpexe.status?.viewer?.isPlatformAdmin === true) assert.match(insideTech(html), new RegExp(`<dd>${id}</dd>`), `${where}: id ${id} is under Technical details`);
+  else assert.equal(insideTech(html), "", `${where}: no Technical details for this viewer`);
 }
 
 async function openImports() {
@@ -304,8 +306,13 @@ for (const role of ["coach", "club admin", "platform admin"]) {
     if (admin) {
       assertMasked(html, `${role}: v3 session review`);
       const tech = insideTech(html);
-      for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(tech.includes(marker), `${role}: ${marker} under Technical details`);
-      assert.match(tech, /<dt>Left-out source codes<\/dt><dd>max_v_missing<\/dd>/);
+      if (role === "platform admin") {
+        for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(tech.includes(marker), `${role}: ${marker} under Technical details`);
+        assert.match(tech, /<dt>Left-out source codes<\/dt><dd>max_v_missing<\/dd>/);
+      } else {
+        // P2 (O1): the club admin has no Technical details, so the markers are nowhere.
+        for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(!html.includes(marker), `${role}: ${marker} is nowhere`);
+      }
       assert.match(outsideTech(html), /not switched on for this team, so its values are not imported: Max acceleration\./);
       assert.match(outsideTech(html), /Top speed - required value missing/);
     } else {
@@ -329,18 +336,22 @@ test("no stored identity at all (none loaded, or the team has no binding): an ad
   }
 });
 
-test("a coach keeps the screens as before: the GPEXE ids stay in the text, no identity is ever requested, and nothing signals that a snapshot exists", async () => {
+test("P2: a coach sees no GPEXE id either - the list position names the athlete - and no identity is ever requested, nor any sign that a snapshot exists", async () => {
   reset(VIEWERS.coach);
   await openMapping();
   const html = pageHtml();
   assert.equal(fetchCalls.filter((c) => c.url.includes("/athlete-identities")).length, 0, "no identity request");
-  assert.match(outsideTech(html), new RegExp(`<strong>GPEXE athlete ${ID.named}</strong>`));
+  assertMasked(html, "coach: Link athletes");
+  assert.match(outsideTech(html), /<strong>GPEXE athlete \d+<\/strong>/, "named by its position in the list");
+  assert.equal(insideTech(html), "", "no Technical details for a coach");
   assert.ok(!/Name not loaded|Name not provided|GPEXE names and dates of birth|retry|24 hours/.test(html), "no sign of an identity or a snapshot");
   await act("training-load-gpexe-map-close");
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
-  assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
+  assertMasked(review, "coach: session review");
+  assert.equal(insideTech(review), "", "no Technical details in a coach's review");
 });
+
 
 // ---------------------------------------------------------------------------
 // The lifetime of the names in memory (code-reviewer M1 / security MEDIUM on 8bc6921).

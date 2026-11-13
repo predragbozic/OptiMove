@@ -91,6 +91,8 @@ export function projectPreview(preview, level, { namesClubVariables = false } = 
     athlete.skippedValues = values(athlete.skippedValues);
     // MT-B: a coach reads what was chosen (the kind, the track, stale), never which choice row or who chose it.
     if (athlete.trackChoice) delete athlete.trackChoice.choiceId;
+    // MT-D: the scaled values are named like the result values (a club variable of another club is not named).
+    if (Array.isArray(athlete.scaleRecording?.values)) athlete.scaleRecording.values = values(athlete.scaleRecording.values);
   }
   for (const change of out.changesToImported ?? []) change.values = values(change.values);
   delete out.unmappedSourceFields;
