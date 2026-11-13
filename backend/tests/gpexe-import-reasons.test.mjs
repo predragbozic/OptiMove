@@ -33,8 +33,10 @@ test("every code the GPEXE mapper and writer can throw maps to a neutral blocked
   // writer (it filters to linked team athletes first), and three are 9-B
   // invariants of the writer (a value that is not canonical decimal text, a
   // value without its provenance): bugs, not coach reasons, so 'other' with
-  // the admin step is the honest category.
-  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped", "provenance_incomplete", "provenance_missing", "value_not_decimal"]);
+  // the admin step is the honest category. MT-B's track_choice_not_supported
+  // is the CLI / test writer path's refusal only; the in-app preview applies a
+  // choice and never meets it.
+  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped", "provenance_incomplete", "provenance_missing", "track_choice_not_supported", "value_not_decimal"]);
   for (const code of codes) assert.ok(Object.values(BLOCKED_CODES).includes(blockedCodeFor(code)), code);
   assert.equal(blockedCodeFor("something_new_nobody_mapped"), BLOCKED_CODES.other);
   assert.equal(blockedCodeFor(null), null);

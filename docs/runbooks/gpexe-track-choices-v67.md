@@ -16,7 +16,8 @@ Each decision is one row of `training_load.gpexe_track_choices`, append-only. A 
 and the current choice is the row no later row supersedes. The table holds only ids (team, session, athlete, track), the
 server-computed track-set fingerprint, who decided, on which right, and when. It stores no GPEXE name and no value.
 
-**Nothing reads a choice yet.** The mapper and the preview apply it in MT-B. "Add them up" comes in MT-E, and scaling a
+**MT-B applies the choice** in the mapper and the preview (plan section 12): every check, preview recompute and approval reads
+it under the team lock. "Add them up" comes in MT-E, and scaling a
 short recording in MT-D, under its own migration.
 
 ## Routes
@@ -102,4 +103,6 @@ Proof is in `backend/tests/gpexe-track-choices-mt-a.test.mjs`:
 5. Smoke without a login: `GET …/track-choices` and `PUT …/track-choices/1` (zero UUIDs) answer 401.
 
 **Rollback:** `gpexe-track-choices-v67-rollback.sql`. It refuses once a choice exists, or once a later migration is recorded.
+Run it only when the deployed commit contains neither MT-A's routes nor MT-B's reads: from MT-B on, every check, recompute and
+approval reads the table and fails without it.
 It was rehearsed in `backend/tests/gpexe-track-choices-v67.test.mjs` (apply, rollback, the exact catalog, re-apply).

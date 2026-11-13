@@ -13,7 +13,8 @@ const UP_TO_V60 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex
 // v62: every check, preview and approval reads the team's session time zone, so the main database carries v62 as well (test 21
 // rolls v62 back for real before v60's rollback, and applies both again at the end).
 const V62_FILE = "202611111200_training_load_v62_team_session_timezone.sql";
-const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE];
+// MT-B: the preview reads v67's track choices, so v67 is applied too.
+const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE, "202611131200_training_load_v67_gpexe_track_choices.sql"];
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -878,6 +879,9 @@ test("21. the rollback refuses, changing nothing, once an undo exists, under a l
   // again at the end.
   const u = await undo(team, s);
   assert.equal(u.status, 200, u.text);
+  // MT-B: v67 (no track choice here) is rolled back first, as v62's rollback refuses under a later migration; it comes back with
+  // MAIN_MIGRATIONS at the end.
+  await c.query(fs.readFileSync(RUNBOOK("gpexe-track-choices-v67-rollback.sql"), "utf8"));
   await c.query(fs.readFileSync(RUNBOOK("team-session-timezone-v62-rollback.sql"), "utf8"));
   await c.query(fs.readFileSync(RUNBOOK("undo-roster-work-v60-rollback.sql"), "utf8"));
   const before = await catalogOf(admin);
