@@ -841,6 +841,17 @@ export async function latestCheck(teamId, { adminViewer = false } = {}) {
   return row ? checkView(row, { adminViewer }) : null;
 }
 
+// The team's newest check that succeeded (the coach Imports screen: which days the sessions shown were last found for),
+// beside the latest check of any outcome. The same for every viewer of the status; no error and no counts.
+export async function lastSucceededCheck(teamId) {
+  const row = (await query(
+    `select id, window_from, window_to, finished_at from training_load.gpexe_import_checks
+      where owner_team_id = $1 and status = 'succeeded' order by started_at desc limit 1`,
+    [teamId],
+  )).rows[0];
+  return row ? { id: row.id, window: { from: row.window_from, to: row.window_to }, finishedAt: row.finished_at } : null;
+}
+
 // Starts a check and returns it right away; the fetch runs in the
 // background (GPEXE can take minutes). `wait` is for tests and the CLI.
 export async function startCheck(teamId, { userId, window, wait = false, adminViewer = false }) {

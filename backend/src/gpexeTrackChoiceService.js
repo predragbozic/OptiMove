@@ -107,7 +107,7 @@ function choiceView(row) {
   };
 }
 
-const CHOSEN_BY_NAME = `(select coalesce(u.display_name, u.full_name) from public.users u where u.id = c.chosen_by_user_id) as chosen_by_name`;
+const CHOSEN_BY_NAME = `(select coalesce(nullif(u.display_name, ''), u.full_name) from public.users u where u.id = c.chosen_by_user_id) as chosen_by_name`;
 const CURRENT_SQL = `select c.*, ${CHOSEN_BY_NAME} from training_load.gpexe_track_choices c
   where c.owner_team_id = $1 and c.gpexe_team_session_id = $2 and c.gpexe_athlete_id = $3
     and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`;
