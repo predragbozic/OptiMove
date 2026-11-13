@@ -564,7 +564,7 @@ function renderSourceCardHtml(source, gx, status) {
             <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
             <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
           </div>
-          <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Without dates, the last 14 days are searched (at most 31)."}</p>
+          <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Leave the dates empty to search the last 14 days."}</p>
         </details>
       ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
@@ -964,6 +964,7 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
 // person can take now (check a result, link athletes, update a review); a new search would not fix those. Otherwise the
 // state bar's button stays the main one.
 const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
+const STEP_IN_GROUP = new Set(["unknown", "unlinked", "stale", "fresh"]);
 function groupLeads(gx, status) {
   // IMP1: on the Needs you tab the Import button is a tab away, so the first group's step leads there either way.
   if (dailyImportState(gx, status).n && importsTab(gx) !== "attention") return false;
@@ -991,7 +992,9 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
     else facts.push("nothing new");
   }
   const gx = state.trainingLoad.gpexe;
-  let step = kind === "attention" ? attentionText(c, status) : "";
+  // P3: one problem is said once. In a group whose sentence and button already give the step, the row gives only its
+  // facts; a group whose sessions differ ("Needs a look", "Problem in the GPEXE data") keeps each row's own step.
+  let step = kind === "attention" && !STEP_IN_GROUP.has(group) ? attentionText(c, status) : "";
   if (kind === "hidden" && withdrawnByCheck(c)) step = withdrawnText(c);
   // A hidden version says which kind it is (replaced, or no longer found);
   // a session the last successful search did not confirm says so too (v33).
@@ -1376,7 +1379,7 @@ function renderCalendarHtml(gx) {
         <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
         <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
       </div>
-      <p class="muted imports-cal-note">Markers show sessions already found by OptiMove. Other dates may not have been searched yet.</p>
+      <p class="muted imports-cal-note">A dot or a number marks the sessions found so far on a day.</p>
       <div class="imports-cal-grid" role="group" aria-label="${escapeAttr(`${MONTH_NAMES[m - 1]} ${y}`)}">
         ${WEEKDAY_NAMES.map((w) => `<span class="imports-cal-weekday" aria-hidden="true">${w}</span>`).join("")}
         ${cells.join("")}
