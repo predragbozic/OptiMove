@@ -213,3 +213,15 @@ test("4. the screen: groups, filters, details, empty and error states, escaping,
   assert.match(renderSettingsNavHtml({ isPlatformAdmin: true }), /data-section="appHealth"/);
   assert.ok(!/appHealth/.test(renderSettingsNavHtml({ isPlatformAdmin: false })));
 });
+
+test("the words for an error that says what failed: the kind in plain words, the code beside it as before; an unknown second part falls back", async () => {
+  const { codeWords } = await import("../app-health-view.js");
+  assert.equal(codeWords("unhandled_rejection.aborterror"), "A background task failed: a request or playback was stopped");
+  assert.equal(codeWords("js_error.script_error"), "A page crashed: the browser hid the error of a foreign script");
+  assert.equal(codeWords("handler_error.typeerror"), "An action failed: a value was missing");
+  assert.equal(codeWords("handler_error"), "An action failed");
+  assert.equal(codeWords("unhandled_rejection"), "A background task failed");
+  assert.equal(codeWords("unhandled_rejection.__proto__"), "Error");
+  assert.equal(codeWords("some.server.code", 503), "Server error");
+  assert.equal(codeWords("some.server.code", 409), "Error");
+});

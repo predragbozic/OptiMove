@@ -30,10 +30,29 @@ code only and never changes the answer.
 
 ## Routes (`/api/app-errors`, sign-in required)
 
-* `POST /` one browser report: exactly the keys `screen`, `action`, `code`, `status`, `stackSig`, `release`, each in its closed
+* `POST /` one browser report: exactly the keys `screen`, `action`, `code`, `status`, `stackSig`, `release`, `reason`, each in its closed
   shape, or `400 invalid_error_report` (nothing stored, the answer never repeats the report). The route parses at most 4 KB (`413 body_too_large` beyond it); `429` after 20 reports a minute from one user; success is an empty `204`.
 * `GET /groups?days=1..30` for an active platform admin: the errors grouped by fingerprint (occurrences, distinct users, first and
   last seen, latest release, roles). Anyone else gets the same 404 as an unknown route.
+
+### What failed (`reason`)
+
+A native rejection — an aborted request, a refused `play()` or full screen — carries no script frames, so its
+`stack_signature` is empty and the row says nothing about itself. The browser therefore sends one more word: `reason`,
+the `name` of the error or of the rejection's reason, lower-cased, and only when it is one of
+`aborterror`, `notallowederror`, `notsupportederror`, `invalidstateerror`, `securityerror`, `networkerror`,
+`timeouterror`, `quotaexceedederror`, `typeerror`, `referenceerror`, `rangeerror`, `syntaxerror`, `other_error`
+(an error object with any other name), `non_error` (the reason is not an error object), `none` (there is no reason),
+`script_error` (the browser hid a foreign script's error) or `no_error_object`. A message is never sent.
+
+It is accepted only with `unhandled_rejection`, `js_error` and `handler_error`, and is stored as the second part of
+`error_code` (`unhandled_rejection.aborterror`): no column is added, and two reasons are two kinds of error in the
+grouping. A report without it is stored as before, so a page still open from an older release keeps working. Any other
+word, or one with another code, is `400` and nothing is stored.
+
+`handler_error` is the app's own click handler failing (`guardHandler` in `frontend/app-errors-capture.js`): it is
+reported once, with the control that was really used and the handler's own frames, instead of surfacing later as an
+anonymous rejection labelled with whatever was tapped last.
 
 ## Throttle and size
 

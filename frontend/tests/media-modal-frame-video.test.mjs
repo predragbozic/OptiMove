@@ -258,3 +258,32 @@ test("7. a Drive video on an iPhone or iPad is not asked to start by itself (its
     if (original) Object.defineProperty(globalThis, "navigator", original); else delete globalThis.navigator;
   }
 });
+
+test("8. the Full screen button on a browser that refuses the request: the refusal is caught and said in the console, never left as an unhandled rejection; asked silently on open it says nothing", async () => {
+  const refusal = new dom.window.DOMException("Fullscreen request denied", "NotAllowedError");
+  const requests = phone({ fullscreen: true, answer: () => Promise.reject(refusal) });
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const originalWarn = console.warn;
+  const warned = [];
+  console.warn = (...args) => warned.push(args[0]);
+  try {
+    modal.openMedia("Dead Bug", "", DRIVE_VIDEO);
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(requests.length, 1, "asked once on open");
+    assert.deepEqual(warned, [], "the request made on open is silent");
+    const button = body().querySelector('[data-action="enter-fullscreen"]');
+    assert.ok(button);
+    assert.equal(modal.handleMediaAction(button), true);
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(requests.length, 2, "the button asks again");
+    assert.deepEqual(warned, [refusal], "the person's own request says why in the console");
+    assert.deepEqual(unhandled, [], "no rejection is left unhandled");
+    assert.ok(body().querySelector(".media-frame-video"), "the inline player stays");
+  } finally {
+    console.warn = originalWarn;
+    process.off("unhandledRejection", onUnhandled);
+    modal.closeMedia();
+  }
+});

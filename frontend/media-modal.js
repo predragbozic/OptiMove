@@ -318,7 +318,9 @@ export function enterMediaFullscreen(silent = false) {
   if (!request) return;
   try {
     const result = request.call(target);
-    if (result?.catch && silent) result.catch(() => {});
+    // The browser may refuse (no user gesture, a frame it will not enlarge): always caught, so it is never an
+    // unhandled rejection; said in the console when the person asked for it.
+    if (result?.catch) result.catch((error) => { if (!silent) console.warn(error); });
   } catch (error) {
     if (!silent) console.warn(error);
   }
