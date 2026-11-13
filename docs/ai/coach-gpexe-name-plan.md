@@ -1,6 +1,6 @@
 # A coach reads the GPEXE name of an unlinked athlete: plan note
 
-Status: **Proposed.** Plan only; no code until the *Rukovodilac* confirms. ★★ (trigger 2: a coach reads the identity
+Status: **Accepted** (the *Rukovodilac*, 2026-11-13: option (a) of section 2). Built after MT-B is merged, as one PR. ★★ (trigger 2: a coach reads the identity
 snapshot; `security-reviewer` and the *Nezavisni revizor*). No migration.
 
 Owner decision (2026-11-13, relayed by the *Rukovodilac*): a coach may see the GPEXE name of an unlinked athlete. The
@@ -32,20 +32,18 @@ Checked against `main` `cbede24b`.
 - **Legal gate:** closed by C123 ("names, dates of birth … need no legal basis, minors are not in the product"). Adding a
   minor athlete reopens it (contract section 5).
 
-## 2. The question for the owner first (blocks the code)
+## 2. Decided: option (a)
 
 The new decision ("never the date of birth, never the conflict flag") and U3's R2 (the coach sees the date of birth and
-the conflict) cannot both hold for the same coach. One of:
+the conflict in the suggestion box) were in conflict. The *Rukovodilac* decided **option (a)** on 2026-11-13: the owner's
+amendment of 2026-11-04 to U3 stands, and the narrower wording did not override it.
 
-- **(a)** The decision applies to the new places only. Link athletes, the review and the chooser show the name without
-  the date, while the U3 suggestion box keeps showing the date and the conflict. The rule stays inconsistent, and the date
-  stays visible to the coach.
-- **(b)** The decision narrows U3 for the coach as well. The coach's suggestions answer drops `birthDate` and
-  `dateConflicts`; a pair whose dates differ becomes one more "choose yourself" row with no reason given. The
-  administrators' answer is unchanged.
-
-I make no recommendation on the product question; (b) is the one that matches the decision's words. The answer changes
-the scope below (marked **[b]**).
+- **The U3 suggestion box is unchanged**: the GPEXE name, the date of birth, and "the dates of birth differ".
+- **The new places get the name only**, with no `birthDate` key and no conflict flag: the Link athletes rows, the session
+  review modal, confirmations, results, notices and errors.
+- **The recorded inconsistency, and why:** a coach sees a GPEXE athlete's date of birth only in the suggestion box,
+  where it helps choose between two people with the same name. Everywhere else the name identifies the athlete, and the
+  date would add personal data without helping a choice.
 
 ## 3. The change
 
@@ -91,9 +89,7 @@ computes it from `pairSuggestionBasis`; the service decides again.
   under a row, in the confirmation and in the result sentences.
 - The last-link notice and the errors.
 - **The unlink question:** it names a linked athlete, so the coach sees the OptiMove name as today.
-- **The U3 suggestion box:**
-  - under (a), unchanged;
-  - **[b]** the coach's rows lose "Born …" and the date-conflict reason.
+- **The U3 suggestion box:** unchanged (section 2).
 - **Unchanged:** the board (`sourceMetricBoardService`), and an athlete who is linked.
 - Duplicate names: the ordinal "(GPEXE athlete N)" as for an admin. N is never the id.
 
@@ -111,10 +107,10 @@ computes it from `pairSuggestionBasis`; the service decides again.
 | File | Change |
 |---|---|
 | `backend/src/routes/gpexeImport.js` | the `athlete-identities` GET audience; `viewer.identityNames` in status |
-| `backend/src/gpexeAthleteIdentityService.js` | `listIdentities`: the coach projection (unlinked only, name only); **[b]** `listPairSuggestions`: the coach answer without `birthDate` / `dateConflicts` |
+| `backend/src/gpexeAthleteIdentityService.js` | `listIdentities`: the coach projection (unlinked only, name only); `listPairSuggestions` unchanged |
 | `frontend/gpexe-import-data.js` | `identityNames` / `identityAdmin` split; load the list for the coach |
-| `frontend/gpexe-import-view.js` | no "Born" line or conflict for a coach; **[b]** the suggestion box |
-| `docs/ai/gps-import-flow-contract.md` | the decision, and **[b]** R2 amended |
+| `frontend/gpexe-import-view.js` | no "Born" line or conflict for a coach outside the suggestion box |
+| `docs/ai/gps-import-flow-contract.md` | the decision and the recorded inconsistency (section 2) |
 
 ## 5. Tests
 
@@ -129,7 +125,7 @@ computes it from `pairSuggestionBasis`; the service decides again.
   - no binding;
 - the administrators' answer byte-identical to today's;
 - the recorded SQL lock order of the coach read is the same as an admin's (connection, binding, team, users, role, club);
-- **[b]** the coach's suggestions carry no `birthDate` or `dateConflicts`; an admin's are unchanged.
+- the coach's suggestions answer is byte-identical to today's (still with the date and the conflicts).
 
 **Frontend** (`gpexe-athlete-identity.actions`, `gpexe-imports-id-masking.actions`, `gpexe-pair-suggestions.actions`):
 - the coach sees names and no "Born", no conflict and no Technical details;
@@ -146,4 +142,4 @@ computes it from `pairSuggestionBasis`; the service decides again.
 - ★★ trigger 2: `security-reviewer`, `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (frontend), then both GOs.
 - One PR, backend and frontend together, so the coach never gets an answer the screen does not expect. No migration and no
   preflight.
-- Needs before code: your confirmation and the owner's answer to section 2.
+- Order: after MT-B is merged.
