@@ -373,6 +373,20 @@ test("the team's own coach (identityNames): the GPEXE names replace the ids on L
   }
 });
 
+test("the team's own coach, a nameless athlete in the review table's row: the heading points at the values in the row when there are some, and only asks to find the athlete when GPEXE sent none (code review LOW on 9f6cd42e)", async () => {
+  for (const [values, expected] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, /Find this athlete in GPEXE using the values in this row\./], [{}, /Find this athlete in GPEXE\. Link only if you are sure\./]]) {
+    reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
+    const base = responder;
+    responder = async (call) => (call.url.endsWith("/candidates/cand-1")
+      ? { status: 200, body: { candidate: { ...candidateDetail(), helperValues: { [ID.named]: { duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, [ID.notLoaded]: values } }, importSwitch: { enabled: true } } }
+      : base(call));
+    await openReview();
+    const html = outsideTech(pageHtml());
+    assert.match(html, expected);
+    assert.ok(!/session values below/.test(html), "no pointer to values below a compact row");
+  }
+});
+
 test("the team's own coach with no stored names keeps the ids as before (an ordinal alone would not help to find the athlete), with no Technical details", async () => {
   reset(VIEWERS["team coach"], { identities: { ...COACH_IDENTITIES, identities: [] } });
   await openMapping();
