@@ -608,3 +608,13 @@ search of the unchanged session changes neither the estimate nor the state.
 **Order:**
 - No MT-B code before v67 (MT-A, #513) is deployed and post-checked.
 - This section goes to a docs pull request after #513 is merged, so it merges without a conflict.
+
+### 12.10 LOWs carried from MT-A's GO (#513, 2026-11-13) into MT-B's pull request
+
+- **L1 (the *Nezavisni revizor*).** A test: two first choices of one athlete, inserted from two connections with the guard
+  satisfied, get 23505. Otherwise the partial unique index `gpexe_track_choices_one_root` is not killed by any test.
+- **L2 (the *Nezavisni revizor*).** A test that switches the team to pilot mode at the PUT's `beforeTeamLock` hook, so the
+  mapping of 55000 `team_import_pilot_mode` to the identical 404 is killed.
+- **L3 (the *Rukovodilac*).** The PUT checks the audience before it validates the body: someone outside the audience gets the
+  identical 404 for a malformed body too.
+- **L4 (the *Rukovodilac*).** `chosenByUserId` leaves `choiceView`. The approver-only GET shows `chosenBy: { name }`.
