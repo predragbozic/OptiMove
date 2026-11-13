@@ -787,6 +787,27 @@ test("7c. the refusals no other test reaches: a session too large to read, a ses
   assert.deepEqual(board.on.map((o) => o.activationId), [activationId]);
 });
 
+test("7d. a team bound through a team-owned connection (v27 allows it) has no board: the identical 404 on the board and on a placement, for the club's admin and for a platform admin", async () => {
+  // The same team, athletes and stored session as a board that works; only the connection's owner differs.
+  const t = await gpexeTeam(W.clubA, { bound: false });
+  const connectionId = (await one(
+    `insert into training_load.source_credential_connections (source_system, owner_scope, owner_team_id, host_key, account_label, credential_kind, created_by_user_id, state,
+                                                              credential_ciphertext, credential_nonce, credential_auth_tag, credential_key_version, last_verified_at)
+     values ('gpexe','team',$1,'server3','18-2 team-owned','exchanged_token',$2,'verified',$3,$4,$5,1, now()) returning id`,
+    [t.teamId, W.pa.id, crypto.randomBytes(24), crypto.randomBytes(12), crypto.randomBytes(16)])).id;
+  const bindingId = (await one(
+    `insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id)
+     values ($1,$2,'gpexe',$3,$4,$1) returning id`, [t.teamId, connectionId, t.sourceTeamId, W.pa.id])).id;
+  Object.assign(t, { connectionId, bindingId });
+  for (const n of [1, 2]) await link(t, n, `Fourth ${NAMES[n]}`);
+  const cand = await candidate(t);
+  for (const who of [W.caA, W.paA, W.pa]) {
+    assert.deepEqual(shape(await boardOf(who, t)), NOT_FOUND, "the board");
+    assert.deepEqual(shape(await boardOf(who, t, { candidateId: cand.id })), NOT_FOUND, "the board of a chosen session");
+    assert.deepEqual(shape(await placement(who, t, cand.id, W.fTime, W.vMin)), NOT_FOUND, "a placement");
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 5. What never leaves, and what the service never does
 // ---------------------------------------------------------------------------
