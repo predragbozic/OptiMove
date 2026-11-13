@@ -33,10 +33,10 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v62_team_session_timezone")) + 1).filter((m) => !m.includes("app_error_events")), "202611131200_training_load_v67_gpexe_track_choices.sql"] });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v62_team_session_timezone")) + 1).filter((m) => !m.includes("app_error_events")), "202611131200_training_load_v67_gpexe_track_choices.sql", "202611131300_training_load_v68_track_choice_scale.sql"] });
   // Every migration but the error-tracking one (an injected failure would be recorded as a row), through v62 only, so v62 stays
   // the last one here whatever comes after it (test 11 rehearses its rollback); plus v67 (MT-B: the preview reads its track
-  // choices), whose record test 11 hides around v62's rollback.
+  // choices), whose record test 11 hides around v62's rollback; and v68 (MT-D: the scale), the same.
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -524,8 +524,8 @@ test("11. migration v62: the preflight passes on v61, the post-check on v62, the
   }
   const team = await setupTeam();
   assert.equal((await setZone(team, "Europe/Sarajevo")).status, 200);
-  // MT-B: v67's record (the one migration after v62 here) is hidden, so the refusal tested is v62's own.
-  await admin.query(`create temp table tz62_later as select * from public.schema_migrations where migration_name like 'migrations_v2/%v67_gpexe_track_choices.sql'`);
+  // MT-B / MT-D: v67's and v68's records (the migrations after v62 here) are hidden, so the refusal tested is v62's own.
+  await admin.query(`create temp table tz62_later as select * from public.schema_migrations where migration_name like 'migrations_v2/%v67_gpexe_track_choices.sql' or migration_name like 'migrations_v2/%v68_track_choice_scale.sql'`);
   await admin.query(`delete from public.schema_migrations where migration_name in (select migration_name from tz62_later)`);
   const before = await catalogOf(admin);
   const c = await newClient();
