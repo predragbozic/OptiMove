@@ -324,7 +324,7 @@ export function enterMediaFullscreen(silent = false) {
     // The person's own request is reported too (App health), so a browser that keeps refusing stays visible.
     if (result?.catch) result.catch((error) => { if (!silent) reportHandlerError(error, "enter-fullscreen"); });
   } catch (error) {
-    if (!silent) console.warn(error);
+    if (!silent) reportHandlerError(error, "enter-fullscreen");
   }
 }
 

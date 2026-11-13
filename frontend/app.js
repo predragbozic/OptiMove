@@ -3049,11 +3049,11 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "exercise-edit-open" || type === "exercise-copy-open") {
-    void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "", { copy: type === "exercise-copy-open" });
+    detached(openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "", { copy: type === "exercise-copy-open" }), type);
     return;
   }
   if (type === "exercise-add-open") {
-    void openExerciseEditor(state, exerciseEditorHandlers, "");
+    detached(openExerciseEditor(state, exerciseEditorHandlers, ""), type);
     return;
   }
   if (await handleExerciseEditorAction(state, exerciseEditorHandlers, action)) return;

@@ -188,4 +188,7 @@ test("6. the lists are one list: the server's, the browser's and the screen's wo
   const loose = appJs.split("\n").filter((line) => /loadActiveTab\(\)/.test(line) && !/^\s*\/\//.test(line)
     && !/(await |return |detached\(|\.then\(|async function loadActiveTab|=> loadActiveTab\(\)|Promise\.resolve\(loadActiveTab\(\)\))/.test(line));
   assert.deepEqual(loose, [], "no tab load is started and left unwatched");
+  // The exercise editor's opening, started from the guarded content listener, is watched too, with its own control.
+  assert.equal((appJs.match(/detached\(openExerciseEditor\([^\n]*\), type\);/g) || []).length, 2);
+  assert.equal(/void openExerciseEditor\(/.test(appJs), false);
 });
