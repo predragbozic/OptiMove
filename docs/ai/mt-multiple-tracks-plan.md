@@ -435,3 +435,186 @@ review reads "Duplicate track ignored (2 identical tracks)".
 - a session without duplicates gives a byte-for-byte unchanged plan and preview;
 - the stored candidate's refresh (`preview_changed`, then the import; route test 3);
 - a later cleanup in both directions (unchanged, or blocked).
+
+## 12. MT-B: applying a choice (plan check, 2026-11-13)
+
+A plan note for the *Rukovodilac*, written before any code and checked against main `8aeefa4f` plus MT-A (#513, `5d97cb8c`).
+MT-B changes the mapper, the preview and the writer, and no route or table. ★★ (triggers 3 and 4).
+
+### 12.1 Where the choice is read, and where it is applied
+
+- **One read, under the team lock.** `previewLocked` (`backend/src/gpexeImportPreview.js:379`) reads the current choices of
+  the session's athletes from `gpexe_track_choices` with a plain read, keyed by (team, session). Every caller already holds
+  the team lock:
+  - the check's preview (`buildCandidatePreview`, :349);
+  - the approval (`gpexeImportService.js` :2500, :2547);
+  - the J20-A1 recompute (:2802, :2822);
+  - the J20-B subset preview (:2978, :2998).
+  The MT-A PUT writes under the same lock. So a preview and its approval see one choice, and a choice changed between them
+  changes the recomputed preview, which the approval answers with `preview_changed` (the existing rule; nothing new).
+- **One application.** `buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone, trackChoices })` gets a new option, a Map
+  from GPEXE athlete id to `{ choiceId, kind, trackId, fingerprint }`. `previewLocked` builds the plan with it, and the import
+  itself writes that plan (`importGpexePlanLocked`, :21). The preview and the approval's import therefore never disagree.
+  - The gate plans (`metricSpecs: []`, at :338, :388, and service :2513, :2809, :2985) read only the event's identity and the
+    session's facts. No athlete matters there, so they need no choice.
+  - The CLI / test path `importGpexeBundleLocked` (`gpexeImportWriter.js:683`) builds its own plan. It gets the same read
+    under its own team lock, or it refuses a session whose multi-track athlete has a current choice
+    (`track_choice_not_supported`). The second is smaller; recommended.
+  - The 7e aggregate preview (`gpexeLevelValues`, `gpexeImportMapper.js:554`) keeps leaving a multi-track athlete out. It
+    shows a mapping's values over single recordings, and a reviewer's choice is no measurement fact. Recommended: unchanged.
+- **The shared fingerprint.** The mapper exports `trackSetFingerprint(athleteRows)`, and the MT-A service imports it in place
+  of its own copy. One function, so the stored fingerprint and the mapper's comparison cannot drift (the code review's LOW on
+  MT-A).
+
+### 12.2 What the mapper does with each choice
+
+Only an athlete with two or more tracks that MT-0 does not take as one recording is affected. Today such an athlete is the
+`multiple_tracks` anomaly.
+
+| Current choice | Fingerprint | The mapper |
+|---|---|---|
+| none, or `cleared` | - | as today: `multiple_tracks` |
+| `track` | equal | the chosen track's rows only, as a single-track athlete: **native identities** `athlete_session:<row>:full` / `…:drill:<i>` of that track; the participant carries `trackChoice: { choiceId, kind: "track", trackId, trackCount }` |
+| `none` | equal | no participant; an anomaly `no_track_by_choice` (not `multiple_tracks`) with `trackChoice: { choiceId, kind: "none", trackCount }` |
+| any | different | `multiple_tracks` as today, with the detail `track_choice_stale` and the stale `choiceId`. Never applied to other tracks |
+
+- **A chosen track's values are the athlete's measured values.** They count everywhere that measured values count: the 6a
+  short-recording flag, M2 (no estimate over a measured value), the dashboards' `api_import` policy.
+- **Choosing the lowest track is never automatic.** Only MT-0's identical copies merge without a choice.
+
+### 12.3 The preview, its hash and the batch
+
+- **Per athlete entry:**
+  - `trackChoice: { choiceId, kind, trackId?, trackCount, stale }`, present only when a current choice exists. So a session
+    without a choice gives a **byte-for-byte unchanged** preview and hash, and `PREVIEW_VERSION` stays 3, as with MT-0's
+    `duplicateTracks`.
+  - `kind: "track"`: `gps.status` is `measured`, and the results come from the chosen track.
+  - `kind: "none"`: `gps.status` is a new value `not_used_by_choice`, and
+    `notImported: { code: "no_track_by_choice", message: "Left out by choice: GPEXE recorded this athlete on more than one track, and no track is used." }`.
+  - Stale: as today (`needs_manual_review`, `multiple_tracks`), plus `trackChoice.stale: true`.
+- **The hash** covers the preview, so it changes when a choice is made, changed or cleared, and when GPEXE's tracks change
+  the fingerprint.
+  - **After a PUT, the stored preview is out of date.** The review must call the J20-A1 recompute
+    (`POST …/candidates/:id/preview`) to show the choice. That is MT-C's flow; an approval sent with the old hash answers
+    `preview_changed` and stores the recomputed preview (the existing rule).
+  - The PUT does not recompute, so it stays small and its lock order unchanged.
+- **The batch:**
+  - `athleteReason` (`gpexeImportReasons.js:91`) gives no reason for `not_used_by_choice` or a used track.
+  - A session whose only blocker was a chosen athlete becomes batch-approvable.
+  - A stale choice is still `athletes_need_manual_review`.
+- **The roster** (`gpexeRosterObservations`, `gpexeImportService.js:2083`):
+  - `not_used_by_choice` is not in `GPEXE_UNUSABLE_REASON`, so a "none" athlete gets **no** `record_unusable` observation. The
+    roster then shows the athlete as needing a state, and the coach decides (*Participated · no device data*, then an
+    estimate, 6b), as the plan's "None" says.
+  - A used track counts as imported and resolves an open observation.
+  - A stale choice stays `needs_manual_review`, with the observation as today.
+
+### 12.4 Stale fingerprints and an import
+
+- **Before an import:** a stale choice is shown with `trackChoice.stale` and the athlete stays `multiple_tracks`. The reviewer
+  chooses again (`expectedChoiceId` = the stale choice's id).
+- **After an import:** MT-A makes the choice final (`choice_final_after_import`, session-wide).
+  - If GPEXE later changes that athlete's tracks, the imported identities go missing, and the session is blocked by the
+    existing `identities_missing_from_source` rule (`gpexeImportPreview.js:611`).
+  - MT-B adds the resolution cause `track_choice_stale` (action `undo_and_choose_again`) for an athlete whose current choice
+    is stale. Its step: "GPEXE changed this athlete's tracks after the import. A platform admin undoes the import of this
+    session (U5), then the track is chosen again."
+
+### 12.5 What a coach without the approver right sees
+
+- **The review** (the preview, for everyone who may open it):
+  - "Track 2 of 2 used" for `track`, with the position by the track's start;
+  - "Left out by choice" for `none`;
+  - "Track choice out of date: GPEXE changed the tracks" for a stale choice.
+  - **No chooser** and no choice id in the coach projection: `gpexeImportAudience.js` drops `trackChoice.choiceId` for the
+    `other` audience. The two administrators get it.
+- **The approver-only GET** (MT-A): the *Rukovodilac*'s LOW 2 on #513. `chosenByUserId` is replaced by `chosenBy: { name }`,
+  the display name, in MT-B. The id is not shown to anyone.
+- **The PUT's order** (the *Rukovodilac*'s LOW 1 on #513): the audience check comes before the body validation, so a team
+  member without the right gets the identical 404 for a malformed body too.
+
+### 12.6 The T6 / provenance label
+
+- **A used track** writes native identities, so T6 and the source identity look exactly like a single-track import. No column
+  is needed (T1 stays answered "no new column").
+- **The label** "One of N tracks (track started HH:MM)" in Activities and the review is read from the current choice row.
+  It is stable after an import, because MT-A makes the choice final while the session is imported. After an undo it follows
+  the new choice.
+- Reading it in Activities is a small backend field on the activity read plus the frontend label. Recommended in MT-C
+  together with the review's row, not in MT-B.
+- **"None"** writes nothing from GPEXE, so there is nothing to label in T6. The roster state and its reason say it.
+
+### 12.7 Existing tests that change, and the new ones
+
+- **Unchanged by construction** (no choice row exists in them). They act as the characterisation that a session without a
+  choice is byte-for-byte the same:
+  - `gpexe-import.test.mjs` and `gpexe-in-app-import.test.mjs` (athlete 103, `multiple_tracks`);
+  - `activity-roster-5a1.test.mjs` (`record_unusable` for two tracks);
+  - `gpexe-import-reasons.test.mjs`;
+  - `gpexe-duplicate-tracks-mt0*.test.mjs`;
+  - `source-metric-preview-math-7e.test.mjs` and `source-metric-preview-7e.test.mjs` (the 7e path stays as it is).
+  MT-B's first test is a stored-preview comparison over the fixture sessions, before and after, with no choice.
+- **Changing:**
+  - `gpexe-track-choices-mt-a.test.mjs`: the GET's `chosenBy`, and the 400/404 order;
+  - the 9b architecture test, if it lists the tables `previewLocked` reads (to be checked when the code exists).
+- **New** (`gpexe-track-choices-mt-b*.test.mjs`):
+  - the mapper with `track` (native identities, values equal to that track's single-track import), `none`, `cleared`, stale;
+  - the preview's `trackChoice` and hash changes;
+  - the coach projection without `choiceId` or chooser;
+  - the batch with a chosen athlete;
+  - the roster: no `record_unusable` for `none`, resolved for a used track;
+  - `preview_changed` after a choice changed between review and approval;
+  - an import with a used track, then the PUT refused (`choice_final_after_import`);
+  - a stale choice after the import blocked with `track_choice_stale`;
+  - the CLI path refusing a session with a choice (`track_choice_not_supported`);
+  - mutations on the application, the stale check and the projection.
+
+### 12.8 Open for the *Rukovodilac*
+
+1. The CLI / test writer path: refuse with `track_choice_not_supported` (recommended) or apply the choice too.
+2. The 7e aggregate preview stays without choices (recommended).
+3. The Activities label goes into MT-C with the review row (recommended), not MT-B.
+
+### 12.9 Decided (the *Rukovodilac*, 2026-11-13)
+
+**Decisions:**
+1. The CLI / test writer path (`importGpexeBundleLocked`) refuses a session that has a current choice, with
+   `track_choice_not_supported`.
+2. The 7e aggregate preview stays without choices.
+3. The Activities label goes into MT-C.
+
+**Addition: `none` lifts no other blocker.** A `none` choice only replaces that athlete's own `multiple_tracks` reason. The
+session stays as blocked or as not ready as its other facts make it:
+- a whole-session block;
+- another athlete's manual review, missing link or membership;
+- changes to imported results that need acceptance.
+
+Test: a session with a `none` athlete and an unlinked athlete stays not ready in the batch.
+
+**Addition: consistency with 6b.** A `none` athlete has no GPEXE value, so:
+- the coach may set an activity-level state (*Participated · no device data*) and, from it, an estimate (6b rule 4, M2);
+- nothing in MT-B writes over that state or that estimate.
+
+The cases follow the existing rules:
+- The choice is final while the session is imported (MT-A).
+- If the import is undone (U5 removes its estimates and roster work, v60 / v63) and the athlete is then given `track`, the
+  next import writes real values. M3 supersedes an estimate still effective at that point, and it is listed in the
+  preview's `supersededEstimates` (6b-B).
+- An estimate never makes the athlete importable or blocks the session.
+
+Test: a `none` athlete imported as left out, then an estimate saved for that athlete, is still its only value. The next
+search of the unchanged session changes neither the estimate nor the state.
+
+**Order:**
+- No MT-B code before v67 (MT-A, #513) is deployed and post-checked.
+- This section goes to a docs pull request after #513 is merged, so it merges without a conflict.
+
+### 12.10 LOWs carried from MT-A's GO (#513, 2026-11-13) into MT-B's pull request
+
+- **L1 (the *Nezavisni revizor*).** A test: two first choices of one athlete, inserted from two connections with the guard
+  satisfied, get 23505. Otherwise the partial unique index `gpexe_track_choices_one_root` is not killed by any test.
+- **L2 (the *Nezavisni revizor*).** A test that switches the team to pilot mode at the PUT's `beforeTeamLock` hook, so the
+  mapping of 55000 `team_import_pilot_mode` to the identical 404 is killed.
+- **L3 (the *Rukovodilac*).** The PUT checks the audience before it validates the body: someone outside the audience gets the
+  identical 404 for a malformed body too.
+- **L4 (the *Rukovodilac*).** `chosenByUserId` leaves `choiceView`. The approver-only GET shows `chosenBy: { name }`.
