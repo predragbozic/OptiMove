@@ -134,9 +134,9 @@ test("U6a-1 1: the state bar says connected / import on or off / last search and
   const page = html();
   const bar = page.slice(page.indexOf('class="imports-statusbar"'), page.indexOf("</section>", page.indexOf('class="imports-statusbar"')));
   assert.match(bar, /No search yet · 2 ready/);
-  const primaries = bar.match(/class="primary-button gpexe-button"/g) || [];
+  const primaries = bar.match(/class="primary-button gpexe-button/g) || [];
   assert.equal(primaries.length, 1, "exactly one primary button in the banner");
-  assert.ok(bar.includes('class="primary-button gpexe-button" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
+  assert.ok(bar.includes('class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
   assert.ok(!/training-load-gpexe-import-ready/.test(bar), "the Import button is not in the banner");
   assert.ok(!/class="gpexe-next"|imports-daily-counts/.test(page));
   assert.match(page, /data-import-tab="attention">Needs you \(0\)</);
@@ -160,7 +160,7 @@ test("U6a-1 1: the state bar says connected / import on or off / last search and
   assert.match(off, /imports-state is-off">Import off</);
   await act("training-load-gpexe-tab", { importTab: "ready" });
   off = html();
-  assert.ok(off.includes('class="primary-button gpexe-button" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
+  assert.ok(off.includes('class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
   assert.ok(!/training-load-gpexe-import-ready/.test(off));
 });
 

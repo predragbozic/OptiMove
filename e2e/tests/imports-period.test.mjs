@@ -24,9 +24,19 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         page.on("request", (r) => { if (r.method() === "POST" && /\/checks$/.test(r.url())) checks.push(r.postDataJSON()); });
         await openTrainingLoad(page);
         await page.click('[data-action="training-load-section"][data-section="imports"]');
-        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 20_000 });
-        await page.click('[data-action="training-load-gpexe-period-toggle"]');
-        await page.waitForSelector(".imports-period", { timeout: 10_000 });
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { state: "attached", timeout: 20_000 });
+        // On a computer the chooser is on the page; on a phone "Find new sessions" opens it as a full-screen sheet.
+        if (width < 500) {
+          assert.equal(await page.locator(".imports-period").isVisible(), false, "a phone: closed until asked for");
+          await page.click('[data-action="training-load-gpexe-period-toggle"]');
+        } else {
+          assert.equal(await page.locator(".imports-find-phone").isVisible(), false, "a computer: no Find new sessions button");
+        }
+        await page.waitForSelector(".imports-period", { state: "visible", timeout: 10_000 });
+        if (width < 500) {
+          const sheet = await page.evaluate(() => { const r = document.querySelector(".imports-period").getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height), vw: window.innerWidth, vh: window.innerHeight }; });
+          assert.deepEqual([sheet.top, sheet.left, sheet.width, sheet.height], [0, 0, sheet.vw, sheet.vh], `a full-screen sheet ${JSON.stringify(sheet)}`);
+        }
         // The month on screen is today's; the fixture's sessions are on 04.11.2026 and 05.11.2026.
         await page.waitForSelector(DAY("2026-11-05"), { timeout: 10_000 });
         const look = await page.evaluate(() => {
@@ -52,18 +62,18 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.deepEqual(look.chips4, ["→"], "the ready session: one blue arrow");
         assert.deepEqual(look.chips5, ["!"], "the session that needs a link: one amber !");
         assert.match(look.label5, /5 November, 1 session: needs you/);
-        assert.match(look.missing, /^Search what's missing · 08\.11\. – \d\d\.\d\d\.$/);
+        assert.match(look.missing, /^Search from 08\.11\. to today$/);
         assert.equal(look.overflow, 0, "no horizontal page scroll");
         // Two taps, the later day first: the period runs from the earlier one.
         await page.click(DAY("2026-11-05"));
-        await page.waitForSelector(".imports-period .period-wait");
+        assert.match((await page.textContent(".imports-period .period-wait")).trim(), /^Search 05\.11\., or tap another day to make the period longer \(at most 31 days\)\.$/);
         await page.click(DAY("2026-11-03"));
         assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "03.11. – 05.11. · 3 days");
         assert.equal(checks.length, 0, "picking sends nothing");
         await page.click('.imports-period .period-range [data-action="training-load-gpexe-check"]');
-        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 60_000 });
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { state: "attached", timeout: 60_000 });
         assert.deepEqual(checks, [{ from: "2026-11-03", to: "2026-11-05" }], "exactly the chosen days");
-        assert.equal(await page.locator(".imports-period").count(), 0, "the chooser folded when the search started");
+        assert.equal(await page.locator(".imports-period").isVisible(), width >= 500, "a phone's sheet closed when the search started; a computer keeps the chooser");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
         assert.deepEqual(pageErrors, []);
       } finally { await context.close(); }
@@ -79,9 +89,7 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
     try {
       await openTrainingLoad(page);
       await page.click('[data-action="training-load-section"][data-section="imports"]');
-      await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 20_000 });
-      await page.click('[data-action="training-load-gpexe-period-toggle"]');
-      await page.waitForSelector(DAY("2026-11-06"), { timeout: 10_000 });
+      await page.waitForSelector(DAY("2026-11-06"), { state: "visible", timeout: 20_000 });
       const box = async (d) => { const b = await page.locator(DAY(d)).boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
       const a = await box("2026-11-02");
       await page.mouse.move(a.x, a.y);
@@ -93,6 +101,7 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
       await page.mouse.up();
       assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "02.11. – 06.11. · 5 days");
       assert.equal(await page.locator(".imports-period .period-wait").count(), 0, "the period is closed, not waiting for a second tap");
+      assert.equal(await page.locator(".imports-period .period-fine").isVisible(), true, "a mouse is told it can drag");
       // The next tap starts a new period.
       await page.click(DAY("2026-11-04"));
       assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "04.11. · 1 day");

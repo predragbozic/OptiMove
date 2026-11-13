@@ -18,6 +18,16 @@ export function localDay(value) {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
+// The day the server searches a session under: the UTC day of its start (the GPEXE wall clock, stored as UTC; the
+// check's window and its withdrawal compare `(session_started_at at time zone 'UTC')::date`, gpexeImportService.js).
+// The chooser marks and lists a session on this day, so the day you tap is the day the search covers (code review);
+// "" when the value is not a date.
+export function sessionDay(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
 const isDay = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const dayTime = (day) => new Date(`${day}T00:00:00Z`).getTime();
 const addDays = (day, n) => new Date(dayTime(day) + n * DAY_MS).toISOString().slice(0, 10);
@@ -27,9 +37,9 @@ export function daysInPeriod(a, b) {
   return Math.round(Math.abs(dayTime(b) - dayTime(a)) / DAY_MS) + 1;
 }
 
-// The panel's local state. `anchor` is the first tap of two; `from` / `to` the chosen period.
+// The chooser's local state: `open` is the phone's sheet, `anchor` the first tap of two, `from` / `to` the chosen period.
 export function emptyPeriod() {
-  return { open: false, month: "", anchor: "", from: "", to: "", day: "", note: "" };
+  return { open: false, month: "", anchor: "", from: "", to: "" };
 }
 
 function p(gx = g()) {
@@ -57,15 +67,15 @@ export function dayOff(day, gx = g(), now = new Date()) {
 }
 
 // A tap (or Enter) on a day: the first picks one day and waits for the second; the second closes the period. A day that
-// is off does nothing. The day tapped first is also the day whose sessions are listed under the calendar.
+// is off does nothing.
 export function pickDay(day, gx = g(), now = new Date()) {
   const s = p(gx);
   if (dayOff(day, gx, now)) return false;
   if (s.anchor) {
     const [from, to] = [s.anchor, day].sort();
-    Object.assign(s, { anchor: "", from, to, note: "" });
+    Object.assign(s, { anchor: "", from, to });
   } else {
-    Object.assign(s, { anchor: day, from: day, to: day, day, note: "" });
+    Object.assign(s, { anchor: day, from: day, to: day });
   }
   return true;
 }
@@ -88,24 +98,18 @@ export function endDrag(gx = g()) {
 }
 
 export function clearPeriod(gx = g()) {
-  Object.assign(p(gx), { anchor: "", from: "", to: "", day: "", note: "" });
+  Object.assign(p(gx), { anchor: "", from: "", to: "" });
 }
 
-// Sets a period without taps (a step that needs other dates fills them in), with the sentence that says why.
-export function setPeriod(from, to, gx = g(), note = "") {
-  if (!isDay(from) || !isDay(to)) return;
-  const [a, b] = [from, to].sort();
-  Object.assign(p(gx), { anchor: "", from: a, to: b, day: "", month: b.slice(0, 7), note });
-}
-
+// The phone's sheet: open or closed (on a computer the chooser is always on the page).
 export function setPeriodOpen(open, gx = g()) {
   p(gx).open = Boolean(open);
 }
 
-// The month on screen: the one turned to, else the month of the chosen period's end, else this month.
-export function periodMonth(gx = g(), now = new Date()) {
+// The month on screen: the one turned to, else the month of the chosen (or suggested) period's end, else this month.
+export function periodMonth(gx = g(), now = new Date(), suggestedTo = "") {
   const s = p(gx);
-  return s.month || (s.to || localDay(now)).slice(0, 7);
+  return s.month || (s.to || suggestedTo || localDay(now)).slice(0, 7);
 }
 
 export function turnMonth(delta, gx = g(), now = new Date()) {

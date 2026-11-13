@@ -36,12 +36,15 @@ const two = (n) => String(n).padStart(2, "0");
 const localIso = (d) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 const TODAY = localIso(new Date());
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return localIso(d); };
-// A session at noon local time on a day, so it is that day on any clock.
-const at = (day, hour = 12) => new Date(`${day}T${two(hour)}:00:00`).toISOString();
+// Fixed past days in one month: the previous month's 10th to 14th.
+const PREV = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return localIso(d).slice(0, 7); })();
+const prevDay = (n) => `${PREV}-${two(n)}`;
+// A session at noon UTC on a day: the day the server searches it under (sessionDay).
+const at = (day, hour = 12) => `${day}T${two(hour)}:00:00Z`;
 
 function row(n, day, overrides = {}) {
   return {
-    id: `cand-${n}`, gpexeTeamSessionId: `70${two(n)}`, label: `FULL TRAINING ${n}`, sessionStartedAt: at(day, 8 + n % 10),
+    id: `cand-${n}`, gpexeTeamSessionId: `70${two(n)}`, label: `FULL TRAINING ${n}`, sessionStartedAt: at(day, 8 + (n % 10)),
     status: "pending", previewStatus: "ready", previewHash: hashOf(n), counts: { created: 4, athletesNotImported: 0 }, changesToImported: 0,
     snapshot: { available: true, expiresAt: "2099-01-01T00:00:00Z" }, approvalBlockers: [],
     blockedCode: null, blockedSourceCode: null, sessionType: "FULL TRAINING", reasons: [], lastSeenAt: at(day), ...overrides,
@@ -94,7 +97,7 @@ async function openImports() {
 }
 const gx = () => state.trainingLoad.gpexe;
 const html = () => renderTrainingLoadCoachHtml();
-const panel = () => { const h = html(); const i = h.indexOf('<section class="gpexe-panel imports-period"'); return i < 0 ? "" : h.slice(i, h.indexOf("</section>", i)); };
+const panel = () => { const h = html(); const i = h.indexOf('<section class="gpexe-panel imports-period'); return i < 0 ? "" : h.slice(i, h.indexOf("</section>", i)); };
 const posts = () => fetchCalls.filter((c) => c.url.endsWith("/checks") && c.method === "POST");
 const dayCell = (p, day) => (p.match(new RegExp(`<button type="button" class="period-day[^"]*" data-action="training-load-gpexe-period-day" data-day="${day}"[^>]*>[\\s\\S]*?</button>`)) || [""])[0];
 
@@ -125,59 +128,54 @@ test("P4 2: 'Search what's missing' runs from the last day of the last successfu
   assert.deepEqual(period.missingWindow({ lastSucceededCheck: { window: { from: "2026-11-13", to: "2026-11-14" } } }, now), { from: "2026-11-13", to: "2026-11-13", clipped: false }, "never from a future day");
 });
 
-test("P4 3: 'Find new sessions' opens and closes the chooser and sends nothing; a running search turns it off", async () => {
+test("P4 3: the chooser is always on the page (a computer); 'Find new sessions' opens and closes the phone's sheet and sends nothing; a running search turns every search button off", async () => {
   resetState();
   installFetchMock(gpexeServer({ candidates: [row(1, daysAgo(1))] }));
   await openImports();
   const before = fetchCalls.length;
-  assert.equal(panel(), "", "folded by default");
-  assert.match(html(), /data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions</);
+  assert.match(panel(), /<section class="gpexe-panel imports-period" id="imports-period"/, "on the page, the sheet closed");
+  assert.match(html(), /class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions</);
   await act("training-load-gpexe-period-toggle");
-  assert.match(panel(), /aria-label="Find new sessions"/);
-  assert.match(html(), /aria-expanded="true" aria-controls="imports-period" >Close</);
+  assert.match(panel(), /class="gpexe-panel imports-period is-open"/, "the phone's sheet is open");
+  assert.match(panel(), /<h3>Find new sessions<\/h3>[\s\S]*data-action="training-load-gpexe-period-toggle" aria-label="Close"/, "the sheet has its own Close");
+  assert.match(html(), /aria-expanded="true" aria-controls="imports-period" >Find new sessions</);
   await act("training-load-gpexe-period-toggle");
-  assert.equal(panel(), "");
+  assert.ok(!/imports-period is-open/.test(panel()));
   assert.equal(fetchCalls.length, before, "nothing sent");
-  gx().period.open = true;
   gx().checkStarting = true;
-  assert.equal(panel(), "", "no chooser while a search starts");
+  const p = panel();
+  assert.ok((p.match(/data-action="training-load-gpexe-check"[^>]*>/g) || []).every((b) => / disabled>$/.test(b)), "every search button off while a search starts");
   assert.match(html(), /data-action="training-load-gpexe-period-toggle"[^>]*disabled>Finding\.\.\.</);
 });
 
-test("P4 4: a day shows one chip per session in start-time order with colour and glyph, up to 3 then +N; 'stays out' has no mark; the label says the states", async () => {
+test("P4 4: a day shows one chip per session in start-time order with colour and glyph, up to 3 then +N; 'stays out' has no chip but its label names it", async () => {
   resetState();
-  const day = daysAgo(2);
-  const quiet = daysAgo(3);
-  const many = daysAgo(4);
+  const day = prevDay(12);
+  const quiet = prevDay(13);
+  const many = prevDay(14);
   installFetchMock(gpexeServer({ candidates: [
     imported(1, day), needs(2, day), row(3, day),
     staysOut(4, quiet),
     row(5, many), row(6, many), row(7, many), row(8, many), row(9, many),
   ] }));
   await openImports();
-  gx().period.month = day.slice(0, 7);
-  await act("training-load-gpexe-period-toggle");
+  gx().period.month = PREV;
   const p = panel();
   const cell = dayCell(p, day);
-  assert.match(cell, /<i class="period-chip is-[a-z]+">[^<]+<\/i><i class="period-chip is-[a-z]+">[^<]+<\/i><i class="period-chip is-[a-z]+">[^<]+<\/i>/);
   const chips = [...cell.matchAll(/period-chip is-(\w+)">([^<]+)</g)].map((m) => `${m[1]}${m[2]}`);
-  assert.equal(chips.length, 3);
-  assert.deepEqual(new Set(chips), new Set(["done\u2713", "needs!", "ready\u2192"]), "colour and glyph per state");
-  assert.match(cell, /aria-label="[^"]*, 3 sessions: [a-z ]+, [a-z ]+, [a-z ]+/);
-  if (many.slice(0, 7) === day.slice(0, 7)) {
-    const crowded = dayCell(p, many);
-    assert.equal((crowded.match(/period-chip is-ready/g) || []).length, 3, "three shown");
-    assert.match(crowded, /period-chip is-more">\+2</, "then +N");
-  }
-  if (quiet.slice(0, 7) === day.slice(0, 7)) {
-    const out = dayCell(p, quiet);
-    assert.ok(!/period-chip/.test(out), "stays out: no mark");
-    assert.match(out, /nothing found yet/);
-  }
+  assert.deepEqual(chips, ["done\u2713", "needs!", "ready\u2192"], "colour and glyph per state, in start-time order");
+  assert.match(cell, /aria-label="[^"]*, 3 sessions: imported, needs you, ready"/);
+  const crowded = dayCell(p, many);
+  assert.equal((crowded.match(/period-chip is-ready/g) || []).length, 3, "three shown");
+  assert.match(crowded, /period-chip is-more">\+2</, "then +N");
+  const out = dayCell(p, quiet);
+  assert.ok(!/period-chip/.test(out), "stays out: no chip");
+  assert.match(out, /1 session: stays out/);
+  assert.doesNotMatch(out, /nothing found yet/);
   assert.match(p, /<i class="period-chip is-needs">!<\/i> needs you/, "a legend names each glyph");
 });
 
-test("P4 5: two taps make the range bar; Search sends exactly those days and folds the chooser; Clear sends nothing", async () => {
+test("P4 5: the first tap offers its day and asks for the last; two taps make the range bar; Search sends exactly those days and closes the sheet; Clear sends nothing", async () => {
   resetState();
   const a = daysAgo(6);
   const b = daysAgo(2);
@@ -186,11 +184,12 @@ test("P4 5: two taps make the range bar; Search sends exactly those days and fol
   await act("training-load-gpexe-period-toggle");
   gx().period.month = b.slice(0, 7);
   await act("training-load-gpexe-period-day", { day: b });
-  assert.match(panel(), /Now tap the last day \(at most 31 days\)\./);
+  assert.match(panel(), /class="period-wait" role="status">Search [0-9.]+, or tap another day to make the period longer \(at most 31 days\)\.</);
   await act("training-load-gpexe-period-day", { day: a });
   const p = panel();
+  assert.ok(!/period-wait/.test(p));
   assert.match(p, /class="period-range-text">[^<]*5 days</);
-  assert.match(p, new RegExp(`data-action="training-load-gpexe-check" data-from="${a}" data-to="${b}"[^>]*>Search `));
+  assert.match(p, new RegExp(`class="period-range-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" data-from="${a}" data-to="${b}"[^>]*>Search [^<]+</button><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-period-clear">Clear<`), "Search first, then Clear");
   assert.match(dayCell(p, a), /is-edge/);
   assert.match(dayCell(p, b), /aria-pressed="true"/);
   assert.equal((p.match(/class="primary-button gpexe-button/g) || []).length, 1, "one main action: the chosen days' Search");
@@ -203,7 +202,7 @@ test("P4 5: two taps make the range bar; Search sends exactly those days and fol
   await act("training-load-gpexe-check", { from: a, to: b });
   assert.equal(posts().length, 1);
   assert.deepEqual(posts()[0].body, { from: a, to: b });
-  assert.equal(panel(), "", "the chooser folds once the search starts");
+  assert.ok(!/imports-period is-open/.test(panel()), "the phone's sheet closes once the search starts");
 });
 
 test("P4 6: 'Search what's missing' carries the end of the last successful search and today; without one it searches the server's 14 days", async () => {
@@ -212,7 +211,7 @@ test("P4 6: 'Search what's missing' carries the end of the last successful searc
   installFetchMock(gpexeServer({ teamStatus: { lastSucceededCheck: { id: "chk-0", window: { from: daysAgo(18), to: last }, finishedAt: new Date().toISOString() } } }));
   await openImports();
   await act("training-load-gpexe-period-toggle");
-  assert.match(panel(), new RegExp(`class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${last}" data-to="${TODAY}" >Search what(?:'|&#039;)s missing`));
+  assert.match(panel(), new RegExp(`class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${last}" data-to="${TODAY}" >Search from [0-9.]+ to today<`));
   await act("training-load-gpexe-check", { from: last, to: TODAY });
   assert.deepEqual(posts()[0].body, { from: last, to: TODAY });
 
@@ -225,18 +224,21 @@ test("P4 6: 'Search what's missing' carries the end of the last successful searc
   assert.deepEqual(posts()[0].body, {}, "no dates: the server's default");
 });
 
-test("P4 7: the first day tapped lists its sessions, each opening its review; a day without sessions lists nothing", async () => {
+test("P4 7: the chosen days list the sessions already found on them, by date, each opening its review; days without sessions list nothing", async () => {
   resetState();
-  const day = daysAgo(1);
-  installFetchMock(gpexeServer({ candidates: [needs(2, day), row(3, day)] }));
+  const d1 = daysAgo(2);
+  const d2 = daysAgo(1);
+  installFetchMock(gpexeServer({ candidates: [needs(2, d1), row(3, d2)] }));
   await openImports();
-  await act("training-load-gpexe-period-toggle");
-  gx().period.month = day.slice(0, 7);
-  await act("training-load-gpexe-period-day", { day });
+  gx().period.month = d2.slice(0, 7);
+  assert.ok(!/period-daylist"/.test(panel()), "nothing chosen, nothing listed");
+  await act("training-load-gpexe-period-day", { day: d1 });
+  await act("training-load-gpexe-period-day", { day: d2 });
   const p = panel();
-  assert.match(p, /class="period-daylist"/);
+  assert.match(p, /Already found on these days/);
   assert.match(p, /data-action="training-load-gpexe-open" data-candidate-id="cand-2"[^>]*><span>Full training 2 · \d\d:\d\d<\/span><span class="period-chip is-needs" aria-hidden="true">!<\/span><span class="period-daylist-state">needs you<\/span>/);
   assert.match(p, /data-candidate-id="cand-3"/);
+  assert.ok(p.indexOf("cand-2") < p.indexOf("cand-3"), "by date");
   await act("training-load-gpexe-period-clear");
   await act("training-load-gpexe-period-day", { day: daysAgo(40) });
   assert.ok(!/period-daylist"/.test(panel()));
@@ -299,4 +301,85 @@ test("P4 10: an unconnected team has no chooser", async () => {
   gx().period.open = true;
   assert.equal(panel(), "");
   assert.ok(!/training-load-gpexe-period-toggle/.test(html()));
+});
+
+test("P4 11: a session near midnight UTC is marked on the day the server searches it under, whatever the browser's time zone", async () => {
+  const keep = process.env.TZ;
+  process.env.TZ = "Europe/Belgrade";
+  try {
+    resetState();
+    installFetchMock(gpexeServer({ candidates: [row(1, prevDay(5), { sessionStartedAt: `${prevDay(5)}T23:30:00Z` })] }));
+    await openImports();
+    gx().period.month = PREV;
+    const p = panel();
+    assert.match(dayCell(p, prevDay(5)), /period-chip/, "on its UTC day (the search's)");
+    assert.doesNotMatch(dayCell(p, prevDay(6)), /period-chip/, "not on the next local day");
+  } finally {
+    if (keep === undefined) delete process.env.TZ; else process.env.TZ = keep;
+  }
+});
+
+test("P4 12: after a search from the chooser the chosen days are cleared, so the next look shows the days a session needs", async () => {
+  resetState();
+  let list = [];
+  installFetchMock(gpexeServer({ candidates: [] }));
+  await openImports();
+  const a = daysAgo(6);
+  const b = daysAgo(4);
+  await act("training-load-gpexe-period-day", { day: a });
+  await act("training-load-gpexe-period-day", { day: b });
+  await act("training-load-gpexe-check", { from: a, to: b });
+  assert.equal(period.periodRange(), null, "cleared once the search starts");
+  const x = prevDay(20);
+  list = [row(1, x, { approvalBlockers: ["not_confirmed_for_import"] })];
+  installFetchMock(gpexeServer({ candidates: list }));
+  await openImports();
+  const p = panel();
+  assert.match(p, new RegExp(`data-action="training-load-gpexe-check" data-from="${x}" data-to="${x}"`));
+  assert.match(p, /These days hold the sessions that need finding again\./);
+});
+
+test("P4 13: the click that ends a drag is the only one swallowed - a later keyboard tap counts; a move with no button held ends the drag", async () => {
+  resetState();
+  state.trainingLoad.gpexe.period = period.emptyPeriod();
+  const listeners = { root: {}, doc: {} };
+  const root = { addEventListener: (t, fn) => { listeners.root[t] = fn; } };
+  let under = null;
+  const doc = { addEventListener: (t, fn) => { listeners.doc[t] = fn; }, elementFromPoint: () => under };
+  const cell = (day) => ({ dataset: { day }, getAttribute: () => null, closest: function () { return this; } });
+  bindPeriodDrag(root, () => {}, doc);
+  installFetchMock(gpexeServer({}));
+  const [a, b, c] = [daysAgo(5), daysAgo(3), daysAgo(1)];
+  listeners.root.pointerdown({ pointerType: "mouse", button: 0, target: cell(a) });
+  under = cell(b);
+  listeners.doc.pointermove({ clientX: 1, clientY: 1, buttons: 1 });
+  under = null;
+  listeners.doc.pointerup({});
+  await new Promise((r) => setTimeout(r, 0));
+  await act("training-load-gpexe-period-day", { day: c });
+  assert.deepEqual(period.periodRange(), { from: c, to: c, days: 1 }, "the keyboard tap counted");
+  period.clearPeriod();
+  listeners.root.pointerdown({ pointerType: "mouse", button: 0, target: cell(a) });
+  under = cell(b);
+  listeners.doc.pointermove({ clientX: 1, clientY: 1, buttons: 0 });
+  assert.equal(period.periodRange(), null, "a lost pointerup: the drag ends, nothing is chosen");
+  listeners.doc.pointermove({ clientX: 2, clientY: 2, buttons: 1 });
+  assert.equal(period.periodRange(), null, "and it stays ended");
+});
+
+test("P4 14: nothing of the removed day filter or the From/To fields is left in the frontend", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const code = [...fs.readdirSync(dir).filter((f) => f.endsWith(".js")).map((f) => path.join(dir, f)), path.join(dir, "styles.css")];
+  const tests = fs.readdirSync(path.join(dir, "tests")).filter((f) => f.endsWith(".mjs") && f !== "gpexe-period-p4.actions.test.mjs").map((f) => path.join(dir, "tests", f));
+  const inCode = ["training-load-gpexe-cal-", "calendarToggled", "calendarFiltered", "imports-cal-", "imports-calendar", "data-gpexe-field", ".imports-banner .imports-dates"];
+  // A test may still assert that a removed thing is absent; it may not drive or import it.
+  const inTests = ["training-load-gpexe-cal-", "calendarToggled", "calendarFiltered", "setCalendarDay", 'class="imports-dates" open'];
+  for (const [files, banned] of [[code, inCode], [tests, inTests]]) {
+    for (const file of files) {
+      const text = fs.readFileSync(file, "utf8");
+      for (const word of banned) assert.ok(!text.includes(word), `${path.basename(file)} still has ${word}`);
+    }
+  }
 });

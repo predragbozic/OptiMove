@@ -57,9 +57,8 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
-import { clearPeriod, periodOf, periodRange, pickDay, setPeriod, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
+import { clearPeriod, periodOf, pickDay, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
 import { takePeriodDragClick } from "./gpexe-period-drag.js";
-import { datesNeededFor } from "./gpexe-import-view.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -115,8 +114,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
-    // P4: the chooser folds once a search starts; the chosen days stay for the next time it opens.
+    // P4: the phone's sheet closes and the chosen days are cleared once a search starts (the month stays), so the
+    // chooser next shows what is still missing or what a session needs (code review).
     setPeriodOpen(false);
+    clearPeriod();
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
     // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
@@ -566,21 +567,18 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   // P4, the period chooser: local only, no request for any of these.
   if (type === "training-load-gpexe-period-toggle") {
-    const open = !periodOf(gx).open;
-    // A step that needs other dates (a stale review, an expired snapshot) fills them in, unless days are chosen already.
-    if (open && !periodRange(gx)) {
-      const dated = datesNeededFor(gx.candidates || [], gx);
-      if (dated) setPeriod(dated.from, dated.to, gx, dated.clipped
-        ? "These are the latest 31 days of the sessions that need finding again; search the earlier ones afterwards."
-        : "These days hold the sessions that need finding again.");
-    }
-    setPeriodOpen(open);
+    // The phone's sheet (on a computer the chooser is always on the page).
+    setPeriodOpen(!periodOf(gx).open);
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-period-day") {
     if (takePeriodDragClick()) return true;
-    if (pickDay(action.dataset.day || "")) renderTrainingLoad();
+    const day = action.dataset.day || "";
+    if (pickDay(day)) {
+      renderTrainingLoad();
+      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-period-day"][data-day="${day}"]`)?.focus?.({ preventScroll: true });
+    }
     return true;
   }
   if (type === "training-load-gpexe-period-month") {

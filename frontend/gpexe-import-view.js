@@ -550,21 +550,21 @@ function renderSourceCardHtml(source, gx, status) {
   const check = gx.check || status.lastCheck;
   const running = Boolean(gx.checkStarting || check?.status === "running");
   const canFind = connected && !running;
-  // P4: "Find new sessions" opens the calendar that chooses what to search (gpexe-period-view.js); a step that needs
-  // other dates fills them in when it opens (the actions).
+  // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
+  // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
         ${connected
           ? `<p class="imports-facts imports-lastsearch">${escapeHtml(bannerText(gx, check))}</p>
-             <div class="imports-actions"><button type="button" class="${groupLeads(gx, status) || open ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period" ${canFind ? "" : "disabled"}>${running ? "Finding..." : open ? "Close" : "Find new sessions"}</button></div>`
+             <div class="imports-actions"><button type="button" class="${groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button></div>`
           : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       </div>
-      ${open && !running ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running }) : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx) }) : ""}
   `;
 }
 

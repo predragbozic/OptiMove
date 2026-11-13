@@ -23,6 +23,7 @@ export function bindPeriodDrag(root, render, doc = globalThis.document) {
   });
   doc.addEventListener("pointermove", (event) => {
     if (!drag) return;
+    if (event.buttons === 0) { end(); return; }
     const el = doc.elementFromPoint?.(event.clientX, event.clientY)?.closest?.(DAY);
     if (!el || (!drag.moved && el.dataset.day === drag.start)) return;
     if (!drag.moved) {
@@ -32,15 +33,18 @@ export function bindPeriodDrag(root, render, doc = globalThis.document) {
     }
     if (dragToDay(el.dataset.day)) render();
   });
-  const end = () => {
+  function end() {
     if (!drag) return;
     const moved = drag.moved;
     drag = null;
     if (!moved) return;
     endDrag();
+    // Only the click that ends this drag is swallowed: a release away from the days leaves no click to take it, and a
+    // later keyboard tap must count.
     swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
     render();
-  };
+  }
   doc.addEventListener("pointerup", end);
   doc.addEventListener("pointercancel", end);
 }

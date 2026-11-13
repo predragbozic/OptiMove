@@ -30,7 +30,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           const row = document.querySelector(".imports-tabs");
           const tabs = [...row.querySelectorAll(".om-tab")];
           return {
-            bannerButtons: [...banner.querySelectorAll(".imports-statusbar button")].map((b) => b.textContent.trim()),
+            bannerButtons: [...banner.querySelectorAll(".imports-statusbar button")].filter((b) => b.offsetParent).map((b) => b.textContent.trim()),
+            chooserVisible: Boolean(document.querySelector(".imports-period")?.offsetParent),
             bannerText: banner.querySelector(".imports-lastsearch").textContent.trim(),
             tabHeights: tabs.map((t) => Math.round(t.getBoundingClientRect().height)),
             tabs: tabs.map((t) => t.textContent.trim()),
@@ -40,7 +41,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
             overflow: document.documentElement.scrollWidth - window.innerWidth,
           };
         });
-        assert.deepEqual(look.bannerButtons, ["Find new sessions"], "one main button in the banner");
+        // P4: on a phone the banner's one button opens the period chooser; on a computer the chooser is on the page.
+        assert.deepEqual(look.bannerButtons, width < 500 ? ["Find new sessions"] : [], "the banner's buttons");
+        assert.equal(look.chooserVisible, width >= 500, "the chooser is on the page on a computer only");
         assert.match(look.bannerText, /^Last search \d{2}\.\d{2}\. \d{2}:\d{2} · 1 ready · 1 needs you$/);
         assert.deepEqual(look.tabs, ["Needs you (1)", "Ready (1)", "Imported (0)", "Stays out (0)", "Athletes (1 not linked)", "Search"]);
         assert.ok(look.tabHeights.every((h) => h >= 44), `tabs ${look.tabHeights}`);
@@ -76,11 +79,11 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         // A search repaints the screen every 2 s: the tab stays, and on a phone the tab row keeps where it was scrolled
         // (Ready is still in view, so nothing needs to move it).
         const scrolled = await page.evaluate(() => { const row = document.querySelector(".imports-tabs"); row.scrollLeft = 24; return row.scrollLeft; });
-        // P4: the search starts from the period chooser ("Search what's missing").
-        await page.click('[data-action="training-load-gpexe-period-toggle"]');
+        // P4: the search starts from the period chooser (its first button).
+        if (width < 500) await page.click('[data-action="training-load-gpexe-period-toggle"]');
         await page.click(".imports-period .period-missing");
-        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"][disabled]', { timeout: 20_000 }).catch(() => {});
-        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 60_000 });
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"][disabled]', { state: "attached", timeout: 20_000 }).catch(() => {});
+        await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { state: "attached", timeout: 60_000 });
         assert.equal(await page.locator('.imports-tab-panel[data-imports-tab="ready"]').count(), 1, "still on Ready after the search");
         if (width < 500) assert.equal(await page.evaluate(() => document.querySelector(".imports-tabs").scrollLeft), scrolled, "the tab row kept its place");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);

@@ -25910,6 +25910,7 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-team-row,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-guide,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .imports-banner,
+body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .imports-period,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-next,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-notice,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-error,
@@ -25980,15 +25981,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-actions {
   display: flex;
   gap: 8px;
   margin: 0;
-}
-
-body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-dates > summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--om-tap-target);
-  color: var(--text);
-  font-size: var(--om-text-sm);
-  cursor: pointer;
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-banner .gpexe-progress-bar {
@@ -26323,18 +26315,41 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-attn-group 
 
 /* End of design IMP2. */
 
-/* Imports P4: the period chooser under "Find new sessions". Seven columns that always fit; a day is a 44 px button
-   with its sessions as chips (colour + glyph, never colour alone); the chosen days are outlined, the first and the
-   last more strongly; a day that can't be picked is faded and says so in its label. */
-body:not(.athlete-mode):not(.login-mode) .imports-period {
+/* Imports P4: the period chooser. On a computer it is always on the page under the banner: the calendar on the left,
+   the search and the chosen days on the right. On a phone "Find new sessions" opens it as a full-screen sheet (and
+   that button is the phone's only). Seven columns that always fit; a day is a button with its sessions as chips
+   (colour + glyph, never colour alone); the chosen days are filled, the first and the last outlined more strongly; a
+   day that can't be picked is faded and says so in its label. */
+.imports-find-phone,
+.imports-period .period-head {
+  display: none;
+}
+body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 1fr);
+  grid-template-areas: "cal first" "cal side";
+  grid-template-rows: auto 1fr;
+  gap: 12px 24px;
+  align-items: start;
   margin-top: 12px;
-  max-width: 560px;
 }
 .imports-period .period-first {
+  grid-area: first;
   display: grid;
   gap: 4px;
+}
+.imports-period .period-cal {
+  grid-area: cal;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.imports-period .period-side {
+  grid-area: side;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
 }
 .imports-period .period-missing {
   width: 100%;
@@ -26345,6 +26360,17 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
 .imports-period .period-wait {
   margin: 0;
   font-size: 0.85rem;
+}
+.imports-period .period-wait {
+  font-weight: 600;
+}
+.imports-period .period-fine {
+  display: none;
+}
+@media (pointer: fine) {
+  .imports-period .period-fine {
+    display: inline;
+  }
 }
 .imports-period .period-nav {
   display: flex;
@@ -26397,10 +26423,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
 .imports-period .period-day:hover {
   border-color: var(--line-strong);
 }
-.imports-period .period-day:focus-visible {
-  outline: none;
-  box-shadow: var(--om-focus-ring, 0 0 0 3px rgba(31, 111, 104, 0.35));
-}
 .imports-period .period-day.is-blank {
   min-height: 0;
   padding: 0;
@@ -26426,6 +26448,11 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* After .is-edge, so the ring is never lost on the first or the last chosen day (mobile-qa). */
+.imports-period .period-day:focus-visible {
+  outline: 3px solid var(--om-accent-ring, rgba(31, 111, 104, 0.35));
+  outline-offset: 1px;
+}
 .imports-period .period-chips {
   display: flex;
   flex-wrap: wrap;
@@ -26435,12 +26462,12 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
 }
 .imports-period .period-chip {
   display: inline-block;
-  min-width: 14px;
+  min-width: 16px;
   padding: 1px 3px;
   border-radius: 4px;
   font-style: normal;
-  font-weight: 700;
-  font-size: 0.72rem;
+  font-weight: 800;
+  font-size: 0.8rem;
   line-height: 1.1;
   text-align: center;
 }
@@ -26467,26 +26494,23 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--muted);
 }
 .imports-period .period-range {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px;
   border-radius: var(--radius);
   background: var(--surface-soft);
 }
 .imports-period .period-range-note {
-  flex: 1 1 100%;
   margin: 0;
   font-size: 0.85rem;
 }
 .imports-period .period-range-text {
   font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 .imports-period .period-range-actions {
   display: flex;
@@ -26499,13 +26523,15 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
 .imports-period .period-daylist {
   display: grid;
   gap: 6px;
-  padding: 10px;
-  border-radius: var(--radius);
-  background: var(--surface-soft);
 }
 .imports-period .period-daylist-title {
   margin: 0;
   font-weight: 600;
+}
+.imports-period .period-daylist-date {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 .imports-period .period-daylist ul {
   display: grid;
@@ -26524,13 +26550,60 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
   text-align: left;
   overflow-wrap: anywhere;
 }
+.imports-period .period-daylist-more {
+  margin: 0;
+  font-size: 0.85rem;
+}
+@media (max-width: 900px) {
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "first" "cal" "side";
+    grid-template-rows: auto;
+  }
+}
 @media (max-width: 760px) {
-  /* Seven 44 px days need the width more than the chooser needs its side padding. */
-  body:not(.athlete-mode):not(.login-mode) .imports-banner .gpexe-panel.imports-period {
-    margin-left: -12px;
-    margin-right: -12px;
-    padding-left: 6px;
-    padding-right: 6px;
+  /* The phone: "Find new sessions" opens the chooser as a full-screen sheet; closed, it is not on the page. */
+  .imports-find-phone {
+    display: inline-flex;
+  }
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
+    display: none;
+  }
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period.is-open {
+    display: grid;
+    grid-template-areas: "head" "first" "cal" "side";
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--surface);
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+    align-content: start;
+  }
+  .imports-period.is-open .period-head {
+    grid-area: head;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .imports-period .period-head h3 {
+    flex: 1;
+    margin: 0;
+    font-size: 1.1rem;
+  }
+  .imports-period .period-close {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 1.4rem;
+    line-height: 1;
   }
   .imports-period .period-grid {
     gap: 2px;
@@ -26540,7 +26613,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-period {
     width: 100%;
   }
   .imports-period .period-range-actions {
-    flex-direction: column-reverse;
+    flex-direction: column;
   }
 }
 /* End of Imports P4. */

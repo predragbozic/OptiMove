@@ -160,7 +160,7 @@ test("IMP1 3: the banner says what the last search found and has ONE main button
   await openImports();
   const banner = html().slice(html().indexOf('imports-banner'), html().indexOf("</section>", html().indexOf('imports-banner')));
   assert.match(banner, /<p class="imports-facts imports-lastsearch">No search yet · 1 ready · 1 needs you<\/p>/);
-  assert.equal((banner.match(/primary-button/g) || []).length + (banner.match(/plain-button gpexe-button" data-action="training-load-gpexe-period-toggle"/g) || []).length, 1, "one button");
+  assert.equal((banner.match(/primary-button/g) || []).length + (banner.match(/plain-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle"/g) || []).length, 1, "one button");
   assert.doesNotMatch(banner, /waiting in GPEXE|new sessions are waiting/);
   assert.doesNotMatch(banner, /Technical details|does not import anything|Pilot mode/, "no long sentence and no Technical details up front");
 });
@@ -222,7 +222,7 @@ test("IMP1 8: on Needs you the person's own step leads and one line opens Ready;
   await openImports();
   const page = html();
   assert.match(page, /<div class="imports-attn-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-open"/, "the group's step is the filled button");
-  assert.match(page, /class="plain-button gpexe-button" data-action="training-load-gpexe-period-toggle"/, "the search is plain here");
+  assert.match(page, /class="plain-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle"/, "the search is plain here");
   assert.match(page, /1 session is ready to import\. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready<\/button>/);
   assert.doesNotMatch(page, /imports-row-action/, "no label on a row");
   const calls = fetchCalls.length;

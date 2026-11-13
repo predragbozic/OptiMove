@@ -809,9 +809,9 @@ export const emptyGpexeImportState = () => ({
   // sentence about choices dropped after a reload; a refusal of the whole
   // request.
   batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null, progress: null, stopRequested: false, stopReason: "" },
-  // P4: the period chooser under "Find new sessions" (gpexe-period-data.js): open, the month shown, the first day
-  // tapped, the chosen days and the day whose sessions are listed. Local to Imports; never the shared week.
-  period: { open: false, month: "", anchor: "", from: "", to: "", day: "" },
+  // P4: the period chooser (gpexe-period-data.js): the phone's sheet open, the month shown, the first day tapped and the
+  // chosen days. Local to Imports; never the shared week.
+  period: { open: false, month: "", anchor: "", from: "", to: "" },
   // U6a: whether the person opened the folded "Import settings" card (kept across repaints).
   settingsOpen: false,
 });

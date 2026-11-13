@@ -2016,7 +2016,7 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-period-toggle" }), { renderTrainingLoad: render });
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /data-action="training-load-gpexe-check" data-from="2026-08-15" data-to="2026-09-14"/);
-  assert.match(html, /These are the latest 31 days of the sessions that need finding again; search the earlier ones afterwards\./);
+  assert.match(html, /The latest 31 days of the sessions that need finding again; search the earlier ones afterwards\./);
   assert.match(html, /class="period-range-text">[^<]*31 days</);
 
   // A stale session with no start date: the sentence does not point at dates that are not set.
