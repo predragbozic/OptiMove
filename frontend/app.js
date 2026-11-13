@@ -42,6 +42,8 @@ import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./ico
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
+import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput } from "./metric-board-actions.js";
+import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
@@ -605,6 +607,16 @@ function bindEvents() {
     });
   });
   els.content.addEventListener("dragend", endVariableDrag);
+  // Data configuration's board on a computer: drag a GPEXE column onto a variable (J18). Its own drag type.
+  els.content.addEventListener("dragstart", (event) => { startSourceFieldDrag(event, { isBlocked: () => Boolean(state.trainingLoad.board?.write) }); });
+  els.content.addEventListener("dragover", overSourceFieldDrag);
+  els.content.addEventListener("dragleave", leaveSourceFieldDrag);
+  els.content.addEventListener("drop", (event) => {
+    dropSourceFieldDrag(event, { onDrop: (fieldId, variableId) => { void dropFieldOnVariable(fieldId, variableId, { render: renderActiveTrainingLoadSurface }); } });
+  });
+  els.content.addEventListener("dragend", endSourceFieldDrag);
+  // The board's panel: its tick and its Required box report through "change".
+  els.content.addEventListener("change", (event) => { if (event.target?.matches?.("[data-mb-tick], [data-mb-required]")) handleBoardInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Builder section on a computer: drag a library exercise onto the Added list.
   els.content.addEventListener("dragstart", (event) => { startBuilderLibraryDrag(event, { isBlocked: builderLibraryDropBlocked }); });
   els.content.addEventListener("dragover", overBuilderLibraryDrag);
@@ -682,6 +694,8 @@ function bindEvents() {
     if (state.activeTab === "training-load" && closeActivityRosterOverlay()) {
       renderTrainingLoad();
     }
+    // J18: the board's sheet, panel or review closes on Escape (never while a save is in flight).
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "board") closeBoardOverlay(renderActiveTrainingLoadSurface);
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
@@ -3096,6 +3110,7 @@ async function handleContentClick(event) {
   if (await handleVariablesAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleSourceFieldsAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleMappingsAction(action, { render: renderActiveTrainingLoadSurface })) return;
+  if (await handleBoardAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleTrainingLoadAction(action, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate })) return;
   handleMediaAction(action);
 }

@@ -490,6 +490,8 @@ const ACT_TEXT = {
     active_version_changed: "This mapping changed meanwhile.",
     revision_not_verified: "The field's unit and meaning must be confirmed first.",
     canonical_version_changed: "The variable has a newer version: make a new version.",
+    // J18 (v66): a club's admin switches a version of a field without parameters on only from the board, with its check.
+    confirmation_required: "Switch this version on from Map by drag and drop.",
     source_metric_target_taken: "This field already fills another variable. Only one of them can be active at a time.",
     ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported"]
       .map((code) => [code, `This version cannot be activated now: ${DRAFT_TEXT[code].replace(/^(There|The|This)\b/, (w) => w.toLowerCase())}`])),

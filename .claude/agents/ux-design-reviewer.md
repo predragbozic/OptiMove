@@ -43,6 +43,8 @@ rezultat → oporavak od greške. Proveri konkretno:
    glavnom toku, uz predlog običnog jezika.
 5. Da li vizuelna hijerarhija, oznake, grupisanje, kontrast i fokus pomažu
    stvarnom zadatku? Carbon koristi kao referencu u okviru OptiMove stila.
+6. Da li ekran poštuje „Interaction principles” iz `.claude/rules/frontend.md`
+   (odluka vlasnika, 2026-11-13)?
 
 Ne zaključuj da je nešto problem samo zato što se tebi estetski ne sviđa.
 Za svaki nalaz navedi konkretan scenario, element ili tekst, posledicu za
