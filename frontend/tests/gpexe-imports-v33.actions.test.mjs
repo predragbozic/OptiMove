@@ -178,7 +178,8 @@ test("1. Ready to import: a pending session the last successful search did not c
   assert.ok(readySection(page).includes('data-candidate-id="cand-1"') && !readySection(page).includes('data-candidate-id="cand-nc"'), "the unconfirmed session is not in Ready");
   assert.match(attentionSection(page), /Needs you \(1\)/);
   assert.ok(attentionSection(page).includes('data-candidate-id="cand-nc"'));
-  assert.match(attentionSection(page), COACH_STEP("06.10.2026"), "the row names the action and the dates; its badge says the status");
+  assert.match(attentionSection(page), />Find again for 06\.10\.2026</, "the group's button names the action and the dates; the badge says the status (P3)");
+  assert.doesNotMatch(attentionSection(page), /gpexe-candidate-next/, "the row does not repeat the group's step");
   assert.doesNotMatch(attentionSection(page), /Not confirmed for import yet\./, "the row does not repeat the badge");
   assert.match(attentionSection(page), /gpexe-badge is-pending">Not confirmed for import</, "not 'Waiting for approval'");
   // The dates are pre-filled for the session that needs finding again (as for an expired one).
@@ -304,8 +305,9 @@ test("6. administrator against coach: an administrator reads the two possible ca
     await openImports();
     const page = html();
     const ADMIN_NOTE = new RegExp(`Not confirmed for import: ${ADMIN_CAUSES}\\. Find new sessions again \\(with dates that include 05\\.10\\.2026\\)${ADMIN_STEP_TAIL}`);
-    // The row names the action alone for everyone; the causes wait in the administrator's review note.
-    assert.match(attentionSection(page), COACH_STEP("05.10.2026"));
+    // The group names the action alone for everyone (its button, with the dates; P3: the row does not repeat it); the
+    // causes wait in the administrator's review note.
+    assert.match(attentionSection(page), />Find again for 05\.10\.2026</);
     assert.doesNotMatch(page, ADMIN_WORDS, "no cause in the list, for anyone");
     assert.doesNotMatch(page, /separate drills|computed/);
     await openCandidate("cand-nc");
