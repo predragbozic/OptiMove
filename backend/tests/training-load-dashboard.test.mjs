@@ -42,7 +42,7 @@ const MIGRATIONS = [
   "202609101100_training_load_v17_dashboard_sanctioned_functions.sql",
   "202609101200_training_load_v18_dashboard_catalog_seed.sql",
   "202609170900_training_load_v19_dashboard_delete.sql",
-  "202611131300_training_load_v68_dashboard_simple_atomic_save.sql",
+  "202611131320_training_load_v70_dashboard_simple_atomic_save.sql",
 ];
 const BASE_MIGRATIONS = MIGRATIONS.slice(0, 14); // everything BEFORE the dashboard migrations — used by the upgrade-safety test
 const DASHBOARD_MIGRATIONS = MIGRATIONS.slice(14);

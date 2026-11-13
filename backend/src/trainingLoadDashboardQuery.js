@@ -345,7 +345,7 @@ function resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRole
   const allowedCoverage = coverageSets[coveragePolicy || "complete_and_partial"];
   const effectiveSourcePolicy = sourcePolicy || "all_with_conflicts";
 
-  let candidates = facts.filter((f) => f.grain === dataScopeLevel);
+  let candidates = facts.filter((f) => f.grain === dataScopeLevel && f.entryMethod !== "estimate");
   if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
   candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
   if (effectiveSourcePolicy === "derived") candidates = candidates.filter((f) => f.isDerived);
