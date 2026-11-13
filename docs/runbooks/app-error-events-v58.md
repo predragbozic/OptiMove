@@ -51,8 +51,10 @@ grouping. A report without it is stored as before, so a page still open from an 
 word, or one with another code, is `400` and nothing is stored.
 
 `handler_error` is the app's own click handler failing (`guardHandler` in `frontend/app-errors-capture.js`): it is
-reported once, with the control that was really used and the handler's own frames, instead of surfacing later as an
-anonymous rejection labelled with whatever was tapped last.
+reported once, with the control of that very click (or none, never the one tapped last) and the handler's own frames,
+instead of surfacing later as an anonymous rejection labelled with whatever was tapped last. A load the handler starts
+and does not wait for (a tab's load) goes through `detached()`, which reports its rejection the same way, and a Full
+screen request the browser refuses is reported with the action `enter-fullscreen`.
 
 ## Throttle and size
 
