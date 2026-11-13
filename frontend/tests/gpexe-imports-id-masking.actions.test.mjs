@@ -426,7 +426,8 @@ test("with the source-athletes read refused, the review's unlinked athletes stay
   await openReview();
   const html = pageHtml();
   assertMasked(html, "review without the source-athletes list");
-  const names = [...outsideTech(html).matchAll(/<summary[^>]*>[\s\S]*?<strong>([^<]*)<\/strong>/g)].map((m) => m[1]).filter((n) => /GPEXE athlete/.test(n));
+  // P1: a club admin's review names the unlinked athletes in the table only (the per-athlete list is the platform admin's).
+  const names = [...outsideTech(html).matchAll(/role="rowheader">([^<]*)<\/th>/g)].map((m) => m[1]).filter((n) => /GPEXE athlete/.test(n));
   assert.ok(names.length >= 2, `two unlinked athletes are named: ${names.join(" | ")}`);
   assert.equal(new Set(names).size, names.length, "never one shared label");
   assert.ok(names.every((n) => /^GPEXE athlete \d+$/.test(n)), "a number, never a bare 'GPEXE athlete'");

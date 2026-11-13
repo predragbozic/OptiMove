@@ -180,7 +180,7 @@ test("1. Ready to import: a pending session the last successful search did not c
   assert.ok(attentionSection(page).includes('data-candidate-id="cand-nc"'));
   assert.match(attentionSection(page), COACH_STEP("06.10.2026"), "the row names the action and the dates; its badge says the status");
   assert.doesNotMatch(attentionSection(page), /Not confirmed for import yet\./, "the row does not repeat the badge");
-  assert.match(attentionSection(page), /gpexe-badge is-pending">Not confirmed for import</, "not 'Waiting for approval'");
+  assert.match(attentionSection(page), /gpexe-badge is-pending">Not confirmed for import</, "not 'Not imported yet' (P1's name for waiting)");
   // The dates are pre-filled for the session that needs finding again (as for an expired one).
   assert.match(page, /The dates are set to include the sessions that need finding again \(06\.10\.2026\)\./);
   assert.match(page, /value="2026-10-06"/);
@@ -274,7 +274,7 @@ test("4. a withdrawn session (superseded by a complete, successful search) is ne
   assert.match(review, /gpexe-badge is-superseded">No longer found</);
   assert.match(review, /The last successful search no longer found this session in GPEXE/);
   assert.doesNotMatch(review, /training-load-gpexe-approve"/);
-  assert.doesNotMatch(review, /newer data|Open the newer version|Waiting for approval/);
+  assert.doesNotMatch(review, /newer data|Open the newer version|gpexe-badge is-pending">Not imported yet/);
   assert.doesNotMatch(outsideTech(review), CODES);
 });
 
