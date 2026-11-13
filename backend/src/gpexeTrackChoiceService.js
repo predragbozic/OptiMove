@@ -168,7 +168,8 @@ export async function listTrackChoices(teamId, candidateId, { userId }) {
         if (!current) continue;
         const view = choiceView(current);
         athletes.push({
-          gpexeAthleteId, tracks: [{ trackId: one.trackId }], choosable: one.readable, sumOffered: false, sumReason: "not_available",
+          gpexeAthleteId, tracks: [{ trackId: one.trackId }], choosable: one.readable,
+          ...(one.readable ? {} : { notChoosableReason: "tracks_not_readable" }), sumOffered: false, sumReason: "not_available",
           currentChoice: { ...view, stale: view.choice !== "cleared" && view.fingerprint !== one.fingerprint },
         });
         continue;
@@ -213,7 +214,7 @@ export function validateTrackChoiceBody(body) {
   const scale = scaleTargetMinutes === undefined || scaleTargetMinutes === null ? null : scaleTargetMinutes;
   if (scale !== null) {
     if (choice !== "track") throw refusal(400, "invalid_scale", "scaleTargetMinutes is sent only with the choice track.");
-    if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0 || scale > SCALE_MAX_MINUTES || Math.round(scale * 100) !== scale * 100) {
+    if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0 || scale > SCALE_MAX_MINUTES || Math.abs(scale * 100 - Math.round(scale * 100)) > 1e-9) {
       throw refusal(400, "invalid_scale", "scaleTargetMinutes must be a number of minutes above 0 and at most 600, with at most two decimals.");
     }
   }
@@ -288,11 +289,6 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
     await assertTrackChoiceAudience(client, userId, teamId);
     // MT-B (L3): the body only after the audience, so a malformed body outside it is the identical 404 too.
     input = validateTrackChoiceBody(body);
-    // MT-D (plan 13.8): no scale while estimates are switched off - the import would leave the athlete's sums out with no way
-    // to save them. A choice without a scale is unchanged.
-    if (input.scaleTargetMinutes !== null && !estimatesEnabled()) {
-      throw refusal(409, "scale_not_available", "Scaling a short recording is not switched on yet.");
-    }
     // A choice without a scale hashes exactly as before MT-D (the key is left out), so a replay of an earlier request matches.
     hash = requestHash({ operation: "track_choice", teamId, candidateId, gpexeAthleteId: String(gpexeAthleteId), ...input, requestKey: undefined, scaleTargetMinutes: input.scaleTargetMinutes ?? undefined });
     // 1. The (author, key) lock and the replay.
@@ -305,6 +301,12 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
       if (prior.request_hash !== hash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request.");
       await client.query("rollback");
       return { status: 200, body: { choice: choiceView(prior) }, replayed: true };
+    }
+    // MT-D (plan 13.8): no new scale while estimates are switched off - the import would leave the athlete's sums out with no way
+    // to save them. After the replay (a saved answer wins over the present state: a scale stored while the flag was on replays
+    // as stored), before anything is locked or written. A choice without a scale is unchanged.
+    if (input.scaleTargetMinutes !== null && !estimatesEnabled()) {
+      throw refusal(409, "scale_not_available", "Scaling a short recording is not switched on yet.");
     }
     // 2. The candidate FOR SHARE (only while open) and the athlete's track set.
     const row = await readCandidate(client, teamId, candidateId, { lock: true });

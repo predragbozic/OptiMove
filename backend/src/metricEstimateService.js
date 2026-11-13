@@ -137,6 +137,11 @@ async function importedEventOf(client, canonicalId) {
   return rows[0];
 }
 
+// The event must be the authorised team's own (defence in depth: the event comes from the activity's links).
+function assertEventOfTeam(event, team) {
+  if (String(event.owner_team_id) !== String(team.id)) throw conflict("estimate_not_available", "Only a session that came from an import can hold estimated values.");
+}
+
 async function rosterAthletes(client, canonicalId) {
   return (await client.query(
     `select r.athlete_id, coalesce(nullif(a.display_name, ''), a.full_name) as name
@@ -297,15 +302,22 @@ async function proportional(client, ctx, minutes) {
 async function scaleRecording(client, ctx) {
   const session = /^team_session:([0-9]{1,12})$/.exec(String(ctx.event.source_external_id ?? ""));
   if (!session) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
+  // With the approval that imported it: a subset import (J20-B) stores no preview of its own, so the athletes it left out are
+  // read from the approval, never inferred from the full preview.
   const candidate = (await client.query(
-    `select preview from training_load.gpexe_import_candidates
-      where owner_team_id = $1 and gpexe_team_session_id = $2 and status = 'imported' and import_undone_at is null
-      order by imported_at desc limit 1`,
+    `select c.preview, a.excluded_athlete_ids
+       from training_load.gpexe_import_candidates c
+       join training_load.gpexe_import_approvals a on a.candidate_id = c.id
+      where c.owner_team_id = $1 and c.gpexe_team_session_id = $2 and c.status = 'imported' and c.import_undone_at is null
+      order by c.imported_at desc limit 1`,
     [ctx.event.owner_team_id, session[1]],
   )).rows[0];
   if (!candidate) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
   if (!candidate.preview) throw conflict("scale_basis_expired", "The data of this import has expired; its recorded part can no longer be scaled.");
-  const scaled = (candidate.preview.athletes ?? []).find((a) => String(a.athleteId) === ctx.athleteId)?.scaleRecording ?? null;
+  const entry = (candidate.preview.athletes ?? []).find((a) => String(a.athleteId) === ctx.athleteId) ?? null;
+  const leftOut = new Set((candidate.excluded_athlete_ids ?? []).map(String));
+  // Only an athlete that import really took: not left out by the coach (J20-B) and not refused (notImported).
+  const scaled = entry && !entry.notImported && !leftOut.has(String(entry.gpexeAthleteId)) ? entry.scaleRecording ?? null : null;
   if (!scaled) throw conflict("scale_not_chosen", "No scale was chosen for this athlete before the import.");
   if (scaled.notPossible) throw conflict("scale_not_possible", "This recording could not be scaled.", { reason: scaled.notPossible });
   const recordedMinutes = Number(scaled.recordedMinutes);
@@ -319,7 +331,8 @@ async function scaleRecording(client, ctx) {
       where d.id = any($1::uuid[])`,
     [defIds, ctx.team.club_id],
   )).rows.map((d) => [String(d.id), d]));
-  return (scaled.values ?? []).map((v) => {
+  // A variable of another club (a team that moved) is never named here, and never estimated - as loadEstimateContext.
+  return (scaled.values ?? []).filter((v) => defs.get(String(v.metricDefinitionId))?.named === true).map((v) => {
     const d = defs.get(String(v.metricDefinitionId));
     const def = String(v.metricDefinitionId);
     const variable = {
@@ -327,12 +340,15 @@ async function scaleRecording(client, ctx) {
       shortLabel: d?.short_label ?? null, unit: d?.unit ?? null, aggregation: d?.daily_aggregation_method ?? null,
     };
     let reason = null;
-    if (!d || !d.named || d.value_type !== "numeric" || d.daily_aggregation_method !== "sum") reason = "not_estimable";
+    if (d.value_type !== "numeric" || d.daily_aggregation_method !== "sum") reason = "not_estimable";
     else if (String(d.current_version_id) !== String(v.metricDefinitionVersionId) || !sameUnit(d.unit, v.unit)) reason = "definition_changed";
     else if (ctx.real.has(def)) reason = "measured_exists";
     const measured = Number(v.value);
     if (reason || !Number.isFinite(measured)) return { variable, value: null, reason: reason ?? "not_estimable", basis: null };
-    const value = d.key === (testHooks.durationKey ?? DURATION_KEY) ? targetMinutes : round(measured * targetMinutes / recordedMinutes, 3);
+    // Only the system minutes variable becomes the target (as the mapper picked the recorded minutes); every other sum, a
+    // club's own `duration` included, is scaled.
+    const isDuration = ctx.durationDef && String(ctx.durationDef.id) === def && ctx.durationDef.unit === "min";
+    const value = isDuration ? targetMinutes : round(measured * targetMinutes / recordedMinutes, 3);
     return { variable, value, reason: null, basis: { measured, recordedMinutes, targetMinutes } };
   });
 }
@@ -358,6 +374,7 @@ export async function getEstimateProposal(ctx, activityId, query) {
     await client.query(`set local statement_timeout = '${READ_STATEMENT_TIMEOUT}'`);
     const target = await resolveRosterTarget(client, ctx, activityId);
     const event = await importedEventOf(client, target.canonicalId);
+    assertEventOfTeam(event, target.team);
     const ectx = await loadEstimateContext(client, { canonicalId: target.canonicalId, activity: target.activity, team: target.team, event, athleteId: input.athleteId });
     const athlete = ectx.roster.find((a) => a.athleteId === input.athleteId);
     if (!athlete) throw conflict("athlete_not_on_roster", "This athlete is not on this session's roster.");
@@ -551,6 +568,7 @@ export async function saveEstimate(ctx, activityId, body) {
     const gate = await client.query(`select coalesce(training.activity_has_roster($1), false) as has_roster`, [canonicalId]);
     if (!gate.rows[0].has_roster) throw noRoster();
     const event = await importedEventOf(client, canonicalId);
+    assertEventOfTeam(event, target.team);
     const ectx = await loadEstimateContext(client, { canonicalId, activity: target.activity, team: target.team, event, athleteId: input.athleteId });
     if (!ectx.roster.some((a) => a.athleteId === input.athleteId)) throw conflict("athlete_not_on_roster", "This athlete is not on this session's roster.");
 

@@ -364,6 +364,10 @@ test("2. the PUT: a scale on a one-track athlete is stored and listed; without a
     const r = await put(team, cand.id, "102", { requestKey: key(), choice: "track", trackId: "62012", expectedChoiceId: null, scaleTargetMinutes: bad });
     assert.deepEqual([r.status, r.body.error], [400, "invalid_scale"], `bad scale ${bad}`);
   }
+  // Two decimals that binary floating point does not hold exactly are still two decimals (the security review's LOW-3).
+  for (const ok of [1.15, 0.07, 39.15, 600]) {
+    assert.equal(choices.validateTrackChoiceBody({ requestKey: key(), choice: "track", trackId: "1", expectedChoiceId: null, scaleTargetMinutes: ok }).scaleTargetMinutes, ok);
+  }
   const onNone = await put(team, cand.id, "103", { requestKey: key(), choice: "none", expectedChoiceId: null, scaleTargetMinutes: 40 });
   assert.deepEqual([onNone.status, onNone.body.error], [400, "invalid_scale"]);
 
@@ -379,8 +383,17 @@ test("2. the PUT: a scale on a one-track athlete is stored and listed; without a
     process.env.ESTIMATES_ENABLED = "true";
   }
 
-  const made = await scale(team, cand.id, "102", 40, { trackId: "62012" });
+  const scaleBody = { requestKey: key(), choice: "track", trackId: "62012", expectedChoiceId: null, scaleTargetMinutes: 40 };
+  const made = await put(team, cand.id, "102", scaleBody);
   assert.equal(made.status, 201, made.text);
+  // The code review's HIGH: a stored scale replays as stored after the flag is turned off (the saved answer wins).
+  process.env.ESTIMATES_ENABLED = "false";
+  try {
+    const replay = await put(team, cand.id, "102", scaleBody);
+    assert.deepEqual([replay.status, replay.body.choice?.id, replay.body.choice?.scaleTargetMinutes], [200, made.body.choice.id, 40], replay.text);
+  } finally {
+    process.env.ESTIMATES_ENABLED = "true";
+  }
   assert.equal(made.body.choice.scaleTargetMinutes, 40);
   const listed = (await getChoices(team, cand.id)).body;
   assert.equal(listed.scaleAvailable, true);
@@ -438,9 +451,20 @@ test("3. a scaled athlete is imported with its max only; the preview lists the s
   assert.deepEqual(measured.map((r) => [r.label.replace(/ [^ ]+$/, ""), r.entry_method]), [["GPEXE max speed", "api_import"]], "only the max measured");
 
   const activityId = (await admin.query(`select activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id])).rows[0].activity_id;
+  // A value naming a definition the team cannot see (unknown here) is never returned or estimated (the security review's LOW-1).
+  const stranger = crypto.randomUUID();
+  await admin.query(
+    `update training_load.gpexe_import_candidates
+        set preview = jsonb_set(preview, array['athletes', (select (i - 1)::text from jsonb_array_elements(preview -> 'athletes') with ordinality a(e, i) where e ->> 'athleteId' = $2), 'scaleRecording', 'values'],
+                                (preview #> array['athletes', (select (i - 1)::text from jsonb_array_elements(preview -> 'athletes') with ordinality a(e, i) where e ->> 'athleteId' = $2), 'scaleRecording', 'values'])
+                                || jsonb_build_array(jsonb_build_object('metricDefinitionId', $3::text, 'metricDefinitionVersionId', $3::text, 'unit', 'm', 'value', '1')))
+      where id = $1`,
+    [cand.id, team.athleteIds[1], stranger],
+  );
   const proposal = await tapi(`/${activityId}/estimates/proposal?athleteId=${team.athleteIds[1]}`, { cookie: team.coach.cookie });
   assert.equal(proposal.status, 200, proposal.text);
   assert.equal(proposal.body.methods.scale_recording.available, true);
+  assert.equal(JSON.stringify(proposal.body).includes(stranger), false, "the unknown definition is not named");
   const other = await tapi(`/${activityId}/estimates/proposal?athleteId=${team.athleteIds[0]}`, { cookie: team.coach.cookie });
   assert.deepEqual([other.body.methods.scale_recording.available, other.body.methods.scale_recording.reason], [false, "scale_not_chosen"]);
 
@@ -594,5 +618,48 @@ test("6. the runbook's preflight is all true on a database at v67, and the post-
     await allTrue(atV67.url, "docs/runbooks/scale-recording-v68-v69-postcheck.sql");
   } finally {
     await atV67.drop();
+  }
+});
+
+test("7. the code review's MEDIUMs: an athlete left out of a subset import gets no scaled estimate; a sum variable that is not the system minutes is scaled, never set to the target", async () => {
+  const team = await setupTeam();
+  await useWorldMinutes();
+  const cand = await candidateOf(team, 6701, { without103: true });
+  assert.equal((await scale(team, cand.id, "102", 40, { trackId: "67012" })).status, 201);
+  await recompute(team, cand.id);
+  const listed = (await candidates(team)).find((c) => c.id === cand.id);
+  const sub = await api(`/teams/${team.teamId}/candidates/${cand.id}/preview`, { method: "POST", cookie: team.padmin.cookie, body: { excludedAthleteIds: ["102"] } });
+  assert.equal(sub.status, 200, sub.text);
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  let approved;
+  try {
+    approved = await api(`/teams/${team.teamId}/candidates/${cand.id}/approve`, { method: "POST", cookie: team.padmin.cookie, body: { previewHash: listed.previewHash, subsetHash: sub.body.subset.subsetHash, excludedAthleteIds: ["102"] } });
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.ok([200, 201].includes(approved.status), approved.text);
+  const activityId = (await admin.query(`select activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id])).rows[0].activity_id;
+  const left = await tapi(`/${activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), athleteId: team.athleteIds[1], method: "scale_recording" } });
+  // 102 left out: either not on the session's roster for an estimate, or not scaled - never a scaled estimate.
+  assert.equal(left.status, 409, left.text);
+  assert.ok(["scale_not_chosen", "athlete_not_on_roster"].includes(left.body.error), left.text);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_value_estimates where method = 'scale_recording' and estimated_by_user_id = $1`, [team.coach.id])).rows[0].n, 0);
+
+  // A sum variable keyed as the save's minutes variable but not in minutes (here: the distance) is scaled, not set to 40.
+  const team2 = await setupTeam();
+  const cand2 = await candidateOf(team2, 6702, { without103: true });
+  assert.equal((await scale(team2, cand2.id, "102", 40, { trackId: "67022" })).status, 201);
+  await recompute(team2, cand2.id);
+  assert.equal((await approve(team2, (await candidates(team2)).find((c) => c.id === cand2.id))).body.results?.[0]?.outcome, "imported");
+  const distanceKey = (await admin.query(`select key from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].key;
+  estimates.setEstimateTestHooks({ durationKey: distanceKey });
+  try {
+    const activity2 = (await admin.query(`select activity_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand2.id])).rows[0].activity_id;
+    const saved = await tapi(`/${activity2}/estimates`, { method: "POST", cookie: team2.coach.cookie, body: { requestKey: key(), athleteId: team2.athleteIds[1], method: "scale_recording" } });
+    assert.equal(saved.status, 201, saved.text);
+    const byLabel = Object.fromEntries((await wholeValues(team2.teamId, team2.athleteIds[1])).map((r) => [r.label.replace(/ [^ ]+$/, ""), r.value]));
+    assert.equal(byLabel["GPEXE total distance"], 3000, "scaled, not the target");
+  } finally {
+    estimates.setEstimateTestHooks({ durationKey: timeKey });
   }
 });
