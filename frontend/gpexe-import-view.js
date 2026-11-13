@@ -2585,7 +2585,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
       ${updating}${updateError}
       ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
       ${lo.states && stateAthleteIds(c, detail).length ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
-      ${needLink ? `<p class="gpexe-review-howto">Link each GPEXE athlete to the right athlete of your team.${c?.helperValues ? " The values on the row help you find them in GPEXE; if you are not sure, check there first." : ""}</p>` : ""}
+      ${needLink ? `<p class="muted gpexe-review-howto">Link each GPEXE athlete to the right athlete of your team.${c?.helperValues ? " The values on the row help you find them in GPEXE; if you are not sure, check there first." : ""}</p>` : ""}
       <div class="gpexe-chips" role="group" aria-label="Show">${chips}</div>
       ${shown.length ? reviewTableOf(shown, c, choices, lo) : ""}
       ${fine.length ? `<details class="gpexe-fine"${filter === "all" || !shown.length ? " open" : ""}><summary>${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}</summary>${reviewTableOf(fine, c, choices, lo)}</details>` : ""}
