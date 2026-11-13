@@ -621,8 +621,9 @@ search of the unchanged session changes neither the estimate nor the state.
 
 ## 13. MT-D: `scale_recording` (plan check, 2026-11-13)
 
-Section 10 checked against `main` `bcadaec2` (MT-B merged). The findings below change or complete section 10. Nothing is
-built until the *Rukovodilac* decides 13.7.
+Section 10 checked against `main` `bcadaec2` (MT-B merged). The findings below change or complete section 10. **Decided**
+by the *Rukovodilac* on 2026-11-13: every item of 13.7 as recommended, with 13.8 and 13.9. The migration is **v68**, with a
+prefix after `202611131200` (J18's v66 is not merged; whoever merges later re-issues its preflight block).
 
 ### 13.1 The 6a flag is a hint in the browser only
 
@@ -694,8 +695,9 @@ sessions only). So a scaled athlete's drill values have no estimate path. Recomm
 athlete was on the pitch for is a real recording. They do not take part in M2.
 
 **No duration variable (13.7 D3).** If the team's activations do not include the duration variable, `recordedMinutes`
-cannot be known. Recommended: the preview marks the choice `scale_not_possible` and imports the athlete as without a choice.
-This is a preview block for that athlete only, never a guess.
+cannot be known. Recommended: the athlete is imported as without a choice, and the preview entry carries
+`scaleRecording: { notPossible: "no_duration" }`, so the screen can say in one sentence why the scale was not applied. This
+never guesses a value.
 
 ### 13.5 The migration (MT-D's own, the next free number, after v67)
 
@@ -764,3 +766,52 @@ both GOs and the owner's order naming the migration.
   - MT-D2: the 6b save of `scale_recording`. It could ride in D1, since the method CHECK is in the same migration.
   - Recommended: one PR, so no method exists without its save.
 - **The screen** (offer, label "Estimate · scaled 25 → 56 min") is MT-C / the design executor's.
+
+**Decided (2026-11-13):**
+- D1–D5 as recommended.
+- O6 stays: `avg` left out as `not_scaled` in v1; `max`, `last` and `none` imported as measured.
+- One PR for the migration and the save. The screen belongs to the design executor's coach flow.
+
+### 13.8 While `ESTIMATES_ENABLED` is off (correction to the expectation)
+
+The expectation was:
+- the choice can be stored;
+- the import leaves the sums out as `scaled_by_choice`;
+- the estimate save is refused by the flag (the routes' identical 404, phase 5b contract).
+
+**The last two are right, but together they lose data.** Under that expectation, a scaled athlete's whole-session sums are
+neither imported nor estimable until the flag is on. That is only after 6b-D, on a separate owner order. Meanwhile the
+athlete would show no distance, no counts and no duration at all.
+
+**Correction (recommended):**
+- The PUT refuses a scale while the flag is off, with `409 scale_not_available` ("Scaling a short recording is not switched
+  on yet."). The choice without a scale (MT-A / MT-B) is unchanged.
+- No new scale choice can then remove measured values before the save exists.
+- A scale choice stored while the flag was on keeps its effect if the flag is later turned off. Its values stay in the
+  imported candidate's stored preview for the 90 days of retention, and can be saved once the flag is back on.
+- The mapper does not read the flag. The preview and its hash do not depend on the environment.
+
+### 13.9 Dashboards, the undo and a later full recording
+
+**Dashboards before 6b-C / 6b-D.**
+- `resolveFactsToRows` (`backend/src/trainingLoadDashboardQuery.js`) has no estimate rule yet. Under the default
+  `all_with_conflicts` policy it would count an `estimate` fact like a measured one.
+- That is why the flag stays off until 6b-D is deployed (phase 5b contract). With 13.8, no scale exists before then.
+- **With the flag off**, a scaled athlete therefore cannot exist. An unscaled short athlete shows their measured values as
+  today.
+- **From 6b-D on**:
+  - a scaled athlete's `max` values (and `last`, `none` and the drill values) show like any import;
+  - the scaled sums show only under the `estimate` policy (6b-D);
+  - under every other policy the athlete has no whole-session sum for that session.
+
+**The undo.**
+- It removes the session with the scaled estimates (v63 `estimates_removed`).
+- The choice stays (section 7), and so does its scale.
+- A re-import applies it again, while the fingerprint still matches.
+
+**A later full recording** (M3):
+- GPEXE's rows change, so the fingerprint no longer matches. The choice is stale, and the athlete is imported as measured.
+- If the session was imported before, the change is `identities_missing_from_source` until the import is undone (MT-B), as
+  for any track change.
+- The new measured sums supersede the scaled estimates through `supersede_estimate_on_value` (v63). The preview lists them in
+  `supersededEstimates` (6b-B).
