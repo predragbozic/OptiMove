@@ -9,6 +9,7 @@ import { launch, openAs } from "../lib/browser.mjs";
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 let world;
 let browser;
+let scheduleId;
 
 async function api(role, path, method = "GET", body) {
   const token = world.accounts.find((a) => a.role === role).sessionToken;
@@ -23,6 +24,8 @@ before(async () => {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(new Date());
   const created = await api("team_coach", "/api/tests/schedules", "POST", { testVersionId: WELLNESS, scheduleKind: "one_time", timezone: zone, startDate: today, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: world.ids.teamA }] });
   assert.equal(created.status, 201);
+  scheduleId = created.body.schedule.id;
+  assert.ok(scheduleId);
   const assignment = (await api("athlete", "/api/tests/athlete/today")).body?.assignments?.[0];
   assert.equal((await api("athlete", `/api/tests/assignments/${assignment.assignmentId}/submit`, "POST", { values: { fatigue: 3, soreness: 4, sleep: 2, mood: 4, stress: 3, injury: false } })).status, 200);
 });
@@ -83,7 +86,7 @@ for (const width of [390, 1280]) test(`(team_coach, ${width} px) a result opened
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
   try {
     await openTests(page, "results");
-    await page.locator(".tests-weekly-agenda .tests-weekly-session").first().click();
+    await page.locator(`[data-action="tests-weekly-open-results"][data-schedule-id="${scheduleId}"]`).click();
     const one = page.locator('[data-action="tests-open-result"]').first();
     await page.locator(".tests-result-back, [data-action=\"tests-open-result\"]").first().waitFor();
     if (await one.count()) await one.click();
