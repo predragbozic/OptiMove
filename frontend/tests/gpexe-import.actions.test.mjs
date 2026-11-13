@@ -1006,7 +1006,7 @@ test("data setup (9-B): a coach reads one sentence and one step for every mappin
   await openImports();
   let html = renderTrainingLoadCoachHtml();
   const step = setupRowStep(html);
-  assert.equal(step, "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.");
+  assert.equal(step, "Ask your club administrator to finish the data setup of this team, then find new sessions.", "P1 (O5): a coach asks the club administrator");
   await openCandidate("c-setup");
   html = renderTrainingLoadCoachHtml();
   const block = setupBlock(html);
