@@ -45,15 +45,19 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.match(text, /Coach/, "the group says which role was affected");
       for (const who of PEOPLE()) assert.ok(!text.includes(who), `the screen does not show "${who}"`);
       // AH-2: the devices of the error, in words with their counts, inside the row; nothing wider than the screen.
-      const devices = (await page.locator(".app-health-group", { hasText: "e2e_seeded_error" }).locator(".app-health-devices").textContent()).replace(/\s+/g, " ").trim();
-      assert.equal(devices, "On iPhone · Safari 17 · 2 times; Windows · Chrome 131 · 1 time; not recorded · 1 time");
+      const group = page.locator(".app-health-group", { hasText: "e2e_seeded_error" });
+      assert.deepEqual(await group.locator(".app-health-device").allTextContents(), ["iPhone · Safari 17 · 2 times", "Windows · Chrome 131 · 1 time", "device not recorded · 1 time"]);
+      // Each device is one phrase that stays together: one under another on a phone, side by side on a wide screen.
+      const boxes = await group.locator(".app-health-device").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), lines: el.getClientRects().length }; }));
+      if (width === WIDTHS.phone) assert.ok(boxes[0].top < boxes[1].top && boxes[1].top < boxes[2].top && boxes.every((b) => b.left === boxes[0].left), "stacked");
+      else assert.ok(boxes.every((b) => b.top === boxes[0].top) && boxes[0].left < boxes[1].left, "side by side");
       assert.match(text, /4 times · 1 person/);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(overflow <= 0, `no horizontal scroll (${overflow}px)`);
       const box = await page.locator(".app-health-group", { hasText: "e2e_seeded_error" }).locator(".app-health-devices").boundingBox();
       const viewport = page.viewportSize();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, "the device line stays inside the screen");
-      if (process.env.E2E_SHOTS_DIR) await page.locator("section.app-health").screenshot({ path: `${process.env.E2E_SHOTS_DIR}/app-health-devices-${width.width || width}.png` });
+      if (process.env.E2E_SHOTS_DIR) await page.locator("section.app-health").screenshot({ path: `${process.env.E2E_SHOTS_DIR}/app-health-devices-${width}.png` });
     } finally {
       await context.close();
     }

@@ -63,28 +63,30 @@ export function deviceWords(d) {
   const major = Number.isInteger(d?.major) && d.major >= 1 && d.major <= 999 ? ` ${d.major}` : "";
   return browser ? `${device} · ${browser}${major}` : device;
 }
-// The device line of a browser error: at most three devices, most frequent first, each with its count; how many
-// other devices there are; and how often none was recorded. A server error has no device and no line.
+// The devices of a browser error, one phrase each: at most three devices, most frequent first, each with its count;
+// then how many other kinds of device there are and how often; then how often none was recorded. With no device at
+// all: the one phrase "Device not recorded". A server error has no device and no phrase.
 export const MAX_DEVICE_LINES = 3;
 const NO_DEVICE = "Device not recorded";
-export function deviceLine(g) {
-  if (g?.source !== "client") return "";
+export function deviceParts(g) {
+  if (g?.source !== "client") return [];
   const list = (Array.isArray(g.devices) ? g.devices : []).slice(0, MAX_DEVICE_LINES);
+  if (!list.length) return [NO_DEVICE];
   const count = (n) => (Number.isInteger(n) && n >= 0 ? n : 0);
   const parts = list.map((d) => `${deviceWords(d)} · ${timesLabel(count(d.occurrences))}`);
   const others = count(g.otherDevices);
-  if (others) parts.push(`${others} other ${others === 1 ? "device" : "devices"}`);
+  // "Device types", not devices: one entry is a kind of device and browser, however many phones that is.
+  if (others) parts.push(`${others} other device ${others === 1 ? "type" : "types"}${count(g.otherDeviceOccurrences) ? ` · ${timesLabel(count(g.otherDeviceOccurrences))}` : ""}`);
   const missing = count(g.deviceNotRecorded);
-  if (!list.length) return NO_DEVICE;
-  if (missing) parts.push(`not recorded · ${timesLabel(missing)}`);
-  return parts.join("; ");
+  if (missing) parts.push(`device not recorded · ${timesLabel(missing)}`);
+  return parts;
 }
 
 function groupCard(g, selected) {
   const open = selected === g.fingerprint;
   const where = placeLabel(g);
   const kind = g.source === "client" ? "Browser" : "Server";
-  const devices = deviceLine(g);
+  const devices = deviceParts(g);
   return `
     <article class="app-health-group ${open ? "is-open" : ""}">
       <button type="button" class="app-health-row" data-action="app-health-open" data-fingerprint="${escapeAttr(g.fingerprint)}" aria-expanded="${open ? "true" : "false"}">
@@ -92,7 +94,7 @@ function groupCard(g, selected) {
         <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}<small class="app-health-code">${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</small></span>
         <span class="app-health-count">${escapeHtml(timesLabel(g.occurrences))} · ${escapeHtml(String(g.users))} ${g.users === 1 ? "person" : "people"}</span>
         <span class="app-health-seen">Since ${escapeHtml(formatSeen(g.firstSeenAt))} · last ${escapeHtml(formatSeen(g.lastSeenAt))}</span>
-        ${devices ? `<span class="app-health-devices">${devices === NO_DEVICE ? "" : `<span class="app-health-devices-label">On</span> `}${escapeHtml(devices)}</span>` : ""}
+        ${devices.length ? `<span class="app-health-devices">${devices.map((part) => `<span class="app-health-device">${escapeHtml(part)}</span>`).join("")}</span>` : ""}
       </button>
       ${open ? `
         <dl class="app-health-detail">

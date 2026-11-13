@@ -241,6 +241,16 @@ test("6. without the key: the row is stored with no hash - never the unkeyed one
     assert.equal(await M.recordClientError(quiet, M.sanitizeClientReport({ ...GOOD, action: "q1" })), "stored", "another person still reports");
     assert.equal((await rows()).length, M.NO_KEY_REPORTS_PER_USER_WINDOW + 1);
     assert.ok(M.NO_KEY_REPORTS_PER_USER_WINDOW * 2 < M.MAX_ROWS_WITHOUT_USER_WINDOW, "two people cannot fill the shared cap");
+    // Through the route: every report answers 204, and only the first 40 of one person are stored.
+    await clear();
+    const sender = await user("Coach Example");
+    const statuses = [];
+    for (let i = 0; i < M.NO_KEY_REPORTS_PER_USER_WINDOW + 3; i += 1) {
+      if (i % 15 === 0) M.resetRateLimitForTests();
+      statuses.push((await call("/api/app-errors", { method: "POST", body: { ...GOOD, action: `r${i}` }, cookie: sender.cookie })).status);
+    }
+    assert.ok(statuses.every((st) => st === 204), "a dropped report is answered like a stored one");
+    assert.equal((await rows()).length, M.NO_KEY_REPORTS_PER_USER_WINDOW);
     // With the key the in-memory count does not apply (the per-user cap of rows in the table does).
     await clear();
     setKeys(`2:${KEY_A}`);
@@ -309,9 +319,26 @@ test("7b. AH-2, the groups read: per kind of browser error the three most freque
   assert.deepEqual(new Set(main.devices.slice(0, 2).map((d) => d.os)), new Set(["windows", "ios"]));
   assert.deepEqual(main.devices[2], { class: "desktop", os: "linux", browser: "firefox", major: 127, occurrences: 2 });
   assert.deepEqual(Object.keys(main.devices[0]).sort(), ["browser", "class", "major", "occurrences", "os"], "no viewport, touch, hash or id");
-  assert.deepEqual([main.otherDevices, main.deviceNotRecorded], [1, 4]);
+  assert.deepEqual([main.otherDevices, main.otherDeviceOccurrences, main.deviceNotRecorded], [1, 1, 4]);
+  assert.equal(main.devices.reduce((n, d) => n + d.occurrences, 0) + main.otherDeviceOccurrences + main.deviceNotRecorded, main.occurrences, "the phrases add up to the row's count");
+  // A report that lands between the two reads of one answer changes neither: they share one snapshot.
+  const { pool } = await import("../src/db.js");
+  let between = 0;
+  const racing = { connect: async () => {
+    const c = await pool.connect();
+    return { release: () => c.release(), query: async (...args) => {
+      const out = await c.query(...args);
+      if (typeof args[0] === "string" && /array_agg\(distinct role\)/.test(args[0])) { between += 1; await ev({ class: "tablet", os: "ios", browser: "safari", major: 18, viewport: "768_1023", touch: true }, 3); }
+      return out;
+    } };
+  } };
+  const raced = (await M.listErrorGroups({ days: 7 }, { executor: racing })).find((g) => g.action === "open-imports");
+  assert.equal(between, 1);
+  assert.deepEqual([raced.occurrences, raced.otherDevices], [17, 1], "the answer is of the moment it began");
+  assert.equal(raced.devices.reduce((n, d) => n + d.occurrences, 0) + raced.otherDeviceOccurrences + raced.deviceNotRecorded, raced.occurrences);
+  assert.equal((await M.listErrorGroups({ days: 7 })).find((g) => g.action === "open-imports").occurrences, 20, "and the next read has the new reports");
   const other = res.body.groups.find((g) => g.action === "other-kind");
-  assert.deepEqual([other.devices, other.otherDevices, other.deviceNotRecorded], [[{ class: "phone", os: "ios", browser: "safari", major: 17, occurrences: 1 }], 0, 0], "each kind has its own devices");
+  assert.deepEqual([other.devices, other.otherDevices + other.otherDeviceOccurrences, other.deviceNotRecorded], [[{ class: "phone", os: "ios", browser: "safari", major: 17, occurrences: 1 }], 0, 0], "each kind has its own devices");
   const server = res.body.groups.find((g) => g.source === "server");
   assert.deepEqual([server.devices, server.otherDevices, server.deviceNotRecorded], [[], 0, 0], "a server error has no device and is not counted as unrecorded");
   // A kind whose every row predates the change.

@@ -356,7 +356,13 @@ export const MAX_DEVICE_LINES = 3;
 export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor = pool } = {}) {
   const d = Math.min(Math.max(Number.isInteger(days) ? days : 7, 1), RETENTION_DAYS);
   const l = Math.min(Math.max(Number.isInteger(limit) ? limit : 100, 1), 200);
-  const rows = (await executor.query(
+  // One snapshot and one "now" for the counts and the devices: the two reads always agree with each other.
+  const client = await executor.connect();
+  let rows; let devices;
+  try {
+    await client.query("begin transaction isolation level repeatable read read only");
+    await client.query("set local statement_timeout = '10s'");
+    rows = (await client.query(
     `select fingerprint,
             (array_agg(source order by last_seen_at desc))[1] as source,
             (array_agg(screen order by last_seen_at desc))[1] as screen,
@@ -382,10 +388,11 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
   // The devices of the listed kinds of error, in the same period: per kind the MAX_DEVICE_LINES most frequent
   // (class, system, browser, version), how many other combinations there are, and how often no device was recorded
   // (a row from before v70 or from an older page). Browser reports only: a server error has no device.
-  const devices = rows.length ? (await executor.query(
-    `select fingerprint, device_class, os_family, browser_family, browser_major, n, combos, rn
+    devices = rows.length ? (await client.query(
+    `select fingerprint, device_class, os_family, browser_family, browser_major, n, combos, total, rn
        from (select fingerprint, device_class, os_family, browser_family, browser_major, sum(repeat_count)::int as n,
                     (count(*) over (partition by fingerprint))::int as combos,
+                    (sum(sum(repeat_count)) over (partition by fingerprint))::int as total,
                     (row_number() over (partition by fingerprint order by sum(repeat_count) desc, max(last_seen_at) desc,
                                          device_class, os_family, browser_family, browser_major))::int as rn
                from public.app_error_events
@@ -395,10 +402,17 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
       where rn <= ${MAX_DEVICE_LINES}
       order by fingerprint, rn`,
     [d, rows.map((r) => r.fingerprint)],
-  )).rows : [];
+    )).rows : [];
+    await client.query("commit");
+  } catch (error) {
+    try { await client.query("rollback"); } catch { /* the connection is released below */ }
+    throw error;
+  } finally {
+    client.release();
+  }
   const byKind = new Map();
   for (const row of devices) {
-    const entry = byKind.get(row.fingerprint) || { list: [], combos: row.combos };
+    const entry = byKind.get(row.fingerprint) || { list: [], combos: row.combos, total: row.total };
     entry.list.push({ class: row.device_class, os: row.os_family, browser: row.browser_family, major: row.browser_major, occurrences: row.n });
     byKind.set(row.fingerprint, entry);
   }
@@ -408,7 +422,8 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
       fingerprint: r.fingerprint, source: r.source, screen: r.screen, routeTemplate: r.route_template, action: r.action, code: r.error_code,
       status: r.http_status, release: r.release_commit, stackSignature: r.stack_signature, occurrences: r.occurrences, users: r.users,
       firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, roles: r.roles,
-      devices: dev ? dev.list : [], otherDevices: dev ? Math.max(dev.combos - dev.list.length, 0) : 0, deviceNotRecorded: r.no_device,
+      devices: dev ? dev.list : [], otherDevices: dev ? Math.max(dev.combos - dev.list.length, 0) : 0,
+      otherDeviceOccurrences: dev ? Math.max(dev.total - dev.list.reduce((n, x) => n + x.occurrences, 0), 0) : 0, deviceNotRecorded: r.no_device,
     };
   });
 }

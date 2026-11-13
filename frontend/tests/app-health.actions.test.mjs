@@ -245,8 +245,8 @@ test("the words for an error that says what failed: the kind in plain words, the
   assert.equal(codeWords("some.server.code", 409), "Error");
 });
 
-test("AH-2. the device line: at most three devices in words with their counts, the others counted, 'Device not recorded' when none was; nothing for a server error", async () => {
-  const { deviceWords, deviceLine, MAX_DEVICE_LINES } = await import("../app-health-view.js");
+test("AH-2. the devices of an error: at most three in words with their counts, one phrase each, the others counted, 'Device not recorded' when none was; nothing for a server error", async () => {
+  const { deviceWords, deviceParts, MAX_DEVICE_LINES } = await import("../app-health-view.js");
   assert.equal(deviceWords({ class: "phone", os: "ios", browser: "safari", major: 17 }), "iPhone · Safari 17");
   assert.equal(deviceWords({ class: "tablet", os: "ios", browser: "webview" }), "iPad · In-app browser");
   assert.equal(deviceWords({ class: "phone", os: "android", browser: "chrome", major: 142 }), "Android phone · Chrome 142");
@@ -266,27 +266,29 @@ test("AH-2. the device line: at most three devices in words with their counts, t
 
   const base = { fingerprint: "d".repeat(64), source: "client", screen: "weekly", code: "js_error", occurrences: 9, users: 2, firstSeenAt: "2026-11-09T06:00:00Z", lastSeenAt: "2026-11-09T07:00:00Z", roles: ["coach"] };
   const three = [{ class: "phone", os: "ios", browser: "safari", major: 17, occurrences: 3 }, { class: "phone", os: "android", browser: "chrome", major: 142, occurrences: 1 }, { class: "desktop", os: "windows", browser: "edge", major: 126, occurrences: 1 }];
-  assert.equal(deviceLine({ ...base, devices: three.slice(0, 2) }), "iPhone · Safari 17 · 3 times; Android phone · Chrome 142 · 1 time");
-  assert.equal(deviceLine({ ...base, devices: three, otherDevices: 2, deviceNotRecorded: 4 }), "iPhone · Safari 17 · 3 times; Android phone · Chrome 142 · 1 time; Windows · Edge 126 · 1 time; 2 other devices; not recorded · 4 times");
-  assert.equal(deviceLine({ ...base, devices: three.slice(0, 1), otherDevices: 1, deviceNotRecorded: 1 }), "iPhone · Safari 17 · 3 times; 1 other device; not recorded · 1 time");
-  assert.equal(deviceLine({ ...base, devices: [...three, ...three] }).split(";").length, MAX_DEVICE_LINES, "never more than three, whatever the server sends");
-  assert.equal(deviceLine({ ...base, devices: [], deviceNotRecorded: 9 }), "Device not recorded");
-  assert.equal(deviceLine(base), "Device not recorded", "an older server sends no devices");
-  assert.equal(deviceLine({ ...base, devices: "iPhone" }), "Device not recorded");
-  assert.equal(deviceLine({ ...base, devices: [{ class: "phone", os: "ios", occurrences: "many" }], otherDevices: -3, deviceNotRecorded: "x" }), "iPhone · 0 times");
-  assert.equal(deviceLine({ ...base, source: "server", devices: three }), "", "a server error has no device line");
+  assert.deepEqual(deviceParts({ ...base, devices: three.slice(0, 2) }), ["iPhone · Safari 17 · 3 times", "Android phone · Chrome 142 · 1 time"]);
+  assert.deepEqual(deviceParts({ ...base, devices: three, otherDevices: 2, otherDeviceOccurrences: 5, deviceNotRecorded: 4 }),
+    ["iPhone · Safari 17 · 3 times", "Android phone · Chrome 142 · 1 time", "Windows · Edge 126 · 1 time", "2 other device types · 5 times", "device not recorded · 4 times"]);
+  assert.deepEqual(deviceParts({ ...base, devices: three.slice(0, 1), otherDevices: 1, otherDeviceOccurrences: 1, deviceNotRecorded: 1 }), ["iPhone · Safari 17 · 3 times", "1 other device type · 1 time", "device not recorded · 1 time"]);
+  assert.deepEqual(deviceParts({ ...base, devices: three.slice(0, 1), otherDevices: 2 }), ["iPhone · Safari 17 · 3 times", "2 other device types"], "without their count the others are still said");
+  assert.equal(deviceParts({ ...base, devices: [...three, ...three] }).length, MAX_DEVICE_LINES, "never more than three devices, whatever the server sends");
+  assert.deepEqual(deviceParts({ ...base, devices: [], deviceNotRecorded: 9 }), ["Device not recorded"]);
+  assert.deepEqual(deviceParts(base), ["Device not recorded"], "an older server sends no devices");
+  assert.deepEqual(deviceParts({ ...base, devices: "iPhone" }), ["Device not recorded"]);
+  assert.deepEqual(deviceParts({ ...base, devices: [{ class: "phone", os: "ios", occurrences: "many" }], otherDevices: -3, otherDeviceOccurrences: "x", deviceNotRecorded: "x" }), ["iPhone · 0 times"]);
+  assert.deepEqual(deviceParts({ ...base, source: "server", devices: three }), [], "a server error has no device");
 
-  // On the screen: the line sits in the row, escaped, for a browser error only.
-  serveGroups([{ ...base, devices: three.slice(0, 2), otherDevices: 0, deviceNotRecorded: 0 }, GROUPS[0], { ...GROUPS[1], devices: [{ class: "<img src=x onerror=alert(1)>", os: "other", browser: "<b>", occurrences: 2 }] }, GROUPS[2]]);
+  // On the screen: one phrase per device inside the row, escaped, for a browser error only.
+  serveGroups([{ ...base, devices: three.slice(0, 2), otherDevices: 0, deviceNotRecorded: 1 }, GROUPS[0], { ...GROUPS[1], devices: [{ class: "<img src=x onerror=alert(1)>", os: "other", browser: "<b>", occurrences: 2 }] }, GROUPS[2]]);
   state.activeTab = "organization"; state.appHealth = D.emptyAppHealth();
   await D.loadAppHealth(() => {});
   const html = renderAppHealthPanelHtml();
-  assert.match(html, /<span class="app-health-devices"><span class="app-health-devices-label">On<\/span> iPhone · Safari 17 · 3 times; Android phone · Chrome 142 · 1 time<\/span>/);
+  assert.match(html, /<span class="app-health-devices"><span class="app-health-device">iPhone · Safari 17 · 3 times<\/span><span class="app-health-device">Android phone · Chrome 142 · 1 time<\/span><span class="app-health-device">device not recorded · 1 time<\/span><\/span>/);
   assert.equal((html.match(/class="app-health-devices"/g) || []).length, 3, "three browser errors, one server error");
-  assert.match(html, /<span class="app-health-devices-label">On<\/span> Unknown device · 2 times</);
-  assert.match(html, /<span class="app-health-devices">Device not recorded<\/span>/);
+  assert.match(html, /<span class="app-health-devices"><span class="app-health-device">Unknown device · 2 times<\/span><\/span>/);
+  assert.match(html, /<span class="app-health-devices"><span class="app-health-device">Device not recorded<\/span><\/span>/);
   assert.ok(!html.includes("<img src=x onerror") && !html.includes("<b>"));
-  // The line is inside the row's button, so it is read with the row and adds no control.
+  // The phrases are inside the row's button, so they are read with the row and add no control.
   const row = html.slice(html.indexOf('data-fingerprint="' + "d".repeat(64)), html.indexOf("</button>", html.indexOf('data-fingerprint="' + "d".repeat(64))));
   assert.ok(row.includes("app-health-devices"));
 });

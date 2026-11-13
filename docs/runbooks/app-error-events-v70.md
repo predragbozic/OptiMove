@@ -70,13 +70,16 @@ the server. The key never reaches the database, a log or an answer.
 
 * `devices`: at most three `{ class, os, browser, major, occurrences }`, most frequent first, of the browser reports
   only. The viewport and the touch flag do not split a device here (they stay in the table for a later question);
-* `otherDevices`: how many further combinations there are;
+* `otherDevices` and `otherDeviceOccurrences`: how many further combinations there are, and how often they occurred;
 * `deviceNotRecorded`: how many occurrences of browser reports carry no device (rows from before v70, an older page).
 
 A server error has an empty list and zeros. Nothing else is added to the answer: no hash, no id, no viewport.
-App health shows one line in the row of a browser error: "On iPhone · Safari 17 · 3 times; Windows · Chrome 131 ·
-1 time; 2 other devices; not recorded · 1 time", or "Device not recorded" when no report of the kind carried one.
-A word outside the lists is shown as "Unknown device", never as it is. Only a platform admin has the screen and the read.
+Both reads run in one read-only snapshot, so the devices always add up to the counts beside them.
+App health shows, in the row of a browser error, one phrase per device: "iPhone · Safari 17 · 3 times", "Windows ·
+Chrome 131 · 1 time", then "2 other device types · 4 times" and "device not recorded · 1 time"; or only "Device not
+recorded" when no report of the kind carried one. They sit side by side on a wide screen and one under another on a
+phone. A word outside the lists is never shown as it is: an unknown system or class falls back to the class's word or
+"Unknown device", and an unknown browser is left out. Only a platform admin has the screen and the read.
 
 ## Deploy
 
