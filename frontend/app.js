@@ -30,7 +30,7 @@ import {
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
 import { handleAppHealthAction } from "./app-health-actions.js";
-import { installAppErrorCapture } from "./app-errors-capture.js";
+import { detached, guardHandler, installAppErrorCapture } from "./app-errors-capture.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
 import { ensureDriveImportStatus, handleDriveImportAction, handleDriveImportBeforeUnload, handleDriveImportChange, handleDriveImportPointer, handleDriveImportToggle } from "./drive-import-actions.js";
@@ -479,11 +479,11 @@ function bindEvents() {
       collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
-      loadActiveTab();
+      detached(loadActiveTab());
     });
   });
   els.libraryTabs.forEach((button) => {
-    button.addEventListener("click", () => { void openLibraryTab(button.dataset); });
+    button.addEventListener("click", () => { detached(openLibraryTab(button.dataset)); });
   });
   els.athleteTabs.forEach((button) => {
     button.addEventListener("click", () => {
@@ -501,11 +501,11 @@ function bindEvents() {
       collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
-      loadActiveTab();
+      detached(loadActiveTab());
     });
   });
 
-  els.content.addEventListener("click", handleContentClick);
+  els.content.addEventListener("click", guardHandler(handleContentClick));
   // Builder section editor on phones: a name cut to two lines unfolds on tap.
   els.content.addEventListener("click", (event) => { toggleClampedTitle(event.target); });
   // A click anywhere on the page folds an open exercise card "⋯" menu. iOS
@@ -635,7 +635,7 @@ function bindEvents() {
   document.addEventListener("pointercancel", () => { if (endTestsCalendarDrag()) renderTests(); });
   document.addEventListener("touchend", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
   document.addEventListener("touchcancel", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
-  document.addEventListener("click", handleGlobalClick);
+  document.addEventListener("click", guardHandler(handleGlobalClick));
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
   // R2 pictures (FE-1): whatever renders one, its short-lived address is
@@ -1819,7 +1819,7 @@ function openCentralCalendarFromRail() {
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
-  loadActiveTab();
+  detached(loadActiveTab());
 }
 
 function handleImageError(event) {
@@ -1910,7 +1910,7 @@ function goHome() {
     collapseRailAfterNav();
     renderTabs();
     renderLibraryNav();
-    void loadActiveTab();
+    detached(loadActiveTab());
     return;
   }
   renderCurrentNode();
@@ -1940,7 +1940,7 @@ async function handleGlobalClick(event) {
     if (nextTab === "organization" && tab.dataset.settingsSection) state.organization.section = tab.dataset.settingsSection;
     renderTabs();
     renderLibraryNav();
-    loadActiveTab();
+    detached(loadActiveTab());
     return;
   }
 
@@ -2222,7 +2222,7 @@ function handleAppBack() {
     state.openWeekCalendarOnLoad = false;
     renderTabs();
     renderLibraryNav();
-    void loadActiveTab();
+    detached(loadActiveTab());
     return true;
   }
 
@@ -2349,7 +2349,7 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
   els.toolbar.innerHTML = "";
   // The calendar's dots, the chosen day and the exercise and program strips
   // load beside the roster, each drawing its own card when it arrives.
-  if (state.currentUser?.activeWorkspace?.type !== "platform") void loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh });
+  if (state.currentUser?.activeWorkspace?.type !== "platform") detached(loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh }));
   return loadCoachHomeData({ setLoading, renderCoachHome, forceRefresh });
 }
 
@@ -3049,11 +3049,11 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "exercise-edit-open" || type === "exercise-copy-open") {
-    void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "", { copy: type === "exercise-copy-open" });
+    detached(openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "", { copy: type === "exercise-copy-open" }), type);
     return;
   }
   if (type === "exercise-add-open") {
-    void openExerciseEditor(state, exerciseEditorHandlers, "");
+    detached(openExerciseEditor(state, exerciseEditorHandlers, ""), type);
     return;
   }
   if (await handleExerciseEditorAction(state, exerciseEditorHandlers, action)) return;
@@ -3437,7 +3437,7 @@ function renderAthleteList() {
       renderAthleteList();
       renderTabs();
       renderLibraryNav();
-      loadActiveTab();
+      detached(loadActiveTab());
     });
   });
 }

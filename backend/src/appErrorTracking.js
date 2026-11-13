@@ -22,7 +22,14 @@ const PURGE_INTERVAL_HOURS = 6;
 const WORD = /^[a-z0-9_.-]{1,60}$/;
 const SCREEN = /^[a-z0-9_-]{1,60}$/;
 const COMMIT = /^[0-9a-f]{7,40}$/;
-const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release"]);
+const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release", "reason"]);
+// What failed, as one word of a closed list: the kind of the rejection's reason or of the error object (its `name`,
+// never its message). A native rejection (an aborted request, a refused play() or full screen) has no script frames,
+// so without this word such an error says nothing about itself. Only the codes below take one; it is stored as the
+// code's second part ("unhandled_rejection.aborterror"), so no column is added.
+export const CLIENT_REASONS = Object.freeze(["aborterror", "notallowederror", "notsupportederror", "invalidstateerror", "securityerror", "networkerror",
+  "timeouterror", "quotaexceedederror", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "other_error", "non_error", "none", "script_error", "no_error_object"]);
+export const CODES_WITH_REASON = Object.freeze(["unhandled_rejection", "js_error", "handler_error"]);
 
 export function userHash(userId) {
   if (!userId) return null;
@@ -103,7 +110,8 @@ function releaseOf(clientValue) {
 export function sanitizeClientReport(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   for (const key of Object.keys(body)) if (!CLIENT_KEYS.has(key)) return null;
-  const { screen, action, code, status, stackSig, release } = body;
+  const { screen, action, code, status, stackSig, release, reason } = body;
+  if (reason != null && (typeof reason !== "string" || !CLIENT_REASONS.includes(reason) || !CODES_WITH_REASON.includes(code))) return null;
   if (typeof screen !== "string" || !SCREEN.test(screen)) return null;
   if (action != null && (typeof action !== "string" || !WORD.test(action))) return null;
   if (typeof code !== "string" || !WORD.test(code)) return null;
@@ -112,7 +120,7 @@ export function sanitizeClientReport(body) {
   if (release != null && typeof release !== "string") return null;
   const stackSignature = stackSig == null ? null : cleanStackSignature(stackSig);
   if (stackSig != null && stackSignature === null) return null;
-  return { source: "client", screen, routeTemplate: null, action: action ?? null, code, status: status ?? null, stackSignature, release: releaseOf(release) };
+  return { source: "client", screen, routeTemplate: null, action: action ?? null, code: reason == null ? code : `${code}.${reason}`, status: status ?? null, stackSignature, release: releaseOf(release) };
 }
 
 // ---- per-user rate limit (in memory, bounded) ----
