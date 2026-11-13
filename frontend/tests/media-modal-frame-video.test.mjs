@@ -266,23 +266,30 @@ test("8. the Full screen button on a browser that refuses the request: the refus
   const onUnhandled = (reason) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
   const originalWarn = console.warn;
+  const originalError = console.error;
   const warned = [];
   console.warn = (...args) => warned.push(args[0]);
+  console.error = () => {};
+  const capture = await import("../app-errors-capture.js");
+  const reported = [];
+  capture.setReporterForTests(capture.createReporter({ send: (b) => { reported.push(b); }, isSignedIn: () => true, dedupeMs: 0 }));
   try {
     modal.openMedia("Dead Bug", "", DRIVE_VIDEO);
     await new Promise((r) => setTimeout(r, 5));
     assert.equal(requests.length, 1, "asked once on open");
-    assert.deepEqual(warned, [], "the request made on open is silent");
+    assert.deepEqual([warned, reported], [[], []], "the request made on open is silent");
     const button = body().querySelector('[data-action="enter-fullscreen"]');
     assert.ok(button);
     assert.equal(modal.handleMediaAction(button), true);
     await new Promise((r) => setTimeout(r, 5));
     assert.equal(requests.length, 2, "the button asks again");
-    assert.deepEqual(warned, [refusal], "the person's own request says why in the console");
+    assert.deepEqual(reported.map((b) => [b.code, b.reason, b.action]), [["handler_error", "notallowederror", "enter-fullscreen"]], "the person's own request is reported, with what failed");
     assert.deepEqual(unhandled, [], "no rejection is left unhandled");
     assert.ok(body().querySelector(".media-frame-video"), "the inline player stays");
   } finally {
     console.warn = originalWarn;
+    console.error = originalError;
+    capture.setReporterForTests(null);
     process.off("unhandledRejection", onUnhandled);
     modal.closeMedia();
   }

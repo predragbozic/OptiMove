@@ -97,9 +97,9 @@ test("1. sanitizers keep closed shapes only", () => {
   assert.equal(M.sanitizeClientReport({ screen: "weekly", action: "open-media", code: "unhandled_rejection", reason: "aborterror" }).code, "unhandled_rejection.aborterror");
   assert.equal(M.sanitizeClientReport({ screen: "weekly", code: "handler_error", reason: "none" }).code, "handler_error.none");
   assert.equal(M.sanitizeClientReport(GOOD).code, "js_error", "a report without the word is stored as before (an older page still open)");
-  for (const reason of M.CLIENT_REASONS) {
-    const out = M.sanitizeClientReport({ screen: "weekly", code: "unhandled_rejection", reason });
-    assert.match(out.code, /^[a-z0-9_.-]{1,60}$/, `${reason} fits the column's shape`);
+  for (const code of M.CODES_WITH_REASON) for (const reason of M.CLIENT_REASONS) {
+    const out = M.sanitizeClientReport({ screen: "weekly", code, reason });
+    assert.match(out.code, /^[a-z0-9_.-]{1,60}$/, `${code} with ${reason} fits the column's shape`);
   }
   for (const bad of [{ ...GOOD, reason: "AbortError" }, { ...GOOD, reason: "abort error" }, { ...GOOD, reason: SECRET }, { ...GOOD, reason: "" }, { ...GOOD, reason: 1 }, { ...GOOD, reason: ["aborterror"] },
     { ...GOOD, code: "no_response", reason: "aborterror" }, { ...GOOD, code: "http_500", reason: "typeerror" }, { ...GOOD, code: "js_error.typeerror", reason: "typeerror" }]) {

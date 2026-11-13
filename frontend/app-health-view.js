@@ -27,7 +27,9 @@ const REASON_LABEL = {
 };
 export function codeWords(code, status) {
   const [base, reason] = String(code || "").split(".");
-  const label = CODE_LABEL[code] || (Object.hasOwn(REASON_LABEL, reason || "") && CODE_LABEL[base] ? `${CODE_LABEL[base]}: ${REASON_LABEL[reason]}` : null);
+  // Own keys only: a code is a word a signed-in browser chose ("constructor", "__proto__" fit its shape).
+  const own = (map, key) => (typeof key === "string" && Object.hasOwn(map, key) ? map[key] : null);
+  const label = own(CODE_LABEL, code) || (own(REASON_LABEL, reason) && own(CODE_LABEL, base) ? `${own(CODE_LABEL, base)}: ${own(REASON_LABEL, reason)}` : null);
   return label || (status >= 500 ? "Server error" : "Error");
 }
 // The groups read asks for at most this many (GET /api/app-errors/groups, the server's default limit).

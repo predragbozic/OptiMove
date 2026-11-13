@@ -50,18 +50,24 @@ export function stackSigOf(error) {
 // What failed, as one word of the server's closed list (backend/src/appErrorTracking.js CLIENT_REASONS): the `name` of
 // the error or of the rejection's reason, never its message. A native rejection - an aborted request, a refused
 // play() or full screen - carries no script frames, so this word is all it can say about itself.
-export const REASONS = Object.freeze(["aborterror", "notallowederror", "notsupportederror", "invalidstateerror", "securityerror", "networkerror",
-  "timeouterror", "quotaexceedederror", "typeerror", "referenceerror", "rangeerror", "syntaxerror", "other_error", "non_error", "none", "script_error", "no_error_object"]);
-const NAMED = new Set(REASONS.slice(0, 12));
+// The names an error object can report as its own word; every other value falls into one of the fixed words after them.
+export const NAMED_REASONS = Object.freeze(["aborterror", "notallowederror", "notsupportederror", "invalidstateerror", "securityerror", "networkerror",
+  "timeouterror", "quotaexceedederror", "typeerror", "referenceerror", "rangeerror", "syntaxerror"]);
+export const REASONS = Object.freeze([...NAMED_REASONS, "other_error", "non_error", "none", "script_error", "no_error_object"]);
+const NAMED = new Set(NAMED_REASONS);
 // The word for a thrown or rejected value: none (nothing), non_error (a value that is not an error object), the
 // error's own name when it is one of the list, other_error for any other error object.
 export function reasonOf(value) {
   if (value === undefined || value === null) return "none";
   if (typeof value !== "object" && typeof value !== "function") return "non_error";
-  let name = "";
-  try { name = typeof value.name === "string" ? value.name.toLowerCase() : ""; } catch { name = ""; }
-  if (NAMED.has(name)) return name;
-  return name || value instanceof Error ? "other_error" : "non_error";
+  // Reading a hostile value (a throwing getter, a revoked proxy) never throws out of the capture.
+  try {
+    const name = typeof value.name === "string" ? value.name.toLowerCase() : "";
+    if (NAMED.has(name)) return name;
+    return name || value instanceof Error ? "other_error" : "non_error";
+  } catch {
+    return "non_error";
+  }
 }
 // The word for a window "error" event: its error object's, or - with no object - whether the browser hid the error
 // of a script it treats as foreign ("Script error.") or gave nothing at all.
@@ -135,7 +141,12 @@ export function reportApiFailure({ code, status }) {
 export function reportHandlerError(error, action) {
   try { globalThis.console?.error?.(error); } catch { /* reporting never throws */ }
   if (!active) return;
-  report({ screen: currentScreen(), action: wordOf(action, "") || currentAction(), code: "handler_error", error: error instanceof Error ? error : null, reason: reasonOf(error) });
+  // Only the control of this very click, or none: never the one tapped last, which may be another.
+  report({ screen: currentScreen(), action: wordOf(action, ""), code: "handler_error", error: error instanceof Error ? error : null, reason: reasonOf(error) });
+}
+// A promise nobody waits for (a tab's load started from a click): its rejection is reported, never left unhandled.
+export function detached(promise, action = "") {
+  Promise.resolve(promise).then(undefined, (error) => reportHandlerError(error, action));
 }
 // Wraps an event listener, sync or async: a throw or a rejection is reported once and goes no further.
 export function guardHandler(handler) {

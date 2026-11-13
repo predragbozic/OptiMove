@@ -222,6 +222,11 @@ test("the words for an error that says what failed: the kind in plain words, the
   assert.equal(codeWords("handler_error"), "An action failed");
   assert.equal(codeWords("unhandled_rejection"), "A background task failed");
   assert.equal(codeWords("unhandled_rejection.__proto__"), "Error");
+  // A code is a word a signed-in browser chose: a name every object has is never read as a label.
+  for (const planted of ["constructor", "__proto__", "toString", "constructor.aborterror", "__proto__.aborterror", "hasOwnProperty.typeerror"]) {
+    assert.equal(codeWords(planted), "Error", planted);
+    assert.equal(codeWords(planted, 500), "Server error", planted);
+  }
   assert.equal(codeWords("some.server.code", 503), "Server error");
   assert.equal(codeWords("some.server.code", 409), "Error");
 });

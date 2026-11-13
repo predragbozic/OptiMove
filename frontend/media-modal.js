@@ -1,3 +1,4 @@
+import { reportHandlerError } from "./app-errors-capture.js";
 import { els } from "./dom.js";
 import {
   decodeAccessContext,
@@ -319,8 +320,9 @@ export function enterMediaFullscreen(silent = false) {
   try {
     const result = request.call(target);
     // The browser may refuse (no user gesture, a frame it will not enlarge): always caught, so it is never an
-    // unhandled rejection; said in the console when the person asked for it.
-    if (result?.catch) result.catch((error) => { if (!silent) console.warn(error); });
+    // unhandled rejection; said in the console and reported when the person asked for it.
+    // The person's own request is reported too (App health), so a browser that keeps refusing stays visible.
+    if (result?.catch) result.catch((error) => { if (!silent) reportHandlerError(error, "enter-fullscreen"); });
   } catch (error) {
     if (!silent) console.warn(error);
   }

@@ -5,7 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
+import { readFile } from "node:fs/promises";
+
 const C = await import("../app-errors-capture.js");
+const appJs = await readFile(new URL("../app.js", import.meta.url), "utf8");
 const sent = [];
 const reporterFor = () => C.createReporter({ send: (body) => { sent.push(body); }, isSignedIn: () => true, dedupeMs: 0, perMinute: 1000 });
 const SECRET = "Secret Athlete Name 2001-02-03";
@@ -26,6 +29,9 @@ test("1. reasonOf: the error's name as a word of the list, never its message; ev
   assert.equal(C.reasonOf(undefined), "none");
   assert.equal(C.reasonOf(null), "none");
   assert.equal(C.reasonOf({ get name() { throw new Error("x"); } }), "non_error", "a hostile getter never throws out");
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  assert.equal(C.reasonOf(revoked.proxy), "non_error", "nor does a revoked proxy");
   for (const value of [new DomEx("x", "AbortError"), new TypeError("x"), SECRET, null, { name: "Odd" }]) assert.ok(C.REASONS.includes(C.reasonOf(value)));
   // A window "error" event.
   assert.equal(C.reasonOfErrorEvent({ error: new RangeError("x") }), "rangeerror");
@@ -127,6 +133,25 @@ test("4. guardHandler: a click handler that rejects or throws is reported once a
     const said = logged.filter((args) => args[0] instanceof Error || args[0]?.name === "AbortError");
     assert.equal(said.length, 3, "each failure is still said in the console");
     assert.ok(!JSON.stringify(sent).includes("Secret"));
+    // A click on something with no data-action, right after a click with one: the report names no control at all.
+    const bare = dom.window.document.createElement("p");
+    content.appendChild(bare);
+    mode = "plain";
+    dom.window.document.querySelector('[data-action="first-thing"]').click();
+    await new Promise((r) => setTimeout(r, 5));
+    sent.length = 0;
+    bare.click();
+    await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual([sent.length, sent[0].code, "action" in sent[0]], [1, "handler_error", false], "never the control tapped last");
+    // A promise the handler starts and does not wait for: detached() reports its rejection; it is never unhandled.
+    sent.length = 0;
+    C.detached(Promise.reject(new TypeError(SECRET)), "open-tab");
+    C.detached(Promise.resolve("fine"));
+    C.detached(undefined);
+    await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(sent.map((b) => [b.code, b.reason, b.action]), [["handler_error", "typeerror", "open-tab"]]);
+    assert.deepEqual(unhandled, [], "still no rejection left unhandled");
+    assert.ok(!JSON.stringify(sent).includes("Secret"));
   } finally {
     console.error = originalError;
     process.off("unhandledRejection", onUnhandled);
@@ -145,4 +170,22 @@ test("5. before the capture is installed nothing is reported, and the guard stil
     assert.equal(sent.length, 0);
     assert.equal(logged.length, 1);
   } finally { console.error = originalError; }
+});
+
+test("6. the lists are one list: the server's, the browser's and the screen's words; app.js guards its two click listeners and leaves no tab load unwatched", async () => {
+  // The server's list, read from its source (the module itself needs a database to load).
+  const serverSource = await readFile(new URL("../../backend/src/appErrorTracking.js", import.meta.url), "utf8");
+  const listed = serverSource.match(/export const CLIENT_REASONS = Object\.freeze\(\[([^\]]+)\]\);/);
+  assert.ok(listed, "the server's list is where it is expected");
+  assert.deepEqual(listed[1].match(/"([a-z_]+)"/g).map((w) => w.slice(1, -1)), [...C.REASONS], "the server accepts exactly the words the browser sends");
+  for (const word of C.NAMED_REASONS) assert.equal(C.reasonOf({ name: word.toUpperCase() }), word);
+  for (const word of C.REASONS) assert.match(word, /^[a-z_]{1,30}$/);
+  const { codeWords } = await import("../app-health-view.js");
+  for (const word of C.REASONS) assert.ok(codeWords(`js_error.${word}`).startsWith("A page crashed: "), `the screen has words for ${word}`);
+  assert.match(appJs, /els\.content\.addEventListener\("click", guardHandler\(handleContentClick\)\);/);
+  assert.match(appJs, /document\.addEventListener\("click", guardHandler\(handleGlobalClick\)\);/);
+  // Every call of the tab loader is waited for, returned, chained or handed to detached().
+  const loose = appJs.split("\n").filter((line) => /loadActiveTab\(\)/.test(line) && !/^\s*\/\//.test(line)
+    && !/(await |return |detached\(|\.then\(|async function loadActiveTab|=> loadActiveTab\(\)|Promise\.resolve\(loadActiveTab\(\)\))/.test(line));
+  assert.deepEqual(loose, [], "no tab load is started and left unwatched");
 });
