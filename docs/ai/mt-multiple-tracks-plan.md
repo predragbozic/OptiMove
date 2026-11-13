@@ -476,7 +476,7 @@ Only an athlete with two or more tracks that MT-0 does not take as one recording
 | none, or `cleared` | - | as today: `multiple_tracks` |
 | `track` | equal | the chosen track's rows only, as a single-track athlete: **native identities** `athlete_session:<row>:full` / `…:drill:<i>` of that track; the participant carries `trackChoice: { choiceId, kind: "track", trackId, trackCount }` |
 | `none` | equal | no participant; an anomaly `no_track_by_choice` (not `multiple_tracks`) with `trackChoice: { choiceId, kind: "none", trackCount }` |
-| any | different | `multiple_tracks` as today, with the detail `track_choice_stale` and the stale `choiceId`. Never applied to other tracks |
+| any | different | `multiple_tracks` as today (today's detail text), with `trackChoice.stale: true` and the stale `choiceId`; a blocked session's resolution names `track_choice_stale` (also once GPEXE leaves the athlete a single track). Never applied to other tracks |
 
 - **A chosen track's values are the athlete's measured values.** They count everywhere that measured values count: the 6a
   short-recording flag, M2 (no estimate over a measured value), the dashboards' `api_import` policy.

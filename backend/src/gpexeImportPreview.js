@@ -138,7 +138,26 @@ const ATHLETE_ANOMALY = {
   multiple_tracks: { gps: "needs_manual_review", review: true, message: "Recorded on more than one track in this session; needs manual review." },
   stats_invalid: { gps: "not_valid", review: false, message: "GPEXE marks this athlete's statistics as not valid." },
   whole_session_row_count: { gps: "needs_manual_review", review: true, message: "GPEXE has more than one whole-session row for this athlete; needs manual review." },
+  // MT-B: the reviewer chose no track of an athlete GPEXE recorded on several tracks. Not a review: the athlete simply has no
+  // GPEXE value (no roster observation; the coach gives the state, and an estimate may follow - 6b).
+  no_track_by_choice: { gps: "not_used_by_choice", review: false, message: "Left out by choice: GPEXE recorded this athlete on more than one track, and no track is used." },
 };
+
+// MT-B: the current track choices of a session's athletes (v67), read under the team lock every previewLocked caller holds -
+// the PUT writes under the same lock, so a preview and the approval that recomputes it see one choice. A Map keyed by GPEXE
+// athlete id, as buildGpexeImportPlan takes it.
+export async function readTrackChoices(client, ownerTeamId, gpexeTeamSessionId) {
+  const rows = (await client.query(
+    `select c.id, c.gpexe_athlete_id, c.choice, c.chosen_track_id, c.track_set_fingerprint
+       from training_load.gpexe_track_choices c
+      where c.owner_team_id = $1 and c.gpexe_team_session_id = $2
+        and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`,
+    [ownerTeamId, String(gpexeTeamSessionId)],
+  )).rows;
+  return new Map(rows.map((r) => [String(r.gpexe_athlete_id), {
+    choiceId: String(r.id), kind: r.choice, trackId: r.chosen_track_id ?? null, fingerprint: r.track_set_fingerprint,
+  }]));
+}
 
 // The whole-candidate blocks of a mapped import (J17 sections 3 and 6), each
 // with one fixed sentence for the two administrators. A coach reads the
@@ -383,9 +402,11 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   const unactivated = mapping?.unactivated ?? [];
   // v62: the team's zone, under the team lock the caller holds; used only for a session whose tracks report several zones.
   const teamTimezone = await teamSessionTimezone(client, ownerTeamId);
+  // MT-B: the session's track choices, under the same lock.
+  const trackChoices = bundle?.teamSession?.id ? await readTrackChoices(client, ownerTeamId, bundle.teamSession.id) : new Map();
   let gates;
   try {
-    gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone });
+    gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone, trackChoices });
   } catch (error) {
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error, { activationSet, unactivated });
@@ -402,7 +423,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     else {
       specs = built.specs;
       try {
-        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs, teamTimezone });
+        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs, teamTimezone, trackChoices });
       } catch (error) {
         if (!(error instanceof GpexeMappingError)) throw error;
         return blockedByMapping(bundle, error, { activationSet, unactivated });
@@ -507,6 +528,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     const athleteId = links.get(gpexeAthleteId) ?? null;
     const participant = participantById.get(gpexeAthleteId) ?? null;
     const anomaly = (anomaliesByAthlete.get(gpexeAthleteId) || []).map((a) => ({ kind: a.kind, ...(ATHLETE_ANOMALY[a.kind] || {}), detail: a.detail }));
+    // MT-B: the athlete's track choice as the plan applied it (a used track, none, or a stale one) - present only then.
+    const trackChoice = participant?.trackChoice ?? (anomaliesByAthlete.get(gpexeAthleteId) || []).find((a) => a.trackChoice)?.trackChoice ?? null;
     const blocking = anomaly.find((a) => a.gps);
     const entry = {
       gpexeAthleteId,
@@ -594,6 +617,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     if (participant && entry.skippedValues.length > 0 && participant.results.every((r) => r.values.length === 0)) entry.allValuesLeftOut = true;
     // MT-0: identical duplicate tracks were taken as one recording; present only then, so every other preview is unchanged.
     if (participant?.duplicateTracks) entry.duplicateTracks = { ...participant.duplicateTracks, ignoredTrackIds: [...participant.duplicateTracks.ignoredTrackIds] };
+    // MT-B: present only when the athlete has a current track choice, so every other preview (and its hash) is unchanged.
+    if (trackChoice) entry.trackChoice = { ...trackChoice };
     athletes.push(entry);
   }
 
@@ -611,8 +636,16 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   if (blocked?.code === "identities_missing_from_source") {
     const byId = new Map(athletes.map((a) => [a.gpexeAthleteId, a]));
     const UNDO = "Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.";
+    // MT-B: a current track or none choice that no longer applies. The entry marks it stale while the athlete still has several
+    // tracks that differ; once GPEXE left one track, or its tracks became one recording (MT-0), the entry carries no choice at all.
+    const choiceStale = (gpexeAthleteId, entry) => {
+      if (entry?.trackChoice) return entry.trackChoice.stale === true;
+      const choice = trackChoices.get(gpexeAthleteId);
+      return Boolean(entry && choice && (choice.kind === "track" || choice.kind === "none"));
+    };
     blocked.resolution = (blocked.gpexeAthleteIds || []).map((gpexeAthleteId) => {
       const entry = byId.get(gpexeAthleteId);
+      const stale = choiceStale(gpexeAthleteId, entry);
       const cause = entry?.notImported?.code ?? "missing_in_gpexe";
       const previousAthleteId = blocked.previousAthleteByGpexeId?.[gpexeAthleteId] ?? null;
       let action;
@@ -623,11 +656,15 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
       } else if (cause === "athlete_not_in_team") {
         action = "restore_team_membership";
         step = `Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". ${UNDO}`;
+      } else if (stale) {
+        // MT-B: the athlete's track choice was made for tracks GPEXE has changed since the import.
+        action = "undo_and_choose_again";
+        step = `GPEXE changed this athlete's tracks after the import. A platform admin undoes the import of this session, then the track is chosen again. ${UNDO}`;
       } else {
         action = "fix_in_gpexe_or_undo";
         step = `Correct this athlete's data in GPEXE (one track, valid statistics), then press "Check now". ${UNDO}`;
       }
-      return { gpexeAthleteId, previousAthleteId, cause, action, step };
+      return { gpexeAthleteId, previousAthleteId, cause: action === "undo_and_choose_again" ? "track_choice_stale" : cause, action, step };
     });
     if (blocked.unknownExternalIds?.length) {
       blocked.resolution.push({

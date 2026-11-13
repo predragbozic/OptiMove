@@ -16,7 +16,9 @@ const UP_TO_V60 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex
 // v62: every check, preview and approval reads the team's session time zone, so the main database carries v62 as well; the v60
 // rollback checks below hide v62's record for their run (its later-migration gate would refuse first) and put it back.
 const V62_FILE = "202611111200_training_load_v62_team_session_timezone.sql";
-const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE];
+// MT-B: the preview reads v67's track choices, so v67 is applied too (test 0 hides its record with v62's).
+const V67_FILE = "202611131200_training_load_v67_gpexe_track_choices.sql";
+const MAIN_MIGRATIONS = [...UP_TO_V60.filter((m) => !m.includes("app_error_events")), V62_FILE, V67_FILE];
 import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import { bindThroughRoutes, createFakeSource } from "./support/gpexe-fake-source.mjs";
 import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
@@ -303,7 +305,7 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
   const rollback = fs.readFileSync(RUNBOOK("undo-roster-work-v60-rollback.sql"), "utf8");
   const before = await catalogOf(admin);
   const c = await newClient();
-  await c.query(`create temp table o1_v62 as select * from public.schema_migrations where migration_name = $1`.replace("$1", `'migrations_v2/${V62_FILE}'`));
+  await c.query(`create temp table o1_v62 as select * from public.schema_migrations where migration_name in ($1, $2)`.replace("$1", `'migrations_v2/${V62_FILE}'`).replace("$2", `'migrations_v2/${V67_FILE}'`));
   await c.query(`delete from public.schema_migrations where migration_name in (select migration_name from o1_v62)`);
   const attempt = async (pattern) => {
     await assert.rejects(c.query(rollback), pattern);
@@ -337,6 +339,7 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
     await c.end();
   }
   assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V62_FILE}`])).rows[0].n, 1, "v62's record is back");
+  assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V67_FILE}`])).rows[0].n, 1, "v67's record is back");
 });
 
 // ---------------------------------------------------------------------------
