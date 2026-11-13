@@ -103,7 +103,7 @@ test("1. the board is offered in a club workspace only: no card, no context and 
     assert.ok(!content.querySelector("[data-mb-board]"), `${type}: no board`);
   }
   asUser("club");
-  assert.deepEqual(data.boardContext(), { clubId: CLUB, clubName: "Example Club" });
+  assert.deepEqual(data.boardContext(), { clubId: CLUB, clubName: "Example Club", isPlatformAdmin: false });
   assert.ok(home().includes('data-section="board"'));
 });
 
@@ -510,4 +510,18 @@ test("26. leaving after a save drops the Saved notice too", async () => {
   assert.equal(state.trainingLoad.board.saved, null);
   render();
   assert.ok(!text().includes("Saved."));
+});
+
+test("27. keys, codes and the GPEXE team's number are shown to a platform admin only; a club's admin gets one sentence and the next step", async () => {
+  await open();
+  for (const internal of ["Technical details", "athlete_session.", "linked to GPEXE team", "7001"]) assert.ok(!content.innerHTML.includes(internal), `a club admin sees no "${internal}"`);
+  overrides.push((c) => (c.url.includes("/board/placement?") ? { status: 200, body: { placement: { placeable: false, code: "conversion_unavailable", sourceUnit: "m", targetUnit: "min" } } } : null));
+  await click(`[data-action="metric-board-pick"][data-field-id="${FIELD}"]`);
+  await click(`[data-action="metric-board-place"][data-variable-id="${TARGET}"]`);
+  assert.ok(text().includes("The units do not match"));
+  assert.ok(!content.innerHTML.includes("conversion_unavailable"), "the code stays out");
+  // The same screen for a platform admin working in the club.
+  state.currentUser = { id: "u2", activeWorkspace: { type: "club", scopeId: CLUB, label: "Example Club" }, availableWorkspaces: [{ type: "platform" }, { type: "club", scopeId: CLUB }] };
+  render();
+  for (const internal of ["Technical details", "athlete_session.total_distance", "linked to GPEXE team 7001", "conversion_unavailable"]) assert.ok(content.innerHTML.includes(internal), `a platform admin sees "${internal}"`);
 });

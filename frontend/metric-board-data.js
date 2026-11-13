@@ -21,7 +21,9 @@ export const MAX_ROWS = 20;
 export function boardContext(user = state.currentUser) {
   const ws = user?.activeWorkspace || null;
   if (!ws || ws.type !== "club" || !ws.scopeId) return null;
-  return { clubId: String(ws.scopeId), clubName: ws.label || "" };
+  // A platform workspace exists only for an active platform admin: only they are shown keys, codes and source ids.
+  const available = Array.isArray(user?.availableWorkspaces) ? user.availableWorkspaces : [];
+  return { clubId: String(ws.scopeId), clubName: ws.label || "", isPlatformAdmin: available.some((w) => w?.type === "platform") };
 }
 
 export function emptyBoardState() {

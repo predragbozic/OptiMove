@@ -23,8 +23,10 @@ const teamName = (s) => cleanName(s.board?.team?.name || teamOf(s)?.name || "thi
 const withUnit = (value, unit) => (value === null || value === undefined ? "No value" : `${escapeHtml(value)}${unit ? ` ${escapeHtml(unit)}` : ""}`);
 const busy = (s) => Boolean(s.write) || s.loading;
 
-const REQUIRED_HELP = "Required: if a session has no value here, OptiMove imports the rest and shows 'Required value missing' in the review.";
-const OPTIONAL_HELP = "Optional: if a session has no value here, it is simply left out.";
+const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest and marks the value as missing. Untick to leave it out quietly.";
+// Keys, codes and the GPEXE team's number are for a platform admin only (the owner, 2026-11-13).
+const forSupport = () => boardContext()?.isPlatformAdmin === true;
+const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
 // ---------------------------------------------------------------------------
 // The frame: header, Which team?, tabs
@@ -37,9 +39,9 @@ function header(s) {
       <div>
         <p class="om-eyebrow">Data configuration</p>
         <h2 class="om-page-header__title" id="metric-board-title" tabindex="-1">Map by drag and drop</h2>
-        <p class="muted mb-lead">After a search you see what GPEXE sent. ${sourceFieldDragAvailable() && !isPhone() ? "Drag a column onto your variable." : "Tap a column, then your variable."} OptiMove proposes the conversion and shows two athletes. Compare them with the GPEXE screen and confirm. That confirmation is the evidence.</p>
+        <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? "Drag a GPEXE column onto your variable" : "Tap a GPEXE column, then your variable"}, compare two athletes with the GPEXE screen, and save.</p>
       </div>
-      ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)} — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}</span>
+      ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)}${gpexeTeam(team.sourceTeamId)}</span>
         ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}</div>` : ""}
     </header>`;
 }
@@ -55,7 +57,7 @@ function whichTeam(s) {
     <section class="om-card" aria-labelledby="mb-which-team">
       <div class="om-card__header"><h3 class="om-card__title" id="mb-which-team">Which team?</h3></div>
       <ul class="mb-team-list">
-        ${s.teams.items.map((t) => `<li><button type="button" class="om-btn mb-team" data-action="metric-board-team" data-team-id="${escapeAttr(t.teamId)}">${name(t.name)} — linked to GPEXE team ${escapeHtml(t.sourceTeamId)}</button></li>`).join("")}
+        ${s.teams.items.map((t) => `<li><button type="button" class="om-btn mb-team" data-action="metric-board-team" data-team-id="${escapeAttr(t.teamId)}">${name(t.name)}${gpexeTeam(t.sourceTeamId)}</button></li>`).join("")}
       </ul>
     </section>`;
 }
@@ -74,7 +76,7 @@ function columnHtml(s, c, drag) {
   const unitLine = c.unitProven ? `GPEXE sends values in ${escapeHtml(c.unit)}` : c.expectedUnit ? `Expected ${escapeHtml(c.expectedUnit)}, not confirmed` : "Unit not confirmed";
   const values = c.rawA !== null || c.rawB !== null
     ? `<span class="mb-col-vals" aria-label="${escapeAttr(`${cleanName(board.pair.labels[0])}: ${c.rawA ?? "no value"}; ${cleanName(board.pair.labels[1])}: ${c.rawB ?? "no value"}`)}">${withUnit(c.rawA, c.unitProven ? c.unit : "")}<br>${withUnit(c.rawB, c.unitProven ? c.unit : "")}</span>` : "";
-  const tech = `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>`;
+  const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
   const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span>`;
   if (!c.placeable && !use) {
     return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small class="mb-reason">${escapeHtml(COLUMN_REASON[c.reason] || "This column cannot be placed.")}</small></span>${values}</div>${tech}</li>`;
@@ -200,7 +202,7 @@ function panelBody(s) {
   const p = panel.placement;
   if (p.placeable !== true) {
     return `${title}<p class="mb-refusal" role="alert">${escapeHtml(placementRefusal(p, { column, variable }))}</p>
-      <details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(p.code || "")}</code></details>
+      ${forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(p.code || "")}</code></details>` : ""}
       <div class="om-card__actions"><button type="button" class="om-btn" data-action="metric-board-cancel">Back</button></div>`;
   }
   const placed = s.placements[panel.fieldId] || {};
@@ -214,7 +216,7 @@ function panelBody(s) {
       <li>Compare the last column with what GPEXE shows. Seconds may differ by one. Distance and speed may differ in the last digit.</li>
       <li>If it does not match, do not tick it. Remove it, or choose another column or another variable.</li></ul></div>
     <label class="mb-check"><input type="checkbox" data-mb-tick ${placed.checked ? "checked" : ""}><span>Matches GPEXE for both athletes</span></label>
-    <label class="mb-check"><input type="checkbox" data-mb-required data-field-id="${escapeAttr(panel.fieldId)}" ${placed.requirement !== "optional" ? "checked" : ""}><span>Required<small>${REQUIRED_HELP} ${OPTIONAL_HELP}</small></span></label>
+    <label class="mb-check"><input type="checkbox" data-mb-required data-field-id="${escapeAttr(panel.fieldId)}" ${placed.requirement !== "optional" ? "checked" : ""}><span>Required<small>${REQUIRED_HELP}</small></span></label>
     <div class="om-card__actions">
       <button type="button" class="om-btn om-btn--primary" data-action="metric-board-keep">Keep this placement</button>
       <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-cancel">Cancel</button>
@@ -293,7 +295,7 @@ function reviewBody(s) {
   // One new row and nothing else: the panel's own summary and the send, not a second form.
   const single = fresh.length === 1 && pre.length === 0;
   return `<h3 class="om-card__title" id="mb-review-title" tabindex="-1">${single ? "Switch this on?" : "Review before saving"}</h3>
-    <p class="muted">GPEXE · ${name(team?.name || teamName(s))} — linked to GPEXE team ${escapeHtml(team?.sourceTeamId || s.board.team.sourceTeamId)}</p>
+    <p class="muted">GPEXE · ${name(team?.name || teamName(s))}${gpexeTeam(team?.sourceTeamId || s.board.team.sourceTeamId)}</p>
     ${fresh.length ? `${single ? "" : `<p class="om-eyebrow">New columns</p>`}<ul class="mb-review-list">${freshHtml}</ul>` : ""}
     ${group("OptiMove mappings (no check needed)", pre.filter((p) => p.badge !== "club_mapping"))}
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
@@ -337,7 +339,7 @@ function switchOffHtml(s) {
   const x = s.switchOff;
   if (!x) return "";
   const team = teamOf(s);
-  const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? ` — linked to GPEXE team ${escapeHtml(team.sourceTeamId)}` : ""}?</strong> Sessions found from then on are imported without it.</p>
+  const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? gpexeTeam(team.sourceTeamId) : ""}?</strong> Sessions found from then on are imported without it.</p>
     ${s.write?.kind === "switch-off" ? writeHtml(s) : ""}
     <div class="om-card__actions"><button type="button" class="om-btn om-btn--danger" data-action="metric-board-switch-off" ${s.write ? "disabled" : ""}>Switch off</button>
       <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div>`;

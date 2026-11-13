@@ -101,8 +101,7 @@ test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no d
       const page = admin.page;
       await openBoard(page);
       assert.equal(await page.locator("[data-mb-drag-field]").count(), 0, "nothing drags on a phone");
-      const summary = await page.locator(".mb-tech summary").first().boundingBox();
-      assert.ok(summary.height >= 44, `Technical details is ${summary.height}px tall`);
+      assert.equal(await page.locator(".mb-tech").count(), 0, "a club admin is shown no technical details");
       // Switch off asks in the bottom sheet, in view, not somewhere up the page.
       await page.tap(`[data-action="metric-board-switch-off-open"][data-activation-id="${activationId}"]`);
       const question = page.locator(".mb-sheet", { hasText: "Switch off TotDist" });

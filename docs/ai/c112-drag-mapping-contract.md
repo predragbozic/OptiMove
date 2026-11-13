@@ -1848,6 +1848,10 @@ Frontend only, stacked on 18-3; no migration, no backend change. English texts o
   everything, a team asked for by the stepper included.
 - **Leaving.** An unsaved placement, a save in flight and an unconfirmed result ask before a section, tab, team or
   workspace change and on `beforeunload`. Escape closes the topmost of review, panel, chosen column.
+- **One sentence and one next step** (the owner's standing decision of 2026-11-13, applied to the board's
+  sentences only, no layout change): a column's key, a refusal's code and the GPEXE team's number are shown to a
+  platform admin only (Technical details, "linked to GPEXE team N"); a club's admin sees the team's name alone. The
+  lead is one sentence, and Required has one line of help instead of two.
 - **Not checked, stated:** dragging in Firefox (the column is a `<button draggable>`; the e2e runs Chromium only; tap
   a column and then a variable works in every browser).
 - **Left out of 18-4, stated:** the session chooser (the board uses the session route 1 picks) and the choice of the
