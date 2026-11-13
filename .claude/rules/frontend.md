@@ -87,7 +87,8 @@ application - whatever we build, it matters." It applies to every new or changed
 - A coach or club admin gets one plain sentence and one next step: no ids, codes or server sentences. Technical
   details are for the platform admin only. Exception: in Settings → Source connections the club admin keeps what its
   own step needs, folded away. Known gap: in Imports the club admin still sees them (the status's `identityAdmin`)
-  and is asked to pass them on. Removing that is the P2 change of the plain-language Imports work.
+  and is asked to pass them on. Removing that is a separate change of the Imports audience (frontend, and the codes
+  the server sends), ordered by the manager on 2026-11-13 and not merged yet.
 - Every gesture (swipe, drag) also has a visible control. The 44 px target and 360/375/390 px rules above are unchanged.
 
 ## Browser QA
