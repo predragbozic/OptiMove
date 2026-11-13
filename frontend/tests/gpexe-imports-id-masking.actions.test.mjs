@@ -67,12 +67,16 @@ const IDENTITIES = {
   pendingCount: 1, retryLaterCount: 1, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [],
 };
 const NO_IDENTITIES = { identities: [], pendingCount: 6, retryLaterCount: 0, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [] };
+// The coach's answer (plan coach-gpexe-name): the unlinked athletes' names only - no birthDate key, no birthDateConflicts.
+const COACH_IDENTITIES = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova" }, { gpexeAthleteId: ID.noName, name: null }], pendingCount: 1, retryLaterCount: 1, maxPerLoad: 50, retentionDays: 14 };
 
 function status(viewer) {
   return { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "on" }, lastCheck: null, viewer, approvalAvailable: true };
 }
 const VIEWERS = {
   coach: { canApprove: true, approvalBasis: "team_grant", isPlatformAdmin: false },
+  // The team's own coach (plan coach-gpexe-name): the GPEXE names, never the dates or the admin-only load.
+  "team coach": { canApprove: true, approvalBasis: "team_grant", isPlatformAdmin: false, identityNames: true },
   "club admin": { canApprove: false, approvalBasis: null, isPlatformAdmin: false, identityAdmin: true },
   "platform admin": { canApprove: true, approvalBasis: "platform_admin", isPlatformAdmin: true, identityAdmin: true },
 };
@@ -340,6 +344,26 @@ test("a coach keeps the screens as before: the GPEXE ids stay in the text, no id
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
   assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
+});
+
+test("the team's own coach (identityNames): the GPEXE names replace the ids on Link athletes and the session review, never a date of birth or a conflict, and the admin-only load controls stay hidden", async () => {
+  reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
+  await openMapping();
+  const html = pageHtml();
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/athlete-identities")).length >= 1, true, "the coach reads the stored names");
+  // The GPEXE name stands in for the id, with no "Born" line and no date.
+  assert.match(outsideTech(html), /<strong>Mira Zedova<\/strong>/);
+  assertMasked(html, "team coach: Link athletes");
+  assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(html)), "no date of birth for the coach");
+  // No admin-only load: no "Load the GPEXE names and dates of birth", no retry/suppression counts.
+  assert.ok(!/Load the GPEXE names and dates of birth|names and dates of birth already|24 hours|Hidden for 24|retry/i.test(html), "no admin load controls");
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const review = pageHtml();
+  assert.match(outsideTech(review), /Find the GPEXE athlete Mira Zedova in GPEXE first/, "the review names the athlete by its GPEXE name");
+  assertMasked(review, "team coach: session review");
+  assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(review)), "no date in the review");
+  assertInTech(review, ID.named, "team coach: review athlete");
 });
 
 // ---------------------------------------------------------------------------
