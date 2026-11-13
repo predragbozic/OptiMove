@@ -117,7 +117,7 @@ test("custom aggregation is explicit, independent of daily metadata, with scope 
   assert.match(selected(chosen, "scope"), /value="session" selected/);
   assert.match(chosen, /value="bar_chart" checked/);
   input.draft.view.analyticalAggregation = "sum";
-  assert.match(selected(renderSimpleEditorHtml(input), "aggregation"), /Unavailable choice: sum/);
+  assert.match(selected(renderSimpleEditorHtml(input), "aggregation"), /Unavailable choice/);
 });
 
 test("builtin fixed metadata does not expose custom analytical controls; backend gates views", () => {
@@ -134,7 +134,7 @@ test("preview is lossless for every current and comparison row, including proble
   const rows = Array.from({ length: 150 }, (_, index) => ({ athleteId: `athlete-${index}`, value: index === 0 ? 0 : -index, unit: null, conflict: index === 1, note: index === 149 ? '<svg onload="bad">' : "" }));
   rows.push({ value: [0, -5, null], unit: "m", unitConflict: true, coverage: { status: "partial", detail: "Do not hide" } });
   const preview = { status: "invalid", issues: [{ code: "conflict", path: "<bad>" }], warnings: ["Incomplete coverage"], resolvedPeriod: { dateFrom: "2026-10-01" }, widgetResult: { status: "problem", series: [{ seriesId: "series-1", status: "error", data: { current: rows, comparison: [{ value: -0.123456789123, unit: "m", missing: true }] } }] } };
-  const html = renderSimpleEditorHtml(model({ step: 3, preview }));
+  const html = renderSimpleEditorHtml(model({ step: 3, preview }), true);
   assert.equal((html.match(/<tbody>/g) ?? []).length, 2);
   assert.equal((html.match(/<tr>/g) ?? []).length, rows.length + 1 + 2);
   assert.match(html, /<td class="tl-simple-number">0<\/td>/);
@@ -246,7 +246,7 @@ test("roster loading and errors are distinct from empty athletes and preserve se
   input.rosterLoading = false;
   input.rosterError = "<bad> unavailable";
   html = renderSimpleEditorHtml(input);
-  assert.match(html, /role="alert"[^>]*>Athletes could not be loaded\. &lt;bad&gt; unavailable/);
+  assert.match(html, /role="alert"[^>]*>Athletes could not be loaded\./);
   assert.doesNotMatch(html, /No authorized athletes|Selected athlete unavailable/);
   input.athletes = [{ id: metricId, name: "Alex" }];
   assert.match(control(renderSimpleEditorHtml(input), "athlete"), /checked disabled/);
@@ -277,8 +277,10 @@ test("preview headings and athlete names are friendly while every original field
   assert.match(table, /<td>No observation<\/td>/);
   assert.doesNotMatch(table, new RegExp(metricId));
   assert.match(html, /Choose how to combine measurements\./);
-  assert.match(html, /&lt;Warning&gt;/);
-  const details = html.match(/<pre>([\s\S]*?)<\/pre>/)[1].replaceAll("&quot;", '"').replaceAll("&#039;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  assert.doesNotMatch(html, /&lt;Warning&gt;|raw-series-id|unknownField|<pre>/);
+  const adminHtml = renderSimpleEditorHtml(model({ step: 3, preview }), true);
+  assert.match(adminHtml, /&lt;Warning&gt;/);
+  const details = adminHtml.match(/<pre>([\s\S]*?)<\/pre>/)[1].replaceAll("&quot;", '"').replaceAll("&#039;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
   assert.deepEqual(JSON.parse(details), preview);
 });
 

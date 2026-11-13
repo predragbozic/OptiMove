@@ -16,11 +16,11 @@ const fieldLabels = {
 };
 const statusLabels = { ok: "Ready", valid: "Ready", invalid: "Needs attention", error: "Could not load", problem: "Needs attention", advancedRequired: "Advanced editor required", no_data: "No data", noData: "No data", partial: "Partial coverage", complete: "Complete coverage", noObservation: "No observation", no_observation: "No observation" };
 const lookup = (labels, value) => Object.hasOwn(labels, value) ? labels[value] : text(value);
-const friendlyStatus = (value) => lookup(statusLabels, value);
+const friendlyStatus = (value) => statusLabels[value] ?? "Status unavailable";
 const valueType = (value) => value == null ? "Not specified" : lookup({ numeric: "Numeric", text: "Text", boolean: "Boolean" }, value);
 
-function issueText(issue) {
-  if (!issue || typeof issue !== "object") return text(issue);
+function issueText(issue, technical) {
+  if (!issue || typeof issue !== "object") return technical ? text(issue) : "Review your settings and preview again.";
   const known = {
     conflict: "Conflicting observations were returned. Review the affected rows.", unitConflict: "Returned observations have conflicting units.",
     requiresChoice: "Choose the required setting before previewing again.", notFound: "The selected metric or filter is no longer available.",
@@ -33,12 +33,12 @@ function issueText(issue) {
     incompatiblePresentation: "The saved presentation settings do not match this display. Open advanced settings.",
   };
   const choice = issue.code === "requiresChoice" ? issue.path?.includes("analyticalAggregation") ? "Choose how to combine measurements." : issue.path?.includes("dataScopeLevel") ? "Choose which measurements to use." : null : null;
-  return choice ?? (Object.hasOwn(known, issue.code) ? known[issue.code] : issue.message ?? text(issue));
+  return choice ?? (Object.hasOwn(known, issue.code) ? known[issue.code] : technical ? issue.message ?? text(issue) : "Review your settings and preview again.");
 }
 
 function athleteName(id, athletes) {
   if (id == null) return "Whole group";
-  return athletes.find((athlete) => String(athlete.id).toLowerCase() === String(id).toLowerCase())?.name || String(id);
+  return athletes.find((athlete) => String(athlete.id).toLowerCase() === String(id).toLowerCase())?.name || "Athlete name unavailable";
 }
 
 function inheritedAthletes(model) {
@@ -55,7 +55,7 @@ function inheritedAthletes(model) {
   }
   const selection = (hasEffectiveIds || hasRuntimeIds) && ids === null ? "Dashboard athletes: all, subject to dashboard access." : "Dashboard athlete selection will be resolved from dashboard defaults.";
   if (!athletes.length && model.rosterLoading !== false) return message(`${selection} Athlete roster has not loaded.`);
-  const names = athletes.map((athlete) => athlete.name || athlete.id);
+  const names = athletes.map((athlete) => athlete.name || "Athlete name unavailable");
   return message(`${selection} Loaded roster: ${names.length} ${names.length === 1 ? "athlete" : "athletes"}${names.length ? ` — ${names.join(", ")}` : "."}`);
 }
 
@@ -92,8 +92,8 @@ function athletesAndPeriod(model, locked) {
   return `<fieldset${disabled(locked)}><legend>Athletes</legend>
     ${[["inherit", "Use dashboard athletes"], ["allAuthorized", "All authorized athletes"], ["selected", "Choose athletes"]].map(([value, label]) => `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-athlete-mode" ${action("athlete-mode")} value="${value}"${selection.mode === value ? " checked" : ""}>${label}</label>`).join("")}
     ${selection.mode === "inherit" ? inheritedAthletes(model) : ""}
-    ${model.rosterLoading ? message("Loading athletes…") : model.rosterError ? message(`Athletes could not be loaded. ${typeof model.rosterError === "string" ? model.rosterError : "Please try again."}`, "alert") : ""}
-    ${selection.mode === "selected" ? `<div class="tl-simple-athletes" aria-busy="${Boolean(model.rosterLoading)}">${athletes.map((athlete) => `<label class="tl-simple-choice"><input type="checkbox" ${action("athlete")} data-id="${escapeAttr(athlete.id)}" value="${escapeAttr(athlete.id)}"${ids.has(athlete.id) ? " checked" : ""}${disabled(model.rosterLoading || model.rosterError)}> ${escapeHtml(athlete.name ?? athlete.id)}</label>`).join("")}${!athletes.length && !model.rosterLoading && !model.rosterError ? message("No authorized athletes available.") : ""}${!model.rosterLoading && !model.rosterError ? [...ids].filter((id) => !athletes.some((athlete) => athlete.id === id)).map((id) => message(`Selected athlete unavailable: ${id}`)).join("") : ""}</div>` : ""}
+    ${model.rosterLoading ? message("Loading athletes…") : model.rosterError ? message(`Athletes could not be loaded.`, "alert") : ""}
+    ${selection.mode === "selected" ? `<div class="tl-simple-athletes" aria-busy="${Boolean(model.rosterLoading)}">${athletes.map((athlete) => `<label class="tl-simple-choice"><input type="checkbox" ${action("athlete")} data-id="${escapeAttr(athlete.id)}" value="${escapeAttr(athlete.id)}"${ids.has(athlete.id) ? " checked" : ""}${disabled(model.rosterLoading || model.rosterError)}> ${escapeHtml(athlete.name ?? "Athlete name unavailable")}</label>`).join("")}${!athletes.length && !model.rosterLoading && !model.rosterError ? message("No authorized athletes available.") : ""}${!model.rosterLoading && !model.rosterError ? [...ids].filter((id) => !athletes.some((athlete) => athlete.id === id)).map(() => message("Selected athlete unavailable.")).join("") : ""}</div>` : ""}
     </fieldset>
     <fieldset${disabled(locked)}><legend>Period</legend>
     <label class="tl-simple-choice"><input type="radio" name="training-load-simple-period-mode" ${action("period-mode")} value="inherit"${!fixed ? " checked" : ""}>Use dashboard period</label>
@@ -107,7 +107,7 @@ function athletesAndPeriod(model, locked) {
 
 function selectField(name, label, choices, selected, locked, placeholder = "Choose an option") {
   const available = choices.some(([value]) => value === selected);
-  return `<label class="tl-simple-field">${escapeHtml(label)}<select ${action(name)}${disabled(locked)}>${!available ? `<option value="${escapeAttr(selected ?? "")}" selected disabled>${escapeHtml(selected ? `Unavailable choice: ${selected}` : placeholder)}</option>` : ""}${choices.map(([value, title]) => option(value, title, selected)).join("")}</select></label>`;
+  return `<label class="tl-simple-field">${escapeHtml(label)}<select ${action(name)}${disabled(locked)}>${!available ? `<option value="${escapeAttr(selected ?? "")}" selected disabled>${escapeHtml(selected ? "Unavailable choice" : placeholder)}</option>` : ""}${choices.map(([value, title]) => option(value, title, selected)).join("")}</select></label>`;
 }
 
 function displayChoices(model, locked) {
@@ -128,12 +128,13 @@ function displayChoices(model, locked) {
     <p>The preview lists all returned data. Saved charts use the current dashboard display.</p>`;
 }
 
-function resultTable(rows, caption, athletes) {
+function resultTable(rows, caption, athletes, technical) {
   const records = rows.map((row) => row !== null && typeof row === "object" && !Array.isArray(row) ? row : { value: row });
-  const keys = [...new Set(records.flatMap(Object.keys))];
+  const keys = [...new Set(records.flatMap(Object.keys))].filter(key => technical || (Object.hasOwn(fieldLabels, key) && !["activityId", "componentId", "sessionId"].includes(key)));
   if (!records.length) return message(`${caption}: no returned rows.`);
   if (!keys.length) keys.push("value");
   function cell(key, value) {
+    if (!technical && typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value) && key !== "athleteId") return "Unavailable";
     if (key === "athleteId") return athleteName(value, athletes);
     if (key === "unit" && value == null) return "no unit specified";
     if (["conflict", "unitConflict", "missing"].includes(key) && typeof value === "boolean") return value ? "Yes" : "No";
@@ -143,14 +144,14 @@ function resultTable(rows, caption, athletes) {
   return `<div class="tl-simple-table-scroll" role="region" aria-label="${escapeAttr(caption)}" tabindex="0"><table><caption>${escapeHtml(caption)}</caption><thead><tr>${keys.map((key) => `<th scope="col">${escapeHtml(lookup(fieldLabels, key))}</th>`).join("")}</tr></thead><tbody>${records.map((row) => `<tr>${keys.map((key) => `<td${typeof row[key] === "number" ? ' class="tl-simple-number"' : ""}>${Object.hasOwn(row, key) ? escapeHtml(cell(key, row[key])) : "—"}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
-function previewHtml(model) {
+function previewHtml(model, technical) {
   const preview = model.preview;
   if (!preview) return message(model.previewLoading ? "Loading preview…" : "Preview your choices before saving.");
   const result = preview.widgetResult;
   const tables = [];
   function visit(value, path) {
-    if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? []));
-    else if (value && typeof value === "object") Object.entries(value).forEach(([key, child]) => visit(child, `${path} / ${lookup(fieldLabels, key)}`));
+    if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? [], technical));
+    else if (value && typeof value === "object") Object.entries(value).forEach(([key, child]) => visit(child, `${path} / ${(technical ? lookup(fieldLabels, key) : fieldLabels[key] ?? "Results")}`));
   }
   for (const [index, series] of (result?.series ?? []).entries()) {
     const label = series.label ?? series.displayLabel ?? `Series ${index + 1}`;
@@ -159,24 +160,24 @@ function previewHtml(model) {
   }
   if (result && !result.series?.length) visit(result, "Result");
   return `${model.previewLoading ? message("Loading preview… Previous results are shown below.") : ""}
-    ${message(`Preview status: ${friendlyStatus(preview.status ?? "not specified")}`)}
+    <p class="tl-simple-preview-status" data-ready="${preview.status === "valid"}"><span aria-hidden="true">${preview.status === "valid" ? "✓" : "!"}</span> ${escapeHtml(friendlyStatus(preview.status ?? "not specified"))} · ${(preview.issues ?? []).length} ${(preview.issues ?? []).length === 1 ? "issue" : "issues"}</p>
     ${result?.status ? message(`Result status: ${friendlyStatus(result.status)}`) : ""}
     ${preview.resolvedPeriod ? message(`Resolved period: ${preview.resolvedPeriod.dateFrom ?? "not specified"} to ${preview.resolvedPeriod.dateTo ?? "not specified"}${preview.resolvedPeriod.timeZone ? ` (${preview.resolvedPeriod.timeZone})` : ""}`) : ""}
-    ${(preview.issues ?? []).map((issue) => message(issueText(issue), "alert")).join("")}
-    ${(preview.warnings ?? []).map((warning) => message(issueText(warning))).join("")}
+    ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue, technical), "alert")).join("")}
+    ${(technical ? preview.warnings ?? [] : []).map((warning) => message(issueText(warning, technical))).join("")}
     ${tables.join("")}
     ${!result ? message("No preview results returned.") : ""}
-    <details class="tl-simple-raw"><summary>Complete preview result and problem details</summary><pre>${escapeHtml(JSON.stringify(preview, null, 2))}</pre></details>`;
+    ${technical ? `<details class="tl-simple-raw"><summary>Complete preview result and problem details</summary><pre>${escapeHtml(JSON.stringify(preview, null, 2))}</pre></details>` : ""}`;
 }
 
 function saveFeedback(model) {
-  return `${model.saveState === "unknown" ? `${message("Save outcome unknown. Your draft is retained and editing is locked. Retry sends the same request; check status to find out whether it was recorded.", "alert")}${button("retry", "Retry same request")}${button("status", "Check status")}` : ""}
+  return `${model.saveState === "unknown" ? `${button("status", "Check status")}${button("retry", "Retry same request")}${message("The save has not been confirmed.", "alert")}` : ""}
     ${model.saveState === "saving" ? message("Saving… Your draft is retained while saving.") : ""}
     ${model.saveState === "recorded" ? message("Save recorded.") : ""}
     ${model.saveError ? message(model.saveError, "alert") : ""}`;
 }
 
-export function renderSimpleEditorHtml(model = {}) {
+export function renderSimpleEditorHtml(model = {}, technical = false) {
   if (!model?.open) return "";
   const step = [1, 2, 3].includes(model.step) ? model.step : 1;
   const locked = ["unknown", "saving", "recorded"].includes(model.saveState);
@@ -190,7 +191,7 @@ export function renderSimpleEditorHtml(model = {}) {
     ${model.error ? message(model.error, "alert") : ""}
     ${advanced ? message("These settings require the advanced editor. Opening advanced will ask before discarding these unsaved changes.") : ""}
     <div class="tl-simple-content"><fieldset class="tl-simple-editable"${disabled(locked)}><legend class="tl-simple-sr-only">Step ${step} settings</legend>${step === 1 ? metricCards(model, locked) : step === 2 ? athletesAndPeriod(model, locked) : displayChoices(model, locked)}</fieldset>
-    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}">${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model)}</section>` : ""}</div>
+    ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}">${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model, technical)}</section>` : ""}</div>
     <footer>${button("advanced", "Open advanced editor", locked, 'aria-describedby="tl-simple-advanced-help"')}<p id="tl-simple-advanced-help">Opening advanced will ask before discarding these unsaved changes.</p>
     <div class="tl-simple-navigation">${step > 1 ? button("back", "Back", locked) : ""}${step < 3 ? button("next", "Next", locked || (step === 1 && !model.draft?.metricRef) || advanced) : button("save", "Save", locked || !model.canSave || !supported.atomicSave || advanced || model.previewLoading)}${step === 3 && !supported.atomicSave ? message("Saving is temporarily unavailable.") : ""}</div></footer>
   </section></div>`;

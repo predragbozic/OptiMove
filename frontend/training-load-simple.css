@@ -80,3 +80,6 @@
   .tl-simple-steps { gap: .5rem 1.5rem; }
   .tl-simple-navigation > button { flex: 1; }
 }
+
+.tl-simple-preview-status { color: #78271f; }
+.tl-simple-preview-status[data-ready="true"] { color: #24653b; }

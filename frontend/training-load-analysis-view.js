@@ -903,7 +903,7 @@ export function renderTrainingLoadAnalysisHtml() {
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
-      ${renderSimpleEditorHtml(a.simpleEditor)}
+      ${renderSimpleEditorHtml(a.simpleEditor, state.currentUser?.availableWorkspaces?.some(workspace => workspace.type === "platform"))}
     </div>
   `;
 }

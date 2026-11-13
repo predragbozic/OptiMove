@@ -29,7 +29,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     },
   ];
 
-  function createQueryFixture(value) {
+  function createQueryFixture(value, entryMethod = "manual") {
     const calls = [];
     async function queryRunner(sql, params) {
       calls.push({ sql, params });
@@ -49,7 +49,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
         }] };
       }
       if (sql.includes("from training_load.metric_measurement_occasions")) {
-        return { rows: [{ occasion_id: "session-occasion", entry_method: "manual", event_scope_level: "session" }] };
+        return { rows: [{ occasion_id: "session-occasion", entry_method: entryMethod, event_scope_level: "session" }] };
       }
       if (sql.includes("from training_load.metric_definition_versions")) {
         return { rows: params[0].map((id) => ({ id, daily_aggregation_method: "sum", value_type: "numeric" })) };
@@ -60,7 +60,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       if (sql.includes("from training_load.metric_events ev")) {
         return { rows: [{
           metric_definition_id: "day-metric", metric_definition_version_id: "day-version", athlete_id: "athlete-a",
-          local_date: "2026-10-29", occasion_id: "day-occasion", entry_method: "manual",
+          local_date: "2026-10-29", occasion_id: "day-occasion", entry_method: entryMethod,
           value_numeric: value * 2, unit_at_capture: "m", aggregation_role: "standalone", coverage: "complete",
         }] };
       }
@@ -100,6 +100,17 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       const activityCalls = calls.filter(({ sql }) => sql.includes("select a.id from training.activities"));
       assert.deepEqual(new Set(activityCalls.map(({ params }) => params[0])), new Set(["2026-10-29", "2026-10-28"]));
     }
+  });
+
+  test("estimated readings are excluded from dashboard values without affecting session counts", async () => {
+    const { queryRunner } = createQueryFixture(42, "estimate");
+    const result = await queryDashboard(workspaceArgs, widgets, period, { queryRunner });
+    const [session, count, day] = result.flatMap((widget) => widget.series);
+    for (const metric of [session, day]) {
+      assert.deepEqual(metric.data.current, []);
+      assert.deepEqual(metric.data.comparison, []);
+    }
+    assert.equal(count.data.current[0].value, 1);
   });
 
   test("both public entry points retain the imported query default and accept explicit runners", async () => {
