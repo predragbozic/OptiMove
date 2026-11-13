@@ -104,7 +104,8 @@ create table public.app_error_person_lookups (
   fingerprint text not null,
   people_named integer not null,
   outcome text not null,
-  looked_at timestamptz not null default now(),
+  -- clock_timestamp(), not now(): the insert guard compares with the clock, and a transaction may be older than a minute.
+  looked_at timestamptz not null default clock_timestamp(),
   constraint app_error_person_lookups_request_key_once unique (request_key),
   constraint app_error_person_lookups_fingerprint_shape check (fingerprint ~ '^[0-9a-f]{64}$'),
   constraint app_error_person_lookups_people_range check (people_named between 0 and 20),

@@ -3,7 +3,7 @@
 
 -- 1. v70 is recorded once, with the file's checksum.
 select count(*) = 1 as recorded_once,
-       bool_and(checksum = 'ec21db14ece804df76fa1894d84f9f38a5b961f12d3f5e672a37b1b8785edb79') as checksum_ok
+       bool_and(checksum = '858045833f49ed0ba59e2acec57d20e4ece762d7b1107490a7dc450659677d60') as checksum_ok
   from public.schema_migrations where migration_name = 'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql';
 
 -- 2. The seven columns, the 22 CHECKs (14 of v58 and 8 of v70), and the update guard with v70's body.
@@ -22,7 +22,7 @@ select (select count(*) from pg_constraint where conrelid = 'public.app_error_pe
        not exists (select 1 from pg_roles r where r.rolname in ('anon', 'authenticated') and has_table_privilege(r.rolname, 'public.app_error_person_lookups', 'SELECT')) as not_for_data_api;
 
 -- 4. For reading: rows by hash version. Right after the deploy every row is version 1; new rows are version 2 or later.
---    keyed_without_hash > 0 on rows of a signed-in role means the server runs without APP_ERROR_USER_HASH_KEYS.
+--    signed_in_without_hash > 0 on rows of a signed-in role means the server runs without APP_ERROR_USER_HASH_KEYS.
 select user_hash_version, count(*) as rows_total, count(*) filter (where user_hash is null and role <> 'none') as signed_in_without_hash,
        count(*) filter (where device_class is not null) as with_device, max(last_seen_at) as newest
   from public.app_error_events group by 1 order by 1;

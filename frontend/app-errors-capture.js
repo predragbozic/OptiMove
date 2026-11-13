@@ -125,7 +125,9 @@ export function deviceOf(nav = globalThis.navigator, win = globalThis.window) {
     if (ipad || (os === "android" && !/Mobile/.test(ua))) cls = "tablet";
     else if (/iPhone|iPod/.test(ua) || (os === "android" && /Mobile/.test(ua))) cls = "phone";
     else if (["windows", "macos", "linux", "chromeos"].includes(os)) cls = "desktop";
-    const device = { class: cls, os, browser, touch: touchPoints > 0 };
+    const device = { class: cls, os, browser };
+    // A browser that does not say how many touch points it has is unknown, not "no touch".
+    if (typeof nav?.maxTouchPoints === "number") device.touch = touchPoints > 0;
     if (major) device.major = major;
     const viewport = viewportBucket(Number(win?.innerWidth));
     if (viewport) device.viewport = viewport;

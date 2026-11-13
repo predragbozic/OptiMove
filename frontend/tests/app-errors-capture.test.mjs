@@ -227,8 +227,9 @@ test("7. the device: six words of the closed lists chosen in the browser; the Us
   assert.deepEqual(d("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 OPR/111.0.0.0", 0, 1280),
     { class: "desktop", os: "windows", browser: "other", touch: false, viewport: "1024_1439" }, "a Chromium browser outside the list is not called Chrome");
   // Nothing readable: the fallback words, no width, never a throw.
-  assert.deepEqual(C.deviceOf({}, {}), { class: "unknown", os: "other", browser: "other", touch: false });
-  assert.deepEqual(C.deviceOf(null, null), { class: "unknown", os: "other", browser: "other", touch: false });
+  assert.deepEqual(C.deviceOf({}, {}), { class: "unknown", os: "other", browser: "other" });
+  assert.deepEqual(C.deviceOf(null, null), { class: "unknown", os: "other", browser: "other" });
+  assert.equal("touch" in C.deviceOf({ userAgent: UAS.iphoneSafari }, { innerWidth: 390 }), false, "no touch-point count is unknown, not no touch");
   assert.deepEqual(d(SECRET, 0, NaN), { class: "unknown", os: "other", browser: "other", touch: false });
   assert.equal(C.deviceOf({ get userAgent() { throw new Error("x"); } }, {}), null, "a hostile navigator gives no device");
   for (const [w, bucket] of [[359, "lt_360"], [360, "360_479"], [479, "360_479"], [480, "480_767"], [767, "480_767"], [768, "768_1023"], [1023, "768_1023"], [1024, "1024_1439"], [1439, "1024_1439"], [1440, "ge_1440"], [0, null], [-5, null]]) {

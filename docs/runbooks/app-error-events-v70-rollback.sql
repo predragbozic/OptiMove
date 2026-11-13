@@ -30,6 +30,13 @@ begin
   if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql') then
     raise exception 'v70 rollback refused: later migrations are applied';
   end if;
+end $$;
+
+-- Before the checks of the rows: no writer can add a keyed row or a lookup between a check and the change it guards.
+lock table public.app_error_events, public.app_error_person_lookups in access exclusive mode;
+
+do $$
+begin
   if exists (select 1 from public.app_error_events where user_hash_version >= 2 and user_hash is not null) then
     raise exception 'v70 rollback refused: a keyed user hash is stored';
   end if;

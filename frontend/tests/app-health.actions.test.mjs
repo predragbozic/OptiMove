@@ -90,7 +90,7 @@ test("2. limits: repeat once a minute, N a minute, signed out sends nothing, a f
   assert.equal(calls[0].url, "/api/app-errors");
   assert.equal(calls[0].options.method, "POST");
   // The default reporter adds the device it reads itself: here this process's own navigator, which is no browser.
-  assert.deepEqual(JSON.parse(calls[0].options.body), { screen: "home", code: "js_error", device: { class: "unknown", os: "other", browser: "other", touch: false } });
+  assert.deepEqual(JSON.parse(calls[0].options.body), { screen: "home", code: "js_error", device: { class: "unknown", os: "other", browser: "other" } });
   state.currentUser = null;
 });
 

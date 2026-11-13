@@ -75,15 +75,19 @@ export function keyedUserHash(userId, version) {
   if (!key) return null;
   return crypto.createHmac("sha256", key).update(`app-error-user:${String(userId)}`).digest("hex").slice(0, 12);
 }
+// Said once per process, at the server's start and again at the first row should the ring go missing later: the
+// variable's name only, never a part of its value.
+export function warnIfUserHashKeyMissing() {
+  if (userHashRing() || warnedNoKey) return;
+  warnedNoKey = true;
+  console.warn(`[app-errors] people cannot be counted or shown: ${USER_HASH_KEYS_ENV} is not set or not readable`);
+}
 // What a new row stores: the current key's hash and its version. Without a usable ring the row is stored WITHOUT a
 // hash - never with the unkeyed one: a silent return to the weaker scheme is what the key is there to prevent.
 export function userHashForNewRow(userId) {
   const ring = userHashRing();
   if (!ring) {
-    if (!warnedNoKey) {
-      warnedNoKey = true;
-      console.warn(`[app-errors] people cannot be counted or shown: ${USER_HASH_KEYS_ENV} is not set or not readable`);
-    }
+    warnIfUserHashKeyMissing();
     return { hash: null, version: FIRST_KEYED_VERSION };
   }
   return { hash: keyedUserHash(userId, ring.current), version: ring.current };
@@ -232,6 +236,8 @@ export function resetRateLimitForTests() { buckets.clear(); }
 export async function writeEvent(event, { executor = pool } = {}) {
   const fingerprint = fingerprintOf({ source: event.source, where: event.screen || event.routeTemplate, action: event.action, code: event.code, status: event.status, stackSignature: event.stackSignature });
   const hash = event.userHash ?? null;
+  // A hash is stored only with the version that says how it was made: a keyed hash labelled unkeyed could never be resolved.
+  if (hash !== null && event.userHashVersion == null) throw new Error("writeEvent: a user hash needs its version");
   const hashVersion = event.userHashVersion ?? 1;
   // The device of a browser report; a server error has none (the table refuses one).
   const d = event.source === "client" ? event.device || {} : {};
@@ -314,7 +320,9 @@ export function recordServerError(req, error, status, { executor = pool } = {}) 
     const event = { source: "server", screen: null, routeTemplate, action: null, code, status, stackSignature: stackSignatureFromError(error), role: roleOf(req.authz), userHash: who.hash, userHashVersion: who.version, release: releaseOf(null) };
     // A 5xx storm must not become a second storm on the pool: an in-memory repeat filter and a bound on writes in flight.
     const fp = fingerprintOf({ source: "server", where: routeTemplate, action: null, code, status, stackSignature: event.stackSignature });
-    const key = `${event.userHash || "none"}:${fp}`;
+    // Per user by the id itself (in memory only, never stored): without the hashing key every hash is null, and two
+    // people hitting the same error must still both count.
+    const key = `${req.user?.id || "none"}:${fp}`;
     const now = Date.now();
     if (recentServer.size > 2000) for (const [k2, t] of recentServer) if (now - t > DEDUPE_MS) recentServer.delete(k2);
     if (now - (recentServer.get(key) ?? 0) < DEDUPE_MS || inFlight >= MAX_IN_FLIGHT) return;
@@ -414,6 +422,7 @@ export async function purgePersonLookups({ executor = pool } = {}) {
 export function startAppErrorRetentionSchedule({ intervalHours = PURGE_INTERVAL_HOURS, startupDelayMs = 60_000 } = {}) {
   const failed = (e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`);
   const tick = () => purgeAppErrorEvents().catch(failed).then(() => purgePersonLookups()).catch(failed);
+  warnIfUserHashKeyMissing();
   const first = setTimeout(tick, startupDelayMs);
   first.unref();
   const every = setInterval(tick, intervalHours * 3_600_000);

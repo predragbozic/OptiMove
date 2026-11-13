@@ -51,7 +51,8 @@ the server. The key never reaches the database, a log or an answer.
   naming the variable only, and `GET /api/app-errors/groups` answers `people: "not_configured"`, which App health shows
   as one line. Errors are still recorded and grouped; people are not counted for those rows, one user's repeats are not
   told apart (they raise the count of one row per kind of error and device), and such rows fall under the cap of rows
-  without a user (200 an hour in all). "Show person" (AH-3) fails closed without the ring.
+  without a user (200 an hour in all). All writers of one kind of error then also share one lock, so in a burst some
+  reports are dropped after 2 s. The line in the log is written at the server's start. "Show person" (AH-3) fails closed without the ring.
 * **Old rows** keep version 1 and their unkeyed hash until they age out (30 days). For that time one person may be
   counted twice in a group (once per version). AH-3 resolves a version 1 row by the old formula and a keyed row by
   its own version's key.
@@ -88,13 +89,27 @@ the server. The key never reaches the database, a log or an answer.
 ## Rollback
 
 `app-error-events-v70-rollback.sql`: one transaction; refuses while the migrator runs, when v70 is not recorded, when a
-later migration is recorded, **once a keyed hash is stored** (without the version column it would read as unkeyed -
+migration with a later file name is recorded (one with an earlier name applied after v70, such as v66, v68 or v69, does not
+block it), **once a keyed hash is stored** (without the version column it would read as unkeyed -
 from then on v70 is forward-only) and once a lookup is recorded. Otherwise it drops the seven columns, restores v58's
 guard body (md5 `1737e2dd01bcdb74f02a006a65cb5389`), drops the lookups table and its functions and removes the record.
-The deployed commit must first no longer contain the migration file or write the new columns. Rehearsed in
+It locks both tables before its checks. The deployed commit must first no longer contain the migration file or write the new columns. Rehearsed in
 `app-error-events-v70.test.mjs`.
 
 ## Limits
+
+* For the 30 days in which a person's version 1 and version 2 rows coexist, whoever holds a copy of the table can
+  often match the two by kind of error, role and release, and the version 1 hash can be recomputed from the user list.
+  The keyed hash stays the same until a rotation, so that match outlives the 30 days. If a copy of the database is the
+  concern, rotate to version 3 once the version 1 rows have aged out (the owner's decision).
+* The device is reduced from the User-Agent string, the touch-point count and the window's width only;
+  `navigator.userAgentData` is not read (a deviation from plan 2.1). A Chromium browser that calls itself Chrome is
+  stored as `chrome`; `touch` is left out when the browser gives no touch-point count.
+* For AH-3: a lookup's `outcome` is `answered` or `key_missing` only; recording a refused or rate-limited look needs
+  a new migration. `looked_at` defaults to the clock and must be within a minute of it.
+* `backend/tests/_gpexe-disposable-db.mjs`'s shared list does not carry v70 (suites that need error rows append it
+  themselves); a suite on the plain list that provokes a 5xx logs "not recorded". Follow-up: add it to the list once
+  v66 is merged.
 
 * The device words come from the browser: a hostile signed-in client can send any word of the lists. They are a
   bounded shape, not a proof.

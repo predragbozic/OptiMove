@@ -210,16 +210,35 @@ test("6. without the key: the row is stored with no hash - never the unkeyed one
       assert.deepEqual([all[0].user_hash, all[0].user_hash_version, all[0].repeat_count, all[0].device_class], [null, 2, 2, "phone"]);
       assert.ok(!JSON.stringify(all).includes(M.userHash(coach.id)), "never the unkeyed hash");
       assert.equal(warned.length, 1, "said once");
+      M.warnIfUserHashKeyMissing();
+      assert.equal(warned.length, 1, "and not again");
       assert.match(warned[0], /APP_ERROR_USER_HASH_KEYS is not set or not readable/);
       assert.ok(!warned[0].includes(KEY_A) && !warned[0].includes("short"), "never a part of the value");
       const groups = await call("/api/app-errors/groups?days=1", { cookie: admin.cookie });
       assert.equal(groups.body.people, "not_configured");
       assert.equal(groups.body.groups[0].users, 0);
     }
+    // At the server's start, before any error: the line is there without a report (the retention schedule's start says it).
+    setKeys(`2:${crypto.randomBytes(31).toString("base64")}`);
+    warned.length = 0;
+    M.startAppErrorRetentionSchedule({ startupDelayMs: 3_600_000 })();
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /APP_ERROR_USER_HASH_KEYS is not set or not readable/);
+    // Two people, the same server error, no key: both count (the in-memory filter is per user, by the id that is never stored).
+    await clear();
+    M.resetServerDedupeForTests();
+    for (const id of [crypto.randomUUID(), crypto.randomUUID()]) M.recordServerError({ baseUrl: "", route: { path: "/:id/x" }, originalUrl: "/api/things/1/x", user: { id }, authz: null }, new Error("boom"), 500);
+    for (let i = 0; i < 100 && (await rows())[0]?.repeat_count !== 2; i += 1) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual((await rows()).map((r) => [r.user_hash, r.repeat_count]), [[null, 2]]);
+    setKeys(`2:${KEY_A}`);
+    warned.length = 0;
+    M.startAppErrorRetentionSchedule({ startupDelayMs: 3_600_000 })();
+    assert.equal(warned.length, 0, "with a usable key nothing is said");
   } finally {
     console.warn = original;
     setKeys(`2:${KEY_A}`);
   }
+  await assert.rejects(M.writeEvent({ source: "client", screen: "home", code: "js_error", role: "coach", userHash: "0123456789ab" }), /a user hash needs its version/);
   assert.equal(M.userHashKeyState(), "keyed", "set again, it is read again without a restart of the module");
 });
 
@@ -292,6 +311,7 @@ test("9. the preflight and the post-check read what they claim; the rollback ref
   const pre = blocks(await sql("app-error-events-v70-preflight.sql"));
   const rollback = await sql("app-error-events-v70-rollback.sql");
   assert.equal(post.length, 6);
+  assert.ok(!(await sql("app-error-events-v70-postcheck.sql")).includes("keyed_without_hash"));
   assert.equal(pre.length, 4);
   assert.ok((await sql("app-error-events-v70-postcheck.sql")).includes(crypto.createHash("sha256").update(migration).digest("hex")), "the post-check names this file's checksum");
   // A row of each kind, and a lookup, are there from the earlier tests.
@@ -353,7 +373,9 @@ test("9. the preflight and the post-check read what they claim; the rollback ref
   await refused(/v70 is not recorded/);
   const preAfter = [(await k.query(pre[0])).rows[0], (await k.query(pre[1])).rows[0]];
   assert.deepEqual([preAfter[0].v58_recorded, preAfter[0].v70_absent, preAfter[0].nothing_later, preAfter[0].last_migration], [true, true, true, V58]);
-  assert.deepEqual(Object.values(preAfter[1]), [true, true, true, true], "the preflight is clean on a v58 database");
+  assert.deepEqual([preAfter[1].guard_is_v58, preAfter[1].no_v70_column, preAfter[1].no_lookups_table, preAfter[1].can_create_in_public], [true, true, true, true], "the preflight is clean on a v58 database");
+  const me = (await k.query("select current_user as u")).rows[0].u;
+  assert.deepEqual([preAfter[1].table_owner, preAfter[1].guard_owner], [me, me], "and names the owners the migrator must be");
 
   // The gate: a guard body that is not v58's is refused, and v70 applies again on v58, with Supabase-like default grants taken back.
   await k.query(`create or replace function public.app_error_events_guard_update() returns trigger language plpgsql as $f$ begin return new; end $f$`);

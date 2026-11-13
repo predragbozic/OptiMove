@@ -191,7 +191,7 @@ test("3b. a user cannot fill the table: at most 100 new rows per hour", async ()
   let stored = 0;
   for (let i = 0; i < 105; i += 1) {
     if (i % 15 === 0) M.resetRateLimitForTests();
-    const out = await M.writeEvent({ source: "client", screen: "home", action: `a${i}`, code: "js_error", role: "coach", userHash: M.userHash(u.id) });
+    const out = await M.writeEvent({ source: "client", screen: "home", action: `a${i}`, code: "js_error", role: "coach", userHash: M.userHash(u.id), userHashVersion: 1 });
     if (out === "stored") stored += 1;
   }
   assert.equal(stored, 100);
@@ -289,7 +289,7 @@ test("5c. through a real route: a 5xx answers the generic body and one sanitized
 
 test("5d. concurrent reports of the same user and fingerprint all count (the update guard never rejects a legitimate bump)", async () => {
   await k.query(`delete from public.app_error_events`);
-  const ev = { source: "client", screen: "home", action: "race", code: "js_error", role: "coach", userHash: M.userHash("race-user") };
+  const ev = { source: "client", screen: "home", action: "race", code: "js_error", role: "coach", userHash: M.userHash("race-user"), userHashVersion: 1 };
   const outcomes = await Promise.all(Array.from({ length: 12 }, () => M.writeEvent(ev)));
   assert.equal(outcomes.filter((o) => o === "stored").length, 1);
   assert.equal(outcomes.filter((o) => o === "counted").length, 11);
