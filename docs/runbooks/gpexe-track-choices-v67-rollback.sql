@@ -4,7 +4,9 @@
 -- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/gpexe-track-choices-v67.test.mjs:
 -- apply -> rollback -> the catalog before v67 exactly -> re-apply, and the refusals below). Before it is run anywhere real: a fresh
 -- restore-verified backup exists; the deployed commit no longer contains the v67 migration file (otherwise the migrator applies
--- it again at the next start) and no longer serves the track-choice routes; the owner approved this database specifically
+-- it again at the next start) and contains neither MT-A's track-choice routes nor MT-B's reads of the choices (from MT-B on, every
+-- check, preview recompute and approval reads training_load.gpexe_track_choices, and fails without it); the owner approved this
+-- database specifically
 -- (.claude/rules/database-safety.md).
 --
 -- It drops the table, its guard, the acting-user function, and the v67 record. It changes no other row. It refuses, changing

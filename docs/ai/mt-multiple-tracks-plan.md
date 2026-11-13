@@ -435,3 +435,410 @@ review reads "Duplicate track ignored (2 identical tracks)".
 - a session without duplicates gives a byte-for-byte unchanged plan and preview;
 - the stored candidate's refresh (`preview_changed`, then the import; route test 3);
 - a later cleanup in both directions (unchanged, or blocked).
+
+## 12. MT-B: applying a choice (plan check, 2026-11-13)
+
+A plan note for the *Rukovodilac*, written before any code and checked against main `8aeefa4f` plus MT-A (#513, `5d97cb8c`).
+MT-B changes the mapper, the preview and the writer, and no route or table. ★★ (triggers 3 and 4).
+
+### 12.1 Where the choice is read, and where it is applied
+
+- **One read, under the team lock.** `previewLocked` (`backend/src/gpexeImportPreview.js:379`) reads the current choices of
+  the session's athletes from `gpexe_track_choices` with a plain read, keyed by (team, session). Every caller already holds
+  the team lock:
+  - the check's preview (`buildCandidatePreview`, :349);
+  - the approval (`gpexeImportService.js` :2500, :2547);
+  - the J20-A1 recompute (:2802, :2822);
+  - the J20-B subset preview (:2978, :2998).
+  The MT-A PUT writes under the same lock. So a preview and its approval see one choice, and a choice changed between them
+  changes the recomputed preview, which the approval answers with `preview_changed` (the existing rule; nothing new).
+- **One application.** `buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone, trackChoices })` gets a new option, a Map
+  from GPEXE athlete id to `{ choiceId, kind, trackId, fingerprint }`. `previewLocked` builds the plan with it, and the import
+  itself writes that plan (`importGpexePlanLocked`, :21). The preview and the approval's import therefore never disagree.
+  - The gate plans (`metricSpecs: []`, at :338, :388, and service :2513, :2809, :2985) read only the event's identity and the
+    session's facts. No athlete matters there, so they need no choice.
+  - The CLI / test path `importGpexeBundleLocked` (`gpexeImportWriter.js:683`) builds its own plan. It gets the same read
+    under its own team lock, or it refuses a session whose multi-track athlete has a current choice
+    (`track_choice_not_supported`). The second is smaller; recommended.
+  - The 7e aggregate preview (`gpexeLevelValues`, `gpexeImportMapper.js:554`) keeps leaving a multi-track athlete out. It
+    shows a mapping's values over single recordings, and a reviewer's choice is no measurement fact. Recommended: unchanged.
+- **The shared fingerprint.** The mapper exports `trackSetFingerprint(athleteRows)`, and the MT-A service imports it in place
+  of its own copy. One function, so the stored fingerprint and the mapper's comparison cannot drift (the code review's LOW on
+  MT-A).
+
+### 12.2 What the mapper does with each choice
+
+Only an athlete with two or more tracks that MT-0 does not take as one recording is affected. Today such an athlete is the
+`multiple_tracks` anomaly.
+
+| Current choice | Fingerprint | The mapper |
+|---|---|---|
+| none, or `cleared` | - | as today: `multiple_tracks` |
+| `track` | equal | the chosen track's rows only, as a single-track athlete: **native identities** `athlete_session:<row>:full` / `…:drill:<i>` of that track; the participant carries `trackChoice: { choiceId, kind: "track", trackId, trackCount }` |
+| `none` | equal | no participant; an anomaly `no_track_by_choice` (not `multiple_tracks`) with `trackChoice: { choiceId, kind: "none", trackCount }` |
+| any | different | `multiple_tracks` as today (today's detail text), with `trackChoice.stale: true` and the stale `choiceId`; a blocked session's resolution names `track_choice_stale` (also once GPEXE leaves the athlete a single track). Never applied to other tracks |
+
+- **A chosen track's values are the athlete's measured values.** They count everywhere that measured values count: the 6a
+  short-recording flag, M2 (no estimate over a measured value), the dashboards' `api_import` policy.
+- **Choosing the lowest track is never automatic.** Only MT-0's identical copies merge without a choice.
+
+### 12.3 The preview, its hash and the batch
+
+- **Per athlete entry:**
+  - `trackChoice: { choiceId, kind, trackId?, trackCount, stale }`, present only when a current choice exists. So a session
+    without a choice gives a **byte-for-byte unchanged** preview and hash, and `PREVIEW_VERSION` stays 3, as with MT-0's
+    `duplicateTracks`.
+  - `kind: "track"`: `gps.status` is `measured`, and the results come from the chosen track.
+  - `kind: "none"`: `gps.status` is a new value `not_used_by_choice`, and
+    `notImported: { code: "no_track_by_choice", message: "Left out by choice: GPEXE recorded this athlete on more than one track, and no track is used." }`.
+  - Stale: as today (`needs_manual_review`, `multiple_tracks`), plus `trackChoice.stale: true`.
+- **The hash** covers the preview, so it changes when a choice is made, changed or cleared, and when GPEXE's tracks change
+  the fingerprint.
+  - **After a PUT, the stored preview is out of date.** The review must call the J20-A1 recompute
+    (`POST …/candidates/:id/preview`) to show the choice. That is MT-C's flow; an approval sent with the old hash answers
+    `preview_changed` and stores the recomputed preview (the existing rule).
+  - The PUT does not recompute, so it stays small and its lock order unchanged.
+- **The batch:**
+  - `athleteReason` (`gpexeImportReasons.js:91`) gives no reason for `not_used_by_choice` or a used track.
+  - A session whose only blocker was a chosen athlete becomes batch-approvable.
+  - A stale choice is still `athletes_need_manual_review`.
+- **The roster** (`gpexeRosterObservations`, `gpexeImportService.js:2083`):
+  - `not_used_by_choice` is not in `GPEXE_UNUSABLE_REASON`, so a "none" athlete gets **no** `record_unusable` observation. The
+    roster then shows the athlete as needing a state, and the coach decides (*Participated · no device data*, then an
+    estimate, 6b), as the plan's "None" says.
+  - A used track counts as imported and resolves an open observation.
+  - A stale choice stays `needs_manual_review`, with the observation as today.
+
+### 12.4 Stale fingerprints and an import
+
+- **Before an import:** a stale choice is shown with `trackChoice.stale` and the athlete stays `multiple_tracks`. The reviewer
+  chooses again (`expectedChoiceId` = the stale choice's id).
+- **After an import:** MT-A makes the choice final (`choice_final_after_import`, session-wide).
+  - If GPEXE later changes that athlete's tracks, the imported identities go missing, and the session is blocked by the
+    existing `identities_missing_from_source` rule (`gpexeImportPreview.js:611`).
+  - MT-B adds the resolution cause `track_choice_stale` (action `undo_and_choose_again`) for an athlete whose current choice
+    is stale. Its step: "GPEXE changed this athlete's tracks after the import. A platform admin undoes the import of this
+    session (U5), then the track is chosen again."
+
+### 12.5 What a coach without the approver right sees
+
+- **The review** (the preview, for everyone who may open it):
+  - "Track 2 of 2 used" for `track`, with the position by the track's start;
+  - "Left out by choice" for `none`;
+  - "Track choice out of date: GPEXE changed the tracks" for a stale choice.
+  - **No chooser** and no choice id in the coach projection: `gpexeImportAudience.js` drops `trackChoice.choiceId` for the
+    `other` audience. The two administrators get it.
+- **The approver-only GET** (MT-A): the *Rukovodilac*'s LOW 2 on #513. `chosenByUserId` is replaced by `chosenBy: { name }`,
+  the display name, in MT-B. The id is not shown to anyone.
+- **The PUT's order** (the *Rukovodilac*'s LOW 1 on #513): the audience check comes before the body validation, so a team
+  member without the right gets the identical 404 for a malformed body too.
+
+### 12.6 The T6 / provenance label
+
+- **A used track** writes native identities, so T6 and the source identity look exactly like a single-track import. No column
+  is needed (T1 stays answered "no new column").
+- **The label** "One of N tracks (track started HH:MM)" in Activities and the review is read from the current choice row.
+  It is stable after an import, because MT-A makes the choice final while the session is imported. After an undo it follows
+  the new choice.
+- Reading it in Activities is a small backend field on the activity read plus the frontend label. Recommended in MT-C
+  together with the review's row, not in MT-B.
+- **"None"** writes nothing from GPEXE, so there is nothing to label in T6. The roster state and its reason say it.
+
+### 12.7 Existing tests that change, and the new ones
+
+- **Unchanged by construction** (no choice row exists in them). They act as the characterisation that a session without a
+  choice is byte-for-byte the same:
+  - `gpexe-import.test.mjs` and `gpexe-in-app-import.test.mjs` (athlete 103, `multiple_tracks`);
+  - `activity-roster-5a1.test.mjs` (`record_unusable` for two tracks);
+  - `gpexe-import-reasons.test.mjs`;
+  - `gpexe-duplicate-tracks-mt0*.test.mjs`;
+  - `source-metric-preview-math-7e.test.mjs` and `source-metric-preview-7e.test.mjs` (the 7e path stays as it is).
+  MT-B's first test is a stored-preview comparison over the fixture sessions, before and after, with no choice.
+- **Changing:**
+  - `gpexe-track-choices-mt-a.test.mjs`: the GET's `chosenBy`, and the 400/404 order;
+  - the 9b architecture test, if it lists the tables `previewLocked` reads (to be checked when the code exists).
+- **New** (`gpexe-track-choices-mt-b*.test.mjs`):
+  - the mapper with `track` (native identities, values equal to that track's single-track import), `none`, `cleared`, stale;
+  - the preview's `trackChoice` and hash changes;
+  - the coach projection without `choiceId` or chooser;
+  - the batch with a chosen athlete;
+  - the roster: no `record_unusable` for `none`, resolved for a used track;
+  - `preview_changed` after a choice changed between review and approval;
+  - an import with a used track, then the PUT refused (`choice_final_after_import`);
+  - a stale choice after the import blocked with `track_choice_stale`;
+  - the CLI path refusing a session with a choice (`track_choice_not_supported`);
+  - mutations on the application, the stale check and the projection.
+
+### 12.8 Open for the *Rukovodilac*
+
+1. The CLI / test writer path: refuse with `track_choice_not_supported` (recommended) or apply the choice too.
+2. The 7e aggregate preview stays without choices (recommended).
+3. The Activities label goes into MT-C with the review row (recommended), not MT-B.
+
+### 12.9 Decided (the *Rukovodilac*, 2026-11-13)
+
+**Decisions:**
+1. The CLI / test writer path (`importGpexeBundleLocked`) refuses a session that has a current choice, with
+   `track_choice_not_supported`.
+2. The 7e aggregate preview stays without choices.
+3. The Activities label goes into MT-C.
+
+**Addition: `none` lifts no other blocker.** A `none` choice only replaces that athlete's own `multiple_tracks` reason. The
+session stays as blocked or as not ready as its other facts make it:
+- a whole-session block;
+- another athlete's manual review, missing link or membership;
+- changes to imported results that need acceptance.
+
+Test: a session with a `none` athlete and an unlinked athlete stays not ready in the batch.
+
+**Addition: consistency with 6b.** A `none` athlete has no GPEXE value, so:
+- the coach may set an activity-level state (*Participated · no device data*) and, from it, an estimate (6b rule 4, M2);
+- nothing in MT-B writes over that state or that estimate.
+
+The cases follow the existing rules:
+- The choice is final while the session is imported (MT-A).
+- If the import is undone (U5 removes its estimates and roster work, v60 / v63) and the athlete is then given `track`, the
+  next import writes real values. M3 supersedes an estimate still effective at that point, and it is listed in the
+  preview's `supersededEstimates` (6b-B).
+- An estimate never makes the athlete importable or blocks the session.
+
+Test: a `none` athlete imported as left out, then an estimate saved for that athlete, is still its only value. The next
+search of the unchanged session changes neither the estimate nor the state.
+
+**Order:**
+- No MT-B code before v67 (MT-A, #513) is deployed and post-checked.
+- This section goes to a docs pull request after #513 is merged, so it merges without a conflict.
+
+### 12.10 LOWs carried from MT-A's GO (#513, 2026-11-13) into MT-B's pull request
+
+- **L1 (the *Nezavisni revizor*).** A test: two first choices of one athlete, inserted from two connections with the guard
+  satisfied, get 23505. Otherwise the partial unique index `gpexe_track_choices_one_root` is not killed by any test.
+- **L2 (the *Nezavisni revizor*).** A test that switches the team to pilot mode at the PUT's `beforeTeamLock` hook, so the
+  mapping of 55000 `team_import_pilot_mode` to the identical 404 is killed.
+- **L3 (the *Rukovodilac*).** The PUT checks the audience before it validates the body: someone outside the audience gets the
+  identical 404 for a malformed body too.
+- **L4 (the *Rukovodilac*).** `chosenByUserId` leaves `choiceView`. The approver-only GET shows `chosenBy: { name }`.
+
+## 13. MT-D: `scale_recording` (plan check, 2026-11-13)
+
+Section 10 checked against `main` `bcadaec2` (MT-B merged). The findings below change or complete section 10. **Decided**
+by the *Rukovodilac* on 2026-11-13: every item of 13.7 as recommended, with 13.8 and 13.9. The migration is **v68**, with a
+prefix after `202611131200` (J18's v66 is not merged; whoever merges later re-issues its preflight block).
+
+### 13.1 The 6a flag is a hint in the browser only
+
+`SHORT_SHARE = 0.75` and `markShortRecordings` live in `frontend/gpexe-import-view.js`. The server has no notion of a short
+recording. Section 10 says "only offered for a row with the 6a flag".
+
+**Recommendation:**
+- The screen offers the scale only on a flagged row.
+- The server checks the basis only: `0 < recordedMinutes < targetMinutes <= 600`. It does not check the 75 % share.
+- The owner called the flag "a hint only, never a decision", so the server does not turn it into a rule.
+
+### 13.2 Most short athletes have one track, and the choice table refuses them
+
+v67's `track_set_fingerprint` CHECK needs **at least two tracks**. The MT-A service answers `not_multiple_tracks` for a
+single-track athlete. A substituted player (the 6a case) usually has one track, so section 10's "the choice table, as
+`scale_target_minutes`" cannot hold their choice as v67 stands.
+
+**Recommendation:** MT-D's migration widens the table rather than adding a second one:
+- the fingerprint CHECK accepts one track;
+- `scale_target_minutes` is added (`numeric`, null, or `0 < x <= 600`);
+- the guard (v67's `validate_gpexe_track_choice`, replaced under its md5 gate `909c3c79…`) refuses:
+  - a one-track row that is not `choice = 'track'` with a scale (a one-track athlete without a scale needs no row);
+  - `none` with a scale;
+  - `cleared` with a scale.
+- A scale on a multi-track athlete rides on its `track` row (section 10 Q3). MT-E's `sum` does the same later.
+- `cleared` removes both the track and the scale, so the athlete is imported as before.
+
+**The PUT (MT-A's route) for a scale:**
+- it takes `{ choice: 'track', trackId, scaleTargetMinutes }`;
+- for a one-track athlete only with a scale;
+- `not_multiple_tracks` stays the answer for a one-track athlete without a scale;
+- the audience is the same as MT-A's (whoever may approve), because the choice is made before the import.
+
+### 13.3 The values to scale: the stored preview, not a second mapper run
+
+Section 10 says the save "recomputes the athlete's measured sum values from the imported candidate's stored snapshot, through
+the same mapper". Two facts make that fragile:
+- **The activations can change between the import and the save.** The mapper needs `mapping.rows`, and running it again with
+  today's activations can give other values, or none.
+- **The retention purge clears `raw_bundle` and `preview` together** (v22 retention, 90 days after an import). The two live
+  exactly as long as each other, so the snapshot offers no longer window than the preview.
+
+**Recommendation:**
+- For a scaled athlete the mapper puts the sum values it leaves out (`scaled_by_choice`) into the preview entry as
+  `scaleRecording: { targetMinutes, recordedMinutes, values: [{ metricDefinitionId, versionId, value, unit }] }`.
+  - `recordedMinutes` is the athlete's whole-session duration from the same plan.
+  - The entry is part of the preview hash, so the approval binds the numbers the coach saw.
+- The save (`metricEstimateService`, method `scale_recording`) reads them from the **imported, not undone** candidate of the
+  event's session, `status = 'imported'`. The approval imports exactly the stored preview: the hash is equal, so the stored
+  preview is the imported one.
+  - It writes `measured × target / recorded` for each value.
+  - Duration becomes the target.
+  - The basis is `{ recordedMinutes, targetMinutes, measured }`, as section 10 says.
+- After the purge, the save answers `409 scale_basis_expired`. The scaled values already saved keep their basis.
+- **Consequence:** the mapper specs need the variable's daily aggregation. `gpexeImportMapping.js` (the activation rows) adds
+  `daily_aggregation_method` from the definition's current version. Without a choice the preview gains nothing, so the
+  no-choice hash is unchanged (pinned, as in MT-B test 1).
+
+### 13.4 Which values of a scaled athlete are imported
+
+Whole session:
+- `max` is imported as measured.
+- `sum` is left out with `scaled_by_choice`, and its numbers go into `scaleRecording`.
+- `avg` is left out with `not_scaled` (O6, Q-avg).
+- `last` and `none` are imported as measured: they are not totals.
+
+**Drills (open, 13.7 D2).** Estimates are whole-session only (v63: an estimate occasion has no segment, and M2 looks at whole
+sessions only). So a scaled athlete's drill values have no estimate path. Recommended: import them as measured. A drill the
+athlete was on the pitch for is a real recording. They do not take part in M2.
+
+**No duration variable (13.7 D3).** If the team's activations do not include the duration variable, `recordedMinutes`
+cannot be known. Recommended: the athlete is imported as without a choice, and the preview entry carries
+`scaleRecording: { notPossible: "no_duration" }`, so the screen can say in one sentence why the scale was not applied. This
+never guesses a value.
+
+### 13.5 The migration (MT-D's own, the next free number, after v67)
+
+- `metric_value_estimates.method` CHECK gains `scale_recording`.
+- `estimate_basis_ok` (v63, `immutable`, used by a CHECK) is replaced under an md5 gate with a `scale_recording` branch:
+  - exactly the keys `measured`, `recordedMinutes` and `targetMinutes`, all numbers;
+  - `0 < recordedMinutes < targetMinutes <= 600`;
+  - `measured >= 0`.
+
+  The existing rows stay valid, because only a branch is added.
+- `validate_metric_value_estimate` (v64's body, md5 gate) allows `scale_recording` for `sum` variables only.
+- `gpexe_track_choices`:
+  - the fingerprint CHECK accepts one track;
+  - the `scale_target_minutes` column, with its CHECK;
+  - the guard replaced under its md5 gate (13.2).
+- The rollback refuses once:
+  - a `scale_recording` estimate exists;
+  - a one-track or scaled choice row exists;
+  - a later migration is recorded.
+
+  It is rehearsed in a test (apply → rollback → catalog equal → re-apply).
+
+### 13.6 Locks, audience and tests
+
+**Locks and the save:**
+- The save is the 6b save: decider lock, team try-lock, alias set, request lock, then the writes. It reads the candidate
+  without a lock, because an imported candidate does not change; an undo leaves it undone, and the save then answers
+  `estimate_not_available`.
+- It is never inside the approval's transaction (6b rule 4).
+- The save's audience is 6b's (J20-C, `lock_activity_decider`). The choice's audience is MT-A's.
+
+**Tests:**
+- mapper:
+  - the scaled athlete's max values are imported, sum values go into `scaleRecording`, avg is `not_scaled`, and drill values
+    are imported (D2);
+  - without a choice the plan hash equals the base;
+- preview hash and `preview_changed` when a scale changes;
+- the PUT with a scale on one track and on two tracks; refused without a scale on one track, and for `none` / `cleared` with
+  a scale;
+- the save:
+  - the values, duration = target, and the basis;
+  - refused for a non-sum variable;
+  - `scale_basis_expired` after a purge;
+  - replay;
+  - the recorded SQL order;
+- the undo removes the scaled estimates;
+- a later full recording voids the choice and supersedes the scaled estimates (`supersede_estimate_on_value`);
+- the migration round trip and the md5 refusals;
+- the dashboards' estimate policy shows the scaled values only under `estimate`;
+- mutations of the shares, the aggregation routing and the basis branch.
+
+**Triggers:** 1, 3 and 4. Reviewers: `db-reviewer`, `code-reviewer` and `security-reviewer` (the PUT widens its body), then
+both GOs and the owner's order naming the migration.
+
+### 13.7 Open for the *Rukovodilac*
+
+- **D1.** The source of the values to scale: the stored preview (13.3, recommended) or a second mapper run over the snapshot
+  (section 10 as written).
+- **D2.** A scaled athlete's drill values: imported as measured (recommended) or left out.
+- **D3.** No duration variable on the team: the scale is not possible, and the athlete is imported as without a choice
+  (recommended).
+- **D4.** One-track scale rows in v67's table (13.2, recommended) or a separate scale table.
+- **D5.** The server does not check the 75 % share; the basis bounds only (13.1, recommended).
+- **Two PRs or one.**
+  - MT-D1: the migration with the PUT and mapper side (★★).
+  - MT-D2: the 6b save of `scale_recording`. It could ride in D1, since the method CHECK is in the same migration.
+  - Recommended: one PR, so no method exists without its save.
+- **The screen** (offer, label "Estimate · scaled 25 → 56 min") is MT-C / the design executor's.
+
+**Decided (2026-11-13):**
+- D1–D5 as recommended.
+- O6 stays: `avg` left out as `not_scaled` in v1; `max`, `last` and `none` imported as measured.
+- One PR for the migration and the save. The screen belongs to the design executor's coach flow.
+
+### 13.8 While `ESTIMATES_ENABLED` is off (correction to the expectation)
+
+The expectation was:
+- the choice can be stored;
+- the import leaves the sums out as `scaled_by_choice`;
+- the estimate save is refused by the flag (the routes' identical 404, phase 5b contract).
+
+**The last two are right, but together they lose data.** Under that expectation, a scaled athlete's whole-session sums are
+neither imported nor estimable until the flag is on. That is only after 6b-D, on a separate owner order. Meanwhile the
+athlete would show no distance, no counts and no duration at all.
+
+**Correction (recommended):**
+- The PUT refuses a scale while the flag is off, with `409 scale_not_available` ("Scaling a short recording is not switched
+  on yet."). The choice without a scale (MT-A / MT-B) is unchanged.
+- No new scale choice can then remove measured values before the save exists.
+- A scale choice stored while the flag was on keeps its effect if the flag is later turned off. Its values stay in the
+  imported candidate's stored preview for the 90 days of retention, and can be saved once the flag is back on.
+- The mapper does not read the flag. The preview and its hash do not depend on the environment.
+
+### 13.9 Dashboards, the undo and a later full recording
+
+**Dashboards before 6b-C / 6b-D.**
+- `resolveFactsToRows` (`backend/src/trainingLoadDashboardQuery.js`) has no estimate rule yet. Under the default
+  `all_with_conflicts` policy it would count an `estimate` fact like a measured one.
+- That is why the flag stays off until 6b-D is deployed (phase 5b contract). With 13.8, no scale exists before then.
+- **With the flag off**, a scaled athlete therefore cannot exist. An unscaled short athlete shows their measured values as
+  today.
+- **From 6b-D on**:
+  - a scaled athlete's `max` values (and `last`, `none` and the drill values) show like any import;
+  - the scaled sums show only under the `estimate` policy (6b-D);
+  - under every other policy the athlete has no whole-session sum for that session.
+
+**The undo.**
+- It removes the session with the scaled estimates (v63 `estimates_removed`).
+- The choice stays (section 7), and so does its scale.
+- A re-import applies it again, while the fingerprint still matches.
+
+**A later full recording** (M3):
+- GPEXE's rows change, so the fingerprint no longer matches. The choice is stale, and the athlete is imported as measured.
+- If the session was imported before, the change is `identities_missing_from_source` until the import is undone (MT-B), as
+  for any track change.
+- The new measured sums supersede the scaled estimates through `supersede_estimate_on_value` (v63). The preview lists them in
+  `supersededEstimates` (6b-B).
+
+### 13.10 As built (MT-D)
+
+The runbook is `docs/runbooks/scale-recording-v68-v69.md`. The build differs from 13.2 and 13.5 as follows; the rules are the
+same. The *Rukovodilac* accepted the deviations and the MT-0 limit on 2026-11-13.
+
+- **Two migrations, v68 and v69, not one.**
+  - v68 holds the choice table's scale. v69 holds the estimate method and its basis.
+  - Why: several suites build their database through v67 without v63 and v64, and MT-B's preview reads the scale column on
+    every check. U5's v57 rollback rehearsal needs v57's bodies, so those suites cannot add v63 and v64.
+- **v67's guard is not replaced.** The one-track rule is two table CHECKs:
+  - `gpexe_track_choices_one_track_scale`: a one-track row is a `track` row with a scale, or a `cleared` row;
+  - `gpexe_track_choices_scale_on_track`.
+- **`validate_metric_value_estimate` is not replaced.**
+  - v64's body already keeps `scale_recording` to `sum` variables.
+  - v69 replaces only `estimate_basis_ok`, under the md5 gate of v63's body.
+- **MT-0 athletes** (identical tracks) are not offered a scale in v1: the PUT answers `not_multiple_tracks`.
+- **The flag check comes after the replay.** A scale stored while `ESTIMATES_ENABLED` was on replays as stored after the flag
+  is turned off. A new scale is refused.
+- **The save takes an athlete only if that import really took it:**
+  - not left out by a J20-B subset (the approval's `excluded_athlete_ids`);
+  - not `notImported`.
+- **Only the system minutes variable becomes the target.** Every other sum, a club's own `duration` included, is scaled.
+- **The proposal** answers `methods.scale_recording`. It is either available with its values, or not available with the reason
+  (`scale_not_chosen`, `scale_not_possible`, `scale_basis_expired`).
+- **A one-track choice that no longer matches** (other rows) is marked `stale` on the entry, and the athlete is imported as
+  measured.

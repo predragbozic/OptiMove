@@ -218,6 +218,7 @@ export function mappedMetricSpecs(rows) {
       sourceLabel: activation.sourceLabel,
       sourceParameterFingerprint: activation.sourceParameterFingerprint,
       requirement: activation.requirement,
+      aggregation: activation.dailyAggregation ?? null,
       levels: Object.freeze({ full: activation.appliesToSession === true, drill: activation.appliesToDrill === true }),
       factors: Object.freeze({ scale: canonicalDecimal(activation.scale), divisor: canonicalDecimal(activation.scaleDivisor), offset: canonicalDecimal(activation.offset) }),
       range: Object.freeze({
@@ -290,7 +291,65 @@ export function identicalTracks(bundle, athleteRows, trackIds) {
 // teamTimezone (v62, mixed_timezones (b)): the team's session time zone, set by a platform admin. It is used only when the
 // tracks report more than one zone; a session whose tracks agree keeps its own zone (an away match keeps its real local
 // time). Without it a mixed session is refused as before.
-export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null } = {}) {
+// MT-B: the track set of one athlete's rows as a fingerprint - '<track>:<row>,<row>;<track>:...', tracks and rows in ascending
+// numeric order - or null when a track or row id is not a canonical GPEXE id (no choice can name such a set). The one function
+// the track-choice service stores and the mapper compares (gpexeTrackChoiceService.js).
+const CANONICAL_GPEXE_ID = /^(0|[1-9][0-9]{0,11})$/;
+const byNumericId = (a, b) => Number(a) - Number(b) || (a < b ? -1 : a > b ? 1 : 0);
+export function trackSetFingerprint(athleteRows) {
+  const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))].sort(byNumericId);
+  if (!trackIds.every((t) => CANONICAL_GPEXE_ID.test(t)) || !athleteRows.every((r) => CANONICAL_GPEXE_ID.test(String(r.id)))) return null;
+  return trackIds
+    .map((t) => `${t}:${athleteRows.filter((r) => String(r.track) === t).map((r) => String(r.id)).sort(byNumericId).join(",")}`)
+    .join(";");
+}
+
+// MT-D (plan sections 10 and 13): a scaled athlete's whole-session result. The recorded minutes are the athlete's whole-session
+// duration (the system variable `duration`, in minutes) of the same plan. With it, and recorded < target: every `sum` value is
+// taken out of the result into scaleRecording.values (left out as scaled_by_choice; the save after the import writes it as an
+// estimate, measured x target / recorded), every `avg` value is left out as not_scaled (O6), and max / last / none stay measured.
+// Drill results are never touched (D2). Without a duration, or when the recording is not shorter than the target, nothing is
+// scaled and the athlete is imported as without a choice: { notPossible } says why (D3).
+export const SCALE_DURATION_KEY = "duration";
+let scaleDurationKey = SCALE_DURATION_KEY;
+// Tests name their own minutes variable (the disposable worlds have no `duration`); null restores it.
+export function setScaleDurationKeyForTests(key) {
+  scaleDurationKey = key ?? SCALE_DURATION_KEY;
+}
+function scaleWholeSession({ results, metricSpecs, leftOut, gpexeAthleteId, targetMinutes }) {
+  const whole = results.find((r) => r.level === "full");
+  const specOf = new Map(metricSpecs.filter((s) => !s.raw).map((s) => [s.activationId, s]));
+  const duration = whole?.values.find((v) => v.variableKey === scaleDurationKey && v.variableScope === "system" && v.unit === "min");
+  if (!duration) return { notPossible: "no_duration", targetMinutes };
+  const recordedMinutes = Number(duration.value);
+  if (!(Number.isFinite(recordedMinutes) && recordedMinutes > 0 && recordedMinutes < targetMinutes)) return { notPossible: "not_shorter", targetMinutes, recordedMinutes };
+  const kept = [];
+  const values = [];
+  for (const v of whole.values) {
+    const aggregation = specOf.get(v.activationId)?.aggregation ?? null;
+    const at = { gpexeAthleteId, athleteSessionId: whole.athleteSessionId, level: "full", drillIndex: null, activationId: v.activationId, category: "scaled" };
+    if (aggregation === "sum") {
+      values.push({
+        metricDefinitionId: v.metricDefinitionId, metricDefinitionVersionId: v.metricDefinitionVersionId,
+        variableKey: v.variableKey, variableScope: v.variableScope, label: v.label, unit: v.unit, value: v.value,
+      });
+      leftOut.push({ ...at, code: "scaled_by_choice" });
+    } else if (aggregation === "avg") {
+      leftOut.push({ ...at, code: "not_scaled" });
+    } else {
+      kept.push(v);
+    }
+  }
+  whole.values = kept;
+  return { targetMinutes, recordedMinutes, values };
+}
+
+// trackChoices (MT-B, plan section 12): a Map of GPEXE athlete id -> the athlete's current track choice
+// { choiceId, kind: 'track' | 'none' | 'cleared', trackId, fingerprint }, read by previewLocked under the team lock. It
+// matters only for an athlete with more than one track that is not one recording (MT-0): a 'track' or 'none' choice whose
+// fingerprint equals the athlete's track set is applied; any other is ignored (a stale one is marked). Without a choice the
+// plan is exactly the one before MT-B.
+export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null, trackChoices = null } = {}) {
   if (!Array.isArray(metricSpecs)) throw new TypeError("metricSpecs must be an array");
   const session = bundle?.teamSession;
   if (!session?.id) throw new GpexeMappingError("session_missing", "teamSession is required.");
@@ -330,15 +389,63 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
     let athleteRows = allRows;
     let trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
     let duplicateTracks = null;
+    let trackChoice = null;
+    // MT-D: the target minutes of a scale chosen for this athlete's recording, applied only with the choice itself.
+    let scaleTargetMinutes = null;
+    const scaleOf = (choice) => {
+      const n = choice?.scaleTargetMinutes === null || choice?.scaleTargetMinutes === undefined ? null : Number(choice.scaleTargetMinutes);
+      return n !== null && Number.isFinite(n) && n > 0 && n <= 600 ? n : null;
+    };
+    if (trackIds.length === 1 && trackChoices instanceof Map) {
+      // MT-D: a one-track athlete holds a choice only for a scale ('track' with scaleTargetMinutes); applied while it names
+      // exactly this track and these rows. Otherwise it is void: the athlete is imported as without a choice, marked stale.
+      const choice = trackChoices.get(gpexeAthleteId) ?? null;
+      if (choice && choice.kind === "track" && scaleOf(choice) !== null) {
+        const applies = trackSetFingerprint(athleteRows) === choice.fingerprint && String(choice.trackId) === trackIds[0];
+        scaleTargetMinutes = applies ? scaleOf(choice) : null;
+        trackChoice = {
+          choiceId: String(choice.choiceId), kind: "track", trackId: String(choice.trackId), trackCount: 1, stale: !applies,
+          scaleTargetMinutes: scaleOf(choice),
+        };
+      }
+    }
     if (trackIds.length > 1) {
       duplicateTracks = identicalTracks(bundle, athleteRows, trackIds);
       if (!duplicateTracks) {
-        anomalies.push({ kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review` });
-        continue;
+        // MT-B: the reviewer's choice for these tracks, applied only while it names exactly this track set.
+        const choice = trackChoices instanceof Map ? (trackChoices.get(gpexeAthleteId) ?? null) : null;
+        const live = choice && (choice.kind === "track" || choice.kind === "none") ? choice : null;
+        const fingerprint = live ? trackSetFingerprint(athleteRows) : null;
+        const applies = live && fingerprint !== null && live.fingerprint === fingerprint
+          && (live.kind === "none" || trackIds.includes(String(live.trackId)));
+        if (applies && live.kind === "none") {
+          anomalies.push({
+            kind: "no_track_by_choice", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — none used by choice`,
+            trackChoice: { choiceId: String(live.choiceId), kind: "none", trackId: null, trackCount: trackIds.length, stale: false },
+          });
+          continue;
+        }
+        if (!applies) {
+          anomalies.push({
+            kind: "multiple_tracks", gpexeAthleteId, detail: `tracks ${trackIds.join(", ")} — not imported, needs review`,
+            ...(live ? { trackChoice: { choiceId: String(live.choiceId), kind: live.kind, trackId: live.trackId ?? null, trackCount: trackIds.length, stale: true } } : {}),
+          });
+          continue;
+        }
+        // 'track': that track's own rows, as a single-track athlete (their native identities).
+        trackChoice = { choiceId: String(live.choiceId), kind: "track", trackId: String(live.trackId), trackCount: trackIds.length, stale: false };
+        // MT-D: a scale rides on the 'track' choice; the key is present only with a scale, so MT-B's previews are unchanged.
+        if (scaleOf(live) !== null) {
+          scaleTargetMinutes = scaleOf(live);
+          trackChoice.scaleTargetMinutes = scaleTargetMinutes;
+        }
+        athleteRows = athleteRows.filter((r) => String(r.track) === trackChoice.trackId);
+        trackIds = [trackChoice.trackId];
+      } else {
+        // MT-0: one recording, from the lowest track id, with that track's own rows (their native identities).
+        athleteRows = athleteRows.filter((r) => String(r.track) === duplicateTracks.usedTrackId);
+        trackIds = [duplicateTracks.usedTrackId];
       }
-      // MT-0: one recording, from the lowest track id, with that track's own rows (their native identities).
-      athleteRows = athleteRows.filter((r) => String(r.track) === duplicateTracks.usedTrackId);
-      trackIds = [duplicateTracks.usedTrackId];
     }
     const track = bundle.tracks?.[trackIds[0]];
     if (!track) throw new GpexeMappingError("track_missing", `track ${trackIds[0]} for athlete ${gpexeAthleteId} was not fetched.`);
@@ -444,7 +551,11 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null 
         }
       }
     }
-    participants.push({ gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}) });
+    const scaleRecording = scaleTargetMinutes === null ? null : scaleWholeSession({ results, metricSpecs, leftOut, gpexeAthleteId, targetMinutes: scaleTargetMinutes });
+    participants.push({
+      gpexeAthleteId, timezone: track.timezone, results, ...(duplicateTracks ? { duplicateTracks } : {}), ...(trackChoice ? { trackChoice } : {}),
+      ...(scaleRecording ? { scaleRecording } : {}),
+    });
   }
 
   const mixed = timezones.size > 1;

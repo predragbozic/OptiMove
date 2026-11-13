@@ -69,6 +69,28 @@ has caused a wrong conclusion in this project before.
   plain read filters the superseded rows out, the parameter returns them, any other query
   is refused.
 
+## Interaction principles
+
+Confirmed product decision of the owner, 2026-11-13: "interaction through the whole
+application - whatever we build, it matters." It applies to every new or changed screen.
+
+- Action before explanation: the next step is a button; any explanation follows it, folded or in a help panel.
+- One problem = one question = 2-3 buttons.
+- Prefer an immediate visible result with Undo to "Are you sure?", but only where a route reverses the write for the
+  same person without a reason, a second confirmation or a possible refusal. Today's example: a variable's category
+  link in Data configuration. Every other write keeps an explicit confirmation, for example:
+  - an import: U5 can reverse it later for a platform admin, but that is recovery, with a reason and its own
+    confirmation, and it can be refused;
+  - an athlete link: Unlink ends it, but results already imported under it stay;
+  - settings and deletions.
+- Show a state with colour, a glyph and a count, never with colour alone.
+- A coach or club admin gets one plain sentence and one next step: no ids, codes or server sentences. Technical
+  details are for the platform admin only. Exception: in Settings → Source connections the club admin keeps what its
+  own step needs, folded away. Known gap: in Imports the club admin still sees them (the status's `identityAdmin`)
+  and is asked to pass them on. Removing that is a separate change of the Imports audience (frontend, and the codes
+  the server sends), ordered by the manager on 2026-11-13 and not merged yet.
+- Every gesture (swipe, drag) also has a visible control. The 44 px target and 360/375/390 px rules above are unchanged.
+
 ## Browser QA
 
 A real browser check (manual or automated, per `testing-evidence.md`) is only needed

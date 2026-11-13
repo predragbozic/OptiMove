@@ -172,7 +172,7 @@ test("1. a GPS athlete clearly below the session's longest time gets a yellow Ch
     assert.ok(!/is-check/.test(rowOf(name, page)), `${name}: no flag`);
   }
   assert.match(page, /data-filter="short" aria-pressed="false">Short recording <span class="gpexe-chip-count">1<\/span>/);
-  assert.match(page, /Needs a person <span class="gpexe-chip-count">3<\/span>/, "the flagged athlete and the two without a record");
+  assert.match(page, /Needs you <span class="gpexe-chip-count">3<\/span>/, "the flagged athlete and the two without a record");
   const fine = page.slice(page.indexOf('class="gpexe-fine"'));
   assert.ok(!fine.includes(">Cy Example</th>"), "the flagged athlete is shown, not folded under the fine ones");
   assert.ok(fine.includes(">Ana Example</th>"));

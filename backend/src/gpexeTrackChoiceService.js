@@ -23,13 +23,14 @@
 import { pool } from "./db.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { ApprovalTeamGoneError, canApproveGpexeImport, lockApprovalTeam } from "./gpexeImportAccess.js";
-import { identicalTracks } from "./gpexeImportMapper.js";
+import { identicalTracks, trackSetFingerprint } from "./gpexeImportMapper.js";
 import { isImportWaitError, isSessionEndedError, setImportTransactionBounds } from "./gpexeImportPreview.js";
 import {
   COMMIT_ANSWER_TIMEOUT_MS, NOTHING_SAVED, OUTCOME_UNKNOWN, UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
   commitCertainlyRefused, requestHash, withinBound,
 } from "./activityRosterCommands.js";
 import { GpexeImportServiceError } from "./gpexeImportService.js";
+import { estimatesEnabled } from "./metricEstimateService.js";
 
 export const TRACK_CHOICES = Object.freeze(["track", "none", "cleared"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,7 +73,9 @@ export function trackSetOf(bundle, athleteRows) {
   const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))].sort(byNumber);
   if (trackIds.length < 2) return null;
   if (identicalTracks(bundle, athleteRows, trackIds)) return null;
-  const readable = trackIds.every((t) => GPEXE_ID.test(t)) && athleteRows.every((r) => GPEXE_ID.test(String(r.id)));
+  // MT-B: the mapper's own fingerprint - one function, so the stored fingerprint and the mapper's comparison cannot drift.
+  const fingerprint = trackSetFingerprint(athleteRows);
+  const readable = fingerprint !== null;
   const tracks = trackIds.map((trackId) => {
     const rows = athleteRows.filter((r) => String(r.track) === trackId);
     const whole = rows.filter((r) => r.drill === null || r.drill === undefined);
@@ -88,9 +91,19 @@ export function trackSetOf(bundle, athleteRows) {
       drillIndexes: rows.filter((r) => r.drill !== null && r.drill !== undefined).map((r) => Number(r.drill)).sort((a, b) => a - b),
     };
   });
-  const fingerprint = readable ? tracks.map((t) => `${t.trackId}:${t.rowIds.join(",")}`).join(";") : null;
   return { tracks, fingerprint, readable };
 }
+
+// MT-D: a one-track athlete (the usual short recording) may hold a scale choice only. Its fingerprint is the mapper's for that
+// one track. An athlete whose tracks are one recording (MT-0) is not offered a scale in v1.
+export function oneTrackSetOf(bundle, athleteRows) {
+  const trackIds = [...new Set(athleteRows.map((r) => String(r.track)))];
+  if (trackIds.length !== 1) return null;
+  const fingerprint = trackSetFingerprint(athleteRows);
+  return { trackId: trackIds[0], fingerprint, readable: fingerprint !== null };
+}
+
+const SCALE_MAX_MINUTES = 600;
 
 function choiceView(row) {
   if (!row) return null;
@@ -98,14 +111,18 @@ function choiceView(row) {
     id: String(row.id),
     choice: row.choice,
     trackId: row.chosen_track_id ?? null,
+    // MT-D: the target minutes of a scale, or null.
+    scaleTargetMinutes: row.scale_target_minutes === null || row.scale_target_minutes === undefined ? null : Number(row.scale_target_minutes),
     fingerprint: row.track_set_fingerprint,
     chosenAt: new Date(row.chosen_at).toISOString(),
-    chosenByUserId: String(row.chosen_by_user_id),
+    // MT-B (L4): who chose, by name only - the approver's audience; never the user id.
+    chosenBy: { name: row.chosen_by_name ?? null },
     supersedesChoiceId: row.supersedes_choice_id ? String(row.supersedes_choice_id) : null,
   };
 }
 
-const CURRENT_SQL = `select c.* from training_load.gpexe_track_choices c
+const CHOSEN_BY_NAME = `(select coalesce(nullif(u.display_name, ''), u.full_name) from public.users u where u.id = c.chosen_by_user_id) as chosen_by_name`;
+const CURRENT_SQL = `select c.*, ${CHOSEN_BY_NAME} from training_load.gpexe_track_choices c
   where c.owner_team_id = $1 and c.gpexe_team_session_id = $2 and c.gpexe_athlete_id = $3
     and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`;
 
@@ -144,7 +161,19 @@ export async function listTrackChoices(teamId, candidateId, { userId }) {
     const athletes = [];
     for (const [gpexeAthleteId, rows] of [...athleteRowsOf(row.raw_bundle).entries()].sort(([a], [b]) => byNumber(a, b))) {
       const set = trackSetOf(row.raw_bundle, rows);
-      if (!set) continue;
+      if (!set) {
+        // MT-D: a one-track athlete is listed only while it holds a choice (a scale, or the row that cleared it).
+        const one = oneTrackSetOf(row.raw_bundle, rows);
+        const current = one ? (await client.query(CURRENT_SQL, [teamId, row.gpexe_team_session_id, gpexeAthleteId])).rows[0] ?? null : null;
+        if (!current) continue;
+        const view = choiceView(current);
+        athletes.push({
+          gpexeAthleteId, tracks: [{ trackId: one.trackId }], choosable: one.readable,
+          ...(one.readable ? {} : { notChoosableReason: "tracks_not_readable" }), sumOffered: false, sumReason: "not_available",
+          currentChoice: { ...view, stale: view.choice !== "cleared" && view.fingerprint !== one.fingerprint },
+        });
+        continue;
+      }
       const current = (await client.query(CURRENT_SQL, [teamId, row.gpexe_team_session_id, gpexeAthleteId])).rows[0] ?? null;
       const view = choiceView(current);
       athletes.push({
@@ -159,7 +188,8 @@ export async function listTrackChoices(teamId, candidateId, { userId }) {
       });
     }
     await client.query("commit");
-    return { candidateId: String(row.id), gpexeTeamSessionId: String(row.gpexe_team_session_id), status: row.status, athletes };
+    // MT-D: whether a scale can be chosen now (estimates switched on); the screen offers it only on a short recording (6a).
+    return { candidateId: String(row.id), gpexeTeamSessionId: String(row.gpexe_team_session_id), status: row.status, scaleAvailable: estimatesEnabled(), athletes };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;
@@ -170,15 +200,23 @@ export async function listTrackChoices(teamId, candidateId, { userId }) {
 
 export function validateTrackChoiceBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw refusal(400, "invalid_body", "The body must be an object.");
-  const allowed = new Set(["requestKey", "choice", "trackId", "expectedChoiceId"]);
-  if (Object.keys(body).some((k) => !allowed.has(k))) throw refusal(400, "invalid_body", "The body may hold requestKey, choice, trackId and expectedChoiceId only.");
-  const { requestKey, choice, trackId, expectedChoiceId } = body;
+  const allowed = new Set(["requestKey", "choice", "trackId", "expectedChoiceId", "scaleTargetMinutes"]);
+  if (Object.keys(body).some((k) => !allowed.has(k))) throw refusal(400, "invalid_body", "The body may hold requestKey, choice, trackId, expectedChoiceId and scaleTargetMinutes only.");
+  const { requestKey, choice, trackId, expectedChoiceId, scaleTargetMinutes } = body;
   if (typeof requestKey !== "string" || !UUID.test(requestKey)) throw refusal(400, "invalid_request_key", "requestKey must be a UUID.");
   if (!TRACK_CHOICES.includes(choice)) throw refusal(400, "invalid_choice", "choice must be track, none or cleared.");
   if (choice === "track") {
     if (typeof trackId !== "string" || !GPEXE_ID.test(trackId)) throw refusal(400, "invalid_track_id", "trackId must be a GPEXE track id.");
   } else if (trackId !== undefined && trackId !== null) {
     throw refusal(400, "invalid_track_id", "trackId is sent only with the choice track.");
+  }
+  // MT-D: the target minutes of a scale, only with the choice track: a number, 0 < x <= 600, at most two decimals.
+  const scale = scaleTargetMinutes === undefined || scaleTargetMinutes === null ? null : scaleTargetMinutes;
+  if (scale !== null) {
+    if (choice !== "track") throw refusal(400, "invalid_scale", "scaleTargetMinutes is sent only with the choice track.");
+    if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0 || scale > SCALE_MAX_MINUTES || Math.abs(scale * 100 - Math.round(scale * 100)) > 1e-9) {
+      throw refusal(400, "invalid_scale", "scaleTargetMinutes must be a number of minutes above 0 and at most 600, with at most two decimals.");
+    }
   }
   if (!("expectedChoiceId" in body) || (expectedChoiceId !== null && (typeof expectedChoiceId !== "string" || !UUID.test(expectedChoiceId)))) {
     throw refusal(400, "invalid_expected_choice", "expectedChoiceId must be the current choice's id, or null when there is none.");
@@ -188,12 +226,13 @@ export function validateTrackChoiceBody(body) {
     choice,
     trackId: choice === "track" ? trackId : null,
     expectedChoiceId: expectedChoiceId === null ? null : expectedChoiceId.toLowerCase(),
+    scaleTargetMinutes: scale,
   };
 }
 
 async function readByRequest(client, userId, requestKey) {
   return (await client.query(
-    `select * from training_load.gpexe_track_choices where chosen_by_user_id = $1 and request_key = $2`,
+    `select c.*, ${CHOSEN_BY_NAME} from training_load.gpexe_track_choices c where c.chosen_by_user_id = $1 and c.request_key = $2`,
     [userId, requestKey],
   )).rows[0] ?? null;
 }
@@ -235,8 +274,8 @@ async function findStoredChoice(userId, requestKey, hash, ms) {
 
 export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { userId, body, expectedClubId = undefined }) {
   if (!GPEXE_ID.test(String(gpexeAthleteId))) throw notFound();
-  const input = validateTrackChoiceBody(body);
-  const hash = requestHash({ operation: "track_choice", teamId, candidateId, gpexeAthleteId: String(gpexeAthleteId), ...input, requestKey: undefined });
+  let input = null;
+  let hash = null;
   const client = await pool.connect();
   let commitSent = false;
   let broken = false;
@@ -248,6 +287,10 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
     await setImportTransactionBounds(client);
     // The route's audience, unlocked (the fast 404); the right that counts is the one locked at step 5.
     await assertTrackChoiceAudience(client, userId, teamId);
+    // MT-B (L3): the body only after the audience, so a malformed body outside it is the identical 404 too.
+    input = validateTrackChoiceBody(body);
+    // A choice without a scale hashes exactly as before MT-D (the key is left out), so a replay of an earlier request matches.
+    hash = requestHash({ operation: "track_choice", teamId, candidateId, gpexeAthleteId: String(gpexeAthleteId), ...input, requestKey: undefined, scaleTargetMinutes: input.scaleTargetMinutes ?? undefined });
     // 1. The (author, key) lock and the replay.
     await client.query(
       `select pg_advisory_xact_lock(hashtextextended('track-choice-request:' || $1::uuid::text || ':' || $2::uuid::text, ${REQUEST_LOCK_SEED}))`,
@@ -258,6 +301,12 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
       if (prior.request_hash !== hash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request.");
       await client.query("rollback");
       return { status: 200, body: { choice: choiceView(prior) }, replayed: true };
+    }
+    // MT-D (plan 13.8): no new scale while estimates are switched off - the import would leave the athlete's sums out with no way
+    // to save them. After the replay (a saved answer wins over the present state: a scale stored while the flag was on replays
+    // as stored), before anything is locked or written. A choice without a scale is unchanged.
+    if (input.scaleTargetMinutes !== null && !estimatesEnabled()) {
+      throw refusal(409, "scale_not_available", "Scaling a short recording is not switched on yet.");
     }
     // 2. The candidate FOR SHARE (only while open) and the athlete's track set.
     const row = await readCandidate(client, teamId, candidateId, { lock: true });
@@ -271,8 +320,16 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
     }
     if (!snapshotAvailable(row)) throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; find new sessions again.");
     const athleteRows = athleteRowsOf(row.raw_bundle).get(String(gpexeAthleteId));
-    const set = athleteRows ? trackSetOf(row.raw_bundle, athleteRows) : null;
-    if (!set) throw refusal(409, "not_multiple_tracks", "This athlete has one recording in this session; there is nothing to choose.");
+    let set = athleteRows ? trackSetOf(row.raw_bundle, athleteRows) : null;
+    if (!set) {
+      // MT-D: one track - only a scale, or clearing one (whether there is one to clear is checked under the lock, step 6).
+      const one = athleteRows ? oneTrackSetOf(row.raw_bundle, athleteRows) : null;
+      const scaleRequest = input.choice === "track" && input.scaleTargetMinutes !== null;
+      if (!one || !(scaleRequest || input.choice === "cleared")) {
+        throw refusal(409, "not_multiple_tracks", "This athlete has one recording in this session; there is nothing to choose.");
+      }
+      set = { tracks: [{ trackId: one.trackId }], fingerprint: one.fingerprint, readable: one.readable };
+    }
     if (!set.readable) throw refusal(409, "tracks_not_readable", "GPEXE sent this athlete's tracks with ids OptiMove cannot read; no choice can be stored.");
     if (input.choice === "track" && !set.tracks.some((t) => t.trackId === input.trackId)) {
       throw refusal(409, "track_not_in_session", "This track is not one of the athlete's tracks in this session.");
@@ -305,7 +362,7 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
       throw error;
     }
     // 6. The athlete's current choice, FOR UPDATE.
-    const current = (await client.query(`${CURRENT_SQL} for update`, [teamId, row.gpexe_team_session_id, String(gpexeAthleteId)])).rows[0] ?? null;
+    const current = (await client.query(`${CURRENT_SQL} for update of c`, [teamId, row.gpexe_team_session_id, String(gpexeAthleteId)])).rows[0] ?? null;
     const currentId = current ? String(current.id) : null;
     if (currentId !== input.expectedChoiceId) {
       throw refusal(409, "choice_changed", "The choice was changed since you opened it; review it again.", { currentChoice: choiceView(current) });
@@ -317,17 +374,19 @@ export async function putTrackChoice(teamId, candidateId, gpexeAthleteId, { user
     const inserted = (await client.query(
       `insert into training_load.gpexe_track_choices
          (owner_team_id, gpexe_team_session_id, gpexe_athlete_id, track_set_fingerprint, choice, chosen_track_id,
-          chosen_by_user_id, chosen_basis, chosen_grant_id, supersedes_choice_id, request_key, request_hash)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
+          chosen_by_user_id, chosen_basis, chosen_grant_id, supersedes_choice_id, request_key, request_hash, scale_target_minutes)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id`,
       [teamId, row.gpexe_team_session_id, String(gpexeAthleteId), set.fingerprint, input.choice, input.trackId,
-        userId, right.basis, right.grant_id ?? null, currentId, input.requestKey, hash],
+        userId, right.basis, right.grant_id ?? null, currentId, input.requestKey, hash, input.scaleTargetMinutes],
     )).rows[0];
+    const saved = await readByRequest(client, userId, input.requestKey);
+    if (!saved || String(saved.id) !== String(inserted.id)) throw new Error("the inserted choice was not read back");
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, teamId });
     commitSent = true;
     const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
     committing.catch(() => {});
     await withinBound(committing, testHooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
-    return { status: 201, body: { choice: choiceView(inserted) } };
+    return { status: 201, body: { choice: choiceView(saved) } };
   } catch (error) {
     if (!commitSent) {
       await client.query("rollback").catch(() => { broken = true; });
