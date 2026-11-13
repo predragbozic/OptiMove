@@ -1915,10 +1915,10 @@ export function identityNameKey(name) {
 //     expired, GPEXE had no record): "Name not loaded (GPEXE athlete N)";
 //   * no stored identity at all: "GPEXE athlete N".
 // N is the athlete's position in the GPEXE athlete list on screen (stable for
-// that list, never stored, never the id). A coach - who gets no identity and
-// no sign that one exists - keeps the id, as before.
+// that list, never stored, never the id). P2: a coach - who gets no identity and
+// no sign that one exists - gets the same position, never the id.
 export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   // A GPEXE name shared by two athletes carries the position too.
@@ -1929,9 +1929,9 @@ export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
 
 // The same athlete inside a sentence: "the GPEXE athlete <name>", "GPEXE
 // athlete N (name not provided)", "GPEXE athlete N (name not loaded)" or
-// "GPEXE athlete N" - for a coach "GPEXE athlete <id>", as before.
+// "GPEXE athlete N" - for a coach "GPEXE athlete N" too (P2), never the id.
 export function gpexeAthleteSentence(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `the GPEXE athlete ${who.name} (${ordinal})` : `the GPEXE athlete ${who.name}`;
@@ -1957,9 +1957,11 @@ function hasStoredIdentities(gx) {
   return Object.keys(gx.identity?.list?.byId || {}).length > 0;
 }
 
-// True when the screen must not show a GPEXE id outside Technical details.
+// True when the screen must not show a GPEXE id outside Technical details. P2 (owner 2026-11-13): for every viewer - a
+// coach's screen names a GPEXE athlete by its list position as well, and only the platform admin has Technical details.
+// eslint-disable-next-line no-unused-vars
 export function maskGpexeIds(gx = g()) {
-  return identityViewer(gx);
+  return true;
 }
 
 export function identityOf(gpexeAthleteId, gx = g()) {

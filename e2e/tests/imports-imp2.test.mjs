@@ -61,7 +61,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           };
         });
         assert.equal(result.summary, "Imported 3 sessions. You can see them in Training Load → Activities and in the Imported tab.");
-        assert.equal(result.techBlocks, 1, "one Technical details for the whole result");
+        assert.equal(result.techBlocks, 0, "P2: a coach's result has no Technical details (the platform admin's only)");
         assert.ok(result.outcomeRight <= 2, `the outcome sits on the right (${result.outcomeRight} px)`);
         assert.notEqual(result.dot, "rgba(0, 0, 0, 0)", "the outcome carries its dot");
         assert.ok(result.overflow <= 0);

@@ -287,8 +287,8 @@ test("IMP2 2: the result says what was imported and where to see it in one line,
   const d = dialog();
   assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and in the Imported tab\.<\/p>/);
   assert.doesNotMatch(d, /listed under Imported below/, "Imported is a tab since IMP1");
-  assert.equal((d.match(/<details class="gpexe-tech">/g) || []).length, 1, "one Technical details for the whole result");
-  assert.match(d, /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-cand-1<\/dd>/);
+  // P2 (O1): the one Technical details of the result is the platform admin's; a coach's result has none.
+  assert.equal((d.match(/<details class="gpexe-tech">/g) || []).length, 0, "no Technical details for a coach");
 });
 
 test("IMP2 3: the dialog's CSS is coach-side only and draws light rows with the outcome's dot", () => {
@@ -317,7 +317,7 @@ test("IMP2 4: a mixed result names only the imported ones in its Activities sent
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
   assert.match(dialog(), /You can see the imported ones in Training Load → Activities and in the Imported tab\./);
-  assert.match(dialog(), /<dt>Session cand-1<\/dt><dd>FULL TRAINING 1 · imported · approval appr-1<\/dd>/, "the raw GPEXE name stays under Technical details");
+  assert.ok(!/FULL TRAINING 1|appr-1|gpexe-tech/.test(dialog()), "P2: the raw GPEXE name and the ids are not in a coach's result");
 });
 
 // IMP3: "Everything from GPEXE is imported." - the sketch's line, only when it is true.

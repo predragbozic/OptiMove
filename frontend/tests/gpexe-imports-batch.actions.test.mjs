@@ -254,7 +254,7 @@ test("4./5./6. Review shows the sessions (no hash, id or code in the open), Back
   const open = d.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!open.includes("cand-1") && !open.includes("cand-3"), "ids only under Technical details");
   assert.ok(!html().includes(hashOf(1)) && !html().includes(hashOf(3)), "a hash is never in the page");
-  assert.match(d, /Candidate ids<\/dt><dd>cand-1, cand-3<\/dd>/);
+  assert.ok(!/gpexe-tech/.test(d), "P2: a coach has no Technical details; the ids stay out of the dialog");
   // Back keeps the selection.
   await act("training-load-gpexe-batch-back");
   assert.ok(!/imports-batch"/.test(html()));
