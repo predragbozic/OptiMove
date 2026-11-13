@@ -13,6 +13,7 @@ import * as identity from "../gpexeAthleteIdentityService.js";
 import * as teamSwitch from "../teamImportSwitchService.js";
 import * as teamTimezone from "../gpexeTeamTimezone.js";
 import * as sessionUndo from "../gpexeSessionUndoService.js";
+import * as trackChoices from "../gpexeTrackChoiceService.js";
 import { decideImportStates } from "../activityRosterCommands.js";
 import { RosterError } from "../activityRoster.js";
 
@@ -77,7 +78,7 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds, currentChoice } = error.details || {};
         // The precise reason of a source-connection refusal names connection
         // and server configuration facts: an administrator of the team's club
         // or of the platform gets it; a coach gets the stable code and the
@@ -110,6 +111,8 @@ function handle(fn) {
           ...(rosterWork && typeof rosterWork === "object" ? { rosterWork } : {}),
           ...(Number.isInteger(calendarLinks) ? { calendarLinks } : {}),
           ...(retrySameRequest === true ? { retrySameRequest: true } : {}),
+          // MT-A: a stale expectedChoiceId answers with the current choice (ids and the choice only).
+          ...(currentChoice !== undefined && error.code === "choice_changed" ? { currentChoice } : {}),
         });
       }
       next(error);
@@ -322,6 +325,32 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
     };
   }
   res.json({ ...result, candidate, ...(candidateReadError ? { candidateReadError } : {}) });
+}));
+
+// MT-A (v67): the track choice of an athlete GPEXE recorded on more than one track. The approver's audience only
+// (lock_gpexe_import_approver's right, team mode included); everyone else gets the identical 404. Nothing reads the choice
+// before MT-B. See gpexeTrackChoiceService.
+router.get("/teams/:teamId/candidates/:candidateId/track-choices", handle(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.candidateId)) return notFound(res);
+  res.json(await trackChoices.listTrackChoices(access.teamId, req.params.candidateId, { userId: req.user.id }));
+}));
+
+router.put("/teams/:teamId/candidates/:candidateId/track-choices/:gpexeAthleteId", handle(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.candidateId)) return notFound(res);
+  const result = await trackChoices.putTrackChoice(access.teamId, req.params.candidateId, req.params.gpexeAthleteId, {
+    userId: req.user.id, body: req.body, expectedClubId: access.clubId,
+  });
+  res.status(result.status).json({
+    ...result.body,
+    ...(result.replayed ? { replayed: true } : {}),
+    ...(result.verifiedAfterCommitError ? { verifiedAfterCommitError: true } : {}),
+  });
 }));
 
 // J20-A1: recompute the whole candidate's preview now (a link does not change
