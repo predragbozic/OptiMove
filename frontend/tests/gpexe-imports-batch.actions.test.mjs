@@ -521,7 +521,8 @@ test("10c. a session reviewed before a link change goes to Needs attention with 
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
   await openTab("attention");
-  assert.match(html(), /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*Full training 1<\/strong>[\s\S]*?Athlete links changed after this review was made - open it and update the review\./);
+  assert.match(html(), /Needs you \(1\)[\s\S]*?Review out of date[\s\S]*?<strong>[^<]*Full training 1<\/strong>/);
+  assert.match(html(), /Athlete links changed after this session was reviewed\. Update its review before importing\./, "the group gives the step once (P3)");
   await openTab("ready");
   const page = html();
   assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
@@ -696,7 +697,7 @@ test("13. the calendar marks every day with a found session, whatever its bucket
   const page = html();
   assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "U6a: folded by default, on a desktop too");
   assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
-  assert.match(page, /Markers show sessions already found by OptiMove\. Other dates may not have been searched yet\./);
+  assert.match(page, /A dot or a number marks the sessions found so far on a day\./, "the note names both kinds of mark (a dot for one session, a number for more)");
   assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 2 sessions found" aria-pressed="false"><span class="imports-cal-num">21<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-count">2<\/span>/);
   assert.match(page, /data-day="2026-09-14" aria-label="14 September, 1 session found" aria-pressed="false"><span class="imports-cal-num">14<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-dot"><\/span>/);
@@ -900,7 +901,7 @@ test("10f. a 'nothing new' session reviewed before a link change is a Needs-atte
   await openTab("attention");
   const attention = html().slice(html().indexOf('aria-label="Needs attention"'));
   assert.match(attention, /<h3>Needs you \(1\)<\/h3>/);
-  assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Athlete links changed after this review was made - open it and update the review\./, "the stale 'nothing new' session is an attention item with its step");
+  assert.match(attention, /Athlete links changed after this session was reviewed\. Update its review before importing\.[\s\S]*?data-candidate-id="cand-1"/, "the stale 'nothing new' session is an attention item; its group gives the step (P3)");
   assert.ok(!attention.includes('data-candidate-id="cand-2"'));
   await openTab("imported");
   const page = html();

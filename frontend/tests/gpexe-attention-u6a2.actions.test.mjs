@@ -157,14 +157,16 @@ test("1. the sessions that need a person are grouped by what is in the way, in a
   assert.deepEqual(groupKeys(page), ["unlinked", "fresh", "review", "data"]);
   const u = groupHtml("unlinked", page);
   assert.match(u, /<h4>Athletes not linked<\/h4><span class="imports-attn-count">2 sessions<\/span>/);
-  assert.match(u, /These sessions have athletes who are not linked to a team athlete yet\. Link them from their rows, session by session\./);
+  assert.match(u, /Link the GPEXE athletes of these sessions to the athletes of your team\./);
+  // P3: one problem is said once - the group gives the step, its rows only their facts.
+  assert.ok(!/gpexe-candidate-next/.test(u), "no row repeats the group's step");
   assert.equal((u.match(/<div class="imports-attn-actions">[\s\S]*?<\/div>/)[0].match(/<button/g) || []).length, 1, "one button");
   assert.match(u, /data-action="training-load-gpexe-open" data-candidate-id="cand-4" data-group="unlinked">Link athletes</);
   assert.match(u, /<details class="imports-attn-sessions"><summary>Show the 2 sessions<\/summary>/, "several sessions are folded");
   assert.match(u, /data-candidate-id="cand-6" data-group="unlinked"/, "a row inside the group opens the review in the group");
   const f = groupHtml("fresh", page);
   assert.match(f, /data-action="training-load-gpexe-check" data-from="2026-09-05" data-to="2026-09-05" >Find again for 05\.09\.2026</);
-  assert.match(f, /The last search did not confirm this session/, "a group of one is spoken of in the singular");
+  assert.match(f, /Search again to read this session from GPEXE before importing\./, "a group of one is spoken of in the singular");
   assert.ok(!/<details class="imports-attn-sessions">/.test(f), "a group of one shows its session");
   assert.match(groupHtml("review", page), /data-candidate-id="cand-3" data-group="review">Open the session</);
   assert.match(page, /<h4>Needs a look<\/h4>/);
