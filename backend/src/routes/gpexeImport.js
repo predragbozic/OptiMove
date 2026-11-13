@@ -142,15 +142,17 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
   if (!access) return;
   // The change reason is an admin's own audit note (it may name another club
   // or team), so only a platform admin gets it back.
-  const [settings, lastCheck, approval] = await Promise.all([
+  const [settings, lastCheck, lastSucceededCheck, approval] = await Promise.all([
     service.getTeamSettings(access.teamId),
     service.latestCheck(access.teamId, { adminViewer: adminViewerOf(req) }),
+    service.lastSucceededCheck(access.teamId),
     canApproveGpexeImport({ query }, req.user.id, access.teamId),
   ]);
   res.json({
     settings: settings && (access.platformAdmin ? settings : { gpexeTeamId: settings.gpexeTeamId, configuredAt: settings.configuredAt }),
     importSwitch: service.applySwitchInfo(),
     lastCheck,
+    lastSucceededCheck,
     // identityAdmin only when true: a coach's answer carries no trace of the
     // administrator-only identity load.
     // U2 (v56): the team's own switch, shown to everyone who sees the team (no condition detail here).

@@ -466,6 +466,9 @@ test("9. L3 and L4: a malformed body outside the audience is the identical 404 (
   const listed = (await getChoices(team, cand.id)).body.athletes[0].currentChoice;
   assert.deepEqual(listed.chosenBy, { name: "platform admin" });
   assert.equal(JSON.stringify((await getChoices(team, cand.id)).body).includes(team.padmin.id), false, "no user id anywhere");
+  // An empty display name falls back to the full name, as the board and the roster do.
+  await admin.query(`update public.users set display_name = '', full_name = 'Platform Admin Full' where id = $1`, [team.padmin.id]);
+  assert.deepEqual((await getChoices(team, cand.id)).body.athletes[0].currentChoice.chosenBy, { name: "Platform Admin Full" });
 });
 
 test("10. 6b: a 'none' athlete imported as left out takes an estimate; the next search of the unchanged session changes neither the estimate nor its being the athlete's only value", async () => {
