@@ -1679,8 +1679,8 @@ let identityEpoch = 0;
 // steps) stays below this: a request still open after it is a lost answer.
 export const IDENTITY_REQUEST_BOUND_MS = 90_000;
 
-// Only an administrator's status says so; a coach's carries nothing, so a
-// coach's screen never asks for an identity at all.
+// The administrator: dates of birth, conflicts, the load and Technical details. The team's own coach gets
+// status.viewer.identityNames only (identityNameViewer below) and never a Technical detail (J20-A2).
 export function identityViewer(gx = g()) {
   return gx.status?.viewer?.identityAdmin === true;
 }
@@ -1925,10 +1925,10 @@ export function identityNameKey(name) {
 //     expired, GPEXE had no record): "Name not loaded (GPEXE athlete N)";
 //   * no stored identity at all: "GPEXE athlete N".
 // N is the athlete's position in the GPEXE athlete list on screen (stable for
-// that list, never stored, never the id). A coach - who gets no identity and
-// no sign that one exists - keeps the id, as before.
+// that list, never stored, never the id). A coach without the names, or whose
+// team has none stored, keeps the id, as before (maskGpexeIds).
 export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
-  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!maskGpexeIds(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   // A GPEXE name shared by two athletes carries the position too.
@@ -1940,9 +1940,9 @@ export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
 
 // The same athlete inside a sentence: "the GPEXE athlete <name>", "GPEXE
 // athlete N (name not provided)", "GPEXE athlete N (name not loaded)" or
-// "GPEXE athlete N" - for a coach "GPEXE athlete <id>", as before.
+// "GPEXE athlete N" - "GPEXE athlete <id>" where maskGpexeIds is false, as before.
 export function gpexeAthleteSentence(gpexeAthleteId, gx = g()) {
-  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!maskGpexeIds(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `the GPEXE athlete ${who.name} (${ordinal})` : `the GPEXE athlete ${who.name}`;
@@ -1969,8 +1969,10 @@ function hasStoredIdentities(gx) {
 }
 
 // True when the screen must not show a GPEXE id outside Technical details.
+// An administrator always; the team's coach only while the team holds stored names (with none, the coach reads the id as
+// before - an ordinal alone would not help to find the athlete in GPEXE).
 export function maskGpexeIds(gx = g()) {
-  return identityNameViewer(gx);
+  return identityViewer(gx) || (identityNameViewer(gx) && hasStoredIdentities(gx));
 }
 
 export function identityOf(gpexeAthleteId, gx = g()) {

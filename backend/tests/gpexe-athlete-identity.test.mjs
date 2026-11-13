@@ -396,7 +396,7 @@ test("4b. the team's coach (plan coach-gpexe-name): the stored list holds the GP
   assert.ok("birthDateConflicts" in admin.body);
   const coach = await list(o, o.coach.cookie);
   assert.equal(coach.status, 200, coach.text);
-  assert.deepEqual(Object.keys(coach.body).sort(), ["identities", "maxPerLoad", "pendingCount", "retentionDays", "retryLaterCount"]);
+  assert.deepEqual(Object.keys(coach.body).sort(), ["identities", "maxPerLoad", "retentionDays"], "names only, not the load's counts");
   assert.deepEqual(coach.body.identities.map((i) => Object.keys(i).sort()), [["gpexeAthleteId", "name"], ["gpexeAthleteId", "name"]]);
   assert.deepEqual(coach.body.identities.map((i) => i.gpexeAthleteId), ["4602", "4603"], "the linked athlete's GPEXE name is not the coach's");
   assert.equal(coach.body.identities[0].name, admin.body.identities[1].name);
@@ -414,9 +414,63 @@ test("4b. the team's coach (plan coach-gpexe-name): the stored list holds the GP
   const other = await ready(1, 4701);
   const foreign = await list(o, other.o.coach.cookie);
   assert.deepEqual([foreign.status, foreign.text], [404, missing.text], "another team's coach");
-  await q(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [o.coach.id, o.teamId]);
+  // An athlete unlinked later is the coach's again.
+  const link = (await q(`select id from training_load.gpexe_athlete_links where owner_team_id = $1 and gpexe_athlete_id = '4601' and unlinked_at is null`, [o.teamId]))[0];
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/athlete-links/${link.id}/unlink`, { method: "POST", cookie: o.padmin.cookie })).status, 200);
+  assert.deepEqual((await list(o, o.coach.cookie)).body.identities.map((i) => i.gpexeAthleteId), ["4601", "4602", "4603"], "an athlete unlinked later appears");
+  // A revocation after the route's check, before the locked read: the identical 404.
+  let fired = false;
+  identity.setIdentityListHoldForTests(async (stage) => {
+    if (stage !== "before" || fired) return;
+    fired = true;
+    await q(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [o.coach.id, o.teamId]);
+  });
+  const raced = await list(o, o.coach.cookie);
+  identity.setIdentityListHoldForTests(null);
+  assert.ok(fired);
+  assert.deepEqual([raced.status, raced.text, raced.cacheControl], [404, missing.text, "no-store"], "a coach revoked after the route's check");
   const revoked = await list(o, o.coach.cookie);
-  assert.equal(revoked.status, 404, "a revoked coach");
+  assert.deepEqual([revoked.status, revoked.text], [404, missing.text], "a revoked coach");
+});
+
+test("4b2. the team's coach: a revocation while the read holds its locks waits for the read (the coach's role row is locked for share), then the next read is the identical 404; an archived team and an ended binding are the identical 404 too", async () => {
+  const x = await ready(2, 4801);
+  assert.equal((await load(x.o)).body.loaded, 2);
+  const missing = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities`, { cookie: x.o.coach.cookie });
+  const other = new pg.Client({ connectionString: db.url });
+  await other.connect();
+  try {
+    let revoking = null;
+    let revokedAt = 0;
+    let answeredAt = 0;
+    identity.setIdentityListHoldForTests(async (stage) => {
+      if (stage !== "locked") return;
+      revoking = other.query(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [x.o.coach.id, x.o.teamId]).then(() => { revokedAt = Date.now(); });
+      await new Promise((r) => setTimeout(r, 300));
+      answeredAt = Date.now();
+    });
+    const r = await list(x.o, x.o.coach.cookie);
+    identity.setIdentityListHoldForTests(null);
+    assert.equal(r.status, 200, r.text);
+    await revoking;
+    assert.ok(revokedAt >= answeredAt, "the revocation waited for the coach's read");
+    const after = await list(x.o, x.o.coach.cookie);
+    assert.deepEqual([after.status, after.text], [404, missing.text]);
+  } finally {
+    await other.end();
+  }
+  for (const [label, change] of [
+    ["team archived", (y) => q(`update public.teams set is_active = false where id = $1`, [y.o.teamId])],
+    ["binding ended", (y) => q(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'coach test' where id = $1`, [y.binding.bindingId, y.o.padmin.id])],
+  ]) {
+    const y = await ready(1, 4851);
+    assert.equal((await load(y.o)).body.loaded, 1);
+    assert.equal((await list(y.o, y.o.coach.cookie)).status, 200);
+    await change(y);
+    const gone = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities`, { cookie: y.o.coach.cookie });
+    const r = await list(y.o, y.o.coach.cookie);
+    assert.deepEqual([r.status, r.text], [404, gone.text], label);
+  }
 });
 
 test("4. authorization and information hiding: a platform admin (platform or the team's club workspace) and the team's club admin (that club's workspace) get the identity; a club admin in another workspace, another club's admin, a revoked club admin, a missing or malformed team, an archived team or club, a never-bound team and an ended binding all get the identical 404 {error:notFound} with no-store, on GET and POST, and nothing is read; the team's coach (a platform admin acting in the team workspace included) reads the unlinked names only (plan coach-gpexe-name) and its load stays the identical 404 in pilot mode; a coach's status says identityNames only", async () => {

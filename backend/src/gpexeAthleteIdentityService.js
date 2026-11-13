@@ -327,11 +327,9 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
           order by length(i.gpexe_athlete_id), i.gpexe_athlete_id`,
         [binding.id, teamId],
       )).rows;
-      const { pending, retryLater } = await eligibleAthletes(client, teamId, binding.id);
+      // Names only: not even the load's pending and retry-later counts (the load is the administrators').
       const answer = {
         identities: unlinked.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name })),
-        pendingCount: pending.length,
-        retryLaterCount: retryLater,
         maxPerLoad: IDENTITY_MAX_PER_LOAD,
         retentionDays: IDENTITY_TTL_DAYS,
       };
@@ -413,7 +411,7 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
 // The identity load (D3, after the pilot): the identity administrators, and the team's own coach in that team's workspace.
 // A coach's right holds only while the team's import switch is on in mode `team`; the service checks it in every phase of
 // the load (rightHolds with teamMode) and answers the identical 404 otherwise, as before. The stored snapshot's list
-// (listIdentities) stays the administrators'.
+// (listIdentities) gives the administrators everything and the team's own coach the unlinked athletes' names only.
 export function identityLoadBasis(req, access) {
   return pairSuggestionBasis(req, access);
 }

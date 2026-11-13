@@ -43,12 +43,13 @@ function fixture(n) {
 }
 const ORG = () => ({ teams: [{ id: TEAM, name: "First Team", club_name: "Club" }], clubs: [], athletes: ATHLETES });
 const VIEWERS = {
-  coach: { canApprove: false, approvalBasis: null, isPlatformAdmin: false },
+  // The real server sends identityNames to the team's own coach (plan coach-gpexe-name).
+  coach: { canApprove: false, approvalBasis: null, isPlatformAdmin: false, identityNames: true },
   "club admin": { canApprove: false, approvalBasis: null, isPlatformAdmin: false, identityAdmin: true },
 };
 const pair = (i, over = {}) => ({ gpexeAthleteId: String(88100 + i), gpexeName: `Gname ${i}`, birthDate: "2005-01-02", athleteId: `ath-${i + 1}`, athleteName: `Athlete ${i + 1}`, ...over });
 
-function server({ viewer, suggestions, onLink }) {
+function server({ viewer, suggestions, onLink, identities }) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG() };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
@@ -59,6 +60,7 @@ function server({ viewer, suggestions, onLink }) {
     if (rest.startsWith("/candidates")) return { status: 200, body: { candidates: [] } };
     if (rest === "/athlete-links" && call.method === "GET") return { status: 200, body: { links: [] } };
     if (rest === "/athlete-links" && call.method === "POST") return onLink ? onLink(call) : { status: 201, body: { link: { id: `link-${call.body.gpexeAthleteId}` } } };
+    if (rest === "/athlete-identities" && identities) return { status: 200, body: identities };
     if (rest === "/athlete-identities") return { status: 200, body: { identities: [], pendingCount: 0, retryLaterCount: 0, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [] } };
     if (rest === "/athlete-pair-suggestions") return typeof suggestions === "function" ? suggestions(call) : { status: 200, body: suggestions };
     return { status: 404, body: { error: "notFound" } };
@@ -225,6 +227,20 @@ test("7. the coach's review of staged suggestions names the GPEXE name and date 
   assert.match(review, /<strong>Ana Marić<\/strong>/);
   assert.match(review, /Born 04\.03\.2008/);
   assert.match(review, /Athlete 1/);
+});
+
+test("7b. the coach whose stored names hold that athlete (a name, no date) still sees the suggestion's date of birth in the review, the same line as in the box", async () => {
+  fixture(2);
+  reset("coach", {
+    suggestions: OK({ exact: [pair(0, { gpexeName: "Ana Marić", birthDate: "2008-03-04" })] }),
+    identities: { identities: [{ gpexeAthleteId: "88100", name: "Ana Marić" }], maxPerLoad: 50, retentionDays: 14 },
+  });
+  await openMapping();
+  await act("training-load-gpexe-map-suggest-all");
+  const review = pageHtml().match(/<section class="gpexe-link-confirm[\s\S]*?<\/section>/)?.[0] || "";
+  assert.match(review, /<strong>Ana Marić<\/strong>/);
+  assert.match(review, /Born 04\.03\.2008/);
+  assert.ok(!/class="gpexe-tech"/.test(review), "no Technical details for the coach");
 });
 
 test("8. leaving Imports drops the suggestions, and an answer still in flight never brings them back", async () => {

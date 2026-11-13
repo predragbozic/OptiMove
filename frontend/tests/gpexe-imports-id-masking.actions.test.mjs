@@ -68,7 +68,7 @@ const IDENTITIES = {
 };
 const NO_IDENTITIES = { identities: [], pendingCount: 6, retryLaterCount: 0, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [] };
 // The coach's answer (plan coach-gpexe-name): the unlinked athletes' names only - no birthDate key, no birthDateConflicts.
-const COACH_IDENTITIES = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova" }, { gpexeAthleteId: ID.noName, name: null }], pendingCount: 1, retryLaterCount: 1, maxPerLoad: 50, retentionDays: 14 };
+const COACH_IDENTITIES = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova" }, { gpexeAthleteId: ID.noName, name: null }], maxPerLoad: 50, retentionDays: 14 };
 
 function status(viewer) {
   return { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "on" }, lastCheck: null, viewer, approvalAvailable: true };
@@ -361,9 +361,28 @@ test("the team's own coach (identityNames): the GPEXE names replace the ids on L
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
   assert.match(outsideTech(review), /Find the GPEXE athlete Mira Zedova in GPEXE first/, "the review names the athlete by its GPEXE name");
+  // An athlete the coach has no name for: the heading points at the session values, never at a number GPEXE does not know.
+  assert.match(outsideTech(review), /Find this athlete in GPEXE using the session values below/, "a nameless athlete");
   assertMasked(review, "team coach: session review");
   assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(review)), "no date in the review");
-  assertInTech(review, ID.named, "team coach: review athlete");
+  // UX HIGH on 7c0510ab: a coach gets no Technical details at all and no GPEXE id anywhere in the page.
+  for (const [where, page] of [["Link athletes", html], ["session review", review]]) {
+    if (where === "session review") assert.ok(!/class="gpexe-tech"/.test(page), `team coach: no Technical details on ${where}`);
+    for (const id of ALL_IDS) assert.ok(!new RegExp(`\\b${id}\\b`).test(page.replace(/data-[a-z-]+="[^"]*"/g, "")), `team coach: GPEXE id ${id} nowhere on ${where}`);
+    assert.ok(!/give them the Technical details|the id is under Technical details/.test(page), `team coach: no pointer to Technical details on ${where}`);
+  }
+});
+
+test("the team's own coach with no stored names keeps the ids as before (an ordinal alone would not help to find the athlete), with no Technical details", async () => {
+  reset(VIEWERS["team coach"], { identities: { ...COACH_IDENTITIES, identities: [] } });
+  await openMapping();
+  const html = pageHtml();
+  assert.match(outsideTech(html), new RegExp(`<strong>GPEXE athlete ${ID.named}</strong>`));
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const review = pageHtml();
+  assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
+  assert.ok(!/class="gpexe-tech"/.test(review), "no Technical details in the review");
 });
 
 // ---------------------------------------------------------------------------

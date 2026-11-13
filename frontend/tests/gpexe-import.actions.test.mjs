@@ -136,7 +136,8 @@ function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: 
     settings,
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
     lastCheck,
-    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false, ...(identityAdmin ? { identityAdmin: true } : {}) },
+    // The team's own coach gets identityNames from the real server (plan coach-gpexe-name); the J20-A2 coach tests model it.
+    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false, ...(identityAdmin ? { identityAdmin: true } : { identityNames: true }) },
     approvalAvailable: true,
   };
 }

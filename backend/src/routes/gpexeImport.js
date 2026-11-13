@@ -488,9 +488,10 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
 
 // GPEXE athlete identity (owner order 2026-10-06, v32): the name and date of
 // birth of the team's GPEXE athletes, for a platform admin or the team's club
-// admin only, in the platform or the club's workspace. Everyone else - a
-// coach included - and a team without an active binding get the router's
-// identical 404. Every answer, the 404 included, is no-store.
+// admin, in the platform or the club's workspace. The team's own coach, in that
+// team's workspace, reads the GPEXE names of the unlinked athletes only (plan
+// docs/ai/coach-gpexe-name-plan.md). Everyone else and a team without an active
+// binding get the router's identical 404. Every answer, the 404 included, is no-store.
 // `basisOf` picks the audience: the identity administrators (identityAdminBasis) for the stored list; for the load, also the
 // team's own coach in that team's workspace (identityLoadBasis), whose right the service holds only while the team's
 // import switch is on in mode `team` (the identical 404 otherwise).

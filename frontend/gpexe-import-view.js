@@ -277,14 +277,14 @@ function techHtml(entries, extra = "") {
 // J20-A2: GPEXE field names, raw values and ids are for the two administrators
 // only. A coach's review of the athletes carries no Technical details at all.
 function adminTechHtml(entries, extra = "") {
-  return maskGpexeIds() ? techHtml(entries, extra) : "";
+  return identityViewer() ? techHtml(entries, extra) : "";
 }
 
 // The session review's technical lines: an administrator reads them; a coach
 // reads one sentence instead and never a code, a server message or a step.
 const COACH_TECH_NOTE = "Your administrator can see the technical details of this session.";
 function reviewTechHtml(entries, extra = "") {
-  if (maskGpexeIds()) return techHtml(entries, extra);
+  if (identityViewer()) return techHtml(entries, extra);
   return entries.some(([, v]) => v !== undefined && v !== null && v !== "") ? `<p class="muted gpexe-admin-note">${COACH_TECH_NOTE}</p>` : "";
 }
 function reviewErrorTech(error) {
@@ -292,7 +292,7 @@ function reviewErrorTech(error) {
   return reviewTechHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
 }
 // "(give them the Technical details)" only where the reader has them.
-const giveTech = () => (maskGpexeIds() ? " (give them the Technical details)" : "");
+const giveTech = () => (identityViewer() ? " (give them the Technical details)" : "");
 
 function errorTech(error) {
   if (!error) return "";
@@ -417,7 +417,7 @@ function gpexeSideText(gpexeAthleteId, gx) {
 // The id under Technical details, for an administrator only (a coach sees it
 // in the text, as before).
 function idTechHtml(gpexeAthleteId) {
-  return maskGpexeIds() && gpexeAthleteId ? techHtml([["GPEXE athlete id", gpexeAthleteId]]) : "";
+  return identityViewer() && gpexeAthleteId ? techHtml([["GPEXE athlete id", gpexeAthleteId]]) : "";
 }
 
 function errorText(error, fallback) {
@@ -1503,7 +1503,8 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   const named = Boolean(identityOf(id, gx));
   const writeOff = gx.mapping.sending || gx.sourceAthletesError || identityBusy(gx);
   const tech = techHtml([
-    ["GPEXE athlete id", id],
+    // The id only where the reader may see it: an administrator, or a coach who still reads ids in the text.
+    ...(identityViewer(gx) || !maskGpexeIds(gx) ? [["GPEXE athlete id", id]] : []),
     ["Status", a.status],
     ["Session type", a.lastSeen?.sessionType],
     ["Evidence", a.lastSeen?.evidence],
@@ -1660,10 +1661,11 @@ function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
+  // A U3 pair keeps the suggestion's date of birth for a coach, whose names carry no date (the same line as in the box).
+  const sug = who && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = maskGpexeIds(gx) && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? (who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : "") : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
@@ -1816,7 +1818,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
-          ${maskGpexeIds(gx) ? `<p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
+          ${maskGpexeIds(gx) ? `<p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list${identityViewer(gx) ? ", not the GPEXE id; the id is under Technical details" : ""}.</p>` : ""}
           ${body}
           ${footer}
         </div>
@@ -2185,9 +2187,9 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   }
   return `
     <div class="gpexe-link">
-      <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
+      <p><strong>${maskGpexeIds() && !identityViewer() && !identityOf(id)?.name ? "Find this athlete in GPEXE using the session values below. Link only if you are sure." : `Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.`}</strong></p>
       ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
-      ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
+      ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list${identityViewer() ? ", not the GPEXE id; the id is under Technical details" : ""}.</p>` : ""}
       ${compact ? (compactHasValues(a, c) ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
@@ -2252,7 +2254,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
   // otherwise close it under them).
   const open = unlinked && gx.linkOpen === a.gpexeAthleteId;
   const tech = [
-    ...(maskGpexeIds() && a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
+    ...(identityViewer() && a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
     ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])], v3),
     ...codesTech("Left-out codes", (a.skippedValues || []).map((s) => s.reason)),
     ...codesTech("Left-out source codes", (a.skippedValues || []).map((s) => s.sourceReason)),
