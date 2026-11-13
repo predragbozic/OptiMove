@@ -33,7 +33,10 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v62_team_session_timezone")) + 1).filter((m) => !m.includes("app_error_events")), "202611131200_training_load_v67_gpexe_track_choices.sql"] }); // MT-B: plus v67 (the preview reads its track choices); test 11 hides its record around v62's rollback // every migration but the error-tracking one (an injected failure would be recorded as a row); through v62 only, so v62 stays the last one here whatever comes after it (test 11 rehearses its rollback)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "tz62", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("v62_team_session_timezone")) + 1).filter((m) => !m.includes("app_error_events")), "202611131200_training_load_v67_gpexe_track_choices.sql"] });
+  // Every migration but the error-tracking one (an injected failure would be recorded as a row), through v62 only, so v62 stays
+  // the last one here whatever comes after it (test 11 rehearses its rollback); plus v67 (MT-B: the preview reads its track
+  // choices), whose record test 11 hides around v62's rollback.
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

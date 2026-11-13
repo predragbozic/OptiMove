@@ -636,8 +636,16 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   if (blocked?.code === "identities_missing_from_source") {
     const byId = new Map(athletes.map((a) => [a.gpexeAthleteId, a]));
     const UNDO = "Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.";
+    // MT-B: a current track or none choice that no longer applies. The entry marks it stale while the athlete still has several
+    // tracks that differ; once GPEXE left one track, or its tracks became one recording (MT-0), the entry carries no choice at all.
+    const choiceStale = (gpexeAthleteId, entry) => {
+      if (entry?.trackChoice) return entry.trackChoice.stale === true;
+      const choice = trackChoices.get(gpexeAthleteId);
+      return Boolean(entry && choice && (choice.kind === "track" || choice.kind === "none"));
+    };
     blocked.resolution = (blocked.gpexeAthleteIds || []).map((gpexeAthleteId) => {
       const entry = byId.get(gpexeAthleteId);
+      const stale = choiceStale(gpexeAthleteId, entry);
       const cause = entry?.notImported?.code ?? "missing_in_gpexe";
       const previousAthleteId = blocked.previousAthleteByGpexeId?.[gpexeAthleteId] ?? null;
       let action;
@@ -648,7 +656,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
       } else if (cause === "athlete_not_in_team") {
         action = "restore_team_membership";
         step = `Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". ${UNDO}`;
-      } else if (entry?.trackChoice?.stale) {
+      } else if (stale) {
         // MT-B: the athlete's track choice was made for tracks GPEXE has changed since the import.
         action = "undo_and_choose_again";
         step = `GPEXE changed this athlete's tracks after the import. A platform admin undoes the import of this session, then the track is chosen again. ${UNDO}`;
@@ -656,7 +664,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         action = "fix_in_gpexe_or_undo";
         step = `Correct this athlete's data in GPEXE (one track, valid statistics), then press "Check now". ${UNDO}`;
       }
-      return { gpexeAthleteId, previousAthleteId, cause: entry?.trackChoice?.stale ? "track_choice_stale" : cause, action, step };
+      return { gpexeAthleteId, previousAthleteId, cause: action === "undo_and_choose_again" ? "track_choice_stale" : cause, action, step };
     });
     if (blocked.unknownExternalIds?.length) {
       blocked.resolution.push({

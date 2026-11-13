@@ -245,6 +245,11 @@ test("1. the mapper: a 'track' choice of exactly this track set imports that tra
   assert.match(fingerprint, /^9003:[0-9]+;9004:[0-9]+$/);
   const plan = (choices) => buildGpexeImportPlan(bundle, { metricSpecs: oracle, trackChoices: choices });
   const before = JSON.stringify(buildGpexeImportPlan(bundle, { metricSpecs: oracle }));
+  // Pinned on the base commit 172218c4 (before MT-B): the no-choice plan is the old code's, not only stable under the new one.
+  const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
+  assert.equal(sha(before), "f5c285d86aeff1f9b4e44f4720d3eb45b799102070f12f01bb2d23174c743373", "no choice: the plan of 172218c4");
+  assert.equal(sha(JSON.stringify(buildGpexeImportPlan(bundleOf({ sessionId: 6101, with106: true }), { metricSpecs: oracle, trackChoices: new Map() }))),
+    "2fd6c11a55edb97a94276d9123e2342f10ada74e30081a6b821465c13509a99a", "no choice with an MT-0 athlete: the plan of 172218c4");
   assert.equal(JSON.stringify(plan(new Map())), before, "an empty choice map changes nothing");
   assert.equal(JSON.stringify(plan(null)), before);
   const as = (c) => new Map([["103", { choiceId: "c1", fingerprint, trackId: null, ...c }]]);
@@ -342,6 +347,8 @@ test("4. a choice changed between the review and the approval is preview_changed
   const now = (await candidates(team)).find((c) => c.id === cand.id);
   assert.equal((await approve(team, now)).body.results?.[0]?.outcome, "imported");
   assert.deepEqual(await identitiesOf(team.teamId, team.athleteIds[2]), nativeOf(bundleOf({ sessionId: 6401 }), 9004));
+  const unusable = (await admin.query(`select count(*)::int n from training.activity_source_observations where athlete_id = $1 and kind = 'record_unusable' and resolved_at is null`, [team.athleteIds[2]])).rows[0].n;
+  assert.equal(unusable, 0, "a used track leaves no open record_unusable observation for 103");
   const final = await put(team, cand.id, "103", { requestKey: key(), choice: "none", expectedChoiceId: c2.id });
   assert.equal(final.status, 409);
 });
@@ -361,6 +368,25 @@ test("5. GPEXE changes the tracks after the import: the choice is stale, the ses
   const step = d.preview.blocked.resolution.find((s) => s.gpexeAthleteId === "103");
   assert.deepEqual([step.cause, step.action], ["track_choice_stale", "undo_and_choose_again"]);
   assert.equal(entryOf(d.preview, "103").trackChoice.stale, true);
+});
+
+test("5b. GPEXE turns the athlete's tracks into one recording (MT-0) after the import: the choice no longer applies, the entry carries none, and the resolution still says track_choice_stale / undo_and_choose_again", async () => {
+  const team = await setupTeam();
+  const cand = await candidateOf(team, 6551);
+  await choose(team, cand.id, { choice: "track", trackId: "9004" });
+  await recompute(team, cand.id);
+  assert.equal((await approve(team, (await candidates(team)).find((c) => c.id === cand.id))).body.results?.[0]?.outcome, "imported");
+  // 9004 becomes an exact copy of 9003: MT-0 takes 103 from 9003, so the imported 9004 identities are missing.
+  const copies = (a) => { const p = a.parts.find((x) => x.track === 9003); a.parts = [p, { ...structuredClone(p), track: 9004 }]; };
+  await checkNow(team, [bundleOf({ sessionId: 6551, updatedOn: "2026-09-15T09:00:00.000", tweak103: copies })]);
+  const blocked = (await candidates(team)).find((c) => c.gpexeTeamSessionId === "6551" && c.status === "blocked");
+  assert.ok(blocked, "the changed session is blocked");
+  const d = await detailOf(team, blocked.id);
+  assert.equal(d.preview.blocked.code, "identities_missing_from_source");
+  assert.ok(entryOf(d.preview, "103").duplicateTracks, "MT-0 took 103 as one recording");
+  assert.equal("trackChoice" in entryOf(d.preview, "103"), false, "the entry carries no choice");
+  const step = d.preview.blocked.resolution.find((s) => s.gpexeAthleteId === "103");
+  assert.deepEqual([step.cause, step.action], ["track_choice_stale", "undo_and_choose_again"]);
 });
 
 test("6. the CLI / test writer path refuses a session with a current choice (track_choice_not_supported)", async () => {

@@ -339,6 +339,7 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
     await c.end();
   }
   assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V62_FILE}`])).rows[0].n, 1, "v62's record is back");
+  assert.equal((await admin.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V67_FILE}`])).rows[0].n, 1, "v67's record is back");
 });
 
 // ---------------------------------------------------------------------------
