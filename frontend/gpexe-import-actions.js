@@ -53,7 +53,7 @@ import {
   gpexeAthleteSentence,
   maskGpexeIds,
   identityBusy,
-  identityViewer,
+  identityNameViewer,
   loadGpexeIdentities,
   loadPairSuggestions,
   loadGuidePairs,
@@ -349,9 +349,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
     openTeamMapping();
     renderTrainingLoad();
-    // An administrator also sees the GPEXE names and dates of birth already
-    // stored (no GPEXE request); a coach's screen never asks.
-    if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
+    // The stored GPEXE names (no GPEXE request): an administrator's with dates of birth, the team's own coach's of the
+    // unlinked athletes only.
+    if (identityNameViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
     // U3: the suggested pairs - for the team's coach and the identity administrators alike (the server decides).
     await loadPairSuggestions(renderTrainingLoad);
     return true;

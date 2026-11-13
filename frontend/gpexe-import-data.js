@@ -177,7 +177,7 @@ export async function loadGpexeTeam(render) {
     gx.loading = false;
     // A status without the identity right (a role revoked meanwhile) drops
     // any name the view still held before anything is painted.
-    if (!identityViewer(gx)) {
+    if (!identityNameViewer(gx)) {
       clearGpexeIdentities({ keepOutcome: false });
       dropPendingIdentityLoad(teamId);
     } else {
@@ -192,7 +192,7 @@ export async function loadGpexeTeam(render) {
     void loadGuide(render);
     // An administrator's Imports view also holds the stored GPEXE names (no
     // GPEXE request): every screen of it names athletes without their id.
-    if (identityViewer(gx)) void loadGpexeIdentities(render);
+    if (identityNameViewer(gx)) void loadGpexeIdentities(render);
     const sourceAthletes = await sourceAthletesRead;
     if (generation !== gx.generation) return;
     applySourceAthletesRead(gx, sourceAthletes);
@@ -687,7 +687,7 @@ async function reloadGpexeLinks(generation) {
   if (generation !== gx.generation) return;
   if (!links.error) gx.links = links.links;
   applySourceAthletesRead(gx, sourceAthletes);
-  if (identityViewer(gx)) void loadGpexeIdentities(() => {});
+  if (identityNameViewer(gx)) void loadGpexeIdentities(() => {});
   if (links.error) gx.sourceAthletesError = links.error;
   if (gx.mapping?.open) {
     pruneTeamMappingChoices(gx);
@@ -1685,6 +1685,13 @@ export function identityViewer(gx = g()) {
   return gx.status?.viewer?.identityAdmin === true;
 }
 
+// The GPEXE names (plan docs/ai/coach-gpexe-name-plan.md): an administrator (every athlete, with dates of birth and conflicts),
+// or the team's own coach (the unlinked athletes' names only - the answer carries no date of birth and no conflict). Names and
+// the "GPEXE athlete N" ordinals follow this; dates, conflicts, Technical details and the load stay identityViewer's.
+export function identityNameViewer(gx = g()) {
+  return identityViewer(gx) || gx.status?.viewer?.identityNames === true;
+}
+
 // Nothing of an identity answer may be kept by the browser: no HTTP cache
 // (the server says no-store too), no storage of any kind — the answer lives
 // in gx.identity until the screen closes.
@@ -1695,7 +1702,10 @@ function identityRequest(path, options = {}) {
 
 function identityList(answer) {
   const byId = {};
-  for (const i of answer.identities || []) byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, birthDate: typeof i.birthDate === "string" ? i.birthDate : null };
+  // A coach's answer has no birthDate key: the entry then has none either (undefined), so no "Born" line is ever drawn for it.
+  for (const i of answer.identities || []) {
+    byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, ...("birthDate" in i ? { birthDate: typeof i.birthDate === "string" ? i.birthDate : null } : {}) };
+  }
   return {
     byId,
     pendingCount: Number.isInteger(answer.pendingCount) ? answer.pendingCount : 0,
@@ -1711,7 +1721,7 @@ function identityList(answer) {
 // screen shows nothing of it, without an error.
 export async function loadGpexeIdentities(render) {
   const gx = g();
-  if (!identityViewer(gx) || !gx.teamId) return;
+  if (!identityNameViewer(gx) || !gx.teamId) return;
   const generation = gx.generation;
   const epoch = identityEpoch;
   const teamId = gx.teamId;
@@ -1720,7 +1730,7 @@ export async function loadGpexeIdentities(render) {
   render();
   try {
     const answer = await identityRequest(teamPath(teamId, "/athlete-identities"));
-    if (generation !== gx.generation || epoch !== identityEpoch || !identityViewer(gx)) return;
+    if (generation !== gx.generation || epoch !== identityEpoch || !identityNameViewer(gx)) return;
     gx.identity = { ...gx.identity, available: true, loading: false, list: identityList(answer) };
   } catch (error) {
     if (generation !== gx.generation || epoch !== identityEpoch) return;
@@ -1859,12 +1869,12 @@ async function postIdentityLoad(render, { check }) {
   // workspace change and a return - the view of the same team open now.
   // Another team's view is never touched.
   const view = generation === gx.generation ? gx : g();
-  if (!view || view.teamId !== teamId || !identityViewer(view)) return;
+  if (!view || view.teamId !== teamId || !identityNameViewer(view)) return;
   if (view !== gx && view.identity.sending) return;
   // The names are read again only while an Imports view of this team is open
   // now (loadGpexeIdentities takes its own epoch, so a later clear still drops
   // that read).
-  const viewOpen = () => identityViewer(view) && view.teamId === teamId && g() === view && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
+  const viewOpen = () => identityNameViewer(view) && view.teamId === teamId && g() === view && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
   if (outcome.gone) {
     // Not available any more (the binding ended, the right changed): nothing
     // of it stays on screen.
@@ -1918,25 +1928,26 @@ export function identityNameKey(name) {
 // that list, never stored, never the id). A coach - who gets no identity and
 // no sign that one exists - keeps the id, as before.
 export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   // A GPEXE name shared by two athletes carries the position too.
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `${who.name} (${ordinal})` : who.name;
   if (who) return `Name not provided (${ordinal})`;
-  return hasStoredIdentities(gx) ? `Name not loaded (${ordinal})` : ordinal;
+  // A coach reads unlinked athletes' names only: any other athlete is simply the ordinal, never "not loaded".
+  return identityViewer(gx) && hasStoredIdentities(gx) ? `Name not loaded (${ordinal})` : ordinal;
 }
 
 // The same athlete inside a sentence: "the GPEXE athlete <name>", "GPEXE
 // athlete N (name not provided)", "GPEXE athlete N (name not loaded)" or
 // "GPEXE athlete N" - for a coach "GPEXE athlete <id>", as before.
 export function gpexeAthleteSentence(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `the GPEXE athlete ${who.name} (${ordinal})` : `the GPEXE athlete ${who.name}`;
   if (who) return `${ordinal} (name not provided)`;
-  return hasStoredIdentities(gx) ? `${ordinal} (name not loaded)` : ordinal;
+  return identityViewer(gx) && hasStoredIdentities(gx) ? `${ordinal} (name not loaded)` : ordinal;
 }
 
 // The athlete's position in the team's GPEXE athlete list (the server orders
@@ -1959,12 +1970,12 @@ function hasStoredIdentities(gx) {
 
 // True when the screen must not show a GPEXE id outside Technical details.
 export function maskGpexeIds(gx = g()) {
-  return identityViewer(gx);
+  return identityNameViewer(gx);
 }
 
 export function identityOf(gpexeAthleteId, gx = g()) {
-  // Never for a viewer without the identity right, whatever the state holds.
-  if (!identityViewer(gx)) return null;
+  // Never for a viewer without the right to the names, whatever the state holds.
+  if (!identityNameViewer(gx)) return null;
   return gx.identity?.list?.byId?.[String(gpexeAthleteId)] || null;
 }
 

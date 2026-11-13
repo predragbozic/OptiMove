@@ -359,8 +359,11 @@ test("2. the team's coach (team workspace), the club admin and a platform admin 
     for (const p of r.body.ambiguous) { assert.deepEqual(keys(p), KEYS.ambiguous); for (const c of p.candidates) assert.deepEqual(keys(c), KEYS.candidate); }
     assert.ok(!r.text.includes("Unknown"), "a GPEXE athlete without any team athlete of that name is not listed");
   }
-  // The coach never gets the full identity list or the load.
-  assert.equal((await list(o, o.coach.cookie)).status, 404);
+  // The coach never gets the full identity list (plan coach-gpexe-name: the unlinked names only, no date) or, in pilot mode,
+  // the load.
+  const coachList = await list(o, o.coach.cookie);
+  assert.equal(coachList.status, 200);
+  assert.ok(coachList.body.identities.every((i) => !("birthDate" in i)) && !("birthDateConflicts" in coachList.body));
   assert.equal((await load(o, o.coach.cookie)).status, 404);
 });
 

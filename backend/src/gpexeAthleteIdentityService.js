@@ -313,8 +313,33 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
       // The club the route resolved the caller's workspace for must still be
       // the team's club under the lock (a team moved meanwhile reads nothing).
       || (expectedClubId && String(team.club_id) !== String(expectedClubId))) return closeNull();
-    if (!(await rightHolds(client, ctx, team.club_id, { lock: true }))) return closeNull();
+    if (!(await rightHolds(client, ctx, team.club_id, { lock: true, teamId }))) return closeNull();
     if (listHold) await listHold("locked", client);
+    if (ctx.basis === "team_coach") {
+      // The team's own coach (plan docs/ai/coach-gpexe-name-plan.md): the GPEXE name of an athlete with no active link only,
+      // and nothing else of the snapshot - no date of birth, no date conflict. Filtered here, under the same locks.
+      const unlinked = (await client.query(
+        `select i.gpexe_athlete_id, i.display_name
+           from training_load.gpexe_athlete_identities i
+          where i.binding_id = $1 and i.owner_team_id = $2 and i.expires_at > now()
+            and not exists (select 1 from training_load.gpexe_athlete_links l
+                             where l.owner_team_id = i.owner_team_id and l.unlinked_at is null and l.gpexe_athlete_id = i.gpexe_athlete_id)
+          order by length(i.gpexe_athlete_id), i.gpexe_athlete_id`,
+        [binding.id, teamId],
+      )).rows;
+      const { pending, retryLater } = await eligibleAthletes(client, teamId, binding.id);
+      const answer = {
+        identities: unlinked.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name })),
+        pendingCount: pending.length,
+        retryLaterCount: retryLater,
+        maxPerLoad: IDENTITY_MAX_PER_LOAD,
+        retentionDays: IDENTITY_TTL_DAYS,
+      };
+      await client.query("commit");
+      released = true;
+      release();
+      return answer;
+    }
     const identities = (await client.query(
       `select gpexe_athlete_id, display_name, to_char(birth_date, 'YYYY-MM-DD') as birth_date
          from training_load.gpexe_athlete_identities

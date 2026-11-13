@@ -1486,8 +1486,8 @@ function identityLinesHtml(id, gx, duplicates) {
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
   return `
-    <span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>
-    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</span>` : ""}
+    ${who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
+    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
   `;
 }
 
@@ -1523,7 +1523,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `${gpexeAthleteSentence(id, gx)}${named && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1534,7 +1534,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : maskGpexeIds(gx) ? gpexeSideText(id, gx) : `GPEXE athlete ${id}`;
+  const gpexeSide = who ? `${gpexeSideText(id, gx)}${who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : maskGpexeIds(gx) ? gpexeSideText(id, gx) : `GPEXE athlete ${id}`;
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1590,6 +1590,9 @@ function identityCheckRefusalText(refusal) {
 }
 
 function renderIdentityPanelHtml(gx) {
+  // The load panel (load, retry, suppression, dates) is the administrator's. The team's own coach reads the stored names
+  // through the same list but never loads them, so the panel is not drawn for a names-only viewer.
+  if (!identityViewer(gx)) return "";
   const id = gx.identity;
   if (!id || (!id.available && !id.loading && !id.error && !id.unconfirmed && !id.readError)) return "";
   const list = id.list;
@@ -1660,7 +1663,7 @@ function renderPairHtml(p, gx, list, duplicates) {
   const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = maskGpexeIds(gx) && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? (who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : "") : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
@@ -2183,7 +2186,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   return `
     <div class="gpexe-link">
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
-      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
+      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
       ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
       ${compact ? (compactHasValues(a, c) ? `<p class="muted">The values in this row help you find them in GPEXE. They do not prove who it is.</p>` : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">

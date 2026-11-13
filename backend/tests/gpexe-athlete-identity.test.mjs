@@ -387,7 +387,39 @@ test("3. a real check through the binding loads no identity (zero athlete reques
   assert.equal(after.body.pendingCount, 0);
 });
 
-test("4. authorization and information hiding: a platform admin (platform or the team's club workspace) and the team's club admin (that club's workspace) get the identity; a coach, a platform admin in the team workspace, a club admin in another workspace, another club's admin, a revoked club admin, a missing or malformed team, an archived team or club, a never-bound team and an ended binding all get the identical 404 {error:notFound} with no-store, on GET and POST, and nothing is read; a coach's status has no identity trace", async () => {
+test("4b. the team's coach (plan coach-gpexe-name): the stored list holds the GPEXE names of the unlinked athletes only - each { gpexeAthleteId, name }, no birthDate key, no birthDateConflicts - while an administrator's answer is unchanged; the coach in another team's workspace, another team's coach and a revoked coach get the identical 404", async () => {
+  const { o } = await ready(3, 4601);
+  assert.equal((await load(o)).status, 200);
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/athlete-links`, { method: "POST", cookie: o.padmin.cookie, body: { gpexeAthleteId: "4601", athleteId: o.athleteIds[0] } })).status, 201);
+  const admin = await list(o);
+  assert.deepEqual(admin.body.identities.map((i) => [i.gpexeAthleteId, typeof i.birthDate]), [["4601", "string"], ["4602", "string"], ["4603", "string"]], "the administrator: every athlete, with dates");
+  assert.ok("birthDateConflicts" in admin.body);
+  const coach = await list(o, o.coach.cookie);
+  assert.equal(coach.status, 200, coach.text);
+  assert.deepEqual(Object.keys(coach.body).sort(), ["identities", "maxPerLoad", "pendingCount", "retentionDays", "retryLaterCount"]);
+  assert.deepEqual(coach.body.identities.map((i) => Object.keys(i).sort()), [["gpexeAthleteId", "name"], ["gpexeAthleteId", "name"]]);
+  assert.deepEqual(coach.body.identities.map((i) => i.gpexeAthleteId), ["4602", "4603"], "the linked athlete's GPEXE name is not the coach's");
+  assert.equal(coach.body.identities[0].name, admin.body.identities[1].name);
+  for (const i of admin.body.identities) assert.ok(!coach.text.includes(i.birthDate), "no date of birth reaches the coach");
+  noPii(coach.body.identities.reduce((text, i) => text.split(JSON.stringify(i.name)).join('""'), coach.text), "nothing beyond the names");
+  // The identical 404 for the coach elsewhere.
+  const missing = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities`, { cookie: o.coach.cookie });
+  // The same coach acting in another team's workspace (a coach without a club role cannot act in the club's).
+  const second = (await q(`insert into public.teams (club_id, name) values ($1, 'Second') returning id`, [o.clubId]))[0].id;
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [o.coach.id, second]);
+  await setWorkspace(o.coach.id, "team", second);
+  const elsewhere = await list(o, o.coach.cookie);
+  assert.deepEqual([elsewhere.status, elsewhere.text], [404, missing.text], "the coach in another team's workspace");
+  await setWorkspace(o.coach.id, "team", o.teamId);
+  const other = await ready(1, 4701);
+  const foreign = await list(o, other.o.coach.cookie);
+  assert.deepEqual([foreign.status, foreign.text], [404, missing.text], "another team's coach");
+  await q(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [o.coach.id, o.teamId]);
+  const revoked = await list(o, o.coach.cookie);
+  assert.equal(revoked.status, 404, "a revoked coach");
+});
+
+test("4. authorization and information hiding: a platform admin (platform or the team's club workspace) and the team's club admin (that club's workspace) get the identity; a club admin in another workspace, another club's admin, a revoked club admin, a missing or malformed team, an archived team or club, a never-bound team and an ended binding all get the identical 404 {error:notFound} with no-store, on GET and POST, and nothing is read; the team's coach (a platform admin acting in the team workspace included) reads the unlinked names only (plan coach-gpexe-name) and its load stays the identical 404 in pilot mode; a coach's status says identityNames only", async () => {
   const { o, conn, binding } = await ready(2);
   const ok = async (cookie, who) => {
     const r = await list(o, cookie);
@@ -405,15 +437,27 @@ test("4. authorization and information hiding: a platform admin (platform or the
   const padminClub = await platformAdmin(["club", o.clubId]);
   await ok(padminClub.cookie, "platform admin, club workspace");
   await ok(o.cadmin.cookie, "club admin, own club workspace");
-  await hidden(o.coach.cookie, "coach");
+  // The team's coach (team workspace): the stored names of the unlinked athletes (test 4b); the load in pilot mode is the 404.
+  const coachList = await list(o, o.coach.cookie);
+  assert.equal(coachList.status, 200, coachList.text);
+  assert.equal(coachList.cacheControl, "no-store");
+  const coachLoad = await api(`/gpexe/teams/${o.teamId}/athlete-identities/loads`, { method: "POST", cookie: o.coach.cookie, body: { requestKey: crypto.randomUUID() } });
+  assert.deepEqual([coachLoad.status, coachLoad.body], [404, { error: "notFound" }]);
   const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
   assert.equal(status.status, 200);
-  assert.ok(!status.text.includes("identity"), "the coach's status carries no identity trace");
+  assert.deepEqual(Object.keys(status.body.viewer).filter((k) => /identity/i.test(k)), ["identityNames"], "the coach's status: names only - no identityAdmin, no identityLoad");
+  assert.equal(status.body.viewer.identityNames, true);
   assert.equal((await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.cadmin.cookie })).body.viewer.identityAdmin, true);
   // A platform admin who also coaches the team, active in the team workspace (a team workspace needs a team role).
   const padminTeam = await platformAdmin(["team", o.teamId]);
   await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [padminTeam.id, o.teamId]);
-  await hidden(padminTeam.cookie, "platform admin, team workspace");
+  // In the team workspace that platform admin acts as the team's coach: the coach's names only, never dates; the load in pilot
+  // mode is the 404.
+  const asCoach = await list(o, padminTeam.cookie);
+  assert.equal(asCoach.status, 200, asCoach.text);
+  assert.ok(asCoach.body.identities.every((i) => !("birthDate" in i)) && !("birthDateConflicts" in asCoach.body), "platform admin, team workspace: the coach's view");
+  const asCoachLoad = await api(`/gpexe/teams/${o.teamId}/athlete-identities/loads`, { method: "POST", cookie: padminTeam.cookie, body: { requestKey: crypto.randomUUID() } });
+  assert.deepEqual([asCoachLoad.status, asCoachLoad.body], [404, { error: "notFound" }]);
   const otherClub = (await q(`insert into public.clubs (name) values ('Other') returning id`))[0].id;
   const otherAdmin = await clubAdmin(otherClub);
   await hidden(otherAdmin.cookie, "another club's admin");
