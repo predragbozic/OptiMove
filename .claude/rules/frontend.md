@@ -69,6 +69,22 @@ has caused a wrong conclusion in this project before.
   plain read filters the superseded rows out, the parameter returns them, any other query
   is refused.
 
+## Interaction principles
+
+Confirmed product decision of the owner, 2026-11-13: "interaction through the whole
+application - whatever we build, it matters." It applies to every new or changed screen.
+
+- Action before explanation: the next step is a button; any explanation follows it, folded or in a help panel.
+- One problem = one question = 2-3 buttons. Don't put several decisions in one form or table.
+- Prefer an immediate visible result with Undo to "Are you sure?", but only where a route really reverses the write
+  for the same person. Examples: a variable's category link in Data configuration (removed again), and an imported
+  GPEXE session (U5, platform admin only). A write without one keeps an explicit confirmation, for example a coach's
+  import, an athlete link (Unlink ends it, but results already imported under it stay), settings and deletions.
+- Show a state with colour, a glyph and a count, never with colour alone.
+- A coach or club admin gets one plain sentence and one next step: no ids, codes or server sentences. Technical
+  details are for the platform admin only.
+- Every gesture (swipe, drag) also has a visible control. The 44 px target and 360/375/390 px rules above are unchanged.
+
 ## Browser QA
 
 A real browser check (manual or automated, per `testing-evidence.md`) is only needed
