@@ -1266,7 +1266,7 @@ test("link values: a v3 review shows the helper values the server read from the 
   assert.ok(!/5,230|29\.5/.test(rowOf(html)));
 });
 
-test("link: the confirmation shows the exact GPEXE id and the athlete's full name together; Cancel sends nothing; Confirm sends exactly that link", async () => {
+test("link: the confirmation names the GPEXE athlete by its list position and the athlete's full name together; Cancel sends nothing; Confirm sends exactly that link", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) }));
   await openImports();
@@ -1377,7 +1377,7 @@ test("unlink from the link notice removes exactly the link just made (after a qu
   confirmAnswer = false;
   await act("training-load-gpexe-unlink", { linkId: "link-2" });
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0, "declined: nothing sent");
-  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 2 from Dario Petrov Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Dario Petrov Example; if they are wrong, they can't be changed here — contact a platform administrator.", "the link just made is named even if the link list does not have it yet");
+  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 2 from Dario Petrov Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Dario Petrov Example; if they are wrong, they can't be changed here — ask your club administrator.", "the link just made is named even if the link list does not have it yet");
   confirmAnswer = true;
   await act("training-load-gpexe-unlink", { linkId: "link-2" });
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-2/unlink")).length, 1);
@@ -1516,6 +1516,8 @@ test("link: a lost answer closes the confirmation, treats the links as changed a
 // ---------------------------------------------------------------------------
 
 const ADMIN = "can't be changed here — contact a platform administrator.";
+// O5: a coach is told to ask their club administrator.
+const COACH_ASK = "can't be changed here — ask your club administrator.";
 
 test("approve: a calm note to check the athletes shows when the session imports a linked athlete", async () => {
   resetState();
@@ -1612,13 +1614,13 @@ test("approve: the final question names how many athletes and what is written", 
   assert.equal(approveCalls().length, 0);
 });
 
-test("unlink: the question names the GPEXE id and the athlete from the link list", async () => {
+test("unlink: the question names the GPEXE athlete by its list position and the athlete from the link list", async () => {
   resetState();
   installFetchMock(gpexeServer({}));
   await openImports();
   confirmAnswer = false;
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
-  assert.equal(confirmQuestions.at(-1), `Unlink GPEXE athlete 1 from Ana Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they ${ADMIN}`);
+  assert.equal(confirmQuestions.at(-1), `Unlink GPEXE athlete 1 from Ana Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they ${COACH_ASK}`);
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0, "declined: nothing sent");
   confirmAnswer = true;
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
@@ -1631,7 +1633,7 @@ test("unlink: a link not in the list gets the generic question, and still only t
   await openImports();
   confirmAnswer = false;
   await act("training-load-gpexe-unlink", { linkId: "link-unknown" });
-  assert.equal(confirmQuestions.at(-1), `Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported ${ADMIN}`);
+  assert.equal(confirmQuestions.at(-1), `Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported ${COACH_ASK}`);
   assert.ok(!/undefined|null/.test(confirmQuestions.at(-1)));
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0);
   confirmAnswer = true;
@@ -2291,7 +2293,7 @@ test("Link athletes: closing with choices asks first (declined keeps them); Unli
   // Unlink from the screen.
   await act("training-load-gpexe-map-open");
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
-  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 1 from Ana Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they can't be changed here — contact a platform administrator.");
+  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 1 from Ana Example? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they can't be changed here — ask your club administrator.");
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-1/unlink")).length, 1);
   assert.ok(fetchCalls.filter((c) => c.url.endsWith("/source-athletes")).length >= 2, "the source athletes were read again after the change");
   assert.equal(state.trainingLoad.gpexe.linkSeq, 1);
@@ -3086,5 +3088,67 @@ test("P2 1: the Search tab's Technical details are the platform admin's only - t
     const html = renderTrainingLoadCoachHtml();
     assert.equal(/<details class="gpexe-tech">/.test(html), who === "platform admin", `${who}: Technical details`);
     assert.equal(/<dt>GPEXE team id<\/dt><dd>980<\/dd>/.test(html), who === "platform admin", `${who}: the GPEXE team id`);
+  }
+});
+
+test("P2 4: a refused start or a failed search with a precise connection reason sends the club admin to Settings > Source connections, the coach to their club administrator", async () => {
+  const { checkErrorText, renderCheckSummaryHtml } = await import("../gpexe-import-view.js");
+  const refused = { code: "source_connection_unavailable", message: "server words", data: { error: "source_connection_unavailable", reason: "binding_ended" } };
+  const failed = { status: "failed", startedAt: "2026-11-13T10:00:00Z", error: { code: "binding_ended", message: "server words" } };
+  const cases = [
+    ["coach", () => {}, /Ask your club administrator\./],
+    ["club admin", adminView, /Check it in Settings > Source connections\./],
+  ];
+  for (const [who, setUp, expected] of cases) {
+    resetState();
+    setUp();
+    state.trainingLoad.gpexe = { ...(state.trainingLoad.gpexe || {}), status: status() };
+    assert.match(checkErrorText(refused), expected, `${who}: refused start`);
+    const html = renderCheckSummaryHtml(failed);
+    assert.match(html, expected, `${who}: failed search`);
+    assert.ok(!/server words|binding_ended|Technical details/.test(html), `${who}: no code or server message`);
+  }
+  // Without a precise reason the club admin is told who to ask (OptiMove support), never a step they can't take.
+  resetState();
+  adminView();
+  state.trainingLoad.gpexe = { ...(state.trainingLoad.gpexe || {}), status: status() };
+  assert.match(checkErrorText({ code: "source_connection_unavailable", data: { error: "source_connection_unavailable" } }), /Contact OptiMove support\./);
+  // The platform admin keeps the server's own sentence.
+  resetState();
+  platformView();
+  state.trainingLoad.gpexe = { ...(state.trainingLoad.gpexe || {}), status: status() };
+  assert.equal(checkErrorText(refused), "server words");
+});
+
+test("P2 5: the unlink question names who to ask by audience (O5)", async () => {
+  for (const [who, setUp, ask] of [["coach", () => {}, "ask your club administrator"], ["club admin", adminView, "contact OptiMove support"], ["platform admin", platformView, "contact a platform administrator"]]) {
+    resetState();
+    setUp();
+    installFetchMock(gpexeServer({}));
+    await openImports();
+    confirmAnswer = false;
+    for (const linkId of ["link-1", "link-unknown"]) {
+      const before = confirmQuestions.length;
+      await act("training-load-gpexe-unlink", { linkId });
+      assert.equal(confirmQuestions.length, before + 1, `${who} ${linkId}: one question`);
+      const q = confirmQuestions.at(-1);
+      assert.ok(q.endsWith(`— ${ask}.`), `${who} ${linkId}: ${q}`);
+      assert.ok(!/\b10[0-9]\b/.test(q), `${who} ${linkId}: no GPEXE id`);
+    }
+    assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0, `${who}: declined, nothing sent`);
+  }
+});
+
+test("P2 2: no setup step tells a coach or a club admin to give anyone Technical details", async () => {
+  const { blockedCoachText } = await import("../gpexe-import-view.js");
+  for (const code of ["mapping_not_usable", "source_shape_mismatch"]) {
+    for (const [who, setUp, has] of [["coach", () => {}, false], ["club admin", adminView, false], ["platform admin", platformView, true]]) {
+      resetState();
+      setUp();
+      state.trainingLoad.gpexe = { ...(state.trainingLoad.gpexe || {}), status: status() };
+      const text = blockedCoachText({ blockedCode: "data_setup_incomplete", blockedSourceCode: code });
+      assert.equal(/Technical details/.test(text.step), has, `${who} ${code}: ${text.step}`);
+      assert.match(text.step, /\.$/, `${who} ${code}: one sentence end`);
+    }
   }
 });

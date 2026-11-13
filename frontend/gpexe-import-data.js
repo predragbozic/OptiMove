@@ -810,7 +810,7 @@ export function stagedTeamMapping(gx = g()) {
     const label = gpexeAthleteSentence(gpexeAthleteId, gx);
     if (!choice) return { error: `The athlete chosen for ${label} is not linkable any more (already linked, or no longer in the team). Choose again.` };
     if (choice.duplicate) return { error: `More than one athlete of the team is called ${choice.name}. Give them different names in Settings > Athletes first, then link.` };
-    if (seen.has(athleteId)) return { error: maskGpexeIds(gx) ? `${choice.name} is chosen for ${gpexeAthleteSentence(seen.get(athleteId), gx)} and ${gpexeAthleteSentence(gpexeAthleteId, gx)}. One athlete can be linked to one GPEXE athlete only.` : `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
+    if (seen.has(athleteId)) return { error: `${choice.name} is chosen for ${gpexeAthleteSentence(seen.get(athleteId), gx)} and ${gpexeAthleteSentence(gpexeAthleteId, gx)}. One athlete can be linked to one GPEXE athlete only.` };
     seen.set(athleteId, gpexeAthleteId);
     pairs.push({ gpexeAthleteId, athleteId, athleteName: choice.name });
   }
@@ -1957,12 +1957,6 @@ function hasStoredIdentities(gx) {
   return Object.keys(gx.identity?.list?.byId || {}).length > 0;
 }
 
-// True when the screen must not show a GPEXE id outside Technical details. P2 (owner 2026-11-13): for every viewer - a
-// coach's screen names a GPEXE athlete by its list position as well, and only the platform admin has Technical details.
-// eslint-disable-next-line no-unused-vars
-export function maskGpexeIds(gx = g()) {
-  return true;
-}
 
 export function identityOf(gpexeAthleteId, gx = g()) {
   // Never for a viewer without the identity right, whatever the state holds.
