@@ -62,4 +62,4 @@ docs/runbooks/source-metric-confirmations-v65*.sql text eol=lf
 
 docs/runbooks/activity-roster-v26-rollback.sql text eol=lf
 docs/runbooks/gpexe-check-finalization-v33-rollback.sql text eol=lf
-docs/runbooks/dashboard-simple-v64*.sql text eol=lf
+docs/runbooks/dashboard-simple-v66*.sql text eol=lf
