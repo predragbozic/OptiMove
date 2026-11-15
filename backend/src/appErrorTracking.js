@@ -1,3 +1,4 @@
+import { purgeDashboardSimpleRequests } from './dashboardSimple/retention.js';
 // Option A, A1: a sanitized record of the errors the app hit (migration v58, public.app_error_events).
 //
 // Nothing a person typed or a source returned is ever stored. A report is reduced to closed shapes here, and the
@@ -479,8 +480,20 @@ export async function purgePersonLookups({ executor = pool } = {}) {
 }
 
 export function startAppErrorRetentionSchedule({ intervalHours = PURGE_INTERVAL_HOURS, startupDelayMs = 60_000 } = {}) {
-  const failed = (e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`);
-  const tick = () => purgeAppErrorEvents().catch(failed).then(() => purgePersonLookups()).catch(failed);
+  const purges = [
+    ["app-errors", "event purge", purgeAppErrorEvents],
+    ["app-errors", "person lookup purge", purgePersonLookups],
+    ["dashboard-simple", "receipt purge", () => purgeDashboardSimpleRequests(pool)],
+  ];
+  const tick = async () => {
+    const results = await Promise.allSettled(purges.map(([, , purge]) => purge()));
+    results.forEach((result, index) => {
+      if (result.status !== "rejected") return;
+      const [prefix, operation] = purges[index];
+      const code = String(result.reason?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "");
+      console.error(`[${prefix}] ${operation} failed: ${code}`);
+    });
+  };
   warnIfUserHashKeyMissing();
   const first = setTimeout(tick, startupDelayMs);
   first.unref();

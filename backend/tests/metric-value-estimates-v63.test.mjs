@@ -861,3 +861,47 @@ async function booleansOf(client, sql) {
   for (const res of results) for (const row of res.rows) for (const [k, v] of Object.entries(row)) if (typeof v === "boolean") out.push([k, v]);
   return out;
 }
+
+test("dashboard query excludes estimates from current and comparison without changing session built-ins", async () => {
+  const team = await setupTeam();
+  const session = await importSession(team, 9181);
+  const { sum } = await eventFacts(session);
+  const request = async (suffix, body, status) => {
+    const response = await fetch(`${apiBase}/api/training-load/dashboards${suffix}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: team.coach.cookie },
+      body: JSON.stringify(body),
+    });
+    const json = await response.json();
+    assert.equal(response.status, status, JSON.stringify(json));
+    return json;
+  };
+  const { dashboard } = await request("", { name: "Measured only" }, 201);
+  const addWidget = (widgetType, widgetOrder, y, revision) => request(`/${dashboard.id}/widgets`, {
+    expectedDashboardRevision: revision, widgetType, title: widgetType, widgetOrder,
+    x: 0, y, width: widgetType === "kpi" ? 3 : 6, height: widgetType === "kpi" ? 2 : 4, mobileOrder: widgetOrder,
+  }, 201);
+  const chart = await addWidget("kpi", 0, 0, dashboard.revision);
+  const series = (widget, body, revision, seriesOrder) => request(`/${dashboard.id}/widgets/${widget.widgetId}/series`, {
+    expectedWidgetRevision: revision, seriesOrder, ...body,
+  }, 201);
+  await series(chart, { metricDefinitionId: sum.def, dataScopeLevel: "session", analyticalAggregation: "sum",
+    comparisonPeriod: "previous_period" }, 1, 0);
+  const latest = (await admin.query("select revision from training_load.dashboards where id=$1", [dashboard.id])).rows[0].revision;
+  const table = await addWidget("table", 1, 4, latest);
+  await series(table, { builtInSeriesKey: "session_count", dataScopeLevel: "day", analyticalAggregation: "sum" }, 1, 0);
+  await series(table, { builtInSeriesKey: "last_session_date", dataScopeLevel: "day", analyticalAggregation: "last" }, 2, 1);
+  const read = (date) => request(`/${dashboard.id}/query`, { dateFrom: date, dateTo: date }, 200);
+  const beforeCurrent = await read(D1);
+  const beforeComparison = await read("2026-09-15");
+  assert.ok(beforeCurrent.widgets[0].series[0].data.current.length);
+  assert.ok(beforeComparison.widgets[0].series[0].data.comparison.length);
+  const client = await newClient();
+  try {
+    const participantId = await participantFor(session, team.athleteIds[2]);
+    await writeEstimate(client, { participantId, def: sum, actor: team.coach.id, value: 42000 });
+    assert.deepEqual((await read(D1)).widgets, beforeCurrent.widgets);
+    assert.deepEqual((await read("2026-09-15")).widgets, beforeComparison.widgets);
+  } finally {
+    await client.end();
+  }
+});

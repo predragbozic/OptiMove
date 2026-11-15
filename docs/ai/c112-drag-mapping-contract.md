@@ -1897,6 +1897,9 @@ whole team; the screen's sentence sent the admin to a search that could not help
   share (`unsupported_category`, for one) or `mixed`, and `tried` is how many were read. With no stored session at
   all it is `409 no_stored_session`, as before. The look-back is bounded: an older usable session behind ten
   unusable ones is not reached by default.
+- **A stored session whose plan fails in a way the import's gates do not name** (a bundle of an unexpected shape) is
+  passed by as well, with the reason `session_unreadable` and one log line naming the kind of error only; named, it
+  is the server's own error, as before.
 - **A named session** (`candidateId`, and every placement and save) keeps its own refusal, `candidate_not_importable`
   with the import's reason. Nothing about the audience or the order of 404 before 409 changed.
 - **The screen:** the header says which session is shown (its date and label) and how many newer ones cannot be used;
