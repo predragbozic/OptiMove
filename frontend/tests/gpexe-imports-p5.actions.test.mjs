@@ -138,7 +138,7 @@ test("P5 2: it says each thing once: the search, the four marks with colour and 
     [/A day without a mark may not have been searched yet\./, "unmarked days"],
     [/<strong>Needs you<\/strong> - one step is missing before it can be imported\. The Needs you tab groups the sessions by that step; each group(?:'|&#039;)s button does it\./, "Needs you, once"],
     [/<strong>Import off<\/strong> importing is not turned on for this team yet\. You can still find and review sessions\./, "Import off"],
-    [/<strong>Linking athletes<\/strong> tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session\. It is never guessed/, "linking"],
+    [/<strong>Linking athletes<\/strong> tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session\. It is never guessed: the values of the last session only help you find them\./, "linking, in what this viewer sees"],
     [/<strong>Later<\/strong> puts a Ready session aside on this device only\./, "Later"],
     [/<strong>After importing<\/strong> a session shows with ✓ in the calendar here, and its results are in Training Load → Activities\./, "where they go"],
   ]) assert.match(h, re, what);
@@ -197,4 +197,40 @@ test("P5 6: Tab stays inside the open help", async () => {
   first.getAttribute = last.getAttribute = () => null;
   assert.equal(trapPeriodSheetTab(ev, doc), true);
   assert.equal(focused, first);
+});
+
+test("P5 7 (code review): a team change closes the help; leaving Imports closes the help and the sheet; the sheet's button closes the help", async () => {
+  const { selectGpexeTeam } = await import("../gpexe-import-data.js");
+  await openAs();
+  await act("training-load-gpexe-help");
+  await selectGpexeTeam("bbbbbbbb-0000-4000-8000-000000000002", () => {});
+  assert.equal(gx().helpOpen, false, "a team change");
+  await openAs();
+  await act("training-load-gpexe-help");
+  await act("training-load-gpexe-period-toggle");
+  assert.equal(gx().helpOpen, false, "one modal at a time");
+  gx().helpOpen = true;
+  gx().period.open = true;
+  await act("training-load-section", { section: "activities" }).catch(() => {}); // the closing comes first; the next section itself is not loaded here
+  assert.equal(gx().helpOpen, false);
+  assert.equal(gx().period.open, false);
+});
+
+test("P5 8 (code review): the linking line names only what this viewer sees on Link athletes", async () => {
+  await openAs();
+  await act("training-load-gpexe-help");
+  assert.doesNotMatch(help(), /date of birth/);
+  gx().identity = { ...(gx().identity || {}), list: [] };
+  assert.match(help(), /the GPEXE name and the last session(?:'|&#039;)s values only help you find them/);
+});
+
+test("P5 9 (mobile review): the phone sheet keeps the page still and clear of the notch and the home bar", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const block = css.slice(css.indexOf("/* Imports P5:"), css.indexOf("/* End of Imports P5. */"));
+  assert.match(block, /overscroll-behavior:\s*contain/);
+  assert.match(block, /body:has\(\.imports-help\.is-open\)\s*\{\s*overflow:\s*hidden;/);
+  assert.match(block, /safe-area-inset-bottom/);
+  assert.match(block, /safe-area-inset-top/);
+  assert.doesNotMatch(block, /100vmax/, "a real backdrop, not a box-shadow");
 });

@@ -6,7 +6,8 @@ import { escapeHtml } from "./utils.js";
 
 // `ask` is the viewer's own "who to ask" sentence (a coach: the club administrator; a club admin: OptiMove support);
 // empty for a platform admin, who is the one asked.
-export function renderImportsHelpHtml({ ask = "" } = {}) {
+// `findBy` is what helps this viewer find a GPEXE athlete (code review: only what this viewer sees on Link athletes).
+export function renderImportsHelpHtml({ ask = "", findBy = "the values of the last session" } = {}) {
   const item = (title, text) => `<li><strong>${escapeHtml(title)}</strong> ${escapeHtml(text)}</li>`;
   // A real backdrop (mobile review): a click outside closes the help, and the page behind takes no click.
   return `
@@ -28,7 +29,7 @@ export function renderImportsHelpHtml({ ask = "" } = {}) {
       </ul>
       <p class="imports-help-fine">A day without a mark may not have been searched yet.</p>
       <ul class="imports-help-list">
-        ${item("Linking athletes", "tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session. It is never guessed: the name, date of birth and values only help you find them.")}
+        ${item("Linking athletes", `tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session. It is never guessed: ${findBy} only help you find them.`)}
         ${item("Later", "puts a Ready session aside on this device only. It stays Ready for everyone else; Show brings it back.")}
         ${item("After importing", "a session shows with ✓ in the calendar here, and its results are in Training Load → Activities.")}
         ${item("Import off", "importing is not turned on for this team yet. You can still find and review sessions.")}

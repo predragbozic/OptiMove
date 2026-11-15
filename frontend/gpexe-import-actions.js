@@ -616,6 +616,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // The phone's sheet (on a computer the chooser is always on the page). Focus moves into the sheet and back.
     const open = !periodOf(gx).open;
     setPeriodOpen(open);
+    // P5: one modal at a time.
+    if (open) gx.helpOpen = false;
     renderTrainingLoad();
     globalThis.document?.querySelector?.(open ? ".imports-period .period-close" : ".imports-find-phone")?.focus?.({ preventScroll: true });
     return true;

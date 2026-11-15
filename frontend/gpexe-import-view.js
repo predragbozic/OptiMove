@@ -500,7 +500,10 @@ export function renderGpexeImportsHtml() {
         ${renderTeamRowHtml(teams, gx.teamId)}
         ${status ? `<button type="button" class="plain-button gpexe-button imports-help-open" data-action="training-load-gpexe-help" aria-haspopup="dialog" aria-expanded="${gx.helpOpen ? "true" : "false"}" aria-controls="imports-help">How importing works</button>` : ""}
       </div>
-      ${status && gx.helpOpen ? renderImportsHelpHtml({ ask: platformViewer() ? "" : `Something you can't fix here? ${AskWho()}.` }) : ""}
+      ${status && gx.helpOpen ? renderImportsHelpHtml({
+        ask: platformViewer() ? "" : `Something you can't fix here? ${AskWho()}.`,
+        findBy: identityViewer(gx) && gx.identity?.list ? "the GPEXE name, date of birth and last-session values" : gx.identity?.list ? "the GPEXE name and the last session's values" : "the values of the last session",
+      }) : ""}
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load the imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
       ${status && setupOpen(gx, status) ? renderGuideHtml(gx, status) : ""}

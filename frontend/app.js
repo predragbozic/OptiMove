@@ -92,7 +92,7 @@ import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
-import { closePeriodSheet } from "./gpexe-period-data.js";
+import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
 import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
@@ -603,7 +603,7 @@ function bindEvents() {
   // Imports P4: the period sheet is a phone's; a wider layout (a turned tablet) closes it, so its dialog role and the
   // Escape / Back step never outlive it.
   window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
-    if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
+    if (!event.matches && closeImportsOverlays(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
   });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
@@ -2231,8 +2231,11 @@ function handleAppBack() {
   if (closeSpecificProgramOverlay()) return true;
 
   // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
+  // P5: the help closes first, and the focus goes back to "How importing works".
+  const backHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
   if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
     renderTrainingLoad();
+    if (backHelp) document.querySelector(".imports-help-open")?.focus?.({ preventScroll: true });
     return true;
   }
 

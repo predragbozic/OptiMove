@@ -114,6 +114,15 @@ export function setPeriodOpen(open, gx = g()) {
   p(gx).open = Boolean(open);
 }
 
+// P5 (code review): leaving Imports and a wider layout close both the help and the sheet; true when either was open.
+export function closeImportsOverlays(gx = g()) {
+  if (!gx) return false;
+  const was = Boolean(gx.helpOpen) || Boolean(p(gx).open);
+  gx.helpOpen = false;
+  p(gx).open = false;
+  return was;
+}
+
 // Escape and the phone's Back close an open sheet first (app.js), and so do leaving Imports and a layout wider than a
 // phone (a turned tablet); true when there was one to close.
 // P5: the help ("How importing works") is closed by the same step, so Escape, Back, leaving Imports and a wider layout
