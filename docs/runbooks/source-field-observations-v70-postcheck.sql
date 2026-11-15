@@ -1,0 +1,26 @@
+-- Read-only POST-CHECK for migration v70 (migrations_v2/202611151200_training_load_v70_source_field_observations.sql); run after the
+-- deploy that applied it (the Rukovodilac, each block in a read-only transaction). Changes nothing. Every boolean column of every
+-- block must be true.
+
+-- 1. v70 is recorded once and is the last migration.
+select (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611151200_training_load_v70_source_field_observations.sql') = 1 as recorded_once,
+       (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') = 'migrations_v2/202611151200_training_load_v70_source_field_observations.sql' as last;
+
+-- 2. The table, its checks and its key.
+select to_regclass('training_load.source_field_observations') is not null as table_ok,
+       exists (select 1 from pg_constraint where conname = 'source_field_observations_key' and contype = 'u') as key_unique,
+       (select count(*) from pg_constraint where conrelid = 'training_load.source_field_observations'::regclass and contype = 'c') = 7 as checks_ok;
+
+-- 3. The guard, the delete and truncate refusals, enabled; the three functions are v70's.
+select (select count(*) from pg_trigger t where not t.tgisinternal and t.tgenabled = 'O'
+         and t.tgrelid = 'training_load.source_field_observations'::regclass
+         and t.tgname in ('source_field_observations_guard', 'source_field_observations_no_delete', 'source_field_observations_no_truncate')) = 3 as triggers_ok,
+       (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'training_load' and p.proname = 'field_inventory_context_check') = 'e9ca07242d20642b15490504720d8be6' as context_fn_is_v70,
+       (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'training_load' and p.proname = 'source_field_observations_guard') = '418ea1daedf13f2ea15a3f68c78a3dc7' as guard_fn_is_v70,
+       (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'training_load' and p.proname = 'source_field_observations_keep') = 'c58f74033c1ea54ba0d0c725427f5930' as keep_fn_is_v70;
+
+-- 4. No idle transaction. (Rows appear from the first succeeded check after the deploy; their presence is no failure of v70.)
+select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx;
