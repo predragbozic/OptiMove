@@ -21,6 +21,10 @@ before(async () => {
       const res = await request(context, world, "/api/app-errors", { method: "POST", body });
       assert.equal(res.status, 204, "the seeded report is accepted");
     }
+    // AH-2b: a call that got no answer, reported late, with a name and a query string in its path.
+    const late = await request(context, world, "/api/app-errors", { method: "POST", body: { screen: "weekly", action: "e2e_seed", code: "no_response",
+      request: { method: "POST", route: "/api/athletes/ana-example/plans?token=abc" }, late: "lt_1m" } });
+    assert.equal(late.status, 204, "the late report is accepted");
   } finally {
     await context.close();
   }
@@ -46,17 +50,30 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       for (const who of PEOPLE()) assert.ok(!text.includes(who), `the screen does not show "${who}"`);
       // AH-2: the devices of the error, in words with their counts, inside the row; nothing wider than the screen.
       const group = page.locator(".app-health-group", { hasText: "e2e_seeded_error" });
-      assert.deepEqual(await group.locator(".app-health-device").allTextContents(), ["iPhone · Safari 17 · 2 times", "Windows · Chrome 131 · 1 time", "device not recorded · 1 time"]);
+      assert.deepEqual(await group.locator(".app-health-devices:not(.app-health-timing) .app-health-device").allTextContents(), ["iPhone · Safari 17 · 2 times", "Windows · Chrome 131 · 1 time", "device not recorded · 1 time"]);
       // Each device is one phrase that stays together: one under another on a phone, side by side on a wide screen.
-      const boxes = await group.locator(".app-health-device").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), lines: el.getClientRects().length }; }));
+      const boxes = await group.locator(".app-health-devices:not(.app-health-timing) .app-health-device").evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), lines: el.getClientRects().length }; }));
       if (width === WIDTHS.phone) assert.ok(boxes[0].top < boxes[1].top && boxes[1].top < boxes[2].top && boxes.every((b) => b.left === boxes[0].left), "stacked");
       else assert.ok(boxes.every((b) => b.top === boxes[0].top) && boxes[0].left < boxes[1].left, "side by side");
       assert.match(text, /4 times · 1 person/);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(overflow <= 0, `no horizontal scroll (${overflow}px)`);
-      const box = await page.locator(".app-health-group", { hasText: "e2e_seeded_error" }).locator(".app-health-devices").boundingBox();
+      const box = await page.locator(".app-health-group", { hasText: "e2e_seeded_error" }).locator(".app-health-devices").first().boundingBox();
       const viewport = page.viewportSize();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, "the device line stays inside the screen");
+      // AH-2b: which request failed, as the server's own route words (the name and the query never arrive), and that
+      // it fell around a server restart - in the row, inside the screen.
+      const failed = page.locator(".app-health-group", { hasText: "no_response" });
+      assert.equal((await failed.locator(".app-health-code").textContent()).trim(), "no_response · POST /api/athletes/:x/plans");
+      const timing = await failed.locator(".app-health-timing .app-health-device").allTextContents();
+      assert.equal(timing.length, 1);
+      assert.match(timing[0], /^↻ Around a server restart · 1 time \(1 delivered late\)$/);
+      assert.ok(!text.includes("ana-example") && !text.includes("token"));
+      const timingBox = await failed.locator(".app-health-timing").boundingBox();
+      assert.ok(timingBox.x >= 0 && timingBox.x + timingBox.width <= viewport.width, "the timing line stays inside the screen");
+      await failed.locator(".app-health-row").click();
+      assert.equal((await failed.locator("dl.app-health-detail div", { hasText: "Request" }).locator("dd").textContent()).trim(), "POST /api/athletes/:x/plans");
+      assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)) <= 0, "no horizontal scroll with the detail open");
       if (process.env.E2E_SHOTS_DIR) await page.locator("section.app-health").screenshot({ path: `${process.env.E2E_SHOTS_DIR}/app-health-devices-${width}.png` });
     } finally {
       await context.close();
@@ -70,6 +87,7 @@ test("6b. the groups read gives the platform admin the group and carries no e-ma
     const res = await request(context, world, "/api/app-errors/groups");
     assert.equal(res.status, 200);
     assert.ok(res.text.includes("e2e_seeded_error"));
+    assert.ok(res.text.includes("/api/athletes/:x/plans") && !res.text.includes("ana-example") && !res.text.includes("token"));
     for (const who of PEOPLE()) assert.ok(!res.text.includes(who), `the answer does not contain "${who}"`);
     for (const a of world.accounts) assert.ok(!res.text.includes(a.id), "the answer does not contain a user id");
   } finally {
