@@ -931,6 +931,14 @@ test("7e. the default session is the newest one the import would take: sessions 
   const alone = await boardOf(W.caA, t8);
   assert.deepEqual(refused(alone, 409, "no_usable_session").current, { reason: boardService.DEFAULT_SESSION_UNREADABLE, tried: 1 });
   assert.equal(/Secret Athlete|TypeError|filter is not/.test(alone.text), false, "nothing of the error or the bundle in the answer");
+  assert.equal(logLines.slice(linesBefore).some((l) => l.includes("default_session_all_unreadable")), false, "one such session, or one among sound ones, is not the systemic signal");
+  // Every session read failing that way points at the code, not at one bundle: one more line says so.
+  const second = await candidate(t8, { startedAt: "2026-09-09T10:00:00Z" });
+  await mark(second.id, `raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', '"x"')`);
+  const linesBeforeAll = logLines.length;
+  assert.deepEqual(refused(await boardOf(W.caA, t8), 409, "no_usable_session").current, { reason: boardService.DEFAULT_SESSION_UNREADABLE, tried: 2 });
+  const lines = logLines.slice(linesBeforeAll).filter((l) => l.includes("[source-metric-board] default_session_"));
+  assert.deepEqual(lines, ["[source-metric-board] default_session_plan_failed (TypeError)", "[source-metric-board] default_session_plan_failed (TypeError)", "[source-metric-board] default_session_all_unreadable (tried=2)"]);
 
   // (e) The look-back is bounded: more unusable sessions than the bound in front of a usable one is "none usable", with the bound as tried.
   const t4 = await gpexeTeam(W.clubA);

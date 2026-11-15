@@ -211,6 +211,10 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       // had refused and that was not read again speaks by its stored code.
       const all = rows.map((r) => reasons[r.index] ?? (r.gate ? r.blocked_code : undefined)).filter((x) => x !== undefined);
       const distinct = [...new Set(all)];
+      // Every session that was read failed the same unexpected way: that points at this code, not at one stored
+      // bundle. Said once more, so it is not mistaken for a single bad session.
+      const failed = reasons.filter((x) => x !== undefined);
+      if (failed.length >= 2 && failed.every((x) => x === DEFAULT_SESSION_UNREADABLE)) console.error(`[source-metric-board] default_session_all_unreadable (tried=${failed.length})`);
       throw refusal(409, "no_usable_session", BOARD_MESSAGES.no_usable_session, { current: { reason: distinct.length === 1 ? distinct[0] : "mixed", tried } });
     }
   }
@@ -356,12 +360,12 @@ function keyedPlan(bundle, columns, teamTimezone) {
   return { ids, out: gpexeSessionValuesKeyed(bundle, extracts, { teamTimezone }) };
 }
 
+// The reason of a stored session whose plan failed in a way the import's gates do not name.
+export const DEFAULT_SESSION_UNREADABLE = "session_unreadable";
 // Whether the default can open on a stored session: `why` is the reason it must be passed by, or null with the
 // session's plan. The same checks, in the same order, a named session is refused by (its size, its check and
 // binding, its start, the board's size cap), and then the board's own plan - the import's gates - so a session taken
 // here is one sessionValues() reads.
-// The reason of a stored session whose plan failed in a way the import's gates do not name.
-export const DEFAULT_SESSION_UNREADABLE = "session_unreadable";
 function defaultSessionVerdict(row, team, columns, teamTimezone) {
   const no = (why) => ({ why, plan: null });
   if (row.purged || row.expired) return no("snapshot_expired");
