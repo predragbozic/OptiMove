@@ -91,6 +91,7 @@ import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } fr
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closePeriodSheet } from "./gpexe-period-data.js";
+import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -597,6 +598,13 @@ function bindEvents() {
   els.content.addEventListener("pointerdown", handleContentPointerDown);
   // Imports P4: a mouse or pen drag across the period chooser's days (two taps do the same).
   bindPeriodDrag(els.content, () => renderActiveTrainingLoadSurface());
+  // Imports P4: the period sheet is a phone's; a wider layout (a turned tablet) closes it, so its dialog role and the
+  // Escape / Back step never outlive it.
+  window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
+    if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
+  });
+  // The open sheet is modal: Tab stays inside it.
+  document.addEventListener("keydown", (event) => { trapPeriodSheetTab(event); });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
   els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });
@@ -658,7 +666,7 @@ function bindEvents() {
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
     // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
-    if (state.activeTab === "training-load" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
       renderTrainingLoad();
       document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
       return;
@@ -2185,7 +2193,7 @@ function handleAppBack() {
   if (calendar) return calendar; // a kept form: BACK_STAYED
 
   // Imports P4: the phone's period sheet closes before the screen is left.
-  if (state.activeTab === "training-load" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
     renderTrainingLoad();
     return true;
   }

@@ -576,24 +576,33 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-period-day") {
     if (takePeriodDragClick()) return true;
     const day = action.dataset.day || "";
-    if (pickDay(day)) {
-      renderTrainingLoad();
-      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-period-day"][data-day="${day}"]`)?.focus?.({ preventScroll: true });
-    }
+    if (pickDay(day)) repaintPeriod(renderTrainingLoad, `[data-action="training-load-gpexe-period-day"][data-day="${day}"]`);
     return true;
   }
   if (type === "training-load-gpexe-period-month") {
-    turnMonth(Number(action.dataset.delta) < 0 ? -1 : 1);
-    renderTrainingLoad();
+    const delta = Number(action.dataset.delta) < 0 ? -1 : 1;
+    turnMonth(delta);
+    repaintPeriod(renderTrainingLoad, `.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${delta}"]`);
     return true;
   }
   if (type === "training-load-gpexe-period-clear") {
     clearPeriod();
-    renderTrainingLoad();
+    repaintPeriod(renderTrainingLoad, ".imports-period .period-missing");
     return true;
   }
 
   return false;
+}
+
+// P4: a repaint of the chooser keeps the phone's sheet where it was scrolled (it is its own scroll container, rebuilt
+// by every repaint) and puts the focus back on the control just used (mobile-qa).
+function repaintPeriod(render, focusSelector) {
+  const doc = globalThis.document;
+  const top = doc?.querySelector?.(".imports-period.is-open")?.scrollTop;
+  render();
+  const sheet = doc?.querySelector?.(".imports-period.is-open");
+  if (sheet && typeof top === "number") sheet.scrollTop = top;
+  doc?.querySelector?.(focusSelector)?.focus?.({ preventScroll: true });
 }
 
 // J20-C: the confirmed import of the open review (its approval and activity), or null while it is not confirmed.

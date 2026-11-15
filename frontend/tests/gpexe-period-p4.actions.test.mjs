@@ -427,3 +427,43 @@ test("P4 17: while a group's own step leads the screen, the chooser's first butt
   assert.match(p, /class="plain-button gpexe-button period-missing"/, "the group's step is the one main action");
   assert.doesNotMatch(p, /class="primary-button/);
 });
+
+test("P4 18: leaving Imports closes the phone's sheet, so Escape and Back elsewhere are never spent on it", async () => {
+  resetState();
+  installFetchMock(gpexeServer({}));
+  await openImports();
+  await act("training-load-gpexe-period-toggle");
+  assert.equal(period.periodOf().open, true);
+  await act("training-load-section", { section: "overview" });
+  assert.equal(period.closePeriodSheet(gx()), false, "already closed by leaving Imports");
+});
+
+test("P4 19: Tab and Shift+Tab stay inside the open sheet", async () => {
+  const { trapPeriodSheetTab } = await import("../gpexe-period-drag.js");
+  const focus = [];
+  const btn = (name) => ({ name, getAttribute: () => null, focus() { focus.push(name); doc.activeElement = this; } });
+  const [first, mid, last] = [btn("close"), btn("day"), btn("search")];
+  const sheet = { querySelectorAll: () => [first, mid, last], contains: (el) => [first, mid, last].includes(el) };
+  const doc = { activeElement: last, querySelector: (sel) => (sel === ".imports-period.is-open" ? sheet : null) };
+  let prevented = 0;
+  const ev = (shiftKey) => ({ key: "Tab", shiftKey, preventDefault: () => { prevented += 1; } });
+  assert.equal(trapPeriodSheetTab(ev(false), doc), true);
+  assert.deepEqual(focus, ["close"], "Tab from the last control goes to the first");
+  assert.equal(trapPeriodSheetTab(ev(true), doc), true);
+  assert.deepEqual(focus, ["close", "search"], "Shift+Tab from the first goes to the last");
+  doc.activeElement = { outside: true };
+  assert.equal(trapPeriodSheetTab(ev(false), doc), true, "focus outside the sheet comes back in");
+  doc.activeElement = mid;
+  assert.equal(trapPeriodSheetTab(ev(false), doc), false, "inside, Tab moves on by itself");
+  assert.equal(trapPeriodSheetTab({ key: "Tab", shiftKey: false, preventDefault() {} }, { querySelector: () => null }), false, "no open sheet: nothing");
+  assert.equal(prevented, 3);
+});
+
+test("P4 20: while a group's step leads, suggested days' Search is quiet too (one main action)", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ candidates: [needs(1, prevDay(9)), row(2, prevDay(10), { approvalBlockers: ["not_confirmed_for_import"] })] }));
+  await openImports();
+  const p = panel();
+  assert.match(p, /class="period-range"/, "the not-confirmed session's day is suggested");
+  assert.doesNotMatch(p, /class="primary-button/, "nothing in the chooser competes with the group's step");
+});

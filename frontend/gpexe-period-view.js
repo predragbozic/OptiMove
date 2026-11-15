@@ -138,7 +138,7 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
   const why = suggestedRange
     ? (suggested.clipped ? "The latest 31 days of the sessions that need finding again; search the earlier ones afterwards." : "These days hold the sessions that need finding again.")
     : "";
-  const search = range ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" data-from="${escapeAttr(range.from)}" data-to="${escapeAttr(range.to)}" ${off}>${escapeHtml(`Search ${periodText(range.from, range.to, now)}`)}</button>` : "";
+  const search = range ? `<button type="button" class="${quiet ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" data-from="${escapeAttr(range.from)}" data-to="${escapeAttr(range.to)}" ${off}>${escapeHtml(`Search ${periodText(range.from, range.to, now)}`)}</button>` : "";
   return `
     <section class="gpexe-panel imports-period${s.open ? " is-open" : ""}" id="imports-period" ${s.open ? 'role="dialog" aria-modal="true" aria-labelledby="imports-period-title"' : 'aria-label="Find new sessions"'}>
       <div class="period-head">

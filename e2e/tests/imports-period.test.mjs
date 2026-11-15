@@ -135,7 +135,20 @@ test("P4 (390 px): the sheet is a dialog; Escape closes it; a session tapped in 
       await page.waitForSelector(".imports-period", { state: "hidden" });
       assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("imports-find-phone")), true, "the focus went back to Find new sessions");
       await page.click('[data-action="training-load-gpexe-period-toggle"]');
-      await page.click(DAY("2026-11-04"));
+      // A short phone: the sheet scrolls, and a tap on a day keeps it where it was (the Search button stays in view).
+      await page.setViewportSize({ width: 390, height: 560 });
+      await page.click(DAY("2026-11-02"));
+      await page.click(DAY("2026-11-05"));
+      const kept = await page.evaluate(() => {
+        const sheet = document.querySelector(".imports-period");
+        sheet.scrollTop = 90;
+        const before = sheet.scrollTop;
+        document.querySelector('.imports-period [data-day="2026-11-04"]').click();
+        return { before, after: document.querySelector(".imports-period").scrollTop };
+      });
+      assert.ok(kept.before > 0, `the sheet scrolls (${kept.before})`);
+      assert.equal(kept.after, kept.before, "a tap keeps the sheet's scroll");
+      await page.setViewportSize({ width: 390, height: 844 });
       await page.click(DAY("2026-11-05"));
       await page.locator('.imports-period [data-action="training-load-gpexe-open"]').first().click();
       await page.waitForSelector(".gpexe-detail", { state: "visible", timeout: 20_000 });
