@@ -2632,6 +2632,248 @@ test("archived club: a team of an archived club is the same 404 as a missing tea
 });
 
 // ---------------------------------------------------------------------------
+// I1 (v72): the names of the fields a succeeded check's answers carried - never a value, an athlete or a session.
+// ---------------------------------------------------------------------------
+
+function plantedBundle(sessionId) {
+  const bundle = sessionBundle({ sessionId });
+  const athleteKey = Object.keys(bundle.details.full.players)[0];
+  // A field the importer does not read, with a value and a unit word; a malformed name; an extra event count.
+  bundle.details.full.players[athleteKey].planted_metric_x = { unit: "m", value: 99999.5 };
+  // The details projection refuses a malformed metric name (the whole answer); the athlete row's extra keys are not read by
+  // the importer, so a malformed name there reaches the inventory's own guard.
+  bundle.athleteSessions[0]["bad-name"] = 1;
+  bundle.athleteSessions[0].planted_row_field = "secret-value-777";
+  const rowId = String(bundle.athleteSessions[0].id);
+  if (bundle.more[rowId]?.events) bundle.more[rowId].events.planted_event_count = 7;
+  // Unit words v40 refuses (a zero-width space, a Hangul filler, a Braille blank): the name is kept, the word never.
+  bundle.details.full.players[athleteKey].planted_odd_unit_a = { unit: "m\u200b", value: 1 };
+  bundle.details.full.players[athleteKey].planted_odd_unit_b = { unit: "m\u3164", value: 1 };
+  bundle.details.full.players[athleteKey].planted_odd_unit_c = { unit: "\u2800", value: 1 };
+  return bundle;
+}
+
+const inventoryRows = async (connectionId) => (await admin.query(
+  `select endpoint, field_name, value_kind, unit_word, answers_seen, first_seen_check_id, last_seen_check_id
+     from training_load.source_field_observations where source_connection_id = $1 order by endpoint, field_name`, [connectionId],
+)).rows;
+const connectionOf = async (checkId) => (await admin.query(`select source_connection_id from training_load.gpexe_import_checks where id = $1`, [checkId])).rows[0].source_connection_id;
+
+test("I1: a succeeded check records the names of every field its answers carried - with the kind and the answer's own unit word - and never a value, an athlete, a session or a malformed name", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7601)]);
+  const check = await checkNow(team);
+  assert.equal(check.status, "succeeded");
+  const connectionId = await connectionOf(check.id);
+  const rows = await inventoryRows(connectionId);
+  const has = (endpoint, name) => rows.find((r) => r.endpoint === endpoint && r.field_name === name);
+  assert.ok(has("athlete_session", "total_distance"), "a row field the importer reads");
+  assert.ok(has("athlete_session", "planted_row_field"), "a row field it does not read");
+  assert.equal(has("athlete_session", "planted_row_field").value_kind, "text");
+  assert.ok(has("details.session", "tot_burst_events"));
+  const planted = has("details.session", "planted_metric_x");
+  assert.ok(planted, "a details metric the importer does not read");
+  assert.deepEqual([planted.value_kind, planted.unit_word], ["unit_value_object", "m"]);
+  assert.ok(has("more.events", "planted_event_count"));
+  for (const name of ["planted_odd_unit_a", "planted_odd_unit_b", "planted_odd_unit_c"]) {
+    assert.deepEqual([has("details.session", name)?.value_kind, has("details.session", name)?.unit_word], ["unit_value_object", null], `${name}: the name, never a unit word v40 refuses`);
+  }
+  // answers_seen: one per answer - an athlete row once, from its session's list (its own canary read adds none); every
+  // drill answer once; the whole details once.
+  const listRows = (await admin.query(`select raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [team.teamId])).rows[0].raw_bundle.athleteSessions.length;
+  assert.equal(has("athlete_session", "total_distance").answers_seen, listRows, "an athlete row counts once");
+  assert.equal(has("details.drill", "tot_burst_events").answers_seen, 2, "two drill answers");
+  assert.equal(has("details.session", "tot_burst_events").answers_seen, 1, "one whole-session answer");
+  assert.ok(rows.every((r) => r.first_seen_check_id === check.id && r.last_seen_check_id === check.id));
+  assert.ok(!rows.some((r) => r.field_name === "bad-name"), "a malformed name is never recorded");
+  const all = JSON.stringify((await admin.query(`select * from training_load.source_field_observations`)).rows);
+  assert.doesNotMatch(all, /99999|secret-value-777/, "no value");
+  for (const id of ["7601", ...Object.values(team.ids)]) assert.ok(!all.includes(`"${id}"`), `no session or athlete id (${id})`);
+  // The stored snapshot is unchanged by the inventory: still projected to the consumed fields.
+  const raw = JSON.stringify((await admin.query(`select raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [team.teamId])).rows);
+  assert.doesNotMatch(raw, /planted_metric_x|planted_row_field|planted_event_count/);
+
+  // A second check: the counts grow, the first sighting stays.
+  const again = await checkNow(team);
+  assert.equal(again.status, "succeeded");
+  const after = await inventoryRows(connectionId);
+  const p2 = after.find((r) => r.endpoint === "details.session" && r.field_name === "planted_metric_x");
+  assert.equal(p2.answers_seen, planted.answers_seen * 2);
+  assert.equal(p2.first_seen_check_id, check.id);
+  assert.equal(p2.last_seen_check_id, again.id);
+});
+
+test("I1: the table takes no write but a running check's finalization of its own connection; identity is final; nothing is deleted", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7602)]);
+  const check = await checkNow(team);
+  const connectionId = await connectionOf(check.id);
+  const insert = (c) => c.query(
+    `insert into training_load.source_field_observations (source_connection_id, api_family, endpoint, field_name, value_kind, answers_seen, first_seen_check_id, last_seen_check_id)
+     values ($1, 'rest_v1', 'athlete_session', 'raw_write', 'number', 1, $2, $2)`, [connectionId, check.id]);
+  await assert.rejects(insert(admin), (e) => e.code === "42501", "a raw write without the marker");
+  // The marker of a check that is not running (it succeeded): refused too.
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try {
+    await c.query("begin");
+    await c.query(`select set_config('optimove.field_inventory_check', $1 || ':' || pg_current_xact_id()::text, true)`, [check.id]);
+    await assert.rejects(insert(c), (e) => e.code === "42501", "a finished check cannot write");
+    await c.query("rollback");
+  } finally {
+    await c.end();
+  }
+  await assert.rejects(admin.query(`update training_load.source_field_observations set field_name = 'renamed' where source_connection_id = $1`, [connectionId]), (e) => e.code === "42501" || e.code === "23514");
+  await assert.rejects(admin.query(`delete from training_load.source_field_observations where source_connection_id = $1`, [connectionId]), (e) => e.code === "23514");
+  await assert.rejects(admin.query(`truncate training_load.source_field_observations`), (e) => e.code === "23514");
+  assert.ok((await inventoryRows(connectionId)).length > 0);
+});
+
+test("I1: with a running check's marker in its own transaction - only rows of that check, its connection and first seen by it; the identity is final and the counts only grow", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7603)]);
+  const first = await checkNow(team);
+  const connectionId = await connectionOf(first.id);
+  const [existing] = await inventoryRows(connectionId);
+  assert.ok(existing.answers_seen >= 1);
+  // A second check, held at its session list: it is running.
+  let release;
+  src.state.gates.list = { p: new Promise((resolve) => { release = resolve; }), reached: false };
+  const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie: team.coach.cookie, body: WINDOW });
+  assert.equal(started.status, 202);
+  const running = started.body.check.id;
+  try {
+    for (let i = 0; i < 200 && !src.state.gates.list.reached; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(src.state.gates.list.reached, "the check is held at its list");
+    const c = new pg.Client({ connectionString: db.url });
+    await c.connect();
+    const attempt = async (sql, params) => {
+      await c.query("savepoint s");
+      try {
+        await c.query(sql, params);
+        await c.query("release savepoint s");
+        return null;
+      } catch (error) {
+        await c.query("rollback to savepoint s");
+        return error.code;
+      }
+    };
+    try {
+      await c.query("begin");
+      await c.query(`select set_config('optimove.field_inventory_check', $1 || ':' || pg_current_xact_id()::text, true)`, [running]);
+      const insert = (first_, last_, name = "marker_probe") => attempt(
+        `insert into training_load.source_field_observations (source_connection_id, api_family, endpoint, field_name, value_kind, answers_seen, first_seen_check_id, last_seen_check_id)
+         values ($1, 'rest_v1', 'athlete_session', $4, 'number', 1, $2, $3)`, [connectionId, first_, last_, name]);
+      assert.equal(await insert(first.id, first.id), "42501", "a row of another check than the marker's");
+      assert.equal(await insert(first.id, running), "23514", "a new row is first seen by the check that writes it");
+      assert.equal(await insert(running, running), null, "the running check writes its own row");
+      const upd = (set, params = []) => attempt(
+        `update training_load.source_field_observations set last_seen_check_id = $2, ${set} where source_connection_id = $1 and endpoint = $3 and field_name = $4`,
+        [connectionId, running, existing.endpoint, existing.field_name, ...params]);
+      assert.equal(await upd(`answers_seen = answers_seen + 1`), null, "the counts grow");
+      assert.equal(await upd(`answers_seen = 1`), existing.answers_seen + 1 > 1 ? "23514" : null, "the counts never shrink");
+      assert.equal(await upd(`field_name = 'renamed'`), "23514", "the identity is final");
+      assert.equal(await upd(`first_seen_check_id = $2`), "23514", "the first sighting is final");
+    } finally {
+      await c.query("rollback").catch(() => {});
+      await c.end();
+    }
+  } finally {
+    release();
+    delete src.state.gates.list;
+  }
+  await waitForCheck(team.teamId, running, team.coach.cookie);
+});
+
+test("I1: the inventory never decides a check - a row lock held by another finalization of the same connection skips the inventory and the check publishes", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7604)]);
+  const first = await checkNow(team);
+  const connectionId = await connectionOf(first.id);
+  const before = await inventoryRows(connectionId);
+  // Another transaction holds one of the connection's rows (as a concurrent finalization of another team would, up to its
+  // COMMIT): this check's inventory write waits its own 300 ms, is refused, and only the inventory is skipped.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select 1 from training_load.source_field_observations where source_connection_id = $1 and endpoint = 'details.session' and field_name = 'planted_metric_x' for update`, [connectionId]);
+    const held = await checkNow(team);
+    assert.equal(held.status, "succeeded", "the check publishes");
+    assert.deepEqual(await inventoryRows(connectionId), before, "the inventory of that check was skipped as a whole");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  const third = await checkNow(team);
+  assert.equal(third.status, "succeeded");
+  assert.ok((await inventoryRows(connectionId)).every((r) => r.last_seen_check_id === third.id), "the next check records again");
+});
+
+test("I1: a finalization whose transaction began before another write of the same row committed still records - the last sighting never moves back", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7605)]);
+  const first = await checkNow(team);
+  const connectionId = await connectionOf(first.id);
+  const key = ["details.session", "planted_metric_x"];
+  const [{ answers_seen: was }] = (await inventoryRows(connectionId)).filter((r) => r.endpoint === key[0] && r.field_name === key[1]);
+  // After the finalization's BEGIN (its now() fixed), a later transaction writes the same row under the same running
+  // check's marker and commits: its last_seen_at is later than the finalization's now().
+  service.setCheckFinalizeForTests({
+    beforeLocks: async () => {
+      service.setCheckFinalizeForTests({});
+      const [{ id }] = (await admin.query(`select id from training_load.gpexe_import_checks where owner_team_id = $1 and status = 'running'`, [team.teamId])).rows;
+      const c = new pg.Client({ connectionString: db.url });
+      await c.connect();
+      try {
+        await c.query("begin");
+        await c.query(`select pg_sleep(0.05)`);
+        await c.query(`select set_config('optimove.field_inventory_check', $1 || ':' || pg_current_xact_id()::text, true)`, [id]);
+        await c.query(`update training_load.source_field_observations set answers_seen = answers_seen + 1000, last_seen_check_id = $2, last_seen_at = now()
+                        where source_connection_id = $1 and endpoint = $3 and field_name = $4`, [connectionId, id, ...key]);
+        await c.query("commit");
+      } finally {
+        await c.end();
+      }
+    },
+  });
+  try {
+    const second = await checkNow(team);
+    assert.equal(second.status, "succeeded");
+    const [row] = (await inventoryRows(connectionId)).filter((r) => r.endpoint === key[0] && r.field_name === key[1]);
+    assert.equal(row.answers_seen, was + 1000 + 1, "the finalization's own write was recorded, not skipped");
+    assert.equal(row.last_seen_check_id, second.id);
+  } finally {
+    service.setCheckFinalizeForTests({});
+  }
+});
+
+test("I1: a failed check and a legacy-path check record nothing", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7606)]);
+  src.state.faults.drillMissing["7606"] = 1;
+  try {
+    const failed = await checkNow(team);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error.code, "drill_set_incomplete");
+    assert.deepEqual(await inventoryRows(await connectionOf(failed.id)), [], "a failed check records no name");
+  } finally {
+    delete src.state.faults.drillMissing["7606"];
+  }
+  const count = async () => (await admin.query(`select count(*)::int n from training_load.source_field_observations`)).rows[0].n;
+  const legacy = await setupTeam({ path: "legacy" });
+  const before = await count();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [plantedBundle(7607)] }));
+  try {
+    const check = await checkNow(legacy);
+    assert.equal(check.status, "succeeded");
+  } finally {
+    service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
+  }
+  assert.equal(await count(), before, "the legacy path records nothing (Q5)");
+});
+
+// ---------------------------------------------------------------------------
 // The Imports calendar read and the candidate list's window (gpexeImportState.js): one state rule for the list and the
 // calendar, the UTC day of session_started_at, the same audience and 404 as the candidates.
 // ---------------------------------------------------------------------------
