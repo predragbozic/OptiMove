@@ -5583,6 +5583,7 @@ test("v71 rollback SQL restores the catalog, reapplies, and refuses receipts and
       values ($1,$2,$3,'{}',repeat('0',64),now()-interval '8 days','{}','{}',now()-interval '23 hours 50 minutes')`,
       [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]);
     await refuse(/save receipts exist/);
+    await assert.rejects(client.query("delete from training_load.dashboard_simple_requests"), { code: "55000" });
     assert.equal((await client.query("select training_load.cleanup_dashboard_simple_requests(1) as deleted")).rows[0].deleted, 1);
     await client.query(rollback);
     assert.ok(dump() === before, "rollback restores the baseline schema");

@@ -610,8 +610,16 @@ $$;
 create function training_load.guard_dashboard_simple_requests()
 returns trigger language plpgsql as $$
 begin
-  if tg_op = 'DELETE' then
-    if old.retain_until < clock_timestamp() then
+  if tg_op = 'DELETE' and old.retain_until < clock_timestamp() then
+    -- Cleanup takes this request's advisory lock before deleting the row.
+    -- Its presence protects against accidental direct DELETE statements.
+    if exists (
+      select 1 from pg_locks
+      where locktype = 'advisory' and pid = pg_backend_pid() and granted
+        and mode = 'ExclusiveLock' and objsubid = 1
+        and (classid::bigint << 32 | objid::bigint) =
+          hashtextextended('dashboard-simple:' || old.initiator_user_id::text || ':' || old.request_id::text, 0)
+    ) then
       return old;
     end if;
   end if;

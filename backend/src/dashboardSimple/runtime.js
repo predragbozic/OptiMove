@@ -12,7 +12,7 @@ import { withPreviewTransaction } from './previewTransaction.js';
 
 export const SIMPLE_RUNTIME_PATH = '/api/training-load/dashboards/:dashboardId/simple';
 export const SIMPLE_MIGRATION_NAME = 'migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql';
-export const SIMPLE_MIGRATION_SHA256 = '5b8d7050682ad8383a12987f0d2761445a31b13d9905a7f12f9dc875bc5e8262';
+export const SIMPLE_MIGRATION_SHA256 = 'eee3ebad9d414e2c6f614de3003dc8241e3fcbc3bacf5a751bbc0376800f8b5b';
 
 async function assertSchema(pool) {
   try {
