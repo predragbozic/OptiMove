@@ -1,7 +1,7 @@
 // U6b: the setup stepper of the Imports screen, in the order of the agreed "GPS Import Flow" sketch
 // (Connect GPEXE -> Choose team -> Variables -> Athletes -> Ready). One step is open at a time; the
 // Athletes step starts with the first search and counts the suggested pairs (S6); Variables offers the
-// OptiMove GPEXE set and "Choose my own" (S5, the Mappings screen for now); Ready is a checklist (S7)
+// OptiMove GPEXE set and "Choose my own" (S5: the drag-and-drop board in a club workspace, the Mappings screen in the platform workspace); Ready is a checklist (S7)
 // whose backup line comes only from the dates an administrator reads. Driven through the real handlers
 // with a fake fetch, like the other Imports suites. Every name below is a made-up marker.
 import { test } from "node:test";
@@ -126,12 +126,17 @@ test("2. one step is open: the first that is not done; another opens on a click;
   assert.match(openStep(guideHtml()), /Use the OptiMove GPEXE set/, "the click during the review was not kept: Variables stays open after Back");
 });
 
-test("3. Variables (S5): the OptiMove GPEXE set is the primary; Choose my own opens Data configuration > Mappings", async () => {
+test("3. Variables (S5): the OptiMove GPEXE set is the primary; Choose my own opens the drag-and-drop board for the team in a club workspace (J18), Mappings in the platform workspace", async () => {
   reset({ athletes: [athlete(1, "linked")] });
   await open();
   const step = openStep(guideHtml());
   assert.match(step, /data-action="training-load-gpexe-guide-vars-open"[^>]*>Use the OptiMove GPEXE set</);
-  assert.match(step, /data-action="training-load-section" data-section="mappings"[^>]*>Choose my own</);
+  assert.match(step, new RegExp(`data-action="training-load-section" data-section="board" data-mb-team-id="${TEAM}"[^>]*>Choose my own<`));
+  const user = state.currentUser;
+  state.currentUser = { ...user, activeWorkspace: { type: "platform" } };
+  try {
+    assert.match(openStep(guideHtml()), /data-action="training-load-section" data-section="mappings"[^>]*>Choose my own</);
+  } finally { state.currentUser = user; }
 });
 
 test("4. Athletes before the first search: the search is the step's action for an administrator; a coach only reads that an administrator does it", () => {

@@ -18,6 +18,11 @@ The default target is the session's longest recorded time.
 - **After the import,** the 6b save with `method: "scale_recording"` writes each sum as an estimate: measured × target ÷
   recorded. The duration becomes the target.
   - The basis is `{ measured, recordedMinutes, targetMinutes }`.
+  - The scaled value is computed in binary floating point and rounded to 3 decimals, like the other 6b methods; it does not
+    take the mapper's exact-decimal path.
+  - Only an athlete the import really took is scaled: one left out by the coach (J20-B) or marked `notImported` in the
+    stored preview answers `scale_not_chosen`. Today a non-member refuses the whole session at approval, so the
+    `notImported` check is defense in depth (test 8).
   - The numbers come from the imported candidate's stored preview, never from a second mapper run.
   - After the retention purge (90 days after the import) the save answers `409 scale_basis_expired`.
 - **Behind `ESTIMATES_ENABLED`.** While it is off, the PUT refuses a scale (`409 scale_not_available`), so no athlete's sums

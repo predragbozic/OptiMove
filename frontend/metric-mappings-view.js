@@ -71,6 +71,7 @@ function writeHtml(s) {
   if (w.busy) return `<p class="muted" role="status">${w.act === "activate" && w.after?.chained ? "Submitted for review. Activating..." : "Saving..."}</p>`;
   if (w.error) {
     return `<div class="error" role="alert"><p>${escapeHtml(w.error)}</p>
+      ${w.code === "confirmation_required" ? `<p><button class="plain-button" type="button" data-action="training-load-section" data-section="board">Open Map by drag and drop</button></p>` : ""}
       ${w.code ? `<details class="data-sources-tech"><summary>Technical details</summary><dl><div><dt>Code</dt><dd>${escapeHtml(w.code)}</dd></div></dl></details>` : ""}</div>`;
   }
   return "";
