@@ -3,7 +3,7 @@
 // placement hash (section 4.2). No database, no network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { gpexeLevelValues, gpexeLevelValuesKeyed } from "../src/gpexeImportMapper.js";
+import { gpexeLevelValues, gpexeSessionValuesKeyed } from "../src/gpexeImportMapper.js";
 import { extractorFor } from "../src/sourceMetricExtractors.js";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import {
@@ -94,15 +94,25 @@ test("placementHash: stable, and different for every part the admin saw", () => 
   assert.notEqual(placementHash({ ...base, rawA: "12", storedA: "3" }), placementHash({ ...base, rawA: "1", storedA: "23" }));
 });
 
-test("the mapper's raw read carries an athlete's internal key only when the board asks for it", () => {
-  const entry = extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.total_time" });
+test("the mapper's raw read never carries an athlete's key; the board's keyed read gives the same session values for several columns in one plan", () => {
+  const entry = (key) => extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: key });
+  const time = entry("athlete_session.total_time");
+  const dist = entry("athlete_session.total_distance");
   const bundle = previewBundle({ gpexeTeamId: 975999 });
-  const plain = gpexeLevelValues(bundle, (input) => entry.extract(input, {}));
-  const keyed = gpexeLevelValuesKeyed(bundle, (input) => entry.extract(input, {}));
-  assert.equal(plain.code, null);
-  assert.ok(plain.athletes.length >= 3);
-  for (const athlete of plain.athletes) assert.deepEqual(Object.keys(athlete).sort(), ["drill", "session"]);
-  assert.equal(JSON.stringify(plain).includes(PLANTED.athletePrefix), false);
-  assert.deepEqual(keyed.athletes.map(({ session, drill }) => ({ session, drill })), plain.athletes);
+  const plainTime = gpexeLevelValues(bundle, (input) => time.extract(input, {}));
+  const plainDist = gpexeLevelValues(bundle, (input) => dist.extract(input, {}));
+  assert.equal(plainTime.code, null);
+  assert.ok(plainTime.athletes.length >= 3);
+  for (const athlete of plainTime.athletes) assert.deepEqual(Object.keys(athlete).sort(), ["drill", "session"]);
+  assert.equal(JSON.stringify(plainTime).includes(PLANTED.athletePrefix), false);
+  const keyed = gpexeSessionValuesKeyed(bundle, [(input) => time.extract(input, {}), (input) => dist.extract(input, {})]);
+  assert.equal(keyed.code, null);
+  assert.deepEqual(keyed.athletes.map((a) => a.session[0]), plainTime.athletes.map((a) => a.session), "column 0 is the time read alone");
+  assert.deepEqual(keyed.athletes.map((a) => a.session[1]), plainDist.athletes.map((a) => a.session), "column 1 is the distance read alone");
   assert.ok(keyed.athletes.every((athlete) => String(athlete.key).startsWith(PLANTED.athletePrefix)));
+  for (const athlete of keyed.athletes) assert.deepEqual(Object.keys(athlete).sort(), ["key", "session"], "session level only");
+  assert.deepEqual(gpexeSessionValuesKeyed(bundle, []).athletes.map((a) => a.session), plainTime.athletes.map(() => []), "no column: no value");
+  // A session the import would not take is refused by its code, as the single read is.
+  const broken = { ...bundle, more: {} };
+  assert.deepEqual([gpexeSessionValuesKeyed(broken, [(input) => time.extract(input, {})]).code, gpexeLevelValues(broken, (input) => time.extract(input, {})).code], ["more_missing", "more_missing"]);
 });
