@@ -8,6 +8,7 @@
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
 import { emptyPeriod, localDay } from "./gpexe-period-data.js";
+import { pruneLater } from "./gpexe-later-data.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
@@ -173,6 +174,7 @@ export async function loadGpexeTeam(render) {
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.candidatesCheckId = status.lastCheck && status.lastCheck.status !== "running" ? status.lastCheck.id : null;
+    pruneLaterToReady(gx);
     gx.links = links.links;
     // The inbox is painted as soon as the mandatory data is here: a slow
     // helper read must not hold it back either.
@@ -242,6 +244,25 @@ function forgetConfirmedImports() {
   if (linked && !reviewMadeBeforeLinkChange(linked, gx)) gx.lastLink = null;
 }
 
+// P4b: a session put aside for later is forgotten once it is gone or no longer Ready (imported, changed, withdrawn).
+// Code review (HIGH): only hard evidence from the server forgets an id - never a state that is only local or for now
+// (a link changed since the last search, an unconfirmed outcome: those rows read "Needs you" until the next search).
+// An id is forgotten when its session is listed as imported, replaced or withdrawn, or staying out; or when it is not
+// listed at all and the list is complete (under the server's 200-row limit, without the replaced versions).
+const LIST_LIMIT = 200;
+function pruneLaterToReady(gx) {
+  const list = gx.candidates || [];
+  const byId = new Map(list.map((c) => [c.id, c]));
+  const complete = list.length < LIST_LIMIT && !gx.includeSuperseded;
+  pruneLater((id) => {
+    const c = byId.get(id);
+    if (!c) return !complete;
+    if (c.status === "imported" || c.status === "superseded") return false;
+    const bucket = inboxBucket(c, gx);
+    return bucket !== "out" && bucket !== "hidden" && bucket !== "imported";
+  }, gx);
+}
+
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
@@ -252,6 +273,7 @@ export async function reloadGpexeCandidates(render) {
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
     gx.candidatesCheckId = afterCheck;
+    pruneLaterToReady(gx);
     forgetConfirmedImports();
     pruneBatchSelection(gx);
   } catch (error) {
