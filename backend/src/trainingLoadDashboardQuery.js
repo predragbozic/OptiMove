@@ -345,7 +345,7 @@ function resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRole
   const allowedCoverage = coverageSets[coveragePolicy || "complete_and_partial"];
   const effectiveSourcePolicy = sourcePolicy || "all_with_conflicts";
 
-  let candidates = facts.filter((f) => f.grain === dataScopeLevel && f.entryMethod !== "estimate");
+  let candidates = facts.filter((f) => f.grain === dataScopeLevel);
   if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
   candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
   // 6b-D (phase 5b contract, section 5): an estimate (entry_method 'estimate') is left out under every policy - all sources
