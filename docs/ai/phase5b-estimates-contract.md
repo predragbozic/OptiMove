@@ -130,11 +130,11 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 10. **Every place that shows a value** shows an estimate with its label: method, basis, author and date. A coach never sees an
     estimate unlabelled. The readers, and who labels each:
     - `training.canonical_activity_results()`, which passes `detail.entryMethod` (v4:764-783), feeds the Activities drawer's
-      recorded metrics. 6b-C labels it.
+      recorded metrics. 6b-C1 labels it (section 8).
     - The activity's Roster tab metric columns (`activityRoster.js`): an estimate is not measured (`MEASURED_METHODS`), so the row
-      keeps its state. 6b-C shows the estimated value with its label beside it.
+      keeps its state. 6b-C1 shows the estimated value with its label beside it (section 8).
     - The import's session review: an estimate never appears among import values. Only the replacement line of rule 6 shows,
-      from 6b-B, and 6b-C words it.
+      from 6b-B, and 6b-C2 words it.
     - Dashboards and analyses: left out under every existing policy, shown only under the new policy (6b-D, section 5).
     - `calendarQuery.js:302` reads only measured methods; it is unchanged and shows no estimate.
 
@@ -145,7 +145,8 @@ reviewer and the *Rukovodilac*'s gate; no migration runs without the owner's ord
 | **6b-0** | This contract | ★ (docs) |
 | **6b-A** | Migration **v63** (the next free slot after #493's v62, prefix after `202611111200`) | ★★ |
 | **6b-B** | The service and routes | ★★ |
-| **6b-C** | Frontend: the action on a *No device data* row of the session review and of the Roster tab; the label wherever an estimated value shows | ★ (code, ux, mobile) |
+| **6b-C1** | The label's provenance on the Roster and Activities reads (backend, no migration); the Roster tab's action on a *Participated · no device data* row; the label on the Roster tab and in the Activities drawer (section 8) | ★★ (trigger 2: names on existing reads) |
+| **6b-C2** | After the design executor's P4a (#534): the action on the imported session's review and the wording of its replacement line | ★ (code, ux, mobile) |
 | **6b-D** | Dashboards | Needs the answer in section 5 |
 
 **6b-A, migration v63.**
@@ -180,7 +181,7 @@ and `is_derived = false` (M1).
 
 - **The flag.** 6b-B keeps the save behind a server flag `ESTIMATES_ENABLED`, default off. The flag is turned on only after 6b-D
   is merged and deployed, by a separate owner order.
-- **6b-D is built by this executor,** as a small separate pull request right after 6b-C.
+- **6b-D is built by this executor,** as a small separate pull request right after 6b-C1.
   - **Backend:** in `resolveFactsToRows`, an estimate (`entryMethod === 'estimate'`) is left out under every existing policy,
     `all_with_conflicts` and `derived` included, and shown only under the new policy word **`estimate`**.
   - **The CHECK.** v16's `source_policy` CHECK (M/v16:365-366, and its twins at 393-394 and 418-419, and v17's) is widened to
@@ -298,3 +299,45 @@ a save writes one occasion for each variable it estimates.
 - the migration's preflight, post-check and rehearsed rollback.
 
 **Not in 6b-B:** the screens (6b-C) and the dashboards (6b-D).
+
+## 8. 6b-C1 as built
+
+The *Rukovodilac*'s scope decision of 2026-11-15: rule 10's label needs the provenance, which neither read gave, so 6b-C is
+not frontend-only. It is split: C1 (this section) and C2 (the imported session's review, after P4a #534, whose files it shares).
+
+**The reads** (`backend/src/estimateLabels.js`, used by `activityRoster.js` and `trainingActivityResults.js`; joined in JS from
+`metric_value_estimates` by the occasion; no change to `canonical_activity_results`, no migration):
+- Each value of an `estimate` occasion carries `estimate`: `method`, `estimatedBy` (the author's name), `estimatedAt`, and by
+  method `minutes` and `sessionCount` (proportional), `athleteCount` (team average), `recordedMinutes` and `targetMinutes`
+  (scale recording), `sourceAthleteName` (copy). Never a user id, an athlete id, the rate or the raw basis.
+- **The copy source's name** is given only when the same answer already names that athlete: on the Roster read, an athlete of
+  the roster or of *recorded outside the roster*; on the Activities read, an athlete of the facts the caller may see. So an
+  athlete reading their own results gets the method, the author and the date, never whose values were copied. A source who
+  left the team after the session is named as the roster names them for that day.
+- A replaced estimate has no label: the reads show only effective values (rule 7).
+- Every other value, and an answer with no estimate, is exactly as before. The Roster read's `viewer` carries
+  `estimates: true` only while `ESTIMATES_ENABLED` is on.
+
+**The Roster tab** (`frontend/activity-estimate.js` with `activity-roster-*.js`):
+- **The action:** "Estimate values…" ("Change the estimate…" once one exists), only on a row whose state is *Participated · no
+  device data*, for a viewer who may decide, while the server says the save is on. Not on *Unknown*: a state first, then the
+  estimate.
+- **The panel:**
+  - the proposal (one read), with the four methods, their numbers, and an unavailable method disabled with its reason;
+  - the minutes for the own average (Update reads the numbers again), and the athlete to copy from;
+  - an optional note.
+- **The save:**
+  - one request key per attempt; a refusal (a coded 4xx, or `503 try_again`) writes nothing and frees the key;
+  - a lost answer is *Result not confirmed*: Check result sends the same command and key, the leave check asks, and Escape and
+    Cancel keep it;
+  - after a save the roster is read again.
+- **The label:** an estimated value is in italics with an *est.* mark, its label in the cell's title, and the full label in the
+  row's Details.
+
+**The Activities drawer** (`training-load-calendar-view.js`): the results table's cell, the athlete drawer's value and the
+conflict panel show *est.* and the label; the sources list shows the label instead of "Direct".
+
+**Tests:**
+- backend `metric-estimates-6b-b.test.mjs` test 17: the labels on both reads for three methods, the closed fields, no id, a
+  measured value unchanged, the athlete-self read, a source who left, the replaced estimate, the flag, and the identical 404;
+- frontend `activity-estimate.actions.test.mjs`, and `training-load-calendar.actions.test.mjs`'s 6b-C1 test.

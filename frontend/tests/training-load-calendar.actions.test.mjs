@@ -895,6 +895,31 @@ test("the athlete drawer marks two whole-session values of one metric as a confl
   assert.match(drawer, /is-conflict/);
 });
 
+test("6b-C1: an estimated value shows est. and its label in the results table, the athlete drawer and the sources list; a measured value is unchanged", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const estimate = { method: "team_average", athleteCount: 4, estimatedBy: "Mira Coach", estimatedAt: "2026-09-09T10:00:00Z" };
+  withActivitySelected(cal, {
+    detail: activityDetailPayload({
+      athleteNamesById: { "ath-1": "Ana Zzzqa", "ath-2": "Bo Zzzqb" },
+      facts: [
+        { ...metricValueFact("ath-1", { occasionId: "occ-e", entryMethod: "estimate", valueNumeric: 3500 }), estimate },
+        metricValueFact("ath-2", { occasionId: "occ-m", entryMethod: "api_import", sourceIdentityId: "si-1", valueNumeric: 5100 }),
+      ],
+    }),
+  });
+  cal.metricPicker.definitions = [{ id: "def-distance", label: "TotDist", unit: "m" }];
+  const label = "Estimate · team average (4 athletes) · Mira Coach, 09.09.2026";
+  let page = renderTrainingLoadCalendarHtml();
+  assert.match(page, new RegExp(`tl-cell-value is-estimate" title="${label.replace(/[().]/g, "\\$&")}">3500`), "the table cell");
+  assert.match(page, /<span class="tl-cell-value">5100/, "a measured cell is unchanged");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-athlete", athleteId: "ath-1" }), { renderTrainingLoad });
+  page = renderTrainingLoadCalendarHtml();
+  const drawer = page.split("tl-athlete-drawer-overlay")[1] || "";
+  assert.match(drawer, /3500 <span class="tl-cell-unit">m<\/span> <small class="tl-roster-est">est\.<\/small>/);
+  assert.ok(drawer.includes(label), "the drawer names the estimate");
+});
+
 test("segment-to-component resolution is linear in the number of facts", () => {
   resetState();
   const cal = state.trainingLoad.calendar;

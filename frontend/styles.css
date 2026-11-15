@@ -14178,6 +14178,134 @@ button.tests-assignment-card {
   margin: 0;
 }
 
+/* 6b-C1: estimated values - always marked, never styled like a measured value. */
+.tl-roster-est {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 4px;
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.tl-roster-cell.is-estimate,
+.tl-cell-value.is-estimate,
+.tl-roster-all-values .is-estimate dd {
+  font-style: italic;
+}
+
+.tl-roster-est-label {
+  display: block;
+  font-size: 0.8em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tl-estimate-panel {
+  display: grid;
+  gap: 10px;
+  margin: 0 12px 10px 50px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tl-estimate-panel h4,
+.tl-estimate-panel p {
+  margin: 0;
+}
+
+.tl-estimate-methods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tl-estimate-method {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.tl-estimate-method.is-chosen {
+  border-color: var(--accent, var(--line-strong, var(--line)));
+}
+
+.tl-estimate-method.is-unavailable {
+  opacity: 0.75;
+}
+
+.tl-estimate-choice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.tl-estimate-choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.tl-estimate-choice span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tl-estimate-choice small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tl-estimate-values {
+  color: var(--text) !important;
+}
+
+.tl-estimate-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-left: 28px;
+}
+
+.tl-estimate-inline input,
+.tl-estimate-inline select,
+.tl-estimate-panel textarea {
+  min-height: 44px;
+  font-size: 16px;
+  max-width: 100%;
+}
+
+.tl-estimate-inline input {
+  width: 7em;
+}
+
+.tl-estimate-inline select {
+  min-width: 0;
+  flex: 1 1 12em;
+}
+
+.tl-estimate-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tl-estimate-error {
+  color: var(--danger, #b42318);
+}
+
 .tl-roster-picker.is-bulk {
   margin: 0;
 }
@@ -14499,9 +14627,13 @@ button.tests-assignment-card {
   }
   .tl-roster-row-notice,
   .tl-roster-confirm,
-  .tl-roster-picker {
+  .tl-roster-picker,
+  .tl-estimate-panel {
     margin-left: 12px;
     margin-right: 12px;
+  }
+  .tl-estimate-inline {
+    padding-left: 0;
   }
   .tl-roster-row-more > summary {
     padding-left: 12px;

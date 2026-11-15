@@ -18,6 +18,7 @@ import {
   findRosterAthlete, hasSourceRecord, isPhone, isTwoStates, measuredAfterDecision, rowLocked, selectableAthletes, sourceName, stateWord,
   viewerCanDecide,
 } from "./activity-roster-view.js";
+import { estimateBusy, handleEstimateAction } from "./activity-estimate.js";
 import { state } from "./state.js";
 
 const NOTHING_SAVED = "Nothing was saved.";
@@ -59,13 +60,15 @@ export async function loadRosterForOpenActivity(activityId, render) {
 // session changes, by confirmLeaveTrainingLoad and by beforeunload.
 // ---------------------------------------------------------------------------
 export function rosterHasPendingOutcome(roster = rosterState()) {
-  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0;
+  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster);
 }
 
 export function rosterMayBeLeft(roster = rosterState()) {
   if (!rosterHasPendingOutcome(roster)) return true;
   const question = roster.unconfirmed
     ? "A roster change is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
+    : roster.estimate?.unconfirmed
+    ? "An estimate is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
     : "A roster change is still being saved. If you leave now, its result is lost. Leave anyway?";
   return Boolean(globalThis.window?.confirm?.(question));
 }
@@ -81,6 +84,7 @@ export function closeActivityRosterOverlay() {
   const roster = rosterState();
   if (roster.picker && !roster.picker.sending) { roster.picker = null; return true; }
   if (roster.confirm) { roster.confirm = null; return true; }
+  if (roster.estimate && !estimateBusy(roster)) { roster.estimate = null; return true; }
   return false;
 }
 
@@ -438,6 +442,9 @@ export async function handleActivityRosterAction(action, { render }) {
   }
 
   if (!roster.data || !viewerCanDecide(roster.data)) return true;
+
+  // 6b-C1: estimates on a Participated · no device data row.
+  if (type.startsWith("training-load-roster-estimate-")) return handleEstimateAction(action, { render });
 
   // --- selection ---
   if (type === "training-load-roster-pick") {
