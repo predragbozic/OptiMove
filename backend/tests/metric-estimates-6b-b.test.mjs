@@ -1002,6 +1002,14 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   }
   const anaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [ana])).rows[0].n;
   assert.ok(!own.text.includes(anaName), "the copy source's name never reaches the athlete");
+  // The other direction: Ana, the source, reading her own results learns nothing of Eva's estimate.
+  const anaUser = await athleteUser(ana, "ana athlete");
+  const source = await tapi(`/${s.activityId}`, { cookie: anaUser.cookie });
+  assert.equal(source.status, 200, source.text);
+  assert.ok(source.body.facts.length > 0 && source.body.facts.every((f) => String(f.athleteId) === String(ana)), "only Ana's own facts");
+  assert.ok(source.body.facts.every((f) => !("estimate" in f) && f.detail?.entryMethod !== "estimate"), "no estimate in the source's answer");
+  const evaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [eva])).rows[0].n;
+  assert.ok(!source.text.includes(evaName) && !source.text.includes(String(eva)), "the source never learns who copied from them");
 
   // A source athlete who left the team after the session: named as the roster names them (still on that day's roster).
   await admin.query(`update public.athlete_memberships set status = 'archived', ends_at = now() where athlete_id = $1 and team_id = $2`, [ana, team.teamId]).catch(async () => {
