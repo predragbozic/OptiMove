@@ -154,13 +154,16 @@ async function readProposal(render) {
 
 // Why the chosen method cannot be saved yet, though the server offers it: Copy without a chosen athlete, or minutes typed
 // but not yet read again with Update (the numbers on screen are for other minutes). Null when Save may go.
+const STALE_MINUTES = "Press Update to see the values for these minutes.";
+
 export function saveBlocker(e) {
   if (!e?.proposal || !e.method) return null;
   if (e.method === "copy_athlete" && !e.sourceAthleteId) return "Choose an athlete to copy from.";
   if (e.method === "proportional") {
     const used = e.proposal.minutes?.used;
     if (e.minutesInput === "" || !Number.isFinite(Number(e.minutesInput))) return "Enter the minutes the athlete trained, then Update.";
-    if (!Number.isFinite(used) || Number(e.minutesInput) !== used) return "Press Update to see the values for these minutes.";
+    // The server keeps the minutes to 2 decimals, so 40.123 typed is 40.12 read.
+    if (!Number.isFinite(used) || Math.round(Number(e.minutesInput) * 100) / 100 !== used) return STALE_MINUTES;
   }
   return null;
 }
@@ -292,7 +295,8 @@ async function send(r, e, render) {
   }
   if (e.unconfirmed && refusedBeforeReplay(result)) {
     // Check result refused before the server looked the key up: the first save may still have happened.
-    e.unconfirmed = { ...e.unconfirmed, stillUnknown: true };
+    // 403 / 404: asking again cannot help; busy: it can, in a moment.
+    e.unconfirmed = { ...e.unconfirmed, stillUnknown: result.status === 403 || result.status === 404 ? "gone" : "busy" };
     render();
     return true;
   }
@@ -300,6 +304,9 @@ async function send(r, e, render) {
   e.unconfirmed = null;
   e.requestKey = null;
   e.refusal = REFUSALS[result.code] ?? (result.status === 404 ? "This session is not available here any more. Nothing was saved." : result.status === 403 ? REFUSALS.not_a_team_coach : "It could not be saved. Nothing was saved.");
+  render();
+  // The refusal may come from a roster that changed under the coach: read it again, keeping the panel.
+  await refreshActivityRoster(activityId, render, { exclude: [e.athleteId] });
   render();
   return true;
 }
@@ -379,7 +386,7 @@ export function renderEstimatePanelHtml(r, athlete) {
       <section class="tl-estimate-panel" aria-label="Estimate for ${escapeAttr(name)}">
         <p class="tl-roster-tag is-unconfirmed">Result not confirmed</p>
         <p>The answer was lost, so we can't tell whether the estimate was saved. Check result asks again without saving twice.</p>
-        ${e.unconfirmed.stillUnknown ? `<p class="muted">The server could not answer yet, so it is still not confirmed. Try Check result again in a moment.</p>` : ""}
+        ${e.unconfirmed.stillUnknown === "gone" ? `<p class="muted" aria-live="polite">You can't check this here any more: this session is no longer available to you. The estimate may have been saved; ask an administrator to look at the roster.</p>` : e.unconfirmed.stillUnknown ? `<p class="muted" aria-live="polite">The server could not answer yet, so it is still not confirmed. Try Check result again in a moment.</p>` : ""}
         <div class="tl-roster-actions">
           <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-estimate-check" ${e.sending ? "disabled" : ""}>${e.sending ? "Checking…" : "Check result"}</button>
         </div>
@@ -399,7 +406,7 @@ export function renderEstimatePanelHtml(r, athlete) {
         <label class="tl-estimate-note" for="tl-estimate-note">Note (optional)</label>
         <textarea id="tl-estimate-note" rows="2" maxlength="${MAX_NOTE}" data-action="training-load-roster-estimate-note" ${e.sending ? "disabled" : ""}>${escapeHtml(e.note)}</textarea>` : ""}
       ${e.refusal ? `<p class="tl-estimate-error" role="alert">${escapeHtml(e.refusal)}</p>` : ""}
-      ${e.proposal && blocker && !e.refusal ? `<p class="muted tl-estimate-blocker">${escapeHtml(blocker)}</p>` : ""}
+      <p class="muted tl-estimate-blocker" aria-live="polite">${e.proposal && blocker === STALE_MINUTES && !e.refusal ? escapeHtml(blocker) : ""}</p>
       <div class="tl-roster-actions">
         <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-estimate-save" ${canSave ? "" : "disabled"}>${e.sending ? "Saving…" : "Save estimate"}</button>
         <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-estimate-cancel" ${e.sending ? "disabled" : ""}>Cancel</button>

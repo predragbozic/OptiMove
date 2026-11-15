@@ -360,3 +360,40 @@ test("estimateLabelText: each method in the coach's words, never an id", () => {
   assert.equal(estimateLabelText({ ...base, method: "scale_recording", recordedMinutes: 20, targetMinutes: 40 }), "Estimate · recorded 20 of 40 min, scaled · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText(null), "Estimate");
 });
+
+// The narrow re-reviews of 6b-C1 (LOW).
+test("LOW: minutes the server rounds (40.123 read as 40.12) do not trap the panel in Press Update", async () => {
+  const rounding = (url) => {
+    const answer = propProposal(url);
+    const used = answer.body.minutes.used;
+    answer.body.minutes.used = Math.round(used * 100) / 100;
+    return answer;
+  };
+  await openRoster(server({ proposal: rounding, onWrite: () => ({ status: 201, body: {} }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-method", { method: "proportional" });
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-minutes" }, value: "40.123" }, { render });
+  await act("training-load-roster-estimate-update");
+  assert.doesNotMatch(html(), /Press Update to see the values/);
+  assert.doesNotMatch(saveButton(), /disabled/);
+});
+
+test("LOW: a Check result answered 403 or 404 says asking again cannot help, never 'try again in a moment'", async () => {
+  let n = 0;
+  await openRoster(server({ onWrite: () => (++n === 1 ? new TypeError("network") : { status: 404, body: { error: "not_found" } }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-save");
+  await act("training-load-roster-estimate-check");
+  assert.match(html(), /You can&#039;t check this here any more|You can't check this here any more/);
+  assert.doesNotMatch(html(), /could not answer yet/);
+});
+
+test("LOW: a refused first save reads the roster again and keeps the panel with the refusal", async () => {
+  await openRoster(server({ onWrite: () => ({ status: 409, body: { error: "measured_exists" } }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  const rosterReads = () => requests.filter((q) => q.method === "GET" && /\/roster(\?|$)/.test(q.url)).length;
+  const before = rosterReads();
+  await act("training-load-roster-estimate-save");
+  assert.equal(rosterReads(), before + 1, "one roster read after the refusal");
+  assert.match(html(), /tl-estimate-error/);
+});
