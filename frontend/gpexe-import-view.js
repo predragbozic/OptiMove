@@ -20,6 +20,7 @@ import { guideSteps } from "./gpexe-guide-steps.js";
 import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
+import { renderEstimateTargetsHtml } from "./gpexe-estimate-link.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
@@ -1887,11 +1888,13 @@ function renderCandidateBodyHtml(c, detail, status) {
     ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data is too old. Find new sessions to see it again." : "No preview."}</p>` : `
       ${renderBlockedHtml(preview, c)}
       ${renderChangesHtml(preview, c)}
+      ${renderReplacedEstimatesHtml(preview, c)}
       ${renderReviewTableHtml(preview, c)}
       ${renderAthletesHtml(preview, c)}
       ${renderSourceFieldsNoteHtml(preview)}
     `}
     ${renderOutcomeHtml(detail)}
+    ${renderEstimateTargetsHtml(detail)}
     ${renderApproveHtml(c, detail, status)}
     ${renderUndoHtml(c, state.trainingLoad.gpexe)}
   `;
@@ -2029,6 +2032,44 @@ function renderChangesHtml(preview, c) {
         `).join("")}
       </ul>
       ${adminTechHtml(metricNamesTech(changes.flatMap((ch) => ch.values || []), isV3(preview)))}
+    </section>
+  `;
+}
+
+// 6b-C2 (contract rule 6): estimates this import replaces with measured values. The preview names only athlete and variable
+// ids (supersededEstimates); the names come from the review itself - the athlete's name as the review names it, the
+// variable as the preview's own values label it (a club variable of another club stays "Club variable", as everywhere in
+// the review). Never blocks, never needs accepting.
+function replacedEstimateLines(preview, c) {
+  const list = Array.isArray(preview?.supersededEstimates) ? preview.supersededEstimates : [];
+  if (!list.length) return [];
+  const labels = new Map();
+  const remember = (v) => {
+    if (v?.metricDefinitionId && !labels.has(String(v.metricDefinitionId))) labels.set(String(v.metricDefinitionId), variableName(v));
+  };
+  for (const a of preview.athletes || []) for (const r of a.results || []) for (const v of r.values || []) remember(v);
+  for (const ch of preview.changesToImported || []) for (const v of ch.values || []) remember(v);
+  const byAthlete = new Map();
+  for (const e of list) {
+    const key = String(e.athleteId);
+    if (!byAthlete.has(key)) byAthlete.set(key, []);
+    const label = labels.get(String(e.metricDefinitionId)) || "Variable";
+    if (!byAthlete.get(key).includes(label)) byAthlete.get(key).push(label);
+  }
+  return [...byAthlete].map(([athleteId, variables]) => ({ name: athleteName(c, athleteId, null), variables }));
+}
+
+function renderReplacedEstimatesHtml(preview, c) {
+  const lines = replacedEstimateLines(preview, c);
+  if (!lines.length) return "";
+  const count = preview.supersededEstimates.length;
+  return `
+    <section class="gpexe-changes gpexe-replaced-estimates" aria-label="Estimates replaced by measured values">
+      <h4>${escapeHtml(count === 1 ? "An estimate is replaced by a measured value" : `Estimates replaced by measured values (${count})`)}</h4>
+      <p class="muted">GPEXE now has measured values where you had saved estimates. The measured values replace them when you import; nothing needs to be accepted.</p>
+      <ul>
+        ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong> · ${escapeHtml(l.variables.join(", "))}</li>`).join("")}
+      </ul>
     </section>
   `;
 }

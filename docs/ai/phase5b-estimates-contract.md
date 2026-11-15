@@ -354,3 +354,27 @@ conflict panel show *est.* and the label; the sources list shows the label inste
 - backend `metric-estimates-6b-b.test.mjs` test 17: the labels on both reads for three methods, the closed fields, no id, a
   measured value unchanged, the athlete-self read, a source who left, the replaced estimate, the flag, and the identical 404;
 - frontend `activity-estimate.actions.test.mjs`, and `training-load-calendar.actions.test.mjs`'s 6b-C1 test.
+
+## 9. 6b-C2 as built
+
+Frontend only, no backend change, no migration (★: code, ux, mobile). The *Rukovodilac*'s decision of 2026-11-15: option (A),
+one write path.
+
+- **The replacement line (rule 6).** The session review shows the estimates an import replaces with measured values, from
+  6b-B's `preview.supersededEstimates` (athlete and variable ids only). The section is headed "Estimates replaced by measured
+  values (N)", or "An estimate is replaced by a measured value" for one. It has one line per athlete: the athlete's name as
+  the review names it, and the variables as the preview's own values label them (a club variable of another club stays
+  "Club variable"; a variable the preview does not label reads "Variable"). It says nothing needs to be accepted: no
+  checkbox, it never blocks, and it adds nothing to the approval.
+- **The action.** An imported session's review (not an undone one) reads the activity's roster (GET, the Roster tab's own
+  read) when it opens, and again after the import's attendance states are saved.
+  - **The list:** while the server says `viewer.estimates`, the review lists the athletes in state *Participated · no
+    device data* under "Took part without device data", each with **Estimate values in Activities**. A failed read shows
+    no link.
+  - **The link:** it closes the review the way its Close does (never while an approval, its check or an undo is in
+    flight), and asks first while the import's attendance states are still being saved or not confirmed.
+  - **Where it goes:** the session in Activities (the existing results-to-calendar hand-off) with its Roster tab and that
+    athlete's estimate panel (6b-C1) open. The review saves no estimate itself and keeps no second roster state.
+- **Code:** `frontend/gpexe-estimate-link.js`, `gpexe-import-view.js` (`renderReplacedEstimatesHtml`), the action in
+  `training-load-actions.js` (`training-load-estimate-in-activities`), and the reads' hooks in `gpexe-import-data.js` and
+  `gpexe-import-states-data.js`. Tests: `frontend/tests/gpexe-estimates-6b-c2.actions.test.mjs`.
