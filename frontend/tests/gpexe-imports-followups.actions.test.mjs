@@ -26,7 +26,7 @@ const { handleTrainingLoadAction } = await import("../training-load-actions.js")
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, inboxBucket, batchSelectable, candidateGroup, notConfirmedForImport, withdrawnByCheck, calendarDayKey } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, inboxBucket, batchSelectable, candidateGroup, notConfirmedForImport, withdrawnByCheck } = await import("../gpexe-import-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -149,7 +149,8 @@ const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GP
 const ADMIN_STEP_TAIL = "\\. If it stays like this, check in GPEXE that the session(?:'|&#039;)s drills are set up and have data\\.";
 const ADMIN_WORDS = /fewer than two|successful search has confirmed|drills are set up|could not confirm its drill results/;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const dayLabel = (iso) => { const [y, m, d] = calendarDayKey(iso).split("-").map(Number); return `${d} ${MONTHS[m - 1]}`; };
+// P4: the chooser marks a session on the day the server searches it under (its UTC day).
+const dayLabel = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return `${d} ${MONTHS[m - 1]}`; };
 
 
 // ---------------------------------------------------------------------------
