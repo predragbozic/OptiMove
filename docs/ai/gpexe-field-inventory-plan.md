@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-11-15, on the *Rukovodilac*'s order of that day. Plan only: no code, no migration. |
+| Status | Proposed by the executor on 2026-11-15, on the *Rukovodilac*'s order of that day. **The owner's decisions D-INV-1 to D-INV-4 and his answers to Q1–Q5 are recorded in section 6.** Plan only: no code, no migration. |
 | Verified against commit | `91ff79ec` (main, merge of PR #538). |
 | Builds on | `docs/ai/gpexe-metric-variable-mapping-discovery.md` (sections B, D2–D3, J4, J5, J12) and `docs/ai/phase7f-extractor-registry-contract.md`. They are not re-derived here. |
 | The owner's request | Source fields should list **every** variable GPEXE sends, so that he can choose which ones to map. Today it lists the ten catalogued fields (the v34 seed plus v42's `open_top`), and three of them are verified. |
@@ -171,3 +171,89 @@ Steps 1–4 and 6 are a ★★ pull request per field or per batch of fields. St
 
 Order: I1 → I2 → I3. G1 and G2 follow only after the owner's Q4. Until then, a new field is a ★★ pull request as in
 section 3.
+
+## 6. The owner's decisions (2026-11-15)
+
+The owner confirmed these in his chat ("da, slažem se"), and the *Rukovodilac* relayed them on 2026-11-15. They are
+decisions, not proposals; each slice still needs its own contract and reviews.
+
+| | Decision |
+|---|---|
+| **D-INV-1** | Source fields carries **everything GPEXE offers** (the inventory of names), so a club can map what it wants. |
+| **D-INV-2** | **Generic plain fields** (a row number, a details `{unit, value}`): the unit is the unit word GPEXE itself sends with the value. The confirmation is the board's comparison of two athletes with the GPEXE screen and the admin's tick: no tick, no save. A field for which GPEXE sends no unit word stays locked until a platform admin confirms it by hand (the existing M2b acts). This changes C97 for these fields only. |
+| **D-INV-3** | **Zone-dependent fields are in scope**, each carrying the team's GPEXE thresholds as its parameters. |
+| **D-INV-4** | **Derived variables are in scope:** a formula with a formula version over mapped canonical values, labelled calculated, never stored as source-delivered (the owner's rule of 2026-09-17). |
+
+**The answers to section 4:**
+- **Q1:** yes, option A (a table, ★★).
+- **Q2:** a club admin reads only, and only the names seen through their own club's connection. A platform admin sees
+  everything; a coach sees nothing.
+- **Q3:** no notification.
+- **Q4:** now, for the generic plain shapes. Zones and events stay code until the zone model is decided.
+- **Q5:** `rest_v1` only.
+
+### 6.1 How D-INV-2 is recorded as evidence
+
+Recorded in G1's migration and contract; the exact columns are its work.
+- **A distinct evidence status.** T2b's `evidence_status` (v34, `unproven | documented | observed | verified`) gains a
+  fifth value, **`source_stated`**: the unit is the unit word the source sends, and an administrator checked it on the
+  board.
+  - It is never `verified`, and the screen never shows it as "Verified by OptiMove". The words are "Unit stated by
+    GPEXE, checked on the board".
+  - A revision with `source_stated` may carry an active mapping version, as `verified` may. Every other rule (C91's
+    lifecycle, the T4 pinning, the activation's unit check) is unchanged.
+- **The unit word.** It must pass D3's unit-token CHECK, and a row of `unit_conversions` must take it to the target
+  variable's unit. Otherwise the field stays locked and only the M2b acts can open it.
+  - The word is read from the stored answer at the comparison, never typed by the admin.
+  - The word `number` (GPEXE's word for a count, section B) is treated as the unit of a count only if a conversion row
+    says so. Otherwise the field is locked.
+- **The confirmation record.** It is one guarded act, with the actor, its audit row and one act per revision (the v37
+  pattern). It records:
+  - who and when;
+  - the stated unit word;
+  - the two athletes' positions in the session's GPEXE list and the session's position in the check (never an athlete
+    id, a name or a value);
+  - the admin's tick.
+
+  `unit_evidence_ref` points to that record instead of a document anchor. That is a new reference shape, so v34's
+  CHECK on the reference is widened in the same migration.
+- **The meaning.** D-INV-2 names the unit only. For these fields, a field's meaning is the source's own label and
+  description as the board shows them, and the same tick confirms it. This is the *Rukovodilac*'s reading; it is an
+  open point for the owner's word before G1's contract, because C97 asks for official documentation or GPEXE support.
+
+### 6.2 What D-INV-3 and D-INV-4 add (plans first, after I1–G2)
+
+- **Zones (D-INV-3).**
+  - Option A of the zone model is decided (C102) and built for the three seeded zone fields (v42, J7). Their
+    parameters are fixed bounds today (OD1).
+  - D-INV-3 asks for a zone field with **the team's own GPEXE thresholds** as its parameters. A team's zones follow its
+    threshold set (v20's snapshot per event), so the bounds come from the session's threshold answer instead of the
+    mapping version.
+  - That is a change to J12's zone extractor and to OD1, so the *Rukovodilac* receives a short zone-model proposal
+    first (Z0), and Z1 builds it (★★).
+- **Derived variables (D-INV-4).**
+  - **No parallel registry (ADR-007):** a derived variable is a canonical variable in Metrics Core. Its formula and
+    formula version live on the variable's version, as a new kind of definition version.
+  - **Its values** are written as Metrics Core values with the existing, unused columns `is_derived = true` and
+    `computed_by_ref` (v13:283-284; v3 ties `derived_rollup` to both), which name the formula version and the input
+    values. The occasion's `entry_method` carries the kind "calculated", a new value with a migration.
+  - **The dashboards' `derived` source policy** (v16) already selects them.
+  - **When it is computed** (after an import, after an estimate, on demand) and **what happens when an input changes**
+    are the plan's questions. D0 is that plan, sent to the *Rukovodilac* before any code.
+
+### 6.3 The order
+
+**I1 → I2 / I3 → G1 / G2 → Z0 / Z1 → D0 → …**
+
+| Slice | Content | Regime |
+|---|---|---|
+| **I1** | The inventory: migration, collection and upsert (section 5) | ★★ |
+| **I2** | The read route (Q2: club admin read-only, own connection) and "I want this" | ★★ (trigger 2) |
+| **I3** | The Source fields list | code, ux, mobile |
+| **G1** | The T2a creation route and D-INV-2's evidence status, record and act (migration) | ★★ + the Independent |
+| **G2** | The generic plain extractors and the pinned set in the projection; `.claude/rules/metrics-core-mapping.md`'s document (D2, J12), B7.7b / B7.8 and J12 updated in the same pull requests | ★★ + the Independent |
+| **Z0, Z1** | The zone-model proposal (C89), then zone fields with the team's thresholds | proposal to the *Rukovodilac*, then ★★ |
+| **D0** | The derived-variables plan | plan first |
+
+**Privacy throughout:** the name guard stays; a platform admin sees everything; a club admin sees only the names seen
+through their own club's connection; a coach sees nothing.
