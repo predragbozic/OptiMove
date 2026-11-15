@@ -57,6 +57,18 @@ write's `42P01` is skipped like any other refusal and the probe runs again.
 and who may read the rows is I2's (a platform admin all of them; a club admin read-only, only those seen through their own
 club's connection; a coach nothing).
 
+## Who reads the rows (I2)
+
+`GET /api/training-load/sources/metrics/field-inventory` (`backend/src/sourceFieldInventoryRead.js`; plan section 7.2):
+- **A platform admin in the platform workspace** reads every connection's names. A club scope (the club's admin, or a
+  platform admin in that club's workspace) reads only the names seen through the club's own connections: club-owned,
+  or team-owned by one of its own teams.
+- **Everyone else** gets the identical 404 of the metrics routes.
+- **One row per (endpoint, name):** kind, unit word, answers seen, last date, and whether a source field already covers it.
+- **Never answered:** a connection id, a check id, a label, a club or a team.
+- **A club sees a unit word** only when it is an active conversion's unit.
+- **Team thresholds** reach the platform admin only, with `endpoint=team_thresholds`.
+
 ## Order with D1's v71
 
 D1 (another track, PR #524) holds v71: `202611151000_training_load_v71_dashboard_simple_atomic_save.sql`. Its prefix sorts before v72's. The preflight, the post-check
