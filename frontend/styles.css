@@ -26640,12 +26640,27 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   .imports-month-desk {
     display: none;
   }
-  .imports-month-phone {
+  /* A quiet line, not a card: muted, underlined like a link, the whole line the 44 px target. */
+  body:not(.athlete-mode):not(.login-mode) .imports-month-phone {
     display: inline-flex;
+    align-items: center;
     min-height: 44px;
     max-width: 100%;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--muted);
+    font-weight: 400;
+    text-decoration: underline;
+    text-underline-offset: 3px;
     white-space: normal;
     text-align: left;
+  }
+  /* P4a's "Find new sessions": the label centred in its button. */
+  .imports-find-phone {
+    align-items: center;
+    justify-content: center;
   }
 }
 
