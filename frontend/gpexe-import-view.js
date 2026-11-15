@@ -1416,13 +1416,15 @@ function identityLinesHtml(id, gx, duplicates) {
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
   return `
-    ${who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
-    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
+    ${identityViewer(gx) && who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
+    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${identityViewer(gx) && who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
   `;
 }
 
+// Defence in depth (the Independent's L1 on #527): dates and their conflicts are the identity administrators' whatever
+// the data holds, not only because a coach's answer carries none.
 function conflictHtml(id, athleteId, gx) {
-  return birthDateConflict(id, athleteId, gx)
+  return identityViewer(gx) && birthDateConflict(id, athleteId, gx)
     ? `<span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs from the one in this athlete's OptiMove profile. Link them only if you are sure they are the same person.</span>`
     : "";
 }
@@ -1453,7 +1455,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named && identityViewer(gx) && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1464,7 +1466,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `${gpexeSideText(id, gx)}${who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : gpexeSideText(id, gx);
+  const gpexeSide = who ? `${gpexeSideText(id, gx)}${identityViewer(gx) && who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : gpexeSideText(id, gx);
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1591,10 +1593,10 @@ function mapOutcomeText(r, label = gpexeAthleteLabel(r.gpexeAthleteId)) {
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
   // A U3 pair keeps the suggestion's date of birth for a coach, whose names carry no date (the same line as in the box).
-  const sug = who && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
+  const sug = who && identityViewer(gx) && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && identityViewer(gx) && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
