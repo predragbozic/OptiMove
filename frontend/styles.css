@@ -16721,6 +16721,8 @@ optimove-dashboard-chart {
 }
 .gpexe-candidate-list,
 .gpexe-link-list,
+.gpexe-estimate-targets ul,
+.gpexe-replaced-estimates ul,
 .gpexe-changes ul {
   list-style: none;
   margin: 0;
@@ -26993,6 +26995,26 @@ div.mb-slot-open { cursor: default; }
   .mb-tech summary { display: list-item; box-sizing: border-box; min-height: var(--om-tap-target); padding-block: 12px; }
   .mb-col-item { gap: 0; }
   .mb-sheet .mb-notice { margin: 0; }
+}
+
+/* 6b-C2: who took part without device data, each with a link to the estimate in Activities; a long name wraps. */
+.gpexe-estimate-targets li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-estimate-targets li > span {
+  min-width: 0;
+}
+.gpexe-estimate-targets .gpexe-button {
+  padding-block: 8px;
+}
+.gpexe-replaced-estimates li {
+  overflow-wrap: anywhere;
 }
 
 /* Imports P5: "How importing works" - one help for Imports. The header holds the team and the help button; the help is

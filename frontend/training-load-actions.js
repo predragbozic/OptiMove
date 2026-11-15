@@ -2,7 +2,8 @@ import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImpor
 import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import {
-  clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
+  clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
+import { estimateTargetsOf, reviewHasWorkInFlight } from "./gpexe-estimate-link.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
@@ -2374,6 +2375,40 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-results-close-athlete") {
     state.trainingLoad.resultsAthleteId = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-estimate-in-activities") {
+    // 6b-C2 (decision (A)): from an imported session's review to the activity's Roster tab with this athlete's estimate open.
+    // One write path: the Roster tab's own estimate panel (6b-C1). The review is left the way its Close leaves it.
+    const gx = state.trainingLoad.gpexe;
+    const detail = gx.detail;
+    // Read again for the import shown now: an undo made in this review since removes the link.
+    const t = estimateTargetsOf(detail);
+    const athleteId = action.dataset.athleteId;
+    if (!t || !t.athletes.some((a) => a.athleteId === athleteId)) return true;
+    // An approval or an undo whose answer must be seen keeps the review (as its Close does).
+    if (detail.approving || detail.verifying || gx.undo?.step === "sending") return true;
+    // Every question before the review is closed: a No to any of them keeps it as it is.
+    if (reviewHasWorkInFlight(detail)
+      && !window.confirm("The attendance states of this import are still being saved, or their result is not confirmed yet. Leave the review and open Activities? Open the session again later to see their result.")) return true;
+    const cal0 = state.trainingLoad.calendar;
+    if (t.activityId !== cal0.selectedActivityId) {
+      if (!rosterMayBeLeft()) return true;
+      // Asked once: the hand-off below does not ask again for the session it opens.
+      resetActivityRoster(t.activityId);
+      cal0.selectedActivityId = null;
+    }
+    const refresh = closeGpexeCandidate();
+    if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
+    await handleTrainingLoadAction({ dataset: { action: "training-load-results-view-activity-in-calendar", activityId: t.activityId, date: t.date } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+    const cal = state.trainingLoad.calendar;
+    // Another session's roster with a write in flight may have kept the coach there (its own question).
+    if (cal.selectedActivityId !== t.activityId || !cal.roster?.data) return true;
+    cal.activityDetailTab = "roster";
+    cal.roster.userPickedTab = true;
+    await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-open", athleteId } }, { render: renderTrainingLoad });
     renderTrainingLoad();
     return true;
   }
