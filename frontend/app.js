@@ -90,7 +90,10 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { bindPeriodDrag } from "./gpexe-period-drag.js";
+import { closePeriodSheet } from "./gpexe-period-data.js";
+import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -559,7 +562,7 @@ function bindEvents() {
     }
     const settings = panel?.classList?.contains("imports-settings");
     const choose = panel?.classList?.contains("imports-choose");
-    if (!settings && !choose && !panel?.classList?.contains("imports-calendar")) return;
+    if (!settings && !choose) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
@@ -571,8 +574,7 @@ function bindEvents() {
       els.content.querySelector(".imports-choose > summary")?.focus({ preventScroll: true });
       return;
     }
-    if (settings) importSettingsToggled(panel.open);
-    else importsCalendarToggled(panel.open);
+    importSettingsToggled(panel.open);
   }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
@@ -596,6 +598,13 @@ function bindEvents() {
   // not #content, since the pointer can be released/cancelled anywhere -
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
+  // Imports P4: a mouse or pen drag across the period chooser's days (two taps do the same).
+  bindPeriodDrag(els.content, () => renderActiveTrainingLoadSurface());
+  // Imports P4: the period sheet is a phone's; a wider layout (a turned tablet) closes it, so its dialog role and the
+  // Escape / Back step never outlive it.
+  window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
+    if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
+  });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
   els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });
@@ -666,6 +675,12 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
+    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+      renderTrainingLoad();
+      document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
+      return;
+    }
     closeMedia();
     closeExerciseViewMenus(null, els.content);
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
@@ -701,6 +716,8 @@ function bindEvents() {
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   // The open icon picker is modal: Tab stays inside it.
   document.addEventListener("keydown", (event) => { trapIconPickerTab(event); });
+  // Imports P4: the open period sheet is modal too.
+  document.addEventListener("keydown", (event) => { trapPeriodSheetTab(event); });
   window.addEventListener("popstate", handleBrowserBack);
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.
@@ -2210,6 +2227,12 @@ function handleAppBack() {
   // reached once navStack is empty (see above) - i.e. the user is already
   // at the overlay's own root day/block list.
   if (closeSpecificProgramOverlay()) return true;
+
+  // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    renderTrainingLoad();
+    return true;
+  }
 
   if (state.weekSelectorOpen) {
     state.weekSelectorOpen = false;

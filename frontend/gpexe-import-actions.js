@@ -17,18 +17,14 @@ import {
   setGpexeLeaveOut,
   backFromTeamMappingConfirm,
   batchSelectableList,
-  calendarFiltered,
   checkBatchAgain,
   clearBatchSelection,
-  clearCalendarDay,
   closeBatchReview,
   finishBatchResults,
-  moveCalendarMonth,
   openBatchReview,
   selectBatchVisible,
   sendBatch,
   stopBatchSeries,
-  setCalendarDay,
   toggleBatchPick,
   chooseTeamMapping,
   closeGpexeCandidate,
@@ -60,6 +56,14 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
+import { clearPeriod, periodOf, pickDay, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
+import { takePeriodDragClick } from "./gpexe-period-drag.js";
+import { bringBack, clearLaterNotice, isLater, laterOpen, putLater, setLaterOpen } from "./gpexe-later-data.js";
+
+// P4b: a second "Later" within this time of the first is a repeat tap, not a choice.
+const LATER_REPEAT_MS = 400;
+let laterTappedAt = 0;
+export function resetLaterTapForTests() { laterTappedAt = 0; }
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -114,9 +118,14 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
+    // P4: the phone's sheet closes and the chosen days are cleared once a search starts (the month stays), so the
+    // chooser next shows what is still missing or what a session needs (code review).
+    setPeriodOpen(false);
+    clearPeriod();
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
-    await startGpexeCheck(own || { from: fieldValue("[data-gpexe-field='from']"), to: fieldValue("[data-gpexe-field='to']") }, renderTrainingLoad);
+    // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
+    await startGpexeCheck(own || {}, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
@@ -125,10 +134,13 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-open") {
+    clearLaterNotice(gx);
     // U6a-2: a session opened from an attention group (its button or one of its rows) steps through that group.
     // The group's sessions are kept as they are now, so a link that moves the others to "Review out of date" does not end it.
     const group = action.dataset.group || "";
     const groupIds = group ? groupItems(group, gx.candidates || [], gx).map((c) => c.id) : [];
+    // P4: a session opened from the phone's sheet opens over the screen, not under the sheet.
+    setPeriodOpen(false);
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group, groupIds });
     return true;
   }
@@ -509,7 +521,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-batch-select") {
     if (gx.batch.sending) return true;
-    selectBatchVisible(calendarFiltered(batchSelectableList(gx), gx));
+    // P4b: never a session put aside for later on this device.
+    selectBatchVisible(batchSelectableList(gx).filter((c) => !isLater(c, gx)));
     renderTrainingLoad();
     return true;
   }
@@ -520,11 +533,12 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-import-ready") {
-    // J19 U1: "Import N ready" = select the clean Ready sessions (the date
-    // filter is not applied: this is the day's whole list) and open the one
+    // J19 U1: "Import N ready" = select the clean Ready sessions (the whole
+    // list, P4b: but none put aside for later) and open the one
     // review and confirmation; nothing is sent before the confirmation.
     if (gx.batch.sending) return true;
-    selectBatchVisible(batchSelectableList(gx));
+    // P4b: never a session put aside for later on this device.
+    selectBatchVisible(batchSelectableList(gx).filter((c) => !isLater(c, gx)));
     if (openBatchReview()) renderTrainingLoad();
     return true;
   }
@@ -560,24 +574,74 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
     return true;
   }
-  // The local sessions calendar: no request for any of these.
-  if (type === "training-load-gpexe-cal-prev" || type === "training-load-gpexe-cal-next") {
-    moveCalendarMonth(type.endsWith("prev") ? -1 : 1);
+  // P4b, "Later": local only, no request for any of these.
+  if (type === "training-load-gpexe-later") {
+    // Never while an import is being sent; and a second tap right after the first (the list moves under the thumb) is
+    // not a second "Later" (mobile review).
+    const now = Date.now();
+    if (gx.batch?.sending || now - laterTappedAt < LATER_REPEAT_MS) return true;
+    if (putLater(action.dataset.candidateId || "")) {
+      laterTappedAt = now;
+      renderTrainingLoad();
+      const notice = globalThis.document?.querySelector?.(".imports-later-notice button");
+      notice?.focus?.({ preventScroll: true });
+      notice?.scrollIntoView?.({ block: "nearest" });
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-later-back") {
+    const id = action.dataset.candidateId || "";
+    if (bringBack(id)) {
+      renderTrainingLoad();
+      // The session is back in the list: focus its row (reviews: focus is not left on a button that is gone).
+      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-open"][data-candidate-id="${globalThis.CSS?.escape ? CSS.escape(id) : id}"]`)?.focus?.();
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-later-show") {
+    setLaterOpen(!laterOpen(gx));
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-gpexe-cal-day") {
-    setCalendarDay(action.dataset.day || "");
+  // P4, the period chooser: local only, no request for any of these.
+  if (type === "training-load-gpexe-period-toggle") {
+    // The phone's sheet (on a computer the chooser is always on the page). Focus moves into the sheet and back.
+    const open = !periodOf(gx).open;
+    setPeriodOpen(open);
     renderTrainingLoad();
+    globalThis.document?.querySelector?.(open ? ".imports-period .period-close" : ".imports-find-phone")?.focus?.({ preventScroll: true });
     return true;
   }
-  if (type === "training-load-gpexe-cal-all") {
-    clearCalendarDay();
-    renderTrainingLoad();
+  if (type === "training-load-gpexe-period-day") {
+    if (takePeriodDragClick()) return true;
+    const day = action.dataset.day || "";
+    if (pickDay(day)) repaintPeriod(renderTrainingLoad, `[data-action="training-load-gpexe-period-day"][data-day="${day}"]`);
+    return true;
+  }
+  if (type === "training-load-gpexe-period-month") {
+    const delta = Number(action.dataset.delta) < 0 ? -1 : 1;
+    turnMonth(delta);
+    repaintPeriod(renderTrainingLoad, `.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${delta}"]`);
+    return true;
+  }
+  if (type === "training-load-gpexe-period-clear") {
+    clearPeriod();
+    repaintPeriod(renderTrainingLoad, ".imports-period .period-missing");
     return true;
   }
 
   return false;
+}
+
+// P4: a repaint of the chooser keeps the phone's sheet where it was scrolled (it is its own scroll container, rebuilt
+// by every repaint) and puts the focus back on the control just used (mobile-qa).
+function repaintPeriod(render, focusSelector) {
+  const doc = globalThis.document;
+  const top = doc?.querySelector?.(".imports-period.is-open")?.scrollTop;
+  render();
+  const sheet = doc?.querySelector?.(".imports-period.is-open");
+  if (sheet && typeof top === "number") sheet.scrollTop = top;
+  doc?.querySelector?.(focusSelector)?.focus?.({ preventScroll: true });
 }
 
 // J20-C: the confirmed import of the open review (its approval and activity), or null while it is not confirmed.

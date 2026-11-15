@@ -14,6 +14,7 @@
 // contract supplies one, use neutral wording; raw ids and codes stay folded.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { estimateBusy, estimateLabelText, estimateOffered, isEstimateValue, renderEstimatePanelHtml } from "./activity-estimate.js";
 
 export const ROSTER_GROUPS = Object.freeze([
   { id: "needs_state", label: "Needs a state" },
@@ -116,8 +117,9 @@ function isMeasuredValue(v) {
   return v?.entryMethod === "api_import" || v?.entryMethod === "csv_import";
 }
 
+// Measured values, and (6b-C1) estimated values with their label; never another kind.
 function displayValues(athlete) {
-  return (athlete?.values || []).filter(isMeasuredValue);
+  return (athlete?.values || []).filter((v) => isMeasuredValue(v) || isEstimateValue(v));
 }
 
 function hasValue(v) {
@@ -325,9 +327,9 @@ function allValuesHtml(athlete) {
   return `
     <dl class="tl-roster-all-values">
       ${values.map((value) => `
-        <div>
+        <div${isEstimateValue(value) ? ` class="is-estimate"` : ""}>
           <dt>${escapeHtml(metricLabel(value))}</dt>
-          <dd>${escapeHtml(formatRosterValue(value))}</dd>
+          <dd>${escapeHtml(formatRosterValue(value))}${isEstimateValue(value) ? ` <small class="tl-roster-est">est.</small><span class="tl-roster-est-label">${escapeHtml(estimateLabelText(value.estimate))}</span>` : ""}</dd>
         </div>
       `).join("")}
     </dl>
@@ -391,12 +393,12 @@ export function anyWriteInFlight(roster) {
 }
 
 export function rowLocked(roster, athleteId) {
-  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster)) return true;
+  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster)) return true;
   return Boolean(roster.busy?.[athleteId]);
 }
 
 export function bulkLocked(roster) {
-  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster));
+  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster));
 }
 
 function button(label, action, attrs = "", cls = "plain-button tl-roster-button") {
@@ -616,6 +618,11 @@ function rowActionsHtml(roster, athlete) {
       ].join("");
     } else {
       buttons = button("Change", "training-load-roster-change", attrs(), "plain-button tl-roster-button tl-roster-change");
+      // 6b-C1: estimate the values of a Participated · no device data athlete (one decision at a time: a state first).
+      if (estimateOffered(roster.data, athlete) && roster.estimate?.athleteId !== id) {
+        const has = (athlete.values || []).some(isEstimateValue);
+        buttons += button(has ? "Change the estimate…" : "Estimate values…", "training-load-roster-estimate-open", `data-athlete-id="${escapeAttr(id)}" ${locked || estimateBusy(roster) ? "disabled" : ""}`);
+      }
     }
   } else {
     buttons = [
@@ -660,7 +667,8 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
         <span class="tl-roster-state"><span aria-hidden="true">${view.glyph}</span> ${escapeHtml(view.label)}</span>
         ${columns.map((column) => {
           const value = displayValues(athlete).find((item) => metricKey(item) === column.metricKey);
-          return `<span class="tl-roster-cell" data-label="${escapeAttr(column.label)}">${escapeHtml(formatRosterValue(value))}</span>`;
+          const estimated = isEstimateValue(value);
+          return `<span class="tl-roster-cell${estimated ? " is-estimate" : ""}" data-label="${escapeAttr(column.label)}"${estimated ? ` title="${escapeAttr(estimateLabelText(value.estimate))}"` : ""}>${escapeHtml(formatRosterValue(value))}${estimated ? ` <small class="tl-roster-est">est.</small>` : ""}</span>`;
         }).join("")}
       </div>
       ${notes.length ? `<div class="tl-roster-row-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>` : ""}
@@ -668,6 +676,7 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
       ${outside ? "" : noticeHtml(notice, { cls: "tl-roster-row-notice", roster })}
       ${outside || !canDecide ? "" : confirmHtml(roster, athlete)}
       ${outside || !canDecide ? "" : rowPickerHtml(roster, athlete, reasons)}
+      ${outside || !canDecide ? "" : renderEstimatePanelHtml(roster, athlete)}
       <details class="tl-roster-row-more" ${disclosureAttrs(roster, rowKey)}>
         <summary>Details</summary>
         <div class="tl-roster-row-body">

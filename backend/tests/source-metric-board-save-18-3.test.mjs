@@ -87,7 +87,9 @@ after(async () => {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-const uid = () => crypto.randomBytes(4).toString("hex");
+// Letters only: these words land in labels and column keys of the answers, and valueLeaks searches a text for a
+// stored value as a number of its own - a random digit run in a label ("Variable ab20cdef") would be found by chance.
+const uid = () => crypto.randomBytes(4).toString("hex").replace(/\d/g, (d) => "ghijklmnop"[d]);
 const rows = async (sql, params = []) => (await k.query(sql, params)).rows;
 const rows_ = rows;
 const one = async (sql, params = []) => (await k.query(sql, params)).rows[0];
@@ -290,11 +292,22 @@ async function preplacedRow(who, t, cand, v, { pair = 0, requirement = "optional
   assert.ok(entry, "the version is pre-placed on the board");
   return { kind: "preplaced", mappingVersionId: v.versionId, placementHash: entry.placementHash, requirement, replaces: replaces ?? (entry.replaces ?? []).map((c) => c.activationId) };
 }
-// The leaves of an answer that are one of the given values (compared as numbers when both are numeric, else as text),
-// and any key that names a value. Substring search is not used: short numbers also occur inside ids and times.
+// The leaves of an answer that are, or contain, one of the given values, and any key that names a value.
+//   * a leaf equal to a value (as numbers when both are numeric, else as text);
+//   * a text leaf in which a value is written as a number of its own ("took 1200 s", "a=60.5;b=3100", "n 3100.",
+//     "1200.0"), so a value inside a sentence or a joined text is found too.
+// A text shaped like an id (a UUID) or like an ISO time is skipped for the token search: short numbers occur inside
+// both by chance, which is what made a plain substring search fail.
+const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_TIME_SHAPED = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 function valueLeaks(answer, values) {
   const wanted = values.map((v) => String(v));
   const same = (leaf, v) => String(leaf) === v || (leaf !== "" && v !== "" && Number.isFinite(Number(leaf)) && Number.isFinite(Number(v)) && Number(leaf) === Number(v));
+  // Every number written in the text (a digit run with an optional decimal part, not glued to another digit or
+  // point) is compared as a number, so "1200.0" and "20.000000" are found for 1200 and 20, and "1200.5", "31200"
+  // and "0.1200" are not.
+  const numbersIn = (text) => (text.match(/(?<![0-9.])[0-9]+(\.[0-9]+)?(?![0-9])(?!\.[0-9])/g) || []).map(Number);
+  const contains = (leaf, v) => typeof leaf === "string" && v !== "" && Number.isFinite(Number(v)) && !UUID_SHAPED.test(leaf) && !ISO_TIME_SHAPED.test(leaf) && numbersIn(leaf).includes(Number(v));
   const found = [];
   const walk = (node, path) => {
     if (node === null || node === undefined) return;
@@ -308,6 +321,7 @@ function valueLeaks(answer, values) {
     }
     if (typeof node === "boolean") return;
     if (wanted.some((v) => same(node, v))) found.push(path);
+    else if (wanted.some((v) => contains(node, v))) found.push(`${path} (inside)`);
   };
   walk(answer, "$");
   return found;
@@ -357,6 +371,21 @@ test("1. a save: two checked new rows and one OptiMove mapping are switched on f
   assert.deepEqual(valueLeaks(res.body, held), [], "no athlete's value in the answer");
   assert.deepEqual(valueLeaks({ x: { n: Number(held[0]) }, list: [String(held[1])] }, held), ["$.x.n", "$.list[0]"], "the check does find a value that is there");
   assert.deepEqual(valueLeaks({ row: { values: { a: 1 } } }, []), ["$.row.values (key)"], "and a key that names one");
+  // The check's own test: a value inside a longer text is found as a numeric token; the same digits inside an id, a
+  // time or a longer number are not.
+  assert.deepEqual(valueLeaks({ a: "took 1200 s", b: "x=60.5;y=3100", c: "1200", d: 1200, e: ["n 3100."] }, ["1200", "3100", "60.5"]),
+    ["$.a (inside)", "$.b (inside)", "$.c", "$.d", "$.e[0] (inside)"]);
+  assert.deepEqual(valueLeaks({ id: "3f2b1200-1111-4222-8333-444431005556", at: "2026-09-14T12:00:31.000Z", day: "2026-12-00", big: "31200", dec: "1200.5", part: "0.1200", n: 31200 }, ["1200", "3100"]), [],
+    "an id, a time, and a longer number that only contains the digits");
+  assert.deepEqual(valueLeaks({ note: "id 3f2b1200-1111-4222-8333-444431005556 took 1200 s" }, ["1200"]), ["$.note (inside)"], "a text that merely contains an id is still searched");
+  // The id and time shapes are skipped where the value really is a number inside them; the same text as part of a sentence is searched.
+  assert.deepEqual(valueLeaks({ at: "2026-09-14T12:00:31.000Z", day: "2026-09-14", id: "00000020-0000-4000-8000-000000000020" }, ["12", "14", "31", "2026", "20", "9"]), []);
+  assert.deepEqual(valueLeaks({ note: "on 2026-09-14 took 14 s" }, ["14"]), ["$.note (inside)"]);
+  // A value printed with trailing zeros is the same number.
+  assert.deepEqual(valueLeaks({ a: "took 1200.0 s", b: "(20.000000, x)", c: "60.50" }, ["1200", "20", "60.5"]), ["$.a (inside)", "$.b (inside)", "$.c"]);
+  // The test's own random words carry no digit, so a label can never be taken for a value.
+  for (let i = 0; i < 200; i += 1) assert.equal(/\d/.test(uid()), false);
+  assert.deepEqual(valueLeaks({ label: `Variable ${uid()}`, key: `board.test.time.f${uid()}` }, ["20", "30", "1200"]), []);
   for (const needle of [NAMES[1], rows[0].placementHash]) assert.equal(res.text.includes(needle), false, needle);
   // What was written.
   const after = await counts();

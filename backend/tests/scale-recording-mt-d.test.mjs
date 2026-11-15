@@ -484,6 +484,19 @@ test("3. a scaled athlete is imported with its max only; the preview lists the s
   )).rows;
   assert.equal(prov.length, 1);
   assert.deepEqual(prov[0].basis, { measured: 1500, recordedMinutes: 20, targetMinutes: 40 });
+  // 6b-C1: the coach's read labels the scaled values with both minutes; the athlete reading their own results gets the
+  // method, the author and the date only (the Independent's M1).
+  const coachRead = await tapi(`/${activityId}`, { cookie: team.coach.cookie });
+  const coachEst = coachRead.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+  assert.ok(coachEst.length > 0 && coachEst.every((f) => f.estimate.method === "scale_recording" && f.estimate.recordedMinutes === 20 && f.estimate.targetMinutes === 40));
+  const selfId = await makeUser("scaled athlete");
+  await admin.query(`update public.athletes set user_id = $2 where id = $1`, [team.athleteIds[1], selfId]);
+  await setWorkspace(selfId, "athlete", team.athleteIds[1]);
+  const selfRead = await tapi(`/${activityId}`, { cookie: `optimove_session=${await createSession(selfId)}` });
+  assert.equal(selfRead.status, 200, selfRead.text);
+  const selfEst = selfRead.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+  assert.ok(selfEst.length > 0);
+  for (const f of selfEst) assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
 
   const none = await tapi(`/${activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), athleteId: team.athleteIds[0], method: "scale_recording" } });
   assert.deepEqual([none.status, none.body.error], [409, "scale_not_chosen"]);

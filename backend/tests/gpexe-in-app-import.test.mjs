@@ -2630,3 +2630,166 @@ test("archived club: a team of an archived club is the same 404 as a missing tea
   await admin.query(`update public.clubs set is_active = true where id = $1`, [team.clubId]);
   for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${id}/status`, { cookie })).status, 200, `${who} after the club is restored`);
 });
+
+// ---------------------------------------------------------------------------
+// The Imports calendar read and the candidate list's window (gpexeImportState.js): one state rule for the list and the
+// calendar, the UTC day of session_started_at, the same audience and 404 as the candidates.
+// ---------------------------------------------------------------------------
+
+function calendarBundle(sessionId, start, { withUnlinked = false, with103 = false, category, distance101 } = {}) {
+  // 101 and 102 only: both linked and clean, so a session of them alone is "ready" (103's record needs a manual review).
+  const athletes = standardAthletes().slice(0, 2);
+  if (distance101) athletes[0].parts[0].distance = distance101;
+  if (withUnlinked) athletes.push({ ...structuredClone(athletes[1]), id: 104, tracks: [9005] });
+  if (with103) athletes.push(standardAthletes()[2]);
+  return makeBundle({ sessionId, gpexeTeamId: 77, start, category, athletes });
+}
+
+const utcDayOf = async (candidateId) => (await admin.query(
+  `select to_char(session_started_at at time zone 'UTC', 'YYYY-MM-DD') d from training_load.gpexe_import_candidates where id = $1`, [candidateId],
+)).rows[0].d;
+
+test("calendar: per UTC day the first three sessions' states in start order and each state's count, from the same rule as the list's state; replaced versions and undone imports are left out; the window is validated after the access check", async () => {
+  const team = await setupTeam();
+  const bundles = [
+    calendarBundle(7401, "2026-09-03T00:30:00"),
+    calendarBundle(7402, "2026-09-03T23:30:00", { withUnlinked: true }),
+    calendarBundle(7403, "2026-09-03T12:00:00", { category: "OFFICIAL MATCH" }),
+    calendarBundle(7404, "2026-09-03T18:00:00"),
+    calendarBundle(7405, "2026-09-06T10:00:00"),
+    // 103's record needs a manual review: the GPS branch of the trimmed preview.
+    calendarBundle(7406, "2026-09-08T10:00:00", { with103: true }),
+  ];
+  serve(team, bundles);
+  assert.equal((await checkNow(team)).status, "succeeded");
+  await withSwitchOn(async () => {
+    const list = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+    const target = list.find((c) => String(c.gpexeTeamSessionId) === "7405");
+    const candidate = (await api(`/teams/${team.teamId}/candidates/${target.id}`, { cookie: team.coach.cookie })).body.candidate;
+    assert.equal((await approve(team, candidate, team.padmin.cookie)).status, 200);
+  });
+  // New content for 7402: its first version is replaced and must not be counted twice. New content for the imported 7405:
+  // a pending version that changes imported results (the changesToImported branch of the trimmed preview).
+  serve(team, [
+    bundles[0], calendarBundle(7402, "2026-09-03T23:30:00", { withUnlinked: true, distance101: 3333 }), bundles[2], bundles[3],
+    calendarBundle(7405, "2026-09-06T10:00:00", { distance101: 4444 }), bundles[5],
+  ]);
+  assert.equal((await checkNow(team)).status, "succeeded");
+
+  const listed = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.truncated, false);
+  const bySession = Object.fromEntries(listed.body.candidates.map((c) => [String(c.gpexeTeamSessionId), c]));
+  assert.equal(bySession["7403"].state, "out", "a session type that stays out");
+  assert.equal(bySession["7402"].state, "needs", "an unlinked athlete is a step for the coach");
+  assert.equal(bySession["7401"].state, "ready", "nothing to decide");
+  assert.equal(bySession["7406"].state, "needs", "a record that needs a manual review");
+  const v7405 = listed.body.candidates.filter((c) => String(c.gpexeTeamSessionId) === "7405");
+  assert.deepEqual(v7405.map((c) => c.state).sort(), ["imported", "needs"], "the imported version, and the pending one that changes it");
+  assert.ok(v7405.find((c) => c.state === "needs").changesToImported > 0);
+  const all = (await api(`/teams/${team.teamId}/candidates?includeSuperseded=true`, { cookie: team.padmin.cookie })).body.candidates;
+  assert.ok(all.some((c) => c.status === "superseded" && c.state === "hidden"), "the replaced version is hidden");
+
+  const cal = await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`, { cookie: team.coach.cookie });
+  assert.equal(cal.status, 200, JSON.stringify(cal.body));
+  assert.deepEqual(Object.keys(cal.body).sort(), ["days", "from", "to", "truncated"]);
+  assert.equal(cal.body.truncated, false);
+  // The calendar agrees with the list's own states, day by day (the trimmed preview gives the same state as the full one).
+  const expected = new Map();
+  const shown = listed.body.candidates.filter((c) => c.state !== "hidden")
+    .sort((a, b) => Date.parse(a.sessionStartedAt) - Date.parse(b.sessionStartedAt) || Date.parse(a.firstSeenAt) - Date.parse(b.firstSeenAt));
+  for (const c of shown) {
+    const day = await utcDayOf(c.id);
+    const e = expected.get(day) ?? { day, chips: [], counts: { needs: 0, ready: 0, imported: 0, out: 0 } };
+    if (e.chips.length < 3) e.chips.push(c.state);
+    e.counts[c.state] += 1;
+    expected.set(day, e);
+  }
+  assert.deepEqual(cal.body.days, [...expected.values()]);
+  const day3 = cal.body.days.find((d) => d.day === "2026-09-03");
+  assert.ok(day3, "the sessions at 00:30 and 23:30 UTC belong to their own UTC day");
+  assert.equal(day3.chips.length, 3, "three chips for a day of four sessions");
+  assert.equal(Object.values(day3.counts).reduce((a, b) => a + b, 0), 4, "the replaced version is not counted");
+  assert.ok(cal.body.days.every((d) => Object.values(d.counts).some((n) => n > 0)), "only days with a session");
+
+  // The same answer for a platform admin (the state carries no audience-dependent code).
+  const asAdmin = await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`, { cookie: team.padmin.cookie });
+  assert.deepEqual(asAdmin.body, cal.body);
+
+  // A window: the list of those days only, newest first.
+  const day3List = await api(`/teams/${team.teamId}/candidates?from=2026-09-03&to=2026-09-03`, { cookie: team.coach.cookie });
+  assert.equal(day3List.status, 200);
+  assert.deepEqual(day3List.body.candidates.map((c) => String(c.gpexeTeamSessionId)), ["7402", "7404", "7403", "7401"]);
+
+  // Bad windows: 400 invalid_window; the calendar needs both bounds; at most 42 (calendar) and 31 (list) days.
+  for (const q of ["", "?from=2026-09-01", "?from=2026-09-01&to=2026-10-13", "?from=2026-09-02&to=2026-09-01", "?from=2026-02-30&to=2026-03-01", "?from=1.9.2026&to=2026-09-03"]) {
+    const r = await api(`/teams/${team.teamId}/calendar${q}`, { cookie: team.coach.cookie });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_window"], `calendar ${q}`);
+  }
+  assert.equal((await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-10-12`, { cookie: team.coach.cookie })).status, 200, "42 days");
+  assert.deepEqual([(await api(`/teams/${team.teamId}/candidates?from=2026-09-01&to=2026-10-02`, { cookie: team.coach.cookie })).body.error], ["invalid_window"]);
+  assert.equal((await api(`/teams/${team.teamId}/candidates?from=2026-09-01&to=2026-10-01`, { cookie: team.coach.cookie })).status, 200, "31 days");
+
+  // Another team's coach: the identical 404 of the candidates, whatever the window.
+  const other = await setupTeam();
+  for (const q of ["?from=2026-09-01&to=2026-09-30", "?from=bad"]) {
+    const cal404 = await api(`/teams/${team.teamId}/calendar${q}`, { cookie: other.coach.cookie });
+    const list404 = await api(`/teams/${team.teamId}/candidates${q}`, { cookie: other.coach.cookie });
+    assert.equal(cal404.status, 404);
+    assert.deepEqual([cal404.status, cal404.body], [list404.status, list404.body], `identical 404 ${q}`);
+  }
+
+  // The cap counts only shown sessions: a cap of exactly the shown sessions, with a replaced version inside the window,
+  // is not truncated and counts every shown session (the replaced version is filtered before the limit).
+  service.setCandidateListCapsForTests({ calendar: shown.length });
+  try {
+    const exact = await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`, { cookie: team.coach.cookie });
+    assert.equal(exact.body.truncated, false);
+    assert.equal(exact.body.days.reduce((n, d) => n + Object.values(d.counts).reduce((a, b) => a + b, 0), 0), shown.length);
+  } finally {
+    service.setCandidateListCapsForTests();
+  }
+
+  // truncated: the caps lowered for the test.
+  service.setCandidateListCapsForTests({ list: 2, calendar: 2 });
+  try {
+    const cut = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
+    assert.deepEqual([cut.body.candidates.length, cut.body.truncated], [2, true]);
+    const cutCal = await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`, { cookie: team.coach.cookie });
+    assert.equal(cutCal.body.truncated, true);
+    assert.equal(cutCal.body.days.reduce((n, d) => n + Object.values(d.counts).reduce((a, b) => a + b, 0), 0), 2);
+  } finally {
+    service.setCandidateListCapsForTests();
+  }
+});
+
+test("calendar: one statement for the read, whatever the number of sessions; the trimmed preview carries no value, name or id", async () => {
+  const team = await setupTeam();
+  serve(team, [calendarBundle(7501, "2026-09-04T10:00:00")]);
+  await checkNow(team);
+  let sql = [];
+  const originalQuery = appPool.query;
+  appPool.query = function captured(text, ...rest) {
+    if (typeof text === "string" && /session_day/.test(text)) sql.push(text);
+    return originalQuery.call(this, text, ...rest);
+  };
+  const path = `/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`;
+  let few;
+  let many;
+  try {
+    few = await countQueries(async () => assert.equal((await api(path, { cookie: team.coach.cookie })).status, 200));
+    serve(team, [calendarBundle(7501, "2026-09-04T10:00:00"), calendarBundle(7502, "2026-09-05T10:00:00", { withUnlinked: true }),
+      calendarBundle(7503, "2026-09-06T10:00:00"), calendarBundle(7504, "2026-09-07T10:00:00", { category: "OFFICIAL MATCH" })]);
+    await checkNow(team);
+    many = await countQueries(async () => {
+      const r = await api(path, { cookie: team.coach.cookie });
+      assert.equal(r.body.days.length, 4);
+    });
+  } finally {
+    appPool.query = originalQuery;
+  }
+  assert.equal(many, few, `the same number of statements for 1 and 4 sessions (few=${few} many=${many})`);
+  assert.equal(sql.length, 2, "exactly one calendar statement per request");
+  assert.match(sql[0], /\$2::timestamptz/, "parametrized");
+  assert.doesNotMatch(sql[0], /preview_hash, preview|, preview,/, "the full preview is never read");
+});

@@ -502,7 +502,10 @@ test("6. the six surfaces take the request's one audience level: the router comp
   assert.equal(assignments.length, 1, "the level is assigned once");
   assert.match(route.code.slice(assignments[0].index), /^req\.gpexeImportAudience\s*=\s*importAudienceOf\(req\.authz,\s*access\);/);
   assert.equal(enclosing(route, assignments[0].index, { named: true })?.name, "teamAccess");
-  const minimum = { "service.listCandidates": 1, "service.getCandidate": 2 };
+  // The list and the Imports calendar read candidates through readCandidateList / readCandidateCalendar (listCandidates
+  // stays a wrapper of the first, called by no route).
+  const minimum = { "service.readCandidateList": 1, "service.readCandidateCalendar": 1, "service.getCandidate": 2 };
+  assert.equal(callsOf(route, "service.listCandidates").length, 0, "the router reads the list through readCandidateList");
   // The batch (surface 4) answers the same neutral result for every level, so
   // it takes no audience (a dead argument would read as a projection it does
   // not do); both approval routes pass the club the route resolved, so R16's
@@ -524,14 +527,14 @@ test("6. the six surfaces take the request's one audience level: the router comp
     }
   }
   // No other module reads candidates for an answer.
-  for (const name of ["listCandidates", "getCandidate", "approveCandidates"]) {
+  for (const name of ["listCandidates", "readCandidateList", "readCandidateCalendar", "getCandidate", "approveCandidates"]) {
     assert.deepEqual(all().filter((f) => f.rel !== ROUTE && f.rel !== "gpexeImportService.js" && callsOf(f, name).length > 0).map((f) => f.rel), [], `${name} is called outside the router`);
   }
   // The router never projects, reads or builds a blocked code itself.
   assert.doesNotMatch(route.code, /\bprojectPreview\b|\bprojectBlockedCodes\b|\bblockedSourceCode\b|\bcandidateReasons\b/);
-  // candidateSummary: called only by listCandidates and getCandidate, with the level.
+  // candidateSummary: called only by the list, the Imports calendar and getCandidate, with the level.
   const summaryCalls = callsOf(service, "candidateSummary");
-  assert.deepEqual(summaryCalls.map((c) => enclosing(service, c.index, { named: true })?.name).sort(), ["getCandidate", "listCandidates"]);
+  assert.deepEqual(summaryCalls.map((c) => enclosing(service, c.index, { named: true })?.name).sort(), ["getCandidate", "readCandidateCalendar", "readCandidateList"]);
   for (const call of summaryCalls) assert.equal(topLevelArgs(call.args).length, 2, `${where(service, call.index)}: candidateSummary without the level`);
   assert.deepEqual(callsOf(service, "projectBlockedCodes").map((c) => enclosing(service, c.index, { named: true })?.name), ["candidateSummary"]);
   assert.deepEqual(callsOf(service, "projectPreview").map((c) => enclosing(service, c.index, { named: true })?.name), ["getCandidate"]);

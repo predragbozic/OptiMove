@@ -33,7 +33,7 @@ const { handleTrainingLoadAction } = await import("../training-load-actions.js")
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, inboxBucket, batchSelectable, candidateGroup, notConfirmedForImport, withdrawnByCheck, calendarDayKey } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, inboxBucket, batchSelectable, candidateGroup, notConfirmedForImport, withdrawnByCheck } = await import("../gpexe-import-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -166,7 +166,8 @@ const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GP
 const ADMIN_STEP_TAIL = "\\. If it stays like this, check in GPEXE that the session(?:'|&#039;)s drills are set up and have data\\.";
 const ADMIN_WORDS = /fewer than two|successful search has confirmed|drills are set up|could not confirm its drill results/;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const dayLabel = (iso) => { const [y, m, d] = calendarDayKey(iso).split("-").map(Number); return `${d} ${MONTHS[m - 1]}`; };
+// P4: the chooser marks a session on the day the server searches it under (its UTC day).
+const dayLabel = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return `${d} ${MONTHS[m - 1]}`; };
 
 // ---------------------------------------------------------------------------
 test("1. Ready to import: a pending session the last successful search did not confirm is listed under Needs attention with the one step, never under Ready, with no checkbox even when the switch is on and the viewer may approve", async () => {
@@ -182,9 +183,12 @@ test("1. Ready to import: a pending session the last successful search did not c
   assert.doesNotMatch(attentionSection(page), /gpexe-candidate-next/, "the row does not repeat the group's step");
   assert.doesNotMatch(attentionSection(page), /Not confirmed for import yet\./, "the row does not repeat the badge");
   assert.match(attentionSection(page), /gpexe-badge is-pending">Not confirmed for import</, "not 'Not imported yet' (P1's name for waiting)");
-  // The dates are pre-filled for the session that needs finding again (as for an expired one).
-  assert.match(page, /The dates are set to include the sessions that need finding again \(06\.10\.2026\)\./);
-  assert.match(page, /value="2026-10-06"/);
+  // P4: opening "Find new sessions" chooses the day of the session that needs finding again (as for an expired one).
+  await act("training-load-gpexe-period-toggle");
+  const chooser = html();
+  assert.match(chooser, /These days hold the sessions that need finding again\./);
+  assert.match(chooser, /data-action="training-load-gpexe-check" data-from="2026-10-06" data-to="2026-10-06"/);
+  await act("training-load-gpexe-period-toggle");
   // The checkboxes are in "Choose sessions" (IMP1), in the Ready tab.
   gx().chooseOpen = true;
   await act("training-load-gpexe-tab", { importTab: "ready" });
@@ -248,7 +252,8 @@ test("3. candidate_not_actionable: a refused approval reads as one sentence and 
 
 test("4. a withdrawn session (superseded by a complete, successful search) is never Ready, new or Needs attention: the default read asks for no superseded row, so it is listed only after 'Show replaced or no longer found versions' as 'No longer found' with the sentence; its review says the same and has no approval and no 'newer data'; the calendar does not count it", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row(), withdrawn({ label: "FULL TRAINING 06.10.", sessionStartedAt: "2026-10-06T16:08:12Z" })] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: true, canApprove: true, admin: true }, candidates: [row(), withdrawn({ label: "FULL TRAINING 06.10.", sessionStartedAt: "2026-10-06T16:08:12Z" })] });
   await openImports();
   let page = html();
   assert.equal(candidateGroup(withdrawn(), gx()), "withdrawn");
@@ -257,8 +262,13 @@ test("4. a withdrawn session (superseded by a complete, successful search) is ne
   assert.doesNotMatch(readySection(page), /cand-wd/);
   assert.equal(attentionSection(page), "", "no attention bucket at all");
   assert.doesNotMatch(page, /cand-wd/, "hidden until the switch");
-  assert.match(page, new RegExp(`${dayLabel("2026-10-05T16:08:12Z")}, 1 session found`), "the published session's day is marked");
-  assert.match(page, new RegExp(`${dayLabel("2026-10-06T16:08:12Z")}, nothing found yet`), "the withdrawn session's day is not counted");
+  // P4: the period chooser marks the published session's day; the withdrawn one is not counted.
+  gx().period.month = "2026-10";
+  await act("training-load-gpexe-period-toggle");
+  const chooser = html();
+  assert.match(chooser, new RegExp(`${dayLabel("2026-10-05T16:08:12Z")}(?: 2026)?, 1 session: ready`), "the published session's day is marked");
+  assert.match(chooser, new RegExp(`${dayLabel("2026-10-06T16:08:12Z")}(?: 2026)?, nothing found yet`), "the withdrawn session's day is not counted");
+  await act("training-load-gpexe-period-toggle");
   // IMP1: the replaced and no-longer-found versions are shown in the Stays out tab.
   await act("training-load-gpexe-tab", { importTab: "out" });
   assert.match(html(), /Show replaced or no longer found versions</, "the toggle names the section");
@@ -281,7 +291,8 @@ test("4. a withdrawn session (superseded by a complete, successful search) is ne
 
 test("5. a replaced version (superseded by newer content) stays as before: hidden, 'Replaced', 'GPEXE has newer data' - and never Ready or new", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row(), replaced({ label: "FULL TRAINING 05.10. (older)" })] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: true, canApprove: true, admin: true }, candidates: [row(), replaced({ label: "FULL TRAINING 05.10. (older)" })] });
   await openImports();
   let page = html();
   assert.doesNotMatch(page, /cand-old/);
@@ -389,7 +400,8 @@ test("9. the approve handler never sends an approval for a not-confirmed or with
 
 test("10. the source card's 'listed below' line counts the visible rows only: with nothing but a withdrawn session (not listed by the default read) and no recorded search it says 'No sessions found yet', never 'listed below' - and the same once the superseded rows are shown", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: false, canApprove: true }, candidates: [withdrawn()] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: false, canApprove: true, admin: true }, candidates: [withdrawn()] });
   await openImports();
   // IMP1: the found line is in the Search tab; the versions are shown in the Stays out tab.
   await act("training-load-gpexe-tab", { importTab: "search" });

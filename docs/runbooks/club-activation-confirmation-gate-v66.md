@@ -74,6 +74,22 @@ touches the production database.
 3. The *Rukovodilac*'s smoke (`/api/health` serves the commit; without a login `POST …/sources/metrics/confirmations`
    answers 401) and its read-only post-check, `docs/runbooks/club-activation-confirmation-gate-v66-postcheck.sql`.
 
+## Standing rule after the deploy: the server's log settings
+
+v66 is on production since 2026-11-15 (merge `6a5ee45e`; as relayed by the *Rukovodilac*: deployed with `8d5d3a76`,
+its read-only post-check, blocks 1 to 4, as expected). From then on a save writes two athletes' values as bind parameters, and what
+keeps them out of the server's log is the pair "the statement bound of the value-carrying statements
+(`VALUE_STATEMENT_TIMEOUT_MS`, 5000 ms, `backend/src/sourceMetricBoardSaveService.js`) is below `auto_explain`'s
+threshold (10000 ms on production), and no other setting logs parameters".
+
+**Any change of `auto_explain.*`, of `log_parameter_max_length` or `log_parameter_max_length_on_error`, or of the
+other settings block 5 reads (`log_statement`, `log_min_duration_*`, `log_transaction_sample_rate`, `pgaudit.*`,
+`debug_print_*`) on production, by anyone and for any reason, is followed by block 5 of
+`club-activation-confirmation-gate-v66-preflight.sql`, run as the application's role, before the change is left in
+place.** Every column must be true; the `auto_explain` threshold is compared with `VALUE_STATEMENT_TIMEOUT_MS`, and a
+change of that constant in the code is compared with the threshold the same way (the suite pins the preflight's
+number to the constant). A false column means the setting goes back, or saves are stopped, until the owner decides.
+
 ## Rollback
 
 `docs/runbooks/club-activation-confirmation-gate-v66-rollback.sql`, rehearsed on a disposable database (apply →

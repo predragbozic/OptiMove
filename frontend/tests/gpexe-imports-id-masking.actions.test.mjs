@@ -415,6 +415,21 @@ test("the team's own coach through Link athletes and the review link: no date-of
   assert.match(confirmQuestions.at(-1) || "", /Unlink the GPEXE athlete Mira Zedova from /);
 });
 
+test("defence in depth (the Independent's L1 on #527): if a coach's answer ever carried a date of birth or a date conflict, the coach's screens still show neither", async () => {
+  const leaky = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova", birthDate: "2001-02-03" }], maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [{ gpexeAthleteId: ID.named, athleteId: "ath-3" }] };
+  reset(VIEWERS["team coach"], { identities: leaky });
+  const noDates = (html, where) => {
+    const text = outsideTech(html).replace(/<section class="gpexe-suggest"[\s\S]*?<\/section>/g, "");
+    assert.ok(!/date of birth|dates of birth|born |03\.02\.2001/i.test(text), `team coach: no date on ${where}`);
+  };
+  await openMapping();
+  noDates(pageHtml(), "Link athletes");
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: ID.named }, { value: "ath-3" });
+  noDates(pageHtml(), "the staged choice");
+  await act("training-load-gpexe-map-confirm");
+  noDates(pageHtml(), "the confirmation");
+});
+
 test("the team's own coach, a nameless athlete in the review table's row: no heading that points at values below (P2: none in a compact row), only the row's own line about its values", async () => {
   for (const [values, sentNone] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, false], [{}, true]]) {
     reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
