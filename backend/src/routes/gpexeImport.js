@@ -274,11 +274,25 @@ router.get("/teams/:teamId/checks/:checkId", handle(async (req, res) => {
   res.json({ check });
 }));
 
+// Optional from / to (YYYY-MM-DD, both or neither, at most 31 UTC days); truncated when more rows match than the list
+// returns. The window is checked after the access check, so a team the caller may not see is the same 404 whatever it is.
 router.get("/teams/:teamId/candidates", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  const candidates = await service.listCandidates(access.teamId, { includeSuperseded: req.query.includeSuperseded === "true", audience: req.gpexeImportAudience });
-  res.json({ candidates, importSwitch: service.applySwitchInfo() });
+  const window = service.parseDayWindow(req.query.from, req.query.to, service.CANDIDATE_LIST_WINDOW_MAX_DAYS);
+  const { candidates, truncated } = await service.readCandidateList(access.teamId, {
+    includeSuperseded: req.query.includeSuperseded === "true", audience: req.gpexeImportAudience, window,
+  });
+  res.json({ candidates, importSwitch: service.applySwitchInfo(), truncated });
+}));
+
+// The Imports calendar: per UTC day of the window (from and to required, at most 42 days) the first three sessions'
+// states and each state's count. The same audience and 404 as the candidates.
+router.get("/teams/:teamId/calendar", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  const window = service.parseDayWindow(req.query.from, req.query.to, service.CALENDAR_WINDOW_MAX_DAYS, { required: true });
+  res.json(await service.readCandidateCalendar(access.teamId, window, { audience: req.gpexeImportAudience }));
 }));
 
 router.get("/teams/:teamId/candidates/:candidateId", handle(async (req, res) => {
