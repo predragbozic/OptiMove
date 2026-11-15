@@ -1061,10 +1061,10 @@ test("18. 6b-D: the dashboards leave an estimate out under every policy - all so
   const estimated = r.body.estimates.find((e) => e.metricDefinitionId === distance).value;
   const { runDashboardBatchQuery } = await import("../src/trainingLoadDashboardQuery.js");
   const day = (await admin.query(`select occurred_local_date::text d from training.activities where id = $1`, [s.activityId])).rows[0].d;
-  const run = async (sourcePolicy) => {
+  const run = async (sourcePolicy, sourceConnectionId = null) => {
     const [result] = await runDashboardBatchQuery(
       { dataWorkspaceType: "team", dataWorkspaceScopeId: team.teamId, dateFrom: day, dateTo: day },
-      [{ widgetId: "w", seriesId: sourcePolicy, metricDefinitionId: distance, dataScopeLevel: "session", groupBy: "athlete", analyticalAggregation: "sum", sourcePolicy }],
+      [{ widgetId: "w", seriesId: sourcePolicy, metricDefinitionId: distance, dataScopeLevel: "session", groupBy: "athlete", analyticalAggregation: "sum", sourcePolicy, sourceConnectionId }],
     );
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.data.current;
@@ -1072,8 +1072,32 @@ test("18. 6b-D: the dashboards leave an estimate out under every policy - all so
   const measured = [team.athleteIds[ANA], team.athleteIds[BEA], team.athleteIds[CIL]].sort();
   assert.deepEqual((await run("all_with_conflicts")).map((x) => x.athleteId).sort(), measured, "all sources: the measured athletes, as before; not the estimate");
   assert.deepEqual((await run("api_import")).map((x) => x.athleteId).sort(), measured, "API import only: the measured athletes");
+  // An estimate carries its event's connection, so 'source_connection' is the one policy whose own filter it would pass.
+  const conn = (await admin.query(`select source_connection_id c from training_load.metric_events where id = $1`, [s.eventId])).rows[0].c;
+  assert.ok(conn, "the imported event names its connection");
+  assert.deepEqual((await run("source_connection", conn)).map((x) => x.athleteId).sort(), measured, "One connected source: the measured athletes; never the estimate");
   for (const policy of ["derived", "manual", "csv_import"]) {
     assert.ok(!(await run(policy)).some((x) => x.athleteId === dan), `${policy}: the estimate is left out`);
   }
   assert.deepEqual((await run("estimate")).map((x) => [x.athleteId, Number(x.value)]), [[dan, estimated]], "estimate: the estimate alone");
+});
+
+test("18b. 6b-D: the series routes take 'estimate' - a new series and a change of an existing one store it, with no connection", async () => {
+  const team = await setupTeam();
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const dapi = (path, opts) => call("/api/training-load/dashboards", path, { cookie: team.coach.cookie, ...opts });
+  const made = await dapi("", { method: "POST", body: { name: "Estimates" } });
+  assert.equal(made.status, 201, made.text);
+  const dashboard = made.body.dashboard;
+  const widget = await dapi(`/${dashboard.id}/widgets`, { method: "POST", body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", widgetOrder: 1, x: 0, y: 0, width: 6, height: 4, mobileOrder: 1 } });
+  assert.equal(widget.status, 201, widget.text);
+  const seriesBody = (order, sourcePolicy) => ({ expectedWidgetRevision: order, seriesOrder: order, metricDefinitionId: distance, dataScopeLevel: "session", analyticalAggregation: "sum", sourcePolicy });
+  const created = await dapi(`/${dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", body: seriesBody(1, "estimate") });
+  assert.equal(created.status, 201, created.text);
+  const other = await dapi(`/${dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", body: seriesBody(2, "all_with_conflicts") });
+  assert.equal(other.status, 201, other.text);
+  const changed = await dapi(`/${dashboard.id}/widgets/${widget.body.widgetId}/series/${other.body.seriesId}`, { method: "PATCH", body: { expectedWidgetRevision: other.body.widgetRevision, sourcePolicy: "estimate" } });
+  assert.equal(changed.status, 200, changed.text);
+  const stored = (await admin.query(`select source_policy, source_connection_id from training_load.dashboard_widget_series where widget_id = $1 order by series_order`, [widget.body.widgetId])).rows;
+  assert.deepEqual(stored, [{ source_policy: "estimate", source_connection_id: null }, { source_policy: "estimate", source_connection_id: null }]);
 });
