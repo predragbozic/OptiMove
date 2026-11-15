@@ -102,7 +102,7 @@ const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GP
 // Two sentences: the one action now (nothing to wait for when the cause is the
 // first one), then what to look at in GPEXE if it stays like this.
 const adminStep = (c) => `${findAgainText([c])}. If it stays like this, check in GPEXE that the session's drills are set up and have data.`;
-function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
+export function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
   return gx?.status?.viewer?.isPlatformAdmin === true
     ? `Not confirmed for import: ${ADMIN_CAUSES}. ${adminStep(c)}`
     : `Not confirmed for import yet. ${findAgainText([c])}, then review it.`;
@@ -1271,7 +1271,7 @@ function renderBatchResultsHtml(gx) {
       <div class="gpexe-unknown" role="alert">
         <p><strong>The answer to the import did not arrive${earlier.length ? ` for the last ${plural(u.candidateIds.length, "session", "sessions")}` : ""}.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
         <p>${confirmed} of ${u.candidateIds.length} confirmed as imported so far. The rest are not confirmed; nothing is sent again by itself. Sessions that stay unconfirmed keep the mark "Result not confirmed" in the list; open one to check it.</p>
-        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${platformViewer() ? "Ask a platform admin to check these imports (give them the Technical details)." : `${AskWho()} to check these imports.`} Until then, don't enter the data by hand.</p>` : ""}
+        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${escapeHtml(batchGiveUpText())} Until then, don't enter the data by hand.</p>` : ""}
         ${techHtml([["HTTP status", u.error?.status || "no answer"], ["Code", u.error?.code], ["Server message", u.error?.message], ["Candidate ids", u.candidateIds.join(", ")]])}
       </div>
       <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
@@ -1510,7 +1510,7 @@ function identityErrorText(error) {
 // A Check result the server refused for a reason other than the original
 // load's saved outcome: the load is still not confirmed, so these never say
 // that nothing was saved.
-function identityCheckRefusalText(refusal) {
+export function identityCheckRefusalText(refusal) {
   const busy = refusal.code === "try_again" || refusal.code === "database_busy" || refusal.code === "roster_busy";
   if (refusal.code === "source_connection_unavailable") {
     return "Check result could not run: the team's GPEXE connection needs attention (test or reconnect it in Settings > Source connections). The result is still not confirmed.";
@@ -1641,6 +1641,14 @@ export function renderSuggestionsHtml(gx, off) {
   `;
 }
 
+// P2 (Independent L1): every sentence that points at Technical details names them only to the platform admin, who has them.
+export function mapNumberNote() {
+  return `The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.`;
+}
+export function batchGiveUpText() {
+  return platformViewer() ? "Ask a platform admin to check these imports (give them the Technical details)." : `${AskWho()} to check these imports.`;
+}
+
 function renderTeamMappingHtml(gx, teams) {
   const m = gx.mapping;
   const team = teams.find((t) => String(t.id) === String(gx.teamId));
@@ -1743,7 +1751,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
-          <p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>
+          <p class="muted">${escapeHtml(mapNumberNote())}</p>
           ${body}
           ${footer}
         </div>
@@ -2149,7 +2157,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
 // v3: a Left-out entry's reason in the screen's words - an administrator's
 // C110 code or an extractor's code - else the server's plain words (a
 // coach's answer carries no C110 code), never a code.
-function leftOutText(s) {
+export function leftOutText(s) {
   if (typeof s?.reason === "string" && Object.hasOwn(SKIP_TEXT, s.reason)) return SKIP_TEXT[s.reason];
   if (typeof s?.message === "string" && s.message.trim()) return s.message.trim().replace(/\.$/, "");
   return (platformViewer() ? "other reason (see Technical details)" : "other reason");
