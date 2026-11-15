@@ -1467,6 +1467,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // Cancel); the full per-series editor stays behind "Advanced settings".
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
     if (!widget || analysisWidgetActionsBlocked()) { closeAnalysisPopovers(); renderTrainingLoad(); return true; }
+    closeAnalysisPopovers();
     if (await openSimpleEditor(widget, renderTrainingLoad)) return true;
     // The panel labels a catalog-backed series from the loaded definitions,
     // so make sure they're in before staging the widget.

@@ -122,3 +122,5 @@ made by these compatibility corrections.
 Dashboards show measured values only. Current and comparison aggregates exclude estimate occasions. Session count and last session date use their existing session sources.
 
 Preview tokens can be used with distinct request IDs; idempotency is scoped to a request ID. New widgets with a presentation sidecar begin at revision 2. While Simple is open, other Training Load actions are blocked. Browser unload warns for a modified draft or an unresolved save.
+
+The D1 widget editor always uses the dashboard period. The shared server contract still supports replacePageRuntime for compatible callers, but D1 exposes no control that sends it.

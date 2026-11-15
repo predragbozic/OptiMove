@@ -61,8 +61,7 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
       await page.locator(".tl-simple-preview-status[data-ready=true]").waitFor();
       await screenshot(page, width, "before-save");
       await action(page, "simple-save").click();
-      await page.getByText("Save recorded.", { exact: true }).waitFor();
-      await action(page, "simple-close").click();
+      await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
       await page.getByRole("button", { name: "Widget actions: Saved sessions" }).click();
       await action(page, "analysis-edit-widget").click();
       await action(page, "simple-next").click();
@@ -77,11 +76,50 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
         await route.abort("failed");
       }, { times: 1 });
       await action(page, "simple-save").click();
-      await page.getByRole("button", { name: "Check status" }).click();
-      await page.getByText("Save recorded.", { exact: true }).waitFor();
-      await action(page, "simple-close").click();
+      await page.getByRole("button", { name: "Check again" }).click();
+      await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
       await page.getByRole("button", { name: "Widget actions: Updated sessions" }).waitFor();
       await screenshot(page, width, "after-recovery");
+      await page.getByRole("button", { name: "Widget actions: Updated sessions" }).click();
+      await action(page, "analysis-edit-widget").click();
+      await action(page, "simple-next").click();
+      await action(page, "simple-next").click();
+      await action(page, "simple-title").fill("Unconfirmed edit");
+      await action(page, "simple-preview").click();
+      await page.locator(".tl-simple-preview-status[data-ready=true]").waitFor();
+      await page.route("**/simple/widgets/*", route => route.abort("failed"), { times: 1 });
+      await action(page, "simple-save").click();
+      await page.getByText("We could not confirm that your widget was saved.").waitFor();
+      await screenshot(page, width, "unconfirmed");
+      const confirmation = page.waitForEvent("dialog");
+      const cancel = action(page, "simple-close").click();
+      const dialog = await confirmation;
+      assert.match(dialog.message(), /may or may not be on the dashboard/);
+      await dialog.accept();
+      await cancel;
+      await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
+
+      const dashboardPath = world.baseUrl + "/api/training-load/dashboards/" + dashboard.id;
+      const detail = await (await context.request.get(dashboardPath)).json();
+      const legacy = await context.request.post(dashboardPath + "/widgets", { data: {
+        expectedDashboardRevision: detail.dashboard.revision, widgetType: "table", title: "Advanced fixture",
+        widgetOrder: 10, mobileOrder: 10, x: 0, y: 20, width: 6, height: 4,
+      } });
+      assert.equal(legacy.status(), 201, await legacy.text());
+      await page.goto(world.baseUrl);
+      await page.getByText("Sign out").first().waitFor();
+      await openTrainingLoad(page);
+      await page.getByRole("tab", { name: "Data & Analysis" }).click();
+      if (await dashboards.isVisible()) await dashboards.click();
+      await action(page, "analysis-open-picker").click();
+      await page.locator(`[data-dashboard-id="${dashboard.id}"]`).click();
+      await page.getByRole("button", { name: "Widget actions: Advanced fixture" }).click();
+      await action(page, "analysis-edit-widget").click();
+      await page.getByRole("button", { name: "Open Advanced settings" }).waitFor();
+      assert.equal(await action(page, "simple-next").count(), 0);
+      await screenshot(page, width, "advanced-required");
+      await page.getByRole("button", { name: "Open Advanced settings" }).click();
+      await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
       assert.deepEqual(pageErrors, []);
     } finally { await context.close(); }
   });

@@ -429,7 +429,7 @@ test('notRecorded keeps the save unknown and retries reuse its ID instead of sta
   assert.equal(c.model.canSave, false);
   assert.equal(c.pending, true);
   assert.equal(simpleSaveIsPending(c.model), true);
-  assert.match(c.model.saveError, /does not confirm rollback/);
+  assert.match(c.model.saveError, /Still not confirmed/);
   assert.deepEqual(h.of('status').map(call => call.body), [{ requestId: 'id-2' }, { requestId: 'id-2' }]);
   await c.save();
   assert.equal(h.of('save').length, 1);
@@ -608,7 +608,7 @@ test('status transport failures retain the unknown request and permit another st
   assert.equal(c.model.saveState, 'unknown');
   assert.equal(c.model.checkingStatus, false);
   assert.equal(c.model.pendingBody, body);
-  assert.match(c.model.saveError, /Status could not be confirmed/);
+  assert.match(c.model.saveError, /Still not confirmed/);
   await c.status();
   assert.equal(c.model.saveState, 'recorded');
   assert.equal(h.uuidCount, 2);

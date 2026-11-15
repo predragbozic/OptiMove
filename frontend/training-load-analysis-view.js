@@ -558,7 +558,7 @@ function renderGridHtml() {
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
-          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
+          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>
         </div>
       ` : ""}
     </section>
@@ -895,6 +895,7 @@ export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
   return `
     <div class="tl-analysis">
+      <div${a.simpleEditor?.open ? ' inert' : ''}>
       ${renderTopBarHtml()}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
@@ -903,7 +904,8 @@ export function renderTrainingLoadAnalysisHtml() {
       ${renderDashboardFormHtml()}
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
-      ${renderSimpleEditorHtml(a.simpleEditor, state.currentUser?.availableWorkspaces?.some(workspace => workspace.type === "platform"))}
+      </div>
+      ${renderSimpleEditorHtml(a.simpleEditor, state.currentUser?.activeWorkspace?.type === "platform")}
     </div>
   `;
 }

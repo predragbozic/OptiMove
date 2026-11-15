@@ -84,7 +84,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
     const before = JSON.stringify(model.draft);
     mutator(model.draft, model);
     if (before === JSON.stringify(model.draft)) return;
-    model.draft.draftVersion += 1; model.preview = null; model.previewInput = null; model.pending = null; model.canSave = false; model.saveError = ''; model.error = '';
+    model.draft.draftVersion += 1; model.previousPreview = model.preview ?? model.previousPreview; model.preview = null; model.previewInput = null; model.pending = null; model.canSave = false; model.saveError = ''; model.error = '';
     model.advancedRequired = false;
     cancel(timer); queuedPreview = false;
     if (model.step === 3) timer = schedule(() => void preview(), 350);
@@ -97,11 +97,11 @@ export function createSimpleEditorController({ request, getContext, paint = () =
     if (!current(target, run)) { target.error = 'Dashboard filters changed. Reopen the editor before previewing or saving.'; redraw(); return; }
     if (previewInFlight) { queuedPreview = true; return; }
     const envelope = input(target), version = target.draft.draftVersion;
-    previewInFlight = true; target.previewLoading = true; target.preview = null; target.error = ''; redraw();
+    previewInFlight = true; target.previewLoading = true; target.previousPreview = target.preview ?? target.previousPreview; target.preview = null; target.error = ''; redraw();
     try {
       const result = await request(`${base(target)}/preview`, { method: 'POST', body: JSON.stringify(envelope) });
       if (!current(target, run) || target.draft.draftVersion !== version) return;
-      target.preview = result; target.previewInput = envelope;
+      target.preview = result; target.previousPreview = null; target.previewInput = envelope;
       target.advancedRequired = result.status === 'advancedRequired';
     } catch (error) { if (current(target, run) && target.draft.draftVersion === version) target.error = fail(error); }
     finally {
@@ -136,9 +136,9 @@ export function createSimpleEditorController({ request, getContext, paint = () =
       if (!currentTarget(target, run)) return;
       const definiteRejection = error.status >= 400 && error.status < 500 && ['invalidRequest', 'invalidDraft', 'payloadTooLarge', 'staleRevision', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'dashboardArchived', 'templateRequiresClone'].includes(error?.data?.error);
       if (!definiteRejection) {
-        target.saveState = 'unknown'; target.saveError = 'The save outcome is not confirmed. Keep this screen open and check status or retry the same request.';
+        target.saveState = 'unknown'; target.saveError = '';
       } else if (retry) {
-        target.saveState = 'unknown'; target.saveError = 'The earlier save is still unconfirmed. Check its status before taking another action.';
+        target.saveState = 'unknown'; target.saveError = '';
       } else {
         target.saveState = 'idle'; target.pending = null; target.pendingBody = null; target.preview = null; target.saveError = fail(error);
         if ((error.data?.error ?? error.message) === 'staleRevision') target.stale = true;
@@ -154,11 +154,11 @@ export function createSimpleEditorController({ request, getContext, paint = () =
       const result = await request(`${base(target)}/requests/status`, { method: 'POST', body: JSON.stringify({ requestId: target.pending.requestId }) });
       if (!currentTarget(target, run)) return;
       if (result.status === 'recorded') await complete(target, result.receipt, run);
-      else target.saveError = 'No receipt is recorded yet. This does not confirm rollback. Retry the same request or check again.';
-    } catch { if (currentTarget(target, run)) target.saveError = 'Status could not be confirmed. Keep this screen open and try again.'; }
+      else target.saveError = 'Still not confirmed. Check again in a moment.';
+    } catch { if (currentTarget(target, run)) target.saveError = 'Still not confirmed. Check again in a moment.'; }
     finally { if (model === target) { target.checkingStatus = false; redraw(); } }
   }
-  function close() { if (locked(model)) return false; cancel(timer); generation += 1; model = null; paint(null); return true; }
+  function close({ allowUnconfirmed = false } = {}) { if (locked(model) && !(allowUnconfirmed && model.saveState === 'unknown' && !model.checkingStatus)) return false; cancel(timer); generation += 1; model = null; paint(null); return true; }
   return { open, close, change, preview, save, status, metrics, get model() { return model; }, get pending() { return locked(model); }, get dirty() { return Boolean(model?.draft && model.saveState !== 'recorded' && JSON.stringify({ ...model.draft, draftVersion: 1 }) !== JSON.stringify(model.initialDraft)); },
     next() { if (!model?.draft || locked(model)) return; if (model.step === 1 && !model.draft.metricRef) return; if (model.step === 2 && model.draft.athleteSelection.mode === 'selected' && !model.draft.athleteSelection.athleteIds.length) { model.error = 'Choose at least one athlete or use dashboard athletes.'; redraw(); return; } model.error = ''; model.step = Math.min(3, model.step + 1); redraw(); if (model.step === 3) timer = schedule(() => void preview(), 350); },
     back() { if (!model || locked(model)) return; model.step = Math.max(1, model.step - 1); redraw(); },

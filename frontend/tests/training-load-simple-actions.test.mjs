@@ -110,17 +110,14 @@ async function unknownSave() {
   assert.equal(calls.filter(call => call.url === `${base}/simple/widgets`).length, 1);
 }
 
-async function readyReplacement(stagedPeriod) {
+async function readyInherited() {
   await openNew();
   await simple('metric', { kind: 'builtin', id: 'rpe' });
   await simple('next');
-  await simple('period-mode', {}, 'replacePageRuntime');
-  await simple('date-from', {}, stagedPeriod.dateFrom);
-  await simple('date-to', {}, stagedPeriod.dateTo);
   await simple('next'); await simple('preview');
   assert.equal(simpleEditor.model.canSave, true);
   assert.deepEqual(simpleEditor.model.context.period, period);
-  assert.deepEqual(simpleEditor.model.preview.resolvedPeriod, stagedPeriod);
+  assert.deepEqual(simpleEditor.model.preview.resolvedPeriod, period);
   assert.deepEqual(analysis().period, period);
 }
 
@@ -128,42 +125,38 @@ test('status recovery keeps a newer dashboard period and filter and queries them
   const staged = { dateFrom: '2026-09-01', dateTo: '2026-09-30', timeZone: period.timeZone };
   const newer = { dateFrom: '2026-11-01', dateTo: '2026-11-15', timeZone: 'UTC' };
   const newerFilter = { athleteIds: ['athlete-2'], activityId: 'new-activity', componentId: 'new-component' };
-  await readyReplacement(staged);
+  await readyInherited();
   loseSaveResponse = true;
   await simple('save');
   assert.equal(simpleEditor.model.saveState, 'unknown');
   const first = calls.find(call => call.url === `${base}/simple/widgets`);
-  assert.deepEqual(first.body.resolvedPeriod, staged);
+  assert.deepEqual(first.body.resolvedPeriod, period);
   assert.deepEqual(first.body.input.context.period, period);
   analysis().period = structuredClone(newer);
   analysis().runtimeFilter = structuredClone(newerFilter);
   receiptPeriod = staged;
   await simple('status');
-  assert.equal(simpleEditor.model.saveState, 'recorded');
-  assert.equal(simpleEditor.model.receipt.requestId, first.body.requestId);
-  assert.deepEqual(simpleEditor.model.receipt.resolvedPeriod, staged);
+  assert.equal(simpleEditor.model, null);
   assert.deepEqual(analysis().period, newer);
   assert.deepEqual(analysis().runtimeFilter, newerFilter);
-  assert.match(analysis().notice, /saved.*kept.*newer.*period/i);
-  assert.equal(simpleEditor.model.saveError, '');
+  assert.equal(analysis().notice, 'Widget saved.');
   assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: newer.dateFrom, dateTo: newer.dateTo, ...newerFilter }]);
   assert.deepEqual(calls.filter(call => call.url === `${base}/simple/requests/status`).map(call => call.body), [{ requestId: first.body.requestId }]);
   assert.equal(calls.filter(call => call.url === `${base}/simple/widgets`).length, 1);
   assert.equal(calls.filter(call => call.url === base && call.method === 'GET').length, 1);
 });
 
-test('a successful save applies the staged period when the opening dashboard period is unchanged', async () => {
+test('a successful save closes the editor without changing the dashboard period', async () => {
   const staged = { dateFrom: '2026-09-01', dateTo: '2026-09-30', timeZone: period.timeZone };
   const initialFilter = structuredClone(analysis().runtimeFilter);
-  await readyReplacement(staged);
+  await readyInherited();
   receiptPeriod = staged;
   await simple('save');
-  assert.equal(simpleEditor.model.saveState, 'recorded');
-  assert.deepEqual(analysis().period, staged);
+  assert.equal(simpleEditor.model, null);
+  assert.deepEqual(analysis().period, period);
   assert.deepEqual(analysis().runtimeFilter, initialFilter);
   assert.equal(analysis().notice, 'Widget saved.');
-  assert.equal(simpleEditor.model.saveError, '');
-  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: staged.dateFrom, dateTo: staged.dateTo, activityId: null, componentId: null }]);
+  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: period.dateFrom, dateTo: period.dateTo, activityId: null, componentId: null }]);
   assert.equal(calls.filter(call => call.url === `${base}/simple/widgets`).length, 1);
   assert.equal(calls.filter(call => call.url === `${base}/simple/requests/status`).length, 0);
   assert.equal(calls.filter(call => call.url === base && call.method === 'GET').length, 1);
@@ -200,6 +193,7 @@ test('missing Simple API preserves the existing-widget fallback and explicit Adv
 
 test('unknown saves survive close, Escape, navigation, Advanced and beforeunload without repeated requests', async () => {
   await unknownSave();
+  confirmAnswer = false;
   const target = simpleEditor.model, snapshot = structuredClone(target), count = calls.length;
   await simple('close');
   assert.equal(closeTrainingLoadAnalysisOverlay(), false);
@@ -216,11 +210,11 @@ test('unknown saves survive close, Escape, navigation, Advanced and beforeunload
   assert.ok(event.returnValue.length);
   assert.equal(simpleEditor.model, target);
   assert.equal(analysis().simpleEditor, target);
-  assert.deepEqual(target, snapshot);
+  assert.deepEqual(target.pending, snapshot.pending);
   assert.equal(state.trainingLoad.section, 'analysis');
   assert.equal(analysis().editor.open, false);
   assert.equal(analysis().metricPanel, null);
-  assert.deepEqual(confirmations, []);
+  assert.ok(confirmations.every(message => /may or may not/.test(message)));
   assert.equal(calls.length, count);
 });
 
@@ -228,13 +222,14 @@ test('pending Simple saves block cross-host leave checks even outside the Traini
   await unknownSave();
   const target = simpleEditor.model, snapshot = structuredClone(target), count = calls.length;
   state.activeTab = 'home';
+  confirmAnswer = false;
   assert.equal(confirmLeaveTrainingLoad('calendar'), false);
   assert.equal(confirmLeaveTrainingLoad(null, { discard: false }), false);
   assert.equal(confirmLeaveTrainingLoad('training-load'), false);
   assert.equal(simpleEditor.model, target);
-  assert.deepEqual(target, snapshot);
+  assert.deepEqual(target.pending, snapshot.pending);
   assert.equal(state.activeTab, 'home');
-  assert.deepEqual(confirmations, []);
+  assert.ok(confirmations.every(message => /may or may not/.test(message)));
   assert.equal(calls.length, count);
 });
 
@@ -250,7 +245,7 @@ test('existing-widget Advanced bridge preserves a rejected draft then opens the 
   assert.equal(analysis().editor.open, false);
   assert.equal(analysis().metricPanel, null);
   assert.equal(confirmations.length, 1);
-  assert.match(confirmations[0], /Discard.*Simple/i);
+  assert.match(confirmations[0], /Discard your unsaved widget changes/i);
   confirmAnswer = true;
   await simple('advanced');
   assert.equal(confirmations.length, 2);
@@ -345,7 +340,7 @@ for (const type of ['title', 'view', 'metric']) {
   });
 }
 
-for (const [type, value] of [['athlete-mode', 'selected'], ['period-mode', 'replacePageRuntime'], ['view', 'line_chart']]) {
+for (const [type, value] of [['athlete-mode', 'selected'], ['view', 'line_chart']]) {
   test(`${type} restores focus by radio value rather than the first matching action`, async () => {
     await openNew();
     await simple('metric', { kind: 'builtin', id: 'rpe' });
@@ -361,7 +356,6 @@ for (const [type, value] of [['athlete-mode', 'selected'], ['period-mode', 'repl
     assert.equal(replacement.checked, true);
     assert.notEqual(document.activeElement, document.querySelector(`[data-action="training-load-simple-${type}"]`));
     if (type === 'athlete-mode') assert.deepEqual(simpleEditor.model.draft.athleteSelection, { mode: 'selected', athleteIds: [] });
-    else if (type === 'period-mode') assert.equal(simpleEditor.model.draft.periodIntent.mode, value);
     else assert.equal(simpleEditor.model.draft.view.type, value);
   });
 }
@@ -381,6 +375,15 @@ test('closing returns focus to the replacement opener matched by action and widg
   assert.equal(document.activeElement, replacement);
   assert.equal(simpleEditor.model, null);
   assert.equal(analysis().simpleEditor, null);
-  assert.equal(confirmations.length, 1);
+  assert.equal(confirmations.length, 0);
+  assert.equal(calls.length, count);
+});
+
+test('a confirmed cancel exits an unconfirmed save without sending it again', async () => {
+  await unknownSave();
+  const count = calls.length;
+  await simple('close');
+  assert.equal(simpleEditor.model, null);
+  assert.match(confirmations.at(-1), /may or may not be on the dashboard/);
   assert.equal(calls.length, count);
 });

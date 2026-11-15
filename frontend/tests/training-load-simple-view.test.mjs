@@ -85,16 +85,8 @@ test("athlete names and dates use standard values, retained period draft and exp
   let html = renderSimpleEditorHtml(input);
   assert.match(control(html, "athlete"), new RegExp(`data-id="${metricId}" value="${metricId}" checked`));
   assert.match(html, /&lt;script&gt;Athlete&lt;\/script&gt;/);
-  assert.match(control(html, "date-from"), /value="2026-10-01"[^>]*disabled/);
-  assert.match(html, /value="allAuthorized"/);
-  input.draft.periodIntent = { mode: "replacePageRuntime" };
-  input.periodDraft = { dateFrom: "2026-09-01", dateTo: "2026-09-30", timeZone: "UTC" };
-  html = renderSimpleEditorHtml(input);
-  assert.match(control(html, "date-from"), /value="2026-09-01"/);
-  assert.doesNotMatch(control(html, "date-from"), /disabled/);
-  assert.match(control(html, "date-to"), /value="2026-09-30"/);
-  assert.match(html, /whole dashboard only after a successful save/);
-  assert.match(html, /Time zone: UTC/);
+  assert.match(html, /Uses the dashboard period/);
+  assert.doesNotMatch(html, /training-load-simple-date-|replacePageRuntime/);
 });
 
 test("custom aggregation is explicit, independent of daily metadata, with scope and grouping choices", () => {
@@ -158,18 +150,18 @@ test("preview loading, empty results and request errors remain visible", () => {
   assert.match(renderSimpleEditorHtml(model({ step: 3, previewLoading: true })), /aria-busy="true"/);
   const html = renderSimpleEditorHtml(model({ step: 3, error: "Preview request failed", preview: { status: "valid", widgetResult: { series: [{ status: "ok", data: { current: [], comparison: [] } }] } } }));
   assert.match(html, /Preview request failed/);
-  assert.match(html, /Current period: no returned rows/);
+  assert.match(html, /No data for this period/);
 });
 
 test("unknown save locks editable controls and preserves same-request retry and status", () => {
   for (const step of [1, 2, 3]) {
     const html = renderSimpleEditorHtml(model({ step, saveState: "unknown", canSave: true, saveError: "notRecorded: no receipt yet" }));
     assert.match(html, /class="tl-simple-editable" disabled/);
-    assert.match(control(html, "close"), /disabled/);
+    assert.doesNotMatch(control(html, "close"), /disabled/);
     assert.match(control(html, "advanced"), /disabled/);
     assert.doesNotMatch(control(html, "retry"), /disabled/);
     assert.doesNotMatch(control(html, "status"), /disabled/);
-    assert.match(html, /Retry same request|Retry sends the same request/);
+    assert.match(html, /Try saving again/);
     assert.match(html, /notRecorded: no receipt yet/);
     assert.doesNotMatch(html, /rolled back|rollback confirmed/i);
     if (step === 3) {
@@ -188,15 +180,15 @@ test("save requires capability and canSave, with accurate advanced discard confi
   assert.match(control(unavailable, "save"), /disabled/);
   assert.match(control(unavailable, "preview"), /disabled/);
   assert.match(unavailable, /Live preview is temporarily unavailable\./);
-  assert.match(unavailable, /Saving is temporarily unavailable\./);
+  assert.match(unavailable, /Fix the problem above to save/);
   assert.doesNotMatch(unavailable, /on this backend/);
   input.advancedRequired = true;
   input.draft = null;
   const advanced = renderSimpleEditorHtml(input);
   assert.doesNotMatch(control(advanced, "advanced"), /disabled/);
-  assert.match(advanced, /Opening advanced will ask before discarding these unsaved changes\./);
+  assert.match(advanced, /This widget uses settings the simple editor can.t show/);
   assert.doesNotMatch(advanced, /Keep your draft|must preserve your choices|Your draft is retained/);
-  assert.match(control(advanced, "save"), /disabled/);
+  assert.doesNotMatch(advanced, /training-load-simple-save/);
 });
 
 test("metric cards name Numeric, Text and Boolean value types and safely display unknown types", () => {
@@ -206,8 +198,7 @@ test("metric cards name Numeric, Text and Boolean value types and safely display
     { id: "boolean", label: "Boolean metric", unit: null, value_type: "boolean" },
     { id: "unknown", label: "Unknown metric", unit: null, value_type: "<script>" },
   ] }));
-  for (const label of ["Numeric", "Text", "Boolean"]) assert.match(html, new RegExp(`Value type: ${label}`));
-  assert.match(html, /Value type: &lt;script&gt;/);
+  assert.doesNotMatch(html, /Value type|&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>/);
 });
 
@@ -231,7 +222,7 @@ test("inherited athletes summarize actual dashboard filters by count and names",
   assert.doesNotMatch(filtered, new RegExp(metricId));
   assert.doesNotMatch(filtered, /— Alex &lt;Runner&gt;, Bo/);
   input.context.runtimeFilter.athleteIds = null;
-  assert.match(renderSimpleEditorHtml(input), /Dashboard athletes: all, subject to dashboard access\. Loaded roster: 2 athletes — Alex &lt;Runner&gt;, Bo/);
+  assert.match(renderSimpleEditorHtml(input), /2 athletes<\/summary>.*Alex &lt;Runner&gt;, Bo/);
   input.context.runtimeFilter.athleteIds = [];
   assert.match(renderSimpleEditorHtml(input), /Dashboard athletes: 0 athletes\./);
 });
@@ -298,7 +289,7 @@ test("inherited summary uses effective dashboard defaults and the latest model r
   assert.doesNotMatch(html, /— Bo/);
   input.context.effectiveInheritedAthleteIds = null;
   html = renderSimpleEditorHtml(input);
-  assert.match(html, /Loaded roster: 2 athletes — Updated Alex, Bo/);
+  assert.match(html, /2 athletes<\/summary>.*Updated Alex, Bo/);
   assert.doesNotMatch(html, /2 athletes \(all authorized\)/);
 });
 
@@ -319,10 +310,10 @@ test("inherited all-athlete count distinguishes unknown, loading, failed and con
   assert.doesNotMatch(html, /0 athletes/);
   input.rosterError = "";
   html = renderSimpleEditorHtml(input);
-  assert.match(html, /Loaded roster: 0 athletes\./);
+  assert.match(html, /0 athletes\./);
   assert.doesNotMatch(html, /Dashboard athletes: 0|0 athletes \(all authorized\)/);
   delete input.context.effectiveInheritedAthleteIds;
   html = renderSimpleEditorHtml(input);
-  assert.match(html, /selection will be resolved from dashboard defaults/);
+  assert.match(html, /Uses the dashboard/);
   assert.doesNotMatch(html, /Dashboard athletes: all/);
 });

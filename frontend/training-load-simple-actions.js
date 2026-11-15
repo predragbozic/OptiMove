@@ -39,12 +39,10 @@ export const simpleEditor = createSimpleEditorController({ request: api, paint,
     athletes: state.trainingLoad.orgPickerData?.athletes ?? [] }),
   saved: async (receipt, target) => {
     const a = analysis();
-    const periodKey = period => JSON.stringify([period.dateFrom, period.dateTo, period.timeZone || target.context.period.timeZone]);
-    const newerPeriod = periodKey(a.period) !== periodKey(target.context.period);
-    if (target.draft.periodIntent.mode === 'replacePageRuntime' && !newerPeriod) a.period = { ...receipt.resolvedPeriod ?? target.preview.resolvedPeriod };
     await loadDashboardDetail(target.context.dashboardId, render, { force: true });
     await queryAnalysisDashboard(render, { force: true });
-    a.notice = newerPeriod ? 'Widget saved. Kept your newer dashboard period.' : 'Widget saved.';
+    a.notice = 'Widget saved.';
+    if (simpleEditor.model === target) simpleEditor.close();
   },
 });
 
@@ -77,8 +75,12 @@ globalThis.document?.addEventListener?.('keydown', event => {
 export function leaveSimpleEditor({ discard = true, confirm = message => window.confirm(message) } = {}) {
   const model = simpleEditor.model;
   if (!model) return true;
-  if (simpleEditor.pending) return false;
-  if (model.saveState !== 'recorded' && model.draft && !confirm('Discard your unsaved Simple editor changes?')) return false;
+  if (model.saveState === 'saving' || model.checkingStatus) return false;
+  if (model.saveState === 'unknown') {
+    if (!discard) { model.saveError = 'Check again or cancel the editor before leaving.'; paint(model); return false; }
+    return confirm('Close the editor? Your widget may or may not be on the dashboard.') && simpleEditor.close({ allowUnconfirmed: true });
+  }
+  if (simpleEditor.dirty && !model.stale && !confirm('Discard your unsaved widget changes?')) return false;
   return !discard || simpleEditor.close();
 }
 
@@ -112,7 +114,6 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'aggregation') simpleEditor.change(draft => { if (action.value) draft.view.analyticalAggregation = action.value; else delete draft.view.analyticalAggregation; });
   else if (type === 'athlete-mode') simpleEditor.change(draft => { draft.athleteSelection = action.value === 'selected' ? { mode: 'selected', athleteIds: [] } : { mode: action.value }; });
   else if (type === 'athlete') simpleEditor.change(draft => { const selected = new Set(draft.athleteSelection.athleteIds ?? []); if (action.checked) selected.add(action.dataset.id); else selected.delete(action.dataset.id); draft.athleteSelection = { mode: 'selected', athleteIds: [...selected] }; });
-  else if (type === 'period-mode') simpleEditor.change((draft, target) => { draft.periodIntent = action.value === 'inherit' ? { mode: 'inherit' } : { mode: 'replacePageRuntime', periodConfig: { schemaVersion: 1, mode: 'fixed', ...target.periodDraft }, savePageDefaults: false }; });
-  else if (type === 'date-from' || type === 'date-to') simpleEditor.change((draft, target) => { target.periodDraft[type === 'date-from' ? 'dateFrom' : 'dateTo'] = action.value; if (draft.periodIntent.mode === 'replacePageRuntime') draft.periodIntent.periodConfig = { schemaVersion: 1, mode: 'fixed', ...target.periodDraft }; });
+
   return true;
 }
