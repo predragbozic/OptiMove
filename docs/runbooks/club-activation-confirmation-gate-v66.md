@@ -76,8 +76,8 @@ touches the production database.
 
 ## Standing rule after the deploy: the server's log settings
 
-v66 is on production since 2026-11-15 (merge `6a5ee45e`, deployed with `8d5d3a76`; the *Rukovodilac*'s read-only
-post-check, blocks 1 to 4, as expected). From then on a save writes two athletes' values as bind parameters, and what
+v66 is on production since 2026-11-15 (merge `6a5ee45e`; as relayed by the *Rukovodilac*: deployed with `8d5d3a76`,
+its read-only post-check, blocks 1 to 4, as expected). From then on a save writes two athletes' values as bind parameters, and what
 keeps them out of the server's log is the pair "the statement bound of the value-carrying statements
 (`VALUE_STATEMENT_TIMEOUT_MS`, 5000 ms, `backend/src/sourceMetricBoardSaveService.js`) is below `auto_explain`'s
 threshold (10000 ms on production), and no other setting logs parameters".
