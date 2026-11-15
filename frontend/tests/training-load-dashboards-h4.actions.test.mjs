@@ -313,6 +313,7 @@ test("H4: a catalog metric's source, values included and total coverage show rea
     ["api_import", "API import only", false],
     ["csv_import", "CSV import only", false],
     ["derived", "Calculated values only", false],
+    ["estimate", "Estimates only", false],
   ]);
   assert.deepEqual(optionsOf(html, "series-role"), [
     ["standalone_only", "Direct values only", true],

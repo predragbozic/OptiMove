@@ -348,10 +348,14 @@ function resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRole
   let candidates = facts.filter((f) => f.grain === dataScopeLevel);
   if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
   candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
+  // 6b-D (phase 5b contract, section 5): an estimate (entry_method 'estimate') is left out under every policy - all sources
+  // and calculated values included - and shown only under the policy 'estimate', which shows estimates alone.
+  const estimatesOnly = effectiveSourcePolicy === "estimate";
+  candidates = candidates.filter((f) => (f.entryMethod === "estimate") === estimatesOnly);
   if (effectiveSourcePolicy === "derived") candidates = candidates.filter((f) => f.isDerived);
   else if (effectiveSourcePolicy === "source_connection") candidates = candidates.filter((f) => f.sourceConnectionId === sourceConnectionId);
   else if (["manual", "api_import", "csv_import"].includes(effectiveSourcePolicy)) candidates = candidates.filter((f) => f.entryMethod === effectiveSourcePolicy);
-  else if (effectiveSourcePolicy !== "all_with_conflicts") throw new Error(`resolveFactsToRows: unknown source_policy ${effectiveSourcePolicy}`);
+  else if (effectiveSourcePolicy !== "all_with_conflicts" && !estimatesOnly) throw new Error(`resolveFactsToRows: unknown source_policy ${effectiveSourcePolicy}`);
 
   // A MEASUREMENT TARGET = canonical participant + this metric (implicit)
   // + grain + grain identity + unit. Two normal readings on two DIFFERENT

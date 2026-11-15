@@ -20,7 +20,7 @@ const SCOPE_LEVELS = ["day", "session", "component"];
 const GROUP_BY_LABELS = { day: "Per day", week: "Per week", session: "Per session", component: "Per component", athlete: "Per athlete", cohort: "Whole group" };
 const AGGREGATION_LABELS = { sum: "Total", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values" };
 const SCOPE_LABELS = { day: "Day", session: "Session", component: "Component" };
-const SOURCE_POLICIES = ["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "not_applicable"];
+const SOURCE_POLICIES = ["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "estimate", "not_applicable"];
 const COVERAGE_POLICIES = ["complete_only", "complete_and_partial", "any"];
 const ROLE_POLICIES = ["standalone_only", "standalone_and_source_rollup", "all_including_derived"];
 const COMPARISONS = ["", "previous_period", "previous_year"];
@@ -37,6 +37,7 @@ const SOURCE_LABELS = {
   api_import: "API import only",
   csv_import: "CSV import only",
   derived: "Calculated values only",
+  estimate: "Estimates only",
   not_applicable: "Not used for built-in metrics",
 };
 // Values included filters by metric_values.aggregation_role: standalone = a value
@@ -865,7 +866,7 @@ function renderEditorHtml() {
               <label class="tl-editor-wide">Total coverage<select data-action="training-load-analysis-series-coverage" ${key} ${policyOff}>${COVERAGE_POLICIES.map((v) => optionHtml(v, COVERAGE_LABELS[v], entry.fields.coveragePolicy)).join("")}</select></label>
               <p class="muted tl-editor-help">${isBuiltIn
                 ? "Source, values included and total coverage don't apply to built-in metrics."
-                : "Direct value: recorded as it is, not a total. Source total: a total reported by the device or system itself. Calculated total: a total computed afterwards from other values. Partial total: some parts are missing, for example after a device dropout. Direct values are kept by every total coverage choice. If two values remain for the same athlete and session, component or day, the widget shows a conflict instead of adding them up."}</p>
+                : "Direct value: recorded as it is, not a total. Source total: a total reported by the device or system itself. Calculated total: a total computed afterwards from other values. Partial total: some parts are missing, for example after a device dropout. Direct values are kept by every total coverage choice. If two values remain for the same athlete and session, component or day, the widget shows a conflict instead of adding them up. An estimate, a value a coach estimated for an athlete with no recording, is left out of every source except Estimates only."}</p>
             </div>
             <div class="tl-analysis-series-actions">
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
