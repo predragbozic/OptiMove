@@ -2317,8 +2317,10 @@ async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {
       [fieldInventory.connectionId, checkId, rows.map((r) => r.endpoint), rows.map((r) => r.name), rows.map((r) => r.kind), rows.map((r) => r.unitWord), rows.map((r) => r.answers)],
     );
     await run(`select set_config('optimove.field_inventory_check', '', true)`);
-    await run("release savepoint field_inventory");
+    // Back to the finalization's own bound before the release (a SET LOCAL inside a released savepoint stays in force), so
+    // every statement of this try can still roll back to the savepoint.
     await run("set local lock_timeout = '2s'");
+    await run("release savepoint field_inventory");
   } catch (error) {
     if (isDestroyed()) throw error;
     // The savepoint's rollback also undoes its lock_timeout and the marker.
