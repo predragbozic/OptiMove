@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
-import { loadBuilderExercises } from "./builder-data.js";
+import { loadBuilderExercises, loadBuilderExercisesDetached } from "./builder-data.js";
 import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
@@ -585,7 +585,7 @@ function toggleExerciseMark(exerciseId, handlers) {
     if (exercise) state.markedExercises.set(exerciseId, exercise);
   }
   if (state.activeTab === "builder" && state.builder.selectedNodeId) {
-    if (state.builder.exerciseFilters.marked) void loadBuilderExercises();
+    if (state.builder.exerciseFilters.marked) void loadBuilderExercisesDetached();
     else renderBuilder();
   } else {
     searchExercises(state.exerciseSearch.term, handlers);
