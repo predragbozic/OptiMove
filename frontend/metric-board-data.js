@@ -261,9 +261,11 @@ export const BOARD_ERROR = {
   request_key_reused: "Nothing was saved. Compare the columns again, then save.",
   invalid_body: "The board could not be saved as it is. Nothing was saved. Read the board again.",
 };
-// Why none could be used, in words, for the one reason an admin can act on; any other reason keeps the plain sentence.
+// Why none could be used, in words, for the reasons an admin can act on; any other reason keeps the plain sentence.
 const NO_USABLE_SESSION_BY_REASON = {
   unsupported_category: "None of the sessions found so far can be used for mapping: the latest ones are of a type OptiMove does not import. Find a training session in Imports first.",
+  candidate_too_large: "The sessions found so far are too large to read here. Run a search in Imports for a smaller session.",
+  board_too_large: "The sessions found so far have too many athletes and columns to compare at once. Run a search in Imports for a smaller session.",
 };
 export const boardErrorText = (info) => {
   if (info?.code === "no_usable_session") {

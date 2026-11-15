@@ -548,7 +548,13 @@ test("28. which session the board shows, and what it says when none can be used:
   assert.ok(text().includes("None of the sessions found so far can be used for mapping: the latest ones are of a type OptiMove does not import. Find a training session in Imports first."));
   assert.equal(content.querySelector('[data-action="training-load-section"][data-section="imports"]')?.textContent.trim(), "Open Imports to search");
   assert.equal(/cannot read|unsupported_category|no_usable_session|server words/.test(text()), false);
-  for (const current of [{ reason: "mixed", tried: 4 }, { reason: "session_stats_invalid", tried: 1 }, { reason: "candidate_too_large", tried: 1 }, { reason: "constructor" }, null]) {
+  for (const [reason, sentence] of [["candidate_too_large", "The sessions found so far are too large to read here. Run a search in Imports for a smaller session."],
+    ["board_too_large", "The sessions found so far have too many athletes and columns to compare at once. Run a search in Imports for a smaller session."]]) {
+    await none({ reason, tried: 1 });
+    assert.ok(text().includes(sentence), reason);
+    assert.ok(content.querySelector('[data-action="training-load-section"][data-section="imports"]'));
+  }
+  for (const current of [{ reason: "mixed", tried: 4 }, { reason: "session_stats_invalid", tried: 1 }, { reason: "constructor" }, null]) {
     await none(current);
     assert.ok(text().includes("None of the sessions found so far can be used for mapping. Run a search in Imports for another session."), JSON.stringify(current));
     assert.equal(/latest ones|cannot read|training session/.test(text()), false, "'a training session' is said only where the type is the reason");

@@ -177,7 +177,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       base.slice(0, 3),
     )).rows;
     if (listed.length === 0) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
-    const { extracts } = extractsOf(columnsOf({ fields }));
+    const columns = columnsOf({ fields });
     // "Refused by the import's own gates": blocked, with a code that is not one of the mapping-level blocks (those say
     // "no mapping yet" or "this mapping does not fit", which the board is there to change). Such a session is not read
     // while another can be taken; its stored code is its reason. Every other session is tried, newest first.
@@ -191,10 +191,10 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     const attempt = async (row) => {
       tried += 1;
       const read = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, row.id])).rows[0];
-      const verdict = !read ? { why: "gone", out: null } : defaultSessionVerdict(read, team, extracts, teamTimezone);
+      const verdict = !read ? { why: "gone", plan: null } : defaultSessionVerdict(read, team, columns, teamTimezone);
       if (verdict.why !== null) { reasons[row.index] = verdict.why; return false; }
       candidate = read;
-      defaultPlan = verdict.out;
+      defaultPlan = verdict.plan;
       // The newer ones passed by: each was tried and refused, or the import's own gates had refused it.
       defaultSkipped = rows.filter((r) => r.index < row.index && (reasons[r.index] !== undefined || r.gate)).length;
       return true;
@@ -336,8 +336,11 @@ function columnsOf(world) {
 // never read in part.
 export const BOARD_MAX_CELLS = 60_000;
 
-// The readable columns' extractors, in the columns' order, with their field ids.
-function extractsOf(columns) {
+// The board's one plan of a stored session: each athlete's session-level value per readable column, through the
+// import's own gates. The only caller of the keyed read; the extracts are filled here, from the registry alone.
+// Returns { ids, out } - out is the mapper's answer (out.code when the import would not take the session) - or
+// { tooLarge: true } when the work is over the board's cap, before any value is read.
+function keyedPlan(bundle, columns, teamTimezone) {
   const ids = [];
   const extracts = [];
   for (const col of columns) {
@@ -348,32 +351,32 @@ function extractsOf(columns) {
     ids.push(col.field.id);
     extracts.push((input) => extractor.extract(input, {}));
   }
-  return { ids, extracts };
+  const rowCount = Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0;
+  if (extracts.length * rowCount > BOARD_MAX_CELLS) return { tooLarge: true };
+  return { ids, out: gpexeSessionValuesKeyed(bundle, extracts, { teamTimezone }) };
 }
-const cellsOf = (bundle, extracts) => extracts.length * (Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0);
 
-// Whether the default can open on a stored session: `why` is the reason it must be passed by, or null with the plan's
-// result in `out`. The same checks, in the same order, a named session is refused by (its size, its check and
+// Whether the default can open on a stored session: `why` is the reason it must be passed by, or null with the
+// session's plan. The same checks, in the same order, a named session is refused by (its size, its check and
 // binding, its start, the board's size cap), and then the board's own plan - the import's gates - so a session taken
 // here is one sessionValues() reads.
-function defaultSessionVerdict(row, team, extracts, teamTimezone) {
-  const no = (why) => ({ why, out: null });
+function defaultSessionVerdict(row, team, columns, teamTimezone) {
+  const no = (why) => ({ why, plan: null });
   if (row.purged || row.expired) return no("snapshot_expired");
   if (row.too_large === true) return no("candidate_too_large");
   if (row.check_status !== "succeeded" || row.source_path !== SOURCE_CONNECTION_PATH || row.source_binding_id !== team.binding_id) return no("candidate_source_mismatch");
   if (row.session_started_at === null) return no("session_start_unknown");
   if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return no("candidate_source_mismatch");
-  if (cellsOf(row.raw_bundle, extracts) > BOARD_MAX_CELLS) return no("board_too_large");
-  const out = gpexeSessionValuesKeyed(row.raw_bundle, extracts, { teamTimezone });
-  return out.code ? no(out.code) : { why: null, out };
+  const plan = keyedPlan(row.raw_bundle, columns, teamTimezone);
+  if (plan.tooLarge) return no("board_too_large");
+  return plan.out.code ? no(plan.out.code) : { why: null, plan };
 }
 
 function sessionValues(world, columns) {
-  // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
-  const { ids, extracts } = extractsOf(columns);
-  if (cellsOf(world.candidate.raw_bundle, extracts) > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
   // The default's own plan when it chose this session (the same columns, bundle and time zone); else built here.
-  const out = world.defaultPlan ?? gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
+  const plan = world.defaultPlan ?? keyedPlan(world.candidate.raw_bundle, columns, world.teamTimezone);
+  if (plan.tooLarge) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
+  const { ids, out } = plan;
   if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   return out.athletes.map((athlete) => {
     const key = String(athlete.key);
