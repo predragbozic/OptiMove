@@ -63,6 +63,25 @@ before the merge, its deploy and the *Rukovodilac*'s v53 post-check were added o
 
 ## Active phase
 
+**J18, the drag mapping board (C112): 18-1 to 18-4 merged and deployed (added 2026-11-15 at `165612ef`; nothing else
+was re-derived then).** Contract `docs/ai/c112-drag-mapping-contract.md`, section 15.
+- **18-1**, migration v65 (the confirmation tables): merged as PR #506; v65 deployed and post-checked by the
+  *Rukovodilac* (its statement, not read here).
+- **18-2**, the board's reads: merged as PR #512.
+- **18-3**, the board's writes and migration v66 (the club activation confirmation gate): PR #508, merge `6a5ee45e`
+  (2026-11-15). **18-4**, the board's screen: PR #511, merge `8d5d3a76` (2026-11-15), back to back.
+  - Both ★★ GOs on the final heads (`c59a916a`, `e9539a5b`), per the *Rukovodilac*.
+  - As relayed by the *Rukovodilac* (the production database was not read by the executor): deployed with
+    `8d5d3a76`; its read-only post-check, blocks 1 to 4, as expected (v66 recorded with its checksum, the gate's body
+    and trigger, seven triggers on T4, none disabled, no confirmation yet); v67, v68 and v69 had been applied before
+    v66 (the runner applies by file name).
+  - After the first production preflight (2026-11-13, two columns of block 5 false): the save's value-carrying
+    statements run under their own 5000 ms bound, below `auto_explain`'s 10000 ms threshold; the override column
+    ignores `log_statement=none`. **Standing rule:** any change of the server's log settings on production re-runs
+    preflight block 5 (`docs/runbooks/club-activation-confirmation-gate-v66.md`, "Standing rule after the deploy").
+- Not built: 18-E, C121, 18-P. Open items of the contract's section 15: a session chooser, the display-unit choice,
+  the Firefox drag check.
+
 **Metrics Core phases 7h and 7i: contracts accepted (2026-11-02); 7h and 7i-B1 merged and deployed, 7i-B2 next.** The owner accepted both in one turn:
 „J14 O1–O6 i J15 O1–O9 po preporuci, odobravam oba ugovora” (turn `95c006f2` in the *Rukovodilac*'s chat, 20:16:10
 UTC, relayed by its order `011e7d13`). J14 (`docs/ai/phase7h-club-admin-mappings-contract.md`, PR #333, `f0578a7`)
