@@ -258,7 +258,7 @@ test("IMP2 1: the confirmation asks one question over one light list; what happe
   await act("training-load-gpexe-import-ready");
   const d = dialog();
   assert.match(d, /<p class="imports-batch-question"><strong>Import 2 sessions into First Team\? Their values appear in Training Load right away\.<\/strong><\/p>\s*<ul class="imports-batch-list">/, "the question comes first, the list right under it");
-  assert.match(d, /<p class="muted imports-batch-warning">Results imported under the wrong athlete can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>\s*<details class="imports-batch-more"><summary>What happens<\/summary><p class="muted">Each session is imported on its own/, "the lasting consequence stays in sight; how it runs is folded");
+  assert.match(d, /<p class="muted imports-batch-warning">Results imported under the wrong athlete can(?:'|&#039;)t be changed here — ask your club administrator\.<\/p>\s*<details class="imports-batch-more"><summary>What happens<\/summary><p class="muted">Each session is imported on its own/, "the lasting consequence stays in sight; how it runs is folded");
   assert.match(d, /data-action="training-load-gpexe-batch-back" >Cancel<\/button>\s*<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-send" >Import 2 sessions</);
 });
 

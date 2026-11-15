@@ -914,6 +914,32 @@ test("7e. the default session is the newest one the import would take: sessions 
   for (const m of [m1, m2]) await mark(m.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'true'), ${GATE_BLOCK}`);
   assert.deepEqual(refused(await boardOf(W.caA, t3), 409, "no_usable_session").current, { reason: "unsupported_category", tried: 2 });
 
+  // A stored bundle the plan cannot walk at all (not a refusal of the import's gates: an unexpected shape) is passed
+  // by like any other, with a fixed reason and one log line that names the kind of error only. Named, it is what it
+  // was before: the server's own error, never a board.
+  const t8 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t8, n, `Twelfth ${NAMES[n]}`);
+  const sound = await candidate(t8, { startedAt: "2026-09-07T10:00:00Z" });
+  const broken = await candidate(t8, { startedAt: "2026-09-08T10:00:00Z" });
+  await mark(broken.id, `raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', '"Secret Athlete 2001-02-03"')`);
+  const linesBefore = logLines.length;
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t8)).board.session), [sound.id, 1]);
+  const said = logLines.slice(linesBefore).filter((l) => l.includes("default_session_plan_failed"));
+  assert.deepEqual(said, ["[source-metric-board] default_session_plan_failed (TypeError)"], "one line, the kind of error only");
+  assert.equal((await boardOf(W.caA, t8, { candidateId: broken.id })).status, 500, "a named session is not rescued");
+  await mark(sound.id, `status = 'superseded', superseded_by_check_id = last_seen_check_id`);
+  const alone = await boardOf(W.caA, t8);
+  assert.deepEqual(refused(alone, 409, "no_usable_session").current, { reason: boardService.DEFAULT_SESSION_UNREADABLE, tried: 1 });
+  assert.equal(/Secret Athlete|TypeError|filter is not/.test(alone.text), false, "nothing of the error or the bundle in the answer");
+  assert.equal(logLines.slice(linesBefore).some((l) => l.includes("default_session_all_unreadable")), false, "one such session, or one among sound ones, is not the systemic signal");
+  // Every session read failing that way points at the code, not at one bundle: one more line says so.
+  const second = await candidate(t8, { startedAt: "2026-09-09T10:00:00Z" });
+  await mark(second.id, `raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', '"x"')`);
+  const linesBeforeAll = logLines.length;
+  assert.deepEqual(refused(await boardOf(W.caA, t8), 409, "no_usable_session").current, { reason: boardService.DEFAULT_SESSION_UNREADABLE, tried: 2 });
+  const lines = logLines.slice(linesBeforeAll).filter((l) => l.includes("[source-metric-board] default_session_"));
+  assert.deepEqual(lines, ["[source-metric-board] default_session_plan_failed (TypeError)", "[source-metric-board] default_session_plan_failed (TypeError)", "[source-metric-board] default_session_all_unreadable (tried=2)"]);
+
   // (e) The look-back is bounded: more unusable sessions than the bound in front of a usable one is "none usable", with the bound as tried.
   const t4 = await gpexeTeam(W.clubA);
   for (const n of [1, 2]) await link(t4, n, `Eighth ${NAMES[n]}`);

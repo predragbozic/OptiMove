@@ -106,6 +106,8 @@ function resetGpexeTeamState(teamId) {
   gx.batch = emptyBatch();
   // P4: another team starts with the period chooser folded and no days chosen.
   gx.period = emptyPeriod();
+  // P5: and with the help closed.
+  gx.helpOpen = false;
   // IMP1: another team starts on its own default tab, with "Choose sessions" folded.
   gx.tab = "";
   gx.chooseOpen = null;

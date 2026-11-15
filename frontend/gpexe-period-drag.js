@@ -55,7 +55,7 @@ export function bindPeriodDrag(root, render, doc = globalThis.document) {
 // The open phone sheet is modal (aria-modal): Tab and Shift+Tab stay inside it, as in the icon picker (icon-picker.js).
 export function trapPeriodSheetTab(event, doc = globalThis.document) {
   if (event?.key !== "Tab") return false;
-  const sheet = doc?.querySelector?.(".imports-period.is-open");
+  const sheet = doc?.querySelector?.(".imports-help.is-open") || doc?.querySelector?.(".imports-period.is-open");
   if (!sheet) return false;
   const controls = Array.from(sheet.querySelectorAll("button:not(:disabled)")).filter((b) => b.getAttribute("aria-disabled") !== "true");
   if (!controls.length) return false;

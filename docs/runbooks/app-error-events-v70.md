@@ -33,7 +33,8 @@ AH-1 stores; it shows nothing new. The device breakdown on the screen is AH-2 an
   with the 30-day purge of the events). Nothing writes to it before AH-3.
 
 No existing row is rewritten. Locks: `ACCESS EXCLUSIVE` on `public.app_error_events` until the migration's COMMIT (the
-column additions are catalog-only; the eight CHECKs are validated over at most 30 days of rows - preflight block 3 shows
+column additions are catalog-only; the eight CHECKs are added directly and validated in the same `ALTER TABLE` (not
+`NOT VALID` followed by a separate `VALIDATE`), under that lock, over at most 30 days of rows - preflight block 3 shows
 how many).
 
 ## The keyed user hash
@@ -52,7 +53,9 @@ the server. The key never reaches the database, a log or an answer.
   as one line. Errors are still recorded and grouped; people are not counted for those rows, one user's repeats are not
   told apart (they raise the count of one row per kind of error and device), and such rows fall under the cap of rows
   without a user (200 an hour in all). All writers of one kind of error then also share one lock, so in a burst some
-  reports are dropped after 2 s. The line in the log is written at the server's start. "Show person" (AH-3) fails closed without the ring.
+  reports are dropped after 2 s. The line in the log is written at the server's start. So that one person cannot use
+  up that shared cap, each user's reports are then counted in memory (by the id, never stored) and dropped silently
+  beyond 40 an hour (`NO_KEY_REPORTS_PER_USER_WINDOW`; per server process). "Show person" (AH-3) fails closed without the ring.
 * **Old rows** keep version 1 and their unkeyed hash until they age out (30 days). For that time one person may be
   counted twice in a group (once per version). AH-3 resolves a version 1 row by the old formula and a keyed row by
   its own version's key.
@@ -60,6 +63,23 @@ the server. The key never reaches the database, a log or an answer.
   A version whose key has left the ring can no longer be resolved to a person; its rows are still counted.
 * **One hour of repeats** is counted on a row only when the fingerprint, the hash, its version and the six device
   facts are all the same, so one kind of error on two devices is two rows of the same group.
+
+## The devices on the screen (AH-2, no migration)
+
+`GET /api/app-errors/groups` gives each kind of error, for the same period as its counts:
+
+* `devices`: at most three `{ class, os, browser, major, occurrences }`, most frequent first, of the browser reports
+  only. The viewport and the touch flag do not split a device here (they stay in the table for a later question);
+* `otherDevices` and `otherDeviceOccurrences`: how many further combinations there are, and how often they occurred;
+* `deviceNotRecorded`: how many occurrences of browser reports carry no device (rows from before v70, an older page).
+
+A server error has an empty list and zeros. Nothing else is added to the answer: no hash, no id, no viewport.
+Both reads run in one read-only snapshot, so the devices always add up to the counts beside them.
+App health shows, in the row of a browser error, one phrase per device: "iPhone · Safari 17 · 3 times", "Windows ·
+Chrome 131 · 1 time", then "2 other device types · 4 times" and "device not recorded · 1 time"; or only "Device not
+recorded" when no report of the kind carried one. They sit side by side on a wide screen and one under another on a
+phone. A word outside the lists is never shown as it is: an unknown system or class falls back to the class's word or
+"Unknown device", and an unknown browser is left out. Only a platform admin has the screen and the read.
 
 ## Deploy
 
@@ -84,7 +104,8 @@ the server. The key never reaches the database, a log or an answer.
    refuse a file older than the last one applied).
 4. Deploy; the migrator applies v70 before the server starts.
 5. The Rukovodilac runs `app-error-events-v70-postcheck.sql` read-only. Block 4 with `signed_in_without_hash > 0` on
-   version 2 means the key is missing or unreadable.
+   version 2 **is a failure to act on, not a note**: the key is missing or unreadable, every such row stays without a
+   hash for good, and the owner sets or corrects `APP_ERROR_USER_HASH_KEYS` and restarts the service.
 
 ## Rollback
 

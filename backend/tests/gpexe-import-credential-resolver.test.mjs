@@ -1389,7 +1389,8 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
   // Every base table of the two schemas is measured, except what a check may
   // write - so a table the writer or the materialize function gains later is
   // covered without editing this list.
-  const CHECK_MAY_WRITE = new Set(["training_load.gpexe_import_checks", "training_load.gpexe_import_candidates", "training_load.gpexe_retention_runs"]);
+  // I1 (v72): a succeeded check also records the names of the fields it saw (never an import row).
+  const CHECK_MAY_WRITE = new Set(["training_load.gpexe_import_checks", "training_load.gpexe_import_candidates", "training_load.gpexe_retention_runs", "training_load.source_field_observations"]);
   const measured = (await q(
     `select table_schema || '.' || table_name as t from information_schema.tables
       where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' order by 1`,
@@ -1609,7 +1610,7 @@ test("20. drill answers are projected like the whole session (2026-10-09, after 
 test("22. a superseded candidate keeps no unconsumed metric: a pending candidate whose stored snapshot holds a full drill answer (as stored before the drill projection) is superseded by the next check of changed content, and in the same transaction its snapshot keeps only the consumed fields; neither it nor the new candidate exposes the third metric through the candidate list (replaced versions included), the candidate detail or the preview; the superseded one cannot be approved; the switch stays off and no result or activity row is written", async () => {
   const MARKER = "markerUnconsumedObjZq";
   const MARKER_TEXT = "Marker free text value";
-  const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
+  const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_retention_runs', 'source_field_observations') order by 1`)).map((r) => r.t);
   const counts = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
   const o = await org();
   await enableTeamImportSwitch(admin, o.teamId); // U2: the team's switch is on, so the refusal under test is the candidate's own
