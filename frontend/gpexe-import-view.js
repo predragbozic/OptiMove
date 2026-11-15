@@ -22,7 +22,7 @@ import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { renderPeriodHtml } from "./gpexe-period-view.js";
+import { monthCounts, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
 import {
   BATCH_MAX,
@@ -564,6 +564,7 @@ function renderSourceCardHtml(source, gx, status) {
   // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
+  const suggested = datesNeededFor(gx.candidates || [], gx);
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
@@ -575,8 +576,34 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx), quiet: groupLeads(gx, status) }) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: (gx.candidates || []).length >= CANDIDATES_CAP }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open) : ""}
   `;
+}
+
+// P4c (owner, 2026-11-15): the list read holds at most this many sessions, the newest first (listCandidates).
+const CANDIDATES_CAP = 200;
+
+// P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
+// counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
+function renderMonthLineHtml(gx, suggestedTo, open) {
+  const { month, name } = shownMonth(gx, new Date(), suggestedTo);
+  const n = monthCounts(gx, month);
+  const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
+  const head = facts ? `${facts} in ${name}` : `Nothing imported in ${name}`;
+  const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
+  const phone = facts ? `${head} · open the calendar` : `${head} · open the calendar`;
+  return `
+    <p class="muted imports-month-line">
+      <span class="imports-month-desk">${escapeHtml(desk)}</span>
+      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(phone)}</button>
+    </p>
+  `;
+}
+
+// P4c: only a platform admin keeps the Imported and Stays out tabs (and the replaced versions under Stays out).
+function listsAllStates(status) {
+  return status?.viewer?.isPlatformAdmin === true;
 }
 
 // The Search tab ("Search & settings" for whoever has Import settings): what the source is, what the last search
@@ -637,8 +664,9 @@ function setupOpen(gx, status) {
 // with sessions, so a repaint never moves it. data-import-tab, never data-tab: that one is the app's main navigation.
 const IMPORT_TABS = ["attention", "ready", "imported", "out", "athletes", "search"];
 
-export function importsTab(gx) {
-  if (IMPORT_TABS.includes(gx.tab)) return gx.tab;
+export function importsTab(gx, status = gx.status) {
+  const tabs = listsAllStates(status) ? IMPORT_TABS : IMPORT_TABS.filter((t) => t !== "imported" && t !== "out");
+  if (tabs.includes(gx.tab)) return gx.tab;
   const needs = (gx.candidates || []).some((c) => inboxBucket(c, gx) === "attention");
   const tab = needs ? "attention" : "ready";
   // Fixed at the first paint that has sessions: an empty list (before the first search) decides nothing yet.
@@ -650,15 +678,16 @@ function renderImportsTabsHtml(gx, status) {
   const all = gx.candidates || [];
   const count = (name) => all.filter((c) => inboxBucket(c, gx) === name).length;
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
-  const tab = importsTab(gx);
+  const tab = importsTab(gx, status);
+  const all3 = listsAllStates(status);
   const tabs = [
     ["attention", `Needs you (${count("attention")})`],
     ["ready", `Ready (${count("ready")})`],
-    ["imported", `Imported (${count("imported")})`],
-    ["out", `Stays out (${count("out")})`],
+    all3 ? ["imported", `Imported (${count("imported")})`] : null,
+    all3 ? ["out", `Stays out (${count("out")})`] : null,
     ["athletes", unlinked ? `Athletes (${unlinked} not linked)` : "Athletes"],
     ["search", renderTeamSwitchPanelHtml(gx) ? "Search & settings" : "Search"],
-  ];
+  ].filter(Boolean);
   return `
     <nav class="om-tabs imports-tabs" aria-label="Imports">
       ${tabs.map(([key, label]) => `<button type="button" class="om-tab${key === tab ? " is-active" : ""}"${key === tab ? ' aria-current="page"' : ""} data-action="training-load-gpexe-tab" data-import-tab="${key}">${escapeHtml(label)}</button>`).join("")}
@@ -1299,7 +1328,7 @@ function renderBatchResultsHtml(gx) {
   // IMP2 (the sketch): "Imported N sessions. You can see them in Training Load → Activities." first, in one line.
   // A mixed result names only the imported ones (the refused ones are not in Activities).
   const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported)
-    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and in the Imported tab.` : "";
+    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and ${listsAllStates(gx.status) ? "in the Imported tab" : "with ✓ in the calendar"}.` : "";
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(`${onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary}.${seen}`)}</p>` : ""}
     ${stopped}

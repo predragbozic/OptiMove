@@ -26620,6 +26620,37 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
 }
 /* End of Imports P4. */
 
+/* Imports P4c: a coach and a club admin find imported and "stays out" sessions in the calendar only. A quiet grey
+   mark for "stays out"; one quiet line under the chooser counts the month shown (on a phone it is a button that opens
+   the calendar sheet); "Older sessions may not be shown." when the list read is full. */
+.imports-period .period-chip.is-out {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.imports-period .period-cap {
+  margin: 6px 0 0;
+}
+.imports-month-line {
+  margin: 0;
+}
+.imports-month-phone {
+  display: none;
+}
+@media (max-width: 760px) {
+  .imports-month-desk {
+    display: none;
+  }
+  .imports-month-phone {
+    display: inline-flex;
+    min-height: 44px;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+  }
+}
+
+/* End of Imports P4c. */
+
 /* ---------------------------------------------------------------------------
    Map by drag and drop (J18): Training Load > Data configuration. Built on the
    om-* foundation (page header, tabs, cards, badges, buttons); these rules add

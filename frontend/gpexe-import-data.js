@@ -439,7 +439,8 @@ export function closeGpexeCandidate() {
   if (d?.outcome?.kind === "imported" || d?.outcome?.verified === "imported" || d?.outcome?.error?.code === "already_imported") {
     const label = (d.candidate?.label || "The session").replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
     const row = (gx.candidates || []).find((c) => c.id === d.id);
-    if (row?.status === "imported") gx.notice = `${label} is imported - listed under Imported below.`;
+    // P4c: only a platform admin has the Imported list; everyone else finds it with ✓ in the calendar.
+    if (row?.status === "imported") gx.notice = gx.status?.viewer?.isPlatformAdmin === true ? `${label} is imported - listed under Imported below.` : `${label} is imported - it shows with ✓ in the calendar.`;
     else {
       gx.notice = `${label} is imported. The list is being refreshed.`;
       refresh = true;

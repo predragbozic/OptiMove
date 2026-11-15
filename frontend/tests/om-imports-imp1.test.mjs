@@ -118,12 +118,12 @@ const tabRow = () => html().match(/<nav class="om-tabs imports-tabs"[\s\S]*?<\/n
 const activeTab = () => html().match(/data-imports-tab="(\w+)"/)?.[1];
 const unlinked = (n) => ready(n, { reasons: [{ code: "athletes_not_linked", count: 1 }], counts: { created: 2, athletesNotImported: 1 } });
 
-test("IMP1 1: one row of six tabs with counts, in order; one tab's content at a time; a tab sends nothing", async () => {
+test("IMP1 1: one row of tabs with counts, in order (P4c: a coach has no Imported or Stays out tab); one tab's content at a time; a tab sends nothing", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), unlinked(3)] }));
   await openImports();
   const labels = [...tabRow().matchAll(/data-import-tab="(\w+)">([^<]*)</g)].map((m) => `${m[1]}=${m[2]}`);
-  assert.deepEqual(labels, ["attention=Needs you (1)", "ready=Ready (2)", "imported=Imported (0)", "out=Stays out (0)", "athletes=Athletes", "search=Search"]);
+  assert.deepEqual(labels, ["attention=Needs you (1)", "ready=Ready (2)", "athletes=Athletes", "search=Search"]);
   assert.equal(activeTab(), "attention", "something needs the coach: Needs you opens first");
   assert.match(tabRow(), /class="om-tab is-active" aria-current="page" data-action="training-load-gpexe-tab" data-import-tab="attention"/);
   assert.ok(html().includes('aria-label="Needs attention"') && !html().includes('aria-label="Ready to import"'), "only the open tab's list is drawn");
@@ -272,7 +272,7 @@ test("IMP2 2: the result says what was imported and where to see it in one line,
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
   const d = dialog();
-  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and in the Imported tab\.<\/p>/);
+  assert.match(d, /<p class="imports-batch-summary" role="status">Imported 2 sessions\. You can see them in Training Load → Activities and with ✓ in the calendar\.<\/p>/);
   assert.doesNotMatch(d, /listed under Imported below/, "Imported is a tab since IMP1");
   // P2 (O1): the one Technical details of the result is the platform admin's; a coach's result has none.
   assert.equal((d.match(/<details class="gpexe-tech">/g) || []).length, 0, "no Technical details for a coach");
@@ -303,7 +303,7 @@ test("IMP2 4: a mixed result names only the imported ones in its Activities sent
   await openImports();
   await act("training-load-gpexe-import-ready");
   await act("training-load-gpexe-batch-send");
-  assert.match(dialog(), /You can see the imported ones in Training Load → Activities and in the Imported tab\./);
+  assert.match(dialog(), /You can see the imported ones in Training Load → Activities and with ✓ in the calendar\./);
   assert.ok(!/FULL TRAINING 1|appr-1|gpexe-tech/.test(dialog()), "P2: the raw GPEXE name and the ids are not in a coach's result");
 });
 

@@ -148,7 +148,7 @@ test("P4 3: the chooser is always on the page (a computer); 'Find new sessions' 
   assert.match(html(), /data-action="training-load-gpexe-period-toggle"[^>]*disabled>Finding\.\.\.</);
 });
 
-test("P4 4: a day shows one chip per session in start-time order with colour and glyph, up to 3 then +N; 'stays out' has no chip but its label names it", async () => {
+test("P4 4: a day shows one chip per session in start-time order with colour and glyph, up to 3 then +N; 'stays out' a quiet grey mark (P4c) and its label names it", async () => {
   resetState();
   const day = prevDay(12);
   const quiet = prevDay(13);
@@ -169,7 +169,7 @@ test("P4 4: a day shows one chip per session in start-time order with colour and
   assert.equal((crowded.match(/period-chip is-ready/g) || []).length, 3, "three shown");
   assert.match(crowded, /period-chip is-more">\+2</, "then +N");
   const out = dayCell(p, quiet);
-  assert.ok(!/period-chip/.test(out), "stays out: no chip");
+  assert.match(out, /period-chip is-out">\u2013</, "stays out: a quiet grey mark (P4c)");
   assert.match(out, /1 session: stays out/);
   assert.doesNotMatch(out, /nothing found yet/);
   assert.match(p, /<i class="period-chip is-needs">!<\/i> needs you/, "a legend names each glyph");

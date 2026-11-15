@@ -48,6 +48,8 @@ function renderTrainingLoadCoachHtml() {
     gx.tab = tab;
     const other = renderTrainingLoadPage();
     const at = other.indexOf('<div class="imports-tab-panel"');
+    // P4c: a tab this viewer does not have (Imported, Stays out for a coach) falls back to another one - skip it.
+    if (other.match(/data-imports-tab="(\w+)"/)?.[1] !== tab) continue;
     panels.push(other.slice(at)
       .replace(/<section class="gpexe-panel imports-period"[\s\S]*?<\/section>/, ""));
   }
@@ -1023,6 +1025,7 @@ test("data setup (9-B): a coach reads one sentence and one step for every mappin
 
 test("nothing new: a session whose linked athletes are imported is under Imported; one in which nobody is linked yet asks for links instead of reading as done", async () => {
   resetState();
+  platformViewOn = true; // P4c: the Imported and Stays out lists are the platform admin's only
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
@@ -1045,6 +1048,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
 
 test("blocked sessions in the list: sorted from the list's own code with no detail read; a session that stays out for good asks for nothing, every other block shows the detail's own step", async () => {
   resetState();
+  platformViewOn = true; // P4c: the Imported and Stays out lists are the platform admin's only
   const blockedCases = {
     "c-match": { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', categoryName: "OFFICIAL MATCH" },
     "c-thr": { code: "thresholds_not_valid_for_session", message: "thresholds 1473 do not cover session start." },
@@ -1123,6 +1127,7 @@ test("when nothing needs a decision but some sessions can't be imported yet, the
 
 test("after a check ends, a newly blocked session is sorted from the list answer alone - no detail read", async () => {
   resetState();
+  platformViewOn = true; // P4c: the Imported and Stays out lists are the platform admin's only
   let afterCheck = false;
   const base = gpexeServer({
     checks: {
