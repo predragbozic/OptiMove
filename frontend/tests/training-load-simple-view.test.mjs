@@ -96,7 +96,6 @@ test("custom aggregation is explicit, independent of daily metadata, with scope 
   assert.match(control(html, "view"), /value="table" checked/);
   assert.match(html, /How to combine measurements<select/);
   assert.match(html, /Use measurements from<select/);
-  assert.match(html, /The preview lists all returned data\. Saved charts use the current dashboard display\./);
   assert.doesNotMatch(html, /Chart composition and unsupported settings/);
   assert.match(selected(html, "group"), /value="day"/);
   assert.match(selected(html, "aggregation"), /value="" selected disabled>Choose how to combine measurements/);
@@ -138,7 +137,7 @@ test("preview is lossless for every current and comparison row, including proble
   assert.match(html, /unitConflict|partial|Do not hide/);
   assert.match(html, /Series 1: Could not load/);
   assert.match(html, /Result status: Needs attention/);
-  assert.match(html, /Conflicting observations were returned/);
+  assert.match(html, /Some measurements disagree/);
   assert.match(html, /Incomplete coverage/);
   assert.match(html, /&lt;svg onload=&quot;bad&quot;&gt;/);
   assert.doesNotMatch(html, /<svg|<canvas/);
@@ -180,7 +179,7 @@ test("save requires capability and canSave, with accurate advanced discard confi
   assert.match(control(unavailable, "save"), /disabled/);
   assert.match(control(unavailable, "preview"), /disabled/);
   assert.match(unavailable, /Live preview is temporarily unavailable\./);
-  assert.match(unavailable, /Fix the problem above to save/);
+  assert.match(unavailable, /Saving is not available right now/);
   assert.doesNotMatch(unavailable, /on this backend/);
   input.advancedRequired = true;
   input.draft = null;
@@ -243,7 +242,7 @@ test("roster loading and errors are distinct from empty athletes and preserve se
   assert.match(control(renderSimpleEditorHtml(input), "athlete"), /checked disabled/);
   input.rosterError = "";
   input.athletes = [];
-  assert.match(renderSimpleEditorHtml(input), /No authorized athletes available/);
+  assert.match(renderSimpleEditorHtml(input), /No athletes to show/);
   input.draft.athleteSelection = { mode: "inherit" };
   input.rosterLoading = true;
   html = renderSimpleEditorHtml(input);
@@ -265,7 +264,7 @@ test("preview headings and athlete names are friendly while every original field
   assert.match(table, /<th scope="col">Athlete<\/th>/);
   assert.match(table, /<th scope="col">Period \/ group<\/th>/);
   assert.match(table, /<td>Alex &lt;Runner&gt;<\/td>/);
-  assert.match(table, /<td>No observation<\/td>/);
+  assert.match(table, /<td>No data<\/td>/);
   assert.doesNotMatch(table, new RegExp(metricId));
   assert.match(html, /Choose how to combine measurements\./);
   assert.doesNotMatch(html, /&lt;Warning&gt;|raw-series-id|unknownField|<pre>/);
@@ -297,7 +296,7 @@ test("inherited all-athlete count distinguishes unknown, loading, failed and con
   const input = model({ step: 2 });
   input.context.effectiveInheritedAthleteIds = null;
   let html = renderSimpleEditorHtml(input);
-  assert.match(html, /Athlete roster has not loaded/);
+  assert.match(html, /Athletes could not be loaded/);
   assert.doesNotMatch(html, /0 athletes/);
   input.rosterLoading = true;
   html = renderSimpleEditorHtml(input);
@@ -316,4 +315,11 @@ test("inherited all-athlete count distinguishes unknown, loading, failed and con
   html = renderSimpleEditorHtml(input);
   assert.match(html, /Uses the dashboard/);
   assert.doesNotMatch(html, /Dashboard athletes: all/);
+});
+
+test("an Advanced preview keeps the draft and Back available", () => {
+  const html = renderSimpleEditorHtml(model({ step: 3, preview: { status: "advancedRequired" } }));
+  assert.match(html, /This combination needs Advanced settings/);
+  assert.doesNotMatch(control(html, "back"), /disabled/);
+  assert.match(control(html, "save"), /disabled/);
 });

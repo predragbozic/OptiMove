@@ -87,7 +87,11 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
       await action(page, "simple-title").fill("Unconfirmed edit");
       await action(page, "simple-preview").click();
       await page.locator(".tl-simple-preview-status[data-ready=true]").waitFor();
-      await page.route("**/simple/widgets/*", route => route.abort("failed"), { times: 1 });
+      await page.route("**/simple/widgets/*", async route => {
+        const reply = await route.fetch();
+        assert.equal(reply.status(), 200, await reply.text());
+        await route.abort("failed");
+      }, { times: 1 });
       await action(page, "simple-save").click();
       await page.getByText("We could not confirm that your widget was saved.").waitFor();
       await screenshot(page, width, "unconfirmed");
@@ -98,6 +102,8 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
       await dialog.accept();
       await cancel;
       await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
+
+      await page.getByRole("button", { name: "Widget actions: Unconfirmed edit" }).waitFor();
 
       const dashboardPath = world.baseUrl + "/api/training-load/dashboards/" + dashboard.id;
       const detail = await (await context.request.get(dashboardPath)).json();

@@ -5585,7 +5585,11 @@ test("v71 rollback SQL restores the catalog, reapplies, and refuses receipts and
     await refuse(/save receipts exist/);
     await assert.rejects(client.query("delete from training_load.dashboard_simple_requests"), { code: "55000" });
     assert.equal((await client.query("select training_load.cleanup_dashboard_simple_requests(1) as deleted")).rows[0].deleted, 1);
+    const v72 = "migrations_v2/202611151200_training_load_v72_source_field_observations.sql";
+    await client.query("insert into public.schema_migrations (migration_name, checksum, runner_version) select $1, checksum, runner_version from public.schema_migrations where migration_name like '%dashboard_simple_atomic_save.sql'", [v72]);
     await client.query(rollback);
+    assert.equal((await client.query("select 1 from public.schema_migrations where migration_name=$1", [v72])).rowCount, 1);
+    await client.query("delete from public.schema_migrations where migration_name=$1", [v72]);
     assert.ok(dump() === before, "rollback restores the baseline schema");
     await migrate();
     assert.ok(dump() === applied, "reapply restores the migrated schema");

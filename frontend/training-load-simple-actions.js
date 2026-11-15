@@ -6,6 +6,7 @@ import { createSimpleEditorController } from './training-load-simple-controller.
 import { loadTrainingLoadOrgPickerData } from './training-load-data.js';
 
 let render = () => {};
+let refreshingAfterClose;
 let returnFocus = null, previousModel = null, previousStep = null;
 const analysis = () => state.trainingLoad.analysis;
 function paint(model) {
@@ -32,6 +33,26 @@ function paint(model) {
   }
   previousModel = model; previousStep = model?.step;
 }
+async function refreshDashboard(dashboardId) {
+  const a = analysis();
+  if (a.dashboard?.id !== dashboardId) return;
+  await loadDashboardDetail(dashboardId, render, { force: true });
+  if (a.dashboard?.id !== dashboardId || a.detailError) throw new Error('Dashboard refresh failed');
+  await queryAnalysisDashboard(render, { force: true });
+  if (a.queryError) throw new Error('Dashboard query refresh failed');
+}
+
+function closeAndRefresh(model, options) {
+  if (!simpleEditor.close(options)) return false;
+  const a = analysis();
+  refreshingAfterClose = refreshDashboard(model.context.dashboardId).catch(() => {
+    if (analysis() !== a || a.dashboard?.id !== model.context.dashboardId) return;
+    a.notice = 'Reload the page to see the latest dashboard.';
+    render();
+  }).finally(() => { refreshingAfterClose = undefined; });
+  return true;
+}
+
 export const simpleEditor = createSimpleEditorController({ request: api, paint,
   getContext: () => ({ identity: currentUserWorkspaceContextParts(), dashboardId: analysis().dashboard?.id,
     period: { ...analysis().period, timeZone: analysis().period.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
@@ -39,8 +60,7 @@ export const simpleEditor = createSimpleEditorController({ request: api, paint,
     athletes: state.trainingLoad.orgPickerData?.athletes ?? [] }),
   saved: async (receipt, target) => {
     const a = analysis();
-    await loadDashboardDetail(target.context.dashboardId, render, { force: true });
-    await queryAnalysisDashboard(render, { force: true });
+    await refreshDashboard(target.context.dashboardId);
     a.notice = 'Widget saved.';
     if (simpleEditor.model === target) simpleEditor.close();
   },
@@ -48,6 +68,13 @@ export const simpleEditor = createSimpleEditorController({ request: api, paint,
 
 export async function openSimpleEditor(widget, onRender) {
   render = onRender;
+  if (refreshingAfterClose) {
+    await refreshingAfterClose;
+    if (widget) {
+      widget = analysis().widgets.find(row => row.id === widget.id);
+      if (!widget) return true;
+    }
+  }
   await simpleEditor.open(widget);
   if (simpleEditor.model?.unavailable) { simpleEditor.close(); return false; }
   const target = simpleEditor.model;
@@ -75,13 +102,17 @@ globalThis.document?.addEventListener?.('keydown', event => {
 export function leaveSimpleEditor({ discard = true, confirm = message => window.confirm(message) } = {}) {
   const model = simpleEditor.model;
   if (!model) return true;
-  if (model.saveState === 'saving' || model.checkingStatus) return false;
+  if (model.saveState === 'saving' || model.checkingStatus) {
+    model.saveError = 'Wait until the save is confirmed.';
+    paint(model);
+    return false;
+  }
   if (model.saveState === 'unknown') {
     if (!discard) { model.saveError = 'Check again or cancel the editor before leaving.'; paint(model); return false; }
-    return confirm('Close the editor? Your widget may or may not be on the dashboard.') && simpleEditor.close({ allowUnconfirmed: true });
+    return confirm('Close the editor? Your widget may or may not be on the dashboard.') && closeAndRefresh(model, { allowUnconfirmed: true });
   }
   if (simpleEditor.dirty && !model.stale && !confirm('Discard your unsaved widget changes?')) return false;
-  return !discard || simpleEditor.close();
+  return !discard || (model.stale ? closeAndRefresh(model) : simpleEditor.close());
 }
 
 export async function handleSimpleEditorAction(action, onRender) {
@@ -89,7 +120,7 @@ export async function handleSimpleEditorAction(action, onRender) {
   const type = action.dataset.action?.replace('training-load-simple-', '');
   const model = simpleEditor.model;
   if (!model) return true;
-  if (type === 'close') { leaveSimpleEditor(); return true; }
+  if (type === 'close') { leaveSimpleEditor(); await refreshingAfterClose; return true; }
   if (type === 'retry') { await simpleEditor.save(true); return true; }
   if (type === 'status') { await simpleEditor.status(); return true; }
   if (simpleEditor.pending || model.saveState === 'recorded') return true;

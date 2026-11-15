@@ -18,6 +18,7 @@ begin
       where migration_name = 'migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql')
     or exists (select 1 from public.schema_migrations
       where migration_name like 'migrations_v2/%'
+        and migration_name <> 'migrations_v2/202611151200_training_load_v72_source_field_observations.sql'
         and migration_name > 'migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql') then
     raise exception 'v71 rollback refused: v71 is not the last applied v2 migration';
   end if;

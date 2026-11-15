@@ -103,7 +103,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
       if (!current(target, run) || target.draft.draftVersion !== version) return;
       target.preview = result; target.previousPreview = null; target.previewInput = envelope;
       target.advancedRequired = result.status === 'advancedRequired';
-    } catch (error) { if (current(target, run) && target.draft.draftVersion === version) target.error = fail(error); }
+    } catch (error) { if (current(target, run) && target.draft.draftVersion === version) { target.previousPreview = null; target.error = fail(error); } }
     finally {
       previewInFlight = false;
       if (model === target) target.previewLoading = false;
@@ -115,7 +115,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
     if (!currentTarget(target, run)) return;
     target.saveState = 'recorded'; target.receipt = result; target.saveError = ''; redraw();
     try { await saved(result, target); }
-    catch { target.saveError = 'Saved successfully. Reload the dashboard to see the latest result.'; }
+    catch { target.saveError = 'Saved. Reload the page to see it.'; }
     redraw();
   }
   async function save(retry = false) {

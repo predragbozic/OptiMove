@@ -381,9 +381,22 @@ test('closing returns focus to the replacement opener matched by action and widg
 
 test('a confirmed cancel exits an unconfirmed save without sending it again', async () => {
   await unknownSave();
-  const count = calls.length;
+  const writes = calls.filter(call => call.url.endsWith('/simple/widgets')).length;
+  receiptPeriod = period;
   await simple('close');
   assert.equal(simpleEditor.model, null);
   assert.match(confirmations.at(-1), /may or may not be on the dashboard/);
-  assert.equal(calls.length, count);
+  assert.equal(calls.filter(call => call.url.endsWith('/simple/widgets')).length, writes);
+  assert.equal(analysis().widgets[0].revision, 8);
+  assert.ok(calls.some(call => call.url === base + '/query'));
+});
+
+test('closing a stale widget reloads its revision before reopening', async () => {
+  await act('training-load-analysis-edit-widget', { widgetId });
+  assert.equal(simpleEditor.model.widgetRevision, 7);
+  simpleEditor.model.stale = true;
+  receiptPeriod = period;
+  await simple('close');
+  await act('training-load-analysis-edit-widget', { widgetId });
+  assert.equal(simpleEditor.model.widgetRevision, 8);
 });

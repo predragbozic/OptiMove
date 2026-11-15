@@ -12,7 +12,8 @@ with expected(version, prefix, filename) as (values
  ('67','202611131200','202611131200_training_load_v67_gpexe_track_choices.sql'),
  ('68','202611131300','202611131300_training_load_v68_track_choice_scale.sql'),
  ('69','202611131310','202611131310_training_load_v69_scale_recording_estimates.sql'),
- ('70','202611131400','202611131400_app_error_events_v70_device_and_keyed_hash.sql')
+ ('70','202611131400','202611131400_app_error_events_v70_device_and_keyed_hash.sql'),
+ ('72','202611151200','202611151200_training_load_v72_source_field_observations.sql')
 )
 select version, filename,
        exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/' || filename) as recorded,
