@@ -114,7 +114,10 @@ const KEY = `optimove.imports.later.coach-1.${TEAM_A}`;
 const writes = () => fetchCalls.filter((c) => c.method !== "GET");
 const readyTab = () => (html().match(/data-import-tab="ready">([^<]*)</) || [])[1];
 const readyRows = () => [...html().matchAll(/data-action="training-load-gpexe-later" data-candidate-id="([^"]+)"/g)].map((m) => m[1]);
+const { resetLaterTapForTests } = await import("../gpexe-import-actions.js");
+const { reloadGpexeCandidates } = await import("../gpexe-import-data.js");
 async function openReady(candidates) {
+  resetLaterTapForTests();
   resetState();
   platform = false;
   installFetchMock(gpexeServer({ candidates }));
@@ -132,7 +135,8 @@ test("P4b 1: Later puts a Ready session aside on this device: nothing is sent, t
   assert.equal(fetchCalls.length, before, "nothing is sent");
   assert.deepEqual(readyRows(), ["cand-2"]);
   assert.equal(readyTab(), "Ready (1)");
-  assert.match(html(), /imports-later-notice" role="status">[^<]* is put aside for later on this device\. <button[^>]*data-action="training-load-gpexe-later-back" data-candidate-id="cand-1">Undo</);
+  assert.match(html(), /imports-later-notice" role="status"><span>Put aside: [A-Z][a-z]{2} \d{2}\.\d{2}\. · [^<]+\.<\/span> <button[^>]*data-action="training-load-gpexe-later-back" data-candidate-id="cand-1">Undo</);
+  assert.match(html(), /imports-lastsearch">[^<]* · 1 ready · 1 put aside</, "the banner never hides a session put aside");
   assert.match(html(), />Import 1 ready session</, "the main button never takes it");
   assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-1"], "kept per sign-in and team");
   await act("training-load-gpexe-later-back", { candidateId: "cand-1" });
@@ -190,4 +194,58 @@ test("P4b 6: Later leaves the batch selection; Select all and Import never take 
   assert.match(html(), />Import 2 ready sessions</);
   await act("training-load-gpexe-import-ready");
   assert.deepEqual(Object.keys(gx().batch?.selected || {}).sort(), ["cand-1", "cand-2"]);
+});
+
+test("P4b 7 (code review HIGH): a link change and a list read do not forget a session put aside; only the server's final state does", async () => {
+  store.clear(); refuse = false;
+  await openReady([row(1, daysAgo(2)), row(2, daysAgo(3))]);
+  await act("training-load-gpexe-later", { candidateId: "cand-2" });
+  gx().linkSeq += 1;
+  gx().linkCheckStartedAt = null; // every row now reads "Needs you" until the next search
+  await reloadGpexeCandidates(() => {});
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-2"], "kept");
+  // The server says it is imported: forgotten.
+  installFetchMock(gpexeServer({ candidates: [row(1, daysAgo(2)), imported(2, daysAgo(3))] }));
+  await reloadGpexeCandidates(() => {});
+  assert.equal(store.has(KEY), false);
+});
+
+test("P4b 8 (code review MEDIUM): a session missing from a full list (200 rows) or a list with replaced versions is kept; from a complete list it is forgotten", async () => {
+  store.clear(); refuse = false;
+  store.set(KEY, JSON.stringify(["cand-x"]));
+  await openReady(Array.from({ length: 200 }, (_, i) => row(i + 1, daysAgo(i % 30))));
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-x"], "200 rows: maybe only older");
+  gx().includeSuperseded = true;
+  installFetchMock(gpexeServer({ candidates: [row(1, daysAgo(2))] }));
+  await reloadGpexeCandidates(() => {});
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-x"], "with the replaced versions the list is not the plain one");
+  gx().includeSuperseded = false;
+  await reloadGpexeCandidates(() => {});
+  assert.equal(store.has(KEY), false, "a complete list without it: gone");
+});
+
+test("P4b 9: in Choose sessions there is no Later, and Select all leaves out a session put aside", async () => {
+  store.clear(); refuse = false;
+  await openReady([row(1, daysAgo(2)), row(2, daysAgo(3)), row(3, daysAgo(4))]);
+  await act("training-load-gpexe-later", { candidateId: "cand-3" });
+  gx().chooseOpen = true;
+  assert.doesNotMatch(html(), /data-action="training-load-gpexe-later" /, "no Later in checkbox mode");
+  await act("training-load-gpexe-batch-select");
+  assert.deepEqual(Object.keys(gx().batch.selected).sort(), ["cand-1", "cand-2"]);
+});
+
+test("P4b 10: no Later while an import is being sent; a second tap right after the first is not a second Later", async () => {
+  store.clear(); refuse = false;
+  await openReady([row(1, daysAgo(2)), row(2, daysAgo(3)), row(3, daysAgo(4))]);
+  gx().batch = { ...(gx().batch || {}), sending: true, selected: {} };
+  assert.match(html(), /data-action="training-load-gpexe-later" data-candidate-id="cand-1" disabled/);
+  await act("training-load-gpexe-later", { candidateId: "cand-1" });
+  assert.equal(store.has(KEY), false, "refused while sending");
+  gx().batch.sending = false;
+  await act("training-load-gpexe-later", { candidateId: "cand-1" });
+  await act("training-load-gpexe-later", { candidateId: "cand-2" });
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-1"], "the repeat tap is ignored");
+  resetLaterTapForTests();
+  await act("training-load-gpexe-later", { candidateId: "cand-2" });
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-1", "cand-2"]);
 });

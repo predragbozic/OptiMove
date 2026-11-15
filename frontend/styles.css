@@ -26766,10 +26766,31 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-later-row >
   flex: 1 1 auto;
   min-width: 0;
 }
-.imports-later {
+/* UX review: a quiet secondary action, not the heaviest control of the row; the same 44 px target. */
+body:not(.athlete-mode):not(.login-mode) .imports-later {
   flex: 0 0 auto;
   min-height: 44px;
   min-width: 44px;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.imports-later-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+/* Mobile review: a focus ring that can be seen. */
+body:not(.athlete-mode):not(.login-mode) .imports-later:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-later-notice .gpexe-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
 }
 .imports-later-aside {
   display: grid;

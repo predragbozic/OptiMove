@@ -59,6 +59,11 @@ import {
 import { clearPeriod, periodOf, pickDay, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
 import { takePeriodDragClick } from "./gpexe-period-drag.js";
 import { bringBack, clearLaterNotice, isLater, laterOpen, putLater, setLaterOpen } from "./gpexe-later-data.js";
+
+// P4b: a second "Later" within this time of the first is a repeat tap, not a choice.
+const LATER_REPEAT_MS = 400;
+let laterTappedAt = 0;
+export function resetLaterTapForTests() { laterTappedAt = 0; }
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -571,14 +576,26 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   // P4b, "Later": local only, no request for any of these.
   if (type === "training-load-gpexe-later") {
+    // Never while an import is being sent; and a second tap right after the first (the list moves under the thumb) is
+    // not a second "Later" (mobile review).
+    const now = Date.now();
+    if (gx.batch?.sending || now - laterTappedAt < LATER_REPEAT_MS) return true;
     if (putLater(action.dataset.candidateId || "")) {
+      laterTappedAt = now;
       renderTrainingLoad();
-      globalThis.document?.querySelector?.(".imports-later-notice button")?.focus?.({ preventScroll: true });
+      const notice = globalThis.document?.querySelector?.(".imports-later-notice button");
+      notice?.focus?.({ preventScroll: true });
+      notice?.scrollIntoView?.({ block: "nearest" });
     }
     return true;
   }
   if (type === "training-load-gpexe-later-back") {
-    if (bringBack(action.dataset.candidateId || "")) renderTrainingLoad();
+    const id = action.dataset.candidateId || "";
+    if (bringBack(id)) {
+      renderTrainingLoad();
+      // The session is back in the list: focus its row (reviews: focus is not left on a button that is gone).
+      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-open"][data-candidate-id="${globalThis.CSS?.escape ? CSS.escape(id) : id}"]`)?.focus?.();
+    }
     return true;
   }
   if (type === "training-load-gpexe-later-show") {

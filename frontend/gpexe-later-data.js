@@ -83,11 +83,11 @@ export function setLaterOpen(open, gx = g()) {
   laterList(gx).open = Boolean(open);
 }
 
-// After the list is read: ids of sessions that are gone or no longer Ready are forgotten, so storage never grows
-// with sessions nobody will see again. `stillReady(id)` says whether a listed session is still Ready.
-export function pruneLater(stillReady, gx = g()) {
+// After the list is read: ids of sessions that are gone for good are forgotten, so storage never grows with sessions
+// nobody will see again. `keep(id)` says whether an id is kept.
+export function pruneLater(keep, gx = g()) {
   const l = laterList(gx);
-  const kept = l.ids.filter((id) => stillReady(id));
+  const kept = l.ids.filter((id) => keep(id));
   if (kept.length === l.ids.length) return;
   l.ids = kept;
   if (l.notice && !kept.includes(l.notice)) l.notice = "";

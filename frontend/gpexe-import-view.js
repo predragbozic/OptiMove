@@ -555,6 +555,8 @@ function bannerText(gx, check) {
   if (gx.candidates) {
     parts.push(`${ready} ready`);
     if (needs) parts.push(`${needs} need${needs === 1 ? "s" : ""} you`);
+    // UX review: "0 ready" never hides a session waiting on this device.
+    if (readyAll.length > ready) parts.push(`${readyAll.length - ready} put aside`);
   }
   return parts.join(" · ");
 }
@@ -1047,7 +1049,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
     const full = !checked && Object.keys(gx.batch.selected).length >= BATCH_MAX;
     box = `<label class="imports-pick"><input type="checkbox" data-action="training-load-gpexe-pick" data-candidate-id="${escapeAttr(c.id)}" aria-label="Select ${escapeAttr(niceSessionName(c))} ${escapeAttr(fmtDateTime(c.sessionStartedAt))}" ${checked ? "checked" : ""} ${full || gx.batch.sending ? "disabled" : ""}></label>`;
   }
-  const later = kind === "ready" && !box ? `<button type="button" class="plain-button gpexe-button imports-later" data-action="training-load-gpexe-later" data-candidate-id="${escapeAttr(c.id)}" aria-label="${escapeAttr(`Later: put ${niceSessionName(c)} ${sessionDayText(c.sessionStartedAt)} aside on this device`)}">Later</button>` : "";
+  const later = kind === "ready" && !box ? `<button type="button" class="plain-button gpexe-button imports-later" data-action="training-load-gpexe-later" data-candidate-id="${escapeAttr(c.id)}"${gx.batch?.sending ? " disabled" : ""} aria-label="${escapeAttr(`Later: put ${niceSessionName(c)} ${sessionDayText(c.sessionStartedAt)} aside on this device`)}">Later</button>` : "";
   return `
     <li class="${[box ? "imports-pick-row" : "", later ? "imports-later-row" : ""].filter(Boolean).join(" ")}">
       ${box}
@@ -1092,7 +1094,8 @@ function laterNoticeHtml(gx) {
   const id = laterNotice(gx);
   const c = id && (gx.candidates || []).find((x) => x.id === id);
   if (!c) return "";
-  return `<p class="gpexe-notice imports-later-notice" role="status">${escapeHtml(`${niceSessionName(c)} ${sessionDayText(c.sessionStartedAt)} is put aside for later on this device.`)} <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-later-back" data-candidate-id="${escapeAttr(c.id)}">Undo</button></p>`;
+  // UX review: short, in the row's own words; "on this device" is said once, in the line under the list.
+  return `<p class="gpexe-notice imports-later-notice" role="status"><span>${escapeHtml(`Put aside: ${[sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · ")}.`)}</span> <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-later-back" data-candidate-id="${escapeAttr(c.id)}">Undo</button></p>`;
 }
 
 // One line under the Ready list: how many are put aside, and Show; shown, each with Bring back.
