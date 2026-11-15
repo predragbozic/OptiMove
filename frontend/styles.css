@@ -27022,7 +27022,28 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-help {
   overflow-y: auto;
   box-sizing: border-box;
   margin: 0;
-  box-shadow: 0 0 0 100vmax rgba(15, 23, 32, 0.45), 0 12px 40px rgba(15, 23, 32, 0.25);
+  max-height: calc(100dvh - 48px);
+  overscroll-behavior: contain;
+  padding-top: 0;
+  box-shadow: 0 12px 40px rgba(15, 23, 32, 0.25);
+}
+.imports-help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(15, 23, 32, 0.45);
+}
+body:has(.imports-help.is-open) {
+  overflow: hidden;
+}
+/* The heading and × stay in view while the help scrolls (mobile review). */
+body:not(.athlete-mode):not(.login-mode) .imports-help-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 12px;
+  padding-bottom: 8px;
+  background: var(--surface, #fff);
 }
 .imports-help-head {
   display: flex;
@@ -27090,13 +27111,31 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
     top: 0;
     left: 0;
     transform: none;
-    width: 100vw;
+    width: auto;
     height: 100vh;
     height: 100dvh;
     max-height: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 16px;
+    padding-top: 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  body:not(.athlete-mode):not(.login-mode) .imports-help-head {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+  }
+  /* UX review: on a phone the help is a quiet link on the team's row, not a second main button. */
+  body:not(.athlete-mode):not(.login-mode) .imports-help-open {
+    border-color: transparent;
+    background: none;
+    box-shadow: none;
+    color: var(--muted);
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    padding-left: 2px;
+    padding-right: 2px;
   }
   .imports-help-foot .gpexe-button {
     width: 100%;

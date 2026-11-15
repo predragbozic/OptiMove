@@ -136,11 +136,14 @@ test("P5 2: it says each thing once: the search, the four marks with colour and 
     [/period-chip is-done" aria-hidden="true">✓<\/i> <strong>Imported<\/strong>/, "✓"],
     [/period-chip is-out" aria-hidden="true">–<\/i> <strong>Stays out<\/strong>/, "–"],
     [/A day without a mark may not have been searched yet\./, "unmarked days"],
-    [/<strong>Needs you<\/strong> groups the sessions by what they ask/, "Needs you"],
+    [/<strong>Needs you<\/strong> - one step is missing before it can be imported\. The Needs you tab groups the sessions by that step; each group(?:'|&#039;)s button does it\./, "Needs you, once"],
+    [/<strong>Import off<\/strong> importing is not turned on for this team yet\. You can still find and review sessions\./, "Import off"],
     [/<strong>Linking athletes<\/strong> tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session\. It is never guessed/, "linking"],
     [/<strong>Later<\/strong> puts a Ready session aside on this device only\./, "Later"],
     [/<strong>After importing<\/strong> a session shows with ✓ in the calendar here, and its results are in Training Load → Activities\./, "where they go"],
   ]) assert.match(h, re, what);
+  assert.equal(h.split("<strong>Needs you</strong>").length, 2, "Needs you is explained once");
+  assert.match(html(), /<div class="imports-help-backdrop" data-action="training-load-gpexe-help" aria-hidden="true"><\/div>/, "a click outside closes it");
 });
 
 test("P5 3: who to ask: a coach the club administrator, a club admin OptiMove support, a platform admin nobody", async () => {

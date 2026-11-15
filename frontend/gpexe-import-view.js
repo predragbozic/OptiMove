@@ -1312,7 +1312,7 @@ function renderBatchReviewHtml(gx, items) {
     <ul class="imports-batch-list">
       ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
-    <p class="muted imports-batch-warning">Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    <p class="muted imports-batch-warning">${escapeHtml(`Results imported under the wrong athlete can't be changed here — ${platformViewer() ? "contact a platform administrator" : askWho()}.`)}</p>
     <details class="imports-batch-more"><summary>What happens</summary><p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others.</p></details>
     ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
     ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")], ["GPEXE session names", items.map((i) => i.candidate?.label).filter(Boolean).join("; ")]])}
@@ -1709,14 +1709,14 @@ export function renderSuggestionsHtml(gx, off) {
     <section class="gpexe-suggest" aria-label="Suggested pairs">
       ${shown.length ? `
         <h4>Suggested pairs (${shown.length})</h4>
-        <p class="muted">GPEXE athlete (name, date of birth) &rarr; athlete in your team: same name and same date of birth. Nothing is linked yet - the button below only opens a summary that you confirm.</p>
+        <p class="muted">Same name and date of birth. Nothing is linked until you confirm.</p>
         <ul class="gpexe-suggest-list">${exactRows}</ul>
         ${stageable.length > shown.length ? `<p class="muted">The first ${SUGGESTION_MAX_PAIRS} are listed; the rest appear after these are linked.</p>` : ""}
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-suggest-all" ${off ? "disabled" : ""}>Review all ${shown.length} suggested ${shown.length === 1 ? "pair" : "pairs"}</button></div>
       ` : ""}
       ${choice.length ? `
         <h4>Needs your choice (${choice.length})</h4>
-        <p class="muted">These are never selected for you. Choose the athlete below if you are sure.</p>
+        <p class="muted">Choose the athlete below.</p>
         <ul class="gpexe-suggest-list">${choiceRows}</ul>
       ` : ""}
     </section>
