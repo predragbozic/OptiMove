@@ -776,6 +776,9 @@ export function createGpexeRestV1Adapter({
   // session is still read on its own and compared whole (the canary). A row the details do not cover,
   // or a whole session whose canary differs or whose drill set is incomplete, is read row by row as before.
   bundleMaxSpeedFromDetails = false,
+  // I1 (docs/ai/gpexe-field-inventory-plan.md): called with (endpoint, raw answer) right after an answer was accepted,
+  // so a check can record the NAMES of the fields GPEXE sends. It reads nothing, sends nothing and never fails a read.
+  observeFields = null,
 } = {}) {
   // The gate: the key's own approved catalog row, and the family this file is for.
   const probeUrl = sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, "team/");
@@ -798,6 +801,11 @@ export function createGpexeRestV1Adapter({
   if (typeof sleep !== "function") throw new SourceAdapterError("invalid_options", "The source adapter needs a sleep function.");
   if (typeof bundleDrillLabels !== "boolean") throw new SourceAdapterError("invalid_options", "Whether the bundle reads the drill labels is a boolean.");
   if (typeof bundleMaxSpeedFromDetails !== "boolean") throw new SourceAdapterError("invalid_options", "Whether the bundle takes max_v from the details is a boolean.");
+  if (observeFields !== null && typeof observeFields !== "function") throw new SourceAdapterError("invalid_options", "The field observer is a function.");
+  const observed = (endpoint, body) => {
+    if (!observeFields) return;
+    try { observeFields(endpoint, body); } catch { /* an observer never fails a read */ }
+  };
   const rl = rateLimit === null || rateLimit === undefined ? null : rateLimitState(rateLimit);
   // Every request this instance sends, and when the first one left: the
   // counts a rate-limit refusal reports (integers only).
@@ -1441,6 +1449,7 @@ export function createGpexeRestV1Adapter({
       refreshedDuring(parent.id, epoch);
       // Projected to the consumed fields (drills too, since 2026-10-09).
       const projected = projectSessionDetails(body, parent.drillsCount);
+      observed("details.session", body);
       if (bundleMaxSpeedFromDetails) rememberMaxSpeeds(parent.id, "whole", body.players);
       return projected;
     },
@@ -1454,7 +1463,9 @@ export function createGpexeRestV1Adapter({
       const parent = confirmed(sessionId);
       if (parent.drillsCount < 1) throw new SourceAdapterError("invalid_drill_index", "That session has no drills.");
       const { body } = await readDrill(parent.id, drillIndex, parent.drillsCount);
-      return projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+      const projected = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+      observed("details.drill", body);
+      return projected;
     },
 
     // Every drill of a confirmed parent, in position order: exactly the
@@ -1478,6 +1489,7 @@ export function createGpexeRestV1Adapter({
           const { body } = await readDrill(parent.id, index, parent.drillsCount);
           refreshedDuring(parent.id, epoch);
           const details = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+          observed("details.drill", body);
           // The full map passed the projection's guards (canonical athlete
           // ids, metric names, bounds) before it is fingerprinted.
           fingerprints.push(Object.keys(details.players).length > 0 ? drillAnswerFingerprint(body.players) : null);
@@ -1523,6 +1535,7 @@ export function createGpexeRestV1Adapter({
         ids.add(rowId);
       }
       const projected = rows.map((row) => pick(row, BUNDLE_FIELDS.athleteSession));
+      for (const row of rows) observed("athlete_session", row);
       listedAthleteRows.set(parent.id, ids);
       return { rows: projected, total };
     },
@@ -1545,6 +1558,7 @@ export function createGpexeRestV1Adapter({
       if (canonicalId(body.athlete) === null) throw unexpected("The source server's athlete row names its athlete in an unknown way.");
       const trackId = body.track === undefined || body.track === null ? null : canonicalId(body.track);
       if (body.track !== undefined && body.track !== null && trackId === null) throw unexpected("The source server's athlete row names its track in an unknown way.");
+      // I1: an athlete row is counted once, from its session's list; its own read adds no answer (answers_seen = list rows).
       const out = pick(body, BUNDLE_FIELDS.athleteSession);
       confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
       if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
@@ -1562,7 +1576,9 @@ export function createGpexeRestV1Adapter({
       refreshedDuring(owner, epoch);
       if (!isPlainObject(body)) throw unexpected("The source server did not answer the athlete row's events as an object.");
       if (body.athletesession_id !== undefined && canonicalId(body.athletesession_id) !== id) throw unexpected("The source server's events name another athlete row.");
-      return projectMore(body);
+      const projected = projectMore(body);
+      observed("more", body);
+      return projected;
     },
 
     // A track named by an athlete row read above.
@@ -1627,7 +1643,9 @@ export function createGpexeRestV1Adapter({
         if (named === null) throw unexpected("The source server's thresholds name their team in an unknown way.");
         if (named === false) throw new SourceAdapterError("source_team_mismatch", "The source server returned thresholds of another team.");
       }
-      return remember(pick(body, BUNDLE_FIELDS.teamThresholds));
+      const projected = pick(body, BUNDLE_FIELDS.teamThresholds);
+      observed("team_thresholds", body);
+      return remember(projected);
     },
 
     async getUnits(options) { refuseTeamOptions(options); throw unavailable("units"); },

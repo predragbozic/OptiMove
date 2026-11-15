@@ -93,6 +93,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611131200_training_load_v67_gpexe_track_choices.sql",
   "202611131300_training_load_v68_track_choice_scale.sql",
   "202611131310_training_load_v69_scale_recording_estimates.sql",
+  "202611151200_training_load_v72_source_field_observations.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

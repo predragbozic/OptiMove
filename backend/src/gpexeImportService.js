@@ -26,6 +26,7 @@ import {
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId, wholeRowHelperValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
+import { createFieldCollector } from "./sourceFieldInventory.js";
 import { candidateState } from "./gpexeImportState.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
@@ -1018,11 +1019,14 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   // if that fails (nothing of the environment token is tried instead). The
   // legacy path is wrapped so that a binding appearing mid-run stops it.
   let source = null;
+  // I1: the names of the fields this check's answers carry (never a value), written by its finalization.
+  let fieldInventory = null;
   if (facts.path === PATH_SOURCE_CONNECTION) {
     try {
+      fieldInventory = { collector: createFieldCollector(), connectionId: facts.connectionId };
       // A check honours the source's rate limit once (Retry-After within the
       // resolver's maximum); an identity load never waits.
-      source = openImportSource(facts, { meter, rateLimitRetry: true, checkBundle: { maxSpeedFromDetails: maxSpeedFromDetailsForTests ?? true } });
+      source = openImportSource(facts, { meter, rateLimitRetry: true, checkBundle: { maxSpeedFromDetails: maxSpeedFromDetailsForTests ?? true }, observeFields: fieldInventory.collector.observe });
       client = importClientFor(source, { meter });
     } catch (error) {
       const code = error instanceof SourceImportResolveError ? error.code : "internal_error";
@@ -1050,7 +1054,7 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   }
   const identity = importSourceIdentity(facts);
   console.info(`[gpexe] check ${row.id} of team ${teamId} reads through ${identity.path}${identity.path === PATH_SOURCE_CONNECTION ? ` (connection ${identity.connectionId}, binding ${identity.bindingId}, source team ${identity.sourceTeamId})` : " (GPEXE_API_TOKEN, a team without a source binding)"}`);
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null, importPath: identity, meter });
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null, importPath: identity, meter, fieldInventory });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
   return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
@@ -1095,7 +1099,7 @@ async function runCheck(checkId, options) {
   }
 }
 
-async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null, importPath = null, meter = NOOP_CHECK_METER }) {
+async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null, importPath = null, meter = NOOP_CHECK_METER, fieldInventory = null }) {
   const counts = { sessions: 0, new: 0, changed: 0, unchanged: 0 };
   // Every heartbeat, timed (the meter never throws; the heartbeat's own error
   // is passed on unchanged).
@@ -1157,7 +1161,7 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     // it replaced or no longer confirms, and marks it succeeded (v33).
     const finalizeStarted = meter.start();
     try {
-      await finalizeCheck(checkId, { teamId, window, withdraw: Boolean(source), source, legacy, sessionsSeen: counts.sessions });
+      await finalizeCheck(checkId, { teamId, window, withdraw: Boolean(source), source, legacy, sessionsSeen: counts.sessions, fieldInventory });
     } finally {
       meter.finalize(finalizeStarted);
     }
@@ -2279,7 +2283,54 @@ const finalizeError = (code) => importRefusal(code);
 const isFinalizeBusy = (error) => ["55P03", "40P01", "57014"].includes(error?.code) || isPoolCheckoutTimeout(error)
   || /a GPEXE check, import or connection change is running/.test(String(error?.message));
 
-async function finalizeCheck(checkId, { teamId, window, withdraw, source = null, legacy = null, sessionsSeen }) {
+// I1 (v72): one upsert of the names a check saw, under the check's own writer marker. The inventory never decides a check:
+// the write runs in a savepoint with its own short lock_timeout, and any refusal (a lock held by another team's finalization
+// of the same connection, a CHECK, a missing table) rolls back to that savepoint, logs a code only and lets the check
+// publish. Only a lost connection (no answer within the bound) still ends the finalization, as for every statement.
+// A database without v72 records nothing; the probe runs once per process and is reset when the table goes missing.
+const FIELD_INVENTORY_LOCK_TIMEOUT = "300ms";
+let fieldInventoryTable = null;
+async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {
+  const rows = fieldInventory?.collector?.rows?.() ?? [];
+  if (!rows.length || !fieldInventory.connectionId) return;
+  if (fieldInventoryTable === null) {
+    fieldInventoryTable = Boolean((await run(`select to_regclass('training_load.source_field_observations') is not null as present`)).rows[0]?.present);
+  }
+  if (!fieldInventoryTable) return;
+  await run("savepoint field_inventory");
+  try {
+    await run(`set local lock_timeout = '${FIELD_INVENTORY_LOCK_TIMEOUT}'`);
+    await run(`select set_config('optimove.field_inventory_check', $1 || ':' || pg_current_xact_id()::text, true)`, [checkId]);
+    await run(
+      `insert into training_load.source_field_observations
+         (source_connection_id, api_family, endpoint, field_name, value_kind, unit_word, answers_seen, first_seen_check_id, last_seen_check_id)
+       select $1, 'rest_v1', f.endpoint, f.field_name, f.value_kind,
+              case when training_load.source_metric_unit_token_ok(f.unit_word) then f.unit_word end,
+              f.answers, $2, $2
+         from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[]) as f(endpoint, field_name, value_kind, unit_word, answers)
+       on conflict (source_connection_id, endpoint, field_name) do update
+         set value_kind = excluded.value_kind,
+             unit_word = coalesce(excluded.unit_word, training_load.source_field_observations.unit_word),
+             answers_seen = training_load.source_field_observations.answers_seen + excluded.answers_seen,
+             last_seen_check_id = excluded.last_seen_check_id,
+             last_seen_at = greatest(training_load.source_field_observations.last_seen_at, now())`,
+      [fieldInventory.connectionId, checkId, rows.map((r) => r.endpoint), rows.map((r) => r.name), rows.map((r) => r.kind), rows.map((r) => r.unitWord), rows.map((r) => r.answers)],
+    );
+    await run(`select set_config('optimove.field_inventory_check', '', true)`);
+    // Back to the finalization's own bound before the release (a SET LOCAL inside a released savepoint stays in force), so
+    // every statement of this try can still roll back to the savepoint.
+    await run("set local lock_timeout = '2s'");
+    await run("release savepoint field_inventory");
+  } catch (error) {
+    if (isDestroyed()) throw error;
+    // The savepoint's rollback also undoes its lock_timeout and the marker.
+    await run("rollback to savepoint field_inventory");
+    if (error?.code === "42P01") fieldInventoryTable = null;
+    console.error(`[gpexe] check ${checkId}: the field inventory was not recorded (${error?.code ?? error?.name ?? "unknown"})`);
+  }
+}
+
+async function finalizeCheck(checkId, { teamId, window, withdraw, source = null, legacy = null, sessionsSeen, fieldInventory = null }) {
   finalizeCalls += 1;
   let client;
   try {
@@ -2419,6 +2470,8 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
         }
       }
     }
+    // 5b. I1: the names of the fields this check's answers carried, in the same COMMIT (a failed check records none).
+    await writeFieldInventory(run, checkId, fieldInventory, () => destroyed);
     // 6. The publication: the observations are applied, the check succeeded.
     await run(`delete from training_load.gpexe_import_check_observations where check_id = $1 and owner_team_id = $2`, [checkId, teamId]);
     void published;
