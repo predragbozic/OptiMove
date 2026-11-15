@@ -5,7 +5,7 @@
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
   BOARD_ERROR, COLUMN_REASON, MAX_ROWS, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
-  preplacedRows, slotOf, variableOf,
+  preplacedRows, sessionWords, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
 
@@ -154,7 +154,7 @@ function boardCards(s) {
     <div class="mb-cols">
       <section class="om-card mb-card" aria-labelledby="mb-columns-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-columns-title">GPEXE columns</h3></div>
-        <p class="muted mb-note">From the session of ${escapeHtml(dateTime(board.session.startedAt))}. ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
+        <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
         <ul class="mb-list">${board.columns.map((c) => columnHtml(s, c, drag)).join("")}</ul>
@@ -351,7 +351,7 @@ function mapTab(s) {
   if (s.loading && !s.board) return `<p class="muted" role="status">Reading the saved session...</p>`;
   if (s.error) {
     const linkAthletes = s.error.code === "not_enough_athletes";
-    const search = ["candidate_too_large", "board_too_large", "no_stored_session", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "session_start_unknown"].includes(s.error.code);
+    const search = ["candidate_too_large", "board_too_large", "no_stored_session", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "no_usable_session", "session_start_unknown"].includes(s.error.code);
     return `<div class="om-empty" role="status"><p class="om-empty__title">${escapeHtml(boardErrorText(s.error))}</p>
       <div class="om-empty__actions">
         ${search || linkAthletes ? `<button type="button" class="om-btn om-btn--primary" data-action="training-load-section" data-section="imports">${linkAthletes ? "Open Imports to link athletes" : "Open Imports to search"}</button>` : ""}

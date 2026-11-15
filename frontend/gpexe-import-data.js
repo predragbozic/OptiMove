@@ -6,6 +6,7 @@
 //
 // A response for a team the coach has since switched away from is dropped
 // (generation guard), so an older answer never paints over a newer team.
+import { loadEstimateTargets } from "./gpexe-estimate-link.js";
 import { api } from "./api.js";
 import { emptyPeriod, localDay } from "./gpexe-period-data.js";
 import { pruneLater } from "./gpexe-later-data.js";
@@ -436,6 +437,8 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
     // J20-C: the reasons "Did not participate" takes, for the states chosen before the import.
     gx.detail.participationReasons = Array.isArray(participationReasons) ? participationReasons : [];
     statesOf(gx.detail, gx);
+    // 6b-C2: an imported session's review links the athletes who took part without device data to their estimate.
+    if (candidate?.status === "imported") void loadEstimateTargets(gx.detail, render);
     // J20-A2 follow-up (J20 section 4): U3's suggested pair comes first in a row's chooser.
     if ((candidate?.preview?.athletes || []).some((a) => a.notImported?.code === "athlete_not_linked") && gx.suggestions?.status !== "ready") void loadPairSuggestions(render, { inReview: true });
   } catch (error) {

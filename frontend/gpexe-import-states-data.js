@@ -14,6 +14,7 @@
 // * Only athletes the roster still lists as needing a state are sent (expected decision null), so a state someone set in the Roster
 //   tab meanwhile is never overwritten; they are named as kept.
 import { api } from "./api.js";
+import { loadEstimateTargets } from "./gpexe-estimate-link.js";
 import { state } from "./state.js";
 
 const STORE_PREFIX = "optimove.gpexe.importStates.v1.";
@@ -185,7 +186,8 @@ export async function saveImportStates(detail, approval, render) {
   const s = statesOf(detail);
   if (!approval?.id || !approval?.activityId || s.saving) return;
   const todo = Object.entries(s.groups).filter(([, v]) => v.status !== "saved" && v.status !== "final");
-  if (!todo.length) return;
+  // 6b-C2: after the import (and its states), who may get an estimate is read again.
+  if (!todo.length) { void loadEstimateTargets(detail, render); return; }
   const generation = gx.generation;
   s.saving = true;
   render();
@@ -248,7 +250,10 @@ export async function saveImportStates(detail, approval, render) {
   } finally {
     s.saving = false;
     persist(detail);
-    if (generation === gx.generation && gx.detail === detail) render();
+    if (generation === gx.generation && gx.detail === detail) {
+      render();
+      void loadEstimateTargets(detail, render);
+    }
   }
 }
 

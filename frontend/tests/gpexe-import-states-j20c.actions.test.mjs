@@ -226,7 +226,8 @@ test("6. a refusal the server answered (the attendance changed): not saved; Save
   const rosterReads = () => fetchCalls.filter((c) => c.url.endsWith("/roster")).length;
   const before = rosterReads();
   await act("training-load-gpexe-states-again");
-  assert.equal(rosterReads(), before + 1);
+  // The states' own read before the send, and 6b-C2's read of who may get an estimate once the states settled.
+  assert.equal(rosterReads(), before + 2);
   const calls = statesCalls();
   assert.equal(calls[1].body.requestKey, calls[0].body.requestKey, "a refused request wrote nothing: its key stays");
   assert.match(html(), /1 attendance state saved\./);
