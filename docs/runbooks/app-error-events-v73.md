@@ -70,9 +70,10 @@ person's own connection. The detail has a "Request" line. Only a platform admin 
 
 1. The owner's order naming the v73 file. No new secret and no new environment variable.
 2. The Rukovodilac runs `app-error-events-v73-preflight.sql` read-only, block by block. The file-name prefix is
-   re-checked against `main` at that time (v71 and v72 are other slices' labels; the runner refuses a shared prefix,
-   applies by file name and does not refuse a file older than the last one applied - preflight block 1's
-   `nothing_later` is then read with that in mind, as for v70).
+   re-checked against `main` at that time. v71 (`202611151000`) and v72 (`202611151200`) are merged and have
+   earlier file names: whether or not they are recorded yet, they block neither v73 nor its rollback, and block 1's
+   `last_migration` is then expected to read v72 (or v70 when the same deploy applies all three). The runner refuses
+   a shared prefix, applies by file name and does not refuse a file older than the last one applied.
 3. Deploy; the migrator applies v73 before the server starts.
 4. The Rukovodilac runs `app-error-events-v73-postcheck.sql` read-only. Right after the deploy block 3 shows no row
    with the new facts; the first error stored by the new server has an uptime.

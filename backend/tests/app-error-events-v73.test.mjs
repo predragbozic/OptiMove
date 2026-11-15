@@ -268,6 +268,13 @@ test("6. the preflight and the post-check read what they claim; the rollback ref
   await refused(/later migrations are applied/);
   assert.equal((await k.query(pre[0])).rows[0].nothing_later, false);
   await k.query(`delete from public.schema_migrations where migration_name = $1`, [LATER]);
+  // v71 and v72 (other slices, recorded before v73 with earlier file names) block nothing: not the rollback, not the preflight.
+  const V72 = "migrations_v2/202611151200_training_load_v72_source_field_observations.sql";
+  for (const earlier of ["migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql", V72]) {
+    await k.query(`update later_row set migration_name = $1`, [earlier]);
+    await k.query(`insert into public.schema_migrations select * from later_row`);
+  }
+  assert.equal((await k.query(pre[0])).rows[0].nothing_later, true);
   assert.equal(await guardMd5(), "05cd59a40237bf6b443d268961409d93", "nothing was changed by a refused rollback");
   // The migrator's lock held by another session.
   const holder = new pg.Client({ connectionString: db.url });
@@ -292,7 +299,7 @@ test("6. the preflight and the post-check read what they claim; the rollback ref
   await assert.rejects(k.query(`update public.app_error_events set device_class = 'tablet'`), /only repeat_count and last_seen_at may change/, "v70's columns are final under the restored guard");
   await refused(/v73 is not recorded/);
   const preAfter = [(await k.query(pre[0])).rows[0], (await k.query(pre[1])).rows[0]];
-  assert.deepEqual([preAfter[0].v70_recorded, preAfter[0].v73_absent, preAfter[0].nothing_later, preAfter[0].last_migration], [true, true, true, V70]);
+  assert.deepEqual([preAfter[0].v70_recorded, preAfter[0].v73_absent, preAfter[0].nothing_later, preAfter[0].last_migration], [true, true, true, V72], "clean on a database whose last migration is v72");
   const me = (await k.query("select current_user as u")).rows[0].u;
   assert.deepEqual([preAfter[1].guard_is_v70, preAfter[1].no_v73_column, preAfter[1].table_owner, preAfter[1].guard_owner], [true, true, me, me], "the preflight is clean on a v70 database");
 
