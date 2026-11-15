@@ -1,12 +1,14 @@
--- Read-only PREFLIGHT for migration v71 (migrations_v2/202611151200_training_load_v71_source_field_observations.sql); run before the
+-- Read-only PREFLIGHT for migration v72 (migrations_v2/202611151200_training_load_v72_source_field_observations.sql); run before the
 -- merge (the Rukovodilac, each block in a read-only transaction). Changes nothing. Every boolean column of every block must be true.
 
--- 1. The server, and the migrations: none of v71's name recorded; the last one recorded is listed for the packet.
+-- 1. The server, and the migrations: v72 is not recorded; D1's v71 (202611151000_training_load_v71_dashboard_simple_atomic_save.sql, another track) may be recorded
+--    once or not at all, in either order with v72; the last one recorded is listed for the packet.
 select current_setting('server_version_num')::int >= 160000 as pg16_or_later,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%_v71_%') as v71_absent,
+       not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611151200_training_load_v72_source_field_observations.sql') as v72_absent,
+       (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql') <= 1 as d1_v71_absent_or_once,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
--- 2. The objects v71 needs exist, and none of its own does.
+-- 2. The objects v72 needs exist, and none of its own does.
 select to_regclass('training_load.gpexe_import_checks') is not null as checks_table,
        to_regclass('training_load.source_credential_connections') is not null as connections_table,
        exists (select 1 from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_import_checks'

@@ -2283,11 +2283,11 @@ const finalizeError = (code) => importRefusal(code);
 const isFinalizeBusy = (error) => ["55P03", "40P01", "57014"].includes(error?.code) || isPoolCheckoutTimeout(error)
   || /a GPEXE check, import or connection change is running/.test(String(error?.message));
 
-// I1 (v71): one upsert of the names a check saw, under the check's own writer marker. The inventory never decides a check:
+// I1 (v72): one upsert of the names a check saw, under the check's own writer marker. The inventory never decides a check:
 // the write runs in a savepoint with its own short lock_timeout, and any refusal (a lock held by another team's finalization
 // of the same connection, a CHECK, a missing table) rolls back to that savepoint, logs a code only and lets the check
 // publish. Only a lost connection (no answer within the bound) still ends the finalization, as for every statement.
-// A database without v71 records nothing; the probe runs once per process and is reset when the table goes missing.
+// A database without v72 records nothing; the probe runs once per process and is reset when the table goes missing.
 const FIELD_INVENTORY_LOCK_TIMEOUT = "300ms";
 let fieldInventoryTable = null;
 async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {

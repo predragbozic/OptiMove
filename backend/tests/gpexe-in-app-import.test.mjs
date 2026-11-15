@@ -2632,7 +2632,7 @@ test("archived club: a team of an archived club is the same 404 as a missing tea
 });
 
 // ---------------------------------------------------------------------------
-// I1 (v71): the names of the fields a succeeded check's answers carried - never a value, an athlete or a session.
+// I1 (v72): the names of the fields a succeeded check's answers carried - never a value, an athlete or a session.
 // ---------------------------------------------------------------------------
 
 function plantedBundle(sessionId) {

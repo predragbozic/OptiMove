@@ -1,6 +1,6 @@
-# Migration v71: the GPEXE field inventory (I1)
+# Migration v72: the GPEXE field inventory (I1)
 
-Migration: `migrations_v2/202611151200_training_load_v71_source_field_observations.sql`. Plan:
+Migration: `migrations_v2/202611151200_training_load_v72_source_field_observations.sql`. Plan:
 `docs/ai/gpexe-field-inventory-plan.md` (sections 1, 5 and 6; the owner's D-INV-1 and his answers Q1 and Q5).
 
 ## What it does
@@ -49,7 +49,7 @@ connection.
   that runs SQL through the application's own pool while a check of that connection runs, nor against whoever holds the
   database credentials.
 
-A database without v71 records nothing: the finalization checks once per process whether the table exists, so a test
+A database without v72 records nothing: the finalization checks once per process whether the table exists, so a test
 database built from a subset of the migrations is unaffected. If the table goes missing later (a rollback), the first
 write's `42P01` is skipped like any other refusal and the probe runs again.
 
@@ -57,21 +57,26 @@ write's `42P01` is skipped like any other refusal and the probe runs again.
 and who may read the rows is I2's (a platform admin all of them; a club admin read-only, only those seen through their own
 club's connection; a coach nothing).
 
+## Order with D1's v71
+
+D1 (another track, PR #524) holds v71: `202611151000_training_load_v71_dashboard_simple_atomic_save.sql`. Its prefix sorts before v72's. The preflight, the post-check
+and the rollback accept it recorded once or not at all, in either order of deploy (the pattern of v66's files).
+
 ## Before the merge (the Rukovodilac)
 
-1. Run `docs/runbooks/source-field-observations-v71-preflight.sql`, each block read-only. Every boolean must be true.
+1. Run `docs/runbooks/source-field-observations-v72-preflight.sql`, each block read-only. Every boolean must be true.
    Block 3 also wants no running check: a finalization running across the deploy would meet the new table midway.
 2. The owner's order naming the migration file.
 
 ## After the deploy
 
-Run `docs/runbooks/source-field-observations-v71-postcheck.sql`, each block read-only. Every boolean must be true. The
+Run `docs/runbooks/source-field-observations-v72-postcheck.sql`, each block read-only. Every boolean must be true. The
 first rows appear with the first succeeded check after the deploy.
 
 ## Rollback
 
-`docs/runbooks/source-field-observations-v71-rollback.sql`. It refuses once a row exists or a later migration is
-recorded, and it was rehearsed on disposable databases (`backend/tests/source-field-observations-v71.test.mjs`). Code that
+`docs/runbooks/source-field-observations-v72-rollback.sql`. It refuses once a row exists or a later migration is
+recorded, and it was rehearsed on disposable databases (`backend/tests/source-field-observations-v72.test.mjs`). Code that
 still writes the inventory records nothing without the table.
 
 ## Tests
@@ -88,5 +93,5 @@ still writes the inventory records nothing without the table.
   - **a second check:** the counts grow and the first sighting stays;
   - **the writer rules:** with a running check's marker, only that check's own rows of its connection, first seen by it;
     identity final, counts only grow; no raw write, delete or truncate.
-- `backend/tests/source-field-observations-v71.test.mjs`: the preflight, the refusal over an existing table, the
+- `backend/tests/source-field-observations-v72.test.mjs`: the preflight, the refusal over an existing table, the
   post-check, the rollback to the exact catalog, its refusal with a row, and the re-apply.
