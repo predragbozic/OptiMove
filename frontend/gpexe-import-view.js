@@ -22,7 +22,7 @@ import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { monthCounts, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
+import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
 import {
   BATCH_MAX,
@@ -577,7 +577,7 @@ function renderSourceCardHtml(source, gx, status) {
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
     ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: (gx.candidates || []).length >= CANDIDATES_CAP }) : ""}
-    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, (gx.candidates || []).length >= CANDIDATES_CAP) : ""}
   `;
 }
 
@@ -586,13 +586,16 @@ const CANDIDATES_CAP = 200;
 
 // P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
 // counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
-function renderMonthLineHtml(gx, suggestedTo, open) {
-  const { month, name } = shownMonth(gx, new Date(), suggestedTo);
+function renderMonthLineHtml(gx, suggestedTo, open, capped = false) {
+  const now = new Date();
+  const { month, name } = shownMonth(gx, now, suggestedTo);
   const n = monthCounts(gx, month);
   const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
-  const head = facts ? `${facts} in ${name}` : `Nothing imported in ${name}`;
+  // UX review: an empty month names the last import, so "nothing" never reads as "nothing ever imported".
+  const last = facts ? "" : lastImportedDay(gx);
+  const head = [facts ? `${facts} in ${name}` : `Nothing imported in ${name}`, last && !last.startsWith(month) ? `the last import is on ${periodText(last, last, now)}` : "", capped ? "older sessions may not be shown" : ""].filter(Boolean).join(" · ");
   const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
-  const phone = facts ? `${head} · open the calendar` : `${head} · open the calendar`;
+  const phone = `${head} · open the calendar`;
   return `
     <p class="muted imports-month-line">
       <span class="imports-month-desk">${escapeHtml(desk)}</span>
@@ -623,7 +626,7 @@ function renderSearchTabHtml(source, gx, status) {
         ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
       </p>
       ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
-      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : ""}
+      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name, listsAllStates(status)) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
       ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage), Boolean(gx.teamSwitch?.data?.canChangeMode || gx.teamSwitch?.data?.mode === "team"))}
       ${techHtml([
@@ -701,11 +704,12 @@ function renderImportsTabsHtml(gx, status) {
 // "Sessions found 21.09.2026 14:02 · 07.09.2026 - 21.09.2026 · 12": when the
 // source was last read, for which days, and how many sessions it listed.
 // Never "sync" - nothing is pulled into OptiMove by finding.
-function renderFoundHtml(check, listed = 0, sourceName = "the source") {
+function renderFoundHtml(check, listed = 0, sourceName = "the source", lists = true) {
   if (!check || check.status !== "succeeded") {
     // A search that is running or failed does not undo what an earlier one
     // found: the sessions below are still there.
-    return listed ? `<p class="muted imports-found">Sessions from the last successful search are listed below.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
+    // P4c: a coach and a club admin have no list of every session - they are in the calendar.
+    return listed ? `<p class="muted imports-found">Sessions from the last successful search are ${lists ? "listed below" : "shown in the calendar"}.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
   }
   const when = fmtDateTime(check.finishedAt || check.startedAt);
   const days = check.window ? `${formatDate(check.window.from)} - ${formatDate(check.window.to)}` : "";

@@ -50,7 +50,7 @@ function row(n, day, overrides = {}) {
   };
 }
 const needs = (n, day) => row(n, day, { counts: { created: 4, athletesNotImported: 2 }, reasons: [{ code: "athletes_not_linked", count: 2 }] });
-const imported = (n, day) => row(n, day, { status: "imported", importedAt: at(day) });
+const imported = (n, day, over = {}) => row(n, day, { status: "imported", importedAt: at(day), ...over });
 const staysOut = (n, day) => row(n, day, { previewStatus: "blocked", status: "blocked", blockedCode: "unsupported_session_type" });
 
 let platform = false;
@@ -134,7 +134,7 @@ test("P4c 2: the quiet line counts the month the calendar shows and follows pagi
   assert.equal(gx().period.month, THIS);
   assert.match(line(), new RegExp(`1 imported in ${monthName(THIS)} ·`), "the line follows the month shown");
   gx().period.month = "2020-01";
-  assert.match(line(), /imports-month-desk">Nothing imported in January 2020</);
+  assert.match(line(), /imports-month-desk">Nothing imported in January 2020 · the last import is on /);
 });
 
 test("P4c 3: the line's phone button opens the calendar sheet", async () => {
@@ -181,5 +181,52 @@ test("P4c 6: a platform admin keeps the Imported and Stays out tabs and the repl
   assert.equal(line(), "");
   gx().tab = "out";
   assert.match(html(), /training-load-gpexe-superseded/);
+  platform = false;
+});
+
+test("P4c 7: an empty month names the last import's day; a full list read also says so in the line", async () => {
+  resetState();
+  platform = false;
+  installFetchMock(gpexeServer({ candidates: [imported(1, prevDay(10)), row(2, prevDay(12))] }));
+  await openImports();
+  gx().period.month = "2020-01";
+  assert.match(line(), new RegExp(`imports-month-desk">Nothing imported in January 2020 · the last import is on 10\\.${PREV.slice(5, 7)}\\.<`));
+  gx().period.month = PREV;
+  assert.doesNotMatch(line(), /the last import is on/, "a month with an import does not repeat it");
+  resetState();
+  installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => imported(i + 1, daysAgo(i % 40))) }));
+  await openImports();
+  assert.match(line(), /· older sessions may not be shown · open the calendar</);
+});
+
+test("P4c 8: an undone import, a withdrawn and a replaced version never count for a coach; no list read, no line", async () => {
+  resetState();
+  platform = false;
+  const d = prevDay(10);
+  installFetchMock(gpexeServer({ candidates: [
+    imported(1, d),
+    imported(2, d, { importUndoneAt: at(d) }),
+    row(3, d, { status: "superseded", supersededByCheckId: "chk-x", approvalBlockers: ["not_confirmed_for_import"] }),
+    row(4, d, { status: "superseded", supersededByCandidateId: "cand-1", approvalBlockers: ["superseded_by_newer_data"] }),
+  ] }));
+  await openImports();
+  gx().period.month = PREV;
+  assert.match(line(), new RegExp(`imports-month-desk">1 imported in ${monthName(PREV)} ·`));
+  assert.equal((dayCell(panel(), d).match(/period-chip is-done/g) || []).length, 1, "one check mark");
+  gx().candidates = null;
+  assert.equal(line(), "", "no line before the list is read");
+});
+
+test("P4c 9: closing an imported session's review: a coach is told it shows with ✓ in the calendar, a platform admin that it is listed under Imported", async () => {
+  const { closeGpexeCandidate } = await import("../gpexe-import-data.js");
+  for (const [admin, text] of [[false, "Training X is imported - it shows with ✓ in the calendar."], [true, "Training X is imported - listed under Imported below."]]) {
+    resetState();
+    platform = admin;
+    installFetchMock(gpexeServer({ candidates: [imported(1, prevDay(10))] }));
+    await openImports();
+    gx().detail = { id: "cand-1", candidate: { label: "Training X" }, outcome: { kind: "imported", result: {} } };
+    closeGpexeCandidate();
+    assert.equal(gx().notice, text);
+  }
   platform = false;
 });

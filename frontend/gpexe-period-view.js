@@ -183,6 +183,13 @@ export function shownMonth(gx, now = new Date(), suggestedTo = "") {
   return { month, name: `${MONTH_NAMES[m - 1]}${y !== now.getFullYear() ? ` ${y}` : ""}` };
 }
 
+// P4c (UX review): the day of the latest imported session in the loaded list ("2026-10-28"), or "".
+export function lastImportedDay(gx) {
+  let last = "";
+  for (const [day, items] of sessionsByDay(gx)) if (day > last && items.some((x) => x.chip.cls === "done")) last = day;
+  return last;
+}
+
 // P4c: what the calendar holds of a month, by state, from the loaded list (no request).
 export function monthCounts(gx, month) {
   const n = { imported: 0, out: 0 };

@@ -26657,6 +26657,10 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
     white-space: normal;
     text-align: left;
   }
+  body:not(.athlete-mode):not(.login-mode) .imports-month-phone:focus-visible {
+    outline: 2px solid var(--accent, #1f6f68);
+    outline-offset: 2px;
+  }
   /* P4a's "Find new sessions": the label centred in its button. */
   .imports-find-phone {
     align-items: center;

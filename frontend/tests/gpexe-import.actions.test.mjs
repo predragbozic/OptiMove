@@ -49,7 +49,11 @@ function renderTrainingLoadCoachHtml() {
     const other = renderTrainingLoadPage();
     const at = other.indexOf('<div class="imports-tab-panel"');
     // P4c: a tab this viewer does not have (Imported, Stays out for a coach) falls back to another one - skip it.
-    if (other.match(/data-imports-tab="(\w+)"/)?.[1] !== tab) continue;
+    const got = other.match(/data-imports-tab="(\w+)"/)?.[1];
+    if (got !== tab) {
+      if (!platformViewOn && (tab === "imported" || tab === "out")) continue;
+      throw new Error(`tab ${tab} fell back to ${got}`);
+    }
     panels.push(other.slice(at)
       .replace(/<section class="gpexe-panel imports-period"[\s\S]*?<\/section>/, ""));
   }
@@ -1859,7 +1863,7 @@ test("Imports: a search that found nothing says so with its dates; a running or 
   });
   await openImports();
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Sessions from the last successful search are listed below\./);
+  assert.match(html, /Sessions from the last successful search are shown in the calendar\./, "P4c: a coach has no list of every session");
   assert.ok(!/No sessions found yet/.test(html), "the failed search does not deny the listed sessions");
   assert.match(html, /did not finish\. Try again in a moment\./);
 });
