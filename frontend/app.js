@@ -675,10 +675,12 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
-    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
+    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions" (P5: the help closes
+    // first, and the focus goes back to "How importing works").
+    const importsHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
     if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
       renderTrainingLoad();
-      document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
+      document.querySelector(importsHelp ? ".imports-help-open" : ".imports-find-phone")?.focus?.({ preventScroll: true });
       return;
     }
     closeMedia();

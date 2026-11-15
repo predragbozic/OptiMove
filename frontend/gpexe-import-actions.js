@@ -604,6 +604,14 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   // P4, the period chooser: local only, no request for any of these.
+  if (type === "training-load-gpexe-help") {
+    // P5: "How importing works" - local only. Focus moves into the dialog and back to the button that opened it.
+    gx.helpOpen = !gx.helpOpen;
+    if (gx.helpOpen) setPeriodOpen(false);
+    renderTrainingLoad();
+    globalThis.document?.querySelector?.(gx.helpOpen ? ".imports-help .imports-help-close" : ".imports-help-open")?.focus?.({ preventScroll: true });
+    return true;
+  }
   if (type === "training-load-gpexe-period-toggle") {
     // The phone's sheet (on a computer the chooser is always on the page). Focus moves into the sheet and back.
     const open = !periodOf(gx).open;

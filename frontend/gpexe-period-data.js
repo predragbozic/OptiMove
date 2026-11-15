@@ -116,8 +116,15 @@ export function setPeriodOpen(open, gx = g()) {
 
 // Escape and the phone's Back close an open sheet first (app.js), and so do leaving Imports and a layout wider than a
 // phone (a turned tablet); true when there was one to close.
+// P5: the help ("How importing works") is closed by the same step, so Escape, Back, leaving Imports and a wider layout
+// treat it like the sheet.
 export function closePeriodSheet(gx = g()) {
-  if (!gx || !p(gx).open) return false;
+  if (!gx) return false;
+  if (gx.helpOpen) {
+    gx.helpOpen = false;
+    return true;
+  }
+  if (!p(gx).open) return false;
   p(gx).open = false;
   return true;
 }
