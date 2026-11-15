@@ -603,8 +603,6 @@ function bindEvents() {
   window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
     if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
   });
-  // The open sheet is modal: Tab stays inside it.
-  document.addEventListener("keydown", (event) => { trapPeriodSheetTab(event); });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
   els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });
@@ -704,6 +702,8 @@ function bindEvents() {
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   // The open icon picker is modal: Tab stays inside it.
   document.addEventListener("keydown", (event) => { trapIconPickerTab(event); });
+  // Imports P4: the open period sheet is modal too.
+  document.addEventListener("keydown", (event) => { trapPeriodSheetTab(event); });
   window.addEventListener("popstate", handleBrowserBack);
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.
@@ -2192,12 +2192,6 @@ function handleAppBack() {
   const calendar = closeCentralCalendarPanel(renderCentralCalendar);
   if (calendar) return calendar; // a kept form: BACK_STAYED
 
-  // Imports P4: the phone's period sheet closes before the screen is left.
-  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
-    renderTrainingLoad();
-    return true;
-  }
-
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this
   // must run before the overlay-close check below, otherwise Back from a
@@ -2229,6 +2223,12 @@ function handleAppBack() {
   if (state.athletesExpanded) {
     state.athletesExpanded = false;
     renderAthleteListState();
+    return true;
+  }
+
+  // Imports P4: the phone's period sheet closes before the screen is left.
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    renderTrainingLoad();
     return true;
   }
 
