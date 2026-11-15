@@ -5,19 +5,27 @@
 -- Any value other than the expected one means: stop, change nothing, report
 -- the block, the column and the value.
 
--- 1. v66 recorded once, with the repository's checksum. v67 (MT-A, another
---    track, another table) is recorded too and sorts after v66 by file name,
---    so it stays the last migration; no OTHER migration may have arrived.
+-- 1. v66 recorded once, with the repository's checksum. Four migrations of
+--    other tracks sort after v66 by file name and are tolerated by exact
+--    name: v67 (MT-A; required), v68 and v69 (MT-D; expected, deployed before
+--    v66) and v70 (App health; before or after v66). No OTHER later
+--    migration may have arrived.
 --    Expected: v66_rows = 1, v66_checksum_ok = true, v67_rows = 1,
---    other_later_migrations = 0.
+--    v68_rows = 1, v69_rows = 1, v70_rows = 0 or 1, other_later_migrations = 0.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_rows,
   (select bool_and(checksum = '0fef63affe37f5c7c90961cb8c90e278ffe7e6ec3432fef418e54011b3d36dc0') from public.schema_migrations
     where migration_name = 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql') as v66_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as v67_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131300_training_load_v68_track_choice_scale.sql') as v68_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131310_training_load_v69_scale_recording_estimates.sql') as v69_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql') as v70_rows,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql'
-    and migration_name <> 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql') as other_later_migrations;
+    and migration_name not in ('migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql',
+                               'migrations_v2/202611131300_training_load_v68_track_choice_scale.sql',
+                               'migrations_v2/202611131310_training_load_v69_scale_recording_estimates.sql',
+                               'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql')) as other_later_migrations;
 
 -- 2. The gate exists with its body, its trigger is enabled and runs last
 --    among T4's row triggers before an update, and T4's other guards are

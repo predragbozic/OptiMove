@@ -32,6 +32,14 @@ const V65_NAME = `migrations_v2/${BEFORE_V66.find((m) => m.includes("_v65_"))}`;
 // database therefore holds it before v66 is applied, exactly as production does.
 const V67 = "202611131200_training_load_v67_gpexe_track_choices.sql";
 const V67_NAME = `migrations_v2/${V67}`;
+// MT-D's two migrations (on main, deployed before v66) and App health's v70 (another pull request; before or after
+// v66): later than v66 by file name too, each tolerated by exact name. v70's file is not on this branch: where the
+// rehearsal needs it recorded, its row is planted with the checksum the runbook pins.
+const V68_NAME = "migrations_v2/202611131300_training_load_v68_track_choice_scale.sql";
+const V69_NAME = "migrations_v2/202611131310_training_load_v69_scale_recording_estimates.sql";
+const V70_NAME = "migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql";
+const V70_SHA = "858045833f49ed0ba59e2acec57d20e4ece762d7b1107490a7dc450659677d60";
+const PLANT_V70 = (sha = V70_SHA) => `insert into public.schema_migrations (migration_name, checksum, runner_version) values ('${V70_NAME}', '${sha}', 'test')`;
 const V66_FILE = path.resolve(ROOT, "migrations_v2", V66);
 const RUNBOOKS = path.resolve(ROOT, "docs/runbooks");
 const ROLLBACK = path.join(RUNBOOKS, "club-activation-confirmation-gate-v66-rollback.sql");
@@ -67,8 +75,7 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V66), "v66 is a test migration");
-  assert.equal(BEFORE_V66.at(-1), V67, "the database v66 is applied to holds v67, as production's does");
-  assert.ok(BEFORE_V66.at(-2).includes("_v65_"), "v66's own previous migration is v65");
+  assert.deepEqual(BEFORE_V66.slice(-4).map((m) => `migrations_v2/${m}`), [V65_NAME, V67_NAME, V68_NAME, V69_NAME], "the database v66 is applied to holds v67, v68 and v69, as production will; v66's own previous migration is v65");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66rb", migrations: BEFORE_V66 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66", migrations: [...BEFORE_V66, V66] }),
@@ -643,7 +650,14 @@ test("5. the migration: every expected value of the read-only preflight and each
   // --- Before v66: the preflight.
   const pre = await blocks(r, PREFLIGHT);
   assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7]);
-  assert.deepEqual(pre[1][0], { v65_rows: "1", v65_checksum_ok: true, v67_rows: "1", v67_checksum_ok: true, v66_rows: "0", other_after_v66: "0", last_migration: V67_NAME });
+  assert.deepEqual(pre[1][0], { v65_rows: "1", v65_checksum_ok: true, v67_rows: "1", v67_checksum_ok: true, v68_rows: "1", v69_rows: "1", v70_rows: "0", later_checksums_ok: true,
+    v66_rows: "0", other_after_v66: "0", last_migration: V69_NAME });
+  // The pinned checksums of v68 and v69 are the files' own.
+  for (const name of [V68_NAME, V69_NAME]) {
+    const fileSha = crypto.createHash("sha256").update(await fsp.readFile(path.resolve(ROOT, name))).digest("hex");
+    assert.equal((await one(r, `select checksum from public.schema_migrations where migration_name = $1`, [name])).checksum, fileSha);
+    assert.ok((await fsp.readFile(PREFLIGHT, "utf8")).includes(`('${name}', '${fileSha}')`), `the preflight pins ${name}`);
+  }
   assert.deepEqual(pre[2][0], { update_guard_ok: true, actor_guard_ok: true, trigger_set_ok: true });
   assert.deepEqual(pre[3][0], { v66_objects: "0", relied_on_ok: true, owns_t4_ok: true, may_create_ok: true });
   assert.deepEqual(pre[4][0], { waiting_without_link: "0", waiting_with_link: "0" });
@@ -660,7 +674,17 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.equal((await flipped((c) => c.query(`create function training_load.source_metric_mapping_versions_confirmation_gate() returns trigger as $$ begin return new; end; $$ language plpgsql`), 3)).v66_objects, "1");
   assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [V65_NAME]), 1)).v65_checksum_ok, false);
   assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [V67_NAME]), 1)).v67_checksum_ok, false);
-  // Another migration after v66 - v67 is the only one tolerated.
+  // The tolerated later migrations, in any subset: v70 recorded (with its checksum) or not; v68 and v69 absent is seen, not refused.
+  assert.deepEqual(((x) => [x.v70_rows, x.later_checksums_ok, x.other_after_v66, x.last_migration])(await flipped((c) => c.query(PLANT_V70()), 1)), ["1", true, "0", V70_NAME]);
+  assert.deepEqual(((x) => [x.v70_rows, x.later_checksums_ok])(await flipped((c) => c.query(PLANT_V70("0".repeat(64))), 1)), ["1", false], "a recorded v70 that is not the pinned file");
+  for (const name of [V68_NAME, V69_NAME]) {
+    assert.equal((await flipped((c) => c.query(`update public.schema_migrations set checksum = repeat('0', 64) where migration_name = $1`, [name]), 1)).later_checksums_ok, false, name);
+  }
+  assert.deepEqual(((x) => [x.v68_rows, x.v69_rows, x.later_checksums_ok, x.other_after_v66, x.last_migration])(
+    await flipped((c) => c.query(`delete from public.schema_migrations where migration_name = any($1)`, [[V68_NAME, V69_NAME]]), 1)), ["0", "0", true, "0", V67_NAME]);
+  assert.equal((await flipped((c) => c.query(`delete from public.schema_migrations where migration_name = $1`, [V67_NAME]), 1)).v67_rows, "0", "v67 is required");
+  // Another migration after v66 - only v67, v68, v69 and v70 are tolerated, by exact name.
+  assert.equal((await flipped((c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611131400_app_error_events_v70_other.sql', repeat('0', 64), 'test')`), 1)).other_after_v66, "1", "a name that only resembles v70's");
   assert.equal((await flipped((c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912312359_training_load_v99_test_only.sql', repeat('0', 64), 'test')`), 1)).other_after_v66, "1");
   // The log settings: each way a save's values could reach the server log.
   const logs = async (settings) => flipped(async (c) => { for (const [n, v] of settings) await c.query(`select set_config($1, $2, true)`, [n, v]); }, 5);
@@ -673,6 +697,24 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "-1"]])).auto_explain_parameters_not_logged_ok, false);
   assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "0"], ["auto_explain.log_verbose", "on"]])).auto_explain_parameters_not_logged_ok, false, "a verbose plan");
   assert.equal((await logs([["auto_explain.log_min_duration", "0"], ["auto_explain.log_parameter_max_length", "0"]])).auto_explain_parameters_not_logged_ok, true);
+  // Production's own setting: full parameters from 10000 ms on. The save's value statements are cancelled at
+  // VALUE_STATEMENT_TIMEOUT_MS, so a threshold above that bound never explains one; at or below it, it could.
+  const { VALUE_STATEMENT_TIMEOUT_MS } = await import("../src/sourceMetricBoardSaveService.js");
+  assert.equal(VALUE_STATEMENT_TIMEOUT_MS, 5000);
+  assert.ok((await fsp.readFile(PREFLIGHT, "utf8")).includes(`> ${VALUE_STATEMENT_TIMEOUT_MS}) as auto_explain_parameters_not_logged_ok`), "the preflight compares with the code's bound");
+  // The threshold is read from pg_settings in milliseconds, which lists the setting only where the module is loaded
+  // (as on production, where it is preloaded); without it the column falls back to "absent or off".
+  await r.query(`load 'auto_explain'`);
+  assert.equal((await blocks(r, PREFLIGHT))[5][0].auto_explain_parameters_not_logged_ok, true, "loaded and off");
+  const explain = async (ms, more = []) => (await logs([["auto_explain.log_min_duration", String(ms)], ["auto_explain.log_parameter_max_length", "-1"], ...more])).auto_explain_parameters_not_logged_ok;
+  assert.equal(await explain(10000), true, "production's threshold");
+  assert.equal(await explain(10000, [["auto_explain.log_verbose", "on"], ["auto_explain.sample_rate", "1"], ["auto_explain.log_nested_statements", "on"]]), true);
+  assert.equal(await explain(VALUE_STATEMENT_TIMEOUT_MS + 1), true);
+  assert.equal(await explain(VALUE_STATEMENT_TIMEOUT_MS), false, "at the bound a statement could still finish and be explained");
+  assert.equal(await explain(4000), false);
+  assert.equal(await explain(1), false);
+  const six = (await whilePlanted(r, async (c) => { for (const [n, v] of [["auto_explain.log_min_duration", "10000"], ["auto_explain.sample_rate", "1"]]) await c.query(`select set_config($1, $2, true)`, [n, v]); }, (c) => blocks(c, PREFLIGHT)))[6][0];
+  assert.deepEqual([six.auto_explain_log_min_duration_ms, six.value_statement_bound_ms, six.auto_explain_sample_rate, six.logging_overrides], ["10000", 5000, "1", ""], "block 6 prints the threshold beside the bound");
   // A sampled transaction logs its statements whatever the other settings say.
   assert.equal((await logs([["log_transaction_sample_rate", "0.01"], ["log_parameter_max_length", "-1"]])).statement_parameters_not_logged_ok, false);
   // pgaudit's object audit (its role) logs without pgaudit.log.
@@ -681,6 +723,14 @@ test("5. the migration: every expected value of the read-only preflight and each
   assert.equal((await logs([["debug_print_plan", "on"]])).plans_not_printed_ok, false);
   // An override on a role or on the database, which another session would not see in its own settings.
   assert.equal((await flipped((c) => c.query(`alter database ${rdb.name} set log_min_duration_statement = 0`), 5)).no_role_or_database_override_ok, false);
+  // The one override that is not counted: log_statement=none only reduces logging (the platform's admin roles carry it).
+  const overridden = async (sql, block = 5) => (await whilePlanted(r, async (c) => { await c.query(`create role v66_test_admin nologin`); for (const q of sql) await c.query(q); }, (c) => blocks(c, PREFLIGHT)))[block][0];
+  assert.equal((await overridden([`alter role v66_test_admin set log_statement = 'none'`])).no_role_or_database_override_ok, true);
+  assert.equal((await overridden([`alter role v66_test_admin set log_statement = 'none'`], 6)).logging_overrides, "v66_test_admin: log_statement=none", "and block 6 still shows it");
+  for (const bad of [`alter role v66_test_admin set log_statement = 'all'`, `alter role v66_test_admin set log_statement = 'mod'`, `alter role v66_test_admin set log_parameter_max_length = -1`,
+    `alter role v66_test_admin set log_min_duration_statement = 0`, `alter role v66_test_admin in database ${rdb.name} set auto_explain.log_min_duration = 0`]) {
+    assert.equal((await overridden([`alter role v66_test_admin set log_statement = 'none'`, bad])).no_role_or_database_override_ok, false, bad);
+  }
   // A waiting club version of a field without parameters is counted; a held T4 writer shows.
   const before = await catalog(r);
   const other = await client(rdb.url);
@@ -705,7 +755,8 @@ test("5. the migration: every expected value of the read-only preflight and each
   // --- Apply, post-check, the gate in force.
   await migrate(rdb.url, [...BEFORE_V66, V66]);
   const post1 = await blocks(r, POSTCHECK);
-  assert.deepEqual(post1[1][0], { v66_rows: "1", v66_checksum_ok: true, v67_rows: "1", other_later_migrations: "0" });
+  assert.deepEqual(post1[1][0], { v66_rows: "1", v66_checksum_ok: true, v67_rows: "1", v68_rows: "1", v69_rows: "1", v70_rows: "0", other_later_migrations: "0" });
+  assert.deepEqual(((x) => [x.v70_rows, x.other_later_migrations])((await whilePlanted(r, (c) => c.query(PLANT_V70()), (c) => blocks(c, POSTCHECK)))[1][0]), ["1", "0"], "v70 deployed before the post-check is not another migration");
   assert.equal((await whilePlanted(r, (c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912312359_training_load_v99_test_only.sql', repeat('0', 64), 'test')`), (c) => blocks(c, POSTCHECK)))[1][0].other_later_migrations, "1");
   assert.equal((await one(r, `select checksum from public.schema_migrations where migration_name = $1`, [V66_NAME])).checksum, sha);
   assert.deepEqual(post1[2][0], { gate_body_ok: true, gate_trigger_enabled_ok: true, gate_runs_last_ok: true, t4_triggers: "7", disabled_triggers: "0", update_guard_ok: true, actor_guard_ok: true });
@@ -738,9 +789,38 @@ test("5. the migration: every expected value of the read-only preflight and each
   } finally { await holder.query("select pg_advisory_unlock(822026)"); await holder.end(); }
   assert.deepEqual(await catalog(r), applied);
 
-  // --- Rollback -> the catalog before v66, exactly -> apply again.
-  assert.equal(await runRollback(r), null);
-  assert.deepEqual(await catalog(r), before);
-  await migrate(rdb.url, [...BEFORE_V66, V66]);
-  assert.deepEqual(await catalog(r), applied);
+  // A later migration whose name only resembles a tolerated one refuses too.
+  await refusedWith(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611131300_training_load_v68_other.sql', repeat('0', 64), 'test')`,
+    `delete from public.schema_migrations where migration_name = 'migrations_v2/202611131300_training_load_v68_other.sql'`, /a later migration is recorded/);
+
+  // --- Rollback -> the catalog before v66, exactly -> apply again; once for each set of later migrations the
+  // database may hold: v67 alone, v67 + v68 + v69 (the fixed order), all four, and v67 + v70.
+  const records = (await r.query(`select * from public.schema_migrations where migration_name = any($1)`, [[V68_NAME, V69_NAME]])).rows;
+  assert.equal(records.length, 2);
+  const restore = async () => {
+    await r.query(`delete from public.schema_migrations where migration_name = any($1)`, [[V68_NAME, V69_NAME, V70_NAME]]);
+    for (const row of records) {
+      const cols = Object.keys(row);
+      await r.query(`insert into public.schema_migrations (${cols.join(", ")}) overriding system value values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, cols.map((col) => row[col]));
+    }
+  };
+  const without = (names) => r.query(`delete from public.schema_migrations where migration_name = any($1)`, [names]);
+  for (const [label, arrange] of [
+    ["v67 alone", () => without([V68_NAME, V69_NAME])],
+    ["v67, v68 and v69", async () => {}],
+    ["v67, v68, v69 and v70", () => r.query(PLANT_V70())],
+    ["v67 and v70", async () => { await without([V68_NAME, V69_NAME]); await r.query(PLANT_V70()); }],
+  ]) {
+    await arrange();
+    const later = (await r.query(`select migration_name from public.schema_migrations where migration_name > $1 order by 1`, [V66_NAME])).rows.map((x) => x.migration_name);
+    assert.equal(await runRollback(r), null, label);
+    assert.equal((await one(r, `select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V66_NAME])).n, 0);
+    assert.deepEqual((await r.query(`select migration_name from public.schema_migrations where migration_name > $1 order by 1`, [V66_NAME])).rows.map((x) => x.migration_name), later, `${label}: the later migrations stay recorded`);
+    // With the records of this database's own later migrations put back, the catalog is the one before v66, exactly.
+    await restore();
+    assert.deepEqual(await catalog(r), before, `${label}: the catalog before v66`);
+    await migrate(rdb.url, [...BEFORE_V66, V66]);
+    assert.deepEqual(await catalog(r), applied, `${label}: v66 applies again`);
+  }
+
 });
