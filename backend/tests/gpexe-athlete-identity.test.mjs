@@ -473,6 +473,27 @@ test("4b2. the team's coach: a revocation while the read holds its locks waits f
   }
 });
 
+test("4b3. the team's coach never reads an expired row, even one the purge before the read has not removed yet (the Independent's L2 on #527: the expires_at > now() filter of the coach's query)", async () => {
+  const { o } = await ready(2, 4901);
+  assert.equal((await load(o)).body.loaded, 2);
+  assert.deepEqual((await list(o, o.coach.cookie)).body.identities.map((i) => i.gpexeAthleteId), ["4901", "4902"]);
+  // Age 4901 after the purge that runs before the read, inside the read's own transaction (its locks are taken).
+  let aged = false;
+  identity.setIdentityListHoldForTests(async (stage) => {
+    if (stage !== "locked" || aged) return;
+    aged = true;
+    await q(`alter table training_load.gpexe_athlete_identities disable trigger gpexe_athlete_identities_no_update`);
+    await q(`update training_load.gpexe_athlete_identities set observed_at = now() - interval '15 days', expires_at = now() - interval '1 day' where owner_team_id = $1 and gpexe_athlete_id = '4901'`, [o.teamId]);
+    await q(`alter table training_load.gpexe_athlete_identities enable trigger gpexe_athlete_identities_no_update`);
+  });
+  const coach = await list(o, o.coach.cookie);
+  identity.setIdentityListHoldForTests(null);
+  assert.ok(aged, "the row was aged after the purge, inside the read");
+  assert.equal((await q(`select count(*)::int as n from training_load.gpexe_athlete_identities where owner_team_id = $1 and gpexe_athlete_id = '4901' and expires_at <= now()`, [o.teamId]))[0].n, 1, "the expired row is still there, unpurged");
+  assert.equal(coach.status, 200, coach.text);
+  assert.deepEqual(coach.body.identities.map((i) => i.gpexeAthleteId), ["4902"], "the expired row is not the coach's");
+});
+
 test("4. authorization and information hiding: a platform admin (platform or the team's club workspace) and the team's club admin (that club's workspace) get the identity; a club admin in another workspace, another club's admin, a revoked club admin, a missing or malformed team, an archived team or club, a never-bound team and an ended binding all get the identical 404 {error:notFound} with no-store, on GET and POST, and nothing is read; the team's coach (a platform admin acting in the team workspace included) reads the unlinked names only (plan coach-gpexe-name) and its load stays the identical 404 in pilot mode; a coach's status says identityNames only", async () => {
   const { o, conn, binding } = await ready(2);
   const ok = async (cookie, who) => {
