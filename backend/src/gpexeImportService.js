@@ -27,6 +27,7 @@ import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCa
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { createFieldCollector } from "./sourceFieldInventory.js";
+import { candidateState } from "./gpexeImportState.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
   blockedByMapping, buildCandidatePreview, canonicalJson, isImportWaitError, isSessionEndedError, previewLocked, setImportTransactionBounds, sha256Hex,
@@ -1426,7 +1427,7 @@ function candidateSummary(row, audience = "other") {
   const snapshot = snapshotState(row);
   const preview = snapshot.available ? row.preview : null;
   const blockedForHash = row.status === "blocked" || preview?.status === "blocked";
-  return projectBlockedCodes({
+  const summary = {
     id: row.id,
     gpexeTeamSessionId: row.gpexe_team_session_id,
     label: row.session_label,
@@ -1458,7 +1459,11 @@ function candidateSummary(row, audience = "other") {
     // "Ready to import", from the stored preview - the list needs no
     // per-candidate read for them. Null / empty when the snapshot is gone.
     ...candidateReasons(row.status, preview),
-  }, level);
+  };
+  // The Imports state (gpexeImportState.js), from the summary's own facts before the audience projection (which changes
+  // only blockedSourceCode, a code the state never reads): the same word for every audience.
+  summary.state = candidateState(summary);
+  return projectBlockedCodes(summary, level);
 }
 
 const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_started_at, status, preview, preview_hash,
@@ -1468,14 +1473,105 @@ const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_sta
   (select k.status from training_load.gpexe_import_checks k
     where k.id = gpexe_import_candidates.last_seen_check_id and k.owner_team_id = gpexe_import_candidates.owner_team_id) as last_seen_check_status`;
 
-export async function listCandidates(teamId, { includeSuperseded = false, audience } = {}) {
+export const CANDIDATE_LIST_LIMIT = 200;
+export const CANDIDATE_LIST_WINDOW_MAX_DAYS = 31;
+export const CALENDAR_WINDOW_MAX_DAYS = 42;
+export const CALENDAR_ROW_CAP = 500;
+
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// Tests lower the two row caps to prove truncated without writing hundreds of candidates.
+let listLimit = CANDIDATE_LIST_LIMIT;
+let calendarCap = CALENDAR_ROW_CAP;
+export function setCandidateListCapsForTests({ list = CANDIDATE_LIST_LIMIT, calendar = CALENDAR_ROW_CAP } = {}) {
+  listLimit = list;
+  calendarCap = calendar;
+}
+
+// A window of whole UTC days, from and to inclusive (a session's day is the UTC day of session_started_at, the day the
+// check window and the withdrawal compare, and the frontend's sessionDay). Null when neither bound is given (unless
+// required); a refusal
+// (400 invalid_window) for one bound alone, a date that is not a real day, from after to, or more than maxDays days.
+export function parseDayWindow(from, to, maxDays, { required = false } = {}) {
+  const given = (v) => v !== undefined && v !== null && v !== "";
+  if (!required && !given(from) && !given(to)) return null;
+  const day = (v) => {
+    const m = typeof v === "string" ? DAY.exec(v) : null;
+    if (!m) return null;
+    const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return new Date(ms).toISOString().slice(0, 10) === v ? ms : null;
+  };
+  const a = given(from) ? day(from) : null;
+  const b = given(to) ? day(to) : null;
+  const span = a === null || b === null ? null : (b - a) / 86_400_000 + 1;
+  if (span === null || span < 1 || span > maxDays) {
+    throw refusal(400, "invalid_window", `Choose dates from and to (YYYY-MM-DD), at most ${maxDays} days.`);
+  }
+  return { from, to, startIso: new Date(a).toISOString(), endIso: new Date(b + 86_400_000).toISOString() };
+}
+
+// The candidate list (newest first). truncated is true when more than CANDIDATE_LIST_LIMIT rows match: one more row is
+// read to know it, and never returned. With a window, only the sessions of its UTC days.
+export async function readCandidateList(teamId, { includeSuperseded = false, audience, window = null } = {}) {
   const rows = (await query(
     `select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates
      where owner_team_id = $1 and ($2 or (status <> 'superseded' and import_undone_at is null))
-     order by session_started_at desc nulls last, first_seen_at desc limit 200`,
-    [teamId, includeSuperseded],
+       and ($3::timestamptz is null or (session_started_at >= $3::timestamptz and session_started_at < $4::timestamptz))
+     order by session_started_at desc nulls last, first_seen_at desc limit $5`,
+    [teamId, includeSuperseded, window?.startIso ?? null, window?.endIso ?? null, listLimit + 1],
   )).rows;
-  return rows.map((row) => candidateSummary(row, audience));
+  const truncated = rows.length > listLimit;
+  return { candidates: rows.slice(0, listLimit).map((row) => candidateSummary(row, audience)), truncated };
+}
+
+export async function listCandidates(teamId, options = {}) {
+  return (await readCandidateList(teamId, options)).candidates;
+}
+
+// The preview keys the state rule reads (candidateSummary through candidateReasons and approvalBlockers): the status,
+// the blocked code, the session type, the changes to imported results, and per athlete only the GPS status and the
+// not-imported code. Never the values, names or ids (a test proves the trimmed and the full row give the same state).
+const CALENDAR_PREVIEW = `case when preview is null then null else jsonb_build_object(
+    'status', preview->'status',
+    'blocked', jsonb_build_object('code', preview->'blocked'->'code'),
+    'session', jsonb_build_object('categoryName', preview->'session'->'categoryName'),
+    'changesToImported', case when jsonb_typeof(preview->'changesToImported') = 'array'
+      then (select coalesce(jsonb_agg(null::jsonb), '[]'::jsonb) from jsonb_array_elements(preview->'changesToImported')) end,
+    'athletes', case when jsonb_typeof(preview->'athletes') = 'array'
+      then (select coalesce(jsonb_agg(jsonb_build_object(
+              'athleteId', case when a->>'athleteId' is null then null else true end,
+              'gps', jsonb_build_object('status', a->'gps'->'status'),
+              'notImported', jsonb_build_object('code', a->'notImported'->'code'))), '[]'::jsonb)
+            from jsonb_array_elements(preview->'athletes') a) end) end as preview`;
+
+// The Imports calendar: one statement for the window's UTC days. Per day the states of its first three sessions in start
+// order (chips) and the count of each state; only days with a session that is shown; replaced and withdrawn versions and
+// undone imports are never read. truncated when more than CALENDAR_ROW_CAP sessions fall in the window.
+export async function readCandidateCalendar(teamId, window, { audience } = {}) {
+  const columns = CANDIDATE_COLUMNS.replace(/(^|\s)preview,/, "$1");
+  const rows = (await query(
+    `select ${columns}, ${CALENDAR_PREVIEW},
+            to_char(session_started_at at time zone 'UTC', 'YYYY-MM-DD') as session_day
+       from training_load.gpexe_import_candidates
+      where owner_team_id = $1 and status <> 'superseded' and import_undone_at is null
+        and session_started_at >= $2::timestamptz and session_started_at < $3::timestamptz
+      order by session_started_at, first_seen_at, id limit $4`,
+    [teamId, window.startIso, window.endIso, calendarCap + 1],
+  )).rows;
+  const truncated = rows.length > calendarCap;
+  const days = new Map();
+  for (const row of rows.slice(0, calendarCap)) {
+    const state = candidateSummary(row, audience).state;
+    if (state === "hidden") continue;
+    let day = days.get(row.session_day);
+    if (!day) {
+      day = { day: row.session_day, chips: [], counts: { needs: 0, ready: 0, imported: 0, out: 0 } };
+      days.set(row.session_day, day);
+    }
+    if (day.chips.length < 3) day.chips.push(state);
+    day.counts[state] += 1;
+  }
+  return { from: window.from, to: window.to, days: [...days.values()], truncated };
 }
 
 // Tests make reading a candidate fail, to prove the approval route never
@@ -2187,11 +2283,11 @@ const finalizeError = (code) => importRefusal(code);
 const isFinalizeBusy = (error) => ["55P03", "40P01", "57014"].includes(error?.code) || isPoolCheckoutTimeout(error)
   || /a GPEXE check, import or connection change is running/.test(String(error?.message));
 
-// I1 (v70): one upsert of the names a check saw, under the check's own writer marker. The inventory never decides a check:
+// I1 (v71): one upsert of the names a check saw, under the check's own writer marker. The inventory never decides a check:
 // the write runs in a savepoint with its own short lock_timeout, and any refusal (a lock held by another team's finalization
 // of the same connection, a CHECK, a missing table) rolls back to that savepoint, logs a code only and lets the check
 // publish. Only a lost connection (no answer within the bound) still ends the finalization, as for every statement.
-// A database without v70 records nothing; the probe runs once per process and is reset when the table goes missing.
+// A database without v71 records nothing; the probe runs once per process and is reset when the table goes missing.
 const FIELD_INVENTORY_LOCK_TIMEOUT = "300ms";
 let fieldInventoryTable = null;
 async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {

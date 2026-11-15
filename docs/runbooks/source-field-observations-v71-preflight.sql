@@ -1,12 +1,12 @@
--- Read-only PREFLIGHT for migration v70 (migrations_v2/202611151200_training_load_v70_source_field_observations.sql); run before the
+-- Read-only PREFLIGHT for migration v71 (migrations_v2/202611151200_training_load_v71_source_field_observations.sql); run before the
 -- merge (the Rukovodilac, each block in a read-only transaction). Changes nothing. Every boolean column of every block must be true.
 
--- 1. The server, and the migrations: none of v70's name recorded; the last one recorded is listed for the packet.
+-- 1. The server, and the migrations: none of v71's name recorded; the last one recorded is listed for the packet.
 select current_setting('server_version_num')::int >= 160000 as pg16_or_later,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%_v70_%') as v70_absent,
+       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%_v71_%') as v71_absent,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
--- 2. The objects v70 needs exist, and none of its own does.
+-- 2. The objects v71 needs exist, and none of its own does.
 select to_regclass('training_load.gpexe_import_checks') is not null as checks_table,
        to_regclass('training_load.source_credential_connections') is not null as connections_table,
        exists (select 1 from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_import_checks'

@@ -81,7 +81,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611041300_training_load_v55_team_dashboards_club_variables.sql",
   "202611041400_training_load_v56_team_import_switch.sql",
   "202611051000_training_load_v57_session_undo.sql",
-  "202611091000_app_error_events.sql",
+  "202611091000_app_error_events.sql", // v70 (its device and hash-version columns, which the error writer fills) is not in this list: a suite that reads error rows appends it itself
   "202611091100_training_load_v59_import_approval_subset.sql",
   "202611101000_training_load_v60_undo_roster_work.sql",
   "202611101200_training_load_v61_import_states_approval.sql",
@@ -93,7 +93,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611131200_training_load_v67_gpexe_track_choices.sql",
   "202611131300_training_load_v68_track_choice_scale.sql",
   "202611131310_training_load_v69_scale_recording_estimates.sql",
-  "202611151200_training_load_v70_source_field_observations.sql",
+  "202611151200_training_load_v71_source_field_observations.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

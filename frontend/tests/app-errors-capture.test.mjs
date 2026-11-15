@@ -71,7 +71,7 @@ test("3. the installed listeners send the word with each kind of error, and two 
     ["unhandled_rejection", "non_error", "open-media"], ["unhandled_rejection", "none", "open-media"],
     ["js_error", "script_error", "open-media"], ["js_error", "no_error_object", "open-media"]]);
   assert.ok(!JSON.stringify(sent).includes("Secret"), "nothing of a message or a reason's text is sent");
-  for (const body of sent) assert.deepEqual(Object.keys(body).filter((k) => !["screen", "action", "code", "status", "stackSig", "reason"].includes(k)), []);
+  for (const body of sent) assert.deepEqual(Object.keys(body).filter((k) => !["screen", "action", "code", "status", "stackSig", "reason", "device"].includes(k)), []);
   C.setReporterForTests(null);
 });
 
@@ -191,4 +191,81 @@ test("6. the lists are one list: the server's, the browser's and the screen's wo
   // The exercise editor's opening, started from the guarded content listener, is watched too, with its own control.
   assert.equal((appJs.match(/detached\(openExerciseEditor\([^\n]*\), type\);/g) || []).length, 2);
   assert.equal(/void openExerciseEditor\(/.test(appJs), false);
+});
+
+const UAS = {
+  iphoneSafari: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+  iphoneChrome: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0.6478.54 Mobile/15E148 Safari/604.1",
+  iphoneInApp: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 SomeApp/455.0",
+  ipadAsMac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+  androidChrome: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+  androidTablet: "Mozilla/5.0 (Linux; Android 13; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  androidSamsung: "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36",
+  androidWebview: "Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36",
+  windowsEdge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+  windowsFirefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+  macSafari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+  linuxChrome: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  chromeOs: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+};
+
+test("7. the device: six words of the closed lists chosen in the browser; the User-Agent itself never leaves", async () => {
+  const d = (ua, touch, width) => C.deviceOf({ userAgent: ua, maxTouchPoints: touch }, { innerWidth: width });
+  assert.deepEqual(d(UAS.iphoneSafari, 5, 390), { class: "phone", os: "ios", browser: "safari", touch: true, major: 17, viewport: "360_479" });
+  assert.deepEqual(d(UAS.iphoneChrome, 5, 375), { class: "phone", os: "ios", browser: "chrome", touch: true, major: 126, viewport: "360_479" });
+  assert.deepEqual(d(UAS.iphoneInApp, 5, 320), { class: "phone", os: "ios", browser: "webview", touch: true, viewport: "lt_360" });
+  assert.deepEqual(d(UAS.ipadAsMac, 5, 820), { class: "tablet", os: "ios", browser: "safari", touch: true, major: 17, viewport: "768_1023" }, "an iPad that says it is a Mac");
+  assert.deepEqual(d(UAS.macSafari, 0, 1440), { class: "desktop", os: "macos", browser: "safari", touch: false, major: 17, viewport: "ge_1440" });
+  assert.deepEqual(d(UAS.androidChrome, 5, 412), { class: "phone", os: "android", browser: "chrome", touch: true, major: 126, viewport: "360_479" });
+  assert.deepEqual(d(UAS.androidTablet, 10, 800), { class: "tablet", os: "android", browser: "chrome", touch: true, major: 125, viewport: "768_1023" });
+  assert.deepEqual(d(UAS.androidSamsung, 5, 360), { class: "phone", os: "android", browser: "samsung", touch: true, major: 25, viewport: "360_479" });
+  assert.deepEqual(d(UAS.androidWebview, 5, 600), { class: "phone", os: "android", browser: "webview", touch: true, viewport: "480_767" });
+  assert.deepEqual(d(UAS.windowsEdge, 0, 1280), { class: "desktop", os: "windows", browser: "edge", touch: false, major: 126, viewport: "1024_1439" });
+  assert.deepEqual(d(UAS.windowsFirefox, 10, 1366), { class: "desktop", os: "windows", browser: "firefox", touch: true, major: 127, viewport: "1024_1439" });
+  assert.deepEqual(d(UAS.linuxChrome, 0, 1920), { class: "desktop", os: "linux", browser: "chrome", touch: false, major: 126, viewport: "ge_1440" });
+  assert.deepEqual(d(UAS.chromeOs, 0, 1366), { class: "desktop", os: "chromeos", browser: "chrome", touch: false, major: 126, viewport: "1024_1439" });
+  assert.deepEqual(d("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 OPR/111.0.0.0", 0, 1280),
+    { class: "desktop", os: "windows", browser: "other", touch: false, viewport: "1024_1439" }, "a Chromium browser outside the list is not called Chrome");
+  // Nothing readable: the fallback words, no width, never a throw.
+  assert.deepEqual(C.deviceOf({}, {}), { class: "unknown", os: "other", browser: "other" });
+  assert.deepEqual(C.deviceOf(null, null), { class: "unknown", os: "other", browser: "other" });
+  assert.equal("touch" in C.deviceOf({ userAgent: UAS.iphoneSafari }, { innerWidth: 390 }), false, "no touch-point count is unknown, not no touch");
+  assert.deepEqual(d(SECRET, 0, NaN), { class: "unknown", os: "other", browser: "other", touch: false });
+  assert.equal(C.deviceOf({ get userAgent() { throw new Error("x"); } }, {}), null, "a hostile navigator gives no device");
+  for (const [w, bucket] of [[359, "lt_360"], [360, "360_479"], [479, "360_479"], [480, "480_767"], [767, "480_767"], [768, "768_1023"], [1023, "768_1023"], [1024, "1024_1439"], [1439, "1024_1439"], [1440, "ge_1440"], [0, null], [-5, null]]) {
+    assert.equal(C.viewportBucket(w), bucket, String(w));
+  }
+  // Every word is one of the server's, read from its source; and the lists are the same lists.
+  const serverSource = await readFile(new URL("../../backend/src/appErrorTracking.js", import.meta.url), "utf8");
+  for (const key of ["class", "os", "browser", "viewport"]) {
+    const listed = serverSource.match(new RegExp(`\\b${key}: Object\\.freeze\\(\\[([^\\]]+)\\]\\)`));
+    assert.deepEqual(listed[1].match(/"([a-z0-9_]+)"/g).map((w) => w.slice(1, -1)), [...C.DEVICE_LISTS[key]], key);
+  }
+  // In the report: the checked device only; a word outside a list, an extra key or the User-Agent is never sent.
+  for (const ua of Object.values(UAS)) {
+    const body = C.buildReport({ screen: "weekly", code: "js_error", device: d(ua, 1, 400) });
+    assert.deepEqual(Object.keys(body.device).filter((k) => !["class", "os", "browser", "major", "viewport", "touch"].includes(k)), []);
+    assert.ok(!JSON.stringify(body).includes("Mozilla"));
+  }
+  assert.deepEqual(C.buildReport({ screen: "weekly", code: "js_error", device: { class: UAS.macSafari, os: "ios", ua: UAS.macSafari, major: 17, touch: "yes" } }).device, { os: "ios" }, "the major goes with its family only");
+  assert.equal("device" in C.buildReport({ screen: "weekly", code: "js_error", device: { ua: UAS.macSafari } }), false);
+  assert.equal("device" in C.buildReport({ screen: "weekly", code: "js_error" }), false);
+  // The reporter adds the device itself, read at the time of the error.
+  const out = [];
+  let width = 390;
+  const report = C.createReporter({ send: (b) => { out.push(b); }, isSignedIn: () => true, dedupeMs: 0, getDevice: () => d(UAS.iphoneSafari, 5, width) });
+  report({ screen: "weekly", code: "js_error" });
+  width = 800;
+  report({ screen: "weekly", code: "js_error" });
+  assert.deepEqual(out.map((b) => b.device.viewport), ["360_479", "768_1023"]);
+  const broken = C.createReporter({ send: (b) => { out.push(b); }, isSignedIn: () => true, getDevice: () => null });
+  assert.equal(broken({ screen: "weekly", code: "js_error" }), true, "an unreadable device never stops a report");
+  assert.equal("device" in out.at(-1), false);
+});
+
+test("8. a tab's load that nobody waits for reports with the fixed word open-tab", () => {
+  assert.equal((appJs.match(/detached\(loadActiveTab\(\), "open-tab"\);/g) || []).length, 7);
+  assert.equal(/detached\(loadActiveTab\(\)\);/.test(appJs), false);
+  assert.match(appJs, /detached\(openLibraryTab\(button\.dataset\), "open-tab"\);/);
+  assert.match(appJs, /detached\(loadCoachHomeExtras\(\{ onChange: refreshCoachHomeSection, forceRefresh \}\), "open-tab"\);/);
 });

@@ -1,7 +1,7 @@
--- Training Load v70 - the GPEXE field inventory (I1).
+-- Training Load v71 - the GPEXE field inventory (I1).
 --
 -- Plan: docs/ai/gpexe-field-inventory-plan.md sections 1, 5 and 6 (the owner's D-INV-1 and his answers Q1 and Q5,
--- 2026-11-15). Runbook: docs/runbooks/source-field-observations-v70.md.
+-- 2026-11-15). Runbook: docs/runbooks/source-field-observations-v71.md.
 --
 -- What this migration changes (no existing row changes; nothing is written to a table):
 --   1. training_load.source_field_observations: one row per (source connection, endpoint, field name) a succeeded check
@@ -15,8 +15,8 @@
 --      DELETE and TRUNCATE are refused: a name list with no personal data, kept for the club's choice (D-INV-1).
 --
 -- Not here: reading the rows (I2), the Source fields list (I3), "I want this" (I2), creating a source field (G1).
--- Order: after v69. Refuses to run without v31's check source facts, v40's unit-token rule, or when the table exists.
--- Rollback: docs/runbooks/source-field-observations-v70-rollback.sql (refuses once a row exists, or a later migration is
+-- Order: after v69 and app_error_events v70 (202611131400). Refuses to run without v31's check source facts, v40's unit-token rule, or when the table exists.
+-- Rollback: docs/runbooks/source-field-observations-v71-rollback.sql (refuses once a row exists, or a later migration is
 -- recorded).
 
 -- ---------------------------------------------------------------------------
@@ -25,17 +25,17 @@
 do $$
 begin
   if to_regclass('training_load.gpexe_import_checks') is null or to_regclass('training_load.source_credential_connections') is null then
-    raise exception 'v70 refused: v22 (the checks) or v27 (the source connections) is not applied' using errcode = '23514';
+    raise exception 'v71 refused: v22 (the checks) or v27 (the source connections) is not applied' using errcode = '23514';
   end if;
   if not exists (select 1 from information_schema.columns
                   where table_schema = 'training_load' and table_name = 'gpexe_import_checks' and column_name = 'source_connection_id') then
-    raise exception 'v70 refused: v31 (a check''s source path facts) is not applied' using errcode = '23514';
+    raise exception 'v71 refused: v31 (a check''s source path facts) is not applied' using errcode = '23514';
   end if;
   if to_regprocedure('training_load.source_metric_unit_token_ok(text)') is null then
-    raise exception 'v70 refused: v40''s training_load.source_metric_unit_token_ok(text) is missing' using errcode = '23514';
+    raise exception 'v71 refused: v40''s training_load.source_metric_unit_token_ok(text) is missing' using errcode = '23514';
   end if;
   if to_regclass('training_load.source_field_observations') is not null then
-    raise exception 'v70 refused: training_load.source_field_observations already exists' using errcode = '23514';
+    raise exception 'v71 refused: training_load.source_field_observations already exists' using errcode = '23514';
   end if;
 end;
 $$;
@@ -69,7 +69,7 @@ create table training_load.source_field_observations (
 );
 
 comment on table training_load.source_field_observations is
-  'I1: the names of the fields a source connection''s answers carried (never a value, an athlete or a session), written only by a succeeded check''s finalization (v70).';
+  'I1: the names of the fields a source connection''s answers carried (never a value, an athlete or a session), written only by a succeeded check''s finalization (v71).';
 
 -- ---------------------------------------------------------------------------
 -- 2. The writer

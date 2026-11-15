@@ -1,7 +1,7 @@
 // I1 (docs/ai/gpexe-field-inventory-plan.md, sections 1 and 6): the names of the fields a source answer carries, collected
 // in memory by a check from the answers it already reads, never a value, an athlete id, a session id, a date or raw JSON.
 // The adapter calls observe() right after it accepted (projected) an answer; the check's finalization writes the result
-// in one statement (training_load.source_field_observations, migration v70), only when the check succeeds.
+// in one statement (training_load.source_field_observations, migration v71), only when the check succeeds.
 //
 // Bounds: a name must be an identifier (the projection's own METRIC_NAME rule) and never a prototype key; at most
 // MAX_PER_ENDPOINT names per endpoint, so at most 6 x 300 = 1,800 per check; the rest is counted (rejected / dropped), never

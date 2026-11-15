@@ -1,5 +1,5 @@
-// I1, migration v70 on disposable databases: the preflight on the database before it, the refusal over an existing table, the
-// post-check after it, the rollback back to the catalog before v70 exactly and its refusal once an observation exists, and v70
+// I1, migration v71 on disposable databases: the preflight on the database before it, the refusal over an existing table, the
+// post-check after it, the rollback back to the catalog before v71 exactly and its refusal once an observation exists, and v71
 // applies again. The writer rules are proven through a real check in gpexe-in-app-import.test.mjs ("I1: ...").
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,9 +9,9 @@ import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
-const V70_FILE = "202611151200_training_load_v70_source_field_observations.sql";
-const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V70_FILE) + 1).filter((m) => !m.includes("app_error_events"));
-const BEFORE_V70 = MAIN_MIGRATIONS.filter((m) => m !== V70_FILE);
+const V71_FILE = "202611151200_training_load_v71_source_field_observations.sql";
+const MAIN_MIGRATIONS = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V71_FILE) + 1).filter((m) => !m.includes("app_error_events"));
+const BEFORE_V71 = MAIN_MIGRATIONS.filter((m) => m !== V71_FILE);
 const RUNBOOK = (name) => new URL(`../../docs/runbooks/${name}`, import.meta.url);
 
 async function catalogOf(client) {
@@ -34,30 +34,30 @@ async function booleansOf(client, sql) {
   return out;
 }
 
-test("1. v70: the preflight passes before it; it refuses over an existing table, changing nothing; the post-check passes after it; the rollback restores the catalog exactly, refuses once an observation exists, and v70 applies again", async () => {
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "sfo70rb", migrations: BEFORE_V70 });
+test("1. v71: the preflight passes before it; it refuses over an existing table, changing nothing; the post-check passes after it; the rollback restores the catalog exactly, refuses once an observation exists, and v71 applies again", async () => {
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "sfo70rb", migrations: BEFORE_V71 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
-    const pre = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v70-preflight.sql"), "utf8"));
+    const pre = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v71-preflight.sql"), "utf8"));
     assert.equal(pre.length, 13, "the preflight returns its 13 booleans");
-    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v70");
+    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v71");
     const before = await catalogOf(client);
 
     await client.query(`create table training_load.source_field_observations (id int)`);
-    await assert.rejects(applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS), /v70_source_field_observations\.sql" \(SQLSTATE 23514\)/);
+    await assert.rejects(applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS), /v71_source_field_observations\.sql" \(SQLSTATE 23514\)/);
     await client.query(`drop table training_load.source_field_observations`);
-    assert.deepEqual(await catalogOf(client), before, "nothing of v70 was applied over an existing table");
+    assert.deepEqual(await catalogOf(client), before, "nothing of v71 was applied over an existing table");
 
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
-    const post = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v70-postcheck.sql"), "utf8"));
+    const post = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v71-postcheck.sql"), "utf8"));
     assert.equal(post.length, 10, "the post-check returns its 10 booleans");
-    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v70");
+    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v71");
     const after = await catalogOf(client);
     assert.notDeepEqual(after, before);
 
-    await client.query(fs.readFileSync(RUNBOOK("source-field-observations-v70-rollback.sql"), "utf8"));
-    assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v70 exactly");
+    await client.query(fs.readFileSync(RUNBOOK("source-field-observations-v71-rollback.sql"), "utf8"));
+    assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v71 exactly");
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
 
@@ -68,7 +68,7 @@ test("1. v70: the preflight passes before it; it refuses over an existing table,
       `insert into training_load.source_field_observations (source_connection_id, api_family, endpoint, field_name, value_kind, answers_seen, first_seen_check_id, last_seen_check_id)
        values ($1, 'rest_v1', 'athlete_session', 'planted', 'number', 1, $2, $2)`, [crypto.randomUUID(), crypto.randomUUID()]);
     await client.query("set session_replication_role = origin");
-    await assert.rejects(client.query(fs.readFileSync(RUNBOOK("source-field-observations-v70-rollback.sql"), "utf8")), /v70 rollback refused: a field observation exists/);
+    await assert.rejects(client.query(fs.readFileSync(RUNBOOK("source-field-observations-v71-rollback.sql"), "utf8")), /v71 rollback refused: a field observation exists/);
     await client.query("rollback").catch(() => {});
     assert.deepEqual(await catalogOf(client), after, "the refused rollback changed nothing");
   } finally {
