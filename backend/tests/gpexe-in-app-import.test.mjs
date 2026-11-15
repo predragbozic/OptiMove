@@ -2636,11 +2636,12 @@ test("archived club: a team of an archived club is the same 404 as a missing tea
 // calendar, the UTC day of session_started_at, the same audience and 404 as the candidates.
 // ---------------------------------------------------------------------------
 
-function calendarBundle(sessionId, start, { withUnlinked = false, category, distance101 } = {}) {
+function calendarBundle(sessionId, start, { withUnlinked = false, with103 = false, category, distance101 } = {}) {
   // 101 and 102 only: both linked and clean, so a session of them alone is "ready" (103's record needs a manual review).
   const athletes = standardAthletes().slice(0, 2);
   if (distance101) athletes[0].parts[0].distance = distance101;
   if (withUnlinked) athletes.push({ ...structuredClone(athletes[1]), id: 104, tracks: [9005] });
+  if (with103) athletes.push(standardAthletes()[2]);
   return makeBundle({ sessionId, gpexeTeamId: 77, start, category, athletes });
 }
 
@@ -2656,6 +2657,8 @@ test("calendar: per UTC day the first three sessions' states in start order and 
     calendarBundle(7403, "2026-09-03T12:00:00", { category: "OFFICIAL MATCH" }),
     calendarBundle(7404, "2026-09-03T18:00:00"),
     calendarBundle(7405, "2026-09-06T10:00:00"),
+    // 103's record needs a manual review: the GPS branch of the trimmed preview.
+    calendarBundle(7406, "2026-09-08T10:00:00", { with103: true }),
   ];
   serve(team, bundles);
   assert.equal((await checkNow(team)).status, "succeeded");
@@ -2665,8 +2668,12 @@ test("calendar: per UTC day the first three sessions' states in start order and 
     const candidate = (await api(`/teams/${team.teamId}/candidates/${target.id}`, { cookie: team.coach.cookie })).body.candidate;
     assert.equal((await approve(team, candidate, team.padmin.cookie)).status, 200);
   });
-  // New content for 7402: its first version is replaced and must not be counted twice.
-  serve(team, [...bundles.slice(0, 1), calendarBundle(7402, "2026-09-03T23:30:00", { withUnlinked: true, distance101: 3333 }), ...bundles.slice(2)]);
+  // New content for 7402: its first version is replaced and must not be counted twice. New content for the imported 7405:
+  // a pending version that changes imported results (the changesToImported branch of the trimmed preview).
+  serve(team, [
+    bundles[0], calendarBundle(7402, "2026-09-03T23:30:00", { withUnlinked: true, distance101: 3333 }), bundles[2], bundles[3],
+    calendarBundle(7405, "2026-09-06T10:00:00", { distance101: 4444 }), bundles[5],
+  ]);
   assert.equal((await checkNow(team)).status, "succeeded");
 
   const listed = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
@@ -2675,8 +2682,11 @@ test("calendar: per UTC day the first three sessions' states in start order and 
   const bySession = Object.fromEntries(listed.body.candidates.map((c) => [String(c.gpexeTeamSessionId), c]));
   assert.equal(bySession["7403"].state, "out", "a session type that stays out");
   assert.equal(bySession["7402"].state, "needs", "an unlinked athlete is a step for the coach");
-  assert.equal(bySession["7405"].state, "imported");
   assert.equal(bySession["7401"].state, "ready", "nothing to decide");
+  assert.equal(bySession["7406"].state, "needs", "a record that needs a manual review");
+  const v7405 = listed.body.candidates.filter((c) => String(c.gpexeTeamSessionId) === "7405");
+  assert.deepEqual(v7405.map((c) => c.state).sort(), ["imported", "needs"], "the imported version, and the pending one that changes it");
+  assert.ok(v7405.find((c) => c.state === "needs").changesToImported > 0);
   const all = (await api(`/teams/${team.teamId}/candidates?includeSuperseded=true`, { cookie: team.padmin.cookie })).body.candidates;
   assert.ok(all.some((c) => c.status === "superseded" && c.state === "hidden"), "the replaced version is hidden");
 
@@ -2727,6 +2737,17 @@ test("calendar: per UTC day the first three sessions' states in start order and 
     const list404 = await api(`/teams/${team.teamId}/candidates${q}`, { cookie: other.coach.cookie });
     assert.equal(cal404.status, 404);
     assert.deepEqual([cal404.status, cal404.body], [list404.status, list404.body], `identical 404 ${q}`);
+  }
+
+  // The cap counts only shown sessions: a cap of exactly the shown sessions, with a replaced version inside the window,
+  // is not truncated and counts every shown session (the replaced version is filtered before the limit).
+  service.setCandidateListCapsForTests({ calendar: shown.length });
+  try {
+    const exact = await api(`/teams/${team.teamId}/calendar?from=2026-09-01&to=2026-09-30`, { cookie: team.coach.cookie });
+    assert.equal(exact.body.truncated, false);
+    assert.equal(exact.body.days.reduce((n, d) => n + Object.values(d.counts).reduce((a, b) => a + b, 0), 0), shown.length);
+  } finally {
+    service.setCandidateListCapsForTests();
   }
 
   // truncated: the caps lowered for the test.
