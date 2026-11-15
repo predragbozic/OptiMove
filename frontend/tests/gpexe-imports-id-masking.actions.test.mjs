@@ -383,6 +383,38 @@ test("the team's own coach (identityNames): the GPEXE names replace the ordinals
   }
 });
 
+test("the team's own coach through Link athletes and the review link: no date-of-birth wording anywhere (case-insensitive, the confirmation included), and the name the coach confirmed stays on the result, the last-link notice and the unlink question after the re-read leaves the linked athlete out", async () => {
+  // The server's coach list names unlinked athletes only: once 'named' is linked, the re-read no longer carries it.
+  let linked = false;
+  const identities = () => ({ status: 200, body: linked ? { ...COACH_IDENTITIES, identities: COACH_IDENTITIES.identities.filter((i) => i.gpexeAthleteId !== ID.named) } : COACH_IDENTITIES });
+  const noDates = (html, where) => assert.ok(!/date of birth|dates of birth|born /i.test(outsideTech(html).replace(/<section class="gpexe-suggest"[\s\S]*?<\/section>/g, "")), `team coach: no date-of-birth wording on ${where}`);
+  reset(VIEWERS["team coach"], { identities, onLink: () => { linked = true; return { status: 201, body: { link: { id: "link-new" } } }; } });
+  await openMapping();
+  noDates(pageHtml(), "Link athletes");
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: ID.named }, { value: "ath-3" });
+  await act("training-load-gpexe-map-confirm");
+  noDates(pageHtml(), "the confirmation");
+  await act("training-load-gpexe-map-send");
+  const results = pageHtml();
+  assert.match(outsideTech(results), /<strong>Mira Zedova → /, "the result names the athlete the coach confirmed");
+  noDates(results, "the results");
+  await act("training-load-gpexe-map-done");
+  await act("training-load-gpexe-map-close");
+
+  // The review link: the notice and the unlink question keep the confirmed name too.
+  linked = false;
+  reset(VIEWERS["team coach"], { identities, onLink: () => { linked = true; return { status: 201, body: { link: { id: "link-review" } } }; } });
+  await openReview();
+  selectValues[ID.named] = "ath-2";
+  await act("training-load-gpexe-link", { gpexeAthleteId: ID.named });
+  await act("training-load-gpexe-link-confirm");
+  await act("training-load-gpexe-close");
+  const notice = outsideTech(pageHtml());
+  assert.match(notice, /The GPEXE athlete Mira Zedova is now linked to /);
+  await act("training-load-gpexe-unlink", { linkId: "link-review" });
+  assert.match(confirmQuestions.at(-1) || "", /Unlink the GPEXE athlete Mira Zedova from /);
+});
+
 test("the team's own coach, a nameless athlete in the review table's row: no heading that points at values below (P2: none in a compact row), only the row's own line about its values", async () => {
   for (const [values, sentNone] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, false], [{}, true]]) {
     reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });

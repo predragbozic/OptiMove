@@ -1771,7 +1771,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(r.label || gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, r.label || gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}
@@ -1783,7 +1783,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-link-confirm gpexe-map-confirm" role="group" aria-label="Confirm the links">
         <p><strong>Link ${plural(staged.pairs.length, "athlete", "athletes")}?</strong></p>
         <ul>${staged.pairs.map((p) => renderPairHtml(p, gx, list, duplicates)).join("")}</ul>
-        ${gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
+        ${identityViewer(gx) && gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
         ${unlinked.length > staged.pairs.length ? `<p class="muted">${escapeHtml(plural(unlinked.length - staged.pairs.length, "other GPEXE athlete stays", "other GPEXE athletes stay"))} not linked (Not now); their sessions keep needing attention until they are linked.</p>` : ""}
         <p>Once you find new sessions and approve an import, each GPEXE athlete's results are imported as the athlete chosen here — in the sessions already found and in every session found later.</p>
         <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
@@ -1795,7 +1795,7 @@ function renderTeamMappingHtml(gx, teams) {
     `;
   } else {
     body = `
-      <p class="muted gpexe-hint">${gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      <p class="muted gpexe-hint">${identityViewer(gx) && gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : gx.identity?.list ? "A link is never guessed. The GPEXE name and the last session's values help you find an athlete in GPEXE; neither proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}
@@ -1859,7 +1859,7 @@ function renderLastLinkHtml(gx) {
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
+      <p><strong>${escapeHtml((l.gpexeSentence || gpexeWho(l.gpexeAthleteId)).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>

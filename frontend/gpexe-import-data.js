@@ -860,7 +860,10 @@ export async function sendTeamMapping(render) {
   render();
   const results = [];
   let changed = false;
-  for (const pair of staged.pairs) {
+  for (const sent of staged.pairs) {
+    // The label as the viewer saw it at the review: a coach's list leaves a linked athlete's name out after the re-read,
+    // so the result keeps the name the coach confirmed.
+    const pair = { ...sent, label: gpexeAthleteLabel(sent.gpexeAthleteId, gx) };
     try {
       const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId: pair.gpexeAthleteId, athleteId: pair.athleteId }) });
       results.push({ ...pair, outcome: "linked", linkId: answer?.link?.id || "" });
@@ -948,6 +951,8 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
   gx.linkError = null;
   gx.linkBusy = true;
   render();
+  // The athlete as the viewer saw it before the link (a coach's re-read list no longer names a linked athlete).
+  const gpexeSentence = gpexeAthleteSentence(gpexeAthleteId, gx);
   try {
     const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
     if (generation !== gx.generation) return;
@@ -955,7 +960,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
     linksChanged();
     gx.linkConfirm = null;
     gx.notice = "";
-    gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
+    gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, gpexeSentence, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
     // The change is made; a failed re-read of the list only leaves it stale.
     await reloadGpexeLinks(generation).catch(() => {});
     // J20-A2: update the review on screen with one server recompute.
