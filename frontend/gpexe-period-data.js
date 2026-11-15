@@ -28,6 +28,14 @@ export function sessionDay(value) {
   return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
 }
 
+// The last day that can be searched: the later of the browser's day and the UTC day. The chips use UTC days, and the
+// server takes a window up to its UTC day + 1 (resolveCheckWindow), so neither side can be refused or unreachable.
+export function todayDay(now = new Date()) {
+  const local = localDay(now);
+  const utc = now.toISOString().slice(0, 10);
+  return local > utc ? local : utc;
+}
+
 const isDay = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const dayTime = (day) => new Date(`${day}T00:00:00Z`).getTime();
 const addDays = (day, n) => new Date(dayTime(day) + n * DAY_MS).toISOString().slice(0, 10);
@@ -61,7 +69,7 @@ export function periodRange(gx = g()) {
 // days (both counted) away from it.
 export function dayOff(day, gx = g(), now = new Date()) {
   if (!isDay(day)) return true;
-  if (day > localDay(now)) return true;
+  if (day > todayDay(now)) return true;
   const s = p(gx);
   return Boolean(s.anchor) && daysInPeriod(s.anchor, day) > PERIOD_MAX_DAYS;
 }
@@ -106,6 +114,13 @@ export function setPeriodOpen(open, gx = g()) {
   p(gx).open = Boolean(open);
 }
 
+// Escape and the phone's Back close an open sheet first (app.js); true when there was one to close.
+export function closePeriodSheet(gx = g()) {
+  if (!gx || !p(gx).open) return false;
+  p(gx).open = false;
+  return true;
+}
+
 // The month on screen: the one turned to, else the month of the chosen (or suggested) period's end, else this month.
 export function periodMonth(gx = g(), now = new Date(), suggestedTo = "") {
   const s = p(gx);
@@ -124,7 +139,7 @@ export function turnMonth(delta, gx = g(), now = new Date()) {
 export function missingWindow(status, now = new Date()) {
   const last = status?.lastSucceededCheck?.window?.to;
   if (!isDay(last)) return null;
-  const today = localDay(now);
+  const today = todayDay(now);
   let from = last > today ? today : last;
   let clipped = false;
   if (daysInPeriod(from, today) > PERIOD_MAX_DAYS) {

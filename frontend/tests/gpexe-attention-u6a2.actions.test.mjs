@@ -501,8 +501,12 @@ test("15. a stale review asks for no search until updating it failed", async () 
 });
 
 test("16. with nothing ready, the first group's button is the one main action when it is a step the person can take now; otherwise the search or Import N ready stays the main one", async () => {
-  // P4: the period chooser (always on a computer, a sheet on a phone) has its own main action; it is left out here.
-  const primaries = (page) => (page.replace(/<section class="gpexe-panel imports-period[\s\S]*?<\/section>/, "").match(/class="primary-button gpexe-button/g) || []).length;
+  // P4: one main action on each screen size. A computer shows the period chooser and hides the phone's "Find new
+  // sessions"; a phone shows that button and keeps the chooser in a closed sheet. Both counts must be 1.
+  const count = (html) => (html.match(/class="primary-button gpexe-button/g) || []).length;
+  const computer = (page) => count(page.replace(/class="primary-button gpexe-button imports-find-phone"/, ""));
+  const phone = (page) => count(page.replace(/<section class="gpexe-panel imports-period[\s\S]*?<\/section>/, ""));
+  const primaries = (page) => { const c = computer(page); const p = phone(page); assert.equal(c, p, `computer ${c}, phone ${p}`); return c; };
   // IMP1: the Import button lives in the Ready tab, so on the Needs you tab a step the person can take now leads even
   // when sessions are ready ([ready(1), unlinked(4)] used to keep "Import N ready" as the main action of one screen).
   for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], true], [[notConfirmed(5)], false], [[blocked(2)], false]]) {

@@ -137,7 +137,7 @@ test("P4 3: the chooser is always on the page (a computer); 'Find new sessions' 
   assert.match(html(), /class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions</);
   await act("training-load-gpexe-period-toggle");
   assert.match(panel(), /class="gpexe-panel imports-period is-open"/, "the phone's sheet is open");
-  assert.match(panel(), /<h3>Find new sessions<\/h3>[\s\S]*data-action="training-load-gpexe-period-toggle" aria-label="Close"/, "the sheet has its own Close");
+  assert.match(panel(), /<h3 id="imports-period-title">Find new sessions<\/h3>[\s\S]*data-action="training-load-gpexe-period-toggle" aria-label="Close"/, "the sheet has its own Close");
   assert.match(html(), /aria-expanded="true" aria-controls="imports-period" >Find new sessions</);
   await act("training-load-gpexe-period-toggle");
   assert.ok(!/imports-period is-open/.test(panel()));
@@ -382,4 +382,48 @@ test("P4 14: nothing of the removed day filter or the From/To fields is left in 
       for (const word of banned) assert.ok(!text.includes(word), `${path.basename(file)} still has ${word}`);
     }
   }
+});
+
+test("P4 15: the phone's sheet is a dialog while open; a session opened from it closes it first; Escape and Back close it (closePeriodSheet)", async () => {
+  resetState();
+  const day = prevDay(8);
+  installFetchMock(async (call) => {
+    if (/\/candidates\/cand-1$/.test(call.url)) return { status: 200, body: { candidate: { ...row(1, day), athletes: {}, approval: null, preview: { version: 3, status: "ready", blocked: null, counts: {}, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [], unactivatedSourceMetricCount: 0 } } } };
+    return gpexeServer({ candidates: [row(1, day)] })(call);
+  });
+  await openImports();
+  assert.match(panel(), /id="imports-period" aria-label="Find new sessions"/, "closed: a region, not a dialog");
+  await act("training-load-gpexe-period-toggle");
+  assert.match(panel(), /id="imports-period" role="dialog" aria-modal="true" aria-labelledby="imports-period-title"/);
+  assert.match(panel(), /<h3 id="imports-period-title">Find new sessions<\/h3>/);
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.equal(period.periodOf().open, false, "the review opens over the screen, not under the sheet");
+  await act("training-load-gpexe-period-toggle");
+  assert.equal(period.closePeriodSheet(gx()), true, "Escape / Back: closed");
+  assert.equal(period.closePeriodSheet(gx()), false, "nothing more to close");
+});
+
+test("P4 16: 'today' is the later of the browser's and the UTC day, so a session of the UTC day can always be picked", () => {
+  // 21:00 in New York (UTC-5) is 02:00Z the next day: the UTC day is today's last day.
+  const keep = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    const late = new Date("2026-11-14T02:00:00Z");
+    assert.equal(period.localDay(late), "2026-11-13", "the browser's day");
+    assert.equal(period.todayDay(late), "2026-11-14", "the UTC day is later");
+    const g = { period: period.emptyPeriod() };
+    assert.equal(period.dayOff("2026-11-14", g, late), false, "the UTC day is not in the future");
+    assert.equal(period.dayOff("2026-11-15", g, late), true, "the day after is");
+  } finally {
+    if (keep === undefined) delete process.env.TZ; else process.env.TZ = keep;
+  }
+});
+
+test("P4 17: while a group's own step leads the screen, the chooser's first button is quiet", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ candidates: [needs(1, prevDay(9))] }));
+  await openImports();
+  const p = panel();
+  assert.match(p, /class="plain-button gpexe-button period-missing"/, "the group's step is the one main action");
+  assert.doesNotMatch(p, /class="primary-button/);
 });

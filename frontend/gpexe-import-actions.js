@@ -131,6 +131,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // The group's sessions are kept as they are now, so a link that moves the others to "Review out of date" does not end it.
     const group = action.dataset.group || "";
     const groupIds = group ? groupItems(group, gx.candidates || [], gx).map((c) => c.id) : [];
+    // P4: a session opened from the phone's sheet opens over the screen, not under the sheet.
+    setPeriodOpen(false);
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group, groupIds });
     return true;
   }
@@ -564,9 +566,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   // P4, the period chooser: local only, no request for any of these.
   if (type === "training-load-gpexe-period-toggle") {
-    // The phone's sheet (on a computer the chooser is always on the page).
-    setPeriodOpen(!periodOf(gx).open);
+    // The phone's sheet (on a computer the chooser is always on the page). Focus moves into the sheet and back.
+    const open = !periodOf(gx).open;
+    setPeriodOpen(open);
     renderTrainingLoad();
+    globalThis.document?.querySelector?.(open ? ".imports-period .period-close" : ".imports-find-phone")?.focus?.({ preventScroll: true });
     return true;
   }
   if (type === "training-load-gpexe-period-day") {

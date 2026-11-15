@@ -90,6 +90,7 @@ import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
+import { closePeriodSheet } from "./gpexe-period-data.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -656,6 +657,12 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
+    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
+    if (state.activeTab === "training-load" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+      renderTrainingLoad();
+      document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
+      return;
+    }
     closeMedia();
     closeExerciseViewMenus(null, els.content);
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
@@ -2176,6 +2183,12 @@ function handleAppBack() {
   // of the screen (the Training Load drawers' own rule).
   const calendar = closeCentralCalendarPanel(renderCentralCalendar);
   if (calendar) return calendar; // a kept form: BACK_STAYED
+
+  // Imports P4: the phone's period sheet closes before the screen is left.
+  if (state.activeTab === "training-load" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    renderTrainingLoad();
+    return true;
+  }
 
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this

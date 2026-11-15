@@ -575,7 +575,7 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx) }) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx), quiet: groupLeads(gx, status) }) : ""}
   `;
 }
 

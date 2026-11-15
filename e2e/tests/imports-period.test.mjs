@@ -90,7 +90,16 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
       await openTrainingLoad(page);
       await page.click('[data-action="training-load-section"][data-section="imports"]');
       await page.waitForSelector(DAY("2026-11-06"), { state: "visible", timeout: 20_000 });
-      const box = async (d) => { const b = await page.locator(DAY(d)).boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+      // The screen repaints while the status is read: wait for the day, and read its box again if it was just replaced.
+      const box = async (d) => {
+        for (let i = 0; i < 20; i += 1) {
+          await page.locator(DAY(d)).waitFor({ state: "visible" });
+          const b = await page.locator(DAY(d)).boundingBox();
+          if (b) return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+          await page.waitForTimeout(100);
+        }
+        throw new Error(`no box for ${d}`);
+      };
       const a = await box("2026-11-02");
       await page.mouse.move(a.x, a.y);
       await page.mouse.down();
@@ -105,6 +114,38 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
       // The next tap starts a new period.
       await page.click(DAY("2026-11-04"));
       assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "04.11. · 1 day");
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  } finally { await world.stop(); }
+});
+
+test("P4 (390 px): the sheet is a dialog; Escape closes it; a session tapped in its list opens its review on top", async () => {
+  const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "imports" } });
+  try {
+    await prepareImports(world);
+    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);
+    try {
+      await openTrainingLoad(page);
+      await page.click('[data-action="training-load-section"][data-section="imports"]');
+      await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]:not([disabled])', { timeout: 20_000 });
+      await page.click('[data-action="training-load-gpexe-period-toggle"]');
+      await page.waitForSelector('.imports-period[role="dialog"]', { state: "visible" });
+      assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("period-close")), true, "the focus moved into the sheet");
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".imports-period", { state: "hidden" });
+      assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("imports-find-phone")), true, "the focus went back to Find new sessions");
+      await page.click('[data-action="training-load-gpexe-period-toggle"]');
+      await page.click(DAY("2026-11-04"));
+      await page.click(DAY("2026-11-05"));
+      await page.locator('.imports-period [data-action="training-load-gpexe-open"]').first().click();
+      await page.waitForSelector(".gpexe-detail", { state: "visible", timeout: 20_000 });
+      const onTop = await page.evaluate(() => {
+        const r = document.querySelector(".gpexe-detail").getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(40, r.height / 2));
+        return Boolean(el && el.closest(".gpexe-detail"));
+      });
+      assert.equal(onTop, true, "the review is on top, not under the sheet");
+      assert.equal(await page.locator(".imports-period").isVisible(), false, "the sheet closed");
       assert.deepEqual(pageErrors, []);
     } finally { await context.close(); }
   } finally { await world.stop(); }

@@ -26420,8 +26420,10 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
-.imports-period .period-day:hover {
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .imports-period .period-day:not(.is-off):hover {
+    border-color: var(--line-strong);
+  }
 }
 .imports-period .period-day.is-blank {
   min-height: 0;
