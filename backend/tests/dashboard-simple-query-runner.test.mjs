@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   test("dashboard query runners with an isolated database mock", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", (process.versions.node.split('.')[0] === '22' ? '--experimental-test-isolation=none' : '--test-isolation=none'), fileURLToPath(import.meta.url)], { encoding: "utf8" });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   });

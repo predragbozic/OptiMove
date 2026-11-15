@@ -26,7 +26,7 @@ const { handleTrainingLoadAction, confirmLeaveTrainingLoad, handleTrainingLoadBe
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, calendarDayKey, calendarToggled, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -178,7 +178,7 @@ test("1. the sessions that need a person are grouped by what is in the way, in a
   assert.match(html(), /<h3>Ready to import \(2\)<\/h3>/);
 });
 
-test("2. (D4) the state bar counts 'Ready: N' and 'Needs you: N' from the whole list - a day picked in the calendar does not change them; with nothing to do there is no 'Needs you'", async () => {
+test("2. (D4) the state bar counts 'Ready: N' and 'Needs you: N' from the whole list - choosing days to search does not change them; with nothing to do there is no 'Needs you'", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2), unlinked(3)] }));
   await openImports();
@@ -187,8 +187,9 @@ test("2. (D4) the state bar counts 'Ready: N' and 'Needs you: N' from the whole 
   const banner = () => html().match(/<div class="imports-statusbar"[\s\S]*?<div class="imports-actions">/)[0];
   assert.match(tabs(), /data-import-tab="attention">Needs you \(1\)<[\s\S]*data-import-tab="ready">Ready \(2\)</);
   assert.match(banner(), /2 ready · 1 needs you/);
-  await act("training-load-gpexe-cal-day", { day: calendarDayKey(ready(1).sessionStartedAt) });
-  assert.match(tabs(), /Needs you \(1\)<[\s\S]*Ready \(2\)</, "the day filter does not change the counts");
+  // P4: choosing days in the period chooser filters nothing (the old day filter is gone).
+  await act("training-load-gpexe-period-day", { day: ready(1).sessionStartedAt.slice(0, 10) });
+  assert.match(tabs(), /Needs you \(1\)<[\s\S]*Ready \(2\)</, "choosing days does not change the counts");
   assert.match(banner(), /2 ready · 1 needs you/, "nor the banner's");
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1)] }));
@@ -404,7 +405,7 @@ test("10. a stale review (links changed after it) is its own group whose button 
   const page = html();
   assert.deepEqual(groupKeys(page), ["stale"]);
   assert.match(groupHtml("stale", page), /data-candidate-id="cand-1" data-group="stale">Update the review</);
-  assert.ok(!/<details class="imports-dates" open>/.test(page), "no search is asked for");
+  assert.ok(!/class="period-range"/.test(page), "no days are chosen for a stale review: no search is asked for");
   await act("training-load-gpexe-open", { candidateId: "cand-1", group: "stale" });
   assert.match(html(), /data-action="training-load-gpexe-review-update">Update the review</);
 });
@@ -414,7 +415,7 @@ test("11. (D2) the search button keeps its name, and the line under the bar says
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [] }));
   await openImports();
   const page = html();
-  assert.match(page, /data-action="training-load-gpexe-check" >Find new sessions</);
+  assert.ok(page.includes('data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search button keeps its name");
   // IMP1: no long sentence up front - the line is the first one of the Search tab.
   assert.ok(!page.includes("does not import anything"), "not on the default tab");
   await act("training-load-gpexe-tab", { importTab: "search" });
@@ -500,16 +501,21 @@ test("15. a stale review asks for no search until updating it failed", async () 
 });
 
 test("16. with nothing ready, the first group's button is the one main action when it is a step the person can take now; otherwise the search or Import N ready stays the main one", async () => {
-  const primaries = (page) => (page.match(/class="primary-button gpexe-button"/g) || []).length;
+  // P4: one main action on each screen size. A computer shows the period chooser and hides the phone's "Find new
+  // sessions"; a phone shows that button and keeps the chooser in a closed sheet. Both counts must be 1.
+  const count = (html) => (html.match(/class="primary-button gpexe-button/g) || []).length;
+  const computer = (page) => count(page.replace(/class="primary-button gpexe-button imports-find-phone"/, ""));
+  const phone = (page) => count(page.replace(/<section class="gpexe-panel imports-period[\s\S]*?<\/section>/, ""));
+  const primaries = (page) => { const c = computer(page); const p = phone(page); assert.equal(c, p, `computer ${c}, phone ${p}`); return c; };
   // IMP1: the Import button lives in the Ready tab, so on the Needs you tab a step the person can take now leads even
   // when sessions are ready ([ready(1), unlinked(4)] used to keep "Import N ready" as the main action of one screen).
-  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], true], [[notConfirmed(5)], false], [[blocked(2)], false]]) {
+  for (const [list, groupMain] of [[[unlinked(4)], true], [[ready(1), unlinked(4)], true], [[notConfirmed(5)], false], [[blocked(2)], false], [[unlinked(4), notConfirmed(5)], true]]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
     await openImports();
     const page = html();
     const groupBtn = page.match(/<div class="imports-attn-actions"><button type="button" class="(\w+)-button/)[1];
-    const findBtn = page.match(/class="(\w+)-button gpexe-button" data-action="training-load-gpexe-check" /)[1];
+    const findBtn = page.match(/class="(\w+)-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" /)[1];
     assert.equal(groupBtn, groupMain ? "primary" : "plain", JSON.stringify(list.map((c) => c.id)));
     if (groupMain) assert.equal(findBtn, "plain");
     assert.equal(primaries(page.slice(0, page.indexOf('aria-label="Ready to import"'))), 1, "one main action");

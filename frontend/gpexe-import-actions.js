@@ -17,18 +17,14 @@ import {
   setGpexeLeaveOut,
   backFromTeamMappingConfirm,
   batchSelectableList,
-  calendarFiltered,
   checkBatchAgain,
   clearBatchSelection,
-  clearCalendarDay,
   closeBatchReview,
   finishBatchResults,
-  moveCalendarMonth,
   openBatchReview,
   selectBatchVisible,
   sendBatch,
   stopBatchSeries,
-  setCalendarDay,
   toggleBatchPick,
   chooseTeamMapping,
   closeGpexeCandidate,
@@ -52,7 +48,7 @@ import {
   checkIdentityLoad,
   gpexeAthleteSentence,
   identityBusy,
-  identityViewer,
+  identityNameViewer,
   loadGpexeIdentities,
   loadPairSuggestions,
   loadGuidePairs,
@@ -60,6 +56,8 @@ import {
   openIdentityConfirm,
   sendIdentityLoad,
 } from "./gpexe-import-data.js";
+import { clearPeriod, periodOf, pickDay, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
+import { takePeriodDragClick } from "./gpexe-period-drag.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -76,7 +74,8 @@ function unlinkQuestion(gx, linkId) {
   }
   const name = link.athleteName;
   // P2: no viewer sees a GPEXE id outside Technical details; the athlete is named by its list position.
-  const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
+  // The link just made keeps the name the viewer confirmed (a coach's re-read list no longer names a linked athlete).
+  const who = fromNotice && gx.lastLink.gpexeSentence ? gx.lastLink.gpexeSentence : gpexeAthleteSentence(link.gpexeAthleteId, gx);
   return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — ${ask}.`;
 }
 
@@ -113,9 +112,14 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
+    // P4: the phone's sheet closes and the chosen days are cleared once a search starts (the month stays), so the
+    // chooser next shows what is still missing or what a session needs (code review).
+    setPeriodOpen(false);
+    clearPeriod();
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
-    await startGpexeCheck(own || { from: fieldValue("[data-gpexe-field='from']"), to: fieldValue("[data-gpexe-field='to']") }, renderTrainingLoad);
+    // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
+    await startGpexeCheck(own || {}, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
@@ -128,6 +132,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // The group's sessions are kept as they are now, so a link that moves the others to "Review out of date" does not end it.
     const group = action.dataset.group || "";
     const groupIds = group ? groupItems(group, gx.candidates || [], gx).map((c) => c.id) : [];
+    // P4: a session opened from the phone's sheet opens over the screen, not under the sheet.
+    setPeriodOpen(false);
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group, groupIds });
     return true;
   }
@@ -346,9 +352,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
     openTeamMapping();
     renderTrainingLoad();
-    // An administrator also sees the GPEXE names and dates of birth already
-    // stored (no GPEXE request); a coach's screen never asks.
-    if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
+    // The stored GPEXE names (no GPEXE request): an administrator's with dates of birth, the team's own coach's of the
+    // unlinked athletes only.
+    if (identityNameViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
     // U3: the suggested pairs - for the team's coach and the identity administrators alike (the server decides).
     await loadPairSuggestions(renderTrainingLoad);
     return true;
@@ -508,7 +514,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-batch-select") {
     if (gx.batch.sending) return true;
-    selectBatchVisible(calendarFiltered(batchSelectableList(gx), gx));
+    selectBatchVisible(batchSelectableList(gx));
     renderTrainingLoad();
     return true;
   }
@@ -559,24 +565,45 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
     return true;
   }
-  // The local sessions calendar: no request for any of these.
-  if (type === "training-load-gpexe-cal-prev" || type === "training-load-gpexe-cal-next") {
-    moveCalendarMonth(type.endsWith("prev") ? -1 : 1);
+  // P4, the period chooser: local only, no request for any of these.
+  if (type === "training-load-gpexe-period-toggle") {
+    // The phone's sheet (on a computer the chooser is always on the page). Focus moves into the sheet and back.
+    const open = !periodOf(gx).open;
+    setPeriodOpen(open);
     renderTrainingLoad();
+    globalThis.document?.querySelector?.(open ? ".imports-period .period-close" : ".imports-find-phone")?.focus?.({ preventScroll: true });
     return true;
   }
-  if (type === "training-load-gpexe-cal-day") {
-    setCalendarDay(action.dataset.day || "");
-    renderTrainingLoad();
+  if (type === "training-load-gpexe-period-day") {
+    if (takePeriodDragClick()) return true;
+    const day = action.dataset.day || "";
+    if (pickDay(day)) repaintPeriod(renderTrainingLoad, `[data-action="training-load-gpexe-period-day"][data-day="${day}"]`);
     return true;
   }
-  if (type === "training-load-gpexe-cal-all") {
-    clearCalendarDay();
-    renderTrainingLoad();
+  if (type === "training-load-gpexe-period-month") {
+    const delta = Number(action.dataset.delta) < 0 ? -1 : 1;
+    turnMonth(delta);
+    repaintPeriod(renderTrainingLoad, `.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${delta}"]`);
+    return true;
+  }
+  if (type === "training-load-gpexe-period-clear") {
+    clearPeriod();
+    repaintPeriod(renderTrainingLoad, ".imports-period .period-missing");
     return true;
   }
 
   return false;
+}
+
+// P4: a repaint of the chooser keeps the phone's sheet where it was scrolled (it is its own scroll container, rebuilt
+// by every repaint) and puts the focus back on the control just used (mobile-qa).
+function repaintPeriod(render, focusSelector) {
+  const doc = globalThis.document;
+  const top = doc?.querySelector?.(".imports-period.is-open")?.scrollTop;
+  render();
+  const sheet = doc?.querySelector?.(".imports-period.is-open");
+  if (sheet && typeof top === "number") sheet.scrollTop = top;
+  doc?.querySelector?.(focusSelector)?.focus?.({ preventScroll: true });
 }
 
 // J20-C: the confirmed import of the open review (its approval and activity), or null while it is not confirmed.

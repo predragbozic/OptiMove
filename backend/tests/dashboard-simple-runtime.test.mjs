@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 if (!process.execArgv.includes('--experimental-test-module-mocks')) {
   test('runtime startup and admission wiring with an isolated database mock', () => {
-    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks','--test','--test-isolation=none',fileURLToPath(import.meta.url)], { encoding: 'utf8' });
+    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks','--test',(process.versions.node.split('.')[0] === '22' ? '--experimental-test-isolation=none' : '--test-isolation=none'),fileURLToPath(import.meta.url)], { encoding: 'utf8' });
     assert.ifError(child.error);
     assert.equal(child.status, 0, child.stdout + child.stderr);
   });

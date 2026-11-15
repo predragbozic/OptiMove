@@ -321,13 +321,13 @@ test("1. a team coach in the team workspace: no switch, the switch off, or on in
   noPii(r.text, "the coach's load answer carries counts only");
 });
 
-test("2. team mode does not widen anything else: the stored list stays the administrators' (identical 404 for the coach), a coach of another team, another club's admin and a user without a role get the identical 404", async () => {
+test("2. team mode does not widen anything else: the coach's stored list stays the unlinked names only (plan coach-gpexe-name; no date, no conflict), a coach of another team, another club's admin and a user without a role get the identical 404", async () => {
   const { o } = await ready(2, 811);
   await teamMode(o, "team", true);
   const missing = await api(`/gpexe/teams/00000000-0000-4000-8000-000000000000/athlete-identities`, { cookie: o.coach.cookie });
   const lst = await list(o, o.coach.cookie);
-  assert.equal(lst.status, 404);
-  assert.equal(lst.text, missing.text);
+  assert.equal(lst.status, 200);
+  assert.ok(lst.body.identities.every((i) => !("birthDate" in i)) && !("birthDateConflicts" in lst.body));
   const other = await org();
   const foreignCoach = other.coach;
   const otherClubAdmin = other.cadmin;

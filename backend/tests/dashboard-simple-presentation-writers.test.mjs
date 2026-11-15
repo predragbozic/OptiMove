@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   test("legacy presentation writers with isolated database mocks", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", (process.versions.node.split('.')[0] === '22' ? '--experimental-test-isolation=none' : '--test-isolation=none'), fileURLToPath(import.meta.url)], { encoding: "utf8" });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   });
@@ -211,7 +211,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     queryHandler = async sql => {
       if (sql.includes("from training_load.dashboards")) return { rows: [dashboard] };
       if (sql.includes("from training_load.dashboard_widgets")) {
-        assert.match(sql, /display_config, presentation_config, local_filter_override/);
+        assert.match(sql, /display_config, to_jsonb\(dashboard_widgets\)->'presentation_config' as presentation_config, local_filter_override/);
         return { rows };
       }
       if (sql.includes("from training_load.dashboard_widget_series")) return { rows: [{ id: "source-series", widget_id: rows[0].id }] };

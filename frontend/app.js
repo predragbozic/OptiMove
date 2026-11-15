@@ -42,6 +42,8 @@ import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./ico
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
+import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput } from "./metric-board-actions.js";
+import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
@@ -88,7 +90,10 @@ import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athl
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
+import { bindPeriodDrag } from "./gpexe-period-drag.js";
+import { closePeriodSheet } from "./gpexe-period-data.js";
+import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -557,7 +562,7 @@ function bindEvents() {
     }
     const settings = panel?.classList?.contains("imports-settings");
     const choose = panel?.classList?.contains("imports-choose");
-    if (!settings && !choose && !panel?.classList?.contains("imports-calendar")) return;
+    if (!settings && !choose) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.
     if (panel.open === (panel.dataset.renderedOpen === "1")) return;
@@ -569,8 +574,7 @@ function bindEvents() {
       els.content.querySelector(".imports-choose > summary")?.focus({ preventScroll: true });
       return;
     }
-    if (settings) importSettingsToggled(panel.open);
-    else importsCalendarToggled(panel.open);
+    importSettingsToggled(panel.open);
   }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
@@ -594,6 +598,13 @@ function bindEvents() {
   // not #content, since the pointer can be released/cancelled anywhere -
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
+  // Imports P4: a mouse or pen drag across the period chooser's days (two taps do the same).
+  bindPeriodDrag(els.content, () => renderActiveTrainingLoadSurface());
+  // Imports P4: the period sheet is a phone's; a wider layout (a turned tablet) closes it, so its dialog role and the
+  // Escape / Back step never outlive it.
+  window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
+    if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
+  });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
   els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });
@@ -605,6 +616,16 @@ function bindEvents() {
     });
   });
   els.content.addEventListener("dragend", endVariableDrag);
+  // Data configuration's board on a computer: drag a GPEXE column onto a variable (J18). Its own drag type.
+  els.content.addEventListener("dragstart", (event) => { startSourceFieldDrag(event, { isBlocked: () => Boolean(state.trainingLoad.board?.write) }); });
+  els.content.addEventListener("dragover", overSourceFieldDrag);
+  els.content.addEventListener("dragleave", leaveSourceFieldDrag);
+  els.content.addEventListener("drop", (event) => {
+    dropSourceFieldDrag(event, { onDrop: (fieldId, variableId) => { void dropFieldOnVariable(fieldId, variableId, { render: renderActiveTrainingLoadSurface }); } });
+  });
+  els.content.addEventListener("dragend", endSourceFieldDrag);
+  // The board's panel: its tick and its Required box report through "change".
+  els.content.addEventListener("change", (event) => { if (event.target?.matches?.("[data-mb-tick], [data-mb-required]")) handleBoardInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Builder section on a computer: drag a library exercise onto the Added list.
   els.content.addEventListener("dragstart", (event) => { startBuilderLibraryDrag(event, { isBlocked: builderLibraryDropBlocked }); });
   els.content.addEventListener("dragover", overBuilderLibraryDrag);
@@ -654,6 +675,12 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
+    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+      renderTrainingLoad();
+      document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
+      return;
+    }
     closeMedia();
     closeExerciseViewMenus(null, els.content);
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
@@ -682,11 +709,15 @@ function bindEvents() {
     if (state.activeTab === "training-load" && closeActivityRosterOverlay()) {
       renderTrainingLoad();
     }
+    // J18: the board's sheet, panel or review closes on Escape (never while a save is in flight).
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "board") closeBoardOverlay(renderActiveTrainingLoadSurface);
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   // The open icon picker is modal: Tab stays inside it.
   document.addEventListener("keydown", (event) => { trapIconPickerTab(event); });
+  // Imports P4: the open period sheet is modal too.
+  document.addEventListener("keydown", (event) => { trapPeriodSheetTab(event); });
   window.addEventListener("popstate", handleBrowserBack);
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.
@@ -2197,6 +2228,12 @@ function handleAppBack() {
   // at the overlay's own root day/block list.
   if (closeSpecificProgramOverlay()) return true;
 
+  // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    renderTrainingLoad();
+    return true;
+  }
+
   if (state.weekSelectorOpen) {
     state.weekSelectorOpen = false;
     renderWeeklyRoot(state.lastWeeklyData);
@@ -3097,6 +3134,7 @@ async function handleContentClick(event) {
   if (await handleVariablesAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleSourceFieldsAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleMappingsAction(action, { render: renderActiveTrainingLoadSurface })) return;
+  if (await handleBoardAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleTrainingLoadAction(action, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate })) return;
   handleMediaAction(action);
 }

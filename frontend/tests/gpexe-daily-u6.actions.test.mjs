@@ -134,9 +134,9 @@ test("U6a-1 1: the state bar says connected / import on or off / last search and
   const page = html();
   const bar = page.slice(page.indexOf('class="imports-statusbar"'), page.indexOf("</section>", page.indexOf('class="imports-statusbar"')));
   assert.match(bar, /No search yet · 2 ready/);
-  const primaries = bar.match(/class="primary-button gpexe-button"/g) || [];
+  const primaries = bar.match(/class="primary-button gpexe-button/g) || [];
   assert.equal(primaries.length, 1, "exactly one primary button in the banner");
-  assert.match(bar, /class="primary-button gpexe-button" data-action="training-load-gpexe-check" >Find new sessions</);
+  assert.ok(bar.includes('class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
   assert.ok(!/training-load-gpexe-import-ready/.test(bar), "the Import button is not in the banner");
   assert.ok(!/class="gpexe-next"|imports-daily-counts/.test(page));
   assert.match(page, /data-import-tab="attention">Needs you \(0\)</);
@@ -160,11 +160,11 @@ test("U6a-1 1: the state bar says connected / import on or off / last search and
   assert.match(off, /imports-state is-off">Import off</);
   await act("training-load-gpexe-tab", { importTab: "ready" });
   off = html();
-  assert.match(off, /class="primary-button gpexe-button" data-action="training-load-gpexe-check" >Find new sessions</);
+  assert.ok(off.includes('class="primary-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="false" aria-controls="imports-period" >Find new sessions'), "the search is the main button");
   assert.ok(!/training-load-gpexe-import-ready/.test(off));
 });
 
-test("U6a-1 2: the administrator's switch controls sit in one folded 'Import settings' card; the main screen keeps only the state; the date fields carry no format the browser may not show", async () => {
+test("U6a-1 2: the administrator's switch controls sit in one folded 'Import settings' card; the main screen keeps only the state; no date field promises a format the browser may not show", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1)] }));
   await openImports();
@@ -178,8 +178,8 @@ test("U6a-1 2: the administrator's switch controls sit in one folded 'Import set
   assert.ok(at > 0, "the card is there");
   assert.ok(!/imports-settings"[^>]* open/.test(page.slice(at, at + 80)), "folded by default");
   assert.ok(page.indexOf('aria-label="Imports for this team"') > at, "the panel is inside the card");
-  assert.match(page, /<span>From<\/span><input type="date"/);
-  assert.match(page, /<span>To<\/span><input type="date"/);
+  // P4: the search's From/To fields are gone (the period is chosen on a calendar under "Find new sessions").
+  assert.ok(!/data-gpexe-field=/.test(page), "no search date fields");
   assert.ok(!/DD\.MM\.YYYY/.test(page), "a native date field shows the browser's own format, so no label promises another");
   assert.ok(!/Linked athletes|GPEXE athletes linked to this team|gpexe-link-list/.test(page), "no list of linked athletes on the daily screen, folded or not");
   await act("training-load-gpexe-tab", { importTab: "athletes" });
@@ -230,16 +230,14 @@ test("U6a-1 4: while the GPEXE athletes read has failed, Link athletes is off an
   assert.ok(!/data-action="training-load-gpexe-unlink"/.test(html()));
 });
 
-test("U6a-1 5: the notes of the main button sit right under it; with a day filtered and more than 50 ready, no note says all of them are imported; the review-only reason is said once", async () => {
+test("U6a-1 5: the notes of the main button sit right under it; with more than 50 ready, no note says all of them are imported; the review-only reason is said once", async () => {
   resetState();
   const many = Array.from({ length: 51 }, (_, i) => ready(i + 1, { sessionStartedAt: `2026-09-${String((i % 28) + 1).padStart(2, "0")}T16:08:12Z`, gpexeTeamSessionId: `9${String(i + 1).padStart(3, "0")}` }));
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: many }));
   await openImports();
-  await act("training-load-gpexe-cal-day", { day: "2026-09-01" });
   const page = html();
   assert.match(page, />Import the first 50 ready sessions</);
   assert.ok(!/imports all 51/.test(page));
-  assert.match(page, /Import the first 50 ready sessions takes ready sessions of every date, not only of the day you picked\./);
   assert.match(page, /1 more session stays for the next batch\./);
   // IMP1: the notes follow the Import button, under the Ready list.
   const button = page.indexOf('data-action="training-load-gpexe-import-ready"');
@@ -250,12 +248,10 @@ test("U6a-1 5: the notes of the main button sit right under it; with a day filte
   await openImports();
   const ro = html();
   assert.equal((ro.match(/[Aa]n approver imports these/g) || []).length, 1, "the review-only reason appears once");
-  // A day filter on a day without a ready session never hides the reason (it is read from the whole list).
+  // With a session that needs the coach the reason is still said once, in the Ready tab.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { canApprove: false } }, candidates: [ready(1), ready(2, { previewStatus: "blocked", status: "blocked", blockedCode: "mixed_timezones" })] }));
   await openImports();
-  await act("training-load-gpexe-cal-day", { day: "2026-09-02" });
-  // IMP1: the reason is said in the Ready tab (a session needs the coach, so Needs you opens first).
   await act("training-load-gpexe-tab", { importTab: "ready" });
-  assert.equal((html().match(/[Aa]n approver imports these/g) || []).length, 1, "said once, with the day filtered");
+  assert.equal((html().match(/[Aa]n approver imports these/g) || []).length, 1, "said once");
 });

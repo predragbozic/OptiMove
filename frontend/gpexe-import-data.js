@@ -7,6 +7,7 @@
 // A response for a team the coach has since switched away from is dropped
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
+import { emptyPeriod, localDay } from "./gpexe-period-data.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
@@ -101,7 +102,8 @@ function resetGpexeTeamState(teamId) {
   const gx = g();
   gx.generation += 1;
   gx.batch = emptyBatch();
-  gx.calendar = { month: "", day: "", open: null };
+  // P4: another team starts with the period chooser folded and no days chosen.
+  gx.period = emptyPeriod();
   // IMP1: another team starts on its own default tab, with "Choose sessions" folded.
   gx.tab = "";
   gx.chooseOpen = null;
@@ -177,7 +179,7 @@ export async function loadGpexeTeam(render) {
     gx.loading = false;
     // A status without the identity right (a role revoked meanwhile) drops
     // any name the view still held before anything is painted.
-    if (!identityViewer(gx)) {
+    if (!identityNameViewer(gx)) {
       clearGpexeIdentities({ keepOutcome: false });
       dropPendingIdentityLoad(teamId);
     } else {
@@ -192,7 +194,7 @@ export async function loadGpexeTeam(render) {
     void loadGuide(render);
     // An administrator's Imports view also holds the stored GPEXE names (no
     // GPEXE request): every screen of it names athletes without their id.
-    if (identityViewer(gx)) void loadGpexeIdentities(render);
+    if (identityNameViewer(gx)) void loadGpexeIdentities(render);
     const sourceAthletes = await sourceAthletesRead;
     if (generation !== gx.generation) return;
     applySourceAthletesRead(gx, sourceAthletes);
@@ -687,7 +689,7 @@ async function reloadGpexeLinks(generation) {
   if (generation !== gx.generation) return;
   if (!links.error) gx.links = links.links;
   applySourceAthletesRead(gx, sourceAthletes);
-  if (identityViewer(gx)) void loadGpexeIdentities(() => {});
+  if (identityNameViewer(gx)) void loadGpexeIdentities(() => {});
   if (links.error) gx.sourceAthletesError = links.error;
   if (gx.mapping?.open) {
     pruneTeamMappingChoices(gx);
@@ -860,7 +862,10 @@ export async function sendTeamMapping(render) {
   render();
   const results = [];
   let changed = false;
-  for (const pair of staged.pairs) {
+  for (const sent of staged.pairs) {
+    // A coach's re-read list leaves a linked athlete's name out, so the result keeps the name the coach confirmed. Only a
+    // name is kept: a list position ("GPEXE athlete N") renumbers after the re-read and is read live.
+    const pair = { ...sent, ...(identityOf(sent.gpexeAthleteId, gx)?.name ? { label: gpexeAthleteLabel(sent.gpexeAthleteId, gx) } : {}) };
     try {
       const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId: pair.gpexeAthleteId, athleteId: pair.athleteId }) });
       results.push({ ...pair, outcome: "linked", linkId: answer?.link?.id || "" });
@@ -948,6 +953,8 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
   gx.linkError = null;
   gx.linkBusy = true;
   render();
+  // The athlete as the viewer saw it before the link (a coach's re-read list no longer names a linked athlete).
+  const gpexeSentence = identityOf(gpexeAthleteId, gx)?.name ? gpexeAthleteSentence(gpexeAthleteId, gx) : null;
   try {
     const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
     if (generation !== gx.generation) return;
@@ -955,7 +962,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
     linksChanged();
     gx.linkConfirm = null;
     gx.notice = "";
-    gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
+    gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, gpexeSentence, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
     // The change is made; a failed re-read of the list only leaves it stale.
     await reloadGpexeLinks(generation).catch(() => {});
     // J20-A2: update the review on screen with one server recompute.
@@ -1152,12 +1159,6 @@ export function batchSelectableList(gx = g()) {
   return (gx.candidates || []).filter((c) => batchSelectable(c, gx));
 }
 
-// The rows the list shows under the local date filter (all of them without one).
-export function calendarFiltered(list, gx = g()) {
-  const day = gx.calendar?.day;
-  if (!day) return list;
-  return list.filter((c) => calendarDayKey(c.sessionStartedAt) === day);
-}
 
 // The chosen sessions in the list's order, each with the hash chosen with
 // it (never a hash read later: a changed session is dropped, not resent).
@@ -1189,8 +1190,7 @@ export function toggleBatchPick(candidateId, checked) {
   return true;
 }
 
-// "Select all" / "Select first N": the visible sessions that can be chosen
-// (a local date filter never adds a hidden one), in the list's order, until
+// "Select all" / "Select first N": the sessions that can be chosen, in the list's order, until
 // the batch is full. Already chosen ones stay chosen.
 export function selectBatchVisible(visible) {
   const gx = g();
@@ -1447,73 +1447,11 @@ export function finishBatchResults() {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// The local sessions calendar (Imports phase 4b)
-// ---------------------------------------------------------------------------
-
-// The day a session belongs to, on the same local clock the row's date and
-// time use (never toISOString, which can move a late session to the next
-// UTC day). "" when the value is not a date.
-export function calendarDayKey(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  const two = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-}
-
-export function calendarMonthKey(value) {
-  const key = calendarDayKey(value);
-  return key ? key.slice(0, 7) : "";
-}
-
-// The month on screen: the one chosen with Prev/Next, else the month of the
-// newest session found, else this month.
-export function calendarMonthShown(gx = g(), now = new Date()) {
-  if (gx.calendar?.month) return gx.calendar.month;
-  const days = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx)).map((c) => calendarDayKey(c.sessionStartedAt)).filter(Boolean).sort();
-  if (days.length) return days[days.length - 1].slice(0, 7);
-  return calendarMonthKey(now);
-}
-
-// Prev/Next: local only, no request.
-export function moveCalendarMonth(delta) {
-  const gx = g();
-  const [y, m] = calendarMonthShown(gx).split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  gx.calendar.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-// A marked day filters the list to that day; the same day again, or "Show
-// all dates", removes the filter. Never the dates of "Find new sessions".
-export function setCalendarDay(day) {
-  const gx = g();
-  gx.calendar.day = gx.calendar.day === day ? "" : day;
-}
-
-export function clearCalendarDay() {
-  g().calendar.day = "";
-}
-
-// Whether the calendar panel is open: as the coach left it; otherwise folded
-// on every screen (U6a: the list is the day's work), and open while a day is
-// filtered so the "Show all dates" line is in sight.
-export function calendarOpen(gx = g()) {
-  const open = gx.calendar?.open;
-  if (open === true || open === false) return open;
-  if (gx.calendar?.day) return true;
-  return false;
-}
-
-// The panel was opened or folded (the <details> element's own "toggle"
-// event, app.js): its state is kept for the next repaint. Local only - no
-// request, no change to the search dates, the shared week or the filtered day.
-export function calendarToggled(open) {
-  g().calendar.open = Boolean(open);
-}
+// A session's local day (never toISOString, which can move a late session to the next UTC day); the period chooser's.
+export const calendarDayKey = localDay;
 
 // IMP1: whether "Choose sessions" (the checkboxes of the Ready list) is open: as the person left it; otherwise open
-// while sessions are selected, so a selection is never out of sight. Local only, like the calendar.
+// while sessions are selected, so a selection is never out of sight. Local only.
 export function chooseOpen(gx = g()) {
   if (gx.chooseOpen === true || gx.chooseOpen === false) return gx.chooseOpen;
   return Object.keys(gx.batch?.selected || {}).length > 0;
@@ -1685,6 +1623,14 @@ export function identityViewer(gx = g()) {
   return gx.status?.viewer?.identityAdmin === true;
 }
 
+// The GPEXE names (plan docs/ai/coach-gpexe-name-plan.md): an administrator (every athlete, with dates of birth and conflicts),
+// or the team's own coach (the unlinked athletes' names only - the answer carries no date of birth and no conflict). Names
+// follow this; dates, conflicts, "Name not loaded" and the load panel stay identityViewer's, Technical details the platform
+// admin's (P2). Without a name every viewer but the administrator reads "GPEXE athlete N", never the id (P2).
+export function identityNameViewer(gx = g()) {
+  return identityViewer(gx) || gx.status?.viewer?.identityNames === true;
+}
+
 // Nothing of an identity answer may be kept by the browser: no HTTP cache
 // (the server says no-store too), no storage of any kind — the answer lives
 // in gx.identity until the screen closes.
@@ -1695,7 +1641,10 @@ function identityRequest(path, options = {}) {
 
 function identityList(answer) {
   const byId = {};
-  for (const i of answer.identities || []) byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, birthDate: typeof i.birthDate === "string" ? i.birthDate : null };
+  // A coach's answer has no birthDate key: the entry then has none either (undefined), so no "Born" line is ever drawn for it.
+  for (const i of answer.identities || []) {
+    byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, ...("birthDate" in i ? { birthDate: typeof i.birthDate === "string" ? i.birthDate : null } : {}) };
+  }
   return {
     byId,
     pendingCount: Number.isInteger(answer.pendingCount) ? answer.pendingCount : 0,
@@ -1711,7 +1660,7 @@ function identityList(answer) {
 // screen shows nothing of it, without an error.
 export async function loadGpexeIdentities(render) {
   const gx = g();
-  if (!identityViewer(gx) || !gx.teamId) return;
+  if (!identityNameViewer(gx) || !gx.teamId) return;
   const generation = gx.generation;
   const epoch = identityEpoch;
   const teamId = gx.teamId;
@@ -1720,7 +1669,7 @@ export async function loadGpexeIdentities(render) {
   render();
   try {
     const answer = await identityRequest(teamPath(teamId, "/athlete-identities"));
-    if (generation !== gx.generation || epoch !== identityEpoch || !identityViewer(gx)) return;
+    if (generation !== gx.generation || epoch !== identityEpoch || !identityNameViewer(gx)) return;
     gx.identity = { ...gx.identity, available: true, loading: false, list: identityList(answer) };
   } catch (error) {
     if (generation !== gx.generation || epoch !== identityEpoch) return;
@@ -1859,12 +1808,12 @@ async function postIdentityLoad(render, { check }) {
   // workspace change and a return - the view of the same team open now.
   // Another team's view is never touched.
   const view = generation === gx.generation ? gx : g();
-  if (!view || view.teamId !== teamId || !identityViewer(view)) return;
+  if (!view || view.teamId !== teamId || !identityNameViewer(view)) return;
   if (view !== gx && view.identity.sending) return;
   // The names are read again only while an Imports view of this team is open
   // now (loadGpexeIdentities takes its own epoch, so a later clear still drops
   // that read).
-  const viewOpen = () => identityViewer(view) && view.teamId === teamId && g() === view && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
+  const viewOpen = () => identityNameViewer(view) && view.teamId === teamId && g() === view && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
   if (outcome.gone) {
     // Not available any more (the binding ended, the right changed): nothing
     // of it stays on screen.
@@ -1915,28 +1864,28 @@ export function identityNameKey(name) {
 //     expired, GPEXE had no record): "Name not loaded (GPEXE athlete N)";
 //   * no stored identity at all: "GPEXE athlete N".
 // N is the athlete's position in the GPEXE athlete list on screen (stable for
-// that list, never stored, never the id). P2: a coach - who gets no identity and
-// no sign that one exists - gets the same position, never the id.
+// that list, never stored, never the id). P2: every other viewer gets the same position, never the id; the team's coach
+// also reads the stored names of the unlinked athletes (identityNameViewer), never "Name not loaded".
 export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
+  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   // A GPEXE name shared by two athletes carries the position too.
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `${who.name} (${ordinal})` : who.name;
   if (who) return `Name not provided (${ordinal})`;
-  return hasStoredIdentities(gx) ? `Name not loaded (${ordinal})` : ordinal;
+  return identityViewer(gx) && hasStoredIdentities(gx) ? `Name not loaded (${ordinal})` : ordinal;
 }
 
 // The same athlete inside a sentence: "the GPEXE athlete <name>", "GPEXE
 // athlete N (name not provided)", "GPEXE athlete N (name not loaded)" or
 // "GPEXE athlete N" - for a coach "GPEXE athlete N" too (P2), never the id.
 export function gpexeAthleteSentence(gpexeAthleteId, gx = g()) {
-  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
+  if (!identityNameViewer(gx)) return `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const ordinal = `GPEXE athlete ${gpexeAthleteOrdinal(gpexeAthleteId, gx)}`;
   const who = identityOf(gpexeAthleteId, gx);
   if (who?.name) return duplicateIdentityNames(gx).has(identityNameKey(who.name)) ? `the GPEXE athlete ${who.name} (${ordinal})` : `the GPEXE athlete ${who.name}`;
   if (who) return `${ordinal} (name not provided)`;
-  return hasStoredIdentities(gx) ? `${ordinal} (name not loaded)` : ordinal;
+  return identityViewer(gx) && hasStoredIdentities(gx) ? `${ordinal} (name not loaded)` : ordinal;
 }
 
 // The athlete's position in the team's GPEXE athlete list (the server orders
@@ -1960,7 +1909,7 @@ function hasStoredIdentities(gx) {
 
 export function identityOf(gpexeAthleteId, gx = g()) {
   // Never for a viewer without the identity right, whatever the state holds.
-  if (!identityViewer(gx)) return null;
+  if (!identityNameViewer(gx)) return null;
   return gx.identity?.list?.byId?.[String(gpexeAthleteId)] || null;
 }
 

@@ -4353,6 +4353,16 @@ router (`/board`, `/board/placement`, `/confirmations`, `/confirmations/:confirm
 `backend/src/sourceMetricBoard.js` (display registry version 1, the pair rule, the placement hash) and
 `backend/src/sourceMetricBoardService.js`. The mapper gains `gpexeLevelValuesKeyed`, the 7e raw read with each
 athlete's internal key, called by the board only. The one write is the expiry batch of v65 before a History read.
+
+**18-3, the board's writes and migration M-B (v66), as built** (J18 section 15.9; verified against `60e3a0c0`; v66
+applied only on the owner's order, in the joint deploy with 18-4): `POST /confirmations` (the save, one transaction:
+`backend/src/sourceMetricBoardSaveService.js`, a writer of T3, T4, T5, T8 and the three confirmation tables),
+`POST /confirmations/:confirmationId/erase-values` and `POST /confirmations/expired-values/remove`
+(`sourceMetricConfirmationAdminService.js`), the scheduled removal (`sourceMetricConfirmationRemoval.js`), and
+`migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql`: one trigger on T4 that lets a
+club admin activate a version of a field without parameters only with a checked confirmation row of the same
+transaction or a v53 copy link (`409 confirmation_required` otherwise). The mapper's keyed read is
+`gpexeSessionValuesKeyed`, one plan for all columns of a board read.
  The flow of the import itself (the daily screen, the per-team switch, suggested athlete pairs, the guide and the in-app correction) is J19, `docs/ai/gps-import-flow-contract.md`, proposed on 2026-11-04.
 
 ## K. Open, but not blocking M1
