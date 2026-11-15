@@ -19,7 +19,7 @@ by a CHECK in the table, so a buggy writer cannot store free text.
 | `http_status` | 100 to 599 |
 | `role` | `platform_admin`, `coach`, `athlete`, `user`, `none`; derived by the server from the session, never from the report |
 | `release_commit` | 7 to 40 hex characters (the browser may send its build; anything else is replaced by the server's commit) |
-| `user_hash` | 12 hex characters of `sha256('app-error-user:' || user id)`; never the id, never a name or e-mail |
+| `user_hash` | 12 hex characters; never the id, never a name or e-mail. Rows written before v70: `sha256('app-error-user:' || user id)` (version 1). From v70 on: a keyed hash with its version, or none without the key (`app-error-events-v70.md`) |
 | `stack_signature` | the grammar `fn@file( > fn@file){0,3}` (function and file names, no line numbers, no message), at most 200 characters; a browser report whose `stackSig` does not match is refused (`400`). The grammar removes the accidental path (an error message in the field); it cannot stop a hostile client that encodes words as `fn@file`, so the column is a bounded shape, not a proof of "no text" |
 | `fingerprint` | sha256 of source, screen or route, action, code, status and the signature |
 | `repeat_count`, `first_seen_at`, `last_seen_at` | counters; the only columns that ever change |
@@ -30,7 +30,7 @@ code only and never changes the answer.
 
 ## Routes (`/api/app-errors`, sign-in required)
 
-* `POST /` one browser report: exactly the keys `screen`, `action`, `code`, `status`, `stackSig`, `release`, `reason`, each in its closed
+* `POST /` one browser report: exactly the keys `screen`, `action`, `code`, `status`, `stackSig`, `release`, `reason`, `device` (v70, `app-error-events-v70.md`), each in its closed
   shape, or `400 invalid_error_report` (nothing stored, the answer never repeats the report). The route parses at most 4 KB (`413 body_too_large` beyond it); `429` after 20 reports a minute from one user; success is an empty `204`.
 * `GET /groups?days=1..30` for an active platform admin: the errors grouped by fingerprint (occurrences, distinct users, first and
   last seen, latest release, roles). Anyone else gets the same 404 as an unknown route.
@@ -87,7 +87,7 @@ deployed commit must no longer contain the migration file or import `appErrorTra
 
 * `role` is derived from the session's roles: a club admin or a team coach is recorded as `coach` (a pilot simplification).
 
-* The user hash is a short, unsalted one-way hash of a random UUID: it lets one user's repeats be counted and distinct users
+* Until v70 the user hash is a short, unsalted one-way hash of a random UUID (from v70 on it is keyed, `app-error-events-v70.md`): it lets one user's repeats be counted and distinct users
   be counted; it is not a defence against someone who already holds the user list (who can recompute it).
 * The in-memory rate limit is per server process.
 * The Supabase Data API is off for this project (checked at the v38 deploy), so the new table is not exposed through it; the table
