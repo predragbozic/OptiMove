@@ -38,7 +38,7 @@ import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { startConfirmationRemovalSchedule } from "./sourceMetricConfirmationRemoval.js";
 import { appErrorsRouter } from "./routes/appErrors.js";
-import { recordServerError, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
+import { collectRouteWords, recordServerError, setRouteWords, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -261,6 +261,10 @@ app.use((error, req, res, next) => {
     message: status >= 500 && isProduction ? "Something went wrong." : error.message,
   });
 });
+
+// App health (v73): the words a path of this server can contain, from its own routes, now that all are mounted. A
+// browser's report of a failed request keeps only these words of the path it names (appErrorTracking.js).
+setRouteWords(collectRouteWords(app));
 
 const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
