@@ -51,7 +51,6 @@ import {
   cancelIdentityConfirm,
   checkIdentityLoad,
   gpexeAthleteSentence,
-  maskGpexeIds,
   identityBusy,
   identityViewer,
   loadGpexeIdentities,
@@ -69,18 +68,16 @@ import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables,
 function unlinkQuestion(gx, linkId) {
   const fromNotice = gx.lastLink && String(gx.lastLink.linkId) === String(linkId) ? { gpexeAthleteId: gx.lastLink.gpexeAthleteId, athleteName: gx.lastLink.athleteName } : null;
   const link = (gx.links || []).find((l) => String(l.id) === String(linkId)) || fromNotice;
+  // O5: who to ask by audience (a coach their club administrator, a club admin OptiMove support).
+  const viewer = gx.status?.viewer;
+  const ask = viewer?.isPlatformAdmin === true ? "contact a platform administrator" : viewer?.identityAdmin === true ? "contact OptiMove support" : "ask your club administrator";
   if (!link?.gpexeAthleteId || !link?.athleteName) {
-    return "Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported can't be changed here — contact a platform administrator.";
+    return `Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported can't be changed here — ${ask}.`;
   }
   const name = link.athleteName;
-  if (maskGpexeIds(gx)) {
-    // An administrator's Imports view never shows a GPEXE id outside
-    // Technical details.
-    const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
-    return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
-  }
-  const id = link.gpexeAthleteId;
-  return `Unlink GPEXE athlete ${id} from ${name}? In sessions not imported yet, athlete ${id} will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
+  // P2: no viewer sees a GPEXE id outside Technical details; the athlete is named by its list position.
+  const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
+  return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — ${ask}.`;
 }
 
 function fieldValue(selector) {

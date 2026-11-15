@@ -1695,6 +1695,21 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
     logging on error, pgaudit by class or by its object-audit role, auto_explain with parameters or a verbose plan,
     a printed plan, and any role or database override of these settings. Not covered by it, stated in block 6: the
     pooler's own log, and a value inside an error's text (v65's guards refuse such rows first with fixed texts).
+  - **After the production preflight of 2026-11-13** (two columns of block 5 false; the *Rukovodilac*'s order):
+    - production's `auto_explain` logs any statement that runs 10000 ms or longer, with its parameters in full; the
+      save's transaction ran under a 10000 ms statement bound, exactly that threshold. The statements of the save
+      that carry an athlete's value as a bind parameter (the confirmation's items, the only ones) now run under
+      their own bound, `VALUE_STATEMENT_TIMEOUT_MS` = 5000 ms, set right before them and put back right after; a
+      statement that long is cancelled (`409 try_again`, nothing written) and a cancelled statement is not
+      explained. Block 5's `auto_explain` column is true when the module is off, or logs neither parameters nor a
+      verbose plan, or its threshold is above that bound; block 6 prints the threshold beside the bound. Routes 6
+      and 7 pass no value;
+    - the override column no longer counts `log_statement=none` (the platform's admin roles carry it; it only
+      reduces logging); any other override is still a refusal;
+    - the deploy order changed: v68 and v69 (MT-D) are deployed before v66, and v70 (App health) may be. The
+      preflight, the post-check and the rollback tolerate v67, v68, v69 and v70 by exact name, in any subset, with
+      v68's, v69's and v70's checksums pinned where they are recorded, and refuse any other later migration. The
+      migration file is unchanged.
 - **Route 3, the save** (`backend/src/sourceMetricBoardSaveService.js`), as section 4.3, with these points:
   - It recomputes with the board's own read functions, twice: on plain reads, to answer a stale or refused row
     before any lock, and again after every lock, which is the answer that counts.

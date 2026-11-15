@@ -692,6 +692,16 @@ export async function importGpexeBundleLocked(client, bundle, ctx, hooks = {}) {
   // v62: the team's zone, read under the team lock this function's callers hold; used only for a mixed session.
   const teamTimezone = await teamSessionTimezone(client, ctx.ownerTeamId);
   const gates = buildGpexeImportPlan(bundle, { metricSpecs: [], teamTimezone });
+  // MT-B (decision 1, 2026-11-13): this path (the CLI and the tests) does not apply a track choice; a session that has one
+  // is refused, so it is never imported here differently from the in-app preview and approval.
+  const chosen = (await client.query(
+    `select 1 from training_load.gpexe_track_choices c
+      where c.owner_team_id = $1 and c.gpexe_team_session_id = $2 and c.choice <> 'cleared'
+        and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)
+      limit 1`,
+    [ctx.ownerTeamId, String(bundle.teamSession.id)],
+  )).rows.length > 0;
+  if (chosen) throw new GpexeImportError("track_choice_not_supported", "This session has a track choice; import it through the in-app review.");
   const mapping = await prepareImportMapping(client, {
     teamId: ctx.ownerTeamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
   });

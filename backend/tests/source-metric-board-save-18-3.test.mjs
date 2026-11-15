@@ -290,6 +290,28 @@ async function preplacedRow(who, t, cand, v, { pair = 0, requirement = "optional
   assert.ok(entry, "the version is pre-placed on the board");
   return { kind: "preplaced", mappingVersionId: v.versionId, placementHash: entry.placementHash, requirement, replaces: replaces ?? (entry.replaces ?? []).map((c) => c.activationId) };
 }
+// The leaves of an answer that are one of the given values (compared as numbers when both are numeric, else as text),
+// and any key that names a value. Substring search is not used: short numbers also occur inside ids and times.
+function valueLeaks(answer, values) {
+  const wanted = values.map((v) => String(v));
+  const same = (leaf, v) => String(leaf) === v || (leaf !== "" && v !== "" && Number.isFinite(Number(leaf)) && Number.isFinite(Number(v)) && Number(leaf) === Number(v));
+  const found = [];
+  const walk = (node, path) => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) { node.forEach((x, i) => walk(x, `${path}[${i}]`)); return; }
+    if (typeof node === "object") {
+      for (const [key2, x] of Object.entries(node)) {
+        if (/^(raw|stored|values|raw_[ab]|stored_[ab])$/i.test(key2) && x !== null) found.push(`${path}.${key2} (key)`);
+        walk(x, `${path}.${key2}`);
+      }
+      return;
+    }
+    if (typeof node === "boolean") return;
+    if (wanted.some((v) => same(node, v))) found.push(path);
+  };
+  walk(answer, "$");
+  return found;
+}
 const save = (who, t, cand, rows, { pair = 0, requestKey = key() } = {}) => post("/confirmations", who, { requestKey, teamId: t.teamId, candidateId: cand.id, pair, rows });
 const counts = async () => one(`select (select count(*) from ${T3})::int as t3, (select count(*) from ${T4})::int as t4, (select count(*) from ${T5})::int as t5,
                                         (select count(*) from ${T5} where ended_at is null)::int as t5_open, (select count(*) from ${T8})::int as t8, (select count(*) from ${T9})::int as t9, (select count(*) from ${T9I})::int as t9i`);
@@ -326,8 +348,16 @@ test("1. a save: two checked new rows and one OptiMove mapping are switched on f
   const byField = new Map(body.confirmation.rows.map((r) => [r.fieldId, r]));
   assert.deepEqual([byField.get(W.fTime.fieldId).variableId, byField.get(W.fTime.fieldId).requirement, byField.get(W.fDist.fieldId).requirement, byField.get(W.fSysTime.fieldId).versionId, byField.get(W.fSysTime.fieldId).requirement],
     [vMin.id, "required", "optional", W.sysTime.versionId, "optional"]);
-  // No value, name or hash in the answer.
-  for (const needle of ["1200", "60.00000003", "3100", NAMES[1], rows[0].placementHash]) assert.equal(res.text.includes(needle), false, needle);
+  // No value, name or hash in the answer. A value is looked for as a whole leaf of the answer (and as a key), never as
+  // a substring: "1200" or "3100" also occur inside an id or a time, which made this check fail by chance.
+  const held = (await rows_(`select trim_scale(raw_a)::text as a, trim_scale(stored_a)::text as b, trim_scale(raw_b)::text as c, trim_scale(stored_b)::text as d from ${T9I} where confirmation_id = $1 and checked`, [body.confirmation.id])).flatMap((r) => Object.values(r));
+  assert.equal(held.length, 8, "the two checked rows hold four values each");
+  assert.ok([pTime.values.a.raw, pTime.values.a.stored, pTime.values.b.raw, pTime.values.b.stored].every((v) => held.some((h) => Number(h) === Number(v))), "among them the ones the placement read showed");
+  assert.ok(held.every((v) => v !== null && v !== undefined && String(v) !== ""), "the two rows' values are known to the test");
+  assert.deepEqual(valueLeaks(res.body, held), [], "no athlete's value in the answer");
+  assert.deepEqual(valueLeaks({ x: { n: Number(held[0]) }, list: [String(held[1])] }, held), ["$.x.n", "$.list[0]"], "the check does find a value that is there");
+  assert.deepEqual(valueLeaks({ row: { values: { a: 1 } } }, []), ["$.row.values (key)"], "and a key that names one");
+  for (const needle of [NAMES[1], rows[0].placementHash]) assert.equal(res.text.includes(needle), false, needle);
   // What was written.
   const after = await counts();
   assert.deepEqual([after.t3 - before.t3, after.t4 - before.t4, after.t5 - before.t5, after.t9 - before.t9, after.t9i - before.t9i], [2, 2, 3, 1, 3]);
@@ -723,6 +753,28 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   assert.ok(from >= 0 && to > from, "the save's transaction was recorded");
   const tx = seen.slice(from, to);
   const txValues = seenValues.slice(from, to);
+  // The statements that carry an athlete's value (the confirmation's items, the only ones naming the value columns)
+  // run under their own lower statement bound, set right before the first and put back right after the last.
+  const saveServiceModule = await import("../src/sourceMetricBoardSaveService.js");
+  const mappingServiceModule = await import("../src/sourceMetricMappingService.js");
+  const valueStatements = tx.map((x, i) => (/\braw_a\b|\bstored_a\b|\braw_b\b|\bstored_b\b/.test(x) ? i : -1)).filter((i) => i >= 0);
+  assert.equal(valueStatements.length, 4, "one items insert per row of the save");
+  assert.ok(valueStatements.every((i) => /^insert into training_load\.source_metric_confirmation_items\b/.test(tx[i])));
+  assert.deepEqual(valueStatements, valueStatements.map((_, n) => valueStatements[0] + n), "one after another, nothing between them");
+  assert.equal(saveServiceModule.VALUE_STATEMENT_TIMEOUT_MS, 5000);
+  assert.ok(saveServiceModule.VALUE_STATEMENT_TIMEOUT_MS < mappingServiceModule.STATEMENT_TIMEOUT_MS);
+  assert.equal(tx[valueStatements[0] - 1], `set local statement_timeout = '${saveServiceModule.VALUE_STATEMENT_TIMEOUT_MS}ms'`, "the lower bound is set right before");
+  assert.equal(tx[valueStatements.at(-1) + 1], `set local statement_timeout = '${mappingServiceModule.STATEMENT_TIMEOUT_MS}ms'`, "and the transaction's bound right after");
+  const bounds = tx.map((x, i) => (/^set local statement_timeout\b/.test(x) ? i : -1)).filter((i) => i >= 0);
+  assert.deepEqual(bounds, [valueStatements[0] - 1, valueStatements.at(-1) + 1], "no other statement of the save's own work changes the bound");
+  // Bind parameters with a value: only those statements carry the four numbers of a checked row.
+  const checkedValues = (await rows_(`select trim_scale(raw_a)::text as a, trim_scale(stored_a)::text as b, trim_scale(raw_b)::text as c, trim_scale(stored_b)::text as d from ${T9I} where confirmation_id = $1 and checked`, [res.body.confirmation.id]));
+  assert.ok(checkedValues.length >= 1);
+  for (const row of checkedValues) {
+    const four = Object.values(row).map(Number);
+    const carriers = txValues.map((params, i) => (four.every((v) => params.some((x) => x !== null && x !== "" && typeof x !== "boolean" && Number(x) === v)) ? i : -1)).filter((i) => i >= 0);
+    assert.ok(carriers.length >= 1 && carriers.every((i) => valueStatements.includes(i)), "the four values of a row travel only in an items insert");
+  }
   const LOCKING = /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock|\block table\b/i;
   const WRITE = /^(insert|update|delete)\b/i;
   const at = (re, after = -1) => { const i = tx.findIndex((x, n) => n > after && re.test(x)); assert.ok(i >= 0, `not sent: ${re}`); return i; };
@@ -805,11 +857,13 @@ test("8. route 6, erasure on request: only a platform admin in the platform work
     }
   });
   assert.deepEqual(await valuesOf(id), { held: true, salt: true, digest: true, kind: null, by: null });
+  const heldBefore = Object.values(await one(`select trim_scale(raw_a)::text as a, trim_scale(stored_a)::text as b, trim_scale(raw_b)::text as c, trim_scale(stored_b)::text as d from ${T9I} where confirmation_id = $1 and checked`, [id]));
+  assert.ok(heldBefore.length === 4 && heldBefore.every((v) => v !== null));
   const requestKey = key();
   const res = await erase(W.pa, { requestKey, reasonCode: "erasure_request" });
   const body = ok(res);
   assert.deepEqual(body.confirmation.rows.map((r) => [r.valuesState, r.values]), [["erased", null]]);
-  assert.equal(res.text.includes("1200"), false);
+  assert.deepEqual(valueLeaks(res.body, heldBefore), [], "the erased values are not in the answer");
   assert.deepEqual(await valuesOf(id), { held: false, salt: false, digest: true, kind: "erased", by: W.pa.id });
   assert.deepEqual(await one(`select action, reason, basis, performed_by_user_id from ${T8} where confirmation_id = $1 and action = 'confirmation_values_erased'`, [id]),
     { action: "confirmation_values_erased", reason: "erasure_request", basis: "platform_admin", performed_by_user_id: W.pa.id });
@@ -979,4 +1033,26 @@ test("12. two admins save crossed rows of one team at the same moment, on free-r
     assert.equal((await one(`select count(*)::int as n from ${T5} where source_team_binding_id = $1 and ended_at is null`, [t.bindingId])).n, 2);
     assert.equal((await one(`select count(*)::int as n from ${T9} where team_id = $1`, [t.teamId])).n, 1);
   }
+});
+
+test("13. a value-carrying statement that runs past its own bound is cancelled: the save answers 409 try_again, nothing is written, and the next save goes through", async () => {
+  const { t, cand } = await freshTeam();
+  const vMin = await variable(W.caA, { unit: "min" });
+  const rows = [await newRow(W.caA, t, cand, await field("time"), vMin)];
+  const { VALUE_STATEMENT_TIMEOUT_MS } = await import("../src/sourceMetricBoardSaveService.js");
+  // The items insert is held longer than its bound (and shorter than the transaction's), by a trigger of the test.
+  await k.query(`create function training_load.test_slow_item() returns trigger language plpgsql as $f$ begin perform pg_sleep(${(VALUE_STATEMENT_TIMEOUT_MS + 1500) / 1000}); return new; end $f$`);
+  await k.query(`create trigger test_slow_item before insert on ${T9I} for each row execute function training_load.test_slow_item()`);
+  const started = Date.now();
+  let res;
+  try {
+    await nothingWritten(async () => { res = await save(W.caA, t, cand, rows); });
+  } finally {
+    await k.query(`drop trigger test_slow_item on ${T9I}`);
+    await k.query(`drop function training_load.test_slow_item()`);
+  }
+  const took = Date.now() - started;
+  refused(res, 409, "try_again");
+  assert.ok(took >= VALUE_STATEMENT_TIMEOUT_MS - 200 && took < VALUE_STATEMENT_TIMEOUT_MS + 1400, `cancelled at the value bound, not at the transaction's (${took} ms)`);
+  assert.equal(ok(await save(W.caA, t, cand, rows)).confirmation.rows.length, 1);
 });

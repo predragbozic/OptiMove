@@ -177,9 +177,9 @@ async function org({ leadingZero = false, bare = false } = {}) {
 // The fake source: the exchange, the team list and team reads (Connect / Test
 // / bind), and the rest_v1 session reads of ONE served team at a time, derived
 // from the shared e03 bundle fixture so the mapper gets consistent data.
-function bundleFor(sourceTeamId, { detailsDrills = [0, 1], emptyDrill = null } = {}) {
+function bundleFor(sourceTeamId, { detailsDrills = [0, 1], emptyDrill = null, athletes = standardAthletes() } = {}) {
   const sid = Number(sourceTeamId) * 10;
-  const b = makeBundle({ sessionId: sid, gpexeTeamId: Number(sourceTeamId), athletes: standardAthletes(), detailsDrills });
+  const b = makeBundle({ sessionId: sid, gpexeTeamId: Number(sourceTeamId), athletes, detailsDrills });
   if (emptyDrill !== null) b.details.drills[String(emptyDrill)] = { players: {} };
   return b;
 }
@@ -2268,14 +2268,18 @@ test("38. an incomplete drill set keeps its reason for an administrator in a clo
     ["players as an array in drill 0", () => ({ index: 0, players: [] }), "op=drill_set; session_position=1; expected=2; completed=0; failed_index=0; code=players_missing."],
     ["brake as a string in drill 1", (p) => ({ index: 1, players: { [Object.keys(p)[0]]: { tot_brake_events: "Marker Athlete Name 2026-10-06 https://evil.example/" } } }), "op=drill_set; session_position=1; expected=2; completed=1; failed_index=1; code=consumed_field_shape_unknown; consumed_field=brake; value_kind=string."],
   ];
+  // Planted, distinctive athlete ids (12 digits) instead of the fixture's 101-103, so no number a log line carries (a duration,
+  // a count, a random UUID's digits) can be mistaken for one; the leak check below then looks for these ids anywhere.
+  const planted = () => standardAthletes().map((a) => ({ ...a, id: 731904117000 + a.id }));
   for (const [label, fault, expected] of cases) {
     const o = await org();
     useSource();
     await bound(o);
     process.env.GPEXE_API_TOKEN = ENV_TOKEN;
     legacyTrap();
-    src.serve(o.sourceTeamId);
+    src.serve(o.sourceTeamId, { athletes: planted() });
     const players = structuredClone(src.state.bundle.details.drills["1"].players);
+    assert.ok(Object.keys(players).length > 0 && Object.keys(players).every((id) => id.startsWith("731904117")), "the planted ids are served");
     src.state.faults.drillPlayers = fault(players);
     const logBefore = logLines.length;
     try {
@@ -2291,11 +2295,8 @@ test("38. an incomplete drill set keeps its reason for an administrator in a clo
       const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
       assert.ok(!JSON.stringify(status.body).includes("Diagnostic"), `${label}: no description in the coach's status`);
       assert.equal((await candidatesOf(o.teamId)).length, 0, `${label}: nothing recorded`);
-      // An athlete id as a whole token only: the log lines carry random UUIDs,
-      // whose hex runs contain three-digit sequences like "101" (a substring
-      // match failed about 1.5% of the runs - CURRENT_STATE, Separate tasks).
-      const namesId = (line, id) => new RegExp(`(?<![0-9A-Za-z-])${id}(?![0-9A-Za-z-])`).test(line);
-      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => namesId(l, id)), `${label}: log line ${l.slice(0, 120)}`);
+      // The planted ids are distinctive, so a plain substring check is exact: no log line names one anywhere.
+      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => l.includes(id)), `${label}: log line ${l.slice(0, 120)}`);
     } finally {
       src.state.faults.drillPlayers = null;
     }

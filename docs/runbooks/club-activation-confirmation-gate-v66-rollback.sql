@@ -17,10 +17,12 @@
 -- it never depended on the gate. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026 of backend/src/migrate.js);
 --   * v66 is not recorded on the database, or a later migrations_v2
---     migration other than v67 is. v67 (MT-A, another track) touches another
---     table, does not read the gate and reaches production before v66, so it
---     sits "after" v66 by file name only; removing the gate leaves it
---     untouched and it is not rolled back first;
+--     migration other than v67, v68, v69 or v70 is. Those four (MT-A's track
+--     choices, MT-D's two scale-recording migrations, App health's v70) are
+--     tolerated by exact name, in any subset: each touches other tables, none
+--     reads the gate, and they sit "after" v66 by file name only (v67, v68
+--     and v69 reach production before it). Removing the gate leaves them
+--     untouched and none is rolled back first;
 --   * the gate's function or trigger is missing, the trigger is disabled, or
 --     the function's body is not v66's (by md5).
 --
@@ -43,15 +45,19 @@ lock table training_load.source_metric_mapping_versions in share row exclusive m
 do $$
 declare
   v66 constant text := 'migrations_v2/202611131000_training_load_v66_club_activation_confirmation_gate.sql';
-  -- MT-A's migration: later by file name, independent of the gate (another table), on production before v66.
-  v67 constant text := 'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql';
+  -- Later by file name and independent of the gate (other tables): MT-A's v67, MT-D's v68 and v69, App health's v70.
+  tolerated constant text[] := array[
+    'migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql',
+    'migrations_v2/202611131300_training_load_v68_track_choice_scale.sql',
+    'migrations_v2/202611131310_training_load_v69_scale_recording_estimates.sql',
+    'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql'];
   reasons text[] := '{}';
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v66) then
     raise exception 'v66 rollback refused: v66 is not recorded on this database';
   end if;
   if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v66
-               and migration_name <> v67) then
+               and migration_name <> all (tolerated)) then
     reasons := reasons || 'a later migration is recorded'::text;
   end if;
   if not exists (select 1 from pg_proc p where p.pronamespace = 'training_load'::regnamespace

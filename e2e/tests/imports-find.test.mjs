@@ -87,7 +87,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await openSession(coach.page, "05.11.");
         await linkFromRow(coach.page, world.ids.athleteIds[3]);
         assert.equal(await coach.page.locator('[data-action="training-load-gpexe-approve"]').count(), 0, "no Import button without the right");
-        assert.match((await coach.page.locator(".gpexe-detail").innerText()).replace(/\s+/g, " "), /Approving needs a platform admin or an explicit approver grant/);
+        assert.match((await coach.page.locator(".gpexe-detail").innerText()).replace(/\s+/g, " "), /You can't import this session\. Ask your club administrator\./);
         const candidates = (await setup.call("team_coach", "GET", `${G}/teams/${setup.teamId}/candidates`)).body.candidates;
         const target = candidates.find((c) => String(c.gpexeTeamSessionId) === "9102");
         const detail = (await setup.call("team_coach", "GET", `${G}/teams/${setup.teamId}/candidates/${target.id}`)).body.candidate;

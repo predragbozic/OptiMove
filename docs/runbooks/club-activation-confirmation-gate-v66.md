@@ -37,15 +37,16 @@ save never depended on the gate. A schema rollback removes only the gate.
 touches the production database.
 
 1. Right before the merge, on the merge tree: the 12-digit prefixes are unique (`.claude/rules/migrations.md`), and
-   the md5 of T4's two guards on `main` is still the pair of the preflight's block 2. **v67** (MT-A,
-   `migrations_v2/202611131200_training_load_v67_gpexe_track_choices.sql`, sha256 `9f9b7d25…47cd`) is merged after
-   v66 and deployed before it: block 1 expects it recorded and as the last migration, and tolerates it alone after
-   v66. If any other migration is merged before v66 is deployed, block 1 is re-issued with that migration's name and
-   checksum first.
+   the md5 of T4's two guards on `main` is still the pair of the preflight's block 2. **Four migrations of other
+   tracks sort after v66 by file name and are tolerated by exact name**, with their checksums where presence is
+   asserted: v67 (MT-A, sha256 `9f9b7d25…47cd`; required, on production), v68 (`8beaef9b…a815`) and v69
+   (`98a11f69…6391`) (MT-D; deployed before v66), and v70 (App health, `85804583…7d60`; before or after v66). None
+   touches T4 or reads the gate; the runner applies by file name and takes v66 after them. Any other migration
+   after v66 is a refusal, and block 1 is then re-issued with that migration's name and checksum first.
 2. The *Rukovodilac* runs `docs/runbooks/club-activation-confirmation-gate-v66-preflight.sql` read-only, one block at
    a time, on the same UTC day as the deploy. Every `…_ok` column must be `true` and every count the expected one:
-   - block 1: v65 and v67 each recorded once with its checksum, no v66, no other migration after v66, and v67 the
-     last one (the runner applies by file name, so v66 goes in after v67 without trouble);
+   - block 1: v65 and v67 each recorded once with its checksum; v68 and v69 recorded (the fixed deploy order), v70
+     recorded or not; each of those three with its checksum where recorded; no v66; no other migration after v66;
    - block 2: T4's two guards and its trigger set as the gate expects;
    - block 3: nothing of v66 exists yet; what it reads is there; the migrator's role owns T4;
    - block 4: **the versions the gate will stop.** `waiting_without_link` must be 0. If it is not, the owner decides
@@ -53,7 +54,13 @@ touches the production database.
    - block 5: **the server does not write a save's values to its log.** It is run **as the application's
      `DATABASE_URL` role**: the settings are those of the session that asks. A refusal: if any column is `false`,
      there is no deploy until the owner changes the setting, or the save is shown not to pass values as logged
-     parameters. Its last column is `false` when any role or database carries an override of these settings;
+     parameters. Its last column is `false` when any role or database carries an override of these settings,
+     except `log_statement=none`, which only reduces logging. **The `auto_explain` column** is true when
+     `auto_explain` is off, or logs neither parameters nor a verbose plan, or its threshold is above 5000 ms: the
+     save's value-carrying statements (the confirmation's items) run under their own 5000 ms statement bound
+     (`VALUE_STATEMENT_TIMEOUT_MS`), a statement that long is cancelled, and `auto_explain` explains only a
+     statement that finished. Production today: threshold 10000 ms, parameters in full, so the bound is what keeps
+     the values out of the log; if the threshold is ever lowered to 5000 ms or less, this column turns false;
    - block 6: the same settings as they are and the role that asked, for the record. It also says what block 5 does
      not cover: the pooler's own statement log, and a value inside an error's own text;
    - block 7: a quiet moment on T4.
@@ -72,8 +79,9 @@ touches the production database.
 `docs/runbooks/club-activation-confirmation-gate-v66-rollback.sql`, rehearsed on a disposable database (apply →
 rollback → the identical catalog → apply again). It drops the gate's trigger and function and removes the v66 record.
 It refuses while the migrator runs, when v66 is not recorded, under a later migration, and when the gate's function
-or trigger is missing, disabled or not v66's. It tolerates exactly one later migration, v67, which touches another
-table, does not read the gate and is not rolled back with it; any other later migration refuses it. Never run
+or trigger is missing, disabled or not v66's. It tolerates, by exact name and in any subset, the four later
+migrations v67, v68, v69 and v70, which touch other tables, do not read the gate and are not rolled back with it;
+any other later migration refuses it. Never run
 without the owner's order for that database. v65 is rolled back only after v66.
 
 ## The stored values: how a platform admin removes them

@@ -15,7 +15,7 @@
 //
 // It never sends a GPEXE request, never logs or audits a value, a name or a
 // hash, and never returns a value.
-import { adminWriteKit, classifyDatabaseError, SourceMetricMappingError } from "./sourceMetricMappingService.js";
+import { adminWriteKit, classifyDatabaseError, SourceMetricMappingError, STATEMENT_TIMEOUT_MS } from "./sourceMetricMappingService.js";
 import { bindingClubHolds } from "./sourceMetricAccess.js";
 import { lockHides, lockListedBindings } from "./sourceMetricActivationSteps.js";
 import { boardKit, mayUseBoard } from "./sourceMetricBoardService.js";
@@ -246,6 +246,10 @@ const RACED_CONSTRAINTS = new Set([
 ]);
 // The mapped texts and constraint names, for the suite that holds each one to the migration that raises it.
 export const SAVE_DATABASE_REFUSALS = Object.freeze({ actorTexts: [...ACTOR_TEXTS], candidateTexts: [...CANDIDATE_TEXTS], racedConstraints: [...RACED_CONSTRAINTS] });
+// The statement bound of the statements that carry an athlete's value (the confirmation's items). The v66 preflight
+// (block 5) requires the database's auto_explain threshold to be above it.
+export const VALUE_STATEMENT_TIMEOUT_MS = 5_000;
+
 export function classifySaveError(error) {
   if (error instanceof SourceMetricMappingError) return error;
   if (error?.code === "42501" && ACTOR_TEXTS.has(error.message)) {
@@ -459,6 +463,12 @@ export async function saveConfirmation({ ctx, body }) {
         [confirmationId, world.candidate.id, world.candidate.bundle_hash, world.candidate.gpexe_team_session_id, world.candidate.session_started_at,
           world.candidate.last_seen_check_id, world.team.id, pair.index],
       );
+      // The only statements of the save that carry an athlete's value as a bind parameter. They run under their own,
+      // lower statement bound (VALUE_STATEMENT_TIMEOUT_MS), well below the threshold from which the database's
+      // auto_explain logs a slow statement with its parameters: a statement that long is cancelled, and a cancelled
+      // statement is not explained. The transaction's bound is restored for what follows; a timeout here is the
+      // usual try_again with nothing written.
+      await client.query(`set local statement_timeout = '${VALUE_STATEMENT_TIMEOUT_MS}ms'`);
       for (const [index, p] of plan.entries()) {
         const checked = p.kind === "new";
         await client.query(
@@ -473,6 +483,7 @@ export async function saveConfirmation({ ctx, body }) {
             checked ? p.values.a.raw : null, checked ? p.values.a.stored : null, checked ? p.values.b.raw : null, checked ? p.values.b.stored : null],
         );
       }
+      await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);
       // Step 16.4: each new version becomes active (the gate reads its row above).
       for (const p of fresh) {
         await client.query(
