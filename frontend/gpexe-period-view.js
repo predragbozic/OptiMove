@@ -79,7 +79,9 @@ function sessionsByDay(gx) {
       const listed = byDay.get(sd.day) || [];
       const missing = serverItems(sd);
       for (const x of listed) {
-        const i = missing.findIndex((m) => m.chip === x.chip);
+        // By the server's own word (code review): the screen's mark may carry the browser's facts (a link change).
+        const mark = x.c && SERVER_WORD[x.c.state] ? CHIP[SERVER_WORD[x.c.state]] : x.chip;
+        const i = missing.findIndex((m) => m.chip === mark);
         if (i >= 0) missing.splice(i, 1);
       }
       const items = [...listed, ...missing];

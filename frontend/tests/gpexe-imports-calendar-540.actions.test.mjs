@@ -279,3 +279,19 @@ test("#540 9 (code review): a failed older read of one day is read again when th
   assert.equal(gets(`/candidates?from=${D(8)}&to=${D(8)}`).length, 2);
   assert.match(panel(), /data-candidate-id="cand-70"/);
 });
+
+test("#540 10 (code review): on the list's first day, a listed session the browser moved to Needs you (a link change) still counts as listed", async () => {
+  resetState(); platform = false;
+  const list = [...recent().slice(0, 5), { ...row(6, daysAgo(5)), state: "ready" }];
+  installFetchMock(gpexeServer({ candidates: list, truncated: true,
+    calendar: () => ({ status: 200, body: { days: [{ day: daysAgo(5), chips: ["ready"], counts: { needs: 0, ready: 1, imported: 0, out: 0 } }] } }) }));
+  await openImports();
+  gx().period.month = daysAgo(5).slice(0, 7);
+  gx().linkSeq = 1; // a link made since the last search: the row reads Needs you
+  html();
+  const { ensurePeriodData } = await import("../gpexe-import-data.js");
+  await ensurePeriodData(() => {});
+  await settle();
+  const cell = dayCell(panel(), daysAgo(5));
+  assert.deepEqual([...cell.matchAll(/period-chip is-(\w+)/g)].map((x) => x[1]), ["needs"], "one session, one mark");
+});
