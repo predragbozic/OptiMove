@@ -366,13 +366,22 @@ one write path.
   the review names it, and the variables as the preview's own values label them (a club variable of another club stays
   "Club variable"; a variable the preview does not label reads "Variable"). It says nothing needs to be accepted: no
   checkbox, it never blocks, and it adds nothing to the approval.
-- **The action.** An imported session's review (not an undone one) reads the activity's roster (GET, the Roster tab's own
+  - **Wording by status:** before the import it says the measured values replace the estimates when the coach imports;
+    after it, that they replaced them in this import.
+  - **An undone import** shows no line.
+- **The action.** An imported session's review (not an undone one, and not one undone or being undone in the same review)
+  reads the activity's roster (GET, the Roster tab's own
   read) when it opens, and again after the import's attendance states are saved.
   - **The list:** while the server says `viewer.estimates`, the review lists the athletes in state *Participated · no
-    device data* under "Took part without device data", each with **Estimate values in Activities**. A failed read shows
-    no link.
-  - **The link:** it closes the review the way its Close does (never while an approval, its check or an undo is in
-    flight), and asks first while the import's attendance states are still being saved or not confirmed.
+    device data* under "Took part without device data", each with **Estimate values in Activities**. An athlete who
+    already has an estimate gets **Change the estimate in Activities** and an "Estimated" mark. A failed read shows no
+    link. Only the newest read counts.
+  - **The link:** it never acts while an approval, its check or an undo is in flight. Every question comes before the
+    review closes, so a No to any of them keeps the review as it is:
+    - while the import's attendance states are still being saved or not confirmed;
+    - Activities' own question when another session's roster has a write in flight or not confirmed.
+
+    Then it closes the review the way its Close does.
   - **Where it goes:** the session in Activities (the existing results-to-calendar hand-off) with its Roster tab and that
     athlete's estimate panel (6b-C1) open. The review saves no estimate itself and keeps no second roster state.
 - **Code:** `frontend/gpexe-estimate-link.js`, `gpexe-import-view.js` (`renderReplacedEstimatesHtml`), the action in

@@ -16722,6 +16722,7 @@ optimove-dashboard-chart {
 .gpexe-candidate-list,
 .gpexe-link-list,
 .gpexe-estimate-targets ul,
+.gpexe-replaced-estimates ul,
 .gpexe-changes ul {
   list-style: none;
   margin: 0;
@@ -26940,6 +26941,9 @@ div.mb-slot-open { cursor: default; }
 }
 .gpexe-estimate-targets li > span {
   min-width: 0;
+}
+.gpexe-estimate-targets .gpexe-button {
+  padding-block: 8px;
 }
 .gpexe-replaced-estimates li {
   overflow-wrap: anywhere;

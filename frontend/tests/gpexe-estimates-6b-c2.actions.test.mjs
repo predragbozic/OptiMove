@@ -25,7 +25,8 @@ const { handleTrainingLoadAction } = await import("../training-load-actions.js")
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, inboxBucket, batchSelectable, candidateGroup, notConfirmedForImport, withdrawnByCheck } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+const { loadEstimateTargets } = await import("../gpexe-estimate-link.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -38,7 +39,6 @@ const ORG = {
   athletes: [{ id: "ath-1", name: "Ana Example", memberships: [{ teamId: TEAM_A, membershipType: "team", status: "active" }] }],
 };
 const SRC = { list: [] };
-const LINKED = [{ gpexeAthleteId: "101", status: "linked", link: { id: "link-1", athleteId: "ath-1", athleteName: "Ana Example", linkedAt: "2026-09-10T10:00:00Z" }, lastSeen: null, values: { duration: 40, distance: 3000, maxSpeed: 27 } }];
 
 let renders = 0;
 const render = () => { renders += 1; };
@@ -71,9 +71,6 @@ function row(overrides = {}) {
     blockedCode: null, blockedSourceCode: null, sessionType: "FULL TRAINING", reasons: [], ...overrides,
   };
 }
-const notConfirmed = (over = {}) => row({ id: "cand-nc", approvalBlockers: ["not_confirmed_for_import"], ...over });
-const withdrawn = (over = {}) => row({ id: "cand-wd", status: "superseded", supersededByCheckId: "chk-withdrawer", approvalBlockers: ["not_confirmed_for_import"], ...over });
-const replaced = (over = {}) => row({ id: "cand-old", status: "superseded", supersededByCandidateId: "cand-1", approvalBlockers: ["superseded_by_newer_data"], ...over });
 
 let previewExtra = {};
 function detailOf(c) {
@@ -137,24 +134,11 @@ function section(page, label) {
   const end = page.indexOf("</section>", start);
   return page.slice(start, end);
 }
-const readySection = (page = html()) => section(page, "Ready to import");
-const attentionSection = (page = html()) => section(page, "Needs attention");
-const checkboxes = (page = html()) => [...page.matchAll(/data-action="training-load-gpexe-pick" data-candidate-id="([^"]+)"/g)].map((m) => m[1]);
 // The page with every closed Technical details block cut out.
 const outsideTech = (page) => page.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
-const CODES = /not_observed|not_confirmed_for_import|candidate_not_actionable|drill_parameter|superseded_by_check|superseded_by_candidate|last_seen/;
-const COACH_STEP = (day) => new RegExp(`Find new sessions again \\(with dates that include ${day}\\), then review it\\.`);
-const COACH_NOTE = (day) => new RegExp(`Not confirmed for import yet\\. Find new sessions again \\(with dates that include ${day}\\), then review it\\.`);
-const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GPEXE returned drill data for fewer than two of its drills, so OptiMove could not confirm its drill results";
-const ADMIN_STEP_TAIL = "\\. If it stays like this, check in GPEXE that the session(?:'|&#039;)s drills are set up and have data\\.";
-const ADMIN_WORDS = /fewer than two|successful search has confirmed|drills are set up|could not confirm its drill results/;
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-// P4: the chooser marks a session on the day the server searches it under (its UTC day).
-const dayLabel = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return `${d} ${MONTHS[m - 1]}`; };
 
 
 
-const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const replacedSection = (page = html()) => section(page, "Estimates replaced by measured values");
 
 async function openReview(extra, teamStatus = { enabled: true, canApprove: true }) {
@@ -178,7 +162,7 @@ test("1. the review names each athlete whose estimates the import replaces, with
   assert.match(sec, /nothing needs to be accepted/);
   assert.doesNotMatch(sec, /type="checkbox"/, "never a checkbox");
   assert.doesNotMatch(sec, /def-|ath-1/, "never an id");
-  assert.ok(html().indexOf("Estimates replaced by measured values") < html().indexOf("ath-1") || !html().includes("ath-1"));
+  assert.doesNotMatch(outsideTech(html()).replace(/data-[a-z-]+="[^"]*"/g, ""), /ath-1|def-(distance|other)/, "no id anywhere a coach reads");
 });
 
 test("2. one estimate reads in the singular; no estimate shows no section", async () => {
@@ -217,10 +201,10 @@ function rosterBody({ estimates = true, states = { "ath-1": "participated_no_val
 }
 const importedRow = () => row({ status: "imported", importedAt: "2026-10-06T10:00:00Z", approvalBlockers: ["already_imported"], previewHash: null });
 
-async function openImportedReview({ roster = rosterBody(), extra = {} } = {}) {
+async function openImportedReview({ roster = rosterBody(), extra = {}, preview = {} } = {}) {
   resetState();
   SRC.list = [];
-  previewExtra = {};
+  previewExtra = preview;
   const inner = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [importedRow()] });
   responder = async (call) => {
     if (call.url === `/api/training-activity/${ACT}/roster`) return typeof roster === "function" ? roster(call) : { status: 200, body: roster };
@@ -236,7 +220,11 @@ async function openImportedReview({ roster = rosterBody(), extra = {} } = {}) {
   // The roster read is fired alongside the review: let it settle.
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
-const targetsSection = (page = html()) => section(page, "Estimate values");
+// The section is named by its heading (aria-labelledby).
+function targetsSection(page = html()) {
+  const start = page.indexOf('class="gpexe-estimate-targets"');
+  return start < 0 ? "" : page.slice(start, page.indexOf("</section>", start));
+}
 
 test("4. an imported session's review lists who took part without device data, each with Estimate values in Activities, only while the server says estimates are on", async () => {
   await openImportedReview({ roster: rosterBody({ states: { "ath-1": "participated_no_values", "ath-2": "measured" } }) });
@@ -287,4 +275,83 @@ test("7. an athlete the review does not list, or an import that was undone, gets
   assert.ok(gx().detail, "an unknown athlete changes nothing");
   await openImportedReview({ extra: { importUndoneAt: "2026-10-07T10:00:00Z" } });
   assert.equal(targetsSection(), "", "an undone import offers no estimate");
+});
+
+// The internal reviews of 6b-C2.
+test("8. an undo made in the same review removes the link, and the action no longer navigates", async () => {
+  await openImportedReview();
+  assert.ok(targetsSection(), "the link is there before the undo");
+  gx().undo = { id: "cand-1", step: "done" };
+  gx().detail.candidate = { ...gx().detail.candidate, importUndoneAt: "2026-10-07T10:00:00Z" };
+  assert.equal(targetsSection(), "", "no link after the undo");
+  await act("training-load-estimate-in-activities", { athleteId: "ath-1" });
+  assert.ok(gx().detail, "the review stays");
+  assert.notEqual(state.trainingLoad.calendar.selectedActivityId, ACT);
+});
+
+test("9. a No to Activities' own question (another session's roster write is not confirmed) keeps the review as it is", async () => {
+  await openImportedReview();
+  const cal = state.trainingLoad.calendar;
+  cal.selectedActivityId = "other";
+  cal.roster = { ...cal.roster, activityId: "other", unconfirmed: { command: {} } };
+  confirmAnswer = false;
+  try {
+    await act("training-load-estimate-in-activities", { athleteId: "ath-1" });
+  } finally {
+    confirmAnswer = true;
+  }
+  assert.ok(gx().detail, "the review stays open");
+  assert.equal(cal.selectedActivityId, "other", "Activities is unchanged");
+  assert.ok(cal.roster.unconfirmed, "the other roster's unconfirmed write is kept");
+});
+
+test("10. a slower, older roster read never replaces a newer one", async () => {
+  await openImportedReview();
+  const detail = gx().detail;
+  let release;
+  const slow = new Promise((resolve) => { release = resolve; });
+  let n = 0;
+  const inner = responder;
+  responder = async (call) => {
+    if (call.url === `/api/training-activity/${ACT}/roster`) {
+      n += 1;
+      if (n === 1) { await slow; return { status: 200, body: rosterBody({ states: { "ath-1": "measured" } }) }; }
+      return { status: 200, body: rosterBody() };
+    }
+    return inner(call);
+  };
+  const first = loadEstimateTargets(detail, render);
+  await loadEstimateTargets(detail, render);
+  release();
+  await first;
+  assert.deepEqual(detail.estimateTargets.athletes.map((a) => a.athleteId), ["ath-1"], "the newer answer stays");
+});
+
+test("11. after the import the replacement line is in the past tense; an athlete who already has an estimate is offered Change the estimate", async () => {
+  const r = rosterBody();
+  r.athletes[0].values = [{ metricKey: "distance", value: 3000, unit: "m", entryMethod: "estimate", estimate: { method: "team_average" } }];
+  await openImportedReview({ roster: r, preview: { supersededEstimates: [{ athleteId: "ath-1", metricDefinitionId: "def-distance" }] } });
+  const replacedText = replacedSection();
+  assert.match(replacedText, /An estimate was replaced by a measured value/);
+  assert.match(replacedText, /replaced them in this import/);
+  assert.doesNotMatch(replacedText, /when you import/);
+  const sec = targetsSection();
+  assert.match(sec, />Change the estimate in Activities</);
+  assert.match(sec, /aria-label="Change the estimate for Ana Example in Activities"/);
+  assert.match(sec, /Estimated/);
+  // An undone import says nothing about the replaced estimates.
+  await openImportedReview({ extra: { importUndoneAt: "2026-10-07T10:00:00Z" }, preview: { supersededEstimates: [{ athleteId: "ath-1", metricDefinitionId: "def-distance" }] } });
+  assert.equal(replacedSection(), "");
+});
+
+test("8b. each undo signal alone removes the link: the undo done in this review (before the session is read again), and an undone session whose import outcome is still on screen", async () => {
+  await openImportedReview();
+  gx().undo = { id: "cand-1", step: "done" };
+  assert.equal(targetsSection(), "", "the undo's own state is enough");
+  gx().undo = { id: "cand-1", step: "unknown" };
+  assert.equal(targetsSection(), "", "an undo whose result is not confirmed too");
+  await openImportedReview();
+  gx().detail.outcome = { kind: "imported", result: { import: { activityId: ACT } } };
+  gx().detail.candidate = { ...gx().detail.candidate, importUndoneAt: "2026-10-07T10:00:00Z" };
+  assert.equal(targetsSection(), "", "the session's undone mark is enough, even with the import's outcome on screen");
 });

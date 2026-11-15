@@ -2060,13 +2060,22 @@ function replacedEstimateLines(preview, c) {
 }
 
 function renderReplacedEstimatesHtml(preview, c) {
+  // An undone import: the undo removed the measured values, so nothing is said about the estimates.
+  if (c?.importUndoneAt) return "";
   const lines = replacedEstimateLines(preview, c);
   if (!lines.length) return "";
   const count = preview.supersededEstimates.length;
+  const done = c?.status === "imported";
+  const heading = done
+    ? (count === 1 ? "An estimate was replaced by a measured value" : `Estimates replaced by measured values (${count})`)
+    : (count === 1 ? "An estimate is replaced by a measured value" : `Estimates replaced by measured values (${count})`);
+  const text = done
+    ? "GPEXE had measured values where estimates were saved, so the measured values replaced them in this import. Their values are in the table below."
+    : "GPEXE now has measured values where estimates were saved. The measured values replace them when you import; nothing needs to be accepted. Their values are in the table below.";
   return `
-    <section class="gpexe-changes gpexe-replaced-estimates" aria-label="Estimates replaced by measured values">
-      <h4>${escapeHtml(count === 1 ? "An estimate is replaced by a measured value" : `Estimates replaced by measured values (${count})`)}</h4>
-      <p class="muted">GPEXE now has measured values where you had saved estimates. The measured values replace them when you import; nothing needs to be accepted.</p>
+    <section class="gpexe-replaced-estimates" aria-label="Estimates replaced by measured values">
+      <h4>${escapeHtml(heading)}</h4>
+      <p class="muted">${escapeHtml(text)}</p>
       <ul>
         ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong> · ${escapeHtml(l.variables.join(", "))}</li>`).join("")}
       </ul>
