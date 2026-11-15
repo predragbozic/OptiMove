@@ -1211,17 +1211,24 @@ test("12. every stable backend code of the source routes reads as a sentence, ne
 });
 
 test("13. the coach's Imports screen: a check refused or failed through the team's source connection tells the coach to contact an administrator instead of 'try again'", () => {
-  assert.match(checkErrorText({ code: "source_connection_unavailable", message: "The team's source connection cannot be used right now; contact an administrator. Nothing was read." }), /contact an administrator/);
+  // P2 (O5): a coach reads who to ask, never the server's sentence.
+  assert.match(checkErrorText({ code: "source_connection_unavailable", message: "The team's source connection cannot be used right now; contact an administrator. Nothing was read." }), /Ask your club administrator/);
   assert.doesNotMatch(checkErrorText({ code: "source_connection_unavailable", message: "" }), /Try again/);
   const failed = renderCheckSummaryHtml({ id: "c1", status: "failed", startedAt: "2026-10-05T10:00:00.000Z", window: {}, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: { code: "source_connection_unavailable", message: "The team's source connection cannot be used right now; contact an administrator." } });
-  assert.match(failed, /contact an administrator/);
+  assert.match(failed, /Ask your club administrator/);
   assert.doesNotMatch(failed, /Try again in a moment/);
   const general = renderCheckSummaryHtml({ id: "c2", status: "failed", startedAt: "2026-10-05T10:00:00.000Z", window: {}, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: { code: "source_unavailable", message: "x" } });
   assert.match(general, /Try again in a moment/);
   // An administrator sees the precise connection code on the row: the advice is Settings > Source connections, not "try again".
-  const admin = renderCheckSummaryHtml({ id: "c3", status: "failed", startedAt: "2026-10-05T10:00:00.000Z", window: {}, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: { code: "binding_ended", message: "x" } });
-  assert.match(admin, /an administrator acts under Settings &gt; Source connections|an administrator acts under Settings > Source connections/);
-  assert.doesNotMatch(admin, /Try again in a moment/);
+  // P2 (owner 2026-11-13, O1): the platform admin with the pointer to the code, the club admin with its own step only.
+  const viewerBefore = state.trainingLoad.gpexe.status;
+  for (const [viewer, words] of [[{ isPlatformAdmin: true, identityAdmin: true }, /an administrator acts under Settings &gt; Source connections|an administrator acts under Settings > Source connections/], [{ identityAdmin: true }, /Check it in Settings &gt; Source connections|Check it in Settings > Source connections/]]) {
+    state.trainingLoad.gpexe.status = { viewer };
+    const admin = renderCheckSummaryHtml({ id: "c3", status: "failed", startedAt: "2026-10-05T10:00:00.000Z", window: {}, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: { code: "binding_ended", message: "x" } });
+    assert.match(admin, words);
+    assert.doesNotMatch(admin, /Try again in a moment/);
+  }
+  state.trainingLoad.gpexe.status = viewerBefore;
 });
 
 test("5c. (J19 U2a) an unnamed GPEXE team cannot be approved by the club admin: the form says it has no name and Approve pair stays off; nothing is sent", async () => {

@@ -156,8 +156,10 @@ function assertMasked(html, where, ids = ALL_IDS) {
   const out = exposed(html);
   for (const id of ids) assert.ok(!new RegExp(`\\b${id}\\b`).test(out), `${where}: GPEXE id ${id} is visible outside Technical details`);
 }
+// P2 (owner 2026-11-13, O1): Technical details in Imports are the platform admin's only; a club admin has none at all.
 function assertInTech(html, id, where) {
-  assert.match(insideTech(html), new RegExp(`<dd>${id}</dd>`), `${where}: id ${id} is under Technical details`);
+  if (state.trainingLoad.gpexe.status?.viewer?.isPlatformAdmin === true) assert.match(insideTech(html), new RegExp(`<dd>${id}</dd>`), `${where}: id ${id} is under Technical details`);
+  else assert.equal(insideTech(html), "", `${where}: no Technical details for this viewer`);
 }
 
 async function openImports() {
@@ -308,8 +310,13 @@ for (const role of ["coach", "club admin", "platform admin"]) {
     if (admin) {
       assertMasked(html, `${role}: v3 session review`);
       const tech = insideTech(html);
-      for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(tech.includes(marker), `${role}: ${marker} under Technical details`);
-      assert.match(tech, /<dt>Left-out source codes<\/dt><dd>max_v_missing<\/dd>/);
+      if (role === "platform admin") {
+        for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(tech.includes(marker), `${role}: ${marker} under Technical details`);
+        assert.match(tech, /<dt>Left-out source codes<\/dt><dd>max_v_missing<\/dd>/);
+      } else {
+        // P2 (O1): the club admin has no Technical details, so the markers are nowhere.
+        for (const marker of [V3_MARK.activation, V3_MARK.version, V3_MARK.fingerprint]) assert.ok(!html.includes(marker), `${role}: ${marker} is nowhere`);
+      }
       assert.match(outsideTech(html), /not switched on for this team, so its values are not imported: Max acceleration\./);
       assert.match(outsideTech(html), /Top speed - required value missing/);
     } else {
@@ -333,48 +340,51 @@ test("no stored identity at all (none loaded, or the team has no binding): an ad
   }
 });
 
-test("a coach keeps the screens as before: the GPEXE ids stay in the text, no identity is ever requested, and nothing signals that a snapshot exists", async () => {
+test("P2: a coach sees no GPEXE id either - the list position names the athlete - and no identity is ever requested, nor any sign that a snapshot exists", async () => {
   reset(VIEWERS.coach);
   await openMapping();
   const html = pageHtml();
   assert.equal(fetchCalls.filter((c) => c.url.includes("/athlete-identities")).length, 0, "no identity request");
-  assert.match(outsideTech(html), new RegExp(`<strong>GPEXE athlete ${ID.named}</strong>`));
+  assertMasked(html, "coach: Link athletes");
+  assert.match(outsideTech(html), /<strong>GPEXE athlete \d+<\/strong>/, "named by its position in the list");
+  assert.equal(insideTech(html), "", "no Technical details for a coach");
   assert.ok(!/Name not loaded|Name not provided|GPEXE names and dates of birth|retry|24 hours/.test(html), "no sign of an identity or a snapshot");
   await act("training-load-gpexe-map-close");
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
-  assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
+  assertMasked(review, "coach: session review");
+  assert.equal(insideTech(review), "", "no Technical details in a coach's review");
 });
 
-test("the team's own coach (identityNames): the GPEXE names replace the ids on Link athletes and the session review, never a date of birth or a conflict, and the admin-only load controls stay hidden", async () => {
+test("the team's own coach (identityNames): the GPEXE names replace the ordinals on Link athletes and the session review, never a date of birth or a conflict, and the admin-only load controls stay hidden", async () => {
   reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
   await openMapping();
   const html = pageHtml();
   assert.equal(fetchCalls.filter((c) => c.url.includes("/athlete-identities")).length >= 1, true, "the coach reads the stored names");
-  // The GPEXE name stands in for the id, with no "Born" line and no date.
+  // The GPEXE name stands in for the ordinal, with no "Born" line and no date.
   assert.match(outsideTech(html), /<strong>Mira Zedova<\/strong>/);
-  assertMasked(html, "team coach: Link athletes");
   assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(html)), "no date of birth for the coach");
   // No admin-only load: no "Load the GPEXE names and dates of birth", no retry/suppression counts.
   assert.ok(!/Load the GPEXE names and dates of birth|names and dates of birth already|24 hours|Hidden for 24|retry/i.test(html), "no admin load controls");
+  assert.ok(!/class="gpexe-identity"/.test(html), "no identity load panel for the coach");
+  assert.ok(!/Name not loaded|name not loaded/.test(html), "a coach is never told a name is not loaded");
   await act("training-load-gpexe-map-close");
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
   assert.match(outsideTech(review), /Find the GPEXE athlete Mira Zedova in GPEXE first/, "the review names the athlete by its GPEXE name");
-  // An athlete the coach has no name for: the heading points at the session values, never at a number GPEXE does not know.
+  // An athlete the coach has no name for: "GPEXE athlete N", and the heading points at the session values (P2).
   assert.match(outsideTech(review), /Find this athlete in GPEXE using the session values below/, "a nameless athlete");
-  assertMasked(review, "team coach: session review");
   assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(review)), "no date in the review");
-  // UX HIGH on 7c0510ab: a coach gets no Technical details at all and no GPEXE id anywhere in the page.
+  // P2 and the UX HIGH on 7c0510ab: a coach gets no Technical details at all and no GPEXE id anywhere in the page.
   for (const [where, page] of [["Link athletes", html], ["session review", review]]) {
-    if (where === "session review") assert.ok(!/class="gpexe-tech"/.test(page), `team coach: no Technical details on ${where}`);
+    assert.ok(!/class="gpexe-tech"/.test(page), `team coach: no Technical details on ${where}`);
     for (const id of ALL_IDS) assert.ok(!new RegExp(`\\b${id}\\b`).test(page.replace(/data-[a-z-]+="[^"]*"/g, "")), `team coach: GPEXE id ${id} nowhere on ${where}`);
     assert.ok(!/give them the Technical details|the id is under Technical details/.test(page), `team coach: no pointer to Technical details on ${where}`);
   }
 });
 
-test("the team's own coach, a nameless athlete in the review table's row: the heading points at the values in the row when there are some, and only asks to find the athlete when GPEXE sent none (code review LOW on 9f6cd42e)", async () => {
-  for (const [values, expected] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, /Find this athlete in GPEXE using the values in this row\./], [{}, /Find this athlete in GPEXE\. Link only if you are sure\./]]) {
+test("the team's own coach, a nameless athlete in the review table's row: no heading that points at values below (P2: none in a compact row), only the row's own line about its values", async () => {
+  for (const [values, sentNone] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, false], [{}, true]]) {
     reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
     const base = responder;
     responder = async (call) => (call.url.endsWith("/candidates/cand-1")
@@ -382,21 +392,24 @@ test("the team's own coach, a nameless athlete in the review table's row: the he
       : base(call));
     await openReview();
     const html = outsideTech(pageHtml());
-    assert.match(html, expected);
+    assert.equal(/GPEXE sent no values for this athlete that could help you find them/.test(html), sentNone);
     assert.ok(!/session values below/.test(html), "no pointer to values below a compact row");
   }
 });
 
-test("the team's own coach with no stored names keeps the ids as before (an ordinal alone would not help to find the athlete), with no Technical details", async () => {
+test("the team's own coach with no stored names reads \"GPEXE athlete N\" (P2), never the id, with no Technical details", async () => {
   reset(VIEWERS["team coach"], { identities: { ...COACH_IDENTITIES, identities: [] } });
   await openMapping();
   const html = pageHtml();
-  assert.match(outsideTech(html), new RegExp(`<strong>GPEXE athlete ${ID.named}</strong>`));
+  assert.match(outsideTech(html), /<strong>GPEXE athlete \d+<\/strong>/);
   await act("training-load-gpexe-map-close");
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
-  assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
-  assert.ok(!/class="gpexe-tech"/.test(review), "no Technical details in the review");
+  assert.match(outsideTech(review), /Find this athlete in GPEXE using the session values below/);
+  for (const page of [html, review]) {
+    assert.ok(!/class="gpexe-tech"/.test(page), "no Technical details");
+    for (const id of ALL_IDS) assert.ok(!new RegExp(`\\b${id}\\b`).test(page.replace(/data-[a-z-]+="[^"]*"/g, "")), `GPEXE id ${id} nowhere`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -483,7 +496,8 @@ test("with the source-athletes read refused, the review's unlinked athletes stay
   await openReview();
   const html = pageHtml();
   assertMasked(html, "review without the source-athletes list");
-  const names = [...outsideTech(html).matchAll(/<summary[^>]*>[\s\S]*?<strong>([^<]*)<\/strong>/g)].map((m) => m[1]).filter((n) => /GPEXE athlete/.test(n));
+  // P1: a club admin's review names the unlinked athletes in the table only (the per-athlete list is the platform admin's).
+  const names = [...outsideTech(html).matchAll(/role="rowheader">([^<]*)<\/th>/g)].map((m) => m[1]).filter((n) => /GPEXE athlete/.test(n));
   assert.ok(names.length >= 2, `two unlinked athletes are named: ${names.join(" | ")}`);
   assert.equal(new Set(names).size, names.length, "never one shared label");
   assert.ok(names.every((n) => /^GPEXE athlete \d+$/.test(n)), "a number, never a bare 'GPEXE athlete'");
