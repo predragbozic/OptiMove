@@ -35,7 +35,7 @@ async function booleansOf(client, sql) {
 }
 
 test("1. v72: the preflight passes before it; it refuses over an existing table, changing nothing; the post-check passes after it; the rollback restores the catalog exactly, refuses once an observation exists, and v72 applies again", async () => {
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "sfo70rb", migrations: BEFORE_V72 });
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "sfo72rb", migrations: BEFORE_V72 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
@@ -60,6 +60,20 @@ test("1. v72: the preflight passes before it; it refuses over an existing table,
     assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v72 exactly");
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
+
+    // D1's v71 (another track, 202611151000) recorded as well, in either order: the post-check still passes, the rollback is
+    // not refused by it, the preflight passes with D1 recorded and v72 gone, and v72 applies again.
+    const D1 = "migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql";
+    await client.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ($1, repeat('0', 64), 'test')`, [D1]);
+    const postD1 = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v72-postcheck.sql"), "utf8"));
+    assert.deepEqual(postD1.filter(([, v]) => v !== true), [], "the post-check passes with D1's v71 recorded");
+    await client.query(fs.readFileSync(RUNBOOK("source-field-observations-v72-rollback.sql"), "utf8"));
+    assert.deepEqual(await catalogOf(client), { ...before, migrations: [...before.migrations, D1].sort() }, "the rollback with D1's v71 recorded");
+    const preD1 = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v72-preflight.sql"), "utf8"));
+    assert.deepEqual(preD1.filter(([, v]) => v !== true), [], "the preflight passes with D1's v71 recorded");
+    await client.query(`delete from public.schema_migrations where migration_name = $1`, [D1]);
+    await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
+    assert.deepEqual(await catalogOf(client), after, "re-applied after the D1 case: the same catalog");
 
     // Once an observation exists the rollback refuses and changes nothing. (The row is planted with the triggers and the
     // foreign keys off, as a replica would write it; the writer itself is proven in gpexe-in-app-import.test.mjs.)
