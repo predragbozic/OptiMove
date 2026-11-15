@@ -48,7 +48,7 @@ import {
   checkIdentityLoad,
   gpexeAthleteSentence,
   identityBusy,
-  identityViewer,
+  identityNameViewer,
   loadGpexeIdentities,
   loadPairSuggestions,
   loadGuidePairs,
@@ -74,7 +74,8 @@ function unlinkQuestion(gx, linkId) {
   }
   const name = link.athleteName;
   // P2: no viewer sees a GPEXE id outside Technical details; the athlete is named by its list position.
-  const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
+  // The link just made keeps the name the viewer confirmed (a coach's re-read list no longer names a linked athlete).
+  const who = fromNotice && gx.lastLink.gpexeSentence ? gx.lastLink.gpexeSentence : gpexeAthleteSentence(link.gpexeAthleteId, gx);
   return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — ${ask}.`;
 }
 
@@ -351,9 +352,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
     openTeamMapping();
     renderTrainingLoad();
-    // An administrator also sees the GPEXE names and dates of birth already
-    // stored (no GPEXE request); a coach's screen never asks.
-    if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
+    // The stored GPEXE names (no GPEXE request): an administrator's with dates of birth, the team's own coach's of the
+    // unlinked athletes only.
+    if (identityNameViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
     // U3: the suggested pairs - for the team's coach and the identity administrators alike (the server decides).
     await loadPairSuggestions(renderTrainingLoad);
     return true;

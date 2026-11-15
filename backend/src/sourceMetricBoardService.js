@@ -17,12 +17,12 @@
 // service); return, log or put into a URL an athlete id or a GPEXE athlete
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
-import { pool } from "./db.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
-import { GPEXE_SOURCE_SYSTEM, gpexeLevelValuesKeyed } from "./gpexeImportMapper.js";
+import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
+import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
 const { boundedRead, refusal, NOT_FOUND, UUID } = adminWriteKit;
@@ -31,11 +31,6 @@ const { boundedRead, refusal, NOT_FOUND, UUID } = adminWriteKit;
 export const BOARD_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 export const CONFIRMATIONS_PAGE = 50;
 const SOURCE_CONNECTION_PATH = "source_connection";
-const REMOVAL_BATCH = 200;
-// The removal batch's bounds: its statement and lock waits in the database, and the whole step on the client.
-const REMOVAL_STATEMENT_MS = 2000;
-const REMOVAL_LOCK_MS = 500;
-const REMOVAL_BOUND_MS = 4000;
 
 const BOARD_MESSAGES = {
   invalid_query: "The query carries a parameter this route does not take, or a value it cannot read.",
@@ -44,6 +39,7 @@ const BOARD_MESSAGES = {
   candidate_too_large: "The saved session is too large to read.",
   candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
   candidate_not_importable: "The import would not take this GPEXE session.",
+  board_too_large: "This session has too many athletes and columns to compare at once.",
   session_start_unknown: "This saved session has no start time.",
   not_enough_athletes: "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them.",
   pair_out_of_range: "No other athletes have values for all your columns.",
@@ -52,48 +48,13 @@ const BOARD_MESSAGES = {
 // made (sections 3.5 and 4.2). Codes only: the screen owns the sentences.
 export const COLUMN_REASONS = Object.freeze(["field_not_confirmed", "field_has_parameters", "source_metric_unsupported", "display_rule_missing", "no_value_for_pair"]);
 
-// Test seam: the removal batch that runs before a board or history read.
-let removalFault = null;
-let removalBoundMs = REMOVAL_BOUND_MS;
-export function setBoardRemovalFaultForTests(fn, { boundMs = REMOVAL_BOUND_MS } = {}) { removalFault = fn ?? null; removalBoundMs = fn ? boundMs : REMOVAL_BOUND_MS; }
-
 // Section 5.8: before every board or history read, ONE batch of the removal of
 // expired values, in its own call before the read's transaction (a read
-// transaction is read-only). Its failure is logged by code only and never
-// fails the read: no route returns a value past its date anyway.
-async function removeExpiredBatch() {
-  // Bounded twice: the statement and its lock waits in the database, and the
-  // whole step by a client bound that closes the connection, so a stalled
-  // batch delays a read by at most the bound and never fails it.
-  let client = null;
-  let abandoned = false;
-  let timer;
-  const close = (destroy) => { const c = client; client = null; if (c) c.release(destroy); };
-  const work = (async () => {
-    if (removalFault) await removalFault();
-    const c = await pool.connect();
-    if (abandoned) { c.release(true); return; }
-    client = c;
-    await c.query("begin");
-    await c.query(`set local statement_timeout = ${REMOVAL_STATEMENT_MS}`);
-    await c.query(`set local lock_timeout = ${REMOVAL_LOCK_MS}`);
-    await c.query(`select training_load.remove_expired_confirmation_values($1)`, [REMOVAL_BATCH]);
-    await c.query("commit");
-    close(false);
-  })();
-  work.catch(() => {});
-  try {
-    await Promise.race([work, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error("removal bound"), { code: "removal_bound_exceeded" })), removalBoundMs);
-    })]);
-  } catch (error) {
-    abandoned = true;
-    close(true); // the connection is closed, so nothing of the batch stays open
-    console.error(`[source-metric-board] expired_values_removal_failed (${error?.code ?? error?.name ?? "error"})`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+// transaction is read-only). Its failure or stall is logged by code only and
+// never fails the read: no route returns a value past its date anyway.
+const removeExpiredBatch = () => removeExpiredValuesBatch();
+// Test seam (the tests of 18-2): the removal module's own.
+export function setBoardRemovalFaultForTests(fn, options) { setRemovalFaultForTests(fn, options); }
 
 // The query, from the raw query string (never Express's parsed req.query).
 // A parameter the route does not take, a repeated one or a malformed value
@@ -132,7 +93,7 @@ const IDENTITY = Object.freeze({ scale: "1", divisor: "1", offset: "0" });
 // The board's world: everything one board or placement read needs, in ONE
 // REPEATABLE READ READ ONLY transaction. Plain reads, no lock.
 // ---------------------------------------------------------------------------
-async function loadWorld(client, ctx, { teamId, candidateId }) {
+async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing = NOT_FOUND }) {
   // The team, its one active GPEXE binding, and the binding's connection owned by the workspace's club.
   const team = (await client.query(
     `select t.id, t.name, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
@@ -151,13 +112,13 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   const usable = `c.status <> 'superseded' and c.import_undone_at is null`;
   const candidateSql = (where, tail) => `
     with scoped as materialized (
-      select c.id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.bundle_hash, c.last_seen_check_id,
+      select c.id, c.status, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.bundle_hash, c.last_seen_check_id,
              c.raw_purged_at is not null as purged, c.raw_expires_at <= now() as expired, c.raw_bundle,
              k.status as check_status, k.source_path, k.source_binding_id
         from training_load.gpexe_import_candidates c
         left join training_load.gpexe_import_checks k on k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id
        where c.owner_team_id = $1::uuid and ${usable} and ${where} ${tail})
-    select s.id, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.bundle_hash, s.last_seen_check_id, s.purged, s.expired,
+    select s.id, s.status, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.bundle_hash, s.last_seen_check_id, s.purged, s.expired,
            s.check_status, s.source_path, s.source_binding_id, b.too_large,
            case when b.too_large is false and s.check_status = 'succeeded' and s.source_path = $3::text and s.source_binding_id = $2::uuid
                      and s.session_started_at is not null
@@ -170,7 +131,7 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   if (candidateId) {
     candidate = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, candidateId])).rows[0];
     // An id that is not a usable stored session of this team is the identical 404.
-    if (!candidate) throw NOT_FOUND();
+    if (!candidate) throw onCandidateMissing();
   } else {
     candidate = (await client.query(candidateSql(
       `c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
@@ -246,14 +207,20 @@ async function loadWorld(client, ctx, { teamId, candidateId }) {
   )).rows;
   const switchedOff = (await client.query(
     // The mapping's LATEST activation on this binding, and only when an administrator ended it:
-    // a mapping switched on again and then ended another way is not "switched off".
+    // a mapping switched on again and then ended another way is not "switched off". An end the
+    // board itself wrote when a save replaced the mapping is not a switch-off either (the
+    // Rukovodilac, 2026-11-12): it is the activation_end row of an operation that also holds a
+    // mapping_confirmation row. T8 is append-only, so that fact cannot change.
     `select x.mapping_id, x.ended_at, coalesce(nullif(u.display_name, ''), u.full_name) as ended_by
-       from (select distinct on (a.mapping_id) a.mapping_id, a.ended_at, a.end_reason, a.ended_by_user_id
+       from (select distinct on (a.mapping_id) a.id, a.mapping_id, a.ended_at, a.end_reason, a.ended_by_user_id
                from training_load.source_metric_mapping_activations a
               where a.source_team_binding_id = $1
               order by a.mapping_id, a.activated_at desc, a.id desc) x
        left join public.users u on u.id = x.ended_by_user_id
-      where x.end_reason = 'admin_ended'`,
+      where x.end_reason = 'admin_ended'
+        and not exists (select 1 from training_load.source_metric_audit e
+                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'mapping_confirmation'
+                         where e.activation_id = x.id and e.action = 'activation_end')`,
     [team.binding_id],
   )).rows;
 
@@ -304,24 +271,32 @@ function columnsOf(world) {
   });
 }
 
+// A board read does at most this much extraction work: readable columns x
+// athlete rows of the stored session (drill rows included). More is refused,
+// never read in part.
+export const BOARD_MAX_CELLS = 60_000;
+
 function sessionValues(world, columns) {
-  // Per readable column, each athlete's session-level value (the import's own gates).
-  const byAthlete = new Map();
+  // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
+  const ids = [];
+  const extracts = [];
   for (const col of columns) {
     if (!col.readable) continue;
     // The registry's own entry, taken here (the importer's architecture guard: a value is read only through extractorFor).
     const extractor = extractorFor({ sourceSystem: col.field.source_system, apiFamily: col.field.api_family, sourceMetricKey: col.field.source_metric_key });
     if (!extractor) continue;
-    const out = gpexeLevelValuesKeyed(world.candidate.raw_bundle, (input) => extractor.extract(input, {}), { teamTimezone: world.teamTimezone });
-    if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
-    for (const athlete of out.athletes) {
-      const key = String(athlete.key);
-      if (!byAthlete.has(key)) byAthlete.set(key, { key, named: world.names.has(key), values: new Map() });
-      const value = athlete.session.length === 1 ? canonicalDecimal(athlete.session[0]) : null;
-      byAthlete.get(key).values.set(col.field.id, value);
-    }
+    ids.push(col.field.id);
+    extracts.push((input) => extractor.extract(input, {}));
   }
-  return [...byAthlete.values()];
+  const rowCount = Array.isArray(world.candidate.raw_bundle?.athleteSessions) ? world.candidate.raw_bundle.athleteSessions.length : 0;
+  if (extracts.length * rowCount > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
+  const out = gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
+  if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
+  return out.athletes.map((athlete) => {
+    const key = String(athlete.key);
+    const values = new Map(ids.map((id, index) => [id, athlete.session[index].length === 1 ? canonicalDecimal(athlete.session[index][0]) : null]));
+    return { key, named: world.names.has(key), values };
+  });
 }
 
 function choosePair(world, columns, pairIndex) {
@@ -465,8 +440,8 @@ function inLimits(value, variable) {
   return true;
 }
 
-function placementOf(world, pairIndex, { fieldId, targetId }) {
-  const columns = columnsOf(world);
+function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
+  const columns = shared?.columns ?? columnsOf(world);
   const col = columns.find((c) => c.field.id === fieldId);
   const variable = world.variables.find((v) => v.id === targetId);
   // A column or a variable outside what this workspace reads is the identical 404
@@ -474,7 +449,7 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
   // any refusal about the session or the pair.
   if (!col || !variable || (variable.owner_scope === "system" && variable.hidden)) throw NOT_FOUND();
   if (world.sessionRefusal) throw world.sessionRefusal;
-  const pair = choosePair(world, columns, pairIndex);
+  const pair = shared ? shared.pairOf() : choosePair(world, columns, pairIndex);
   const refuse = (code, extra = {}) => ({ placement: { placeable: false, code, fieldId, targetId, ...extra } });
 
   if (variable.owner_scope === "system") {
@@ -539,6 +514,26 @@ function placementOf(world, pairIndex, { fieldId, targetId }) {
       placementHashes: hashes,
     },
   };
+}
+
+// A row of an active version the save switches on as it is (OptiMove's, or
+// the club's own): { row } or { code }. The same eligibility as the board's
+// pre-placed rows, except that a mapping an administrator switched off may be
+// placed again by hand.
+function preplacedOf(world, shared, mappingVersionId) {
+  const v = world.versions.find((x) => x.id === mappingVersionId);
+  if (!v) throw NOT_FOUND();
+  const col = shared.columns.find((c) => c.field.id === v.field_id);
+  const variable = world.variables.find((x) => x.id === v.variable_id);
+  if (!col || !variable) throw NOT_FOUND();
+  if (world.sessionRefusal) throw world.sessionRefusal;
+  if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
+  if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
+  if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
+  if (variable.hidden) return { code: "variable_hidden", v };
+  if (world.open.some((o) => o.mapping_version_id === v.id)) return { code: "activation_exists", v };
+  const row = versionRow(world, shared.pairOf(), col, v);
+  return { row: { ...row, collisions: collisionsOf(world, { fieldId: v.field_id, variableId: v.variable_id, levels: row.levels }) }, v };
 }
 
 export async function readPlacement({ ctx, queryString }) {
@@ -663,9 +658,20 @@ export async function readConfirmation({ ctx, confirmationId }) {
   if (typeof confirmationId !== "string" || !UUID.test(confirmationId)) throw NOT_FOUND();
   await removeExpiredBatch();
   return boundedRead(async (client) => {
-    const row = (await client.query(`select ${CONFIRMATION_COLUMNS} ${SCOPE_SQL} and c.id = $3::uuid`, [ctx.owner.scope, ctx.owner.clubId, confirmationId.toLowerCase()])).rows[0];
-    if (!row) throw NOT_FOUND();
-    const items = await itemsOf(client, [row.id]);
-    return { confirmation: confirmationOut(row, items.get(row.id) ?? []) };
+    const found = await confirmationById(client, ctx, confirmationId.toLowerCase());
+    if (!found) throw NOT_FOUND();
+    return found;
   });
 }
+
+// What the save (sourceMetricBoardSaveService.js) reuses, so that it
+// recomputes exactly what the reads showed.
+// One confirmation in the caller's History scope, on the caller's executor: { confirmation } or null.
+async function confirmationById(executor, ctx, confirmationId) {
+  if (!mayReadConfirmations(ctx)) return null;
+  const row = (await executor.query(`select ${CONFIRMATION_COLUMNS} ${SCOPE_SQL} and c.id = $3::uuid`, [ctx.owner.scope, ctx.owner.clubId, confirmationId])).rows[0];
+  if (!row) return null;
+  const items = await itemsOf(executor, [row.id]);
+  return { confirmation: confirmationOut(row, items.get(row.id) ?? []) };
+}
+export const boardKit = Object.freeze({ loadWorld, columnsOf, choosePair, placementOf, preplacedOf, BOARD_MESSAGES, removeExpiredBatch, confirmationById });

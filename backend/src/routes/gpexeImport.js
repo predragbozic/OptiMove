@@ -160,6 +160,9 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     viewer: {
       canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin,
       ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}),
+      // The GPEXE names of the team's athletes (an administrator: all; the team's own coach in its workspace: the unlinked
+      // ones). Only when true; the list route decides again.
+      ...(identity.pairSuggestionBasis(req, access) ? { identityNames: true } : {}),
       // D3: whether this viewer may start the identity load (an administrator; or the team's own coach while the team's
       // switch is on in mode `team`). Only when true, as identityAdmin; the load route decides again.
       ...(identity.identityAdminBasis(req, access) || (identity.identityLoadBasis(req, access) === "team_coach" && approval.switchOn && approval.switchMode === "team") ? { identityLoad: true } : {}),
@@ -485,9 +488,10 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
 
 // GPEXE athlete identity (owner order 2026-10-06, v32): the name and date of
 // birth of the team's GPEXE athletes, for a platform admin or the team's club
-// admin only, in the platform or the club's workspace. Everyone else - a
-// coach included - and a team without an active binding get the router's
-// identical 404. Every answer, the 404 included, is no-store.
+// admin, in the platform or the club's workspace. The team's own coach, in that
+// team's workspace, reads the GPEXE names of the unlinked athletes only (plan
+// docs/ai/coach-gpexe-name-plan.md). Everyone else and a team without an active
+// binding get the router's identical 404. Every answer, the 404 included, is no-store.
 // `basisOf` picks the audience: the identity administrators (identityAdminBasis) for the stored list; for the load, also the
 // team's own coach in that team's workspace (identityLoadBasis), whose right the service holds only while the team's
 // import switch is on in mode `team` (the identical 404 otherwise).
@@ -520,11 +524,13 @@ function identityHandle(fn, basisOf = identity.identityAdminBasis) {
   };
 }
 
+// The stored list: the identity administrators, and (plan docs/ai/coach-gpexe-name-plan.md, 2026-11-13) the team's own coach in
+// that team's workspace, who reads the GPEXE names of the team's unlinked athletes only - never a date of birth or a conflict.
 router.get("/teams/:teamId/athlete-identities", identityHandle(async (req, res, access, ctx) => {
   const answer = await identity.listIdentities(access.teamId, ctx, { expectedClubId: access.clubId });
   if (!answer) return notFound(res);
   res.json(answer);
-}));
+}, identity.pairSuggestionBasis));
 
 // Body: { requestKey } and nothing else. The athletes are derived by the
 // server; the answer carries counts only.

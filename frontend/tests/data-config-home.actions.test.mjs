@@ -137,10 +137,10 @@ test("1. Data configuration opens on the start screen: five cards for an adminis
   assert.ok(!$(".metric-variables-segmented") && !$(".training-load-subnav"), "no switch: the start screen replaces both");
 });
 
-test("2. a club's administrator gets the same five cards; a team's coach three, never Source fields or Mappings, and nothing reads them", async () => {
+test("2. a club's administrator gets the same five cards and Map by drag and drop (J18); a team's coach three, never Source fields, Mappings or the board, and nothing reads them", async () => {
   asClub();
   await loadVariablesSection(render);
-  assert.deepEqual(cards().map((c) => c.title), ["Variables", "Domains", "Categories", "Source fields", "Mappings"]);
+  assert.deepEqual(cards().map((c) => c.title), ["Variables", "Domains", "Categories", "Source fields", "Mappings", "Map by drag and drop"]);
   assert.match(content.textContent, /How FK <Borac>'s training data is described/);
   assert.ok(content.innerHTML.includes("FK &lt;Borac&gt;"), "the club's name is escaped");
   resetVariables();
@@ -157,6 +157,8 @@ test("2. a club's administrator gets the same five cards; a team's coach three, 
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!html.includes('data-section="source-fields"'));
   assert.ok(!html.includes('data-section="mappings"'));
+  assert.ok(!html.includes('data-section="board"'));
+  assert.ok(!content.innerHTML.includes('data-section="board"'), "a coach gets no trace of the board");
 });
 
 test("3. a card says what it can: loading, a failed read, a list that holds more than its first page, a filtered list, nothing yet", async () => {

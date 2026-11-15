@@ -1416,8 +1416,8 @@ function identityLinesHtml(id, gx, duplicates) {
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
   return `
-    <span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>
-    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</span>` : ""}
+    ${who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
+    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
   `;
 }
 
@@ -1453,7 +1453,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1464,7 +1464,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : gpexeSideText(id, gx);
+  const gpexeSide = who ? `${gpexeSideText(id, gx)}${who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : gpexeSideText(id, gx);
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1520,6 +1520,9 @@ export function identityCheckRefusalText(refusal) {
 }
 
 function renderIdentityPanelHtml(gx) {
+  // The load panel (load, retry, suppression, dates) is the administrator's. The team's own coach reads the stored names
+  // through the same list but never loads them here, so the panel is not drawn for a names-only viewer.
+  if (!identityViewer(gx)) return "";
   const id = gx.identity;
   if (!id || (!id.available && !id.loading && !id.error && !id.unconfirmed && !id.readError)) return "";
   const list = id.list;
@@ -1587,10 +1590,11 @@ function mapOutcomeText(r, label = gpexeAthleteLabel(r.gpexeAthleteId)) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
+  // A U3 pair keeps the suggestion's date of birth for a coach, whose names carry no date (the same line as in the box).
+  const sug = who && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
@@ -1681,7 +1685,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(r.label || gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, r.label || gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}
@@ -1693,7 +1697,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-link-confirm gpexe-map-confirm" role="group" aria-label="Confirm the links">
         <p><strong>Link ${plural(staged.pairs.length, "athlete", "athletes")}?</strong></p>
         <ul>${staged.pairs.map((p) => renderPairHtml(p, gx, list, duplicates)).join("")}</ul>
-        ${gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
+        ${identityViewer(gx) && gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
         ${unlinked.length > staged.pairs.length ? `<p class="muted">${escapeHtml(plural(unlinked.length - staged.pairs.length, "other GPEXE athlete stays", "other GPEXE athletes stay"))} not linked (Not now); their sessions keep needing attention until they are linked.</p>` : ""}
         <p>Once you find new sessions and approve an import, each GPEXE athlete's results are imported as the athlete chosen here — in the sessions already found and in every session found later.</p>
         <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
@@ -1705,7 +1709,7 @@ function renderTeamMappingHtml(gx, teams) {
     `;
   } else {
     body = `
-      <p class="muted gpexe-hint">${gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      <p class="muted gpexe-hint">${identityViewer(gx) && gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : gx.identity?.list ? "A link is never guessed. The GPEXE name and the last session's values help you find an athlete in GPEXE; neither proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}
@@ -1769,7 +1773,7 @@ function renderLastLinkHtml(gx) {
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
+      <p><strong>${escapeHtml((l.gpexeSentence || gpexeWho(l.gpexeAthleteId)).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>
@@ -2135,8 +2139,8 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   }
   return `
     <div class="gpexe-link">
-      ${compact ? "" : `<p><strong>Find ${escapeHtml(gpexeWho(id))} in GPEXE first. Link only if you are sure.</strong></p>`}
-      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
+      ${compact ? "" : `<p><strong>${!identityViewer() && !identityOf(id)?.name ? "Find this athlete in GPEXE using the session values below. Link only if you are sure." : `Find ${escapeHtml(gpexeWho(id))} in GPEXE first. Link only if you are sure.`}</strong></p>`}
+      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
       ${!identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>` : ""}
       ${compact ? (compactHasValues(a, c) ? "" : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
