@@ -525,3 +525,46 @@ test("27. keys, codes and the GPEXE team's number are shown to a platform admin 
   render();
   for (const internal of ["Technical details", "athlete_session.total_distance", "linked to GPEXE team 7001", "conversion_unavailable"]) assert.ok(content.innerHTML.includes(internal), `a platform admin sees "${internal}"`);
 });
+
+test("28. which session the board shows, and what it says when none can be used: the date and label, the newer ones passed by, one sentence by reason with Open Imports - never 'cannot read'", async () => {
+  // The header line of the board.
+  const dt = () => "07.11.2026 18:00";
+  assert.equal(data.sessionWords({ startedAt: "x", label: "Training", newerNotUsable: 0 }, dt), "From the session of 07.11.2026 18:00 (Training).");
+  assert.equal(data.sessionWords({ startedAt: "x", label: null }, dt), "From the session of 07.11.2026 18:00.");
+  assert.equal(data.sessionWords({ startedAt: "x", label: "Training", newerNotUsable: 1 }, dt), "From the session of 07.11.2026 18:00 (Training). 1 newer session cannot be used for mapping.");
+  assert.equal(data.sessionWords({ startedAt: "x", label: "", newerNotUsable: 2 }, dt), "From the session of 07.11.2026 18:00. 2 newer sessions cannot be used for mapping.");
+  assert.equal(data.sessionWords({ startedAt: "x", newerNotUsable: "3" }, dt), "From the session of 07.11.2026 18:00.", "only a whole number is said");
+  // On the screen, from the server's answer (escaped).
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: { board: { ...FX.board.board, session: { ...FX.board.board.session, label: "<b>Evening</b> training", newerNotUsable: 2 } } } } : null));
+  await open();
+  assert.match(text(), /From the session of \d\d\.\d\d\.\d{4} \d\d:\d\d \(<b>Evening<\/b> training\)\. 2 newer sessions cannot be used for mapping\./);
+  assert.equal(content.querySelector(".mb-note b"), null, "the label is text");
+  overrides = [];
+  state.trainingLoad.board = null;
+
+  // None usable: the sentence by reason, the way to Imports, no code for a club admin.
+  const none = (current) => { overrides = [(c) => (c.url.startsWith(`${B}/board?`) ? { status: 409, body: { error: "no_usable_session", message: "server words", current } } : null)]; state.trainingLoad.board = null; return actions.loadBoardSection(render); };
+  await none({ reason: "unsupported_category", tried: 2 });
+  assert.ok(text().includes("None of the sessions found so far can be used for mapping: the latest ones are of a type OptiMove does not import. Find a training session in Imports first."));
+  assert.equal(content.querySelector('[data-action="training-load-section"][data-section="imports"]')?.textContent.trim(), "Open Imports to search");
+  assert.equal(/cannot read|unsupported_category|no_usable_session|server words/.test(text()), false);
+  for (const [reason, sentence] of [["candidate_too_large", "The sessions found so far are too large to read here. Run a search in Imports for a smaller session."],
+    ["board_too_large", "The sessions found so far have too many athletes and columns to compare at once. Run a search in Imports for a smaller session."]]) {
+    await none({ reason, tried: 1 });
+    assert.ok(text().includes(sentence), reason);
+    assert.ok(content.querySelector('[data-action="training-load-section"][data-section="imports"]'));
+  }
+  for (const current of [{ reason: "mixed", tried: 4 }, { reason: "session_stats_invalid", tried: 1 }, { reason: "constructor" }, null]) {
+    await none(current);
+    assert.ok(text().includes("None of the sessions found so far can be used for mapping. Run a search in Imports for another session."), JSON.stringify(current));
+    assert.equal(/latest ones|cannot read|training session/.test(text()), false, "'a training session' is said only where the type is the reason");
+    assert.ok(content.querySelector('[data-action="training-load-section"][data-section="imports"]'));
+  }
+  // A session named by the request that the import would not take: its own sentence, also never "cannot read".
+  overrides = [(c) => (c.url.startsWith(`${B}/board?`) ? { status: 409, body: { error: "candidate_not_importable", current: { reason: "unsupported_category" } } } : null)];
+  state.trainingLoad.board = null;
+  await actions.loadBoardSection(render);
+  assert.ok(text().includes("This session cannot be used for mapping. Run a search in Imports for another session."));
+  assert.equal(/cannot read/.test(text()), false);
+  for (const sentence of Object.values(data.BOARD_ERROR)) assert.equal(/cannot read/i.test(sentence), false, sentence);
+});
