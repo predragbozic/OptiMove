@@ -861,9 +861,9 @@ export async function sendTeamMapping(render) {
   const results = [];
   let changed = false;
   for (const sent of staged.pairs) {
-    // The label as the viewer saw it at the review: a coach's list leaves a linked athlete's name out after the re-read,
-    // so the result keeps the name the coach confirmed.
-    const pair = { ...sent, label: gpexeAthleteLabel(sent.gpexeAthleteId, gx) };
+    // A coach's re-read list leaves a linked athlete's name out, so the result keeps the name the coach confirmed. Only a
+    // name is kept: a list position ("GPEXE athlete N") renumbers after the re-read and is read live.
+    const pair = { ...sent, ...(identityOf(sent.gpexeAthleteId, gx)?.name ? { label: gpexeAthleteLabel(sent.gpexeAthleteId, gx) } : {}) };
     try {
       const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId: pair.gpexeAthleteId, athleteId: pair.athleteId }) });
       results.push({ ...pair, outcome: "linked", linkId: answer?.link?.id || "" });
@@ -952,7 +952,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
   gx.linkBusy = true;
   render();
   // The athlete as the viewer saw it before the link (a coach's re-read list no longer names a linked athlete).
-  const gpexeSentence = gpexeAthleteSentence(gpexeAthleteId, gx);
+  const gpexeSentence = identityOf(gpexeAthleteId, gx)?.name ? gpexeAthleteSentence(gpexeAthleteId, gx) : null;
   try {
     const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
     if (generation !== gx.generation) return;
