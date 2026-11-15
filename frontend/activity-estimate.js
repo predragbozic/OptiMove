@@ -82,10 +82,11 @@ function localDay(iso) {
 export function estimateLabelText(e) {
   if (!e) return "Estimate";
   let how;
-  if (e.method === "proportional") how = `own average × ${Number.isFinite(e.minutes) ? num(e.minutes, 2) : "?"} min${Number.isFinite(e.sessionCount) ? ` (${e.sessionCount} sessions)` : ""}`;
+  // A label without its numbers (an athlete reading their own results) reads as plain words, never "?".
+  if (e.method === "proportional") how = Number.isFinite(e.minutes) ? `own average × ${num(e.minutes, 2)} min${Number.isFinite(e.sessionCount) ? ` (${e.sessionCount} sessions)` : ""}` : "own average";
   else if (e.method === "team_average") how = `team average${Number.isFinite(e.athleteCount) ? ` (${e.athleteCount} athletes)` : ""}`;
   else if (e.method === "copy_athlete") how = e.sourceAthleteName ? `copied from ${e.sourceAthleteName}` : "copied from another athlete";
-  else if (e.method === "scale_recording") how = `recorded ${Number.isFinite(e.recordedMinutes) ? num(e.recordedMinutes, 2) : "?"} of ${Number.isFinite(e.targetMinutes) ? num(e.targetMinutes, 2) : "?"} min, scaled`;
+  else if (e.method === "scale_recording") how = Number.isFinite(e.recordedMinutes) && Number.isFinite(e.targetMinutes) ? `recorded ${num(e.recordedMinutes, 2)} of ${num(e.targetMinutes, 2)} min, scaled` : "scaled from a shorter recording";
   else how = "estimate";
   const who = [e.estimatedBy, e.estimatedAt ? localDay(e.estimatedAt) : ""].filter(Boolean).join(", ");
   return `Estimate · ${how}${who ? ` · ${who}` : ""}`;

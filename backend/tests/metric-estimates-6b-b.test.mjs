@@ -1000,6 +1000,19 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
     assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
     assert.equal(f.estimate.method, "copy_athlete");
   }
+  // The Independent's M1: every method reads as method, author and date only for its own athlete - no basis number (a team
+  // average's athlete count is team information).
+  for (const [id, method, label] of [[dan, "proportional", "dan athlete"], [fil, "team_average", "fil athlete"]]) {
+    const self = await athleteUser(id, label);
+    const read = await tapi(`/${s.activityId}`, { cookie: self.cookie });
+    assert.equal(read.status, 200, read.text);
+    const mine = read.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+    assert.ok(mine.length > 0, `${method}: athlete-self sees the estimate`);
+    for (const f of mine) {
+      assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], `${method}: athlete-self keys`);
+      assert.equal(f.estimate.method, method);
+    }
+  }
   const anaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [ana])).rows[0].n;
   assert.ok(!own.text.includes(anaName), "the copy source's name never reaches the athlete");
   // The other direction: Ana, the source, reading her own results learns nothing of Eva's estimate.

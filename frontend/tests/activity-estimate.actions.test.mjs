@@ -356,6 +356,11 @@ test("estimateLabelText: each method in the coach's words, never an id", () => {
   assert.equal(estimateLabelText({ ...base, method: "proportional", minutes: 75, sessionCount: 5 }), "Estimate · own average × 75 min (5 sessions) · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText({ ...base, method: "team_average", athleteCount: 14 }), "Estimate · team average (14 athletes) · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText({ ...base, method: "copy_athlete", sourceAthleteName: "Bea Example" }), "Estimate · copied from Bea Example · Ana Coach, 11.11.2026");
+  // An athlete's own read carries no numbers: plain words, never "?" or "undefined".
+  assert.equal(estimateLabelText({ ...base, method: "proportional" }), "Estimate · own average · Ana Coach, 11.11.2026");
+  assert.equal(estimateLabelText({ ...base, method: "team_average" }), "Estimate · team average · Ana Coach, 11.11.2026");
+  assert.equal(estimateLabelText({ ...base, method: "scale_recording" }), "Estimate · scaled from a shorter recording · Ana Coach, 11.11.2026");
+  assert.equal(estimateLabelText({ ...base, method: "copy_athlete" }), "Estimate · copied from another athlete · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText({ ...base, method: "copy_athlete" }), "Estimate · copied from another athlete · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText({ ...base, method: "scale_recording", recordedMinutes: 20, targetMinutes: 40 }), "Estimate · recorded 20 of 40 min, scaled · Ana Coach, 11.11.2026");
   assert.equal(estimateLabelText(null), "Estimate");

@@ -158,14 +158,18 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
 
   // 6b-C1: the label of each estimated value (contract rule 10) on that fact only; every other fact is as before. A copy
   // source is named only when this answer already names that athlete (athleteNamesById covers the facts the caller may
-  // see), so an athlete reading their own results learns the method, never whose values were copied.
+  // see); an athlete reading their own results gets the method, the author and the date only.
   const estimateFacts = scoped.filter((f) => f.factKind === "metric_value" && f.detail?.entryMethod === "estimate");
   if (estimateFacts.length) {
     const labels = await readEstimateLabels({ query }, estimateFacts.map((f) => f.detail?.occasionId));
     const namesLower = new Map(Object.entries(athleteNamesById).map(([id, name]) => [String(id).toLowerCase(), name]));
     for (const fact of estimateFacts) {
       const estimate = estimateLabelFor(labels.get(String(fact.detail?.occasionId)), (id) => namesLower.get(String(id).toLowerCase()) ?? null);
-      if (estimate) fact.estimate = estimate;
+      // An athlete reading their own results gets the method, the author and the date only: no basis number (a team
+      // average's athlete count is team information) and never the copy source.
+      if (estimate) fact.estimate = readContext.isAthleteSelf
+        ? { method: estimate.method, estimatedBy: estimate.estimatedBy, estimatedAt: estimate.estimatedAt }
+        : estimate;
     }
   }
 
