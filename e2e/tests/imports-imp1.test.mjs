@@ -45,7 +45,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.deepEqual(look.bannerButtons, width < 500 ? ["Find new sessions"] : [], "the banner's buttons");
         assert.equal(look.chooserVisible, width >= 500, "the chooser is on the page on a computer only");
         assert.match(look.bannerText, /^Last search \d{2}\.\d{2}\. \d{2}:\d{2} · 1 ready · 1 needs you$/);
-        assert.deepEqual(look.tabs, ["Needs you (1)", "Ready (1)", "Imported (0)", "Stays out (0)", "Athletes (1 not linked)", "Search"]);
+        assert.deepEqual(look.tabs, ["Needs you (1)", "Ready (1)", "Athletes (1 not linked)", "Search"], "P4c: a coach has no Imported or Stays out tab");
         assert.ok(look.tabHeights.every((h) => h >= 44), `tabs ${look.tabHeights}`);
         assert.equal(look.panels, 1, "one tab's content at a time");
         assert.ok(look.column <= 860, `${look.column} px column`);

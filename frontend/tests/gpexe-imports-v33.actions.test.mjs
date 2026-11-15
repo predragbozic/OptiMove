@@ -252,7 +252,8 @@ test("3. candidate_not_actionable: a refused approval reads as one sentence and 
 
 test("4. a withdrawn session (superseded by a complete, successful search) is never Ready, new or Needs attention: the default read asks for no superseded row, so it is listed only after 'Show replaced or no longer found versions' as 'No longer found' with the sentence; its review says the same and has no approval and no 'newer data'; the calendar does not count it", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row(), withdrawn({ label: "FULL TRAINING 06.10.", sessionStartedAt: "2026-10-06T16:08:12Z" })] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: true, canApprove: true, admin: true }, candidates: [row(), withdrawn({ label: "FULL TRAINING 06.10.", sessionStartedAt: "2026-10-06T16:08:12Z" })] });
   await openImports();
   let page = html();
   assert.equal(candidateGroup(withdrawn(), gx()), "withdrawn");
@@ -290,7 +291,8 @@ test("4. a withdrawn session (superseded by a complete, successful search) is ne
 
 test("5. a replaced version (superseded by newer content) stays as before: hidden, 'Replaced', 'GPEXE has newer data' - and never Ready or new", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row(), replaced({ label: "FULL TRAINING 05.10. (older)" })] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: true, canApprove: true, admin: true }, candidates: [row(), replaced({ label: "FULL TRAINING 05.10. (older)" })] });
   await openImports();
   let page = html();
   assert.doesNotMatch(page, /cand-old/);
@@ -398,7 +400,8 @@ test("9. the approve handler never sends an approval for a not-confirmed or with
 
 test("10. the source card's 'listed below' line counts the visible rows only: with nothing but a withdrawn session (not listed by the default read) and no recorded search it says 'No sessions found yet', never 'listed below' - and the same once the superseded rows are shown", async () => {
   resetState();
-  responder = server({ teamStatus: { enabled: false, canApprove: true }, candidates: [withdrawn()] });
+  // P4c: the replaced and no-longer-found versions (under Stays out) are the platform admin's only.
+  responder = server({ teamStatus: { enabled: false, canApprove: true, admin: true }, candidates: [withdrawn()] });
   await openImports();
   // IMP1: the found line is in the Search tab; the versions are shown in the Stays out tab.
   await act("training-load-gpexe-tab", { importTab: "search" });
