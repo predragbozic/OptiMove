@@ -13,6 +13,7 @@ import { sourceFieldsContext, sourceFieldsState } from "./source-fields-data.js"
 import { CHEVRON_HTML, fieldTileHtml, nodeTileHtml, variableTileHtml } from "./data-config-tiles.js";
 import { currentRevision } from "./source-fields-data.js";
 import { mappingsContext, mappingsState } from "./metric-mappings-data.js";
+import { boardContext } from "./metric-board-data.js";
 import { mappingsCardSummary } from "./metric-mappings-view.js";
 import { escapeHtml } from "./utils.js";
 
@@ -108,6 +109,12 @@ function mappingsCard() {
   return card({ attrs: `data-action="training-load-section" data-section="mappings"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Mappings", summary: escapeHtml(mappingsCardSummary(list)), rows });
 }
 
+// Map by drag and drop (J18): in a club workspace only, beside Mappings.
+function boardCard() {
+  return card({ attrs: `data-action="training-load-section" data-section="board"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Map by drag and drop",
+    summary: "Drag a GPEXE column onto your variable and compare two athletes.", rows: [] });
+}
+
 export function renderDataConfigHomeHtml(s, ctx) {
   return `
     <div class="metric-variables-head">
@@ -123,6 +130,7 @@ export function renderDataConfigHomeHtml(s, ctx) {
       ${nodesCard(s, "category")}
       ${sourceFieldsContext() ? sourceFieldsCard() : ""}
       ${mappingsContext() ? mappingsCard() : ""}
+      ${boardContext() ? boardCard() : ""}
     </ul>
   `;
 }

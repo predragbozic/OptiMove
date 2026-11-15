@@ -1007,12 +1007,20 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   assert.ok(files.length > 20, "the scan found the backend sources");
   const writes = (table) => new RegExp(`(insert\\s+into|update|delete\\s+from)\\s+training_load\\.${table}\\b`, "i");
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
-  assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricMappingService.js"]);
-  assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceInstanceEndService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  // J18 (18-3): the save of the drag-and-drop board writes a club's mapping, its version through both transitions, the
+  // ends and the starts on one binding and their audit rows in ONE transaction (contract section 4.3), so it is a
+  // writer of T3, T4, T5 and T8; the platform admin's two removals of stored values write T8.
+  assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricBoardSaveService.js", "sourceMetricMappingService.js"]);
+  assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricBoardSaveService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceInstanceEndService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricBoardSaveService.js", "sourceMetricConfirmationAdminService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  // The stored confirmation (v65): written by the save only; its values are removed by the platform admin's erasure
+  // (the expiry removal is the database function's own update).
+  assert.deepEqual(writers("source_metric_confirmations"), ["sourceMetricBoardSaveService.js"]);
+  assert.deepEqual(writers("source_metric_confirmation_sessions"), ["sourceMetricBoardSaveService.js"]);
+  assert.deepEqual(writers("source_metric_confirmation_items"), ["sourceMetricBoardSaveService.js", "sourceMetricConfirmationAdminService.js"]);
   // Phase 7d (J10): the writers of T5 - S2's end in the activation service, the
   // starts and the version-driven ends in the shared steps.
-  assert.deepEqual(writers("source_metric_mapping_activations"), ["sourceMetricActivationService.js", "sourceMetricActivationSteps.js"]);
+  assert.deepEqual(writers("source_metric_mapping_activations"), ["sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricBoardSaveService.js"]);
   // Phase 7g (J13) and 9-B (J17 step 5): the import's mapping context creates
   // and keys the Metrics Core connection (the source instance, T7); the end of
   // a held source instance is the one other writer.
