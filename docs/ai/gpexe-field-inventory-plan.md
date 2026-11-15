@@ -248,7 +248,7 @@ Recorded in G1's migration and contract; the exact columns are its work.
 | Slice | Content | Regime |
 |---|---|---|
 | **I1** | The inventory: migration, collection and upsert (section 5) | ★★ |
-| **I2** | The read route (Q2: club admin read-only, own connection) and "I want this" | ★★ (trigger 2) |
+| **I2** | The read route (Q2: club admin read-only, own connection); "I want this" is not built (section 7.4) | ★★ (trigger 2) |
 | **I3** | The Source fields list | code, ux, mobile |
 | **G1** | The T2a creation route and D-INV-2's evidence status, record and act (migration) | ★★ + the Independent |
 | **G2** | The generic plain extractors and the pinned set in the projection; `.claude/rules/metrics-core-mapping.md`'s document (D2, J12), B7.7b / B7.8 and J12 updated in the same pull requests | ★★ + the Independent |
@@ -257,3 +257,108 @@ Recorded in G1's migration and contract; the exact columns are its work.
 
 **Privacy throughout:** the name guard stays; a platform admin sees everything; a club admin sees only the names seen
 through their own club's connection; a coach sees nothing.
+
+## 7. I2 and I3: the plan (2026-11-15; the *Rukovodilac*'s decisions of the same day)
+
+I1 (PR #546, migration v72) records the names. I2 reads them and I3 shows them, read-only for everyone who sees them. It is
+grounded in the code on `dd3ccd19` and on I1's head `553052fc`.
+
+### 7.1 What "not supported yet" means
+
+An observed name is **covered** when a T2a row (`training_load.source_metric_definitions`, v34) of `gpexe` / `rest_v1`
+already names it. The keys follow the seeded fields:
+
+| Inventory endpoint | Covered by a T2a key |
+|---|---|
+| `athlete_session` | `athlete_session.<name>` |
+| `more.events` | `more.events.<name>` |
+| `more.complementary_data` | any key that starts with `more.complementary_data.<name>.` (a zone family, J7) |
+| `details.session`, `details.drill` | `details.players.<name>` (one key serves both levels) |
+| `team_thresholds` | never: thresholds are a team's parameters, not an athlete's value |
+
+The list shows the names that are not covered. **P1:** `team_thresholds` names are never in the "not supported" list; a
+platform admin sees them apart, folded under "Team thresholds (used by zone fields)", because they feed Z1 and are never a
+variable.
+
+### 7.2 I2: the read route (no migration)
+
+`GET /api/training-load/sources/metrics/field-inventory`, under the existing `adminContext` (`resolveMappingAdminWith`).
+Everyone else gets the identical 404 of the other metrics routes.
+
+- **Who sees which rows (Q2):**
+  - a platform admin in the platform workspace: every connection;
+  - in a club workspace (the club's admin, or a platform admin there): only the rows whose connection belongs to that
+    club. **P2:** that is a club-owned connection of the club, and a team-owned connection of one of the club's own
+    teams. A team of another club is never included;
+  - a coach, an athlete, a team workspace: the identical 404 (the route never answers them, as for `/fields`).
+- **One row per (endpoint, name)**, grouped over the visible connections:
+  - the endpoint in plain words (no key, code or id for a club admin);
+  - the latest value kind;
+  - the unit word (P3, below);
+  - answers seen (summed);
+  - the last sighting as a date;
+  - covered or not (7.1);
+  - for a platform admin only, the number of connections.
+- **Never in the answer:** a connection id or label, a check id, a club or team name.
+- **P3, the Independent's L1:**
+  - a club admin sees the unit word only when it is the unit token of an active `unit_conversions` row; otherwise "—";
+  - a platform admin sees the word as recorded;
+  - names stay visible to the club whose own account sent them (Q2 already scopes them, and D-INV-1 asks to show them).
+- **Paging:** an opaque cursor (C68's pattern), 200 rows a page, with the filter `state=not_supported|covered|all`
+  (default `not_supported`).
+- **One statement**, read-only, no lock (the pattern of the other metrics reads).
+
+**I2 also carries:**
+- **L2:** one constant for the finalization's `lock_timeout` of 2 s, used by `finalizeCheck` and I1's
+  `writeFieldInventory`.
+- **L3:** a block added to v72's post-check document, checking that `anon` and `authenticated` have no USAGE on
+  `training_load`. It is a document change only; the migration file is untouched. It is the pattern for every later
+  post-check that touches `training_load`.
+
+**Regime:** ★★ for trigger 2 (the club scoping), without a migration. Reviewers: `security-reviewer`, `code-reviewer`;
+then the *Rukovodilac* and the *Nezavisni revizor* on the frozen head.
+
+**Tests (disposable databases, through the real route):**
+- the read for each audience:
+  - a platform admin sees two clubs' names;
+  - a club admin, in their own club's workspace, sees their club's names, including those from a team-owned connection
+    of their own team;
+  - a foreign club's team-owned connection is never included;
+  - the same club admin in another club's workspace, a coach and a team workspace get the identical 404;
+- covered names are hidden by default;
+- `team_thresholds` reaches the platform admin only;
+- the unit word: a club admin sees it only when it is a known unit;
+- paging;
+- no connection or check id in any answer (a scan).
+
+### 7.3 I3: the screen
+
+Frontend only, in `frontend/source-fields-{view,data,actions}.js`. Reviewers: `code-reviewer`, `ux-design-reviewer`,
+`mobile-qa`, and a browser check at 360, 390 and 1280 px. It is read-only for everyone who sees it.
+
+- **A second list** under the supported fields: **"Available in GPEXE, not supported yet"**, with a one-sentence
+  introduction: "Names GPEXE sent in this club's sessions that OptiMove cannot map yet." In the platform workspace it reads
+  "in every club's sessions".
+- **Each row:**
+  - the name as GPEXE writes it (escaped);
+  - where it comes from in plain words ("athlete row", "session details", "drill details", "events", "zone data");
+  - the kind in plain words ("number", "number with unit", "zone list", …);
+  - the unit word or "—";
+  - "seen in N answers, last DD.MM.YYYY";
+  - for a platform admin, the connection count.
+- **Filters:** a search box over the names, and the endpoint as chips. The "Show supported too" switch reads `state=all`.
+- **Empty states:** "No names yet. The list fills in after the next successful search for sessions." A club with no
+  connection gets "This club has no GPEXE connection."
+- *Load more* pages the list.
+
+### 7.4 Open point: a wish list (not a slice)
+
+"I want this" (a guarded, append-only wish per name) is **not built now** (the *Rukovodilac*, 2026-11-15). Its only user
+would be the platform admin, and G1 gives the generic plain fields a real "add" path. A table for a personal to-do would
+put another ★★ migration in front of G1 / G2.
+
+After G2, if names remain that only code can support (zones, events), a wish list is reconsidered then.
+
+### 7.5 The order
+
+I2 (the read route, ★★ without a migration) → I3 (the screen) → the G1 contract.
