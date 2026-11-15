@@ -993,7 +993,9 @@ test("10. the size cap of a board read: a stored session with more athlete rows 
   const { BOARD_MAX_CELLS } = boardService;
   const rowsNeeded = Math.floor(BOARD_MAX_CELLS / readable) + 1;
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', (select jsonb_agg('{}'::jsonb) from generate_series(1, $2::int))) where id = $1`, [cand.id, rowsNeeded]);
-  refused(await boardOf(W.caA, t), 409, "board_too_large");
+  // Named, the session answers for itself; with no session named it is passed by, and as the only one it is "none usable", by its reason.
+  refused(await boardOf(W.caA, t, { candidateId: cand.id }), 409, "board_too_large");
+  assert.deepEqual(refused(await boardOf(W.caA, t), 409, "no_usable_session").current, { reason: "board_too_large", tried: 1 });
   refused(await placement(W.caA, t, cand.id, f, target), 409, "board_too_large");
   await nothingWritten(async () => { refused(await save(W.caA, t, cand, [row]), 409, "board_too_large"); });
   // A foreign id is still the identical 404 first.
