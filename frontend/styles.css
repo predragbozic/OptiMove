@@ -27035,3 +27035,152 @@ div.mb-slot-open { cursor: default; }
 .gpexe-replaced-estimates li {
   overflow-wrap: anywhere;
 }
+
+/* Imports P5: "How importing works" - one help for Imports. The header holds the team and the help button; the help is
+   a modal: a centred card over a dim backdrop on a computer, a full-screen sheet on a phone. Its marks reuse the
+   calendar's chips (colour + glyph + word). */
+body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .imports-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  width: 100%;
+  max-width: 860px;
+  box-sizing: border-box;
+}
+.imports-help-open {
+  min-height: 44px;
+}
+body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-help {
+  position: fixed;
+  z-index: 1200;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  margin: 0;
+  max-height: calc(100dvh - 48px);
+  overscroll-behavior: contain;
+  padding-top: 0;
+  box-shadow: 0 12px 40px rgba(15, 23, 32, 0.25);
+}
+.imports-help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(15, 23, 32, 0.45);
+}
+body:has(.imports-help.is-open) {
+  overflow: hidden;
+}
+/* The heading and × stay in view while the help scrolls (mobile review). */
+body:not(.athlete-mode):not(.login-mode) .imports-help-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 12px;
+  padding-bottom: 8px;
+  background: var(--surface, #fff);
+}
+.imports-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.imports-help-head h3,
+.imports-help h4 {
+  margin: 0;
+}
+.imports-help h4 {
+  margin-top: 14px;
+  font-size: 1rem;
+}
+.imports-help-close {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.4rem;
+}
+.imports-help-list,
+.imports-help-marks {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.imports-help .period-chip {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-style: normal;
+  font-weight: 800;
+  font-size: 0.8rem;
+  line-height: 1.1;
+  text-align: center;
+}
+.imports-help .period-chip.is-needs { background: var(--om-warning-soft); color: var(--om-warning); }
+.imports-help .period-chip.is-ready { background: var(--om-info-soft); color: var(--om-info); }
+.imports-help .period-chip.is-done { background: var(--om-success-soft); color: var(--om-success); }
+.imports-help .period-chip.is-out { background: var(--surface-soft); color: var(--muted); }
+.imports-help-fine {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+.imports-help-ask {
+  margin: 14px 0 0;
+  font-weight: 600;
+}
+.imports-help-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-help-open:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-help {
+    inset: 0;
+    top: 0;
+    left: 0;
+    transform: none;
+    width: auto;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding-top: 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  body:not(.athlete-mode):not(.login-mode) .imports-help-head {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+  }
+  /* UX review: on a phone the help is a quiet link on the team's row, not a second main button. */
+  body:not(.athlete-mode):not(.login-mode) .imports-help-open {
+    border-color: transparent;
+    background: none;
+    box-shadow: none;
+    color: var(--muted);
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    padding-left: 2px;
+    padding-right: 2px;
+  }
+  .imports-help-foot .gpexe-button {
+    width: 100%;
+  }
+}
+
+/* End of Imports P5. */

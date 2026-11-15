@@ -410,7 +410,7 @@ test("10. a stale review (links changed after it) is its own group whose button 
   assert.match(html(), /data-action="training-load-gpexe-review-update">Update the review</);
 });
 
-test("11. (D2) the search button keeps its name, and the line under the bar says a search imports nothing", async () => {
+test("11. (D2) the search button keeps its name, and that a search imports nothing is said once, in How importing works (P5)", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [] }));
   await openImports();
@@ -419,11 +419,11 @@ test("11. (D2) the search button keeps its name, and the line under the bar says
   // IMP1: no long sentence up front - the line is the first one of the Search tab.
   assert.ok(!page.includes("does not import anything"), "not on the default tab");
   await act("training-load-gpexe-tab", { importTab: "search" });
-  const search = html();
-  const tab = search.indexOf('data-imports-tab="search"');
-  const line = search.indexOf("Finding sessions does not import anything; you choose what to import.");
-  assert.ok(tab > 0 && line > tab, "in the Search tab");
-  assert.equal(search.split("does not import anything").length, 2, "said once");
+  assert.ok(!html().includes("does not import anything") && !html().includes("It imports nothing"), "P5: no standing paragraph in the Search tab");
+  await act("training-load-gpexe-help");
+  const help = html();
+  assert.match(help, /role="dialog" aria-modal="true" aria-labelledby="imports-help-title"[\s\S]*Find new sessions<\/strong> reads GPEXE for the days you choose\. It imports nothing; you choose what to import\./);
+  assert.equal(help.split("It imports nothing").length, 2, "said once");
 });
 
 test("12. guide step 4 is not done while a session still lists an athlete as not linked, even when the athletes list has none; it points to the group, not to a search", async () => {

@@ -1,5 +1,5 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
-import { closePeriodSheet } from "./gpexe-period-data.js";
+import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import {
   clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
@@ -934,8 +934,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: Schedule / Data & Analysis sections --------------------
 
   if (type === "training-load-section") {
-    // Imports P4: the phone's period sheet belongs to Imports; leaving it closes the sheet.
-    closePeriodSheet(state.trainingLoad.gpexe);
+    // Imports P4: the phone's period sheet belongs to Imports; leaving it closes the sheet (P5: and the help).
+    closeImportsOverlays(state.trainingLoad.gpexe);
     // Re-clicking the active Dashboards tab reloads it as well, so it asks too.
     if (state.trainingLoad.section === "analysis" && !(releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft())) {
       renderTrainingLoad();
