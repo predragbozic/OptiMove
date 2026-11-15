@@ -29,6 +29,8 @@ import * as activations from "../sourceMetricActivationService.js";
 import * as previews from "../sourceMetricPreviewService.js";
 import * as instances from "../sourceInstanceEndService.js";
 import * as board from "../sourceMetricBoardService.js";
+import * as boardSave from "../sourceMetricBoardSaveService.js";
+import * as confirmationAdmin from "../sourceMetricConfirmationAdminService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -129,6 +131,33 @@ router.get("/confirmations", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   res.json(await board.listConfirmations({ ctx, queryString: rawQuery(req) }));
+}));
+// Route 3: the save (section 4.3). 200 { confirmation, replayed }: the ids of
+// what was switched on, never a value. The right is asked before the body.
+router.post("/confirmations", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!board.mayUseBoard(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await boardSave.saveConfirmation({ ctx, body: req.body }), 200);
+}));
+// Routes 6 and 7 (section 5.8): an active platform admin in the platform
+// workspace erases one confirmation's values on request, or removes one batch
+// of values past their date. API only in J18 (the runbook says how).
+// Registered before the :confirmationId read, so "expired-values" is never an id.
+router.post("/confirmations/expired-values/remove", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!confirmationAdmin.mayRemoveConfirmationValues(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await confirmationAdmin.removeExpiredConfirmationValues({ ctx, body: req.body }), 200);
+}));
+router.post("/confirmations/:confirmationId/erase-values", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!confirmationAdmin.mayRemoveConfirmationValues(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await confirmationAdmin.eraseConfirmationValues({ ctx, confirmationId: req.params.confirmationId, body: req.body }), 200);
 }));
 router.get("/confirmations/:confirmationId", handle(async (req, res) => {
   const ctx = await adminContext(req, res);

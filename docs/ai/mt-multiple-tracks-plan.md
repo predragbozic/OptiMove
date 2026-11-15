@@ -815,3 +815,30 @@ athlete would show no distance, no counts and no duration at all.
   for any track change.
 - The new measured sums supersede the scaled estimates through `supersede_estimate_on_value` (v63). The preview lists them in
   `supersededEstimates` (6b-B).
+
+### 13.10 As built (MT-D)
+
+The runbook is `docs/runbooks/scale-recording-v68-v69.md`. The build differs from 13.2 and 13.5 as follows; the rules are the
+same. The *Rukovodilac* accepted the deviations and the MT-0 limit on 2026-11-13.
+
+- **Two migrations, v68 and v69, not one.**
+  - v68 holds the choice table's scale. v69 holds the estimate method and its basis.
+  - Why: several suites build their database through v67 without v63 and v64, and MT-B's preview reads the scale column on
+    every check. U5's v57 rollback rehearsal needs v57's bodies, so those suites cannot add v63 and v64.
+- **v67's guard is not replaced.** The one-track rule is two table CHECKs:
+  - `gpexe_track_choices_one_track_scale`: a one-track row is a `track` row with a scale, or a `cleared` row;
+  - `gpexe_track_choices_scale_on_track`.
+- **`validate_metric_value_estimate` is not replaced.**
+  - v64's body already keeps `scale_recording` to `sum` variables.
+  - v69 replaces only `estimate_basis_ok`, under the md5 gate of v63's body.
+- **MT-0 athletes** (identical tracks) are not offered a scale in v1: the PUT answers `not_multiple_tracks`.
+- **The flag check comes after the replay.** A scale stored while `ESTIMATES_ENABLED` was on replays as stored after the flag
+  is turned off. A new scale is refused.
+- **The save takes an athlete only if that import really took it:**
+  - not left out by a J20-B subset (the approval's `excluded_athlete_ids`);
+  - not `notImported`.
+- **Only the system minutes variable becomes the target.** Every other sum, a club's own `duration` included, is scaled.
+- **The proposal** answers `methods.scale_recording`. It is either available with its values, or not available with the reason
+  (`scale_not_chosen`, `scale_not_possible`, `scale_basis_expired`).
+- **A one-track choice that no longer matches** (other rows) is marked `stale` on the entry, and the athlete is imported as
+  measured.

@@ -125,14 +125,15 @@ const loadPosts = () => fetchCalls.filter((c) => c.url.endsWith("/athlete-identi
 const outsideTech = (html) => html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
 
 // ---------------------------------------------------------------------------
-test("a coach: the screen never asks for an identity (no request), shows no name panel, and keeps the GPEXE ids as before", async () => {
+test("a coach: the screen never asks for an identity (no request), shows no name panel, and names a GPEXE athlete by its list position, never its id (P2)", async () => {
   reset({ type: "team", scopeId: TEAM_A });
   responder = server({ admin: false });
   await openMapping();
   assert.equal(identityCalls().length, 0, "no identity request for a coach");
   const html = mappingHtml();
   assert.ok(!/GPEXE names and dates of birth|Load GPEXE names|Born /.test(html));
-  assert.match(html, /<strong>GPEXE athlete 104<\/strong>/);
+  assert.match(html, /<strong>GPEXE athlete \d<\/strong>/);
+  assert.ok(!/GPEXE athlete 104|\b104\b(?![^<]*")/.test(html.replace(/data-[a-z-]+="[^"]*"/g, "")), "no GPEXE id in the text");
 });
 
 test("an administrator: opening the screen reads the stored identities (no-store, no GPEXE request); a loaded row shows the GPEXE name and 'Born DD.MM.YYYY' with the id only under Technical details; 'Name not provided' and 'Date of birth not provided'; a row without an identity keeps its id", async () => {
