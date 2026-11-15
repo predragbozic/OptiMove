@@ -313,8 +313,31 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
       // The club the route resolved the caller's workspace for must still be
       // the team's club under the lock (a team moved meanwhile reads nothing).
       || (expectedClubId && String(team.club_id) !== String(expectedClubId))) return closeNull();
-    if (!(await rightHolds(client, ctx, team.club_id, { lock: true }))) return closeNull();
+    if (!(await rightHolds(client, ctx, team.club_id, { lock: true, teamId }))) return closeNull();
     if (listHold) await listHold("locked", client);
+    if (ctx.basis === "team_coach") {
+      // The team's own coach (plan docs/ai/coach-gpexe-name-plan.md): the GPEXE name of an athlete with no active link only,
+      // and nothing else of the snapshot - no date of birth, no date conflict. Filtered here, under the same locks.
+      const unlinked = (await client.query(
+        `select i.gpexe_athlete_id, i.display_name
+           from training_load.gpexe_athlete_identities i
+          where i.binding_id = $1 and i.owner_team_id = $2 and i.expires_at > now()
+            and not exists (select 1 from training_load.gpexe_athlete_links l
+                             where l.owner_team_id = i.owner_team_id and l.unlinked_at is null and l.gpexe_athlete_id = i.gpexe_athlete_id)
+          order by length(i.gpexe_athlete_id), i.gpexe_athlete_id`,
+        [binding.id, teamId],
+      )).rows;
+      // Names only: not even the load's pending and retry-later counts (the load is the administrators').
+      const answer = {
+        identities: unlinked.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name })),
+        maxPerLoad: IDENTITY_MAX_PER_LOAD,
+        retentionDays: IDENTITY_TTL_DAYS,
+      };
+      await client.query("commit");
+      released = true;
+      release();
+      return answer;
+    }
     const identities = (await client.query(
       `select gpexe_athlete_id, display_name, to_char(birth_date, 'YYYY-MM-DD') as birth_date
          from training_load.gpexe_athlete_identities
@@ -388,7 +411,7 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
 // The identity load (D3, after the pilot): the identity administrators, and the team's own coach in that team's workspace.
 // A coach's right holds only while the team's import switch is on in mode `team`; the service checks it in every phase of
 // the load (rightHolds with teamMode) and answers the identical 404 otherwise, as before. The stored snapshot's list
-// (listIdentities) stays the administrators'.
+// (listIdentities) gives the administrators everything and the team's own coach the unlinked athletes' names only.
 export function identityLoadBasis(req, access) {
   return pairSuggestionBasis(req, access);
 }
