@@ -94,6 +94,7 @@ export function renderAppHealthPanelHtml() {
         ${(h.groups || []).length > places.length && places.length >= 40 ? `<p class="muted">Only the first ${places.length} places are listed.</p>` : ""}</details>` : ""}
       ${h.role !== "all" ? `<p class="muted app-health-note">Showing groups where at least one affected person is ${escapeHtml(ROLE_LABEL[h.role] || h.role)}. The counts cover everyone in the group.</p>` : ""}
       ${h.error ? `<p class="builder-error" role="alert">${escapeHtml(h.error)}</p>` : ""}
+      ${h.people === "not_configured" && h.groups ? `<p class="muted app-health-note app-health-people-off" role="note">⚠ People are not counted for new errors: the server's hashing key is not set. Set APP_ERROR_USER_HASH_KEYS on the server (runbook app-error-events-v70).</p>` : ""}
       ${(h.groups || []).length >= APP_HEALTH_GROUP_CAP ? `<p class="muted app-health-note app-health-truncated" role="note">Showing the ${APP_HEALTH_GROUP_CAP} most recently seen kinds of error. Older ones in this period may not be listed.</p>` : ""}
       ${groups === null ? (h.loading ? `<p class="muted">Loading…</p>` : h.error ? "" : `<p class="muted">Nothing is loaded yet. Press Refresh.</p>`) : groups.length
         ? `<p class="app-health-summary">${groups.length} ${groups.length === 1 ? "kind of error" : "kinds of errors"} · ${timesLabel(groups.reduce((n, g) => n + g.occurrences, 0))} · most recent first</p>

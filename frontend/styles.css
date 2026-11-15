@@ -26756,6 +26756,124 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
 }
 /* End of Imports P4. */
 
+/* Imports P4b: "Later" on a Ready row, beside the row's own button (never inside it); a 44 px target. */
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-later-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-later-row > .gpexe-candidate {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* UX review: a quiet secondary action, not the heaviest control of the row; the same 44 px target. */
+body:not(.athlete-mode):not(.login-mode) .imports-later {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.imports-later-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+/* Mobile review: a focus ring that can be seen. */
+body:not(.athlete-mode):not(.login-mode) .imports-later:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-later-notice .gpexe-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+.imports-later-aside {
+  display: grid;
+  gap: 6px;
+}
+.imports-later-aside > p {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.imports-later-aside .gpexe-button,
+.imports-later-notice .gpexe-button {
+  min-height: 44px;
+}
+.imports-later-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.imports-later-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+/* End of Imports P4b. */
+
+/* Imports P4c: a coach and a club admin find imported and "stays out" sessions in the calendar only. A quiet grey
+   mark for "stays out"; one quiet line under the chooser counts the month shown (on a phone it is a button that opens
+   the calendar sheet); "Older sessions may not be shown." when the list read is full. */
+.imports-period .period-chip.is-out {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.imports-period .period-cap {
+  margin: 6px 0 0;
+}
+.imports-month-line {
+  margin: 0;
+}
+.imports-month-phone {
+  display: none;
+}
+@media (max-width: 760px) {
+  .imports-month-desk {
+    display: none;
+  }
+  /* A quiet line, not a card: muted, underlined like a link, the whole line the 44 px target. */
+  body:not(.athlete-mode):not(.login-mode) .imports-month-phone {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    max-width: 100%;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--muted);
+    font-weight: 400;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    white-space: normal;
+    text-align: left;
+  }
+  body:not(.athlete-mode):not(.login-mode) .imports-month-phone:focus-visible {
+    outline: 2px solid var(--accent, #1f6f68);
+    outline-offset: 2px;
+  }
+  /* P4a's "Find new sessions": the label centred in its button. */
+  .imports-find-phone {
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* End of Imports P4c. */
+
 /* ---------------------------------------------------------------------------
    Map by drag and drop (J18): Training Load > Data configuration. Built on the
    om-* foundation (page header, tabs, cards, badges, buttons); these rules add

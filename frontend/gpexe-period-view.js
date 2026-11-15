@@ -5,11 +5,13 @@ import { dayOff, daysInPeriod, localDay, missingWindow, periodMonth, periodOf, p
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-// One state per session: colour, glyph and word (never colour alone). "Stays out" gets no mark.
+// One state per session: colour, glyph and word (never colour alone); "stays out" a quiet grey mark.
 const CHIP = {
   attention: { cls: "needs", glyph: "!", word: "needs you" },
   ready: { cls: "ready", glyph: "→", word: "ready" },
   imported: { cls: "done", glyph: "✓", word: "imported" },
+  // P4c: a quiet grey mark, so a coach finds the day of a session that stays out (it is no longer a list of its own).
+  out: { cls: "out", glyph: "–", word: "stays out" },
 };
 const CHIPS_SHOWN = 3;
 
@@ -23,7 +25,7 @@ export function periodText(from, to, now = new Date()) {
   return from === to ? fmt(from) : `${fmt(from)} – ${fmt(to)}`;
 }
 
-// The sessions found so far, by the day the server searches them under (sessionDay), in start-time order, each with its state (null for "stays out").
+// The sessions found so far, by the day the server searches them under (sessionDay), in start-time order, each with its state.
 function sessionsByDay(gx) {
   const byDay = new Map();
   const list = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx)).slice().sort((a, b) => String(a.sessionStartedAt).localeCompare(String(b.sessionStartedAt)));
@@ -32,14 +34,15 @@ function sessionsByDay(gx) {
     if (!day) continue;
     const bucket = inboxBucket(c, gx);
     if (bucket === "hidden") continue;
+    if (!CHIP[bucket]) continue;
     if (!byDay.has(day)) byDay.set(day, []);
-    byDay.get(day).push({ c, chip: CHIP[bucket] || null });
+    byDay.get(day).push({ c, chip: CHIP[bucket] });
   }
   return byDay;
 }
 
 function chipsHtml(items) {
-  const marked = items.filter((x) => x.chip);
+  const marked = items;
   if (!marked.length) return "";
   const shown = marked.slice(0, CHIPS_SHOWN).map((x) => `<i class="period-chip is-${x.chip.cls}">${x.chip.glyph}</i>`).join("");
   const more = marked.length > CHIPS_SHOWN ? `<i class="period-chip is-more">+${marked.length - CHIPS_SHOWN}</i>` : "";
@@ -49,7 +52,7 @@ function chipsHtml(items) {
 function dayLabel(day, items, flags) {
   const [y, m, d] = day.split("-").map(Number);
   const name = `${d} ${MONTH_NAMES[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`;
-  const found = items.length ? `${plural(items.length, "session", "sessions")}: ${items.map((x) => (x.chip ? x.chip.word : "stays out")).join(", ")}` : "nothing found yet";
+  const found = items.length ? `${plural(items.length, "session", "sessions")}: ${items.map((x) => x.chip.word).join(", ")}` : "nothing found yet";
   return [name, found, ...flags].join(", ");
 }
 
@@ -68,7 +71,7 @@ function gridHtml(gx, byDay, now, range, suggestedTo) {
     const inRange = Boolean(range && day >= range.from && day <= range.to);
     const edge = Boolean(range && (day === range.from || day === range.to));
     const flags = [day === today ? "today" : "", inRange ? "chosen" : "", off ? (day > todayDay(now) ? "in the future" : `more than ${PERIOD_MAX_DAYS} days from the first day`) : ""].filter(Boolean);
-    const cls = ["period-day", day === today ? "is-today" : "", inRange ? "is-in" : "", edge ? "is-edge" : "", off ? "is-off" : "", items.some((x) => x.chip) ? "is-found" : ""].filter(Boolean).join(" ");
+    const cls = ["period-day", day === today ? "is-today" : "", inRange ? "is-in" : "", edge ? "is-edge" : "", off ? "is-off" : "", items.length ? "is-found" : ""].filter(Boolean).join(" ");
     cells.push(`<button type="button" class="${cls}" data-action="training-load-gpexe-period-day" data-day="${day}" aria-label="${escapeAttr(dayLabel(day, items, flags))}" aria-pressed="${inRange ? "true" : "false"}"${off ? ' aria-disabled="true"' : ""}><span class="period-num">${d}</span>${chipsHtml(items)}</button>`);
   }
   return `
@@ -104,9 +107,9 @@ function rangeListHtml(range, byDay, nameOf, timeOf) {
       ${groups.map((grp) => `
         <p class="period-daylist-date">${escapeHtml(formatDate(grp.day))}</p>
         <ul>
-          ${grp.items.map(({ c, chip }) => `<li><button type="button" class="plain-button gpexe-button period-daylist-open" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"><span>${escapeHtml(`${nameOf(c)} · ${timeOf(c.sessionStartedAt)}`)}</span>${chip ? `<span class="period-chip is-${chip.cls}" aria-hidden="true">${chip.glyph}</span><span class="period-daylist-state">${escapeHtml(chip.word)}</span>` : `<span class="period-daylist-state muted">stays out</span>`}</button></li>`).join("")}
+          ${grp.items.map(({ c, chip }) => `<li><button type="button" class="plain-button gpexe-button period-daylist-open" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"><span>${escapeHtml(`${nameOf(c)} · ${timeOf(c.sessionStartedAt)}`)}</span><span class="period-chip is-${chip.cls}" aria-hidden="true">${chip.glyph}</span><span class="period-daylist-state${chip.cls === "out" ? " muted" : ""}">${escapeHtml(chip.word)}</span></button></li>`).join("")}
         </ul>`).join("")}
-      ${all.length > shown.length ? `<p class="muted period-daylist-more">${escapeHtml(`${plural(all.length - shown.length, "more session", "more sessions")} in the tabs below.`)}</p>` : ""}
+      ${all.length > shown.length ? `<p class="muted period-daylist-more">${escapeHtml(`${plural(all.length - shown.length, "more session", "more sessions")} on these days: choose fewer days to see them.`)}</p>` : ""}
     </div>
   `;
 }
@@ -121,7 +124,7 @@ function missingText(missing, now) {
 // as a full-screen sheet (CSS: .imports-period is hidden there unless .is-open). `running` turns every search button
 // off (one search at a time). `suggested` is the days a session needs to be found again (datesNeededFor): shown as
 // chosen until the person taps a day.
-export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, now = new Date(), suggested = null, quiet = false } = {}) {
+export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, now = new Date(), suggested = null, quiet = false, capped = false } = {}) {
   const s = periodOf(gx);
   const byDay = sessionsByDay(gx);
   const missing = missingWindow(status, now);
@@ -152,7 +155,9 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
           <li><i class="period-chip is-needs">!</i> needs you</li>
           <li><i class="period-chip is-ready">→</i> ready</li>
           <li><i class="period-chip is-done">✓</i> imported</li>
+          <li><i class="period-chip is-out">–</i> stays out</li>
         </ul>
+        ${capped ? `<p class="muted period-cap">Older sessions may not be shown.</p>` : ""}
       </div>
       <div class="period-side">
         ${s.anchor
@@ -169,4 +174,28 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
       </div>
     </section>
   `;
+}
+
+// P4c: the month the calendar shows ("2026-11"), and its name - the quiet line under the chooser counts that month.
+export function shownMonth(gx, now = new Date(), suggestedTo = "") {
+  const month = periodMonth(gx, now, suggestedTo);
+  const [y, m] = month.split("-").map(Number);
+  return { month, name: `${MONTH_NAMES[m - 1]}${y !== now.getFullYear() ? ` ${y}` : ""}` };
+}
+
+// P4c (UX review): the day of the latest imported session in the loaded list ("2026-10-28"), or "".
+export function lastImportedDay(gx) {
+  let last = "";
+  for (const [day, items] of sessionsByDay(gx)) if (day > last && items.some((x) => x.chip.cls === "done")) last = day;
+  return last;
+}
+
+// P4c: what the calendar holds of a month, by state, from the loaded list (no request).
+export function monthCounts(gx, month) {
+  const n = { imported: 0, out: 0 };
+  for (const items of sessionsByDay(gx).entries()) {
+    if (!items[0].startsWith(month)) continue;
+    for (const x of items[1]) if (x.chip.cls === "done") n.imported += 1; else if (x.chip.cls === "out") n.out += 1;
+  }
+  return n;
 }

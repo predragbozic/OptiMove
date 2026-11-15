@@ -22,8 +22,9 @@ import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { renderPeriodHtml } from "./gpexe-period-view.js";
+import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
+import { isLater, laterNotice, laterOpen } from "./gpexe-later-data.js";
 import {
   BATCH_MAX,
   batchAllowed,
@@ -535,7 +536,9 @@ function shortWhen(value) {
 
 function bannerText(gx, check) {
   const list = gx.candidates || [];
-  const ready = list.filter((c) => inboxBucket(c, gx) === "ready").length;
+  const readyAll = list.filter((c) => inboxBucket(c, gx) === "ready");
+  // P4b: what is put aside for later on this device is not counted as ready now.
+  const ready = readyAll.filter((c) => !isLater(c, gx)).length;
   const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
   const when = check?.finishedAt || check?.startedAt;
   // Honest: OptiMove does not look in GPEXE by itself yet, so the banner says what the last search found, not what waits.
@@ -547,11 +550,13 @@ function bannerText(gx, check) {
   // The list must have been read after that search ended (a failed re-read keeps an older list).
   const searchOk = check?.status === "succeeded" && gx.candidatesCheckId === check.id && !gx.error
     && !gx.checkStarting && !gx.checkError && !gx.pollStopped;
-  if (gx.candidates && searchOk && !ready && !needs && imported) return `Everything from GPEXE is imported · ${head}`;
+  if (gx.candidates && searchOk && !readyAll.length && !needs && imported) return `Everything from GPEXE is imported · ${head}`;
   const parts = [head];
   if (gx.candidates) {
     parts.push(`${ready} ready`);
     if (needs) parts.push(`${needs} need${needs === 1 ? "s" : ""} you`);
+    // UX review: "0 ready" never hides a session waiting on this device.
+    if (readyAll.length > ready) parts.push(`${readyAll.length - ready} put aside`);
   }
   return parts.join(" · ");
 }
@@ -564,6 +569,7 @@ function renderSourceCardHtml(source, gx, status) {
   // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
+  const suggested = datesNeededFor(gx.candidates || [], gx);
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
@@ -575,8 +581,37 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx), quiet: groupLeads(gx, status) }) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: (gx.candidates || []).length >= CANDIDATES_CAP }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, (gx.candidates || []).length >= CANDIDATES_CAP) : ""}
   `;
+}
+
+// P4c (owner, 2026-11-15): the list read holds at most this many sessions, the newest first (listCandidates).
+const CANDIDATES_CAP = 200;
+
+// P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
+// counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
+function renderMonthLineHtml(gx, suggestedTo, open, capped = false) {
+  const now = new Date();
+  const { month, name } = shownMonth(gx, now, suggestedTo);
+  const n = monthCounts(gx, month);
+  const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
+  // UX review: an empty month names the last import, so "nothing" never reads as "nothing ever imported".
+  const last = facts ? "" : lastImportedDay(gx);
+  const head = [facts ? `${facts} in ${name}` : `Nothing imported in ${name}`, last && !last.startsWith(month) ? `the last import is on ${periodText(last, last, now)}` : "", capped ? "older sessions may not be shown" : ""].filter(Boolean).join(" · ");
+  const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
+  const phone = `${head} · open the calendar`;
+  return `
+    <p class="muted imports-month-line">
+      <span class="imports-month-desk">${escapeHtml(desk)}</span>
+      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(phone)}</button>
+    </p>
+  `;
+}
+
+// P4c: only a platform admin keeps the Imported and Stays out tabs (and the replaced versions under Stays out).
+function listsAllStates(status) {
+  return status?.viewer?.isPlatformAdmin === true;
 }
 
 // The Search tab ("Search & settings" for whoever has Import settings): what the source is, what the last search
@@ -596,7 +631,7 @@ function renderSearchTabHtml(source, gx, status) {
         ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
       </p>
       ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
-      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : ""}
+      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name, listsAllStates(status)) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
       ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage), Boolean(gx.teamSwitch?.data?.canChangeMode || gx.teamSwitch?.data?.mode === "team"))}
       ${techHtml([
@@ -637,8 +672,9 @@ function setupOpen(gx, status) {
 // with sessions, so a repaint never moves it. data-import-tab, never data-tab: that one is the app's main navigation.
 const IMPORT_TABS = ["attention", "ready", "imported", "out", "athletes", "search"];
 
-export function importsTab(gx) {
-  if (IMPORT_TABS.includes(gx.tab)) return gx.tab;
+export function importsTab(gx, status = gx.status) {
+  const tabs = listsAllStates(status) ? IMPORT_TABS : IMPORT_TABS.filter((t) => t !== "imported" && t !== "out");
+  if (tabs.includes(gx.tab)) return gx.tab;
   const needs = (gx.candidates || []).some((c) => inboxBucket(c, gx) === "attention");
   const tab = needs ? "attention" : "ready";
   // Fixed at the first paint that has sessions: an empty list (before the first search) decides nothing yet.
@@ -650,15 +686,16 @@ function renderImportsTabsHtml(gx, status) {
   const all = gx.candidates || [];
   const count = (name) => all.filter((c) => inboxBucket(c, gx) === name).length;
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
-  const tab = importsTab(gx);
+  const tab = importsTab(gx, status);
+  const all3 = listsAllStates(status);
   const tabs = [
     ["attention", `Needs you (${count("attention")})`],
-    ["ready", `Ready (${count("ready")})`],
-    ["imported", `Imported (${count("imported")})`],
-    ["out", `Stays out (${count("out")})`],
+    ["ready", `Ready (${readyNow(all, gx).length})`],
+    all3 ? ["imported", `Imported (${count("imported")})`] : null,
+    all3 ? ["out", `Stays out (${count("out")})`] : null,
     ["athletes", unlinked ? `Athletes (${unlinked} not linked)` : "Athletes"],
     ["search", renderTeamSwitchPanelHtml(gx) ? "Search & settings" : "Search"],
-  ];
+  ].filter(Boolean);
   return `
     <nav class="om-tabs imports-tabs" aria-label="Imports">
       ${tabs.map(([key, label]) => `<button type="button" class="om-tab${key === tab ? " is-active" : ""}"${key === tab ? ' aria-current="page"' : ""} data-action="training-load-gpexe-tab" data-import-tab="${key}">${escapeHtml(label)}</button>`).join("")}
@@ -672,11 +709,12 @@ function renderImportsTabsHtml(gx, status) {
 // "Sessions found 21.09.2026 14:02 · 07.09.2026 - 21.09.2026 · 12": when the
 // source was last read, for which days, and how many sessions it listed.
 // Never "sync" - nothing is pulled into OptiMove by finding.
-function renderFoundHtml(check, listed = 0, sourceName = "the source") {
+function renderFoundHtml(check, listed = 0, sourceName = "the source", lists = true) {
   if (!check || check.status !== "succeeded") {
     // A search that is running or failed does not undo what an earlier one
     // found: the sessions below are still there.
-    return listed ? `<p class="muted imports-found">Sessions from the last successful search are listed below.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
+    // P4c: a coach and a club admin have no list of every session - they are in the calendar.
+    return listed ? `<p class="muted imports-found">Sessions from the last successful search are ${lists ? "listed below" : "shown in the calendar"}.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
   }
   const when = fmtDateTime(check.finishedAt || check.startedAt);
   const days = check.window ? `${formatDate(check.window.from)} - ${formatDate(check.window.to)}` : "";
@@ -873,7 +911,7 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
     const groups = attentionGroups(allAttention, gx);
     // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
-    const readyCount = all.filter((c) => inboxBucket(c, gx) === "ready").length;
+    const readyCount = readyNow(all, gx).length;
     const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
     return `
       ${readyHint}
@@ -886,7 +924,7 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     `;
   }
   if (tab === "ready") {
-    const ready = of("ready");
+    const ready = readyNow(list, gx);
     const pickable = batchAllowed(gx);
     const daily = dailyImportState(gx, status);
     const choosing = pickable && chooseOpen(gx);
@@ -895,9 +933,11 @@ function renderBucketsHtml(gx, status, tab = "ready") {
         <div class="gpexe-panel-head imports-tab-title"><h3>Ready to import (${ready.length})</h3></div>
         ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
         ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
-        ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">Nothing is ready to import.</p>`}
+        ${laterNoticeHtml(gx)}
+        ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">${laterOf(list, gx).length ? "Nothing else is ready to import." : "Nothing is ready to import."}</p>`}
         ${daily.n ? `<div class="imports-import-row"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button></div>` : ""}
         ${renderDailyStripHtml(gx, daily.ready, status)}
+        ${laterListHtml(list, gx)}
         ${pickable && (ready.some((c) => batchSelectable(c, gx)) || Object.keys(gx.batch?.selected || {}).length > 0) ? `
           <details class="imports-choose" data-rendered-open="${choosing ? "1" : "0"}" ${choosing ? "open" : ""}>
             <summary>Choose sessions</summary>
@@ -1009,8 +1049,9 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
     const full = !checked && Object.keys(gx.batch.selected).length >= BATCH_MAX;
     box = `<label class="imports-pick"><input type="checkbox" data-action="training-load-gpexe-pick" data-candidate-id="${escapeAttr(c.id)}" aria-label="Select ${escapeAttr(niceSessionName(c))} ${escapeAttr(fmtDateTime(c.sessionStartedAt))}" ${checked ? "checked" : ""} ${full || gx.batch.sending ? "disabled" : ""}></label>`;
   }
+  const later = kind === "ready" && !box ? `<button type="button" class="plain-button gpexe-button imports-later" data-action="training-load-gpexe-later" data-candidate-id="${escapeAttr(c.id)}"${gx.batch?.sending ? " disabled" : ""} aria-label="${escapeAttr(`Later: put ${niceSessionName(c)} ${sessionDayText(c.sessionStartedAt)} aside on this device`)}">Later</button>` : "";
   return `
-    <li class="${box ? "imports-pick-row" : ""}">
+    <li class="${[box ? "imports-pick-row" : "", later ? "imports-later-row" : ""].filter(Boolean).join(" ")}">
       ${box}
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
@@ -1022,6 +1063,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
         ${step ? `<span class="gpexe-candidate-next">${escapeHtml(step)}</span>` : ""}
       </button>
+      ${later}
     </li>
   `;
 }
@@ -1039,8 +1081,38 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
 // for the ready ones (the existing review and confirmation, up to BATCH_MAX).
 // U6a: what the one main button does. "Import N ready" when clean Ready sessions can go in one batch, otherwise nothing
 // (the button of the state bar is then "Find new sessions"). Shared by the state bar and the notes under it.
+// P4b: Ready sessions not put aside for later on this device, in the list's order; and the ones put aside.
+function readyNow(list, gx) {
+  return list.filter((c) => inboxBucket(c, gx) === "ready" && !isLater(c, gx));
+}
+function laterOf(list, gx) {
+  return list.filter((c) => inboxBucket(c, gx) === "ready" && isLater(c, gx));
+}
+
+// Right after "Later": what happened, and Undo (nothing was sent, so nothing has to be confirmed).
+function laterNoticeHtml(gx) {
+  const id = laterNotice(gx);
+  const c = id && (gx.candidates || []).find((x) => x.id === id);
+  if (!c) return "";
+  // UX review: short, in the row's own words; "on this device" is said once, in the line under the list.
+  return `<p class="gpexe-notice imports-later-notice" role="status"><span>${escapeHtml(`Put aside: ${[sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · ")}.`)}</span> <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-later-back" data-candidate-id="${escapeAttr(c.id)}">Undo</button></p>`;
+}
+
+// One line under the Ready list: how many are put aside, and Show; shown, each with Bring back.
+function laterListHtml(list, gx) {
+  const aside = laterOf(list, gx);
+  if (!aside.length) return "";
+  const open = laterOpen(gx);
+  return `
+    <div class="imports-later-aside">
+      <p class="muted">${escapeHtml(`${plural(aside.length, "session is", "sessions are")} put aside for later on this device.`)} <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-later-show" aria-expanded="${open ? "true" : "false"}">${open ? "Hide" : "Show"}</button></p>
+      ${open ? `<ul class="imports-later-list">${aside.map((c) => `<li><span>${escapeHtml([sessionDayText(c.sessionStartedAt), niceSessionName(c), sessionTimeText(c.sessionStartedAt)].filter(Boolean).join(" · "))}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-later-back" data-candidate-id="${escapeAttr(c.id)}">Bring back</button></li>`).join("")}</ul>` : ""}
+    </div>
+  `;
+}
+
 function dailyImportState(gx, status = gx.status) {
-  const ready = (gx.candidates || []).filter((c) => inboxBucket(c, gx) === "ready");
+  const ready = readyNow(gx.candidates || [], gx);
   const allowed = batchAllowed(gx);
   const pickable = allowed ? ready.filter((c) => batchSelectable(c, gx)) : [];
   const n = Math.min(pickable.length, BATCH_MAX);
@@ -1299,7 +1371,7 @@ function renderBatchResultsHtml(gx) {
   // IMP2 (the sketch): "Imported N sessions. You can see them in Training Load → Activities." first, in one line.
   // A mixed result names only the imported ones (the refused ones are not in Activities).
   const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported)
-    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and in the Imported tab.` : "";
+    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and ${listsAllStates(gx.status) ? "in the Imported tab" : "with ✓ in the calendar"}.` : "";
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(`${onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary}.${seen}`)}</p>` : ""}
     ${stopped}

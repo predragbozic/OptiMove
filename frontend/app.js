@@ -484,11 +484,11 @@ function bindEvents() {
       collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
-      detached(loadActiveTab());
+      detached(loadActiveTab(), "open-tab");
     });
   });
   els.libraryTabs.forEach((button) => {
-    button.addEventListener("click", () => { detached(openLibraryTab(button.dataset)); });
+    button.addEventListener("click", () => { detached(openLibraryTab(button.dataset), "open-tab"); });
   });
   els.athleteTabs.forEach((button) => {
     button.addEventListener("click", () => {
@@ -506,7 +506,7 @@ function bindEvents() {
       collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
-      detached(loadActiveTab());
+      detached(loadActiveTab(), "open-tab");
     });
   });
 
@@ -1850,7 +1850,7 @@ function openCentralCalendarFromRail() {
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
-  detached(loadActiveTab());
+  detached(loadActiveTab(), "open-tab");
 }
 
 function handleImageError(event) {
@@ -1941,7 +1941,7 @@ function goHome() {
     collapseRailAfterNav();
     renderTabs();
     renderLibraryNav();
-    detached(loadActiveTab());
+    detached(loadActiveTab(), "open-tab");
     return;
   }
   renderCurrentNode();
@@ -1971,7 +1971,7 @@ async function handleGlobalClick(event) {
     if (nextTab === "organization" && tab.dataset.settingsSection) state.organization.section = tab.dataset.settingsSection;
     renderTabs();
     renderLibraryNav();
-    detached(loadActiveTab());
+    detached(loadActiveTab(), "open-tab");
     return;
   }
 
@@ -2259,7 +2259,7 @@ function handleAppBack() {
     state.openWeekCalendarOnLoad = false;
     renderTabs();
     renderLibraryNav();
-    detached(loadActiveTab());
+    detached(loadActiveTab(), "open-tab");
     return true;
   }
 
@@ -2386,7 +2386,7 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
   els.toolbar.innerHTML = "";
   // The calendar's dots, the chosen day and the exercise and program strips
   // load beside the roster, each drawing its own card when it arrives.
-  if (state.currentUser?.activeWorkspace?.type !== "platform") detached(loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh }));
+  if (state.currentUser?.activeWorkspace?.type !== "platform") detached(loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh }), "open-tab");
   return loadCoachHomeData({ setLoading, renderCoachHome, forceRefresh });
 }
 
@@ -3476,7 +3476,7 @@ function renderAthleteList() {
       renderAthleteList();
       renderTabs();
       renderLibraryNav();
-      detached(loadActiveTab());
+      detached(loadActiveTab(), "open-tab");
     });
   });
 }

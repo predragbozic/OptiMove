@@ -60,7 +60,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
             overflow: d.scrollWidth - d.clientWidth,
           };
         });
-        assert.equal(result.summary, "Imported 3 sessions. You can see them in Training Load → Activities and in the Imported tab.");
+        assert.equal(result.summary, "Imported 3 sessions. You can see them in Training Load → Activities and with ✓ in the calendar.");
         assert.equal(result.techBlocks, 0, "P2: a coach's result has no Technical details (the platform admin's only)");
         assert.ok(result.outcomeRight <= 2, `the outcome sits on the right (${result.outcomeRight} px)`);
         assert.notEqual(result.dot, "rgba(0, 0, 0, 0)", "the outcome carries its dot");
@@ -69,6 +69,24 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await page.click('.imports-batch [data-action="training-load-gpexe-batch-done"]');
         await page.waitForSelector(".imports-batch", { state: "detached" });
         await page.waitForFunction(() => /^Everything from GPEXE is imported · Last search /.test(document.querySelector(".imports-lastsearch")?.textContent.trim() || ""), null, { timeout: 20_000 });
+        // P4c: a coach has no Imported tab; one quiet line counts the month the calendar shows. Page the calendar to
+        // the sessions' month (on a phone the line itself opens the calendar sheet).
+        assert.equal(await page.locator('[data-import-tab="imported"], [data-import-tab="out"]').count(), 0, "no Imported or Stays out tab");
+        if (width < 500) {
+          await page.click(".imports-month-phone");
+          await page.waitForSelector(".imports-period.is-open", { state: "visible" });
+        }
+        for (let i = 0; i < 24 && (await page.textContent(".imports-period .period-month")).trim() !== "November 2026"; i += 1) {
+          await page.click('.imports-period [data-action="training-load-gpexe-period-month"][data-delta="-1"]');
+        }
+        if (width < 500) {
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".imports-period", { state: "hidden" });
+        }
+        const month = new Date().getFullYear() === 2026 ? "November" : "November 2026";
+        const lineText = (await page.locator(width < 500 ? ".imports-month-phone" : ".imports-month-desk").textContent()).trim();
+        assert.equal(lineText, width < 500 ? `3 imported in ${month} · open the calendar` : `3 imported in ${month} · pick a day in the calendar to open one`);
+        if (width < 500) assert.ok((await page.locator(".imports-month-phone").boundingBox()).height >= 44, "the line's button is 44 px");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
         assert.deepEqual(pageErrors, []);
       } finally { await context.close(); }

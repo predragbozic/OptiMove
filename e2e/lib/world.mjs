@@ -71,9 +71,11 @@ export async function startWorld({ log = false, fakeSource = null } = {}) {
     const port = await freePort();
     const baseUrl = `http://localhost:${port}`;
     const env = { ...process.env, DATABASE_URL: db.url, PORT: String(port), NODE_ENV: "development" };
-    for (const key of Object.keys(env)) if (/^(SUPABASE|RENDER|GPEXE_API_TOKEN|SOURCE_CREDENTIAL_)/.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (/^(SUPABASE|RENDER|GPEXE_API_TOKEN|SOURCE_CREDENTIAL_|APP_ERROR_USER_HASH_KEYS)/.test(key)) delete env[key];
     // A throwaway key for the stored source credential (never a real one) and, on request, the fake GPEXE source.
     env.SOURCE_CREDENTIAL_KEYS = generateKeyEntry(1);
+    // A throwaway key for the user hash of recorded errors (App health; version 2 is the first keyed one).
+    env.APP_ERROR_USER_HASH_KEYS = generateKeyEntry(2);
     if (fakeSource) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --import=${pathToFileURL(path.join(here, "fake-source-preload.mjs")).href}`.trim();
       env.E2E_FAKE_VISIBLE_TEAMS = (fakeSource.visibleTeams || []).join(",");
