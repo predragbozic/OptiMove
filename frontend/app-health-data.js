@@ -4,7 +4,7 @@ import { api } from "./api.js";
 import { state } from "./state.js";
 
 export function emptyAppHealth() {
-  return { days: 7, role: "all", where: "all", loading: false, error: "", groups: null, selected: "", generation: 0 };
+  return { days: 7, role: "all", where: "all", loading: false, error: "", groups: null, people: "keyed", selected: "", generation: 0 };
 }
 
 export function appHealthContext(data) {
@@ -22,6 +22,8 @@ export async function loadAppHealth(render) {
     const answer = await api(`/api/app-errors/groups?days=${encodeURIComponent(h.days)}`);
     if (h.generation !== generation) return;
     h.groups = Array.isArray(answer?.groups) ? answer.groups : [];
+    // Whether the server can tell people apart for new errors (its hashing key is set). An older server says nothing.
+    h.people = answer?.people === "not_configured" ? "not_configured" : "keyed";
     // A place that has no group in the new period is no longer a filter anyone can see or clear.
     if (h.where !== "all" && !whereOptions(h.groups).includes(h.where)) h.where = "all";
   } catch (error) {
