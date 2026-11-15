@@ -33,8 +33,9 @@ migration refuses unless the body it replaces is v70's, md5 `13009f97dbedc04be84
   becomes `:x`. So a name, an e-mail or a search word that ended up in a path is not stored, whatever page sent it.
   A request of any other shape is `400 invalid_error_report` and nothing is stored.
 * **The page's build** is the commit word the production build already carries (`<meta name="optimove-build">`), sent
-  as `release`. The server stores, as before, only its own release; from the page's it keeps one boolean.
-  `page_behind_server` is null when either build is unknown (a development page, a server without `RENDER_GIT_COMMIT`).
+  as `release`. As before v73, a row's `release` is the report's own build when it names one (now every production
+  page does) and the server's otherwise; `page_behind_server` says whether the two differ and is null when either
+  is unknown (a development page, a server without `RENDER_GIT_COMMIT`).
 * **A report that could not be delivered** (its own request got no answer - the same outage, usually) is kept by the
   page **in memory only**, at most five, and sent **once** after the next call that did get an answer, with `late` set
   to how long it waited. Whatever happens to that one attempt, the report is then dropped: there is no retry loop, no
