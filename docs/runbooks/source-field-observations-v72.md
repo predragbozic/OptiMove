@@ -67,7 +67,11 @@ club's connection; a coach nothing).
 - **One row per (endpoint, name):** kind, unit word, answers seen, last date, and whether a source field already covers it.
 - **Never answered:** a connection id, a check id, a label, a club or a team.
 - **A club sees a unit word** only when it is an active conversion's unit.
-- **Team thresholds** reach the platform admin only, with `endpoint=team_thresholds`.
+- **Team thresholds** reach the platform admin only, with `endpoint=team_thresholds`. `state` does not apply to them: they are never a field, so
+  `covered` is null.
+- **`covered`** counts an active source field only; a retired one no longer covers its name. Source field keys are lower
+  case, so a name with a capital letter is never covered until G1 can add it.
+- **Bounded** like every metrics read (C70): read-only, a statement bound, `409 try_again` past it.
 
 ## Order with D1's v71
 

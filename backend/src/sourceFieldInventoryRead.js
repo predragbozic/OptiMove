@@ -9,8 +9,8 @@
 // Never in an answer: a connection or check id, a label, a club or a team. A club scope sees a unit word only when it is
 // a known unit, the token of an active unit conversion (P3). `team_thresholds` names are never a field: a platform admin
 // reads them with endpoint=team_thresholds only, and a club scope gets an empty list there (P1).
-import { pool } from "./db.js";
 import { refusal } from "./sourceMetricAccess.js";
+import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { FIELD_ENDPOINTS } from "./sourceFieldInventory.js";
 
 export const INVENTORY_PAGE_SIZE = 200;
@@ -19,6 +19,8 @@ const ENDPOINTS = new Set(FIELD_ENDPOINTS);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const CURSOR_TEXT = /^[A-Za-z0-9_-]{1,400}$/;
 const THRESHOLDS = "team_thresholds";
+// Every metrics read is bounded (C70): read-only, a statement bound, a client bound, 409 try_again (M2's boundedRead).
+const { boundedRead } = adminWriteKit;
 
 const invalidQuery = (message) => refusal(400, "invalid_query", message);
 const invalidCursor = () => invalidQuery("The cursor is not valid for this list.");
@@ -58,7 +60,11 @@ export function parseInventoryQuery(query, ctx) {
 const encodeCursor = (ctx, { state, endpoint }, last) =>
   Buffer.from(JSON.stringify({ v: 1, s: `${scopeKeyOf(ctx)}|${state}`, f: endpoint, e: last.endpoint, n: last.name }), "utf8").toString("base64url");
 
-// covered: a T2a key of gpexe / rest_v1 names it (section 7.1). The complementary-data family is matched by a literal
+// The visible connections are every state (a disconnected one included) and every team of the club (an archived one
+// included): the names stay the club's own history, as the club's own account sent them (Q2).
+// covered: an active T2a key of gpexe / rest_v1 names it (section 7.1); a retired key no longer covers. T2a keys are
+// lower case, so a name with a capital letter is never covered (it waits for G1). Ordered and paged in the "C" collation,
+// the same in every database. For team thresholds `state` does not apply (they are never a field). The complementary-data family is matched by a literal
 // prefix (left() = the prefix, never LIKE), so an underscore in a name is only itself.
 const INVENTORY_SQL = `
   with visible as (
@@ -84,7 +90,7 @@ const INVENTORY_SQL = `
     select g.*,
            case when g.endpoint = '${THRESHOLDS}' then null else exists (
              select 1 from training_load.source_metric_definitions d
-              where d.source_system = 'gpexe' and d.api_family = 'rest_v1'
+              where d.source_system = 'gpexe' and d.api_family = 'rest_v1' and d.state = 'active'
                 and ((g.endpoint in ('athlete_session', 'more.events') and d.source_metric_key = g.endpoint || '.' || g.field_name)
                   or (g.endpoint in ('details.session', 'details.drill') and d.source_metric_key = 'details.players.' || g.field_name)
                   or (g.endpoint = 'more.complementary_data'
@@ -98,19 +104,20 @@ const INVENTORY_SQL = `
   select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered
     from marked
    where ($3::text = 'all' or endpoint = '${THRESHOLDS}' or covered = ($3::text = 'covered'))
-     and ($4::text is null or (endpoint, field_name) > ($4::text, $5::text))
-   order by endpoint, field_name
+     and ($4::text is null or (endpoint collate "C", field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
+   order by endpoint collate "C", field_name collate "C"
    limit $6`;
 
-export async function listFieldInventory({ ctx, query }, { run = (sql, params) => pool.query(sql, params) } = {}) {
+export async function listFieldInventory({ ctx, query }) {
   const parsed = parseInventoryQuery(query, ctx);
   const platform = isPlatformScope(ctx);
   // P1: team thresholds are the platform admin's only; a club scope asking for them gets an empty list.
   if (parsed.endpoint === THRESHOLDS && !platform) return { fields: [], nextCursor: null };
-  const r = await run(INVENTORY_SQL, [
+  const params = [
     platform ? null : ctx.owner.clubId, parsed.endpoint, parsed.state,
     parsed.after?.endpoint ?? null, parsed.after?.name ?? null, INVENTORY_PAGE_SIZE + 1,
-  ]);
+  ];
+  const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);
   const fields = rows.map((row) => ({
     endpoint: row.endpoint,

@@ -235,21 +235,104 @@ test("7. paging: 200 a page in (endpoint, name) order with an opaque cursor boun
   }
 });
 
-test("8. one SQL statement per request, and no connection id, check id, label, club or team in any answer of this file", async () => {
+test("8. one SQL statement per request, in a bounded read, and no connection id, check id, label, club or team in any answer of this file", async () => {
   const { pool } = await import("../src/db.js");
-  const original = pool.query.bind(pool);
-  let statements = 0;
-  pool.query = (...args) => { if (String(args[0]).includes("source_field_observations")) statements += 1; return original(...args); };
+  const originalConnect = pool.connect.bind(pool);
+  const seen = [];
+  pool.connect = async (...args) => {
+    const client = await originalConnect(...args);
+    if (client && !client.__counted) {
+      const originalQuery = client.query.bind(client);
+      client.query = (...q) => { seen.push(String(q[0])); return originalQuery(...q); };
+      client.__counted = true;
+    }
+    return client;
+  };
   try {
     await api("/field-inventory?state=all", { cookie: W.pa.cookie });
   } finally {
-    pool.query = original;
+    pool.connect = originalConnect;
   }
-  assert.equal(statements, 1);
+  assert.equal(seen.filter((sql) => sql.includes("source_field_observations")).length, 1, "one statement");
+  assert.ok(seen.some((sql) => /repeatable read read only/.test(sql)), "inside a read-only transaction");
+  assert.ok(seen.some((sql) => /statement_timeout/.test(sql)), "with a statement bound");
   const ids = [...W.ids, W.clubA, W.clubB, W.teamA, W.teamB];
   const checks = (await q(`select distinct first_seen_check_id::text c from training_load.source_field_observations`)).map((r) => r.c);
   const labels = (await q(`select account_label l from training_load.source_credential_connections`)).map((r) => r.l);
   for (const text of responses) {
     for (const s of [...ids, ...checks, ...labels]) assert.ok(!text.includes(s), `no ${s} in an answer`);
   }
+});
+
+test("2b. a retired source field no longer covers its name", async () => {
+  const clubC = await club("Club C");
+  const conn = await connection({ clubId: clubC, by: W.pa.id });
+  await observe(conn, [["athlete_session", "retired_field"], ["athlete_session", "active_field"]]);
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try {
+    await c.query("set session_replication_role = replica");
+    for (const [name, state] of [["retired_field", "retired"], ["active_field", "active"]]) {
+      await c.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id, state, retired_by_user_id, retired_at, retired_reason)
+                     values ('gpexe','rest_v1',$1,'Synthetic',$2,$3,$4,$5,$6)`,
+        [`athlete_session.${name}`, W.pa.id, state, state === "retired" ? W.pa.id : null, state === "retired" ? new Date() : null, state === "retired" ? "test" : null]);
+    }
+  } finally {
+    await c.end();
+  }
+  const r = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: W.pa.cookie });
+  const by = Object.fromEntries(r.body.fields.map((f) => [f.name, f.covered]));
+  assert.deepEqual([by.retired_field, by.active_field], [false, true]);
+});
+
+test("7b. the order is the \"C\" collation's, the same in every database: a capital letter before a small one", async () => {
+  const clubD = await club("Club D");
+  const conn = await connection({ clubId: clubD, by: W.pa.id });
+  await observe(conn, [["more.events", "alpha_count"], ["more.events", "Zeta_count"]]);
+  const r = await api("/field-inventory?endpoint=more.events", { cookie: W.pa.cookie });
+  const order = names(r).filter((n) => /alpha_count|Zeta_count/.test(n));
+  assert.deepEqual(order, ["more.events:Zeta_count", "more.events:alpha_count"]);
+});
+
+test("9. the read is bounded: a statement past its bound answers 409 try_again, never a hang or a 500", async () => {
+  const mapping = await import("../src/sourceMetricMappingService.js");
+  mapping.setMappingReadBoundsForTests({ statementTimeoutMs: 50 });
+  mapping.setMappingReadFaultForTests((client) => client.query("select pg_sleep(0.3)"));
+  try {
+    const r = await api("/field-inventory", { cookie: W.pa.cookie });
+    assert.deepEqual([r.status, r.body.error], [409, "try_again"], r.text);
+  } finally {
+    mapping.setMappingReadFaultForTests(null);
+    mapping.setMappingReadBoundsForTests();
+  }
+  assert.equal((await api("/field-inventory", { cookie: W.pa.cookie })).status, 200);
+});
+
+test("10. a platform admin in club A's workspace is a club scope: club A's names only, a club's unit words, no connection count", async () => {
+  const id = await user("platform-admin-in-club");
+  await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [id]);
+  await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, W.clubA]);
+  await workspace(id, "club", W.clubA);
+  const cookie = await cookieFor(id);
+  for (const endpoint of ["athlete_session", "details.session", "details.drill", "more.complementary_data"]) {
+    const r = await api(`/field-inventory?endpoint=${endpoint}&state=all`, { cookie });
+    assert.equal(r.status, 200, r.text);
+    const own = await api(`/field-inventory?endpoint=${endpoint}&state=all`, { cookie: W.ca.cookie });
+    assert.deepEqual(names(r), names(own), `${endpoint}: the same names as club A's own admin`);
+    assert.ok(!names(r).some((n) => /club_b_only|foreign_team_b_only|custom_secret_unit/.test(n)));
+    assert.ok(r.body.fields.every((f) => !("connectionCount" in f)), "no connection count");
+  }
+  const session = await api("/field-inventory?endpoint=details.session", { cookie });
+  assert.equal(session.body.fields.find((f) => f.name === "metabolic_power").unitWord, null, "a club's unit words");
+});
+
+test("11. an admin of club A only, whose workspace preference names club B, reads club A's names (the workspace falls back to their own club) - never club B's", async () => {
+  const id = await user("club-a-only");
+  await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, W.clubA]);
+  await workspace(id, "club", W.clubB);
+  const r = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: await cookieFor(id) });
+  assert.equal(r.status, 200, r.text);
+  const own = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: W.ca.cookie });
+  assert.deepEqual(names(r), names(own));
+  assert.ok(!names(r).some((n) => /club_b_only|foreign_team_b_only/.test(n)), "never club B's names");
 });
