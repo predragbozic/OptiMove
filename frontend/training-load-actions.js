@@ -292,7 +292,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!(simpleEditor.model?.draft?.draftVersion > 0) && !simpleEditor.pending && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn() && !mappingsUnloadShouldWarn() && !boardUnloadShouldWarn()) return false;
+  if (!simpleEditor.dirty && !simpleEditor.pending && !importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn() && !mappingsUnloadShouldWarn() && !boardUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";

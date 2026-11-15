@@ -15,6 +15,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
@@ -215,7 +216,8 @@ async function dropTempDb({ name }) {
   await admin.end();
 }
 async function writeMigrationsDir(runId, files) {
-  const dir = path.resolve(__dirname, `tests_tldash_migrations_${runId}`);
+  const root = path.resolve(__dirname, `tests_tldash_migrations_${runId}`);
+  const dir = runId === "primary" ? path.join(root, "migrations_v2") : root;
   await fsp.rm(dir, { recursive: true, force: true });
   await fsp.mkdir(dir, { recursive: true });
   for (const [name, content] of Object.entries(files)) {
@@ -253,7 +255,24 @@ before(async () => {
   const authModule = await import("../src/auth.js");
   createSession = authModule.createSession;
   hashPassword = authModule.hashPassword;
-  const serverModule = await import("../src/server.js");
+  const runtimeEnv = {
+    DASHBOARD_SIMPLE_MODE: "enabled",
+    DASHBOARD_SIMPLE_BUDGET_VERIFIED: "true",
+    DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED: "true",
+    DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE: "2",
+    DASHBOARD_SIMPLE_KEY_ID: "dashboard-fixture",
+    DASHBOARD_SIMPLE_KEY_BASE64: crypto.randomBytes(32).toString("base64"),
+  };
+  const priorRuntimeEnv = Object.fromEntries(Object.keys(runtimeEnv).map(key => [key, process.env[key]]));
+  Object.assign(process.env, runtimeEnv);
+  let serverModule;
+  try { serverModule = await import("../src/server.js"); }
+  finally {
+    for (const [key, value] of Object.entries(priorRuntimeEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -265,7 +284,7 @@ after(async () => {
   await new Promise((resolve) => server.close(resolve));
   await pool.end();
   await adminClient.end();
-  await fsp.rm(migrationsDir, { recursive: true, force: true });
+  await fsp.rm(path.dirname(migrationsDir), { recursive: true, force: true });
   await dropTempDb(db);
 });
 
@@ -5125,6 +5144,11 @@ test("S2c S14 ledger retention is exactly seven days plus ten minutes and cleanu
   const retention = await query("select extract(epoch from retain_until-request_issued_at)::integer as seconds from training_load.dashboard_simple_requests where initiator_user_id=$1", [fixture.coachId]);
   assert.equal(retention.rowCount, 3);
   assert.ok(retention.rows.every(row => row.seconds === 7 * 24 * 60 * 60 + 10 * 60));
+  await assert.rejects(query("update training_load.dashboard_simple_requests set receipt = receipt where initiator_user_id = $1", [fixture.coachId]), { code: "55000" });
+  await assert.rejects(query("delete from training_load.dashboard_simple_requests where initiator_user_id = $1", [fixture.coachId]), { code: "55000" });
+  await assert.rejects(query("truncate training_load.dashboard_simple_requests"), { code: "55000" });
+  // Seed aged fixtures on this disposable database without waiting a week.
+  await query('alter table training_load.dashboard_simple_requests disable trigger dashboard_simple_requests_guard_rows');
   await query(`update training_load.dashboard_simple_requests set
     request_issued_at=transaction_timestamp()-interval '168 hours 5 minutes',
     retain_until=transaction_timestamp()+interval '5 minutes'
@@ -5133,6 +5157,7 @@ test("S2c S14 ledger retention is exactly seven days plus ten minutes and cleanu
     request_issued_at=transaction_timestamp()-interval '168 hours 10 minutes 1 second',
     retain_until=transaction_timestamp()-interval '1 second'
     where initiator_user_id=$1 and request_id=any($2::uuid[])`, [fixture.coachId, [expired.body.requestId, busy.body.requestId]]);
+  await query('alter table training_load.dashboard_simple_requests enable trigger dashboard_simple_requests_guard_rows');
   const graceStatus = await harness.request(fixture.dashboard.id, "requests/status", { cookie: fixture.coachCookie, body: { requestId: grace.body.requestId } });
   assert.equal(graceStatus.status, 200, JSON.stringify(graceStatus.body));
   assert.equal(graceStatus.body.status, "recorded");
@@ -5496,4 +5521,76 @@ test("S2c S13 a legacy text metric chart with a null sidecar atomically becomes 
   const beforeReplay = await s2bDatabaseState();
   assert.deepEqual(s2cReceipt(await harness.save(fixture, prepared.body, saved.id), "updated"), receipt);
   assert.deepEqual(await s2bDatabaseState(), beforeReplay);
+});
+
+test("Simple production HTTP mount authenticates, hides foreign dashboards and replays an atomic save", async () => {
+  const fixture = await s2aFixture("simple-production-mount");
+  const foreign = await s2aFixture("simple-production-foreign");
+  const route = (id, action) => `/api/training-load/dashboards/${id}/simple/${action}`;
+  const request = (action, body) => api(route(fixture.dashboard.id, action), {
+    cookie: fixture.coachCookie, method: body === undefined ? "GET" : "POST", body,
+  });
+  assert.equal((await api(route(fixture.dashboard.id, "capabilities"))).status, 401);
+  const missing = await api(route(crypto.randomUUID(), "capabilities"), { cookie: fixture.coachCookie });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await api(route(foreign.dashboard.id, "capabilities"), { cookie: fixture.coachCookie }), missing);
+  assert.equal((await request("capabilities")).status, 200);
+  const input = s2bEnvelope();
+  const preview = await request("preview", input);
+  s2bAssertPreview(preview);
+  const body = { requestId: crypto.randomUUID(), requestIssuedAt: preview.body.requestIssuedAt,
+    resolvedPeriod: preview.body.resolvedPeriod, previewToken: preview.body.previewToken, input };
+  const receipt = s2cReceipt(await request("widgets", body), "created");
+  const status = await request("requests/status", { requestId: body.requestId });
+  assert.equal(status.status, 200, JSON.stringify(status.body));
+  assert.equal(status.body.status, "recorded");
+  assert.deepEqual(s2cReceipt(await request("widgets", body), "created"), receipt);
+});
+test("v71 rollback SQL restores the catalog, reapplies, and refuses receipts and later migrations", async () => {
+  const rollbackDb = await makeTempDb("simple_rollback");
+  const client = new pg.Client({ connectionString: rollbackDb.url });
+  const outer = await fsp.mkdtemp(path.join(__dirname, "tests_tldash_rollback_"));
+  const root = path.join(outer, "migrations_v2");
+  const name = MIGRATIONS.at(-1);
+  const migrationFile = path.join(root, name);
+  const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/dashboard-simple-v71-rollback.sql"), "utf8");
+  const dump = () => execFileSync("pg_dump", ["--schema-only", "--no-owner", "--no-privileges", rollbackDb.url], {
+    encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+  }).replace(/^\\(?:un)?restrict .*$/gm, "");
+  const migrate = () => runner.runMigrations({ databaseUrl: rollbackDb.url, migrationsRoot: root });
+  const refuse = async (reason) => {
+    await assert.rejects(client.query(rollback), reason);
+    await client.query("rollback");
+  };
+  try {
+    await client.connect();
+    await client.query(LEGACY_FIXTURE_SQL);
+    await fsp.mkdir(root);
+    for (const [file, sql] of Object.entries(await readMigrationFiles(MIGRATIONS.slice(0, -1)))) {
+      await fsp.writeFile(path.join(root, file), sql);
+    }
+    await migrate();
+    const before = dump();
+    await fsp.writeFile(migrationFile, (await readMigrationFiles([name]))[name]);
+    await migrate();
+    const applied = dump();
+    assert.notEqual(applied, before);
+    await client.query("insert into public.schema_migrations (migration_name, checksum, runner_version) select $1, checksum, runner_version from public.schema_migrations where migration_name like '%dashboard_simple_atomic_save.sql'", ["migrations_v2/999999999999_test.sql"]);
+    await refuse(/not the last applied/);
+    await client.query("delete from public.schema_migrations where migration_name = 'migrations_v2/999999999999_test.sql'");
+    await client.query(`insert into training_load.dashboard_simple_requests
+      (initiator_user_id, request_id, dashboard_id, workspace, payload_hash, request_issued_at, resolved_period, receipt, retain_until)
+      values ($1,$2,$3,'{}',repeat('0',64),now()-interval '8 days','{}','{}',now()-interval '23 hours 50 minutes')`,
+      [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]);
+    await refuse(/save receipts exist/);
+    assert.equal((await client.query("select training_load.cleanup_dashboard_simple_requests(1) as deleted")).rows[0].deleted, 1);
+    await client.query(rollback);
+    assert.ok(dump() === before, "rollback restores the baseline schema");
+    await migrate();
+    assert.ok(dump() === applied, "reapply restores the migrated schema");
+  } finally {
+    await client.end();
+    await fsp.rm(outer, { recursive: true, force: true });
+    await dropTempDb(rollbackDb);
+  }
 });

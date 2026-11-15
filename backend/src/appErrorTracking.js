@@ -290,8 +290,17 @@ export async function purgeAppErrorEvents({ executor = pool, days = RETENTION_DA
   return total;
 }
 
+async function purgeDashboardSimpleRequests() {
+  const { rows } = await pool.query("select to_regprocedure('training_load.cleanup_dashboard_simple_requests(integer)') is not null as installed");
+  if (!rows[0]?.installed) return;
+  for (let batch = 0; batch < 5; batch += 1) {
+    const result = await pool.query("select training_load.cleanup_dashboard_simple_requests(100) as deleted");
+    if (result.rows[0].deleted < 100) break;
+  }
+}
+
 export function startAppErrorRetentionSchedule({ intervalHours = PURGE_INTERVAL_HOURS, startupDelayMs = 60_000 } = {}) {
-  const tick = () => purgeAppErrorEvents().catch((e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`));
+  const tick = () => Promise.all([purgeAppErrorEvents(), purgeDashboardSimpleRequests()]).catch((e) => console.error(`[app-errors] purge failed: ${String(e?.code || "error").replace(/[^A-Za-z0-9_.-]/g, "")}`));
   const first = setTimeout(tick, startupDelayMs);
   first.unref();
   const every = setInterval(tick, intervalHours * 3_600_000);

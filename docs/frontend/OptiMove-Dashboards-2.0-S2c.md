@@ -116,3 +116,9 @@ The synthetic legacy reconstruction used for investigation is unverified and is
 not a substitute for production-data or staging rehearsal. Factories remain
 unmounted and new saves disabled by default. No production-readiness claim is
 made by these compatibility corrections.
+
+### D1 behavior
+
+Dashboards show measured values only. Current and comparison aggregates exclude estimate occasions. Session count and last session date use their existing session sources.
+
+Preview tokens can be used with distinct request IDs; idempotency is scoped to a request ID. New widgets with a presentation sidecar begin at revision 2. While Simple is open, other Training Load actions are blocked. Browser unload warns for a modified draft or an unresolved save.

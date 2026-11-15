@@ -93,6 +93,7 @@ drop function training_load.dashboard_presentation_valid;
 drop function training_load.dashboard_simple_object;
 
 drop table training_load.dashboard_simple_requests;
+drop function training_load.guard_dashboard_simple_requests;
 delete from public.schema_migrations
 where migration_name = 'migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql';
 commit;

@@ -96,3 +96,9 @@ grep for raw writes against all four tables, in a verification pass on 2026-09-1
 ## Supersedes / Superseded by
 
 —
+
+Dashboard Simple uses the sanctioned functions training_load.save_simple_widget,
+training_load.create_widget_with_presentation, and
+training_load.update_widget_content_with_presentation. The existing cloneDashboard
+transaction also copies presentation_config with a raw UPDATE so an opaque sidecar
+survives cloning unchanged.

@@ -23,4 +23,5 @@ select version, filename,
                 or split_part(migration_name, '/', 2) ~ ('_v' || version || '_'))
        ) as slot_matches
 from expected order by version;
+select exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611131400_app_error_events_v70_device_and_keyed_hash.sql') as v70_required_recorded;
 rollback;

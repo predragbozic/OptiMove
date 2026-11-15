@@ -1,3 +1,8 @@
+-- Add Simple widget presentation, atomic save and the immutable request ledger.
+-- Replace the dashboard widget revision function after verifying its prior body.
+-- This migration alters dashboard widget tables and requires DDL locks.
+-- Rollback: docs/runbooks/dashboard-simple-v71-rollback.sql.
+
 do $gate$
 begin
   if (select md5(prosrc) from pg_proc
@@ -601,6 +606,26 @@ begin
   return saved_receipt;
 end;
 $$;
+
+create function training_load.guard_dashboard_simple_requests()
+returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then
+    if old.retain_until < clock_timestamp() then
+      return old;
+    end if;
+  end if;
+  raise exception 'dashboard Simple receipts are immutable until expiry' using errcode = '55000';
+end;
+$$;
+
+create trigger dashboard_simple_requests_guard_rows
+before update or delete on training_load.dashboard_simple_requests
+for each row execute function training_load.guard_dashboard_simple_requests();
+
+create trigger dashboard_simple_requests_guard_truncate
+before truncate on training_load.dashboard_simple_requests
+for each statement execute function training_load.guard_dashboard_simple_requests();
 
 create function training_load.cleanup_dashboard_simple_requests(p_limit integer default 100)
 returns integer language plpgsql as $$
