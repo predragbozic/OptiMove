@@ -14185,7 +14185,7 @@ button.tests-assignment-card {
   padding: 0 4px;
   border: 1px dashed var(--line-strong, var(--line));
   border-radius: 4px;
-  font-size: 0.75em;
+  font-size: max(11px, 0.75em);
   font-style: italic;
   color: var(--muted);
 }
@@ -14271,7 +14271,8 @@ button.tests-assignment-card {
   overflow-wrap: anywhere;
 }
 
-.tl-estimate-values {
+.tl-estimate-values,
+.tl-estimate-reason {
   color: var(--text) !important;
 }
 

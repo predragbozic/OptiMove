@@ -225,7 +225,7 @@ async function runWrite(command, ctx, render) {
   // settle after the first became unconfirmed and replace or clear its
   // slot. The only live control then is Check result, which never comes
   // through here.
-  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length) return;
+  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length || estimateBusy(roster)) return;
   if (bulk ? bulkLocked(roster) : ctx.athleteIds.some((id) => rowLocked(roster, id))) return;
   lockRows(roster, ctx.athleteIds, bulk);
   roster.confirm = null;

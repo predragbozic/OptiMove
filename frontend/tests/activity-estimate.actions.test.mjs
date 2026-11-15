@@ -185,7 +185,7 @@ test("copy from an athlete: choosing the source reads the numbers again; the sav
 
 test("a note is sent trimmed; a refusal (409 or 503 try_again) says nothing was saved and frees the key; the next save takes a new one", async () => {
   let n = 0;
-  const roster = await openRoster(server({ onWrite: () => (++n === 1 ? { status: 409, body: { error: "measured_exists" } } : n === 2 ? { status: 503, body: { error: "try_again" } } : { status: 201, body: {} }) }));
+  const roster = await openRoster(server({ onWrite: () => (++n === 1 ? { status: 409, body: { error: "measured_exists" } } : n === 2 ? { status: 409, body: { error: "try_again" } } : { status: 201, body: {} }) }));
   await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
   await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-note" }, value: "  left at half time  " }, { render });
   await act("training-load-roster-estimate-save");
@@ -194,7 +194,7 @@ test("a note is sent trimmed; a refusal (409 or 503 try_again) says nothing was 
   assert.equal(roster.estimate.unconfirmed, null);
   await act("training-load-roster-estimate-save");
   assert.match(html(), /The server was busy and saved nothing/);
-  assert.equal(roster.estimate.unconfirmed, null, "503 try_again is a refusal, never 'not confirmed'");
+  assert.equal(roster.estimate.unconfirmed, null, "a first save refused with try_again wrote nothing");
   await act("training-load-roster-estimate-save");
   const keys = posts().map((p) => p.body.requestKey);
   assert.equal(new Set(keys).size, 3, "a new key per attempt after a refusal");
@@ -238,6 +238,117 @@ test("labels: an estimated value shows est. and its label (cell title, Details);
   assert.match(page, /Change the estimate…/, "a row that has an estimate offers to change it");
   const measuredRow = page.slice(page.indexOf('data-roster-row="ath-3"'), page.indexOf('data-roster-row="ath-3"') + 1500);
   assert.ok(!/est\./.test(measuredRow.split("tl-roster-row-more")[0]), "a measured value carries no estimate mark");
+});
+
+// The UX review of 6b-C1 (MEDIUMs): Save only for what the coach can see and has chosen.
+function propProposal(url, { requiredWhenNoMinutes = false } = {}) {
+  const q = new URL(url, "http://x").searchParams;
+  const minutes = q.get("minutes") === null ? null : Number(q.get("minutes"));
+  const body = proposalBody({ minutes: minutes ?? 45 });
+  body.minutes = { default: requiredWhenNoMinutes ? null : 45, used: minutes ?? (requiredWhenNoMinutes ? null : 45) };
+  body.methods.proportional = minutes === null && requiredWhenNoMinutes
+    ? { available: false, reason: "minutes_required", values: [] }
+    : { available: true, reason: null, values: [{ metricDefinitionId: "def-dist", value: 80 * (minutes ?? 45), reason: null, basis: { minutes: minutes ?? 45, ratePerMinute: 80, sessions: 3 } }] };
+  return { status: 200, body };
+}
+const saveButton = () => (html().match(/<button[^>]*data-action="training-load-roster-estimate-save"[^>]*>/) || [""])[0];
+
+test("UX M1: Copy with no athlete chosen offers no Save and says to choose one; a click sends nothing", async () => {
+  const roster = await openRoster(server({ onWrite: () => ({ status: 201, body: {} }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-method", { method: "copy_athlete" });
+  assert.equal(roster.estimate.method, "copy_athlete");
+  assert.match(saveButton(), /disabled/);
+  assert.match(html(), /Choose an athlete to copy from\./);
+  await act("training-load-roster-estimate-save");
+  assert.equal(posts().length, 0, "nothing is sent without a source");
+});
+
+test("UX M2: with the session's duration unknown, Own average is still choosable: the minutes, Update, then Save with those minutes", async () => {
+  const roster = await openRoster(server({ proposal: (url) => propProposal(url, { requiredWhenNoMinutes: true }), onWrite: () => ({ status: 201, body: {} }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  assert.doesNotMatch(html(), /id="tl-estimate-proportional"[^>]*disabled/, "the method can be chosen");
+  assert.match(html(), /Enter the minutes the athlete trained, then Update\./);
+  await act("training-load-roster-estimate-method", { method: "proportional" });
+  assert.match(html(), /id="tl-estimate-minutes"/);
+  assert.match(saveButton(), /disabled/);
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-minutes" }, value: "40" }, { render });
+  await act("training-load-roster-estimate-update");
+  assert.match(proposalGets().at(-1).url, /minutes=40/);
+  assert.equal(roster.estimate.proposal.methods.proportional.available, true);
+  assert.doesNotMatch(saveButton(), /disabled/);
+  await act("training-load-roster-estimate-save");
+  assert.equal(posts().length, 1);
+  assert.equal(posts()[0].body.minutes, 40);
+});
+
+test("UX M3: minutes typed without Update are never saved: the panel asks for Update, and Save then carries exactly the minutes shown", async () => {
+  const roster = await openRoster(server({ proposal: (url) => propProposal(url), onWrite: () => ({ status: 201, body: {} }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-method", { method: "proportional" });
+  assert.match(html(), /Distance 3,600 m/, "the numbers for 45 min");
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-minutes" }, value: "30" }, { render });
+  await act("training-load-roster-estimate-save");
+  assert.equal(posts().length, 0, "not saved with numbers the coach has not seen");
+  assert.match(html(), /Press Update to see the values for these minutes\./);
+  assert.match(saveButton(), /disabled/);
+  await act("training-load-roster-estimate-update");
+  assert.match(html(), /Distance 2,400 m/, "the numbers for 30 min");
+  await act("training-load-roster-estimate-save");
+  assert.equal(posts().length, 1);
+  assert.equal(posts()[0].body.minutes, 30);
+  assert.equal(roster.estimate, null);
+});
+
+// The code review of 6b-C1.
+test("HIGH 1: a Check result refused before the server looks the key up (409 try_again, 403) stays not confirmed with the same key; a later Check result settles it", async () => {
+  let n = 0;
+  const roster = await openRoster(server({ onWrite: () => (++n === 1 ? new TypeError("network") : n === 2 ? { status: 409, body: { error: "try_again" } } : n === 3 ? { status: 403, body: { error: "not_a_team_coach" } } : { status: 200, body: {} }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-save");
+  const key = posts()[0].body.requestKey;
+  await act("training-load-roster-estimate-check");
+  assert.ok(roster.estimate.unconfirmed, "try_again on Check result: still not confirmed");
+  assert.doesNotMatch(html(), /saved nothing/);
+  assert.match(html(), /still not confirmed/);
+  await act("training-load-roster-estimate-check");
+  assert.ok(roster.estimate.unconfirmed, "403 on Check result: still not confirmed");
+  await act("training-load-roster-estimate-check");
+  assert.equal(roster.estimate, null, "the replay settles it");
+  assert.deepEqual(posts().map((p) => p.body.requestKey), [key, key, key, key], "always the same key");
+});
+
+test("HIGH 2: the click that opens the Copy from list changes nothing, so it reads nothing and does not repaint; a real change reads once", async () => {
+  await openRoster(server());
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-method", { method: "copy_athlete" });
+  const before = proposalGets().length;
+  renders = 0;
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-source" }, value: "" }, { render });
+  assert.equal(proposalGets().length, before);
+  assert.equal(renders, 0, "no repaint while the native list opens");
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-source" }, value: "ath-3" }, { render });
+  assert.equal(proposalGets().length, before + 1);
+  renders = 0;
+  await handleActivityRosterAction({ dataset: { action: "training-load-roster-estimate-source" }, value: "ath-3" }, { render });
+  assert.equal(proposalGets().length, before + 1, "the same athlete again reads nothing");
+  assert.equal(renders, 0);
+});
+
+test("MEDIUM: one command at a time - an unconfirmed estimate locks the roster's own writes, and a roster write in flight or not confirmed locks the estimate", async () => {
+  let n = 0;
+  const roster = await openRoster(server({ onWrite: () => (++n === 1 ? new TypeError("network") : { status: 200, body: { decision: { id: "d-x" }, athlete: {}, completion: {} } }) }));
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  await act("training-load-roster-estimate-save");
+  assert.ok(roster.estimate.unconfirmed);
+  assert.match(html(), /data-action="training-load-roster-change" data-athlete-id="ath-8"[^>]*disabled/, "Change is locked");
+  await act("training-load-roster-set", { athleteId: "ath-1", kind: "participated_no_values" });
+  assert.equal(writes().length, 1, "no roster write while the estimate is not confirmed");
+  // The other way: a roster result not confirmed keeps the estimate closed.
+  roster.estimate = null;
+  roster.unconfirmed = { requestKey: "k", command: {}, ctx: { athleteIds: ["ath-1"] }, athleteIds: ["ath-1"], names: ["Ivan"], label: "x", checks: 0, checking: false, code: "" };
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  assert.equal(roster.estimate, null, "no estimate while a roster result is not confirmed");
 });
 
 test("estimateLabelText: each method in the coach's words, never an id", () => {

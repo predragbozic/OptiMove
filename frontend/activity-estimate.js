@@ -21,7 +21,7 @@ const METHOD_TITLES = {
   scale_recording: "Scale the recorded part",
 };
 const METHOD_HINTS = {
-  proportional: "This athlete's own rate per minute in their recent sessions, times the minutes below.",
+  proportional: "This athlete's own rate per minute in their recent sessions, times the minutes you enter.",
   team_average: "The average of the athletes measured in this session.",
   copy_athlete: "Another athlete's values from this session. The weakest estimate: use it only if they trained the same way.",
   scale_recording: "The recorded part of this athlete's session, scaled to the minutes chosen before the import.",
@@ -30,7 +30,7 @@ const METHOD_HINTS = {
 const REASONS = {
   too_few_athletes: "Fewer than 3 athletes have a measured value in this session.",
   too_few_sessions: "Fewer than 3 of this athlete's sessions in the last 90 days have measured values.",
-  minutes_required: "Enter the minutes.",
+  minutes_required: "Enter the minutes the athlete trained, then Update.",
   duration_not_available: "This session's duration is not known.",
   method_not_for_variable: "Only totals can be scaled to minutes.",
   source_has_no_value: "That athlete has no measured value for these variables.",
@@ -55,7 +55,7 @@ const REFUSALS = {
   measured_exists: "A measured value arrived meanwhile, so no estimate is needed.",
   activity_superseded: "This session was merged into another one. Open the other session.",
   roster_not_applicable: "Estimates are not available for this session.",
-  request_key_reused: "That save was already used for something else. Start again.",
+  request_key_reused: "Something changed while saving. Open the estimate again.",
   try_again: "The server was busy and saved nothing. Try again.",
   not_a_team_coach: "You can no longer decide on this roster.",
   scale_not_chosen: REASONS.scale_not_chosen,
@@ -104,6 +104,18 @@ export function estimateBusy(r = roster()) {
   return Boolean(r?.estimate?.sending || r?.estimate?.unconfirmed);
 }
 
+// The roster's own one-command-at-a-time lock (5a3b section 7): no estimate starts while a roster write is in flight, not
+// confirmed or locked; the roster's checks also count an estimate in flight (activity-roster-view rowLocked / bulkLocked).
+function rosterWriteBusy(r) {
+  return Boolean(r?.writeLock || r?.unconfirmed || Object.keys(r?.busy || {}).length);
+}
+
+// A resend (Check result) refused by a check the server makes BEFORE it looks the request key up proves nothing about the
+// first send: busy (try_again), the right (403) or the activity (404). The result stays not confirmed, with the same key.
+function refusedBeforeReplay(result) {
+  return result.status === 403 || result.status === 404 || result.code === "try_again" || result.code === "roster_busy";
+}
+
 // ---------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------
@@ -132,12 +144,30 @@ async function readProposal(render) {
     if (e.minutesInput === "" && Number.isFinite(answer?.minutes?.used)) e.minutesInput = String(answer.minutes.used);
     if (!e.method) e.method = firstAvailable(answer);
   } catch (error) {
-    if (roster() !== r || r.estimate !== e || e.readTicket !== ticket) return;
+    if (roster() !== r || r.estimate !== e || e.readTicket !== ticket || generation !== currentRosterResetGeneration()) return;
     e.error = error?.status === 404 ? "Estimates are not available for this session." : "The proposal could not be read. Try again.";
   } finally {
     if (roster() === r && r.estimate === e && e.readTicket === ticket) e.loading = false;
   }
   render();
+}
+
+// Why the chosen method cannot be saved yet, though the server offers it: Copy without a chosen athlete, or minutes typed
+// but not yet read again with Update (the numbers on screen are for other minutes). Null when Save may go.
+export function saveBlocker(e) {
+  if (!e?.proposal || !e.method) return null;
+  if (e.method === "copy_athlete" && !e.sourceAthleteId) return "Choose an athlete to copy from.";
+  if (e.method === "proportional") {
+    const used = e.proposal.minutes?.used;
+    if (e.minutesInput === "" || !Number.isFinite(Number(e.minutesInput))) return "Enter the minutes the athlete trained, then Update.";
+    if (!Number.isFinite(used) || Number(e.minutesInput) !== used) return "Press Update to see the values for these minutes.";
+  }
+  return null;
+}
+
+// A method can be chosen when it can run, or when it needs only the coach's minutes.
+function choosable(view, method) {
+  return Boolean(view?.available) || (method === "proportional" && view?.reason === "minutes_required");
 }
 
 function firstAvailable(proposal) {
@@ -168,7 +198,7 @@ export async function handleEstimateAction(action, { render }) {
   const e = r.estimate;
 
   if (type === "training-load-roster-estimate-open") {
-    if (estimateBusy(r)) return true;
+    if (estimateBusy(r) || rosterWriteBusy(r)) return true;
     const athleteId = action.dataset.athleteId;
     const athlete = (r.data?.athletes || []).find((a) => a.athleteId === athleteId);
     if (!athlete || !estimateOffered(r.data, athlete)) return true;
@@ -189,14 +219,15 @@ export async function handleEstimateAction(action, { render }) {
   }
   if (type === "training-load-roster-estimate-method") {
     const method = action.dataset.method || action.value;
-    if (!ESTIMATE_METHODS.includes(method)) return true;
+    if (!ESTIMATE_METHODS.includes(method) || !choosable(e.proposal?.methods?.[method], method)) return true;
     e.method = method;
     e.refusal = null;
     render();
     return true;
   }
   if (type === "training-load-roster-estimate-minutes") {
-    // Kept while typing, without a re-render; "Update" reads the numbers again.
+    // Kept while typing, without a re-render (the field keeps its focus); "Update" reads the numbers again. Save is refused
+    // until then (saveBlocker), and the panel says so at the next render.
     e.minutesInput = String(action.value ?? "").trim().slice(0, 8);
     return true;
   }
@@ -211,6 +242,9 @@ export async function handleEstimateAction(action, { render }) {
     return true;
   }
   if (type === "training-load-roster-estimate-source") {
+    // The click that opens the native list carries the current value: nothing changed, so no read and no repaint (a repaint
+    // would replace the control while its list opens). Only a real change reads the numbers again.
+    if ((action.value || null) === e.sourceAthleteId) return true;
     e.sourceAthleteId = action.value || null;
     e.method = "copy_athlete";
     await readProposal(render);
@@ -222,7 +256,9 @@ export async function handleEstimateAction(action, { render }) {
   }
   if (type === "training-load-roster-estimate-save") {
     const view = e.proposal?.methods?.[e.method];
-    if (!view?.available) return true;
+    if (!view?.available || e.loading || rosterWriteBusy(r)) return true;
+    // A Save the panel did not offer yet (minutes typed without Update): say why, send nothing.
+    if (saveBlocker(e)) { render(); return true; }
     // One key per save attempt; a refusal frees it, a lost answer keeps it for Check result.
     e.requestKey = newRosterRequestKey();
     return send(r, e, render);
@@ -254,10 +290,16 @@ async function send(r, e, render) {
     render();
     return true;
   }
+  if (e.unconfirmed && refusedBeforeReplay(result)) {
+    // Check result refused before the server looked the key up: the first save may still have happened.
+    e.unconfirmed = { ...e.unconfirmed, stillUnknown: true };
+    render();
+    return true;
+  }
   // Refused: nothing was written; the key is free again.
   e.unconfirmed = null;
   e.requestKey = null;
-  e.refusal = REFUSALS[result.code] ?? "It could not be saved. Nothing was saved.";
+  e.refusal = REFUSALS[result.code] ?? (result.status === 404 ? "This session is not available here any more. Nothing was saved." : result.status === 403 ? REFUSALS.not_a_team_coach : "It could not be saved. Nothing was saved.");
   render();
   return true;
 }
@@ -292,9 +334,9 @@ function methodHtml(e, method) {
   const view = e.proposal?.methods?.[method];
   if (!view) return "";
   const id = `tl-estimate-${method}`;
-  const disabled = !view.available || e.sending || e.loading;
+  const disabled = !choosable(view, method) || e.sending || e.loading;
   const chosen = e.method === method;
-  const reason = !view.available ? (REASONS[view.reason] ?? REASONS.nothing_to_estimate) : "";
+  const reason = !view.available ? (REASONS[view.reason] ?? REASONS.nothing_to_estimate) : chosen && method === "copy_athlete" && !e.sourceAthleteId ? REASONS.choose_source : "";
   const values = view.available ? methodValuesText(e.proposal, view) : "";
   let extra = "";
   if (method === "proportional" && chosen) {
@@ -337,24 +379,27 @@ export function renderEstimatePanelHtml(r, athlete) {
       <section class="tl-estimate-panel" aria-label="Estimate for ${escapeAttr(name)}">
         <p class="tl-roster-tag is-unconfirmed">Result not confirmed</p>
         <p>The answer was lost, so we can't tell whether the estimate was saved. Check result asks again without saving twice.</p>
+        ${e.unconfirmed.stillUnknown ? `<p class="muted">The server could not answer yet, so it is still not confirmed. Try Check result again in a moment.</p>` : ""}
         <div class="tl-roster-actions">
           <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-estimate-check" ${e.sending ? "disabled" : ""}>${e.sending ? "Checking…" : "Check result"}</button>
         </div>
       </section>`;
   }
   const methods = e.proposal ? ESTIMATE_METHODS.map((m) => methodHtml(e, m)).join("") : "";
-  const canSave = Boolean(e.proposal?.methods?.[e.method]?.available) && !e.sending && !e.loading;
+  const blocker = saveBlocker(e);
+  const canSave = Boolean(e.proposal?.methods?.[e.method]?.available) && !blocker && !e.sending && !e.loading && !rosterWriteBusy(r);
   return `
     <section class="tl-estimate-panel" aria-label="Estimate for ${escapeAttr(name)}">
       <h4>Estimate values for ${escapeHtml(name)}</h4>
       <p class="muted">An estimate is always labelled and is never counted as measured. A measured value that arrives later replaces it.</p>
       ${e.loading && !e.proposal ? `<p class="muted" aria-live="polite">Reading the proposal…</p>` : ""}
       ${e.error ? `<p class="tl-estimate-error" role="alert">${escapeHtml(e.error)}</p>` : ""}
-      ${methods ? `<ul class="tl-estimate-methods">${methods}</ul>` : ""}
+      ${methods ? `<ul class="tl-estimate-methods" role="radiogroup" aria-label="Estimate method">${methods}</ul>` : ""}
       ${e.proposal ? `
         <label class="tl-estimate-note" for="tl-estimate-note">Note (optional)</label>
         <textarea id="tl-estimate-note" rows="2" maxlength="${MAX_NOTE}" data-action="training-load-roster-estimate-note" ${e.sending ? "disabled" : ""}>${escapeHtml(e.note)}</textarea>` : ""}
       ${e.refusal ? `<p class="tl-estimate-error" role="alert">${escapeHtml(e.refusal)}</p>` : ""}
+      ${e.proposal && blocker && !e.refusal ? `<p class="muted tl-estimate-blocker">${escapeHtml(blocker)}</p>` : ""}
       <div class="tl-roster-actions">
         <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-estimate-save" ${canSave ? "" : "disabled"}>${e.sending ? "Saving…" : "Save estimate"}</button>
         <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-estimate-cancel" ${e.sending ? "disabled" : ""}>Cancel</button>

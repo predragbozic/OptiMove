@@ -393,12 +393,12 @@ export function anyWriteInFlight(roster) {
 }
 
 export function rowLocked(roster, athleteId) {
-  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster)) return true;
+  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster)) return true;
   return Boolean(roster.busy?.[athleteId]);
 }
 
 export function bulkLocked(roster) {
-  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster));
+  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster));
 }
 
 function button(label, action, attrs = "", cls = "plain-button tl-roster-button") {

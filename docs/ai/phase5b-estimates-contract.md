@@ -315,6 +315,9 @@ not frontend-only. It is split: C1 (this section) and C2 (the imported session's
   athlete reading their own results gets the method, the author and the date, never whose values were copied. A source who
   left the team after the session is named as the roster names them for that day.
 - A replaced estimate has no label: the reads show only effective values (rule 7).
+- **Known, accepted (the security review of C1):** a copied value equals a teammate's measured value of the same session. An
+  athlete reading their own results sees the number as their estimate, labelled "copied from another athlete", never whose
+  it is. This follows from the coach's choice of the copy method (6b-B) and is not changed here.
 - Every other value, and an answer with no estimate, is exactly as before. The Roster read's `viewer` carries
   `estimates: true` only while `ESTIMATES_ENABLED` is on.
 
