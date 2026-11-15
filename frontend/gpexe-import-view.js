@@ -50,7 +50,6 @@ import {
   gpexeAthleteLabel,
   gpexeAthleteSentence,
   gpexeAthleteOrdinal,
-  maskGpexeIds,
   notConfirmedForImport,
   withdrawnByCheck,
   isHiddenVersion,
@@ -106,7 +105,7 @@ const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GP
 // first one), then what to look at in GPEXE if it stays like this.
 const adminStep = (c) => `${findAgainText([c])}. If it stays like this, check in GPEXE that the session's drills are set up and have data.`;
 function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
-  return identityViewer(gx)
+  return gx?.status?.viewer?.isPlatformAdmin === true
     ? `Not confirmed for import: ${ADMIN_CAUSES}. ${adminStep(c)}`
     : `Not confirmed for import yet. ${findAgainText([c])}, then review it.`;
 }
@@ -269,6 +268,9 @@ function coachStep(s, c) {
 // `extra` is markup that belongs to support, not to the coach's flow (the
 // replaced-versions switch): it lives inside the same folded block.
 function techHtml(entries, extra = "") {
+  // P2 (owner 2026-11-13, O1): in Imports only the platform admin has Technical details; the coach and the club admin read
+  // one plain sentence and one step instead. The server's codes stay in its answers; nothing of them is shown to them.
+  if (!platformViewer()) return "";
   const rows = entries.filter(([, v]) => v !== undefined && v !== null && v !== "");
   if (!rows.length && !extra) return "";
   return `<details class="gpexe-tech"><summary>Technical details</summary><dl>${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>${extra}</details>`;
@@ -277,14 +279,14 @@ function techHtml(entries, extra = "") {
 // J20-A2: GPEXE field names, raw values and ids are for the two administrators
 // only. A coach's review of the athletes carries no Technical details at all.
 function adminTechHtml(entries, extra = "") {
-  return maskGpexeIds() ? techHtml(entries, extra) : "";
+  return techHtml(entries, extra);
 }
 
 // The session review's technical lines: an administrator reads them; a coach
 // reads one sentence instead and never a code, a server message or a step.
 // P1: a coach reads no line about technical details at all (it gave them nothing to do).
 function reviewTechHtml(entries, extra = "") {
-  return maskGpexeIds() ? techHtml(entries, extra) : "";
+  return techHtml(entries, extra);
 }
 // P1 (owner 2026-11-13, O1/O2/O3/O5): the coach and the club admin get the simple review; the platform admin keeps the full
 // one. The status's own fact: viewer.isPlatformAdmin.
@@ -302,7 +304,16 @@ function reviewErrorTech(error) {
   return reviewTechHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
 }
 // "(give them the Technical details)" only where the reader has them.
-const giveTech = () => (maskGpexeIds() ? " (give them the Technical details)" : "");
+const giveTech = () => (platformViewer() ? " (give them the Technical details)" : "");
+// A connection fact the team's administrators act on in Settings > Source connections (F3c2g's precise reasons).
+const CONNECTION_FACT = /^(binding_|connection_|team_setting_)|^(host_not_allowed|adapter_not_available|key_missing|credential_unreadable|source_auth_rejected|source_access_refused|source_team_mismatch)$/;
+// P2: the sentence a coach or a club admin reads when the team's GPEXE connection can't be used. The club admin (the
+// connection's owner, F3c2e) with a precise fact gets their own step; everyone else is told who to ask.
+function connectionUnusableText(fact, extra = "") {
+  const clubAdmin = state.trainingLoad.gpexe?.status?.viewer?.identityAdmin === true;
+  if (clubAdmin && typeof fact === "string" && CONNECTION_FACT.test(fact)) return `The team's GPEXE connection can't be used right now.${extra} Check it in Settings > Source connections.`;
+  return `The team's GPEXE connection can't be used right now.${extra} ${AskWho()}.`;
+}
 
 function errorTech(error) {
   if (!error) return "";
@@ -427,7 +438,7 @@ function gpexeSideText(gpexeAthleteId, gx) {
 // The id under Technical details, for an administrator only (a coach sees it
 // in the text, as before).
 function idTechHtml(gpexeAthleteId) {
-  return maskGpexeIds() && gpexeAthleteId ? techHtml([["GPEXE athlete id", gpexeAthleteId]]) : "";
+  return gpexeAthleteId ? techHtml([["GPEXE athlete id", gpexeAthleteId]]) : "";
 }
 
 function errorText(error, fallback) {
@@ -732,7 +743,8 @@ export function checkErrorText(error) {
   if (error.code === "check_already_running") return "Sessions are already being found for this team. Wait for it to finish.";
   // The team's source connection (F3c2g / F3c3): the server's own sentence
   // already says what a coach may know - contact an administrator.
-  if (error.code === "source_connection_unavailable") return error.message || "The team's source connection cannot be used right now; contact an administrator.";
+  // P2: the server's sentence for the platform admin; the coach and the club admin read who to ask.
+  if (error.code === "source_connection_unavailable") return platformViewer() ? error.message || "The team's source connection cannot be used right now; contact an administrator." : connectionUnusableText(error.data?.reason);
   if (error.code === "invalid_window") return "Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be searched at once.";
   if (error.code === "gpexe_token_missing") return "OptiMove has no access to GPEXE set up yet. Ask a platform admin to set it up.";
   if (error.code === "gpexe_team_not_configured") return "This team is not connected to a GPEXE team yet. Ask a platform admin to connect it in Settings > Data sources.";
@@ -763,11 +775,13 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
   // connections (F3c3).
   const code = check.error?.code || "";
   const connection = code === "source_connection_unavailable";
-  const connectionFact = /^(binding_|connection_|team_setting_)|^(host_not_allowed|adapter_not_available|key_missing|credential_unreadable|source_auth_rejected|source_access_refused|source_team_mismatch)$/.test(code);
+  const connectionFact = CONNECTION_FACT.test(code);
   const next = connection
-    ? "The team's source connection cannot be used right now; contact an administrator."
+    ? (platformViewer() ? "The team's source connection cannot be used right now; contact an administrator." : connectionUnusableText(check.error?.reason))
     : connectionFact
-      ? "The team's source connection could not be used (the code is under Technical details); an administrator acts under Settings > Source connections."
+      ? (platformViewer() ? "The team's source connection could not be used (the code is under Technical details); an administrator acts under Settings > Source connections."
+        // The club admin's own step (O1 exception: Source connections keeps what its step needs); a coach never gets a precise code.
+        : connectionUnusableText(code))
       : "Try again in a moment.";
   return `<div class="gpexe-error" role="alert"><p>The last search (${escapeHtml(fmtDateTime(check.startedAt))}) did not finish. ${next}</p>${techHtml([["Code", check.error?.code], ["Server message", check.error?.message]])}</div>`;
 }
@@ -1282,7 +1296,7 @@ function renderBatchResultsHtml(gx) {
       <div class="gpexe-unknown" role="alert">
         <p><strong>The answer to the import did not arrive${earlier.length ? ` for the last ${plural(u.candidateIds.length, "session", "sessions")}` : ""}.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
         <p>${confirmed} of ${u.candidateIds.length} confirmed as imported so far. The rest are not confirmed; nothing is sent again by itself. Sessions that stay unconfirmed keep the mark "Result not confirmed" in the list; open one to check it.</p>
-        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Ask a platform admin to check these imports (give them the Technical details). Until then, don't enter the data by hand.</p>` : ""}
+        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${platformViewer() ? "Ask a platform admin to check these imports (give them the Technical details)." : `${AskWho()} to check these imports.`} Until then, don't enter the data by hand.</p>` : ""}
         ${techHtml([["HTTP status", u.error?.status || "no answer"], ["Code", u.error?.code], ["Server message", u.error?.message], ["Candidate ids", u.candidateIds.join(", ")]])}
       </div>
       <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
@@ -1442,7 +1456,7 @@ function renderLinksHtml(gx) {
         <ul class="gpexe-link-list">
           ${links.map((l) => `
             <li>
-              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? gpexeSideText(l.gpexeAthleteId) : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</div>
+              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(gpexeSideText(l.gpexeAthleteId))}</span>${idTechHtml(l.gpexeAthleteId)}</div>
               <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
             </li>
           `).join("")}
@@ -1496,8 +1510,8 @@ function identityLinesHtml(id, gx, duplicates) {
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
   return `
-    <span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>
-    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</span>` : ""}
+    ${who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
+    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
   `;
 }
 
@@ -1533,7 +1547,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1544,7 +1558,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : maskGpexeIds(gx) ? gpexeSideText(id, gx) : `GPEXE athlete ${id}`;
+  const gpexeSide = who ? `${gpexeSideText(id, gx)}${who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : gpexeSideText(id, gx);
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1579,7 +1593,7 @@ function identityErrorText(error) {
   if (error?.status === 404) return "GPEXE names are not available for this team any more (the team is no longer bound, or your access changed). Nothing was saved.";
   if (code === "source_connection_unavailable") return reason === "connection_not_usable" || reason === "connection_credential_changed"
     ? "The team's GPEXE connection needs attention first: test or reconnect it in Settings > Source connections. Nothing was read."
-    : "The team's GPEXE connection cannot be used right now (the code is under Technical details). Nothing was read.";
+    : platformViewer() ? "The team's GPEXE connection cannot be used right now (the code is under Technical details). Nothing was read." : connectionUnusableText(reason, " Nothing was read.");
   if (code === "identity_load_abandoned") return "The last load did not finish and saved nothing. You can load the names again.";
   if (code === "identity_load_running") return "Another load of GPEXE names is running for this team, possibly started by another administrator. Nothing was started. Load again when it has finished.";
   if (code === "source_auth_rejected") return "GPEXE refused the connection's credential, so nothing was saved. Until it is reconnected in Settings > Source connections, no search or load can run for this team.";
@@ -1596,10 +1610,13 @@ function identityCheckRefusalText(refusal) {
     return "Check result could not run: the team's GPEXE connection needs attention (test or reconnect it in Settings > Source connections). The result is still not confirmed.";
   }
   if (busy) return "Check result could not run because OptiMove or the server is busy. The result is still not confirmed; try Check result again in a moment.";
-  return "Check result could not run (the code is under Technical details). The result is still not confirmed; try Check result again in a moment.";
+  return platformViewer() ? "Check result could not run (the code is under Technical details). The result is still not confirmed; try Check result again in a moment." : "Check result could not run. The result is still not confirmed; try Check result again in a moment.";
 }
 
 function renderIdentityPanelHtml(gx) {
+  // The load panel (load, retry, suppression, dates) is the administrator's. The team's own coach reads the stored names
+  // through the same list but never loads them here, so the panel is not drawn for a names-only viewer.
+  if (!identityViewer(gx)) return "";
   const id = gx.identity;
   if (!id || (!id.available && !id.loading && !id.error && !id.unconfirmed && !id.readError)) return "";
   const list = id.list;
@@ -1650,7 +1667,7 @@ function renderIdentityPanelHtml(gx) {
     </section>`;
 }
 
-function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
+function mapOutcomeText(r, label = gpexeAthleteLabel(r.gpexeAthleteId)) {
   if (r.outcome === "linked") return "linked";
   if (r.outcome === "unknown") return `not confirmed - the answer was lost, so we can't tell whether the link was made. Press Done: if ${label} now appears under Linked, it was.`;
   const code = r.error?.code;
@@ -1667,10 +1684,11 @@ function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
-  const unclear = maskGpexeIds(gx) && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
+  // A U3 pair keeps the suggestion's date of birth for a coach, whose names carry no date (the same line as in the box).
+  const sug = who && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
+  const unclear = (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
@@ -1753,7 +1771,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(r.label || gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, r.label || gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}
@@ -1765,7 +1783,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-link-confirm gpexe-map-confirm" role="group" aria-label="Confirm the links">
         <p><strong>Link ${plural(staged.pairs.length, "athlete", "athletes")}?</strong></p>
         <ul>${staged.pairs.map((p) => renderPairHtml(p, gx, list, duplicates)).join("")}</ul>
-        ${gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
+        ${identityViewer(gx) && gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
         ${unlinked.length > staged.pairs.length ? `<p class="muted">${escapeHtml(plural(unlinked.length - staged.pairs.length, "other GPEXE athlete stays", "other GPEXE athletes stay"))} not linked (Not now); their sessions keep needing attention until they are linked.</p>` : ""}
         <p>Once you find new sessions and approve an import, each GPEXE athlete's results are imported as the athlete chosen here — in the sessions already found and in every session found later.</p>
         <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
@@ -1777,7 +1795,7 @@ function renderTeamMappingHtml(gx, teams) {
     `;
   } else {
     body = `
-      <p class="muted gpexe-hint">${gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      <p class="muted gpexe-hint">${identityViewer(gx) && gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : gx.identity?.list ? "A link is never guessed. The GPEXE name and the last session's values help you find an athlete in GPEXE; neither proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}
@@ -1823,7 +1841,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
-          ${maskGpexeIds(gx) ? `<p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
+          <p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>
           ${body}
           ${footer}
         </div>
@@ -1841,7 +1859,7 @@ function renderLastLinkHtml(gx) {
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
+      <p><strong>${escapeHtml((l.gpexeSentence || gpexeWho(l.gpexeAthleteId)).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>
@@ -1968,13 +1986,13 @@ const SETUP_COACH_TEXT = Object.freeze({
 });
 // 7h-F (decision 1 at 7h-B's GO): the ux-design-reviewer's wording, for the
 // club's admin who usually reads it.
-const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. The club's admin changes the club's own mappings there. If both look right, ask a platform administrator, who handles system mappings and field confirmations (give them the Technical details).";
+const SETUP_MAPPINGS_STEP = "Check the mappings switched on for this team (Training Load > Data configuration > Mappings) and the team's GPEXE binding (Settings > Source connections), then find new sessions. The club's admin changes the club's own mappings there. If both look right, ask a platform administrator, who handles system mappings and field confirmations{TECH}.";
 const SETUP_CONNECTION_STEP = "Check this team's GPEXE binding and the binding of the team that holds this GPEXE team (Settings > Source connections). Ending a held source instance is a platform administrator's step (docs/runbooks/source-instance-end-v50.md); then find new sessions.";
 const SETUP_ADMIN_TEXT = Object.freeze({
   mapping_not_usable: { reason: "This session can't be imported through the team's mappings and GPEXE binding as they stand.", step: SETUP_MAPPINGS_STEP },
   source_threshold_contract_mismatch: { reason: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.", step: "Check the team's thresholds and zones in GPEXE against the mapping, then find new sessions." },
   source_unit_mismatch: { reason: "A mapping's source unit is not the proven unit of its GPEXE field.", step: "Check the mapping's source unit (Training Load > Data configuration > Mappings), then find new sessions." },
-  source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, ask a platform administrator to check that GPEXE field (give them the Technical details)." },
+  source_shape_mismatch: { reason: "GPEXE sent a mapped value in another shape than its field has.", step: "Find new sessions again later. If it stays like this, ask a platform administrator to check that GPEXE field{TECH}." },
   no_mapped_values: { reason: "No value of this session can be imported: either no mapping switched on for this team gives a value for this session, or every mapped value was left out (see Left out under each athlete).", step: "Check which mappings are switched on for this team and the levels they cover (Training Load > Data configuration > Mappings), and any reasons under Left out; then find new sessions." },
   source_instance_held: { reason: "Another team's GPEXE source instance holds this GPEXE team.", step: SETUP_CONNECTION_STEP },
   source_instance_changed: { reason: "This team's GPEXE source instance names another GPEXE team.", step: "Check that this team's GPEXE binding names the right GPEXE team (Settings > Source connections). If it does, ending this team's earlier source instance is a platform administrator's step (an ended instance stays ended; docs/runbooks/source-instance-end-v50.md); then find new sessions." },
@@ -1990,7 +2008,7 @@ function setupBlockCode(c) {
   return null;
 }
 
-function blockedCoachText(c) {
+export function blockedCoachText(c) {
   const code = c.blockedCode;
   // U6a-2 (D8): GPS units of one session report different time zones (mixed_timezones). The code stays in an
   // administrator's Technical details.
@@ -2001,7 +2019,8 @@ function blockedCoachText(c) {
   const precise = setupBlockCode(c);
   if (precise) {
     const own = c.preview?.blocked?.code === precise ? c.preview.blocked.message : null;
-    return { reason: typeof own === "string" && own.trim() ? own : SETUP_ADMIN_TEXT[precise].reason, step: SETUP_ADMIN_TEXT[precise].step };
+    const step = SETUP_ADMIN_TEXT[precise].step.replace("{TECH}", giveTech());
+    return { reason: typeof own === "string" && own.trim() ? own : SETUP_ADMIN_TEXT[precise].reason, step };
   }
   if (code === "data_setup_incomplete" || c.blockedSourceCode === "data_setup_incomplete" || c.preview?.blocked?.code === "data_setup_incomplete") {
     return { ...SETUP_COACH_TEXT };
@@ -2140,7 +2159,7 @@ function renderLinkContextHtml(a, c) {
   const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(maskGpexeIds() ? gpexeWho(a.gpexeAthleteId) : `athlete ${a.gpexeAthleteId}`)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
     <ul class="gpexe-link-context">
       ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2158,7 +2177,7 @@ function renderHelperContextHtml(a, c) {
   const drills = Number.isInteger(h.drillRows) && h.drillRows > 0 ? h.drillRows : 0;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(maskGpexeIds() ? gpexeWho(a.gpexeAthleteId) : `athlete ${a.gpexeAthleteId}`)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
     <ul class="gpexe-link-context">
       ${values.map(([key, label, unit]) => `<li><span>${escapeHtml(label)}</span> <strong>${escapeHtml(fmtValue(h[key], unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2190,8 +2209,8 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   if (pending) {
     return `
       <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
-        <p class="gpexe-link-pair"><strong>${escapeHtml(maskGpexeIds() ? gpexeAthleteLabel(id) : `GPEXE athlete ${id}`)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
-        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When this session is imported, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p class="gpexe-link-pair"><strong>${escapeHtml(gpexeAthleteLabel(id))}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
+        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When this session is imported, ${escapeHtml("this GPEXE athlete")}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
         ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
         <div class="gpexe-link-actions">
@@ -2202,13 +2221,13 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
+    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml("this GPEXE athlete")} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
   }
   return `
     <div class="gpexe-link">
-      ${compact ? "" : `<p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>`}
-      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
-      ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
+      ${compact ? "" : `<p><strong>${!identityViewer() && !identityOf(id)?.name ? "Find this athlete in GPEXE using the session values below. Link only if you are sure." : `Find ${escapeHtml(gpexeWho(id))} in GPEXE first. Link only if you are sure.`}</strong></p>`}
+      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
+      ${!identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>` : ""}
       ${compact ? (compactHasValues(a, c) ? "" : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
@@ -2231,7 +2250,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
 function leftOutText(s) {
   if (typeof s?.reason === "string" && Object.hasOwn(SKIP_TEXT, s.reason)) return SKIP_TEXT[s.reason];
   if (typeof s?.message === "string" && s.message.trim()) return s.message.trim().replace(/\.$/, "");
-  return "other reason (see Technical details)";
+  return (platformViewer() ? "other reason (see Technical details)" : "other reason");
 }
 
 // One Technical details line of codes, each once; a missing code (a coach's
@@ -2249,7 +2268,7 @@ function renderSkippedHtml(a, v3 = false) {
     <div class="gpexe-skipped">
       <p class="muted">Left out (${skipped.length}) - a left-out value is not a zero:</p>
       <ul>
-        ${skipped.map((s) => `<li>${escapeHtml(resultLabel(s))} · ${escapeHtml(v3 ? variableName(s) : metricName(s))} - ${escapeHtml(v3 ? leftOutText(s) : SKIP_TEXT[s.reason] || "other reason (see Technical details)")}</li>`).join("")}
+        ${skipped.map((s) => `<li>${escapeHtml(resultLabel(s))} · ${escapeHtml(v3 ? variableName(s) : metricName(s))} - ${escapeHtml(v3 ? leftOutText(s) : SKIP_TEXT[s.reason] || (platformViewer() ? "other reason (see Technical details)" : "other reason"))}</li>`).join("")}
       </ul>
     </div>
   `;
@@ -2273,7 +2292,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
   // otherwise close it under them).
   const open = unlinked && gx.linkOpen === a.gpexeAthleteId;
   const tech = [
-    ...(maskGpexeIds() && a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
+    ...(a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
     ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])], v3),
     ...codesTech("Left-out codes", (a.skippedValues || []).map((s) => s.reason)),
     ...codesTech("Left-out source codes", (a.skippedValues || []).map((s) => s.sourceReason)),

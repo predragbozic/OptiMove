@@ -41,7 +41,7 @@ let appPool;
 before(async () => {
   // MT-B: the preview reads v67's track choices, so the suite's main database carries v67 too (the v64 rehearsal of test 12
   // keeps MAIN_MIGRATIONS, ending at v64).
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est6bb", migrations: [...MAIN_MIGRATIONS, "202611131200_training_load_v67_gpexe_track_choices.sql"] });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "est6bb", migrations: [...MAIN_MIGRATIONS, "202611131200_training_load_v67_gpexe_track_choices.sql", "202611131300_training_load_v68_track_choice_scale.sql", "202611131310_training_load_v69_scale_recording_estimates.sql"] }); // MT-D: v68 and v69 too (the preview reads the scale)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
