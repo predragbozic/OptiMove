@@ -2214,6 +2214,12 @@ function handleAppBack() {
   // at the overlay's own root day/block list.
   if (closeSpecificProgramOverlay()) return true;
 
+  // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
+    renderTrainingLoad();
+    return true;
+  }
+
   if (state.weekSelectorOpen) {
     state.weekSelectorOpen = false;
     renderWeeklyRoot(state.lastWeeklyData);
@@ -2223,12 +2229,6 @@ function handleAppBack() {
   if (state.athletesExpanded) {
     state.athletesExpanded = false;
     renderAthleteListState();
-    return true;
-  }
-
-  // Imports P4: the phone's period sheet closes before the screen is left.
-  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
-    renderTrainingLoad();
     return true;
   }
 

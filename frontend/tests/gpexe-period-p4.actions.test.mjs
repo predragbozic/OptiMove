@@ -467,3 +467,15 @@ test("P4 20: while a group's step leads, suggested days' Search is quiet too (on
   assert.match(p, /class="period-range"/, "the not-confirmed session's day is suggested");
   assert.doesNotMatch(p, /class="primary-button/, "nothing in the chooser competes with the group's step");
 });
+
+test("P4 21: the phone's Back closes the period sheet before any other step of the screen (a hidden athlete list, the week selector)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const start = src.indexOf("function handleAppBack()");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  const sheet = body.indexOf("closePeriodSheet(");
+  assert.ok(sheet > 0, "handleAppBack closes the sheet");
+  for (const later of ["state.weekSelectorOpen", "state.athletesExpanded"]) {
+    assert.ok(body.indexOf(later) > sheet, `the sheet closes before ${later}`);
+  }
+});
