@@ -821,10 +821,12 @@ test("7e. the default session is the newest one the import would take: sessions 
   const training = await candidate(t, { startedAt: "2026-09-07T10:00:00Z" });
   const match1 = await candidate(t, { startedAt: "2026-09-08T10:00:00Z" });
   const match2 = await candidate(t, { startedAt: "2026-09-08T16:00:00Z" });
-  for (const m of [match1, match2]) await mark(m.id, `${MATCH}, status = 'blocked'`);
+  const GATE_BLOCK = `status = 'blocked', preview = jsonb_build_object('status', 'blocked', 'blocked', jsonb_build_object('code', 'unsupported_category', 'message', 'x'))`;
+  const MAPPING_BLOCK = `status = 'blocked', preview = jsonb_build_object('status', 'blocked', 'blocked', jsonb_build_object('code', 'no_mapped_values', 'message', 'x'))`;
+  for (const m of [match1, match2]) await mark(m.id, `${MATCH}, ${GATE_BLOCK}`);
   const a = await counted(() => boardOf(W.caA, t));
   assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable, x.startedAt])(ok(a.res).board.session), [training.id, 2, "2026-09-07T10:00:00.000Z"]);
-  assert.deepEqual([a.lists, a.reads, a.bundlesInList], [1, 1, 0], "one list without a bundle, and one session read: the blocked ones are not read while another can be taken");
+  assert.deepEqual([a.lists, a.reads, a.bundlesInList], [1, 1, 0], "one list without a bundle, and one session read: a session the import's gates refused is not read while another can be taken");
   assert.equal(ok(a.res).board.pair.labels.length, 2, "the board is the usual board");
   // A named session keeps its own refusal, with the import's reason, and a placement on it too.
   assert.deepEqual(refused(await boardOf(W.caA, t, { candidateId: match2.id }), 409, "candidate_not_importable").current, { reason: "unsupported_category" });
@@ -832,7 +834,7 @@ test("7e. the default session is the newest one the import would take: sessions 
   assert.equal(ok(await boardOf(W.caA, t, { candidateId: training.id })).board.session.newerNotUsable, 0, "a named session says nothing about others");
 
   // (b) The same when the import has not blocked them (a fresh search): each is read once, refused by the plan, and passed by.
-  for (const m of [match1, match2]) await mark(m.id, `status = 'pending'`);
+  for (const m of [match1, match2]) await mark(m.id, `status = 'pending', preview = '{}'::jsonb`);
   const b = await counted(() => boardOf(W.caA, t));
   assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(b.res).board.session), [training.id, 2]);
   assert.deepEqual([b.lists, b.reads, b.bundlesInList], [1, 3, 0], "newest first, one at a time, until one is taken");
@@ -842,8 +844,20 @@ test("7e. the default session is the newest one the import would take: sessions 
   for (const n of [1, 2]) await link(t2, n, `Sixth ${NAMES[n]}`);
   const blockedOld = await candidate(t2, { startedAt: "2026-09-05T10:00:00Z" });
   const blockedNew = await candidate(t2, { startedAt: "2026-09-06T10:00:00Z" });
-  for (const m of [blockedOld, blockedNew]) await mark(m.id, `status = 'blocked'`);
+  for (const m of [blockedOld, blockedNew]) await mark(m.id, MAPPING_BLOCK);
   assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t2)).board.session), [blockedNew.id, 0]);
+  // It is taken in its own place by time, before an older session the import has not blocked: the default is the
+  // newest the plan accepts, and nothing is said about a newer session that was not found unusable.
+  await mark(blockedOld.id, `status = 'pending', preview = '{}'::jsonb`);
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t2)).board.session), [blockedNew.id, 0]);
+  await mark(blockedNew.id, `status = 'blocked', preview = '{}'::jsonb`);
+  assert.equal(ok(await boardOf(W.caA, t2)).board.session.candidateId, blockedNew.id, "a block without a readable code is tried, not trusted");
+  // A stored gate refusal that is stale (the session would be taken now) is still reached when nothing else is.
+  await mark(blockedOld.id, MATCH);
+  await mark(blockedNew.id, GATE_BLOCK);
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t2)).board.session), [blockedNew.id, 0], "the stored word never decides alone");
+  await mark(blockedOld.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,category_name}', to_jsonb((select raw_bundle->'teamSession'->>'category_name' from training_load.gpexe_import_candidates where id = '${blockedNew.id}')))`);
+  await mark(blockedNew.id, MAPPING_BLOCK);
   // With a newer unblocked training session, that one; with a newer unblocked match, the blocked training session, and the match is counted.
   const fresh = await candidate(t2, { startedAt: "2026-09-07T10:00:00Z" });
   assert.equal(ok(await boardOf(W.caA, t2)).board.session.candidateId, fresh.id);
@@ -860,7 +874,7 @@ test("7e. the default session is the newest one the import would take: sessions 
   const body = refused(none.res, 409, "no_usable_session");
   assert.deepEqual(body.current, { reason: "unsupported_category", tried: 2 });
   assert.deepEqual([none.lists, none.reads], [1, 2]);
-  assert.equal(body.message, "None of the sessions found so far can be used for mapping. Find a training session in Imports first.");
+  assert.equal(body.message, "None of the sessions found so far can be used for mapping. Run a search in Imports for another session.");
   assert.equal(/cannot read|"Match"|Match\b/.test(none.res.text), false, "never 'cannot read', and nothing of the source's own words");
   // Two different reasons are "mixed".
   await mark(m1.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false')`);
@@ -873,6 +887,32 @@ test("7e. the default session is the newest one the import would take: sessions 
   await mark(big.id, `raw_bundle = raw_bundle || jsonb_build_object('padding', repeat('x', ${boardService.BOARD_MAX_BUNDLE_BYTES + 1}))`);
   assert.deepEqual(refused(await boardOf(W.caA, t5), 409, "no_usable_session").current, { reason: "candidate_too_large", tried: 1 });
   await mark(big.id, `raw_bundle = raw_bundle - 'padding'`);
+
+  // The attempts have a time budget of their own: when it is spent the answer is "none usable" with what was tried,
+  // never the read's own timeout. One attempt is always made.
+  const t6 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t6, n, `Tenth ${NAMES[n]}`);
+  const only = await candidate(t6, { startedAt: "2026-09-08T10:00:00Z" });
+  // A session with invalid statistics (newest, not blocked) and an older match the import's gates refused.
+  const t7 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t7, n, `Eleventh ${NAMES[n]}`);
+  const gated = await candidate(t7, { startedAt: "2026-09-08T10:00:00Z" });
+  await mark(gated.id, `${MATCH}, ${GATE_BLOCK}`);
+  const invalidStats = await candidate(t7, { startedAt: "2026-09-09T10:00:00Z" });
+  await mark(invalidStats.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false')`);
+  boardService.setBoardDefaultSessionBudgetForTests(0);
+  try {
+    // The one that was not read again still speaks by its stored code: two different reasons are "mixed".
+    assert.deepEqual(refused(await boardOf(W.caA, t7), 409, "no_usable_session").current, { reason: "mixed", tried: 1 });
+    const spent = await counted(() => boardOf(W.caA, t3));
+    assert.deepEqual(refused(spent.res, 409, "no_usable_session").current.tried, 1);
+    assert.equal(spent.reads, 1);
+    assert.equal(ok(await boardOf(W.caA, t6)).board.session.candidateId, only.id, "a board whose first attempt is taken is not affected");
+  } finally { boardService.setBoardDefaultSessionBudgetForTests(); }
+  assert.equal(boardService.BOARD_DEFAULT_SESSION_BUDGET_MS, 4000);
+  // A stored gate refusal that was not read again still speaks by its code: two matches the import blocked.
+  for (const m of [m1, m2]) await mark(m.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'true'), ${GATE_BLOCK}`);
+  assert.deepEqual(refused(await boardOf(W.caA, t3), 409, "no_usable_session").current, { reason: "unsupported_category", tried: 2 });
 
   // (e) The look-back is bounded: more unusable sessions than the bound in front of a usable one is "none usable", with the bound as tried.
   const t4 = await gpexeTeam(W.clubA);

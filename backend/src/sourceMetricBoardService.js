@@ -19,6 +19,7 @@
 // its expiry.
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
+import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
@@ -33,12 +34,17 @@ export const CONFIRMATIONS_PAGE = 50;
 // With no session named, the board opens on the newest stored session the import would take. It looks at most this
 // far back; each one is read and tried alone, never several bundles at once.
 export const BOARD_DEFAULT_SESSION_ATTEMPTS = 10;
+// The time those attempts may take in all, inside the read's own 8 s bound.
+export const BOARD_DEFAULT_SESSION_BUDGET_MS = 4_000;
+let defaultSessionBudgetMs = BOARD_DEFAULT_SESSION_BUDGET_MS;
+// Test seam: another budget (the default with no argument).
+export function setBoardDefaultSessionBudgetForTests(ms = BOARD_DEFAULT_SESSION_BUDGET_MS) { defaultSessionBudgetMs = ms; }
 const SOURCE_CONNECTION_PATH = "source_connection";
 
 const BOARD_MESSAGES = {
   invalid_query: "The query carries a parameter this route does not take, or a value it cannot read.",
   no_stored_session: "No saved session yet. Run a search in Imports first.",
-  no_usable_session: "None of the sessions found so far can be used for mapping. Find a training session in Imports first.",
+  no_usable_session: "None of the sessions found so far can be used for mapping. Run a search in Imports for another session.",
   snapshot_expired: "The saved session is no longer available. Run a new search in Imports.",
   candidate_too_large: "The saved session is too large to read.",
   candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
@@ -148,6 +154,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   let candidate;
   // How many newer stored sessions the default left behind because the import would not take them.
   let defaultSkipped = 0;
+  // The plan of the session the default took, so it is not built a second time for the answer.
+  let defaultPlan = null;
   if (candidateId) {
     candidate = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, candidateId])).rows[0];
     // An id that is not a usable stored session of this team is the identical 404.
@@ -159,7 +167,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     // tried with the board's own plan, until one is taken. Sessions the import already blocked are tried last: a
     // block may be only "no mapping yet", which is what the board is for, so it is never taken as the answer itself.
     const listed = (await client.query(
-      `select c.id, c.status = 'blocked' as blocked
+      `select c.id, c.status = 'blocked' as blocked, c.preview->'blocked'->>'code' as blocked_code
          from training_load.gpexe_import_candidates c
          join training_load.gpexe_import_checks k on k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id
         where c.owner_team_id = $1::uuid and ${usable}
@@ -170,18 +178,40 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     )).rows;
     if (listed.length === 0) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
     const { extracts } = extractsOf(columnsOf({ fields }));
+    // "Refused by the import's own gates": blocked, with a code that is not one of the mapping-level blocks (those say
+    // "no mapping yet" or "this mapping does not fit", which the board is there to change). Such a session is not read
+    // while another can be taken; its stored code is its reason. Every other session is tried, newest first.
+    const rows = listed.map((row, index) => ({ ...row, index, gate: row.blocked === true && typeof row.blocked_code === "string" && !Object.hasOwn(BLOCK_MESSAGES, row.blocked_code) }));
     const reasons = [];
-    const order = [...listed.map((row, index) => ({ ...row, index })).filter((row) => !row.blocked), ...listed.map((row, index) => ({ ...row, index })).filter((row) => row.blocked)];
-    for (const row of order) {
+    let tried = 0;
+    const startedAt = Date.now();
+    // The attempts have a time budget of their own, well inside the read's bound: when it is spent the answer is the
+    // honest "none usable among those tried", never the read's own timeout. One attempt is always made.
+    const inBudget = () => tried === 0 || Date.now() - startedAt < defaultSessionBudgetMs;
+    const attempt = async (row) => {
+      tried += 1;
       const read = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, row.id])).rows[0];
-      const why = !read ? "gone" : defaultSessionRefusal(read, team, extracts, teamTimezone);
-      if (why === null) { candidate = read; defaultSkipped = listed.filter((_, index) => index < row.index).length; break; }
-      reasons[row.index] = why;
+      const verdict = !read ? { why: "gone", out: null } : defaultSessionVerdict(read, team, extracts, teamTimezone);
+      if (verdict.why !== null) { reasons[row.index] = verdict.why; return false; }
+      candidate = read;
+      defaultPlan = verdict.out;
+      // The newer ones passed by: each was tried and refused, or the import's own gates had refused it.
+      defaultSkipped = rows.filter((r) => r.index < row.index && (reasons[r.index] !== undefined || r.gate)).length;
+      return true;
+    };
+    for (const pass of [rows.filter((r) => !r.gate), rows.filter((r) => r.gate)]) {
+      if (candidate) break;
+      for (const row of pass) {
+        if (!inBudget()) break;
+        if (await attempt(row)) break;
+      }
     }
     if (!candidate) {
-      // One reason when every session tried has the same one (said in the sentence); otherwise "mixed".
-      const distinct = [...new Set(reasons.filter(Boolean))];
-      throw refusal(409, "no_usable_session", BOARD_MESSAGES.no_usable_session, { current: { reason: distinct.length === 1 ? distinct[0] : "mixed", tried: listed.length } });
+      // One reason when every session has the same one (said in the sentence); otherwise "mixed". A session the gates
+      // had refused and that was not read again speaks by its stored code.
+      const all = rows.map((r) => reasons[r.index] ?? (r.gate ? r.blocked_code : undefined)).filter((x) => x !== undefined);
+      const distinct = [...new Set(all)];
+      throw refusal(409, "no_usable_session", BOARD_MESSAGES.no_usable_session, { current: { reason: distinct.length === 1 ? distinct[0] : "mixed", tried } });
     }
   }
   // The session's own refusal is carried, not thrown here: a placement first
@@ -277,7 +307,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId: ctx.owner.clubId, team, candidate, defaultSkipped, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
+  return { clubId: ctx.owner.clubId, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -322,24 +352,28 @@ function extractsOf(columns) {
 }
 const cellsOf = (bundle, extracts) => extracts.length * (Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0);
 
-// Why the default must pass a stored session by, or null when the board can open on it: the same checks, in the same
-// order, a named session is refused by (its size, its check and binding, its start, the board's size cap), and then
-// the board's own plan - the import's gates - so a session passed here is one sessionValues() reads.
-function defaultSessionRefusal(row, team, extracts, teamTimezone) {
-  if (row.purged || row.expired) return "snapshot_expired";
-  if (row.too_large === true) return "candidate_too_large";
-  if (row.check_status !== "succeeded" || row.source_path !== SOURCE_CONNECTION_PATH || row.source_binding_id !== team.binding_id) return "candidate_source_mismatch";
-  if (row.session_started_at === null) return "session_start_unknown";
-  if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return "candidate_source_mismatch";
-  if (cellsOf(row.raw_bundle, extracts) > BOARD_MAX_CELLS) return "board_too_large";
-  return gpexeSessionValuesKeyed(row.raw_bundle, extracts, { teamTimezone }).code;
+// Whether the default can open on a stored session: `why` is the reason it must be passed by, or null with the plan's
+// result in `out`. The same checks, in the same order, a named session is refused by (its size, its check and
+// binding, its start, the board's size cap), and then the board's own plan - the import's gates - so a session taken
+// here is one sessionValues() reads.
+function defaultSessionVerdict(row, team, extracts, teamTimezone) {
+  const no = (why) => ({ why, out: null });
+  if (row.purged || row.expired) return no("snapshot_expired");
+  if (row.too_large === true) return no("candidate_too_large");
+  if (row.check_status !== "succeeded" || row.source_path !== SOURCE_CONNECTION_PATH || row.source_binding_id !== team.binding_id) return no("candidate_source_mismatch");
+  if (row.session_started_at === null) return no("session_start_unknown");
+  if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return no("candidate_source_mismatch");
+  if (cellsOf(row.raw_bundle, extracts) > BOARD_MAX_CELLS) return no("board_too_large");
+  const out = gpexeSessionValuesKeyed(row.raw_bundle, extracts, { teamTimezone });
+  return out.code ? no(out.code) : { why: null, out };
 }
 
 function sessionValues(world, columns) {
   // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
   const { ids, extracts } = extractsOf(columns);
   if (cellsOf(world.candidate.raw_bundle, extracts) > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
-  const out = gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
+  // The default's own plan when it chose this session (the same columns, bundle and time zone); else built here.
+  const out = world.defaultPlan ?? gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
   if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   return out.athletes.map((athlete) => {
     const key = String(athlete.key);

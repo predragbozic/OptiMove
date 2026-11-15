@@ -246,9 +246,9 @@ export const BOARD_ERROR = {
   candidate_too_large: "The saved session is too large to read here. Run a search for a smaller session in Imports.",
   candidate_source_mismatch: "The newest saved session was not read through this team's current GPEXE link. Run a new search in Imports.",
   // A session named by the request that the import itself would not take (a match, for one).
-  candidate_not_importable: "This session cannot be used for mapping. Find a training session in Imports first.",
+  candidate_not_importable: "This session cannot be used for mapping. Run a search in Imports for another session.",
   // No session named, and none of the newest stored sessions is one the import would take.
-  no_usable_session: "None of the sessions found so far can be used for mapping. Find a training session in Imports first.",
+  no_usable_session: "None of the sessions found so far can be used for mapping. Run a search in Imports for another session.",
   session_start_unknown: "The saved session has no start time. Run a new search in Imports.",
   not_enough_athletes: "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them.",
   pair_out_of_range: "No other athletes have values for all your columns.",

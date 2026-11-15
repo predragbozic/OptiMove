@@ -1883,17 +1883,25 @@ does not import (a match) at the top of the list answered `409 candidate_not_imp
 whole team; the screen's sentence sent the admin to a search that could not help. Corrected (no migration):
 
 - **Route 1 without `candidateId`:** one statement lists the team's newest stored sessions (at most
-  `BOARD_DEFAULT_SESSION_ATTEMPTS` = 10; ids only, no bundle). Each is then read alone, within the size bound, and
-  tried with the board's own plan, newest first, until one is taken. Sessions the import already blocked are tried
-  after the others: a block may be only "no mapping yet", which is what the board is for, so the stored state never
-  decides by itself. `session.newerNotUsable` says how many newer sessions were passed by.
+  `BOARD_DEFAULT_SESSION_ATTEMPTS` = 10; ids, the stored state and its block code, no bundle). Each is then read
+  alone, within the size bound, and tried with the board's own plan, newest first, until one is taken.
+  - A session the import's own gates already refused (blocked, with a code that is not one of the mapping-level
+    blocks of `gpexeImportPreview.js`) is not read while another can be taken; if nothing else is taken, it is tried
+    too, so the stored word never decides alone. A session blocked only for a mapping reason ("no mapping yet") is
+    tried in its place by time: that is what the board is for.
+  - The attempts have a time budget of their own (`BOARD_DEFAULT_SESSION_BUDGET_MS`, 4 s, inside the read's 8 s
+    bound); one attempt is always made, and the taken session's plan is not built a second time.
+  - `session.newerNotUsable` counts the newer sessions that were tried and refused, or that the import's gates had
+    refused.
 - **None taken:** `409 no_usable_session` with `current: { reason, tried }`; `reason` is the one reason all of them
-  share (`unsupported_category`, for one) or `mixed`. With no stored session at all it is `409 no_stored_session`, as
-  before. The look-back is bounded: an older usable session behind ten unusable ones is not reached by default.
+  share (`unsupported_category`, for one) or `mixed`, and `tried` is how many were read. With no stored session at
+  all it is `409 no_stored_session`, as before. The look-back is bounded: an older usable session behind ten
+  unusable ones is not reached by default.
 - **A named session** (`candidateId`, and every placement and save) keeps its own refusal, `candidate_not_importable`
   with the import's reason. Nothing about the audience or the order of 404 before 409 changed.
 - **The screen:** the header says which session is shown (its date and label) and how many newer ones cannot be used;
-  when none can, one sentence by reason with *Open Imports to search*, and never "cannot read".
+  when none can, one sentence with *Open Imports to search* ("a training session" is said only when the type of the
+  sessions is the reason), and never "cannot read".
 - **Athletes with several recordings:** the board's plan takes no track choice (MT-B). Such an athlete is left out of
   the athletes the board can compare, as before MT-B; the session itself is not refused. Passing the team's saved
   choices to the board is a follow-up, with the session chooser.

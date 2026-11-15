@@ -548,17 +548,17 @@ test("28. which session the board shows, and what it says when none can be used:
   assert.ok(text().includes("None of the sessions found so far can be used for mapping: the latest ones are of a type OptiMove does not import. Find a training session in Imports first."));
   assert.equal(content.querySelector('[data-action="training-load-section"][data-section="imports"]')?.textContent.trim(), "Open Imports to search");
   assert.equal(/cannot read|unsupported_category|no_usable_session|server words/.test(text()), false);
-  for (const current of [{ reason: "mixed", tried: 4 }, { reason: "session_stats_invalid", tried: 1 }, { reason: "constructor" }, null]) {
+  for (const current of [{ reason: "mixed", tried: 4 }, { reason: "session_stats_invalid", tried: 1 }, { reason: "candidate_too_large", tried: 1 }, { reason: "constructor" }, null]) {
     await none(current);
-    assert.ok(text().includes("None of the sessions found so far can be used for mapping. Find a training session in Imports first."), JSON.stringify(current));
-    assert.equal(/latest ones|cannot read/.test(text()), false);
+    assert.ok(text().includes("None of the sessions found so far can be used for mapping. Run a search in Imports for another session."), JSON.stringify(current));
+    assert.equal(/latest ones|cannot read|training session/.test(text()), false, "'a training session' is said only where the type is the reason");
     assert.ok(content.querySelector('[data-action="training-load-section"][data-section="imports"]'));
   }
   // A session named by the request that the import would not take: its own sentence, also never "cannot read".
   overrides = [(c) => (c.url.startsWith(`${B}/board?`) ? { status: 409, body: { error: "candidate_not_importable", current: { reason: "unsupported_category" } } } : null)];
   state.trainingLoad.board = null;
   await actions.loadBoardSection(render);
-  assert.ok(text().includes("This session cannot be used for mapping. Find a training session in Imports first."));
+  assert.ok(text().includes("This session cannot be used for mapping. Run a search in Imports for another session."));
   assert.equal(/cannot read/.test(text()), false);
   for (const sentence of Object.values(data.BOARD_ERROR)) assert.equal(/cannot read/i.test(sentence), false, sentence);
 });
