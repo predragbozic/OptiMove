@@ -25,6 +25,7 @@ import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-impo
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
+import { renderImportsHelpHtml } from "./gpexe-help-view.js";
 import { isLater, laterNotice, laterOpen } from "./gpexe-later-data.js";
 import {
   BATCH_MAX,
@@ -496,7 +497,14 @@ export function renderGpexeImportsHtml() {
   const status = gx.status;
   return `
     <div class="gpexe-imports">
-      ${renderTeamRowHtml(teams, gx.teamId)}
+      <div class="imports-head">
+        ${renderTeamRowHtml(teams, gx.teamId)}
+        ${status ? `<button type="button" class="plain-button gpexe-button imports-help-open" data-action="training-load-gpexe-help" aria-haspopup="dialog" aria-expanded="${gx.helpOpen ? "true" : "false"}" aria-controls="imports-help">How importing works</button>` : ""}
+      </div>
+      ${status && gx.helpOpen ? renderImportsHelpHtml({
+        ask: platformViewer() ? "" : `Something you can't fix here? ${AskWho()}.`,
+        findBy: identityViewer(gx) && gx.identity?.list ? "the GPEXE name, date of birth and last-session values" : gx.identity?.list ? "the GPEXE name and the last session's values" : "the values of the last session",
+      }) : ""}
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load the imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
       ${status && setupOpen(gx, status) ? renderGuideHtml(gx, status) : ""}
@@ -631,7 +639,6 @@ function renderSearchTabHtml(source, gx, status) {
         <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
         ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
       </p>
-      ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
       ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name, listsAllStates(status)) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
       ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage), Boolean(gx.teamSwitch?.data?.canChangeMode || gx.teamSwitch?.data?.mode === "team"))}
@@ -1309,7 +1316,7 @@ function renderBatchReviewHtml(gx, items) {
     <ul class="imports-batch-list">
       ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${batchFacts(c) ? `<span class="gpexe-candidate-facts">${escapeHtml(batchFacts(c))}</span>` : ""}</li>`).join("")}
     </ul>
-    <p class="muted imports-batch-warning">Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    <p class="muted imports-batch-warning">${escapeHtml(`Results imported under the wrong athlete can't be changed here — ${platformViewer() ? "contact a platform administrator" : askWho()}.`)}</p>
     <details class="imports-batch-more"><summary>What happens</summary><p class="muted">Each session is imported on its own, exactly as found in the last search, so one that can't be imported does not stop the others.</p></details>
     ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
     ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")], ["GPEXE session names", items.map((i) => i.candidate?.label).filter(Boolean).join("; ")]])}
@@ -1706,14 +1713,14 @@ export function renderSuggestionsHtml(gx, off) {
     <section class="gpexe-suggest" aria-label="Suggested pairs">
       ${shown.length ? `
         <h4>Suggested pairs (${shown.length})</h4>
-        <p class="muted">GPEXE athlete (name, date of birth) &rarr; athlete in your team: same name and same date of birth. Nothing is linked yet - the button below only opens a summary that you confirm.</p>
+        <p class="muted">Same name and date of birth. Nothing is linked until you confirm.</p>
         <ul class="gpexe-suggest-list">${exactRows}</ul>
         ${stageable.length > shown.length ? `<p class="muted">The first ${SUGGESTION_MAX_PAIRS} are listed; the rest appear after these are linked.</p>` : ""}
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-suggest-all" ${off ? "disabled" : ""}>Review all ${shown.length} suggested ${shown.length === 1 ? "pair" : "pairs"}</button></div>
       ` : ""}
       ${choice.length ? `
         <h4>Needs your choice (${choice.length})</h4>
-        <p class="muted">These are never selected for you. Choose the athlete below if you are sure.</p>
+        <p class="muted">Choose the athlete below.</p>
         <ul class="gpexe-suggest-list">${choiceRows}</ul>
       ` : ""}
     </section>
@@ -1784,7 +1791,7 @@ function renderTeamMappingHtml(gx, teams) {
     `;
   } else {
     body = `
-      <p class="muted gpexe-hint">${identityViewer(gx) && gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : gx.identity?.list ? "A link is never guessed. The GPEXE name and the last session's values help you find an athlete in GPEXE; neither proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      <p class="muted gpexe-hint">Choose an athlete only when you are sure. Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}

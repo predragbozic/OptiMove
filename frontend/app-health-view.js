@@ -110,6 +110,15 @@ export function timingParts(g) {
   if (behind) parts.push(`⇅ Page older than the server · ${of(behind)}`);
   return parts;
 }
+// "Where in the code" of a kind of error. A failed request the browser reports (no answer, an answer it could not
+// read, an HTTP error status) has no place in the page's code by its nature: "not applicable", never "not recorded",
+// which reads as something that went missing. Any other kind without a signature really has none recorded.
+const REQUEST_FAILURE_CODES = new Set(["no_response", "unexpected_response"]);
+export function whereInCodeWords(g) {
+  if (g?.stackSignature) return String(g.stackSignature);
+  const requestFailure = g?.source === "client" && (REQUEST_FAILURE_CODES.has(g.code) || Number.isInteger(g.status));
+  return requestFailure ? "not applicable" : "not recorded";
+}
 
 function groupCard(g, selected) {
   const open = selected === g.fingerprint;
@@ -136,7 +145,7 @@ function groupCard(g, selected) {
           ${g.action ? `<div><dt>Last button pressed</dt><dd>${escapeHtml(g.action)}</dd></div>` : ""}
           ${request ? `<div><dt>Request</dt><dd>${escapeHtml(request)}</dd></div>` : ""}
           <div><dt>Release</dt><dd>${escapeHtml(g.release ? g.release.slice(0, 8) : "unknown")}</dd></div>
-          <div><dt>Where in the code</dt><dd>${escapeHtml(g.stackSignature || "not recorded")}</dd></div>
+          <div><dt>Where in the code</dt><dd>${escapeHtml(whereInCodeWords(g))}</dd></div>
           <div><dt>Group</dt><dd>${escapeHtml(String(g.fingerprint).slice(0, 12))}</dd></div>
         </dl>` : ""}
     </article>`;

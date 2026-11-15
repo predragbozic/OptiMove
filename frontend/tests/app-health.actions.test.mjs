@@ -293,3 +293,29 @@ test("AH-2. the devices of an error: at most three in words with their counts, o
   const row = html.slice(html.indexOf('data-fingerprint="' + "d".repeat(64)), html.indexOf("</button>", html.indexOf('data-fingerprint="' + "d".repeat(64))));
   assert.ok(row.includes("app-health-devices"));
 });
+
+test("'Where in the code' of a failed request reads 'not applicable'; a page error without a signature stays 'not recorded'; a signature is shown as it is", async () => {
+  const { whereInCodeWords } = await import("../app-health-view.js");
+  const client = (over) => ({ source: "client", screen: "weekly", stackSignature: null, status: null, ...over });
+  assert.equal(whereInCodeWords(client({ code: "no_response" })), "not applicable");
+  assert.equal(whereInCodeWords(client({ code: "unexpected_response", status: 200 })), "not applicable");
+  assert.equal(whereInCodeWords(client({ code: "internal_error", status: 500 })), "not applicable", "the server's own code with an HTTP status, as api.js reports it");
+  assert.equal(whereInCodeWords(client({ code: "http_502", status: 502 })), "not applicable");
+  assert.equal(whereInCodeWords(client({ code: "js_error.typeerror" })), "not recorded");
+  assert.equal(whereInCodeWords(client({ code: "unhandled_rejection.aborterror" })), "not recorded", "a rejection without frames has a place in the code that was not recorded");
+  assert.equal(whereInCodeWords(client({ code: "handler_error.other_error" })), "not recorded");
+  assert.equal(whereInCodeWords(client({ code: "no_response", stackSignature: "load@api.js" })), "load@api.js", "a signature always wins");
+  assert.equal(whereInCodeWords({ source: "server", code: "internal_error", status: 500, stackSignature: null }), "not recorded", "a server error has a place in the code");
+  assert.equal(whereInCodeWords({ source: "server", code: "internal_error", status: 500, stackSignature: "handler@athletes.js" }), "handler@athletes.js");
+  assert.equal(whereInCodeWords(client({ code: "no_response", status: "500" })), "not applicable");
+  assert.equal(whereInCodeWords(client({ code: "js_error", status: "500" })), "not recorded", "only a whole number is a status");
+  assert.equal(whereInCodeWords(null), "not recorded");
+  // On the screen, in the opened group.
+  serveGroups([{ ...GROUPS[2], code: "no_response", stackSignature: null }, { ...GROUPS[1], stackSignature: null }]);
+  state.activeTab = "organization"; state.appHealth = D.emptyAppHealth();
+  await D.loadAppHealth(() => {});
+  state.appHealth.selected = GROUPS[2].fingerprint;
+  assert.match(renderAppHealthPanelHtml(), /<dt>Where in the code<\/dt><dd>not applicable<\/dd>/);
+  state.appHealth.selected = GROUPS[1].fingerprint;
+  assert.match(renderAppHealthPanelHtml(), /<dt>Where in the code<\/dt><dd>not recorded<\/dd>/);
+});
