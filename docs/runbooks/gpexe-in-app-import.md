@@ -288,6 +288,35 @@ stay in the single-candidate answer's `preview` (`blocked.message` and its resol
 steps, the per-athlete `notImported` and `gps.reason` messages, the change messages);
 the list carries none of them.
 
+**The Imports state and the calendar read.**
+- **The state.** Every summary also carries `state`, from `candidateState` (`backend/src/gpexeImportState.js`), the
+  server's half of the frontend's `inboxBucket`:
+  - `needs`: a step for the coach;
+  - `ready`: nothing to decide;
+  - `imported`;
+  - `out`: a session type that stays out;
+  - `hidden`: a replaced or withdrawn version, or an undone import.
+
+  It is read before the audience projection and reads no code that projection changes, so every audience gets the same
+  word. The frontend adds two facts only the browser has (an approval whose answer was lost in this tab, a link made after
+  the last search); those can only move a row to its attention group. `frontend/tests/gpexe-import-state-parity.test.mjs`
+  runs both rules over the same summaries.
+- **The list's window.** The list takes optional `from` and `to` (`YYYY-MM-DD`, both or neither, at most 31 days) and
+  answers `{ candidates, importSwitch, truncated }`. `truncated` is true when more than 200 rows match (one more row is
+  read to know it). A window that is not two real days in order, or is too long, is `400 invalid_window`. It is checked
+  after the access check, so a team the caller may not see is the same 404 whatever the window.
+- **The calendar route.** `GET …/teams/:teamId/calendar?from=&to=` (both required, at most 42 days) answers
+  `{ from, to, days: [{ day, chips, counts: { needs, ready, imported, out } }], truncated }`:
+  - **the day:** a session's day is the **UTC day** of `session_started_at`, the day the check window and the withdrawal
+    compare and the frontend's `sessionDay`. Rows elsewhere still show local time, so a session near midnight can show
+    another date on its row; this is the stated rule;
+  - **chips and counts:** chips are the states of the day's first three sessions in start order; counts cover the whole
+    day; only days with a shown session are listed;
+  - **the statement:** one statement, whatever the number of sessions. It reads only the preview keys the state rule
+    needs: the status, the blocked code, the session type, the number of changes, and per athlete whether it is linked,
+    its GPS status and its not-imported code. It reads no value, name or id. At most 500 sessions are read, otherwise
+    `truncated`.
+
 The coach's *Link athletes* screen (Imports phase 3b, Training Load → Data & Analysis →
 Imports → "Link athletes") is built on this list: one row per GPEXE athlete with the last
 session's helper values, a choice of the team's active, not-yet-linked athletes (same-name
