@@ -571,6 +571,8 @@ function renderSourceCardHtml(source, gx, status) {
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
   const suggested = datesNeededFor(gx.candidates || [], gx);
+  // #540: the reads beyond a cut list follow the days the chooser shows (the view only notes them; it reads nothing).
+  gx.periodSuggested = suggested;
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">

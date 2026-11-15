@@ -178,6 +178,8 @@ export async function loadGpexeTeam(render) {
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.candidatesTruncated = candidates.truncated === true;
+    gx.calendars = {};
+    gx.older = null;
     gx.candidatesCheckId = status.lastCheck && status.lastCheck.status !== "running" ? status.lastCheck.id : null;
     pruneLaterToReady(gx);
     gx.links = links.links;
@@ -293,7 +295,9 @@ export function periodMonthComplete(gx = g(), month = periodMonth(gx)) {
   const start = coverStart(gx);
   if (!start) return !gx?.candidatesTruncated;
   const w = monthWindow(month);
-  return w.from > start || Array.isArray(gx.calendars?.[`${w.from}..${w.to}`]?.days);
+  const cal = gx.calendars?.[`${w.from}..${w.to}`];
+  // The calendar read has its own cap (code review): a cut read does not make the month complete.
+  return w.from > start || (Array.isArray(cal?.days) && !cal.truncated);
 }
 
 // Reads what the period chooser needs beyond the list, only when the server cut it: the calendar of the month on screen,
@@ -304,7 +308,9 @@ export async function ensurePeriodData(render, gx = g()) {
   if (!start || !gx.teamId) return;
   const generation = gx.generation;
   const teamId = gx.teamId;
-  const w = monthWindow(periodMonth(gx));
+  // The month and the days the screen shows (code review): the chosen days, else the suggested ones the view painted.
+  const suggested = gx.periodSuggested || null;
+  const w = monthWindow(periodMonth(gx, new Date(), suggested?.to || ""));
   const reads = [];
   const calKey = `${w.from}..${w.to}`;
   // One read per month, kept until the list is read again; a failed read is tried again when the month is shown again.
@@ -314,24 +320,27 @@ export async function ensurePeriodData(render, gx = g()) {
     calendars[calKey] = { days: null, loading: true, error: null };
     reads.push(api(teamPath(teamId, `/calendar?from=${w.from}&to=${w.to}`)).then((answer) => {
       if (generation !== gx.generation || gx.calendars !== calendars) return;
-      calendars[calKey] = { days: Array.isArray(answer.days) ? answer.days : [], loading: false, error: null };
+      calendars[calKey] = { days: Array.isArray(answer.days) ? answer.days : [], truncated: answer.truncated === true, loading: false, error: null };
     }).catch((error) => {
       if (generation !== gx.generation || gx.calendars !== calendars) return;
       calendars[calKey] = { days: null, loading: false, error: errorInfo(error) };
     }));
   }
-  const range = periodRange(gx);
+  const range = periodRange(gx) || (suggested?.from && suggested?.to ? { from: suggested.from, to: suggested.to } : null);
   if (range && range.from <= start) {
     const to = range.to < start ? range.to : start;
     const key = `${range.from}..${to}`;
-    if (gx.older?.key !== key) {
-      gx.older = { key, from: range.from, to, candidates: null, loading: true, error: null };
+    // Read again after a failed read of the same days (code review), never while one is in flight.
+    if (gx.older?.key !== key || (gx.older.error && !gx.older.loading)) {
+      // The answer is kept only by the entry that asked (code review): a reload makes a new entry with the same key.
+      const entry = { key, from: range.from, to, candidates: null, truncated: false, loading: true, error: null };
+      gx.older = entry;
       reads.push(api(teamPath(teamId, `/candidates?from=${range.from}&to=${to}`)).then((answer) => {
-        if (generation !== gx.generation || gx.older?.key !== key) return;
-        gx.older = { ...gx.older, candidates: Array.isArray(answer.candidates) ? answer.candidates : [], loading: false };
+        if (generation !== gx.generation || gx.older !== entry) return;
+        Object.assign(entry, { candidates: Array.isArray(answer.candidates) ? answer.candidates : [], truncated: answer.truncated === true, loading: false });
       }).catch((error) => {
-        if (generation !== gx.generation || gx.older?.key !== key) return;
-        gx.older = { ...gx.older, loading: false, error: errorInfo(error) };
+        if (generation !== gx.generation || gx.older !== entry) return;
+        Object.assign(entry, { loading: false, error: errorInfo(error) });
       }));
     }
   }
@@ -351,14 +360,14 @@ export async function reloadGpexeCandidates(render) {
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
     gx.candidatesTruncated = truncated === true;
-    // The calendar's older days may have changed with the search: read them again.
-    gx.calendars = {};
-    gx.older = null;
-    void ensurePeriodData(render);
     gx.candidatesCheckId = afterCheck;
     pruneLaterToReady(gx);
     forgetConfirmedImports();
     pruneBatchSelection(gx);
+    // The calendar's older days may have changed with the search: read them again (after the list's own state is set).
+    gx.calendars = {};
+    gx.older = null;
+    void ensurePeriodData(render);
   } catch (error) {
     if (generation !== gx.generation) return;
     gx.error = errorInfo(error);

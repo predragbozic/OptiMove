@@ -207,3 +207,75 @@ test("#540 5: a cut list whose calendar read fails keeps saying older sessions m
   assert.match(panel(), /period-cap">Older sessions may not be shown\.</);
   assert.doesNotMatch(dayCell(panel(), D(10)), /period-chip/);
 });
+
+test("#540 6 (code review): a list reload drops the answer to the older-days read it replaced, even for the same days", async () => {
+  resetState(); platform = false;
+  const { reloadGpexeCandidates } = await import("../gpexe-import-data.js");
+  let releaseA;
+  const heldA = new Promise((r) => { releaseA = r; });
+  let n = 0;
+  installFetchMock(gpexeServer({ candidates: recent(), truncated: true,
+    older: async () => { n += 1; if (n === 1) { await heldA; return { status: 200, body: { candidates: [imported(52, D(10))] } }; } return { status: 200, body: { candidates: [needs(52, D(10))] } }; } }));
+  await openImports();
+  gx().period.month = PREV;
+  await act("training-load-gpexe-period-day", { day: D(10) });
+  await settle();
+  await reloadGpexeCandidates(() => {});
+  await settle();
+  releaseA();
+  await settle();
+  assert.match(panel(), /data-candidate-id="cand-52"[\s\S]*?>needs you</, "the newer answer stays");
+});
+
+test("#540 7 (code review): an older read the server cut keeps the calendar's marks for the days it did not list, and says some are not listed", async () => {
+  resetState(); platform = false;
+  installFetchMock(gpexeServer({ candidates: recent(), truncated: true,
+    calendar: () => ({ status: 200, body: { days: [{ day: D(8), chips: ["needs"], counts: { needs: 1, ready: 0, imported: 0, out: 0 } }, { day: D(10), chips: ["out"], counts: { needs: 0, ready: 0, imported: 0, out: 1 } }, { day: D(12), chips: ["ready"], counts: { needs: 0, ready: 1, imported: 0, out: 0 } }] } }),
+    older: () => ({ status: 200, body: { candidates: [row(60, D(12))], truncated: true } }) }));
+  await openImports();
+  gx().period.month = PREV;
+  await act("training-load-gpexe-period-day", { day: D(8) });
+  await act("training-load-gpexe-period-day", { day: D(12) });
+  await settle();
+  const p = panel();
+  assert.match(dayCell(p, D(8)), /period-chip is-needs/, "the day the cut read did not reach keeps its mark");
+  assert.match(dayCell(p, D(10)), /period-chip is-out/, "so does a day between its first day and its first listed day");
+  assert.match(p, /data-candidate-id="cand-60"/, "the listed one opens");
+  assert.match(p, /2 older sessions are not listed here\./);
+});
+
+test("#540 8 (code review): suggested days on a cut list are read without choosing them, and nothing waits forever", async () => {
+  resetState(); platform = false;
+  // The oldest listed session needs finding again (not confirmed), so its day is suggested.
+  const list = [...recent().slice(0, 5), row(6, daysAgo(5), { approvalBlockers: ["not_confirmed_for_import"] })];
+  installFetchMock(gpexeServer({ candidates: list, truncated: true,
+    calendar: () => ({ status: 200, body: { days: [{ day: daysAgo(5), chips: ["needs", "ready"], counts: { needs: 1, ready: 1, imported: 0, out: 0 } }] } }),
+    older: () => ({ status: 200, body: { candidates: [row(6, daysAgo(5), { approvalBlockers: ["not_confirmed_for_import"] }), row(61, daysAgo(5))] } }) }));
+  await openImports();
+  // In the app the first paint comes before the reads; here the render is a no-op, so paint, then read.
+  html();
+  const { ensurePeriodData } = await import("../gpexe-import-data.js");
+  await ensurePeriodData(() => {});
+  await settle();
+  assert.deepEqual(gets("/candidates?from="), [`/candidates?from=${daysAgo(5)}&to=${daysAgo(5)}`], "the suggested day is read");
+  const p = panel();
+  assert.match(p, /data-candidate-id="cand-6"/);
+  assert.match(p, /data-candidate-id="cand-61"/);
+  assert.doesNotMatch(p, /Reading \d+ older/);
+});
+
+test("#540 9 (code review): a failed older read of one day is read again when the day is chosen again", async () => {
+  resetState(); platform = false;
+  let n = 0;
+  installFetchMock(gpexeServer({ candidates: recent(), truncated: true,
+    older: () => { n += 1; return n === 1 ? { status: 500, body: { error: "internal_error" } } : { status: 200, body: { candidates: [row(70, D(8))] } }; } }));
+  await openImports();
+  gx().period.month = PREV;
+  await act("training-load-gpexe-period-day", { day: D(8) });
+  await settle();
+  await act("training-load-gpexe-period-clear");
+  await act("training-load-gpexe-period-day", { day: D(8) });
+  await settle();
+  assert.equal(gets(`/candidates?from=${D(8)}&to=${D(8)}`).length, 2);
+  assert.match(panel(), /data-candidate-id="cand-70"/);
+});

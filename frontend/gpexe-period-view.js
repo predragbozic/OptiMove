@@ -62,11 +62,27 @@ function sessionsByDay(gx) {
   // #540: from the list's first day back, a day not read on its own is the server's calendar day.
   if (start && gx.calendars) {
     const olderRead = Array.isArray(gx.older?.candidates) ? gx.older : null;
+    // An older read the server cut (code review) holds its newest days only: before its first listed day, the
+    // calendar's marks stay.
+    let olderFrom = olderRead?.from || "";
+    if (olderRead?.truncated) {
+      olderFrom = "";
+      for (const c of olderRead.candidates) { const d = sessionDay(c.sessionStartedAt); if (d && (!olderFrom || d < olderFrom)) olderFrom = d; }
+      olderFrom = olderFrom || olderRead.to;
+    }
     const days = Object.values(gx.calendars).flatMap((entry) => (Array.isArray(entry?.days) ? entry.days : []));
     for (const sd of days) {
       if (!sd?.day || sd.day > start) continue;
-      if (olderRead && sd.day >= olderRead.from && sd.day <= olderRead.to) continue;
-      const items = serverItems(sd);
+      if (olderRead && sd.day > olderFrom && sd.day <= olderRead.to) continue;
+      if (olderRead && !olderRead.truncated && sd.day === olderFrom) continue;
+      // A day the list holds only in part keeps its listed sessions; the server adds a mark for each one it does not hold.
+      const listed = byDay.get(sd.day) || [];
+      const missing = serverItems(sd);
+      for (const x of listed) {
+        const i = missing.findIndex((m) => m.chip === x.chip);
+        if (i >= 0) missing.splice(i, 1);
+      }
+      const items = [...listed, ...missing];
       if (items.length) byDay.set(sd.day, items);
     }
   }
@@ -129,7 +145,11 @@ function rangeListHtml(range, byDay, nameOf, timeOf, older = null) {
   // #540: a session known only from the server's calendar is listed once its days are read.
   const unread = every.filter((x) => !x.c).length;
   const all = every.filter((x) => x.c);
-  const unreadNote = unread ? `<p class="muted period-daylist-more" role="status">${escapeHtml(older?.error ? `${plural(unread, "older session", "older sessions")} on these days could not be read. Choose the days again.` : `Reading ${plural(unread, "older session", "older sessions")} on these days...`)}</p>` : "";
+  // "Reading" only while the read is in flight (code review); a cut read says that some are not listed.
+  const unreadText = !unread ? "" : older?.loading ? `Reading ${plural(unread, "older session", "older sessions")} on these days...`
+    : older?.error ? `${plural(unread, "older session", "older sessions")} on these days could not be read. Choose the days again.`
+    : `${plural(unread, "older session is", "older sessions are")} not listed here.`;
+  const unreadNote = unreadText ? `<p class="muted period-daylist-more" role="status">${escapeHtml(unreadText)}</p>` : "";
   if (!all.length) return unreadNote ? `<div class="period-daylist" role="group" aria-label="Sessions already found on these days">${unreadNote}</div>` : "";
   const shown = all.slice(0, SESSIONS_LISTED);
   const groups = [];
