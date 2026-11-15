@@ -266,8 +266,11 @@ test("8. a refused approval for the team's switch reads as one sentence naming w
   const view = await import("../gpexe-import-view.js");
   assert.ok(view, "the view module loads");
   const src = (await import("node:fs")).readFileSync(new URL("../gpexe-import-view.js", import.meta.url), "utf8");
-  assert.match(src, /team_import_switch_off: "Imports are switched off for this team, so it can't be approved here\."/);
-  assert.match(src, /team_import_switch_off: "Not imported: imports are switched off for this team\. A platform administrator can turn them on \(the club administrator too, in team mode\)\."/);
+  assert.match(src, /team_import_switch_off: "Imports are switched off for this team, so it can't be imported here\."/);
+  // P1 (O5): the sentence names who turns them on in the reader's words - an administrator reads the platform and club roles,
+  // a coach asks the club administrator.
+  assert.match(src, /get team_import_switch_off\(\) \{ return `Not imported: imports are switched off for this team\. \$\{switchOnWho\(\)\}`; \}/);
+  assert.match(src, /const switchOnWho = \(\) => \(platformViewer\(\)\s*\? "A platform administrator can turn them on \(the club administrator too, in team mode\)\."\s*: `\$\{AskWho\(\)\}\.`\);/);
 });
 
 test("9. a platform administrator who holds the approval right but whose team is switched off is told so in the review - not that approving needs a platform admin", async () => {
@@ -278,7 +281,7 @@ test("9. a platform administrator who holds the approval right but whose team is
     await openImports();
     await act("training-load-gpexe-open", { candidateId: "cand-1" });
     const page = html();
-    assert.match(page, /Imports are switched off for this team, so it can(?:'|&#039;)t be approved here\./);
+    assert.match(page, /Imports are switched off for this team, so it can(?:'|&#039;)t be imported here\./);
     assert.doesNotMatch(page, /Approving needs a platform admin/);
   } finally {
     READY.approvalBlockers = [];

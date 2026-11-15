@@ -148,7 +148,7 @@ const ATHLETE_ANOMALY = {
 // athlete id, as buildGpexeImportPlan takes it.
 export async function readTrackChoices(client, ownerTeamId, gpexeTeamSessionId) {
   const rows = (await client.query(
-    `select c.id, c.gpexe_athlete_id, c.choice, c.chosen_track_id, c.track_set_fingerprint
+    `select c.id, c.gpexe_athlete_id, c.choice, c.chosen_track_id, c.track_set_fingerprint, trim_scale(c.scale_target_minutes)::text as scale_target_minutes
        from training_load.gpexe_track_choices c
       where c.owner_team_id = $1 and c.gpexe_team_session_id = $2
         and not exists (select 1 from training_load.gpexe_track_choices n where n.supersedes_choice_id = c.id)`,
@@ -156,6 +156,7 @@ export async function readTrackChoices(client, ownerTeamId, gpexeTeamSessionId) 
   )).rows;
   return new Map(rows.map((r) => [String(r.gpexe_athlete_id), {
     choiceId: String(r.id), kind: r.choice, trackId: r.chosen_track_id ?? null, fingerprint: r.track_set_fingerprint,
+    scaleTargetMinutes: r.scale_target_minutes === null ? null : Number(r.scale_target_minutes),
   }]));
 }
 
@@ -181,6 +182,9 @@ const LEFT_OUT_MESSAGES = Object.freeze({
   missing: "GPEXE has no value for this.",
   threshold_contract: "GPEXE's thresholds do not match this mapping.",
   shape: "GPEXE sent this value in another shape.",
+  // MT-D: a scaled athlete's values.
+  scaled_by_choice: "Scaled: saved as an estimate after the import.",
+  not_scaled: "An average is not scaled; left out for this athlete.",
 });
 
 async function activeLinks(client, ownerTeamId) {
@@ -619,6 +623,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     if (participant?.duplicateTracks) entry.duplicateTracks = { ...participant.duplicateTracks, ignoredTrackIds: [...participant.duplicateTracks.ignoredTrackIds] };
     // MT-B: present only when the athlete has a current track choice, so every other preview (and its hash) is unchanged.
     if (trackChoice) entry.trackChoice = { ...trackChoice };
+    // MT-D: present only for a scale choice, so every other preview (and its hash) is unchanged.
+    if (participant?.scaleRecording) entry.scaleRecording = structuredClone(participant.scaleRecording);
     athletes.push(entry);
   }
 

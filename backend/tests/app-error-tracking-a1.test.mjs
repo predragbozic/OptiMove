@@ -92,6 +92,23 @@ test("1. sanitizers keep closed shapes only", () => {
     assert.equal(M.sanitizeClientReport(bad), null, JSON.stringify(bad));
   }
   assert.equal(M.sanitizeClientReport({ ...GOOD, release: "not-a-commit" }).release === "not-a-commit", false, "a non-hex release is replaced, never stored");
+  // What failed: one word of the closed list, only with the three codes that take one, stored as the code's second part.
+  assert.equal(M.sanitizeClientReport({ ...GOOD, reason: "typeerror" }).code, "js_error.typeerror");
+  assert.equal(M.sanitizeClientReport({ screen: "weekly", action: "open-media", code: "unhandled_rejection", reason: "aborterror" }).code, "unhandled_rejection.aborterror");
+  assert.equal(M.sanitizeClientReport({ screen: "weekly", code: "handler_error", reason: "none" }).code, "handler_error.none");
+  assert.equal(M.sanitizeClientReport(GOOD).code, "js_error", "a report without the word is stored as before (an older page still open)");
+  for (const code of M.CODES_WITH_REASON) for (const reason of M.CLIENT_REASONS) {
+    const out = M.sanitizeClientReport({ screen: "weekly", code, reason });
+    assert.match(out.code, /^[a-z0-9_.-]{1,60}$/, `${code} with ${reason} fits the column's shape`);
+  }
+  for (const bad of [{ ...GOOD, reason: "AbortError" }, { ...GOOD, reason: "abort error" }, { ...GOOD, reason: SECRET }, { ...GOOD, reason: "" }, { ...GOOD, reason: 1 }, { ...GOOD, reason: ["aborterror"] },
+    { ...GOOD, code: "no_response", reason: "aborterror" }, { ...GOOD, code: "http_500", reason: "typeerror" }, { ...GOOD, code: "js_error.typeerror", reason: "typeerror" }]) {
+    assert.equal(M.sanitizeClientReport(bad), null, JSON.stringify(bad));
+  }
+  assert.notEqual(
+    M.fingerprintOf({ source: "client", where: "weekly", action: "open-media", code: M.sanitizeClientReport({ screen: "weekly", code: "unhandled_rejection", reason: "aborterror" }).code, status: null, stackSignature: null }),
+    M.fingerprintOf({ source: "client", where: "weekly", action: "open-media", code: M.sanitizeClientReport({ screen: "weekly", code: "unhandled_rejection", reason: "notallowederror" }).code, status: null, stackSignature: null }),
+    "two reasons are two kinds of error");
 });
 
 test("2. the table refuses free text, and only the count and the last-seen time change", async () => {
@@ -130,6 +147,15 @@ test("3. ingest: login, closed body, repeat count, per-user rows, role, size and
   assert.equal(all.length, 1);
   assert.equal(all[0].repeat_count, 2);
   assert.equal(all[0].role, "coach");
+  // The word of what failed travels as its own key and is stored inside the code; a word outside the list stores nothing.
+  const rowsBeforeReason = (await rows()).length;
+  assert.equal((await call("/api/app-errors", { method: "POST", body: { screen: "weekly", action: "open-media", code: "unhandled_rejection", reason: "aborterror" }, cookie: coach.cookie })).status, 204);
+  const refusedReason = await call("/api/app-errors", { method: "POST", body: { screen: "weekly", action: "open-media", code: "unhandled_rejection", reason: SECRET }, cookie: coach.cookie });
+  assert.deepEqual([refusedReason.status, refusedReason.text.includes("Secret")], [400, false]);
+  const withReason = (await rows()).filter((r) => r.screen === "weekly");
+  assert.deepEqual(withReason.map((r) => [r.error_code, r.action, r.stack_signature]), [["unhandled_rejection.aborterror", "open-media", null]]);
+  assert.equal((await rows()).length, rowsBeforeReason + 1);
+  await k.query(`delete from public.app_error_events where screen = 'weekly'`);
   assert.equal(all[0].user_hash, M.userHash(coach.id));
   assert.ok(!JSON.stringify(all[0]).includes(coach.id));
   await call("/api/app-errors", { method: "POST", body: GOOD, cookie: other.cookie });

@@ -304,7 +304,10 @@ test("6. (D8) mixed time zones: a data problem in plain words for everyone; the 
     await openImports();
     const list = html();
     assert.match(groupHtml("data", list), /Problem in the GPEXE data/);
-    assert.match(list, /It is not imported until the team has a time zone\. Ask a platform administrator to set it in Settings &gt; Data sources, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./);
+    // P1 (O5): the platform admin reads where to set it; a coach asks the club administrator.
+    assert.match(list, admin
+      ? /It is not imported until the team has a time zone\. Ask a platform administrator to set it in Settings &gt; Data sources, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./
+      : /It is not imported until the team has a time zone\. Ask your club administrator, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./);
     assert.ok(!/mixed_timezones|Zone\/A/.test(list.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no code in the open");
     await act("training-load-gpexe-open", { candidateId: "cand-2", group: "data" });
     const review = html();
