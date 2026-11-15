@@ -215,17 +215,21 @@ export function sanitizeRequest(request) {
   if (typeof request.route !== "string" || request.route.length > 400) return null;
   const normalized = normalizeRoute(request.route);
   if (normalized === null) return null;
-  return { method: request.method, route: knownWordsOnly(normalized) };
+  // Reduced to the server's own words, the route can be longer than it was (":x" for a one-letter segment): held to
+  // the table's shape here, so a route the table would refuse is a refused report and never a failed insert.
+  const route = knownWordsOnly(normalized);
+  if (route.length > 120 || !ROUTE_SHAPE.test(route)) return null;
+  return { method: request.method, route };
 }
 // The words a path of this server can contain: the static segments of its own routes (collected from the Express
 // app at start, server.js). A segment the browser sent that is not one of them - a name, a search word, anything a
 // person typed that ended up in a path - is stored as ":x", so a browser's route is made of the server's own words
-// only. Until the words are set (a unit test without the app) the route keeps its normalized shape.
+// only. Until the words are set there are none: every segment that is not an id is ":x" (closed, never the path).
+const ROUTE_SHAPE = /^\/[A-Za-z0-9_/:.-]*$/;
 let routeWords = null;
 export function setRouteWords(words) { routeWords = words ? new Set(words) : null; }
 function knownWordsOnly(route) {
-  if (!routeWords) return route;
-  return route.split("/").map((seg) => (seg === "" || seg === ":id" || seg === ":x" || routeWords.has(seg) ? seg : ":x")).join("/");
+  return route.split("/").map((seg) => (seg === "" || seg === ":id" || seg === ":x" || routeWords?.has(seg) ? seg : ":x")).join("/");
 }
 // The static words of every route of an Express app: each route's own path and each mounted router's prefix.
 export function collectRouteWords(app) {
@@ -454,7 +458,8 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
             coalesce(sum(repeat_count) filter (where source = 'client' and device_class is null and os_family is null and browser_family is null), 0)::int as no_device,
             (array_agg(request_method order by last_seen_at desc))[1] as request_method,
             (array_agg(request_route order by last_seen_at desc))[1] as request_route,
-            coalesce(sum(repeat_count) filter (where server_uptime = 'lt_2m' or delivered_late is not null), 0)::int as around_restart,
+            coalesce(sum(repeat_count) filter (where server_uptime = 'lt_2m'), 0)::int as around_restart,
+            coalesce(sum(repeat_count) filter (where server_uptime is not null), 0)::int as timed,
             coalesce(sum(repeat_count) filter (where delivered_late is not null), 0)::int as delivered_late,
             coalesce(sum(repeat_count) filter (where page_behind_server), 0)::int as page_behind
        from public.app_error_events
@@ -503,11 +508,12 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
       firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, roles: r.roles,
       devices: dev ? dev.list : [], otherDevices: dev ? Math.max(dev.combos - dev.list.length, 0) : 0,
       otherDeviceOccurrences: dev ? Math.max(dev.total - dev.list.reduce((n, x) => n + x.occurrences, 0), 0) : 0, deviceNotRecorded: r.no_device,
-      // v73: which request failed (a browser's failed request), and how many of the occurrences fell around a server
-      // restart (recorded within two minutes of the server's start, or delivered late because the report itself
-      // could not get through) or came from a page older than the server.
+      // v73: which request failed (a browser's failed request); and, of the occurrences recorded since v73
+      // (`timedOccurrences` - older rows say nothing), how many were stored within two minutes of the server's start,
+      // how many reached the server late (the report itself could not get through at the time - the server or the
+      // person's own connection) and how many came from a page older than the server.
       request: r.request_method && r.request_route ? { method: r.request_method, route: r.request_route } : null,
-      aroundRestart: r.around_restart, deliveredLate: r.delivered_late, pageBehindServer: r.page_behind,
+      timedOccurrences: r.timed, aroundRestart: r.around_restart, deliveredLate: r.delivered_late, pageBehindServer: r.page_behind,
     };
   });
 }

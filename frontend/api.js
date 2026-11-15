@@ -41,7 +41,7 @@ export async function api(path, options = {}) {
     error.data = errorData;
     throw error;
   }
-  // The server answered: reports that could not be delivered during an outage go out now, once (never for the
+  // The call succeeded: reports that could not be delivered during an outage go out now, once (never for the
   // report route itself).
   if (reportable(path)) flushLateReports();
   try {

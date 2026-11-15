@@ -92,16 +92,20 @@ export function requestWords(g) {
   return `${r.method} ${r.route}`;
 }
 // What is known about when the errors of a kind happened, one phrase each, with a glyph and a count:
-//   * around a server restart - recorded within two minutes of the server's start, or delivered late because the
-//     report itself could not get through at the time;
+//   * around a server restart - stored within two minutes of the server's start;
+//   * delivered late - the report itself could not get through when the error happened (the server, or the
+//     person's own connection) and arrived with a later call;
 //   * from a page older than the server - loaded before a deploy.
 export function timingParts(g) {
   const count = (n) => (Number.isInteger(n) && n > 0 ? n : 0);
-  const total = count(g?.occurrences);
+  // Out of the occurrences these facts were recorded for: a row from before v73 says nothing either way.
+  const total = count(g?.timedOccurrences);
   const of = (n) => (total > n ? `${n} of ${timesLabel(total)}` : timesLabel(n));
   const parts = [];
   const restart = count(g?.aroundRestart);
-  if (restart) parts.push(`↻ Around a server restart · ${of(restart)}${count(g.deliveredLate) ? ` (${count(g.deliveredLate)} delivered late)` : ""}`);
+  if (restart) parts.push(`↻ Around a server restart · ${of(restart)}`);
+  const late = count(g?.deliveredLate);
+  if (late) parts.push(`⏱ Delivered late · ${of(late)}`);
   const behind = count(g?.pageBehindServer);
   if (behind) parts.push(`⇅ Page older than the server · ${of(behind)}`);
   return parts;

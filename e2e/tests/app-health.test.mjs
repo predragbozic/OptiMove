@@ -63,11 +63,11 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, "the device line stays inside the screen");
       // AH-2b: which request failed, as the server's own route words (the name and the query never arrive), and that
       // it fell around a server restart - in the row, inside the screen.
-      const failed = page.locator(".app-health-group", { hasText: "no_response" });
+      const failed = page.locator(".app-health-group", { hasText: "POST /api/athletes/:x/plans" });
       assert.equal((await failed.locator(".app-health-code").textContent()).trim(), "no_response · POST /api/athletes/:x/plans");
       const timing = await failed.locator(".app-health-timing .app-health-device").allTextContents();
-      assert.equal(timing.length, 1);
-      assert.match(timing[0], /^↻ Around a server restart · 1 time \(1 delivered late\)$/);
+      assert.ok(timing.includes("⏱ Delivered late · 1 time"), timing.join(" | "));
+      assert.ok(timing.every((t) => /^(↻ Around a server restart|⏱ Delivered late) · 1 time$/.test(t)), "the restart phrase only while the server is young");
       assert.ok(!text.includes("ana-example") && !text.includes("token"));
       const timingBox = await failed.locator(".app-health-timing").boundingBox();
       assert.ok(timingBox.x >= 0 && timingBox.x + timingBox.width <= viewport.width, "the timing line stays inside the screen");

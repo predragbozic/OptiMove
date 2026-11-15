@@ -87,10 +87,17 @@ test("1. the request of a report: a method of five and a route normalized again 
   for (const hostile of ["/api/athletes/ana-example", "/api/x/Secret.Word/y", "/secret-word", "/api/athletes/ana_example_2001"]) {
     assert.equal(/ana|secret|2001/i.test(ok(hostile).route), false, hostile);
   }
-  // Without the words (a unit test that never loaded the app) the route keeps its normalized shape.
+  // Without the words (the app never set them) nothing of the path is kept: closed, never the path.
   M.setRouteWords(null);
-  assert.equal(ok("/api/athletes/ana-example/plans").route, "/api/athletes/ana-example/plans");
+  assert.equal(ok("/api/athletes/ana-example/plans").route, "/:x/:x/:x/:x");
+  assert.equal(ok("/api/athletes/12").route, "/:x/:x/:id");
   M.setRouteWords(words);
+  // A route that grows past the table's 120 characters once its segments are ":x" is refused, not stored and not a failed insert.
+  const long = `/api${"/a".repeat(58)}`;
+  assert.equal(long.length, 120);
+  assert.equal(M.sanitizeRequest({ method: "GET", route: long }), null);
+  assert.equal(M.sanitizeRequest({ method: "GET", route: `/${"a/".repeat(199)}` }), null);
+  assert.equal(ok(`/api${"/a".repeat(38)}`).route.length, 4 + 38 * 3);
   // Refused whole.
   for (const bad of ["GET /api/x", ["GET", "/api/x"], 1, true, { method: "GET" }, { route: "/api/x" }, { method: "get", route: "/api/x" }, { method: "HEAD", route: "/api/x" }, { method: "GET", route: "api/x" },
     { method: "GET", route: "https://app.example/api/x" }, { method: "GET", route: 12 }, { method: "GET", route: `/${"a/".repeat(250)}` }, { method: "GET", route: "/api/x", url: "/api/x?token=1" },
@@ -183,7 +190,7 @@ test("4. ingest: the request is stored as a pattern and makes the kind; a repeat
   assert.deepEqual(all.slice(-2).map((r) => [r.request_route, r.server_uptime, r.delivered_late, r.repeat_count]), [["/api/media/access", "ge_10m", null, 1], ["/api/media/access", "ge_10m", "lt_10m", 1]]);
   // Refused: nothing stored, and the answer repeats nothing.
   const before = all.length;
-  for (const body of [{ ...FAILED, request: { method: "GET", route: "/api/x", url: "/api/x?secret=1" } }, { ...FAILED, request: { method: "TRACE", route: "/api/x" } }, { ...FAILED, request: "GET /api/x?secret=1" },
+  for (const body of [{ ...FAILED, request: { method: "GET", route: `/api${"/a".repeat(58)}` } }, { ...FAILED, request: { method: "GET", route: "/api/x", url: "/api/x?secret=1" } }, { ...FAILED, request: { method: "TRACE", route: "/api/x" } }, { ...FAILED, request: "GET /api/x?secret=1" },
     { ...FAILED, late: "yesterday" }, { ...FAILED, request: { method: "GET", route: "x" } }]) {
     const res = await post(body);
     assert.equal(res.status, 400, JSON.stringify(body).slice(0, 80));
@@ -208,21 +215,25 @@ test("5. the groups read: which request, how many around a server restart, how m
   await ev(2, { release: SERVER_COMMIT });                 // just after a start
   M.setUptimeForTests(() => 9000);
   await ev(3, { release: "f".repeat(40) });                // long after, from an older page
-  await ev(1, { release: SERVER_COMMIT, late: "lt_1m" });  // delivered late
+  await ev(1, { release: SERVER_COMMIT, late: "lt_1m" });  // delivered late, long after a start: not a restart
   await ev(1, { request: { method: "GET", route: "/api/media/access" } }); // another request: another kind
   M.setUptimeForTests();
   const res = await call("/api/app-errors/groups?days=1", { cookie: admin.cookie });
   assert.equal(res.status, 200);
   const main = res.body.groups.find((g) => g.request?.method === "POST");
   assert.deepEqual(main.request, { method: "POST", route: "/api/media/access" });
-  assert.deepEqual([main.occurrences, main.aroundRestart, main.deliveredLate, main.pageBehindServer], [6, 3, 1, 3]);
+  assert.deepEqual([main.occurrences, main.timedOccurrences, main.aroundRestart, main.deliveredLate, main.pageBehindServer], [6, 6, 2, 1, 3]);
   const other = res.body.groups.find((g) => g.request?.method === "GET");
   assert.deepEqual([other.occurrences, other.aroundRestart, other.deliveredLate, other.pageBehindServer], [1, 0, 0, 0]);
-  // A kind without a request says so with null, and zeros.
+  // A kind without a request says so with null, and zeros; rows from before v73 are not among the timed ones.
   await clear();
+  M.setUptimeForTests(() => 5);
   await M.writeEvent({ ...M.sanitizeClientReport({ screen: "weekly", code: "js_error" }), role: "coach", userHash: null, userHashVersion: 2 });
+  M.setUptimeForTests();
+  const fp = (await rows())[0].fingerprint;
+  await rawInsert({ fingerprint: fp, screen: "weekly", error_code: "js_error", repeat_count: 4 });
   const plain = (await call("/api/app-errors/groups?days=1", { cookie: admin.cookie })).body.groups[0];
-  assert.deepEqual([plain.request, plain.deliveredLate, plain.pageBehindServer], [null, 0, 0]);
+  assert.deepEqual([plain.request, plain.occurrences, plain.timedOccurrences, plain.aroundRestart, plain.deliveredLate, plain.pageBehindServer], [null, 5, 1, 1, 0, 0]);
   assert.equal((await call("/api/app-errors/groups?days=1", { cookie: coach.cookie })).status, 404, "still a platform admin's read only");
 });
 

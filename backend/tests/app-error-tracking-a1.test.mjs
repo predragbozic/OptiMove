@@ -206,7 +206,7 @@ test("4. the read route: platform admin only; everyone else the unknown-route 40
   assert.equal(ok.status, 200);
   assert.ok(Array.isArray(ok.body.groups) && ok.body.groups.length > 0);
   const g = ok.body.groups[0];
-  assert.deepEqual(Object.keys(g).sort(), ["action", "aroundRestart", "code", "deliveredLate", "deviceNotRecorded", "devices", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "otherDeviceOccurrences", "otherDevices", "pageBehindServer", "release", "request", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "users"]);
+  assert.deepEqual(Object.keys(g).sort(), ["action", "aroundRestart", "code", "deliveredLate", "deviceNotRecorded", "devices", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "otherDeviceOccurrences", "otherDevices", "pageBehindServer", "release", "request", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "timedOccurrences", "users"]);
   assert.ok(!JSON.stringify(ok.body).includes("example.invalid"));
   const denied = await call("/api/app-errors/groups", { cookie: coach.cookie });
   const unknown = await call("/api/app-errors/nothing-here", { cookie: coach.cookie });

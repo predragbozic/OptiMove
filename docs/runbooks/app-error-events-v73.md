@@ -31,15 +31,18 @@ migration refuses unless the body it replaces is v70's, md5 `13009f97dbedc04be84
   40 characters) becomes `:id`, a segment with other characters `:x`. The server reduces it **again** the same way and
   then keeps only the words its own routes are made of (collected from the Express app at start); every other segment
   becomes `:x`. So a name, an e-mail or a search word that ended up in a path is not stored, whatever page sent it.
-  A request of any other shape is `400 invalid_error_report` and nothing is stored.
+  If the words were never set, every segment that is not an id is `:x` (closed; the server says so once at start when
+  it collected none). A request of any other shape - or one that no longer fits 120 characters once reduced - is
+  `400 invalid_error_report` and nothing is stored.
 * **The page's build** is the commit word the production build already carries (`<meta name="optimove-build">`), sent
   as `release`. As before v73, a row's `release` is the report's own build when it names one (now every production
   page does) and the server's otherwise; `page_behind_server` says whether the two differ and is null when either
   is unknown (a development page, a server without `RENDER_GIT_COMMIT`).
 * **A report that could not be delivered** (its own request got no answer - the same outage, usually) is kept by the
-  page **in memory only**, at most five, and sent **once** after the next call that did get an answer, with `late` set
+  page **in memory only**, at most five, and sent **once** after the next call that succeeded, with `late` set
   to how long it waited. Whatever happens to that one attempt, the report is then dropped: there is no retry loop, no
-  storage, nothing survives a reload. A signed-out page sends nothing.
+  storage, nothing survives a reload. A signed-out page sends nothing, and a report held for one person is dropped,
+  not sent, when another person is signed in on that page by then.
 
 ## What it changes for existing data
 
@@ -54,11 +57,14 @@ migration refuses unless the body it replaces is v70's, md5 `13009f97dbedc04be84
 
 ## On the screen
 
-`GET /api/app-errors/groups` adds to each kind: `request` (`{ method, route }` or null), `aroundRestart` (occurrences
-stored within two minutes of the server's start, or delivered late), `deliveredLate`, `pageBehindServer`. App health
-shows the request beside the code ("no_response · POST /api/media/access") and, only when there is something to say,
-"↻ Around a server restart · 3 of 6 times (1 delivered late)" and "⇅ Page older than the server · 2 of 6 times". The
-detail has a "Request" line. Only a platform admin has the screen and the read.
+`GET /api/app-errors/groups` adds to each kind: `request` (`{ method, route }` or null), `timedOccurrences` (the
+occurrences recorded since v73 - the only ones these facts are known for), `aroundRestart` (stored within two minutes
+of the server's start), `deliveredLate`, `pageBehindServer`. App health shows the request beside the code
+("no_response · POST /api/media/access") and, only when there is something to say, in a caution colour with a glyph
+and a count: "↻ Around a server restart · 3 of 6 times", "⏱ Delivered late · 1 of 6 times" and "⇅ Page older than
+the server · 2 of 6 times" - each out of the timed occurrences, never of rows from before v73. A late delivery is its
+own phrase and is not counted as a restart: the report could not get through at the time, which is the server or the
+person's own connection. The detail has a "Request" line. Only a platform admin has the screen and the read.
 
 ## Deploy
 
@@ -79,7 +85,9 @@ A page loaded before the deploy keeps sending reports without a request or a bui
 when a migration with a later file name is recorded. Otherwise it locks the table, drops the five columns (their
 CHECKs go with them), restores v70's guard body (md5 `13009f97dbedc04be84380baa037ce88`) and removes the record. The
 rows stay; a row that had a request keeps the fingerprint it was stored under. The deployed commit must first no
-longer contain the migration file or write the new columns. v70's rollback refuses while v73 is recorded, so the
+longer contain the migration file or write the new columns. Pages loaded from the v73 build keep sending `request`
+and `late`, which the earlier server refuses whole (400): **their error reports are lost until the page is
+reloaded**. v70's rollback refuses while v73 is recorded, so the
 order is v73's first. Rehearsed in `app-error-events-v73.test.mjs` (refusals, rollback, v70's own post-check true
 again, re-apply, the md5 gate).
 
@@ -87,8 +95,8 @@ again, re-apply, the md5 gate).
 
 * The uptime is the process's own (`process.uptime()`): "around a restart" is true of a restart of the server process
   (a deploy, a crash, the host waking the service), not of a database or network fault with the server left running.
-  A report delivered late is counted there too because the page could not reach the server when the error happened;
-  that can also be the person's own connection.
+  Any error stored in the first two minutes after a deploy or after the host wakes the service carries the label,
+  whatever its cause. A report held during a restart usually arrives after it, late and within those two minutes.
 * The request, the build and the lateness come from the browser: a hostile signed-in client can send any value of the
   closed shapes. They are bounded, not proven. The route's words are limited to the server's own.
 * The words of the server's routes are collected once, at start. A route word that also happens to be someone's

@@ -120,6 +120,22 @@ test("4. a report that got no answer is held in memory - five at most - and sent
   assert.equal(leaver.flushLate(), 0);
   await tick();
   assert.deepEqual([out.length, leaver.heldCount()], [0, 0], "a signed-out page sends nothing, and keeps nothing");
+  // Another person signed in on the same page meanwhile: their session never carries the first person's report.
+  let who = "user-a";
+  let up = false;
+  const shared = [];
+  const sharedReport = C.createReporter({ send: async (b) => { shared.push(b); if (!up) throw new TypeError("x"); }, isSignedIn: () => true, getUserId: () => who, getDevice: () => null, getBuild: () => "", dedupeMs: 0 });
+  sharedReport({ screen: "weekly", code: "no_response" });
+  await tick();
+  who = "user-b";
+  sharedReport({ screen: "home", code: "no_response" });
+  await tick();
+  assert.equal(sharedReport.heldCount(), 2);
+  up = true; shared.length = 0;
+  sharedReport.flushLate();
+  await tick();
+  assert.deepEqual(shared.map((b) => b.screen), ["home"], "only the report of the person signed in now");
+  assert.equal(sharedReport.heldCount(), 0, "the other is dropped, not kept");
 });
 
 test("5. api.js: a call that got an answer sends what was held; a failed call, a refusal and the report route do not", async () => {
@@ -161,10 +177,14 @@ test("6. the screen: the request beside the code; 'around a server restart' and 
   assert.equal(requestWords({ request: { method: "POST", route: "/api/media/access" } }), "POST /api/media/access");
   for (const g of [{}, { request: null }, { request: { method: "HEAD", route: "/api/x" } }, { request: { method: "GET", route: "/api/x?token=1" } }, { request: { method: "GET", route: "<img>" } },
     { request: { method: "GET", route: `/${"a".repeat(130)}` } }, { request: { method: "GET" } }, { request: "GET /api/x" }]) assert.equal(requestWords(g), "", JSON.stringify(g).slice(0, 60));
-  assert.deepEqual(timingParts({ occurrences: 6, aroundRestart: 3, deliveredLate: 1, pageBehindServer: 2 }), ["↻ Around a server restart · 3 of 6 times (1 delivered late)", "⇅ Page older than the server · 2 of 6 times"]);
-  assert.deepEqual(timingParts({ occurrences: 4, aroundRestart: 4, deliveredLate: 0, pageBehindServer: 0 }), ["↻ Around a server restart · 4 times"]);
-  assert.deepEqual(timingParts({ occurrences: 1, aroundRestart: 1, pageBehindServer: 1 }), ["↻ Around a server restart · 1 time", "⇅ Page older than the server · 1 time"]);
-  for (const g of [{}, null, { occurrences: 5 }, { occurrences: 5, aroundRestart: 0, pageBehindServer: 0, deliveredLate: 0 }, { occurrences: 5, aroundRestart: "3", pageBehindServer: -1 }, { occurrences: 5, aroundRestart: 1.5 }]) assert.deepEqual(timingParts(g), [], JSON.stringify(g));
+  assert.deepEqual(timingParts({ occurrences: 6, timedOccurrences: 6, aroundRestart: 3, deliveredLate: 1, pageBehindServer: 2 }),
+    ["↻ Around a server restart · 3 of 6 times", "⏱ Delivered late · 1 of 6 times", "⇅ Page older than the server · 2 of 6 times"]);
+  // Out of the occurrences the facts were recorded for, never of the rows from before them.
+  assert.deepEqual(timingParts({ occurrences: 40, timedOccurrences: 4, aroundRestart: 1, deliveredLate: 0, pageBehindServer: 0 }), ["↻ Around a server restart · 1 of 4 times"]);
+  assert.deepEqual(timingParts({ occurrences: 40, timedOccurrences: 4, aroundRestart: 4 }), ["↻ Around a server restart · 4 times"]);
+  assert.deepEqual(timingParts({ timedOccurrences: 1, aroundRestart: 1, pageBehindServer: 1 }), ["↻ Around a server restart · 1 time", "⇅ Page older than the server · 1 time"]);
+  assert.deepEqual(timingParts({ timedOccurrences: 3, deliveredLate: 2 }), ["⏱ Delivered late · 2 of 3 times"], "late alone is not a restart");
+  for (const g of [{}, null, { timedOccurrences: 5 }, { timedOccurrences: 5, aroundRestart: 0, pageBehindServer: 0, deliveredLate: 0 }, { timedOccurrences: 5, aroundRestart: "3", pageBehindServer: -1 }, { timedOccurrences: 5, aroundRestart: 1.5 }]) assert.deepEqual(timingParts(g), [], JSON.stringify(g));
 
   const group = (over) => ({ fingerprint: "a".repeat(64), source: "client", screen: "weekly", routeTemplate: null, action: "open-media", code: "no_response", status: null, release: null, stackSignature: null,
     occurrences: 6, users: 2, firstSeenAt: "2026-11-14T08:00:00Z", lastSeenAt: "2026-11-15T07:30:00Z", roles: ["coach"], devices: [], otherDevices: 0, otherDeviceOccurrences: 0, deviceNotRecorded: 0, ...over });
@@ -175,10 +195,10 @@ test("6. the screen: the request beside the code; 'around a server restart' and 
     state.appHealth.selected = selected;
     return V.renderAppHealthPanelHtml();
   };
-  let html = await show([group({ request: { method: "POST", route: "/api/media/access" }, aroundRestart: 3, deliveredLate: 1, pageBehindServer: 2 }), group({ fingerprint: "b".repeat(64), code: "js_error", request: null, aroundRestart: 0, deliveredLate: 0, pageBehindServer: 0 })]);
+  let html = await show([group({ request: { method: "POST", route: "/api/media/access" }, timedOccurrences: 6, aroundRestart: 3, deliveredLate: 1, pageBehindServer: 2 }), group({ fingerprint: "b".repeat(64), code: "js_error", request: null, aroundRestart: 0, deliveredLate: 0, pageBehindServer: 0 })]);
   assert.match(html, /<small class="app-health-code">no_response · POST \/api\/media\/access<\/small>/);
   assert.match(html, /<small class="app-health-code">js_error<\/small>/, "no request: the code alone, as before");
-  assert.match(html, /<span class="app-health-devices app-health-timing"><span class="app-health-device">↻ Around a server restart · 3 of 6 times \(1 delivered late\)<\/span><span class="app-health-device">⇅ Page older than the server · 2 of 6 times<\/span><\/span>/);
+  assert.match(html, /<span class="app-health-devices app-health-timing"><span class="app-health-device">↻ Around a server restart · 3 of 6 times<\/span><span class="app-health-device">⏱ Delivered late · 1 of 6 times<\/span><span class="app-health-device">⇅ Page older than the server · 2 of 6 times<\/span><\/span>/);
   assert.equal(html.split("app-health-timing").length - 1, 1, "only the kind that has something to say");
   // The detail names the request on its own line - or says it was not recorded.
   html = await show([group({ request: { method: "POST", route: "/api/media/access" } })], "a".repeat(64));

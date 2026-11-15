@@ -203,7 +203,7 @@ export function buildReport({ screen, action, code, status, error, reason, devic
   return body;
 }
 
-export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS, getDevice = deviceOf, getBuild = pageBuild } = {}) {
+export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS, getDevice = deviceOf, getBuild = pageBuild, getUserId = () => context.getUser()?.id ?? null } = {}) {
   // The default sender needs a signed-in page; an injected sender (a test) decides for itself.
   const send = sendIn || defaultSend;
   const isSignedIn = signedIn || (sendIn ? () => true : () => Boolean(context.getUser()));
@@ -226,20 +226,23 @@ export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () =>
       seen.set(key, t);
       inWindow += 1;
       // A send that got no answer at all (the same outage, usually) is held; an answer of any kind is final.
-      Promise.resolve(send(body)).then(undefined, () => { if (held.length < MAX_HELD_REPORTS) held.push({ body, at: t }); });
+      const who = getUserId();
+      Promise.resolve(send(body)).then(undefined, () => { if (held.length < MAX_HELD_REPORTS) held.push({ body, at: t, who }); });
       return true;
     } catch {
       return false;
     }
   }
-  // Called after a request that DID get an answer: each held report is sent once more, marked late with how long it
+  // Called after a request that succeeded: each held report is sent once more, marked late with how long it
   // was held. Whatever happens to that attempt, the report is not kept: never a retry loop.
   report.flushLate = function flushLate() {
     if (!held.length) return 0;
     const due = held.splice(0, held.length);
     try {
       if (!isSignedIn()) return 0;
-      for (const { body, at } of due) {
+      const me = getUserId();
+      for (const { body, at, who } of due) {
+        if (who !== me) continue; // another person signed in meanwhile: their session never carries this report
         try { Promise.resolve(send({ ...body, late: lateBucket(Math.max(0, now() - at)) })).then(undefined, () => {}); } catch { /* dropped */ }
       }
       return due.length;
