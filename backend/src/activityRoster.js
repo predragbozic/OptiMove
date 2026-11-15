@@ -30,6 +30,7 @@
 // effective api_import / csv_import values in canonical_activity_results()
 // (ADR-001), never from activity_participants.participation_status (the
 // GPEXE path writes 'planned' for a measured athlete).
+import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { holdsClubAdminRole, holdsTeamCoachRole, isPlatformAdministrator } from "./authz.js";
@@ -167,13 +168,21 @@ export function deriveAthleteState({ decisions, facts, needsReview, observations
   return { state, group, flags, sourceReason };
 }
 
-function valuesView(facts) {
+function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null) {
   return facts
     .filter((f) => f.segmentId === null)
-    .map((f) => ({
-      metricKey: f.metricKey, label: f.metricLabel, shortLabel: f.metricShortLabel,
-      value: f.valueNumeric, valueText: f.valueText, unit: f.unit, entryMethod: f.entryMethod,
-    }))
+    .map((f) => {
+      const view = {
+        metricKey: f.metricKey, label: f.metricLabel, shortLabel: f.metricShortLabel,
+        value: f.valueNumeric, valueText: f.valueText, unit: f.unit, entryMethod: f.entryMethod,
+      };
+      // 6b-C1: only an estimated value carries its label (rule 10); every other value is as before.
+      if (f.entryMethod === "estimate") {
+        const estimate = estimateLabelFor(estimateLabels.get(String(f.occasionId)), nameInAnswer);
+        if (estimate) view.estimate = estimate;
+      }
+      return view;
+    })
     .sort((a, b) => String(a.metricKey).localeCompare(String(b.metricKey)));
 }
 
@@ -354,6 +363,23 @@ export async function loadRosterSnapshot(client, canonicalId) {
   const observationsByAthlete = groupBy(observations, "athlete_id");
   const decisionsByAthlete = groupBy(decisions, "athlete_id");
   const rosterIds = new Set(roster.map((r) => String(r.athlete_id)));
+  // Recorded by a source, but not on this session's roster (no membership
+  // period of the team covers the session): listed apart, never blocking.
+  // Deliberately no finer reason (joined later, left earlier, never a
+  // member): nothing here proves which one it is.
+  const outsideIds = [...new Set(facts.filter((f) => MEASURED_METHODS.has(f.entryMethod)).map((f) => f.athleteId))]
+    .filter((id) => !rosterIds.has(id));
+  const outsideNames = outsideIds.length
+    ? new Map((await one(
+      `select id, coalesce(nullif(display_name, ''), full_name) as name from public.athletes where id = any($1::uuid[])`,
+      [outsideIds],
+    )).map((r) => [String(r.id), r.name]))
+    : new Map();
+  // 6b-C1: the label of each estimated value; a copy source is named only if this answer already names that athlete.
+  const estimateLabels = await readEstimateLabels(client, facts.filter((f) => f.entryMethod === "estimate").map((f) => f.occasionId));
+  const answerNames = new Map([...roster.map((r) => [String(r.athlete_id).toLowerCase(), r.name]), ...[...outsideNames].map(([id, name]) => [id.toLowerCase(), name])]);
+  const nameInAnswer = (athleteId) => answerNames.get(String(athleteId).toLowerCase()) ?? null;
+  const values = (athleteFacts) => valuesView(athleteFacts, estimateLabels, nameInAnswer);
 
   const athletes = roster.map((r) => {
     const athleteId = String(r.athlete_id);
@@ -381,7 +407,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
       ...(flags.includes("decisions_disagree") ? { conflictingDecisions: athleteDecisions.map(decisionView) } : {}),
       flags,
       sourceReason: derived.sourceReason,
-      values: valuesView(athleteFacts),
+      values: values(athleteFacts),
       // Internal (removed by publicAthlete): what the fingerprint and the
       // 5a2 commands rest on.
       decisionIds: athleteDecisions.map((d) => String(d.id)),
@@ -391,20 +417,8 @@ export async function loadRosterSnapshot(client, canonicalId) {
     };
   }).sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
-  // Recorded by a source, but not on this session's roster (no membership
-  // period of the team covers the session): listed apart, never blocking.
-  // Deliberately no finer reason (joined later, left earlier, never a
-  // member): nothing here proves which one it is.
-  const outsideIds = [...new Set(facts.filter((f) => MEASURED_METHODS.has(f.entryMethod)).map((f) => f.athleteId))]
-    .filter((id) => !rosterIds.has(id));
-  const outsideNames = outsideIds.length
-    ? new Map((await one(
-      `select id, coalesce(nullif(display_name, ''), full_name) as name from public.athletes where id = any($1::uuid[])`,
-      [outsideIds],
-    )).map((r) => [String(r.id), r.name]))
-    : new Map();
   const recordedOutsideRoster = outsideIds
-    .map((athleteId) => ({ athleteId, name: outsideNames.get(athleteId) ?? null, state: "measured", stateLabel: ROSTER_STATE_LABELS.measured, values: valuesView(factsByAthlete.get(athleteId) ?? []) }))
+    .map((athleteId) => ({ athleteId, name: outsideNames.get(athleteId) ?? null, state: "measured", stateLabel: ROSTER_STATE_LABELS.measured, values: values(factsByAthlete.get(athleteId) ?? []) }))
     .sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
   const fingerprint = rosterFingerprint(athletes);
@@ -457,7 +471,9 @@ export async function getActivityRoster(ctx, activityId) {
         ownerTeamId: String(activity.owner_team_id),
       },
       canonicalActivityId: canonicalId,
-      viewer: { basis },
+      // 6b-C1: the estimate action is offered only while the save is on (ESTIMATES_ENABLED, metricEstimateService's own
+      // check, read here without importing it: that module imports this one). Off, the answer is as before.
+      viewer: { basis, ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}) },
       completion: snap.completion,
       // Phase 5a2: the token a Complete sends back as expectedFingerprint —
       // the roster the coach looked at.
