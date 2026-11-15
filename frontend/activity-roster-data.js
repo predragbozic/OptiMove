@@ -60,6 +60,7 @@ export function resetActivityRoster(activityId) {
   r.changedRows = [];
   r.retryBulk = null;
   r.retry = null;
+  r.estimate = null;
 }
 
 // How the roster answer failed, in terms the view can show. A session

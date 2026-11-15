@@ -67,12 +67,16 @@ const IDENTITIES = {
   pendingCount: 1, retryLaterCount: 1, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [],
 };
 const NO_IDENTITIES = { identities: [], pendingCount: 6, retryLaterCount: 0, maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [] };
+// The coach's answer (plan coach-gpexe-name): the unlinked athletes' names only - no birthDate key, no birthDateConflicts.
+const COACH_IDENTITIES = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova" }, { gpexeAthleteId: ID.noName, name: null }], maxPerLoad: 50, retentionDays: 14 };
 
 function status(viewer) {
   return { settings: { gpexeTeamId: "980" }, importSwitch: { enabled: true, message: "on" }, lastCheck: null, viewer, approvalAvailable: true };
 }
 const VIEWERS = {
   coach: { canApprove: true, approvalBasis: "team_grant", isPlatformAdmin: false },
+  // The team's own coach (plan coach-gpexe-name): the GPEXE names, never the dates or the admin-only load.
+  "team coach": { canApprove: true, approvalBasis: "team_grant", isPlatformAdmin: false, identityNames: true },
   "club admin": { canApprove: false, approvalBasis: null, isPlatformAdmin: false, identityAdmin: true },
   "platform admin": { canApprove: true, approvalBasis: "platform_admin", isPlatformAdmin: true, identityAdmin: true },
 };
@@ -352,6 +356,108 @@ test("P2: a coach sees no GPEXE id either - the list position names the athlete 
   assert.equal(insideTech(review), "", "no Technical details in a coach's review");
 });
 
+test("the team's own coach (identityNames): the GPEXE names replace the ordinals on Link athletes and the session review, never a date of birth or a conflict, and the admin-only load controls stay hidden", async () => {
+  reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
+  await openMapping();
+  const html = pageHtml();
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/athlete-identities")).length >= 1, true, "the coach reads the stored names");
+  // The GPEXE name stands in for the ordinal, with no "Born" line and no date.
+  assert.match(outsideTech(html), /<strong>Mira Zedova<\/strong>/);
+  assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(html)), "no date of birth for the coach");
+  // No admin-only load: no "Load the GPEXE names and dates of birth", no retry/suppression counts.
+  assert.ok(!/Load the GPEXE names and dates of birth|names and dates of birth already|24 hours|Hidden for 24|retry/i.test(html), "no admin load controls");
+  assert.ok(!/class="gpexe-identity"/.test(html), "no identity load panel for the coach");
+  assert.ok(!/Name not loaded|name not loaded/.test(html), "a coach is never told a name is not loaded");
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const review = pageHtml();
+  assert.match(outsideTech(review), /Find the GPEXE athlete Mira Zedova in GPEXE first/, "the review names the athlete by its GPEXE name");
+  // An athlete the coach has no name for: "GPEXE athlete N", and the heading points at the session values (P2).
+  assert.match(outsideTech(review), /Find this athlete in GPEXE using the session values below/, "a nameless athlete");
+  assert.ok(!/Born |Date of birth|dates of birth differ/.test(outsideTech(review)), "no date in the review");
+  // P2 and the UX HIGH on 7c0510ab: a coach gets no Technical details at all and no GPEXE id anywhere in the page.
+  for (const [where, page] of [["Link athletes", html], ["session review", review]]) {
+    assert.ok(!/class="gpexe-tech"/.test(page), `team coach: no Technical details on ${where}`);
+    for (const id of ALL_IDS) assert.ok(!new RegExp(`\\b${id}\\b`).test(page.replace(/data-[a-z-]+="[^"]*"/g, "")), `team coach: GPEXE id ${id} nowhere on ${where}`);
+    assert.ok(!/give them the Technical details|the id is under Technical details/.test(page), `team coach: no pointer to Technical details on ${where}`);
+  }
+});
+
+test("the team's own coach through Link athletes and the review link: no date-of-birth wording anywhere (case-insensitive, the confirmation included), and the name the coach confirmed stays on the result, the last-link notice and the unlink question after the re-read leaves the linked athlete out", async () => {
+  // The server's coach list names unlinked athletes only: once 'named' is linked, the re-read no longer carries it.
+  let linked = false;
+  const identities = () => ({ status: 200, body: linked ? { ...COACH_IDENTITIES, identities: COACH_IDENTITIES.identities.filter((i) => i.gpexeAthleteId !== ID.named) } : COACH_IDENTITIES });
+  const noDates = (html, where) => assert.ok(!/date of birth|dates of birth|born /i.test(outsideTech(html).replace(/<section class="gpexe-suggest"[\s\S]*?<\/section>/g, "")), `team coach: no date-of-birth wording on ${where}`);
+  reset(VIEWERS["team coach"], { identities, onLink: () => { linked = true; return { status: 201, body: { link: { id: "link-new" } } }; } });
+  await openMapping();
+  noDates(pageHtml(), "Link athletes");
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: ID.named }, { value: "ath-3" });
+  await act("training-load-gpexe-map-confirm");
+  noDates(pageHtml(), "the confirmation");
+  await act("training-load-gpexe-map-send");
+  const results = pageHtml();
+  assert.match(outsideTech(results), /<strong>Mira Zedova → /, "the result names the athlete the coach confirmed");
+  noDates(results, "the results");
+  await act("training-load-gpexe-map-done");
+  await act("training-load-gpexe-map-close");
+
+  // The review link: the notice and the unlink question keep the confirmed name too.
+  linked = false;
+  reset(VIEWERS["team coach"], { identities, onLink: () => { linked = true; return { status: 201, body: { link: { id: "link-review" } } }; } });
+  await openReview();
+  selectValues[ID.named] = "ath-2";
+  await act("training-load-gpexe-link", { gpexeAthleteId: ID.named });
+  await act("training-load-gpexe-link-confirm");
+  await act("training-load-gpexe-close");
+  const notice = outsideTech(pageHtml());
+  assert.match(notice, /The GPEXE athlete Mira Zedova is now linked to /);
+  await act("training-load-gpexe-unlink", { linkId: "link-review" });
+  assert.match(confirmQuestions.at(-1) || "", /Unlink the GPEXE athlete Mira Zedova from /);
+});
+
+test("defence in depth (the Independent's L1 on #527): if a coach's answer ever carried a date of birth or a date conflict, the coach's screens still show neither", async () => {
+  const leaky = { identities: [{ gpexeAthleteId: ID.named, name: "Mira Zedova", birthDate: "2001-02-03" }], maxPerLoad: 50, retentionDays: 14, birthDateConflicts: [{ gpexeAthleteId: ID.named, athleteId: "ath-3" }] };
+  reset(VIEWERS["team coach"], { identities: leaky });
+  const noDates = (html, where) => {
+    const text = outsideTech(html).replace(/<section class="gpexe-suggest"[\s\S]*?<\/section>/g, "");
+    assert.ok(!/date of birth|dates of birth|born |03\.02\.2001/i.test(text), `team coach: no date on ${where}`);
+  };
+  await openMapping();
+  noDates(pageHtml(), "Link athletes");
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: ID.named }, { value: "ath-3" });
+  noDates(pageHtml(), "the staged choice");
+  await act("training-load-gpexe-map-confirm");
+  noDates(pageHtml(), "the confirmation");
+});
+
+test("the team's own coach, a nameless athlete in the review table's row: no heading that points at values below (P2: none in a compact row), only the row's own line about its values", async () => {
+  for (const [values, sentNone] of [[{ duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, false], [{}, true]]) {
+    reset(VIEWERS["team coach"], { identities: COACH_IDENTITIES });
+    const base = responder;
+    responder = async (call) => (call.url.endsWith("/candidates/cand-1")
+      ? { status: 200, body: { candidate: { ...candidateDetail(), helperValues: { [ID.named]: { duration: 74, distance: 5230, maxSpeed: 29.5, drillRows: 2 }, [ID.notLoaded]: values } }, importSwitch: { enabled: true } } }
+      : base(call));
+    await openReview();
+    const html = outsideTech(pageHtml());
+    assert.equal(/GPEXE sent no values for this athlete that could help you find them/.test(html), sentNone);
+    assert.ok(!/session values below/.test(html), "no pointer to values below a compact row");
+  }
+});
+
+test("the team's own coach with no stored names reads \"GPEXE athlete N\" (P2), never the id, with no Technical details", async () => {
+  reset(VIEWERS["team coach"], { identities: { ...COACH_IDENTITIES, identities: [] } });
+  await openMapping();
+  const html = pageHtml();
+  assert.match(outsideTech(html), /<strong>GPEXE athlete \d+<\/strong>/);
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const review = pageHtml();
+  assert.match(outsideTech(review), /Find this athlete in GPEXE using the session values below/);
+  for (const page of [html, review]) {
+    assert.ok(!/class="gpexe-tech"/.test(page), "no Technical details");
+    for (const id of ALL_IDS) assert.ok(!new RegExp(`\\b${id}\\b`).test(page.replace(/data-[a-z-]+="[^"]*"/g, "")), `GPEXE id ${id} nowhere`);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // The lifetime of the names in memory (code-reviewer M1 / security MEDIUM on 8bc6921).

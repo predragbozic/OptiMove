@@ -1,3 +1,4 @@
+import { estimateLabelText } from "./activity-estimate.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
@@ -346,7 +347,7 @@ function renderSourcesTabHtml(detail) {
       ${values.map((f) => `
         <div class="tl-source-row">
           <span class="tl-source-kind tl-source-kind-${escapeAttr(f.detail.entryMethod || "manual")}">${escapeHtml((f.detail.entryMethod || "manual").replace(/_/g, " "))}</span>
-          <span class="tl-source-detail">${f.detail.isDerived ? "Derived" : f.detail.sourceIdentityId ? "Imported" : "Direct"}${f.detail.aggregationRole && f.detail.aggregationRole !== "standalone" ? ` &middot; ${escapeHtml(f.detail.aggregationRole.replace(/_/g, " "))}` : ""}</span>
+          <span class="tl-source-detail">${f.detail.entryMethod === "estimate" ? escapeHtml(estimateLabelText(f.estimate)) : f.detail.isDerived ? "Derived" : f.detail.sourceIdentityId ? "Imported" : "Direct"}${f.detail.aggregationRole && f.detail.aggregationRole !== "standalone" ? ` &middot; ${escapeHtml(f.detail.aggregationRole.replace(/_/g, " "))}` : ""}</span>
         </div>
       `).join("")}
     </div>
@@ -410,7 +411,8 @@ function collectResultsRows(detail, nav) {
     } else if (f.factKind === "metric_value") {
       const key = f.detail.metricDefinitionId;
       if (!row.metrics.has(key)) row.metrics.set(key, []);
-      row.metrics.get(key).push(f.detail);
+      // 6b-C1: an estimate keeps its label beside its value (rule 10).
+      row.metrics.get(key).push(f.estimate ? { ...f.detail, estimate: f.estimate } : f.detail);
     }
   }
   return byAthlete;
@@ -486,7 +488,8 @@ function formatMetricCell(values) {
   if (value === null || value === undefined) return `<span class="tl-cell-empty" aria-label="No data">&ndash;</span>`;
   const conflict = values.length > 1;
   const formatted = typeof value === "number" ? (Number.isInteger(value) ? String(value) : value.toFixed(1)) : String(value);
-  if (!conflict) return `<span class="tl-cell-value">${escapeHtml(formatted)}${shown.unitAtCapture ? ` <span class="tl-cell-unit">${escapeHtml(shown.unitAtCapture)}</span>` : ""}</span>`;
+  const est = shown.entryMethod === "estimate";
+  if (!conflict) return `<span class="tl-cell-value${est ? " is-estimate" : ""}"${est ? ` title="${escapeAttr(estimateLabelText(shown.estimate))}"` : ""}>${escapeHtml(formatted)}${shown.unitAtCapture ? ` <span class="tl-cell-unit">${escapeHtml(shown.unitAtCapture)}</span>` : ""}${est ? ` <small class="tl-roster-est">est.</small>` : ""}</span>`;
   return `
     <button type="button" class="tl-cell-conflict" data-action="training-load-calendar-view-conflict" data-values='${escapeAttr(JSON.stringify(values))}'>
       <span class="tl-conflict-dot" aria-hidden="true"></span>${values.length} values
@@ -652,6 +655,7 @@ function renderConflictPanelHtml() {
           <div class="tl-conflict-row">
             <span class="tl-source-kind tl-source-kind-${escapeAttr(v.entryMethod || "manual")}">${escapeHtml((v.entryMethod || "manual").replace(/_/g, " "))}</span>
             <span class="tl-cell-value">${escapeHtml(String(v.valueNumeric ?? v.valueText ?? (v.valueBoolean ? "Yes" : "No")))}${v.unitAtCapture ? ` ${escapeHtml(v.unitAtCapture)}` : ""}</span>
+            ${v.entryMethod === "estimate" ? `<span class="tl-roster-est-label">${escapeHtml(estimateLabelText(v.estimate))}</span>` : ""}
           </div>
         `).join("")}
         <button type="button" class="plain-button compact-button" data-action="training-load-calendar-conflict-close">Close</button>
@@ -691,7 +695,7 @@ function athleteMetricGroups(detail, metrics, definitions) {
       const def = known.get(id);
       return {
         name: def?.shortLabel || def?.label || "Metric",
-        values: list.map((m) => ({ value: formatValue(m), unit: m.detail.unitAtCapture || "" })),
+        values: list.map((m) => ({ value: formatValue(m), unit: m.detail.unitAtCapture || "", ...(m.detail.entryMethod === "estimate" ? { estimate: m.estimate ?? null } : {}) })),
       };
     }).sort((a, b) => a.name.localeCompare(b.name));
   };
@@ -707,7 +711,7 @@ function athleteMetricGroups(detail, metrics, definitions) {
 }
 
 function renderDrawerValueHtml(row) {
-  const one = (v) => `${escapeHtml(v.value)}${v.unit ? ` <span class="tl-cell-unit">${escapeHtml(v.unit)}</span>` : ""}`;
+  const one = (v) => `${escapeHtml(v.value)}${v.unit ? ` <span class="tl-cell-unit">${escapeHtml(v.unit)}</span>` : ""}${"estimate" in v ? ` <small class="tl-roster-est">est.</small><span class="tl-roster-est-label">${escapeHtml(estimateLabelText(v.estimate))}</span>` : ""}`;
   if (row.values.length === 1) return one(row.values[0]);
   return `<span class="tl-conflict-dot" aria-hidden="true"></span>${row.values.length} values: ${row.values.map(one).join(" · ")}`;
 }

@@ -1,6 +1,7 @@
 // U4 (J19): the five-step setup guide of the Imports screen, markup side. Pure
 // functions of the Imports state; every name is escaped; no id is shown.
-import { escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml } from "./utils.js";
+import { boardContext } from "./metric-board-data.js";
 import { guideSteps } from "./gpexe-guide-steps.js";
 import { guideAdmin, refusalSentence } from "./gpexe-guide-data.js";
 import { calendarDayKey, gpexeTeamOptions, guidePairCounts } from "./gpexe-import-data.js";
@@ -87,9 +88,11 @@ function variablesBodyHtml(gx, variables, busy) {
   const purpose = variables.state === "next" ? `<p class="muted">These decide which numbers (for example distance) are taken from GPEXE.</p>` : "";
   const offer = variables.state === "next" && !g.confirm && !g.write;
   const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" aria-describedby="gpexe-guide-recommended" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button><span class="gpexe-guide-tag" id="gpexe-guide-recommended">Recommended</span>` : "";
-  // S5: "Choose my own" is the Mappings screen until the J18 board exists.
+  // "Choose my own" opens the drag-and-drop board for this team in a club workspace (J18, section 15.4); in the
+  // platform workspace, where the board is not offered, it stays the Mappings screen.
+  const ownTarget = boardContext() && gx.teamId ? `data-section="board" data-mb-team-id="${escapeAttr(String(gx.teamId))}"` : `data-section="mappings"`;
   const own = variables.state !== "waiting" && variables.state !== "unknown" && !g.confirm && !g.write
-    ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" data-section="mappings" ${busy ? "disabled" : ""}>Choose my own</button>` : "";
+    ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" ${ownTarget} ${busy ? "disabled" : ""}>Choose my own</button>` : "";
   const actions = primary || own ? `<div class="gpexe-guide-actions">${primary}${own}</div>` : "";
   return `<p class="muted">${escapeHtml(text)}</p>${samplesHtml(gx)}${skippedLine}${purpose}${actions}${g.confirm || g.write ? confirmHtml(gx) : ""}`;
 }

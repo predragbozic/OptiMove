@@ -59,12 +59,12 @@ function resetState() {
   renders = 0;
 }
 
-function status({ enabled = true, canApprove = true } = {}) {
+function status({ enabled = true, canApprove = true, platform = false } = {}) {
   return {
     settings: { gpexeTeamId: "980" },
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
     lastCheck: null,
-    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false },
+    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: platform },
     approvalAvailable: true,
   };
 }
@@ -716,7 +716,7 @@ test("leaving Training Load with a selection or a running import asks first; dec
 test("10f. a 'nothing new' session reviewed before a link change is a Needs-attention item (find it again); a fresh 'nothing new' session stays Imported / up to date", async () => {
   resetState();
   installFetchMock(gpexeServer({
-    teamStatus: { [TEAM_A]: {} },
+    teamStatus: { [TEAM_A]: { platform: true } }, // P4c: the Imported list is the platform admin's only
     candidates: [
       ready(1, { previewStatus: "no_changes", counts: { unchanged: 4, athletesNotImported: 0 } }),
       ready(2, { previewStatus: "no_changes", counts: { unchanged: 4, athletesNotImported: 0 }, lastSeenAt: "2026-09-25T10:00:00Z" }),

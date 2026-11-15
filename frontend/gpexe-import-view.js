@@ -22,7 +22,7 @@ import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { renderPeriodHtml } from "./gpexe-period-view.js";
+import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
 import { isLater, laterNotice, laterOpen } from "./gpexe-later-data.js";
 import {
@@ -567,6 +567,7 @@ function renderSourceCardHtml(source, gx, status) {
   // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
+  const suggested = datesNeededFor(gx.candidates || [], gx);
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
@@ -578,8 +579,37 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx), quiet: groupLeads(gx, status) }) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: (gx.candidates || []).length >= CANDIDATES_CAP }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, (gx.candidates || []).length >= CANDIDATES_CAP) : ""}
   `;
+}
+
+// P4c (owner, 2026-11-15): the list read holds at most this many sessions, the newest first (listCandidates).
+const CANDIDATES_CAP = 200;
+
+// P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
+// counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
+function renderMonthLineHtml(gx, suggestedTo, open, capped = false) {
+  const now = new Date();
+  const { month, name } = shownMonth(gx, now, suggestedTo);
+  const n = monthCounts(gx, month);
+  const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
+  // UX review: an empty month names the last import, so "nothing" never reads as "nothing ever imported".
+  const last = facts ? "" : lastImportedDay(gx);
+  const head = [facts ? `${facts} in ${name}` : `Nothing imported in ${name}`, last && !last.startsWith(month) ? `the last import is on ${periodText(last, last, now)}` : "", capped ? "older sessions may not be shown" : ""].filter(Boolean).join(" · ");
+  const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
+  const phone = `${head} · open the calendar`;
+  return `
+    <p class="muted imports-month-line">
+      <span class="imports-month-desk">${escapeHtml(desk)}</span>
+      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(phone)}</button>
+    </p>
+  `;
+}
+
+// P4c: only a platform admin keeps the Imported and Stays out tabs (and the replaced versions under Stays out).
+function listsAllStates(status) {
+  return status?.viewer?.isPlatformAdmin === true;
 }
 
 // The Search tab ("Search & settings" for whoever has Import settings): what the source is, what the last search
@@ -599,7 +629,7 @@ function renderSearchTabHtml(source, gx, status) {
         ${connected ? `<span class="imports-state ${importOn ? "is-on" : "is-off"}">${importOn ? "Import on" : "Import off"}</span>` : ""}
       </p>
       ${connected ? `<p class="muted imports-honest">Finding sessions does not import anything; you choose what to import.</p>` : ""}
-      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : ""}
+      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name, listsAllStates(status)) : ""}
       ${sw.enabled ? "" : `<p class="gpexe-switch is-off"><strong>Importing is switched off in this environment.</strong></p>`}
       ${renderTeamSwitchLineHtml(status, Boolean(gx.teamSwitch?.data?.canManage), Boolean(gx.teamSwitch?.data?.canChangeMode || gx.teamSwitch?.data?.mode === "team"))}
       ${techHtml([
@@ -640,8 +670,9 @@ function setupOpen(gx, status) {
 // with sessions, so a repaint never moves it. data-import-tab, never data-tab: that one is the app's main navigation.
 const IMPORT_TABS = ["attention", "ready", "imported", "out", "athletes", "search"];
 
-export function importsTab(gx) {
-  if (IMPORT_TABS.includes(gx.tab)) return gx.tab;
+export function importsTab(gx, status = gx.status) {
+  const tabs = listsAllStates(status) ? IMPORT_TABS : IMPORT_TABS.filter((t) => t !== "imported" && t !== "out");
+  if (tabs.includes(gx.tab)) return gx.tab;
   const needs = (gx.candidates || []).some((c) => inboxBucket(c, gx) === "attention");
   const tab = needs ? "attention" : "ready";
   // Fixed at the first paint that has sessions: an empty list (before the first search) decides nothing yet.
@@ -653,15 +684,16 @@ function renderImportsTabsHtml(gx, status) {
   const all = gx.candidates || [];
   const count = (name) => all.filter((c) => inboxBucket(c, gx) === name).length;
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
-  const tab = importsTab(gx);
+  const tab = importsTab(gx, status);
+  const all3 = listsAllStates(status);
   const tabs = [
     ["attention", `Needs you (${count("attention")})`],
     ["ready", `Ready (${readyNow(all, gx).length})`],
-    ["imported", `Imported (${count("imported")})`],
-    ["out", `Stays out (${count("out")})`],
+    all3 ? ["imported", `Imported (${count("imported")})`] : null,
+    all3 ? ["out", `Stays out (${count("out")})`] : null,
     ["athletes", unlinked ? `Athletes (${unlinked} not linked)` : "Athletes"],
     ["search", renderTeamSwitchPanelHtml(gx) ? "Search & settings" : "Search"],
-  ];
+  ].filter(Boolean);
   return `
     <nav class="om-tabs imports-tabs" aria-label="Imports">
       ${tabs.map(([key, label]) => `<button type="button" class="om-tab${key === tab ? " is-active" : ""}"${key === tab ? ' aria-current="page"' : ""} data-action="training-load-gpexe-tab" data-import-tab="${key}">${escapeHtml(label)}</button>`).join("")}
@@ -675,11 +707,12 @@ function renderImportsTabsHtml(gx, status) {
 // "Sessions found 21.09.2026 14:02 · 07.09.2026 - 21.09.2026 · 12": when the
 // source was last read, for which days, and how many sessions it listed.
 // Never "sync" - nothing is pulled into OptiMove by finding.
-function renderFoundHtml(check, listed = 0, sourceName = "the source") {
+function renderFoundHtml(check, listed = 0, sourceName = "the source", lists = true) {
   if (!check || check.status !== "succeeded") {
     // A search that is running or failed does not undo what an earlier one
     // found: the sessions below are still there.
-    return listed ? `<p class="muted imports-found">Sessions from the last successful search are listed below.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
+    // P4c: a coach and a club admin have no list of every session - they are in the calendar.
+    return listed ? `<p class="muted imports-found">Sessions from the last successful search are ${lists ? "listed below" : "shown in the calendar"}.</p>` : `<p class="muted imports-found">No sessions found yet.</p>`;
   }
   const when = fmtDateTime(check.finishedAt || check.startedAt);
   const days = check.window ? `${formatDate(check.window.from)} - ${formatDate(check.window.to)}` : "";
@@ -1335,7 +1368,7 @@ function renderBatchResultsHtml(gx) {
   // IMP2 (the sketch): "Imported N sessions. You can see them in Training Load → Activities." first, in one line.
   // A mixed result names only the imported ones (the refused ones are not in Activities).
   const seen = !b.sending && (b.summary?.imported || b.summary?.alreadyImported)
-    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and in the Imported tab.` : "";
+    ? ` You can see ${onlyImported(b.summary) ? "them" : "the imported ones"} in Training Load → Activities and ${listsAllStates(gx.status) ? "in the Imported tab" : "with ✓ in the calendar"}.` : "";
   return `
     ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(`${onlyImported(b.summary) ? `Imported ${plural(b.summary.imported, "session", "sessions")}` : summary}.${seen}`)}</p>` : ""}
     ${stopped}
@@ -1452,13 +1485,15 @@ function identityLinesHtml(id, gx, duplicates) {
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
   return `
-    <span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>
-    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</span>` : ""}
+    ${identityViewer(gx) && who.birthDate !== undefined ? `<span class="gpexe-map-born">${escapeHtml(bornText(who.birthDate))}</span>` : ""}
+    ${duplicate ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare ${identityViewer(gx) && who.birthDate !== undefined ? "the date of birth and " : ""}the session values before you choose.</span>` : ""}
   `;
 }
 
+// Defence in depth (the Independent's L1 on #527): dates and their conflicts are the identity administrators' whatever
+// the data holds, not only because a coach's answer carries none.
 function conflictHtml(id, athleteId, gx) {
-  return birthDateConflict(id, athleteId, gx)
+  return identityViewer(gx) && birthDateConflict(id, athleteId, gx)
     ? `<span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs from the one in this athlete's OptiMove profile. Link them only if you are sure they are the same person.</span>`
     : "";
 }
@@ -1489,7 +1524,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(`${gpexeAthleteSentence(id, gx)}${named && identityViewer(gx) && identityOf(id, gx).birthDate !== undefined ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1500,7 +1535,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : gpexeSideText(id, gx);
+  const gpexeSide = who ? `${gpexeSideText(id, gx)}${identityViewer(gx) && who.birthDate !== undefined ? ` · ${bornText(who.birthDate)}` : ""}` : gpexeSideText(id, gx);
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1556,6 +1591,9 @@ export function identityCheckRefusalText(refusal) {
 }
 
 function renderIdentityPanelHtml(gx) {
+  // The load panel (load, retry, suppression, dates) is the administrator's. The team's own coach reads the stored names
+  // through the same list but never loads them here, so the panel is not drawn for a names-only viewer.
+  if (!identityViewer(gx)) return "";
   const id = gx.identity;
   if (!id || (!id.available && !id.loading && !id.error && !id.unconfirmed && !id.readError)) return "";
   const list = id.list;
@@ -1623,10 +1661,11 @@ function mapOutcomeText(r, label = gpexeAthleteLabel(r.gpexeAthleteId)) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const sug = who ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
+  // A U3 pair keeps the suggestion's date of birth for a coach, whose names carry no date (the same line as in the box).
+  const sug = who && identityViewer(gx) && who.birthDate !== undefined ? null : suggestedIdentity(p.gpexeAthleteId, p.athleteId, gx);
   const unclear = (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(sug ? (sug.name || "Name not provided") : gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who && identityViewer(gx) && who.birthDate !== undefined ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : sug ? ` <span class="muted">(${escapeHtml(bornText(sug.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 // U3: suggested pairs on the Link athletes screen (the team's coach and the
@@ -1717,7 +1756,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(r.label || gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, r.label || gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}
@@ -1729,7 +1768,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-link-confirm gpexe-map-confirm" role="group" aria-label="Confirm the links">
         <p><strong>Link ${plural(staged.pairs.length, "athlete", "athletes")}?</strong></p>
         <ul>${staged.pairs.map((p) => renderPairHtml(p, gx, list, duplicates)).join("")}</ul>
-        ${gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
+        ${identityViewer(gx) && gx.identity?.list ? `<p class="muted">OptiMove warns only when both dates of birth are known and differ. No warning does not mean they match.</p>` : ""}
         ${unlinked.length > staged.pairs.length ? `<p class="muted">${escapeHtml(plural(unlinked.length - staged.pairs.length, "other GPEXE athlete stays", "other GPEXE athletes stay"))} not linked (Not now); their sessions keep needing attention until they are linked.</p>` : ""}
         <p>Once you find new sessions and approve an import, each GPEXE athlete's results are imported as the athlete chosen here — in the sessions already found and in every session found later.</p>
         <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
@@ -1741,7 +1780,7 @@ function renderTeamMappingHtml(gx, teams) {
     `;
   } else {
     body = `
-      <p class="muted gpexe-hint">${gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      <p class="muted gpexe-hint">${identityViewer(gx) && gx.identity?.list ? "A link is never guessed. The GPEXE name, date of birth and last-session values help you find an athlete in GPEXE; none of them proves who it is." : gx.identity?.list ? "A link is never guessed. The GPEXE name and the last session's values help you find an athlete in GPEXE; neither proves who it is." : "A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing."} Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
       ${renderIdentityPanelHtml(gx)}
@@ -1805,7 +1844,7 @@ function renderLastLinkHtml(gx) {
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
+      <p><strong>${escapeHtml((l.gpexeSentence || gpexeWho(l.gpexeAthleteId)).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong>${current ? " The review is updated." : ` Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.`}</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>
@@ -2171,8 +2210,8 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
   }
   return `
     <div class="gpexe-link">
-      ${compact ? "" : `<p><strong>Find ${escapeHtml(gpexeWho(id))} in GPEXE first. Link only if you are sure.</strong></p>`}
-      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
+      ${compact ? "" : `<p><strong>${!identityViewer() && !identityOf(id)?.name ? "Find this athlete in GPEXE using the session values below. Link only if you are sure." : `Find ${escapeHtml(gpexeWho(id))} in GPEXE first. Link only if you are sure.`}</strong></p>`}
+      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
       ${!identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>` : ""}
       ${compact ? (compactHasValues(a, c) ? "" : `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`) : renderLinkContextHtml(a, c)}
       <div class="gpexe-link-row">

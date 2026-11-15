@@ -908,3 +908,145 @@ test("16. the undo after an estimate saved through the route: not blocked, estim
   assert.equal(confirmed.status, 200, confirmed.text);
   assert.ok(await estimatesRemoved(s) > 0);
 });
+
+// 6b-C1 (contract rule 10, section 8): the label of an estimated value on the Roster read and the Activities read.
+const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const LABEL_KEYS = {
+  proportional: ["estimatedAt", "estimatedBy", "method", "minutes", "sessionCount"],
+  team_average: ["athleteCount", "estimatedAt", "estimatedBy", "method"],
+  copy_athlete: ["estimatedAt", "estimatedBy", "method", "sourceAthleteName"],
+};
+async function athleteUser(athleteId, label) {
+  const id = await makeUser(label);
+  await admin.query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, id]);
+  await setWorkspace(id, "athlete", athleteId);
+  return { id, cookie: `optimove_session=${await createSession(id)}` };
+}
+
+test("17. 6b-C1: each estimated value carries its label (method, basis, author, date) on the Roster read and the Activities read, in closed fields with no id; a measured value is unchanged; a copy source is named only to a reader the answer already names it to (an athlete reading their own results gets the method only); a replaced estimate shows no label; the audiences are unchanged", async () => {
+  const team = await setupTeam();
+  for (const [sessionId, hour] of [[9701, 6], [9702, 7], [9703, 8]]) await importSession(team, bundleOf({ sessionId, hour, ids: [101, 102, 104, 105] }));
+  const s = await importSession(team, bundleOf({ sessionId: 9710, hour: 10, ids: [101, 102, 104] }));
+  const timeKey = (await admin.query(`select key from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE time min %'`)).rows[0].key;
+  estimates.setEstimateTestHooks({ durationKey: timeKey });
+  const [ana, , , dan, eva, fil] = team.athleteIds;
+  try {
+    assert.equal((await save(team, s, { athleteId: dan, method: "proportional", minutes: 40 })).status, 201);
+    assert.equal((await save(team, s, { athleteId: eva, method: "copy_athlete", sourceAthleteId: ana })).status, 201);
+    assert.equal((await save(team, s, { athleteId: fil, method: "team_average" })).status, 201);
+    // Rule 7: a second estimate of Fil replaces the first; only the current one shows.
+    assert.equal((await save(team, s, { athleteId: fil, method: "team_average", note: "again" })).status, 201);
+  } finally {
+    estimates.setEstimateTestHooks({ durationKey: world?.timeKey ?? timeKey });
+  }
+  const coachName = "coach";
+  const checkLabel = (label, method, where) => {
+    assert.ok(label, `${where}: a label`);
+    assert.deepEqual(Object.keys(label).sort(), LABEL_KEYS[method], `${where}: closed fields`);
+    assert.equal(label.method, method);
+    assert.equal(label.estimatedBy, coachName, `${where}: the author's name`);
+    assert.ok(!Number.isNaN(Date.parse(label.estimatedAt)), `${where}: a date`);
+    assert.ok(!UUID_IN.test(JSON.stringify(label)), `${where}: no id in the label`);
+  };
+
+  // The Roster read (coach, team workspace).
+  const roster = await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie });
+  assert.equal(roster.status, 200, roster.text);
+  const rowOf = (id) => roster.body.athletes.find((a) => a.athleteId === id);
+  for (const [id, method] of [[dan, "proportional"], [eva, "copy_athlete"], [fil, "team_average"]]) {
+    const values = rowOf(id).values;
+    assert.ok(values.length > 0 && values.every((v) => v.entryMethod === "estimate"), `${method}: estimate values`);
+    for (const v of values) checkLabel(v.estimate, method, `roster ${method}`);
+  }
+  assert.equal(rowOf(dan).values[0].estimate.minutes, 40);
+  assert.equal(rowOf(dan).values[0].estimate.sessionCount, 3);
+  assert.equal(rowOf(fil).values[0].estimate.athleteCount, 3);
+  assert.equal(rowOf(eva).values[0].estimate.sourceAthleteName, rowOf(ana).name, "the copy source by the roster's own name");
+  const filTime = rowOf(fil).values.filter((v) => v.metricKey === timeKey);
+  assert.equal(filTime.length, 1, "a replaced estimate is not shown (rule 7)");
+  for (const v of rowOf(ana).values) assert.ok(!("estimate" in v), "a measured value has no estimate field");
+  assert.deepEqual(Object.keys(rowOf(ana).values[0]).sort(), ["entryMethod", "label", "metricKey", "shortLabel", "unit", "value", "valueText"], "a measured value keeps exactly its fields");
+  assert.deepEqual(roster.body.viewer, { basis: "team_coach", estimates: true }, "the action is offered while the flag is on");
+  process.env.ESTIMATES_ENABLED = "false";
+  try {
+    assert.deepEqual((await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body.viewer, { basis: "team_coach" }, "flag off: the viewer is as before");
+  } finally {
+    process.env.ESTIMATES_ENABLED = "true";
+  }
+  // The state stays: an estimate is not measured.
+  assert.notEqual(rowOf(dan).state, "measured");
+
+  // The Activities read (coach, club admin, platform admin): the same labels on the facts.
+  for (const who of [team.coach, team.cadmin, team.padmin]) {
+    const read = await tapi(`/${s.activityId}`, { cookie: who.cookie });
+    assert.equal(read.status, 200, read.text);
+    const est = read.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+    assert.ok(est.length > 0);
+    for (const f of est) {
+      const method = String(f.athleteId) === String(dan) ? "proportional" : String(f.athleteId) === String(eva) ? "copy_athlete" : "team_average";
+      checkLabel(f.estimate, method, `activities ${method}`);
+      if (method === "copy_athlete") assert.equal(f.estimate.sourceAthleteName, read.body.athleteNamesById[ana]);
+    }
+    for (const f of read.body.facts.filter((x) => x.detail?.entryMethod !== "estimate")) assert.ok(!("estimate" in f), "no estimate field on another fact");
+  }
+
+  // Eva reads her own results: the copy is labelled by its method only, never whose values were copied.
+  const evaUser = await athleteUser(eva, "eva athlete");
+  const own = await tapi(`/${s.activityId}`, { cookie: evaUser.cookie });
+  assert.equal(own.status, 200, own.text);
+  const ownEst = own.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+  assert.ok(ownEst.length > 0 && ownEst.every((f) => String(f.athleteId) === String(eva)));
+  for (const f of ownEst) {
+    assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
+    assert.equal(f.estimate.method, "copy_athlete");
+  }
+  // The Independent's M1: every method reads as method, author and date only for its own athlete - no basis number (a team
+  // average's athlete count is team information).
+  for (const [id, method, label] of [[dan, "proportional", "dan athlete"], [fil, "team_average", "fil athlete"]]) {
+    const self = await athleteUser(id, label);
+    const read = await tapi(`/${s.activityId}`, { cookie: self.cookie });
+    assert.equal(read.status, 200, read.text);
+    const mine = read.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
+    assert.ok(mine.length > 0, `${method}: athlete-self sees the estimate`);
+    for (const f of mine) {
+      assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], `${method}: athlete-self keys`);
+      assert.equal(f.estimate.method, method);
+    }
+  }
+  const anaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [ana])).rows[0].n;
+  assert.ok(!own.text.includes(anaName), "the copy source's name never reaches the athlete");
+  // The other direction: Ana, the source, reading her own results learns nothing of Eva's estimate.
+  const anaUser = await athleteUser(ana, "ana athlete");
+  const source = await tapi(`/${s.activityId}`, { cookie: anaUser.cookie });
+  assert.equal(source.status, 200, source.text);
+  // Every athlete fact is Ana's; session-level facts (no athleteId) belong to no athlete.
+  assert.ok(source.body.facts.some((f) => String(f.athleteId) === String(ana)), "Ana's own facts are there");
+  assert.ok(source.body.facts.every((f) => f.athleteId == null || String(f.athleteId) === String(ana)), "no other athlete's fact");
+  assert.ok(source.body.facts.every((f) => !("estimate" in f) && f.detail?.entryMethod !== "estimate"), "no estimate in the source's answer");
+  const evaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [eva])).rows[0].n;
+  assert.ok(!source.text.includes(evaName) && !source.text.includes(String(eva)), "the source never learns who copied from them");
+
+  // A source athlete who left the team after the session: named as the roster names them (still on that day's roster).
+  await admin.query(`update public.athlete_memberships set status = 'archived', ends_at = now() where athlete_id = $1 and team_id = $2`, [ana, team.teamId]).catch(async () => {
+    await admin.query(`update public.athlete_memberships set status = 'archived' where athlete_id = $1 and team_id = $2`, [ana, team.teamId]);
+  });
+  const after = await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie });
+  assert.equal(after.status, 200, after.text);
+  const anaAfter = after.body.athletes.find((a) => a.athleteId === ana) ?? after.body.recordedOutsideRoster?.find((a) => a.athleteId === ana);
+  const evaAfter = after.body.athletes.find((a) => a.athleteId === eva);
+  assert.ok(anaAfter, "the source is still in the answer");
+  assert.equal(evaAfter.values[0].estimate.sourceAthleteName, anaAfter.name, "named exactly as this answer names them");
+
+  // The audiences are unchanged: another team's coach and a missing activity get the identical 404 on both reads.
+  const other = await setupTeam();
+  for (const path of [`/${s.activityId}/roster`]) {
+    const foreign = await tapi(path, { cookie: other.coach.cookie });
+    const missing = await tapi(path.replace(s.activityId, "00000000-0000-4000-8000-000000000000"), { cookie: other.coach.cookie });
+    assert.deepEqual([foreign.status, foreign.text], [missing.status, missing.text], `${path}: identical`);
+    assert.equal(foreign.status, 404);
+    assert.ok(!foreign.text.includes("estimate"));
+  }
+  const foreignRead = await tapi(`/${s.activityId}`, { cookie: other.coach.cookie });
+  const missingRead = await tapi(`/00000000-0000-4000-8000-000000000000`, { cookie: other.coach.cookie });
+  assert.deepEqual([foreignRead.status, foreignRead.text], [missingRead.status, missingRead.text], "activities read: identical");
+});
