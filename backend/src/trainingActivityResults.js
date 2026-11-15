@@ -4,6 +4,7 @@
 // resolveActivityReadContext in routes/trainingActivity.js, same
 // isAthleteSelf/scope split as trainingLoadMetrics.js's own
 // resolveReadContext).
+import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
 
@@ -154,6 +155,23 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     plannedDurationSeconds: r.planned_duration_seconds === null ? null : Number(r.planned_duration_seconds),
     actualDurationSeconds: r.actual_duration_seconds === null ? null : Number(r.actual_duration_seconds),
   }));
+
+  // 6b-C1: the label of each estimated value (contract rule 10) on that fact only; every other fact is as before. A copy
+  // source is named only when this answer already names that athlete (athleteNamesById covers the facts the caller may
+  // see); an athlete reading their own results gets the method, the author and the date only.
+  const estimateFacts = scoped.filter((f) => f.factKind === "metric_value" && f.detail?.entryMethod === "estimate");
+  if (estimateFacts.length) {
+    const labels = await readEstimateLabels({ query }, estimateFacts.map((f) => f.detail?.occasionId));
+    const namesLower = new Map(Object.entries(athleteNamesById).map(([id, name]) => [String(id).toLowerCase(), name]));
+    for (const fact of estimateFacts) {
+      const estimate = estimateLabelFor(labels.get(String(fact.detail?.occasionId)), (id) => namesLower.get(String(id).toLowerCase()) ?? null);
+      // An athlete reading their own results gets the method, the author and the date only: no basis number (a team
+      // average's athlete count is team information) and never the copy source.
+      if (estimate) fact.estimate = readContext.isAthleteSelf
+        ? { method: estimate.method, estimatedBy: estimate.estimatedBy, estimatedAt: estimate.estimatedAt }
+        : estimate;
+    }
+  }
 
   return { canonicalActivityId, facts: scoped, athleteNamesById, variableNamesById, components };
 }

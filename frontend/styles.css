@@ -14178,6 +14178,138 @@ button.tests-assignment-card {
   margin: 0;
 }
 
+/* 6b-C1: estimated values - always marked, never styled like a measured value. */
+.tl-roster-est {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 4px;
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: 4px;
+  font-size: max(11px, 0.75em);
+  font-style: italic;
+  color: var(--muted);
+}
+
+.tl-roster-cell.is-estimate,
+.tl-cell-value.is-estimate,
+.tl-roster-all-values .is-estimate dd {
+  font-style: italic;
+}
+
+.tl-roster-est-label {
+  display: block;
+  font-size: 0.8em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tl-estimate-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin: 0 12px 10px 50px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tl-estimate-panel h4,
+.tl-estimate-panel p {
+  margin: 0;
+}
+
+.tl-estimate-methods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tl-estimate-method {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.tl-estimate-method.is-chosen {
+  border-color: var(--accent, var(--line-strong, var(--line)));
+}
+
+.tl-estimate-method.is-unavailable {
+  opacity: 0.75;
+}
+
+.tl-estimate-choice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.tl-estimate-choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.tl-estimate-choice span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tl-estimate-choice small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tl-estimate-values,
+.tl-estimate-reason {
+  color: var(--text) !important;
+}
+
+.tl-estimate-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-left: 28px;
+}
+
+.tl-estimate-inline input,
+.tl-estimate-inline select,
+.tl-estimate-panel textarea {
+  min-height: 44px;
+  font-size: 16px;
+  max-width: 100%;
+}
+
+.tl-estimate-inline input {
+  width: 7em;
+}
+
+.tl-estimate-inline select {
+  min-width: 0;
+  flex: 1 1 12em;
+}
+
+.tl-estimate-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tl-estimate-error {
+  color: var(--danger, #b42318);
+}
+
 .tl-roster-picker.is-bulk {
   margin: 0;
 }
@@ -14499,9 +14631,13 @@ button.tests-assignment-card {
   }
   .tl-roster-row-notice,
   .tl-roster-confirm,
-  .tl-roster-picker {
+  .tl-roster-picker,
+  .tl-estimate-panel {
     margin-left: 12px;
     margin-right: 12px;
+  }
+  .tl-estimate-inline {
+    padding-left: 0;
   }
   .tl-roster-row-more > summary {
     padding-left: 12px;
@@ -17843,147 +17979,9 @@ p.muted.gpexe-approve-note {
 .imports-batch-actions {
   margin-top: 14px;
 }
-/* The calendar: seven columns that always fit; a marked day is a button
-   with a dot (or the count) under the number, the day filtered to is
-   pressed, today is outlined - none of it by colour alone. */
-.imports-calendar > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
-  cursor: pointer;
-  font-size: 1rem;
-  font-weight: 600;
-}
-.imports-cal-brief {
-  font-weight: 400;
-}
-/* The fold's marker, as on the screen's other folds - in front, so it never wraps onto a line of its own on a phone. */
-.imports-calendar > summary::before {
-  content: "\25B8";
-  margin-right: 6px;
-  font-size: 0.9em;
-}
-.imports-calendar[open] > summary::before {
-  content: "\25BE";
-}
-.imports-calendar > summary::-webkit-details-marker {
-  display: none;
-}
-.imports-cal-nav {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.imports-cal-turn {
-  min-width: 44px;
-  padding: 0;
-  font-size: 1.4rem;
-  line-height: 1;
-}
-.imports-cal-month {
-  min-width: 9.5em;
-  text-align: center;
-}
-.imports-cal-note {
-  margin: 0;
-}
-.imports-cal-grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 2px;
-  /* A month is a compact block, not a full-width table on a desktop. */
-  max-width: 520px;
-}
-.imports-cal-weekday {
-  text-align: center;
-  font-size: 0.75rem;
-  color: var(--muted);
-  padding: 2px 0;
-}
-.imports-cal-day {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  min-height: 44px;
-  padding: 4px 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.95rem;
-}
-.imports-cal-day.is-blank {
-  min-height: 0;
-}
-.imports-cal-day.is-marked {
-  color: var(--text);
-  font-weight: 600;
-  background: var(--surface-soft);
-  border-color: var(--line);
-  cursor: pointer;
-}
-.imports-cal-day.is-marked:hover {
-  border-color: var(--line-strong);
-}
-.imports-cal-day.is-today {
-  border-style: dashed;
-  border-color: var(--line-strong);
-}
-.imports-cal-day.is-today .imports-cal-num {
-  text-decoration: underline;
-}
-.imports-cal-day.is-selected {
-  background: var(--text);
-  color: var(--surface);
-  border-color: var(--text);
-}
-.imports-cal-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 12px;
-}
-.imports-cal-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.imports-cal-count {
-  font-size: 0.7rem;
-  line-height: 1;
-  padding: 1px 5px;
-  border-radius: 8px;
-  border: 1px solid currentColor;
-}
-.imports-cal-filter {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
 @media (max-width: 760px) {
   .imports-select-actions > * {
     width: 100%;
-  }
-  .imports-calendar .imports-cal-nav {
-    width: 100%;
-    justify-content: space-between;
-  }
-  .imports-cal-day {
-    font-size: 0.9rem;
-    padding: 3px 0;
-  }
-  .imports-cal-count {
-    font-size: 0.75rem;
   }
   /* The dialogs' actions stay pinned to the bottom on phones, as the Link
      athletes screen does. */
@@ -26048,6 +26046,7 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-team-row,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-guide,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .imports-banner,
+body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .imports-period,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-next,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-notice,
 body:not(.athlete-mode):not(.login-mode) .gpexe-imports > .gpexe-error,
@@ -26120,15 +26119,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-actions {
   margin: 0;
 }
 
-body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-dates > summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--om-tap-target);
-  color: var(--text);
-  font-size: var(--om-text-sm);
-  cursor: pointer;
-}
-
 body:not(.athlete-mode):not(.login-mode) .imports-banner .gpexe-progress-bar {
   height: 8px;
   border-radius: 999px;
@@ -26136,15 +26126,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .gpexe-progress-bar {
 
 body:not(.athlete-mode):not(.login-mode) .imports-banner .gpexe-progress-bar > span {
   border-radius: 999px;
-}
-
-/* "Pick a day": a slim fold, not a card of its own height. */
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar {
-  padding: 2px 20px;
-}
-
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar[open] {
-  padding-bottom: 16px;
 }
 
 /* The tabs and the tab's panel. */
@@ -26305,24 +26286,11 @@ body:not(.athlete-mode):not(.login-mode) .imports-import-row {
   margin-top: var(--om-space-2);
 }
 
-body:not(.athlete-mode):not(.login-mode) .imports-choose > summary,
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-cal-summary {
+body:not(.athlete-mode):not(.login-mode) .imports-choose > summary {
   display: flex;
   align-items: center;
   min-height: var(--om-tap-target);
   cursor: pointer;
-}
-
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-cal-filter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 6px 6px 6px 12px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  font-size: var(--om-text-sm);
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-attn-group + .imports-attn-group {
@@ -26350,16 +26318,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-search .imports-facts {
     padding: 16px;
   }
 
-  /* The calendar's day buttons need the width more than the card needs its margin. */
-  body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar {
-    padding: 2px 8px;
-  }
-
-  /* The day line wraps on a phone: a rounded box, not a pill that would clip its first letters. */
-  body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-cal-filter {
-    padding-left: 14px;
-    border-radius: 14px;
-  }
 }
 /* End of design IMP1. */
 
@@ -26491,12 +26449,312 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-attn-group 
   border-top: 0;
 }
 
-body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .gpexe-panel.imports-calendar:not([open]) {
-  padding: 0 4px;
-  border-color: transparent;
-  background: transparent;
-}
 /* End of design IMP2. */
+
+/* Imports P4: the period chooser. On a computer it is always on the page under the banner: the calendar on the left,
+   the search and the chosen days on the right. On a phone "Find new sessions" opens it as a full-screen sheet (and
+   that button is the phone's only). Seven columns that always fit; a day is a button with its sessions as chips
+   (colour + glyph, never colour alone); the chosen days are filled, the first and the last outlined more strongly; a
+   day that can't be picked is faded and says so in its label. */
+.imports-find-phone,
+.imports-period .period-head {
+  display: none;
+}
+body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 1fr);
+  grid-template-areas: "cal first" "cal side";
+  grid-template-rows: auto 1fr;
+  gap: 12px 24px;
+  align-items: start;
+  margin-top: 12px;
+}
+.imports-period .period-first {
+  grid-area: first;
+  display: grid;
+  gap: 4px;
+}
+.imports-period .period-cal {
+  grid-area: cal;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.imports-period .period-side {
+  grid-area: side;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+}
+.imports-period .period-missing {
+  width: 100%;
+  min-height: var(--om-tap-target, 44px);
+}
+.imports-period .period-hint,
+.imports-period .period-note,
+.imports-period .period-wait {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.imports-period .period-wait {
+  font-weight: 600;
+}
+.imports-period .period-fine {
+  display: none;
+}
+@media (pointer: fine) {
+  .imports-period .period-fine {
+    display: inline;
+  }
+}
+.imports-period .period-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.imports-period .period-turn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.imports-period .period-month {
+  flex: 1;
+  text-align: center;
+}
+.imports-period .period-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.imports-period .period-weekday {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 2px 0;
+}
+.imports-period .period-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 4px 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .imports-period .period-day:not(.is-off):hover {
+    border-color: var(--line-strong);
+  }
+}
+.imports-period .period-day.is-blank {
+  min-height: 0;
+  padding: 0;
+  cursor: default;
+}
+.imports-period .period-day.is-today {
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+.imports-period .period-day.is-today .period-num {
+  text-decoration: underline;
+}
+.imports-period .period-day.is-in {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-style: solid;
+}
+.imports-period .period-day.is-edge {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  font-weight: 700;
+}
+.imports-period .period-day.is-off {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* After .is-edge, so the ring is never lost on the first or the last chosen day (mobile-qa). */
+.imports-period .period-day:focus-visible {
+  outline: 3px solid var(--om-accent-ring, rgba(31, 111, 104, 0.35));
+  outline-offset: 1px;
+}
+.imports-period .period-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+  max-width: 100%;
+}
+.imports-period .period-chip {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-style: normal;
+  font-weight: 800;
+  font-size: 0.8rem;
+  line-height: 1.1;
+  text-align: center;
+}
+.imports-period .period-chip.is-needs {
+  background: var(--om-warning-soft);
+  color: var(--om-warning);
+}
+.imports-period .period-chip.is-ready {
+  background: var(--om-info-soft);
+  color: var(--om-info);
+}
+.imports-period .period-chip.is-done {
+  background: var(--om-success-soft);
+  color: var(--om-success);
+}
+.imports-period .period-chip.is-more {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.imports-period .period-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.imports-period .period-range {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-period .period-range-note {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.imports-period .period-range-text {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.imports-period .period-range-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-period .period-range-actions .gpexe-button {
+  min-height: 44px;
+}
+.imports-period .period-daylist {
+  display: grid;
+  gap: 6px;
+}
+.imports-period .period-daylist-title {
+  margin: 0;
+  font-weight: 600;
+}
+.imports-period .period-daylist-date {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.imports-period .period-daylist ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.imports-period .period-daylist-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.imports-period .period-daylist-more {
+  margin: 0;
+  font-size: 0.85rem;
+}
+@media (max-width: 900px) {
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "first" "cal" "side";
+    grid-template-rows: auto;
+  }
+}
+@media (max-width: 760px) {
+  /* The phone: "Find new sessions" opens the chooser as a full-screen sheet; closed, it is not on the page. */
+  .imports-find-phone {
+    display: inline-flex;
+  }
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
+    display: none;
+  }
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period.is-open {
+    display: grid;
+    grid-template-areas: "head" "first" "cal" "side";
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--surface);
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(8px, env(safe-area-inset-left, 0px));
+    padding-right: max(8px, env(safe-area-inset-right, 0px));
+    align-content: start;
+  }
+  .imports-period.is-open .period-head {
+    grid-area: head;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .imports-period .period-head h3 {
+    flex: 1;
+    margin: 0;
+    font-size: 1.1rem;
+  }
+  .imports-period .period-close {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+  .imports-period .period-grid {
+    gap: 2px;
+  }
+  .imports-period .period-range-actions,
+  .imports-period .period-range-actions .gpexe-button {
+    width: 100%;
+  }
+  .imports-period .period-range-actions {
+    flex-direction: column;
+  }
+}
+/* End of Imports P4. */
 
 /* ---------------------------------------------------------------------------
    Map by drag and drop (J18): Training Load > Data configuration. Built on the

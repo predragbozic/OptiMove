@@ -19,9 +19,12 @@ const OPEN = '[data-action="training-load-gpexe-open"]';
 async function findThroughUi(page) {
   await openTrainingLoad(page);
   await page.click('[data-action="training-load-section"][data-section="imports"]');
-  await page.waitForSelector('[data-action="training-load-gpexe-check"]', { timeout: 20_000 });
+  await page.waitForSelector('[data-action="training-load-gpexe-period-toggle"]', { state: "attached", timeout: 20_000 });
   assert.equal(await page.locator(OPEN).count(), 0, "nothing has been found yet");
-  await page.click('[data-action="training-load-gpexe-check"]');
+  // P4: on a computer the period chooser is on the page; on a phone "Find new sessions" opens it as a sheet.
+  if (await page.locator('[data-action="training-load-gpexe-period-toggle"].imports-find-phone').isVisible()) await page.click('[data-action="training-load-gpexe-period-toggle"]');
+  // With no search yet the chooser's first button searches the last 14 days.
+  await page.click(".imports-period .period-missing");
   // The sessions appear when the check ends (the screen polls the check).
   await page.waitForSelector(OPEN, { timeout: 60_000 });
 }

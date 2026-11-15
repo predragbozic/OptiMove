@@ -22,15 +22,13 @@ import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
+import { renderPeriodHtml } from "./gpexe-period-view.js";
+import { periodOf } from "./gpexe-period-data.js";
 import {
   BATCH_MAX,
   batchAllowed,
   batchSelectable,
   batchSelection,
-  calendarDayKey,
-  calendarFiltered,
-  calendarMonthShown,
-  calendarOpen,
   chooseOpen,
   candidateGroup,
   gpexeTeamOptions,
@@ -104,7 +102,7 @@ const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GP
 // Two sentences: the one action now (nothing to wait for when the cause is the
 // first one), then what to look at in GPEXE if it stays like this.
 const adminStep = (c) => `${findAgainText([c])}. If it stays like this, check in GPEXE that the session's drills are set up and have data.`;
-function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
+export function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
   return gx?.status?.viewer?.isPlatformAdmin === true
     ? `Not confirmed for import: ${ADMIN_CAUSES}. ${adminStep(c)}`
     : `Not confirmed for import yet. ${findAgainText([c])}, then review it.`;
@@ -374,6 +372,7 @@ function resultLabel(result) {
 // The session's name without a raw timestamp at its end; the date and time
 // are shown next to it anyway.
 // U6a-2 (D5): "Tue 03.11." - the day a session is listed under, in the viewer's time.
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function sessionDayText(value) {
   if (!value) return "";
   const d = new Date(value);
@@ -458,7 +457,7 @@ export const IMPORT_SOURCES = [{ key: "gpexe", name: "GPEXE" }];
 function renderImportSettingsHtml(gx) {
   const panel = renderTeamSwitchPanelHtml(gx);
   if (!panel) return "";
-  // Kept across repaints the way the calendar is (app.js "toggle"): a search polls every 2 s and would fold it otherwise.
+  // Kept across repaints (app.js "toggle"): a search polls every 2 s and would fold it otherwise.
   const open = gx.settingsOpen === true || Boolean(gx.teamSwitch?.error || gx.teamSwitch?.notice || gx.teamSwitch?.busy);
   return `<details class="gpexe-panel imports-settings" data-rendered-open="${open ? "1" : "0"}" ${open ? "open" : ""}><summary>Import settings</summary>${panel}</details>`;
 }
@@ -562,31 +561,21 @@ function renderSourceCardHtml(source, gx, status) {
   const check = gx.check || status.lastCheck;
   const running = Boolean(gx.checkStarting || check?.status === "running");
   const canFind = connected && !running;
-  const list = gx.candidates || [];
-  // A step that needs other dates (a stale review, an expired snapshot)
-  // opens the dates and fills them in, so "find again" is one click.
-  const dated = datesNeededFor(list, gx);
+  // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
+  // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
+  const open = connected && periodOf(gx).open;
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
         ${connected
           ? `<p class="imports-facts imports-lastsearch">${escapeHtml(bannerText(gx, check))}</p>
-             <div class="imports-actions"><button type="button" class="${groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button></div>`
+             <div class="imports-actions"><button type="button" class="${groupLeads(gx, status) ? "plain-button" : "primary-button"} gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button></div>`
           : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       </div>
-      ${connected ? `
-        <details class="imports-dates" ${dated ? "open" : ""}>
-          <summary>Choose dates</summary>
-          <div class="imports-dates-fields">
-            <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" value="${escapeAttr(dated?.from || "")}" ${running ? "disabled" : ""}></label>
-            <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" value="${escapeAttr(dated?.to || "")}" ${running ? "disabled" : ""}></label>
-          </div>
-          <p class="muted gpexe-hint">${dated ? escapeHtml(datedHintText(dated).trim()) : "Leave the dates empty to search the last 14 days."}</p>
-        </details>
-      ` : ""}
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested: datesNeededFor(gx.candidates || [], gx), quiet: groupLeads(gx, status) }) : ""}
   `;
 }
 
@@ -717,7 +706,7 @@ function isoDay(value) {
 // hint says the earlier ones need another search.
 const FIND_WINDOW_MAX_DAYS = 31;
 
-function datesNeededFor(list, gx) {
+export function datesNeededFor(list, gx) {
   const days = sessionsNeedingDates(list, gx).map((c) => isoDay(c.sessionStartedAt)).filter(Boolean).sort();
   if (!days.length) return null;
   const to = days[days.length - 1];
@@ -731,12 +720,6 @@ function datesNeededFor(list, gx) {
   return { from, to, clipped };
 }
 
-function datedHintText(dated) {
-  const range = dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`;
-  return dated.clipped
-    ? `The dates are set to the latest 31 days of the sessions that need finding again (${range}); search the earlier ones afterwards. `
-    : `The dates are set to include the sessions that need finding again (${range}). `;
-}
 
 // Why finding could not start, and the one thing to do.
 export function checkErrorText(error) {
@@ -879,15 +862,14 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
 }
 
 // IMP1: one tab's sessions. A light list (1 px lines); a Ready row carries a "Ready" pill, a row that needs the person
-// the one step of its group. "Pick a day" (the calendar) sits above the list of Needs you, Ready and Imported.
+// the one step of its group. The period to search is chosen under "Find new sessions" (P4), never here.
 function renderBucketsHtml(gx, status, tab = "ready") {
   const all = gx.candidates || [];
-  const day = gx.calendar?.day || "";
-  const list = calendarFiltered(all, gx);
+  const list = all;
   const of = (name) => list.filter((c) => inboxBucket(c, gx) === name);
   const rows = (items, kind, group = "", pick = false) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, pick, group)).join("")}</ul>`;
   if (tab === "attention") {
-    // U6a-2: the groups cover the whole list, like the counts; the day filter narrows the other tabs only.
+    // U6a-2: the groups cover the whole list, like the counts.
     const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
     const groups = attentionGroups(allAttention, gx);
     // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
@@ -895,11 +877,9 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
     return `
       ${readyHint}
-      ${renderCalendarHtml(gx)}
       ${allAttention.length ? `
         <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
           <div class="gpexe-panel-head imports-tab-title"><h3>Needs you (${allAttention.length})</h3></div>
-          ${day ? `<p class="muted">These cover every date, not only the day you picked.</p>` : ""}
           ${groups.map((grp, i) => renderAttentionGroupHtml(grp, gx, status, rows, i === 0 && groupLeads(gx, status))).join("")}
         </section>
       ` : `<section class="gpexe-panel imports-bucket-empty"><p class="muted">Nothing needs you.</p></section>`}
@@ -911,12 +891,11 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     const daily = dailyImportState(gx, status);
     const choosing = pickable && chooseOpen(gx);
     return `
-      ${renderCalendarHtml(gx)}
       <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
         <div class="gpexe-panel-head imports-tab-title"><h3>Ready to import (${ready.length})</h3></div>
         ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
         ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
-        ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
+        ${ready.length ? rows(ready, "ready", "", choosing) : `<p class="muted">Nothing is ready to import.</p>`}
         ${daily.n ? `<div class="imports-import-row"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-import-ready" ${gx.batch?.sending ? "disabled" : ""}>${escapeHtml(daily.label)}</button></div>` : ""}
         ${renderDailyStripHtml(gx, daily.ready, status)}
         ${pickable && (ready.some((c) => batchSelectable(c, gx)) || Object.keys(gx.batch?.selected || {}).length > 0) ? `
@@ -931,10 +910,9 @@ function renderBucketsHtml(gx, status, tab = "ready") {
   if (tab === "imported") {
     const imported = of("imported");
     return `
-      ${renderCalendarHtml(gx)}
       <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Imported">
         <div class="gpexe-panel-head imports-tab-title"><h3>Imported (${imported.length})</h3></div>
-        ${imported.length ? rows(imported, "imported") : `<p class="muted">${day ? "No session of this day is imported." : "Nothing is imported yet."}</p>`}
+        ${imported.length ? rows(imported, "imported") : `<p class="muted">Nothing is imported yet.</p>`}
       </section>
     `;
   }
@@ -1077,8 +1055,7 @@ function renderDailyStripHtml(gx, ready, status = gx.status) {
   const notes = [];
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
-  if (gx.calendar?.day && d.n) notes.push(`${d.label} takes ready sessions of every date, not only of the day you picked.`);
-  // U6a: the one place the review-only reason is said, from the whole list (a day filter never hides it).
+  // U6a: the one place the review-only reason is said, from the whole list.
   if (d.reviewOnly) notes.push(d.reviewOnly);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
@@ -1089,8 +1066,6 @@ function renderSelectBarHtml(gx, visibleReady) {
   const selectable = visibleReady.filter((c) => batchSelectable(c, gx));
   const total = Object.keys(gx.batch.selected).length;
   if (!selectable.length && !total) return "";
-  const visibleSelected = visibleReady.filter((c) => Object.hasOwn(gx.batch.selected, c.id)).length;
-  const hidden = total - visibleSelected;
   const room = Math.max(0, BATCH_MAX - total);
   const unselected = selectable.filter((c) => !Object.hasOwn(gx.batch.selected, c.id));
   const all = room === 0 || unselected.length <= room;
@@ -1098,7 +1073,7 @@ function renderSelectBarHtml(gx, visibleReady) {
   const busy = gx.batch.sending ? "disabled" : "";
   return `
     <div class="imports-select-bar" role="group" aria-label="Import several sessions">
-      <p class="imports-select-summary" role="status"><strong>${total} selected</strong> · maximum ${BATCH_MAX}${hidden ? ` · ${plural(hidden, "selected session is", "selected sessions are")} hidden by the date filter` : ""}${room === 0 ? " · maximum reached, import these first" : ""}</p>
+      <p class="imports-select-summary" role="status"><strong>${total} selected</strong> · maximum ${BATCH_MAX}${room === 0 ? " · maximum reached, import these first" : ""}</p>
       <div class="imports-select-actions">
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-select" ${unselected.length && room ? "" : "disabled"} ${busy}>${all ? "Select all" : `Select first ${room}`}</button>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-clear" ${total ? "" : "disabled"} ${busy}>Clear selection</button>
@@ -1296,7 +1271,7 @@ function renderBatchResultsHtml(gx) {
       <div class="gpexe-unknown" role="alert">
         <p><strong>The answer to the import did not arrive${earlier.length ? ` for the last ${plural(u.candidateIds.length, "session", "sessions")}` : ""}.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
         <p>${confirmed} of ${u.candidateIds.length} confirmed as imported so far. The rest are not confirmed; nothing is sent again by itself. Sessions that stay unconfirmed keep the mark "Result not confirmed" in the list; open one to check it.</p>
-        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${platformViewer() ? "Ask a platform admin to check these imports (give them the Technical details)." : `${AskWho()} to check these imports.`} Until then, don't enter the data by hand.</p>` : ""}
+        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${escapeHtml(batchGiveUpText())} Until then, don't enter the data by hand.</p>` : ""}
         ${techHtml([["HTTP status", u.error?.status || "no answer"], ["Code", u.error?.code], ["Server message", u.error?.message], ["Candidate ids", u.candidateIds.join(", ")]])}
       </div>
       <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
@@ -1339,75 +1314,6 @@ function renderBatchResultsHtml(gx) {
 }
 
 const onlyImported = (s) => Boolean(s?.imported) && !s.alreadyImported && !s.refused && !s.unknown && !s.notAttempted;
-
-// ---------------------------------------------------------------------------
-// The local sessions calendar (Imports phase 4b)
-// ---------------------------------------------------------------------------
-
-const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-// A month of the sessions OptiMove has already found, from the list alone
-// (every session whatever its bucket, replaced versions aside). A marked
-// day filters the list to that day; Prev/Next only turn the page. The
-// From/To dates of "Find new sessions" are a different thing and stay as
-// they are.
-function renderCalendarHtml(gx) {
-  const list = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx));
-  const counts = new Map();
-  for (const c of list) {
-    const key = calendarDayKey(c.sessionStartedAt);
-    if (key) counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const listed = (gx.candidates || []).filter((c) => inboxBucket(c, gx) !== "hidden");
-  const shown = calendarFiltered(listed, gx);
-  const month = calendarMonthShown(gx);
-  const [y, m] = month.split("-").map(Number);
-  const daysInMonth = new Date(y, m, 0).getDate();
-  const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7;
-  const today = calendarDayKey(new Date());
-  const selected = gx.calendar?.day || "";
-  const cells = [];
-  for (let i = 0; i < lead; i += 1) cells.push(`<span class="imports-cal-day is-blank" aria-hidden="true"></span>`);
-  for (let d = 1; d <= daysInMonth; d += 1) {
-    const key = `${month}-${String(d).padStart(2, "0")}`;
-    const n = counts.get(key) || 0;
-    const name = `${d} ${MONTH_NAMES[m - 1]}`;
-    const isToday = key === today;
-    const isSelected = key === selected;
-    const flags = [isToday ? "today" : "", isSelected ? "showing this day" : ""].filter(Boolean);
-    if (n) {
-      const label = `${name}, ${plural(n, "session", "sessions")} found${flags.length ? `, ${flags.join(", ")}` : ""}`;
-      cells.push(`<button type="button" class="imports-cal-day is-marked${isToday ? " is-today" : ""}${isSelected ? " is-selected" : ""}" data-action="training-load-gpexe-cal-day" data-day="${key}" aria-label="${escapeAttr(label)}" aria-pressed="${isSelected ? "true" : "false"}"><span class="imports-cal-num">${d}</span><span class="imports-cal-mark" aria-hidden="true">${n > 1 ? `<span class="imports-cal-count">${n}</span>` : `<span class="imports-cal-dot"></span>`}</span></button>`);
-    } else {
-      cells.push(`<span class="imports-cal-day${isToday ? " is-today" : ""}" aria-label="${escapeAttr(`${name}, nothing found yet${isToday ? ", today" : ""}`)}"><span class="imports-cal-num">${d}</span></span>`);
-    }
-  }
-  // The folded summary says the month and how much it holds, so a phone
-  // coach knows without opening; opening sends nothing and changes nothing.
-  const inMonth = listed.filter((c) => calendarDayKey(c.sessionStartedAt).startsWith(`${month}-`));
-  const daysInUse = new Set(inMonth.map((c) => calendarDayKey(c.sessionStartedAt))).size;
-  const brief = inMonth.length ? `${plural(inMonth.length, "session", "sessions")} on ${plural(daysInUse, "day", "days")}` : "nothing found yet";
-  const open = calendarOpen(gx);
-  // The day filter's line sits under the panel, so it stays in sight when
-  // the calendar is folded.
-  return `
-    <details class="gpexe-panel imports-calendar" data-rendered-open="${open ? "1" : "0"}" ${open ? "open" : ""}>
-      <summary class="imports-cal-summary"><span class="imports-cal-title">Pick a day</span><span class="muted imports-cal-brief"> · ${escapeHtml(MONTH_NAMES[m - 1])} · ${escapeHtml(brief)}</span></summary>
-      <div class="imports-cal-nav">
-        <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-prev" aria-label="Previous month">&lsaquo;</button>
-        <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
-        <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
-      </div>
-      <p class="muted imports-cal-note">A dot or a number marks the sessions found so far on a day.</p>
-      <div class="imports-cal-grid" role="group" aria-label="${escapeAttr(`${MONTH_NAMES[m - 1]} ${y}`)}">
-        ${WEEKDAY_NAMES.map((w) => `<span class="imports-cal-weekday" aria-hidden="true">${w}</span>`).join("")}
-        ${cells.join("")}
-      </div>
-    </details>
-    ${selected ? `<p class="imports-cal-filter" role="status">Showing the sessions of ${escapeHtml(formatDate(selected))} only (${shown.length} of ${listed.length}). <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-cal-all">Show all dates</button></p>` : ""}
-  `;
-}
 
 function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return `<span class="gpexe-badge is-unknown">Result not confirmed</span>`;
@@ -1606,7 +1512,7 @@ function identityErrorText(error) {
 // A Check result the server refused for a reason other than the original
 // load's saved outcome: the load is still not confirmed, so these never say
 // that nothing was saved.
-function identityCheckRefusalText(refusal) {
+export function identityCheckRefusalText(refusal) {
   const busy = refusal.code === "try_again" || refusal.code === "database_busy" || refusal.code === "roster_busy";
   if (refusal.code === "source_connection_unavailable") {
     return "Check result could not run: the team's GPEXE connection needs attention (test or reconnect it in Settings > Source connections). The result is still not confirmed.";
@@ -1741,6 +1647,14 @@ export function renderSuggestionsHtml(gx, off) {
   `;
 }
 
+// P2 (Independent L1): every sentence that points at Technical details names them only to the platform admin, who has them.
+export function mapNumberNote() {
+  return `The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.`;
+}
+export function batchGiveUpText() {
+  return platformViewer() ? "Ask a platform admin to check these imports (give them the Technical details)." : `${AskWho()} to check these imports.`;
+}
+
 function renderTeamMappingHtml(gx, teams) {
   const m = gx.mapping;
   const team = teams.find((t) => String(t.id) === String(gx.teamId));
@@ -1843,7 +1757,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
-          <p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id${platformViewer() ? "; the id is under Technical details" : ""}.</p>
+          <p class="muted">${escapeHtml(mapNumberNote())}</p>
           ${body}
           ${footer}
         </div>
@@ -2249,7 +2163,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
 // v3: a Left-out entry's reason in the screen's words - an administrator's
 // C110 code or an extractor's code - else the server's plain words (a
 // coach's answer carries no C110 code), never a code.
-function leftOutText(s) {
+export function leftOutText(s) {
   if (typeof s?.reason === "string" && Object.hasOwn(SKIP_TEXT, s.reason)) return SKIP_TEXT[s.reason];
   if (typeof s?.message === "string" && s.message.trim()) return s.message.trim().replace(/\.$/, "");
   return (platformViewer() ? "other reason (see Technical details)" : "other reason");
