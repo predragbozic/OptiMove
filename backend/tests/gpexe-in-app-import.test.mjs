@@ -2646,6 +2646,10 @@ function plantedBundle(sessionId) {
   bundle.athleteSessions[0].planted_row_field = "secret-value-777";
   const rowId = String(bundle.athleteSessions[0].id);
   if (bundle.more[rowId]?.events) bundle.more[rowId].events.planted_event_count = 7;
+  // Unit words v40 refuses (a zero-width space, a Hangul filler, a Braille blank): the name is kept, the word never.
+  bundle.details.full.players[athleteKey].planted_odd_unit_a = { unit: "m\u200b", value: 1 };
+  bundle.details.full.players[athleteKey].planted_odd_unit_b = { unit: "m\u3164", value: 1 };
+  bundle.details.full.players[athleteKey].planted_odd_unit_c = { unit: "\u2800", value: 1 };
   return bundle;
 }
 
@@ -2671,6 +2675,15 @@ test("I1: a succeeded check records the names of every field its answers carried
   assert.ok(planted, "a details metric the importer does not read");
   assert.deepEqual([planted.value_kind, planted.unit_word], ["unit_value_object", "m"]);
   assert.ok(has("more.events", "planted_event_count"));
+  for (const name of ["planted_odd_unit_a", "planted_odd_unit_b", "planted_odd_unit_c"]) {
+    assert.deepEqual([has("details.session", name)?.value_kind, has("details.session", name)?.unit_word], ["unit_value_object", null], `${name}: the name, never a unit word v40 refuses`);
+  }
+  // answers_seen: one per answer - an athlete row once, from its session's list (its own canary read adds none); every
+  // drill answer once; the whole details once.
+  const listRows = (await admin.query(`select raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [team.teamId])).rows[0].raw_bundle.athleteSessions.length;
+  assert.equal(has("athlete_session", "total_distance").answers_seen, listRows, "an athlete row counts once");
+  assert.equal(has("details.drill", "tot_burst_events").answers_seen, 2, "two drill answers");
+  assert.equal(has("details.session", "tot_burst_events").answers_seen, 1, "one whole-session answer");
   assert.ok(rows.every((r) => r.first_seen_check_id === check.id && r.last_seen_check_id === check.id));
   assert.ok(!rows.some((r) => r.field_name === "bad-name"), "a malformed name is never recorded");
   const all = JSON.stringify((await admin.query(`select * from training_load.source_field_observations`)).rows);
@@ -2770,4 +2783,92 @@ test("I1: with a running check's marker in its own transaction - only rows of th
     delete src.state.gates.list;
   }
   await waitForCheck(team.teamId, running, team.coach.cookie);
+});
+
+test("I1: the inventory never decides a check - a row lock held by another finalization of the same connection skips the inventory and the check publishes", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7604)]);
+  const first = await checkNow(team);
+  const connectionId = await connectionOf(first.id);
+  const before = await inventoryRows(connectionId);
+  // Another transaction holds one of the connection's rows (as a concurrent finalization of another team would, up to its
+  // COMMIT): this check's inventory write waits its own 300 ms, is refused, and only the inventory is skipped.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select 1 from training_load.source_field_observations where source_connection_id = $1 and endpoint = 'details.session' and field_name = 'planted_metric_x' for update`, [connectionId]);
+    const held = await checkNow(team);
+    assert.equal(held.status, "succeeded", "the check publishes");
+    assert.deepEqual(await inventoryRows(connectionId), before, "the inventory of that check was skipped as a whole");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  const third = await checkNow(team);
+  assert.equal(third.status, "succeeded");
+  assert.ok((await inventoryRows(connectionId)).every((r) => r.last_seen_check_id === third.id), "the next check records again");
+});
+
+test("I1: a finalization whose transaction began before another write of the same row committed still records - the last sighting never moves back", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7605)]);
+  const first = await checkNow(team);
+  const connectionId = await connectionOf(first.id);
+  const key = ["details.session", "planted_metric_x"];
+  const [{ answers_seen: was }] = (await inventoryRows(connectionId)).filter((r) => r.endpoint === key[0] && r.field_name === key[1]);
+  // After the finalization's BEGIN (its now() fixed), a later transaction writes the same row under the same running
+  // check's marker and commits: its last_seen_at is later than the finalization's now().
+  service.setCheckFinalizeForTests({
+    beforeLocks: async () => {
+      service.setCheckFinalizeForTests({});
+      const [{ id }] = (await admin.query(`select id from training_load.gpexe_import_checks where owner_team_id = $1 and status = 'running'`, [team.teamId])).rows;
+      const c = new pg.Client({ connectionString: db.url });
+      await c.connect();
+      try {
+        await c.query("begin");
+        await c.query(`select pg_sleep(0.05)`);
+        await c.query(`select set_config('optimove.field_inventory_check', $1 || ':' || pg_current_xact_id()::text, true)`, [id]);
+        await c.query(`update training_load.source_field_observations set answers_seen = answers_seen + 1000, last_seen_check_id = $2, last_seen_at = now()
+                        where source_connection_id = $1 and endpoint = $3 and field_name = $4`, [connectionId, id, ...key]);
+        await c.query("commit");
+      } finally {
+        await c.end();
+      }
+    },
+  });
+  try {
+    const second = await checkNow(team);
+    assert.equal(second.status, "succeeded");
+    const [row] = (await inventoryRows(connectionId)).filter((r) => r.endpoint === key[0] && r.field_name === key[1]);
+    assert.equal(row.answers_seen, was + 1000 + 1, "the finalization's own write was recorded, not skipped");
+    assert.equal(row.last_seen_check_id, second.id);
+  } finally {
+    service.setCheckFinalizeForTests({});
+  }
+});
+
+test("I1: a failed check and a legacy-path check record nothing", async () => {
+  const team = await setupTeam();
+  serve(team, [plantedBundle(7606)]);
+  src.state.faults.drillMissing["7606"] = 1;
+  try {
+    const failed = await checkNow(team);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error.code, "drill_set_incomplete");
+    assert.deepEqual(await inventoryRows(await connectionOf(failed.id)), [], "a failed check records no name");
+  } finally {
+    delete src.state.faults.drillMissing["7606"];
+  }
+  const count = async () => (await admin.query(`select count(*)::int n from training_load.source_field_observations`)).rows[0].n;
+  const legacy = await setupTeam({ path: "legacy" });
+  const before = await count();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [plantedBundle(7607)] }));
+  try {
+    const check = await checkNow(legacy);
+    assert.equal(check.status, "succeeded");
+  } finally {
+    service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
+  }
+  assert.equal(await count(), before, "the legacy path records nothing (Q5)");
 });

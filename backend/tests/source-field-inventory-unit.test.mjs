@@ -2,7 +2,7 @@
 // name guard, the per-endpoint and total bounds, one count per answer, and that it never throws.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createFieldCollector, MAX_PER_ENDPOINT, MAX_TOTAL, valueKind } from "../src/sourceFieldInventory.js";
+import { createFieldCollector, MAX_PER_ENDPOINT, valueKind } from "../src/sourceFieldInventory.js";
 
 test("kinds: number, text, boolean, null, unit_value_object, zone_list, object, list", () => {
   assert.equal(valueKind(1.5), "number");
@@ -40,7 +40,7 @@ test("more: events and complementary_data under their own endpoints", () => {
   assert.deepEqual(c.rows().map((r) => `${r.endpoint}:${r.name}:${r.kind}`), ["more.complementary_data:power:zone_list", "more.events:acc_count:number"]);
 });
 
-test("bounds: at most MAX_PER_ENDPOINT names per endpoint and MAX_TOTAL in all; the rest is counted, never kept", () => {
+test("bounds: at most MAX_PER_ENDPOINT names per endpoint, so at most six times that per check; the rest is counted, never kept", () => {
   const c = createFieldCollector();
   const many = (n, prefix) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`${prefix}${i}`, 1]));
   c.observe("athlete_session", many(MAX_PER_ENDPOINT + 5, "a"));
@@ -51,7 +51,7 @@ test("bounds: at most MAX_PER_ENDPOINT names per endpoint and MAX_TOTAL in all; 
     else if (endpoint.startsWith("more")) c.observe("more", { [endpoint === "more.events" ? "events" : "complementary_data"]: many(MAX_PER_ENDPOINT, endpoint.slice(-3)) });
     else c.observe(endpoint, many(MAX_PER_ENDPOINT, "t"));
   }
-  assert.ok(c.rows().length <= MAX_TOTAL);
+  assert.equal(c.rows().length, 6 * MAX_PER_ENDPOINT);
 });
 
 test("never throws: odd answers and a throwing getter are ignored", () => {
@@ -62,4 +62,13 @@ test("never throws: odd answers and a throwing getter are ignored", () => {
   assert.doesNotThrow(() => c.observe("details.session", null));
   assert.doesNotThrow(() => c.observe("unknown", { a: 1 }));
   assert.deepEqual(c.rows().filter((r) => r.name === "a"), [], "an unknown endpoint records nothing");
+});
+
+test("the unit word is v40's unit token exactly: every character the database refuses drops the word, never the name", () => {
+  const c = createFieldCollector();
+  const odd = ["m\u200b", "m\u00ad", "m\u202e", "m\u3164", "\u2800", "m\ufe0f", "m\u{e0041}", "m\u2060", "m\u00a0", "m|s", "m=s", "x".repeat(31)];
+  const players = Object.fromEntries(odd.map((unit, i) => [`f${i}`, { unit, value: 1 }]));
+  c.observe("details.session", { players: { 1: { ...players, ok_unit: { unit: "km/h", value: 1 } } } });
+  for (const row of c.rows()) assert.equal(row.unitWord, row.name === "ok_unit" ? "km/h" : null, row.name);
+  assert.equal(c.rows().length, odd.length + 1);
 });

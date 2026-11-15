@@ -1558,8 +1558,8 @@ export function createGpexeRestV1Adapter({
       if (canonicalId(body.athlete) === null) throw unexpected("The source server's athlete row names its athlete in an unknown way.");
       const trackId = body.track === undefined || body.track === null ? null : canonicalId(body.track);
       if (body.track !== undefined && body.track !== null && trackId === null) throw unexpected("The source server's athlete row names its track in an unknown way.");
+      // I1: an athlete row is counted once, from its session's list; its own read adds no answer (answers_seen = list rows).
       const out = pick(body, BUNDLE_FIELDS.athleteSession);
-      observed("athlete_session", body);
       confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
       if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
       return out;

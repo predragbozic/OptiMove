@@ -4,17 +4,18 @@
 // in one statement (training_load.source_field_observations, migration v70), only when the check succeeds.
 //
 // Bounds: a name must be an identifier (the projection's own METRIC_NAME rule) and never a prototype key; at most
-// MAX_PER_ENDPOINT names per endpoint and MAX_TOTAL in all per check; the rest is counted (rejected / dropped), never kept.
+// MAX_PER_ENDPOINT names per endpoint, so at most 6 x 300 = 1,800 per check; the rest is counted (rejected / dropped), never
+// kept. The unit word is v40's unit token exactly (metricTextRules.unitTokenOk, the twin of
+// training_load.source_metric_unit_token_ok), so no word the database refuses ever reaches the write.
+
+import { unitTokenOk } from "./metricTextRules.js";
 
 export const FIELD_ENDPOINTS = Object.freeze(["athlete_session", "more.events", "more.complementary_data", "details.session", "details.drill", "team_thresholds"]);
 export const VALUE_KINDS = Object.freeze(["number", "text", "boolean", "null", "unit_value_object", "zone_list", "object", "list"]);
 export const MAX_PER_ENDPOINT = 300;
-export const MAX_TOTAL = 2000;
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
-// The unit word as v34's unit token (D3): 1-30 characters, no whitespace, no control character, no "|" and no "=".
-const UNIT_TOKEN = /^[^\s\p{Cc}|=]{1,30}$/u;
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -30,7 +31,7 @@ export function valueKind(v) {
 
 function unitWordOf(v) {
   if (!isPlainObject(v) || typeof v.unit !== "string") return null;
-  return UNIT_TOKEN.test(v.unit) ? v.unit : null;
+  return unitTokenOk(v.unit) ? v.unit : null;
 }
 
 export function createFieldCollector() {
@@ -46,7 +47,7 @@ export function createFieldCollector() {
     seen.add(key);
     let entry = fields.get(key);
     if (!entry) {
-      if (fields.size >= MAX_TOTAL || (perEndpoint.get(endpoint) || 0) >= MAX_PER_ENDPOINT) { dropped += 1; return; }
+      if ((perEndpoint.get(endpoint) || 0) >= MAX_PER_ENDPOINT) { dropped += 1; return; }
       entry = { endpoint, name, kind: valueKind(value), unitWord: unitWordOf(value), answers: 0 };
       fields.set(key, entry);
       perEndpoint.set(endpoint, (perEndpoint.get(endpoint) || 0) + 1);
