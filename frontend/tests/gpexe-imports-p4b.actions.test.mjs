@@ -65,7 +65,7 @@ function status({ lastSucceededCheck = null, lastCheck = null } = {}) {
   };
 }
 
-function gpexeServer({ teamStatus = {}, candidates = [], onCheck } = {}) {
+function gpexeServer({ teamStatus = {}, candidates = [], onCheck, truncated = false } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
@@ -74,7 +74,7 @@ function gpexeServer({ teamStatus = {}, candidates = [], onCheck } = {}) {
     if (rest === "/status") return { status: 200, body: status(teamStatus) };
     if (rest === "/source-athletes") return { status: 200, body: { athletes: [], units: {}, lastSeenRule: "" } };
     if (rest === "/athlete-links") return { status: 200, body: { links: [] } };
-    if (rest.startsWith("/candidates")) return { status: 200, body: { candidates } };
+    if (rest.startsWith("/candidates")) return { status: 200, body: { candidates, truncated } };
     if (rest === "/checks" && call.method === "POST") {
       return onCheck ? onCheck(call) : { status: 202, body: { check: { id: "chk-1", status: "succeeded", window: { from: call.body?.from || daysAgo(13), to: call.body?.to || TODAY }, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: null } } };
     }
@@ -210,11 +210,15 @@ test("P4b 7 (code review HIGH): a link change and a list read do not forget a se
   assert.equal(store.has(KEY), false);
 });
 
-test("P4b 8 (code review MEDIUM): a session missing from a full list (200 rows) or a list with replaced versions is kept; from a complete list it is forgotten", async () => {
+test("P4b 8 (code review MEDIUM, #540): a session missing from a list the server cut, or a list with replaced versions, is kept; from a complete list it is forgotten", async () => {
   store.clear(); refuse = false;
   store.set(KEY, JSON.stringify(["cand-x"]));
-  await openReady(Array.from({ length: 200 }, (_, i) => row(i + 1, daysAgo(i % 30))));
-  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-x"], "200 rows: maybe only older");
+  resetLaterTapForTests();
+  resetState();
+  platform = false;
+  installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => row(i + 1, daysAgo(i % 30))), truncated: true }));
+  await openImports();
+  assert.deepEqual(JSON.parse(store.get(KEY)), ["cand-x"], "the server cut the list: maybe only older");
   gx().includeSuperseded = true;
   installFetchMock(gpexeServer({ candidates: [row(1, daysAgo(2))] }));
   await reloadGpexeCandidates(() => {});

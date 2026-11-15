@@ -1,6 +1,6 @@
 // P4: the period chooser that "Find new sessions" opens (gpexe-period-data.js holds its state). Pure template strings.
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
-import { inboxBucket, isHiddenVersion } from "./gpexe-import-data.js";
+import { coverStart, inboxBucket, isHiddenVersion } from "./gpexe-import-data.js";
 import { dayOff, daysInPeriod, localDay, missingWindow, periodMonth, periodOf, periodRange, PERIOD_MAX_DAYS, sessionDay, todayDay } from "./gpexe-period-data.js";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -26,9 +26,30 @@ export function periodText(from, to, now = new Date()) {
 }
 
 // The sessions found so far, by the day the server searches them under (sessionDay), in start-time order, each with its state.
+// #540: the server's state words, in this chooser's chip keys.
+const SERVER_WORD = { needs: "attention", ready: "ready", imported: "imported", out: "out" };
+
+// #540: a day the list does not hold in full, from the server's calendar read: its first three states in start order,
+// then the rest of its counts. These items have no session (c: null); the chosen days' list reads them on their own.
+function serverItems(sd) {
+  const left = { needs: 0, ready: 0, imported: 0, out: 0, ...(sd.counts || {}) };
+  const words = [];
+  for (const w of Array.isArray(sd.chips) ? sd.chips : []) {
+    if (!SERVER_WORD[w] || left[w] <= 0) continue;
+    words.push(w);
+    left[w] -= 1;
+  }
+  for (const w of ["needs", "ready", "imported", "out"]) for (let i = 0; i < left[w]; i += 1) words.push(w);
+  return words.map((w) => ({ c: null, chip: CHIP[SERVER_WORD[w]] }));
+}
+
 function sessionsByDay(gx) {
   const byDay = new Map();
-  const list = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx)).slice().sort((a, b) => String(a.sessionStartedAt).localeCompare(String(b.sessionStartedAt)));
+  const start = coverStart(gx);
+  // The sessions read on their own for the chosen older days join the list for those days only.
+  const ids = new Set((gx.candidates || []).map((c) => c.id));
+  const older = start && Array.isArray(gx.older?.candidates) ? gx.older.candidates.filter((c) => !ids.has(c.id) && sessionDay(c.sessionStartedAt) <= start) : [];
+  const list = [...(gx.candidates || []), ...older].filter((c) => !isHiddenVersion(c, gx)).sort((a, b) => String(a.sessionStartedAt).localeCompare(String(b.sessionStartedAt)));
   for (const c of list) {
     const day = sessionDay(c.sessionStartedAt);
     if (!day) continue;
@@ -37,6 +58,17 @@ function sessionsByDay(gx) {
     if (!CHIP[bucket]) continue;
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push({ c, chip: CHIP[bucket] });
+  }
+  // #540: from the list's first day back, a day not read on its own is the server's calendar day.
+  if (start && gx.calendars) {
+    const olderRead = Array.isArray(gx.older?.candidates) ? gx.older : null;
+    const days = Object.values(gx.calendars).flatMap((entry) => (Array.isArray(entry?.days) ? entry.days : []));
+    for (const sd of days) {
+      if (!sd?.day || sd.day > start) continue;
+      if (olderRead && sd.day >= olderRead.from && sd.day <= olderRead.to) continue;
+      const items = serverItems(sd);
+      if (items.length) byDay.set(sd.day, items);
+    }
   }
   return byDay;
 }
@@ -90,11 +122,15 @@ function gridHtml(gx, byDay, now, range, suggestedTo) {
 // UX review (MEDIUM): the sessions of the chosen (or suggested) days, grouped by date, each opening its review; at most
 // SESSIONS_LISTED, then how many more. Nothing while no day is chosen.
 const SESSIONS_LISTED = 8;
-function rangeListHtml(range, byDay, nameOf, timeOf) {
+function rangeListHtml(range, byDay, nameOf, timeOf, older = null) {
   if (!range) return "";
   const days = [...byDay.keys()].filter((d) => d >= range.from && d <= range.to).sort();
-  const all = days.flatMap((d) => byDay.get(d).map((x) => ({ ...x, day: d })));
-  if (!all.length) return "";
+  const every = days.flatMap((d) => byDay.get(d).map((x) => ({ ...x, day: d })));
+  // #540: a session known only from the server's calendar is listed once its days are read.
+  const unread = every.filter((x) => !x.c).length;
+  const all = every.filter((x) => x.c);
+  const unreadNote = unread ? `<p class="muted period-daylist-more" role="status">${escapeHtml(older?.error ? `${plural(unread, "older session", "older sessions")} on these days could not be read. Choose the days again.` : `Reading ${plural(unread, "older session", "older sessions")} on these days...`)}</p>` : "";
+  if (!all.length) return unreadNote ? `<div class="period-daylist" role="group" aria-label="Sessions already found on these days">${unreadNote}</div>` : "";
   const shown = all.slice(0, SESSIONS_LISTED);
   const groups = [];
   for (const x of shown) {
@@ -109,6 +145,7 @@ function rangeListHtml(range, byDay, nameOf, timeOf) {
         <ul>
           ${grp.items.map(({ c, chip }) => `<li><button type="button" class="plain-button gpexe-button period-daylist-open" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"><span>${escapeHtml(`${nameOf(c)} · ${timeOf(c.sessionStartedAt)}`)}</span><span class="period-chip is-${chip.cls}" aria-hidden="true">${chip.glyph}</span><span class="period-daylist-state${chip.cls === "out" ? " muted" : ""}">${escapeHtml(chip.word)}</span></button></li>`).join("")}
         </ul>`).join("")}
+      ${unreadNote}
       ${all.length > shown.length ? `<p class="muted period-daylist-more">${escapeHtml(`${plural(all.length - shown.length, "more session", "more sessions")} on these days: choose fewer days to see them.`)}</p>` : ""}
     </div>
   `;
@@ -170,7 +207,7 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
             <span class="period-range-actions">${search}${chosen ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-period-clear">Clear</button>` : ""}</span>
           </div>` : ""}
         <p class="muted period-note">Days without a mark may not have been searched yet. Nothing is imported until you import it.</p>
-        ${rangeListHtml(range, byDay, nameOf, timeOf)}
+        ${rangeListHtml(range, byDay, nameOf, timeOf, gx.older)}
       </div>
     </section>
   `;

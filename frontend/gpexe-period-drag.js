@@ -1,6 +1,7 @@
 // P4: dragging across the days of the period chooser with a mouse or a pen. Two taps (or Enter on two days) do the same
 // and are the visible control; a finger keeps scrolling the page, so touch never starts a drag. Local only.
 import { clearPeriod, dragToDay, endDrag, pickDay } from "./gpexe-period-data.js";
+import { ensurePeriodData } from "./gpexe-import-data.js";
 
 const DAY = '[data-action="training-load-gpexe-period-day"]';
 let drag = null;
@@ -44,6 +45,8 @@ export function bindPeriodDrag(root, render, doc = globalThis.document) {
     swallowClick = true;
     setTimeout(() => { swallowClick = false; }, 0);
     render();
+    // #540: older dragged days the list does not hold are read on their own.
+    void ensurePeriodData(render);
   }
   doc.addEventListener("pointerup", end);
   doc.addEventListener("pointercancel", end);

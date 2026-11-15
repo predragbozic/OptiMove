@@ -7,7 +7,7 @@
 // A response for a team the coach has since switched away from is dropped
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
-import { emptyPeriod, localDay } from "./gpexe-period-data.js";
+import { emptyPeriod, localDay, periodMonth, periodRange, sessionDay } from "./gpexe-period-data.js";
 import { pruneLater } from "./gpexe-later-data.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
@@ -111,6 +111,10 @@ function resetGpexeTeamState(teamId) {
   gx.teamId = teamId;
   gx.status = null;
   gx.candidates = null;
+  // #540: whether the server cut the list at its limit, and the calendar and older days read for the period chooser.
+  gx.candidatesTruncated = false;
+  gx.calendars = {};
+  gx.older = null;
   // IMP3: the finished search the candidate list was read after (the banner's "everything is imported" needs it).
   gx.candidatesCheckId = null;
   gx.links = null;
@@ -173,6 +177,7 @@ export async function loadGpexeTeam(render) {
     if (generation !== gx.generation) return;
     gx.status = status;
     gx.candidates = candidates.candidates;
+    gx.candidatesTruncated = candidates.truncated === true;
     gx.candidatesCheckId = status.lastCheck && status.lastCheck.status !== "running" ? status.lastCheck.id : null;
     pruneLaterToReady(gx);
     gx.links = links.links;
@@ -192,6 +197,8 @@ export async function loadGpexeTeam(render) {
     finishLoad(gx, status, render);
     // U2 (v56): the team's switch panel (administrators); the status line needs no extra read.
     void loadTeamImportSwitch(render);
+    // #540: a list the server cut leaves older days to the calendar read.
+    void ensurePeriodData(render);
     // U4: the setup guide's two administrator reads (the connections and the variables).
     void loadGuide(render);
     // An administrator's Imports view also holds the stored GPEXE names (no
@@ -248,12 +255,11 @@ function forgetConfirmedImports() {
 // Code review (HIGH): only hard evidence from the server forgets an id - never a state that is only local or for now
 // (a link changed since the last search, an unconfirmed outcome: those rows read "Needs you" until the next search).
 // An id is forgotten when its session is listed as imported, replaced or withdrawn, or staying out; or when it is not
-// listed at all and the list is complete (under the server's 200-row limit, without the replaced versions).
-const LIST_LIMIT = 200;
+// listed at all and the list is complete (the server did not cut it - #540's truncated - and it has no replaced versions).
 function pruneLaterToReady(gx) {
   const list = gx.candidates || [];
   const byId = new Map(list.map((c) => [c.id, c]));
-  const complete = list.length < LIST_LIMIT && !gx.includeSuperseded;
+  const complete = !gx.candidatesTruncated && !gx.includeSuperseded;
   pruneLater((id) => {
     const c = byId.get(id);
     if (!c) return !complete;
@@ -263,15 +269,92 @@ function pruneLaterToReady(gx) {
   }, gx);
 }
 
+// #540: when the server cut the list (the newest 200 sessions), the days from the oldest listed one back are not all
+// listed. The day the list starts on ("" when nothing was cut): from it back, the calendar shows the server's calendar
+// read, and the chosen days' sessions are read on their own.
+export function coverStart(gx = g()) {
+  if (!gx?.candidatesTruncated) return "";
+  let first = "";
+  for (const c of gx.candidates || []) {
+    const day = sessionDay(c.sessionStartedAt);
+    if (day && (!first || day < first)) first = day;
+  }
+  return first;
+}
+
+function monthWindow(month) {
+  const [y, m] = month.split("-").map(Number);
+  return { from: `${month}-01`, to: `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}` };
+}
+
+// Whether the month on screen is shown in full: nothing was cut, the month is after the list's start, or the server's
+// calendar read for it is here. Otherwise the chooser says older sessions may not be shown.
+export function periodMonthComplete(gx = g(), month = periodMonth(gx)) {
+  const start = coverStart(gx);
+  if (!start) return !gx?.candidatesTruncated;
+  const w = monthWindow(month);
+  return w.from > start || Array.isArray(gx.calendars?.[`${w.from}..${w.to}`]?.days);
+}
+
+// Reads what the period chooser needs beyond the list, only when the server cut it: the calendar of the month on screen,
+// and the sessions of the chosen days that the list does not hold (at most 31 days, the route's limit). Each is read
+// once per window; nothing is read while the list is complete. GET only.
+export async function ensurePeriodData(render, gx = g()) {
+  const start = coverStart(gx);
+  if (!start || !gx.teamId) return;
+  const generation = gx.generation;
+  const teamId = gx.teamId;
+  const w = monthWindow(periodMonth(gx));
+  const reads = [];
+  const calKey = `${w.from}..${w.to}`;
+  // One read per month, kept until the list is read again; a failed read is tried again when the month is shown again.
+  const cal = gx.calendars || (gx.calendars = {});
+  if (w.from <= start && !cal[calKey]?.loading && !Array.isArray(cal[calKey]?.days)) {
+    const calendars = cal;
+    calendars[calKey] = { days: null, loading: true, error: null };
+    reads.push(api(teamPath(teamId, `/calendar?from=${w.from}&to=${w.to}`)).then((answer) => {
+      if (generation !== gx.generation || gx.calendars !== calendars) return;
+      calendars[calKey] = { days: Array.isArray(answer.days) ? answer.days : [], loading: false, error: null };
+    }).catch((error) => {
+      if (generation !== gx.generation || gx.calendars !== calendars) return;
+      calendars[calKey] = { days: null, loading: false, error: errorInfo(error) };
+    }));
+  }
+  const range = periodRange(gx);
+  if (range && range.from <= start) {
+    const to = range.to < start ? range.to : start;
+    const key = `${range.from}..${to}`;
+    if (gx.older?.key !== key) {
+      gx.older = { key, from: range.from, to, candidates: null, loading: true, error: null };
+      reads.push(api(teamPath(teamId, `/candidates?from=${range.from}&to=${to}`)).then((answer) => {
+        if (generation !== gx.generation || gx.older?.key !== key) return;
+        gx.older = { ...gx.older, candidates: Array.isArray(answer.candidates) ? answer.candidates : [], loading: false };
+      }).catch((error) => {
+        if (generation !== gx.generation || gx.older?.key !== key) return;
+        gx.older = { ...gx.older, loading: false, error: errorInfo(error) };
+      }));
+    }
+  }
+  if (!reads.length) return;
+  render();
+  await Promise.all(reads);
+  if (generation === gx.generation) render();
+}
+
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
   // IMP3: a list asked for after a search ended reflects that search; one asked for during a search does not.
   const afterCheck = gx.check && gx.check.status !== "running" ? gx.check.id : null;
   try {
-    const { candidates } = await api(teamPath(gx.teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`));
+    const { candidates, truncated } = await api(teamPath(gx.teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`));
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
+    gx.candidatesTruncated = truncated === true;
+    // The calendar's older days may have changed with the search: read them again.
+    gx.calendars = {};
+    gx.older = null;
+    void ensurePeriodData(render);
     gx.candidatesCheckId = afterCheck;
     pruneLaterToReady(gx);
     forgetConfirmedImports();
@@ -1125,7 +1208,20 @@ export function rowReasons(c) {
 //   imported  - in OptiMove, or nothing new for it;
 //   hidden    - a replaced version (listed only with the switch under the
 //               source's Technical details).
+// #540: the server's state word (backend/src/gpexeImportState.js), in the frontend's bucket words.
+const STATE_BUCKET = { needs: "attention", ready: "ready", imported: "imported", out: "out", hidden: "hidden" };
+
 export function inboxBucket(c, gx = g()) {
+  // #540: the server's `state` is the base; the browser adds its own two facts (an approval whose answer was lost in this
+  // tab, a link made after the last search), which only move a row to Needs you. A summary without it (an older server, a
+  // test fixture) is judged here, by the same rule (gpexe-import-state-parity.test.mjs).
+  const base = STATE_BUCKET[c?.state];
+  if (base) {
+    if (base === "hidden" || base === "out") return base;
+    if (base === "imported" && c.status === "imported") return "imported";
+    if (isUncertain(c, gx) || reviewMadeBeforeLinkChange(c, gx)) return "attention";
+    return base;
+  }
   const group = candidateGroup(c, gx);
   if (group === "replaced" || group === "withdrawn" || group === "undone") return "hidden";
   if (group === "imported") return "imported";

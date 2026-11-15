@@ -65,7 +65,7 @@ function status({ lastSucceededCheck = null, lastCheck = null } = {}) {
   };
 }
 
-function gpexeServer({ teamStatus = {}, candidates = [], onCheck } = {}) {
+function gpexeServer({ teamStatus = {}, candidates = [], onCheck, truncated = false } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
@@ -74,7 +74,7 @@ function gpexeServer({ teamStatus = {}, candidates = [], onCheck } = {}) {
     if (rest === "/status") return { status: 200, body: status(teamStatus) };
     if (rest === "/source-athletes") return { status: 200, body: { athletes: [], units: {}, lastSeenRule: "" } };
     if (rest === "/athlete-links") return { status: 200, body: { links: [] } };
-    if (rest.startsWith("/candidates")) return { status: 200, body: { candidates } };
+    if (rest.startsWith("/candidates")) return { status: 200, body: { candidates, truncated } };
     if (rest === "/checks" && call.method === "POST") {
       return onCheck ? onCheck(call) : { status: 202, body: { check: { id: "chk-1", status: "succeeded", window: { from: call.body?.from || daysAgo(13), to: call.body?.to || TODAY }, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: null } } };
     }
@@ -162,13 +162,15 @@ test("P4c 4: imported and stays-out sessions are in the chosen days' list, each 
   assert.match(p, /<i class="period-chip is-out">\u2013<\/i> stays out/, "the legend names the grey mark");
 });
 
-test("P4c 5: a full list read (200 rows) says older sessions may not be shown; 199 does not", async () => {
-  for (const [n, shown] of [[200, true], [199, false]]) {
+test("P4c 5 (#540): a list the server cut, with no calendar read for the month, says older sessions may not be shown; a complete list of 200 does not", async () => {
+  for (const [truncated, shown] of [[true, true], [false, false]]) {
     resetState();
     platform = false;
-    installFetchMock(gpexeServer({ candidates: Array.from({ length: n }, (_, i) => imported(i + 1, daysAgo(i % 40))) }));
+    // This server answers no calendar read (404), so the cut month stays incomplete.
+    installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => imported(i + 1, daysAgo(i % 40))), truncated }));
     await openImports();
-    assert.equal(/period-cap">Older sessions may not be shown\.</.test(panel()), shown, `${n} rows`);
+    gx().period.month = daysAgo(39).slice(0, 7); // the month the cut list starts in
+    assert.equal(/period-cap">Older sessions may not be shown\.</.test(panel()), shown, `truncated ${truncated}`);
   }
 });
 
@@ -194,8 +196,9 @@ test("P4c 7: an empty month names the last import's day; a full list read also s
   gx().period.month = PREV;
   assert.doesNotMatch(line(), /the last import is on/, "a month with an import does not repeat it");
   resetState();
-  installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => imported(i + 1, daysAgo(i % 40))) }));
+  installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => imported(i + 1, daysAgo(i % 40))), truncated: true }));
   await openImports();
+  gx().period.month = daysAgo(39).slice(0, 7); // the month the cut list starts in
   assert.match(line(), /· older sessions may not be shown · open the calendar</);
 });
 

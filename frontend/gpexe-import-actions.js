@@ -8,7 +8,7 @@ import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImpor
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
-import {
+import { ensurePeriodData,
   reloadGpexeCandidates,
   refreshGpexeStatus,
   reloadGpexeSourceAthletes,
@@ -615,13 +615,21 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-period-day") {
     if (takePeriodDragClick()) return true;
     const day = action.dataset.day || "";
-    if (pickDay(day)) repaintPeriod(renderTrainingLoad, `[data-action="training-load-gpexe-period-day"][data-day="${day}"]`);
+    if (pickDay(day)) {
+      const repaint = () => repaintPeriod(renderTrainingLoad, `[data-action="training-load-gpexe-period-day"][data-day="${day}"]`);
+      repaint();
+      // #540: older chosen days the list does not hold are read on their own (GET only, only when the list was cut).
+      void ensurePeriodData(repaint);
+    }
     return true;
   }
   if (type === "training-load-gpexe-period-month") {
     const delta = Number(action.dataset.delta) < 0 ? -1 : 1;
     turnMonth(delta);
-    repaintPeriod(renderTrainingLoad, `.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${delta}"]`);
+    const repaint = () => repaintPeriod(renderTrainingLoad, `.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${delta}"]`);
+    repaint();
+    // #540: an older month's calendar comes from the server when the list was cut.
+    void ensurePeriodData(repaint);
     return true;
   }
   if (type === "training-load-gpexe-period-clear") {
