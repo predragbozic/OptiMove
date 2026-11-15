@@ -751,7 +751,8 @@ test("7c. the refusals no other test reaches: a session too large to read, a ses
   const large = await candidate(t, { startedAt: "2026-09-12T10:00:00Z" });
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = raw_bundle || jsonb_build_object('padding', repeat('x', $2::int)) where id = $1`, [large.id, boardService.BOARD_MAX_BUNDLE_BYTES + 1]);
   refused(await boardOf(W.caA, t, { candidateId: large.id }), 409, "candidate_too_large");
-  refused(await boardOf(W.caA, t), 409, "candidate_too_large");
+  // By default it is passed by: the board opens on the newest session it can read, and says one newer was left.
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t)).board.session), [good.id, 1]);
   const placeLarge = await placement(W.caA, t, large.id, W.fTime, W.vMin);
   refused(placeLarge, 409, "candidate_too_large");
   assert.equal(placeLarge.text.length < 2000, true, "the refusal carries nothing of the bundle");
@@ -785,6 +786,112 @@ test("7c. the refusals no other test reaches: a session too large to read, a ses
   assert.deepEqual(row.replaces.map((r) => r.activationId), [activationId]);
   assert.match(row.placementHash, /^[0-9a-f]{64}$/);
   assert.deepEqual(board.on.map((o) => o.activationId), [activationId]);
+});
+
+test("7e. the default session is the newest one the import would take: sessions of a type OptiMove does not import, at the top of the list, never close the board; every session refused is said so by its reason; a named session keeps its own refusal; the reads are counted", async () => {
+  const mark = (id, sets) => k.query(`update training_load.gpexe_import_candidates set ${sets} where id = $1`, [id]);
+  const MATCH = `raw_bundle = jsonb_set(raw_bundle, '{teamSession,category_name}', '"Match"')`;
+  // The statements one board read sends about the stored sessions: the list, then each session read alone.
+  const counted = async (fn) => {
+    const seen = [];
+    const wrapped = [];
+    const original = appPool.connect;
+    appPool.connect = function (callback) {
+      if (callback) return original.call(this, callback);
+      return original.call(this).then((c) => {
+        if (!wrapped.some((w) => w.c === c)) {
+          const send = c.query;
+          wrapped.push({ c, send });
+          c.query = function (...args) { const text = typeof args[0] === "string" ? args[0] : args[0]?.text; if (text) seen.push(text.replace(/\s+/g, " ").trim()); return send.apply(this, args); };
+        }
+        return c;
+      });
+    };
+    let res;
+    try { res = await fn(); } finally { appPool.connect = original; for (const { c, send } of wrapped) c.query = send; }
+    const lists = seen.filter((x) => /from training_load\.gpexe_import_candidates c join training_load\.gpexe_import_checks k/.test(x) && / limit \d+$/.test(x)).length;
+    const reads = seen.filter((x) => /^with scoped as materialized/.test(x)).length;
+    const bundlesInList = seen.filter((x) => / limit \d+$/.test(x) && /raw_bundle(?!::)/.test(x.replace(/c\.raw_purged_at|c\.raw_expires_at/g, ""))).length;
+    return { res, lists, reads, bundlesInList };
+  };
+
+  // (a) Production's case: the two newest are matches the import blocked; the third is a training session.
+  const t = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t, n, `Fifth ${NAMES[n]}`);
+  const training = await candidate(t, { startedAt: "2026-09-07T10:00:00Z" });
+  const match1 = await candidate(t, { startedAt: "2026-09-08T10:00:00Z" });
+  const match2 = await candidate(t, { startedAt: "2026-09-08T16:00:00Z" });
+  for (const m of [match1, match2]) await mark(m.id, `${MATCH}, status = 'blocked'`);
+  const a = await counted(() => boardOf(W.caA, t));
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable, x.startedAt])(ok(a.res).board.session), [training.id, 2, "2026-09-07T10:00:00.000Z"]);
+  assert.deepEqual([a.lists, a.reads, a.bundlesInList], [1, 1, 0], "one list without a bundle, and one session read: the blocked ones are not read while another can be taken");
+  assert.equal(ok(a.res).board.pair.labels.length, 2, "the board is the usual board");
+  // A named session keeps its own refusal, with the import's reason, and a placement on it too.
+  assert.deepEqual(refused(await boardOf(W.caA, t, { candidateId: match2.id }), 409, "candidate_not_importable").current, { reason: "unsupported_category" });
+  refused(await placement(W.caA, t, match2.id, W.fTime, W.vMin), 409, "candidate_not_importable");
+  assert.equal(ok(await boardOf(W.caA, t, { candidateId: training.id })).board.session.newerNotUsable, 0, "a named session says nothing about others");
+
+  // (b) The same when the import has not blocked them (a fresh search): each is read once, refused by the plan, and passed by.
+  for (const m of [match1, match2]) await mark(m.id, `status = 'pending'`);
+  const b = await counted(() => boardOf(W.caA, t));
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(b.res).board.session), [training.id, 2]);
+  assert.deepEqual([b.lists, b.reads, b.bundlesInList], [1, 3, 0], "newest first, one at a time, until one is taken");
+
+  // (c) A session the import blocked for another reason (no mapping yet) is still what the board opens on - newest first among the blocked.
+  const t2 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t2, n, `Sixth ${NAMES[n]}`);
+  const blockedOld = await candidate(t2, { startedAt: "2026-09-05T10:00:00Z" });
+  const blockedNew = await candidate(t2, { startedAt: "2026-09-06T10:00:00Z" });
+  for (const m of [blockedOld, blockedNew]) await mark(m.id, `status = 'blocked'`);
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t2)).board.session), [blockedNew.id, 0]);
+  // With a newer unblocked training session, that one; with a newer unblocked match, the blocked training session, and the match is counted.
+  const fresh = await candidate(t2, { startedAt: "2026-09-07T10:00:00Z" });
+  assert.equal(ok(await boardOf(W.caA, t2)).board.session.candidateId, fresh.id);
+  await mark(fresh.id, MATCH);
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t2)).board.session), [blockedNew.id, 1]);
+
+  // (d) Nothing can be used: one answer, by reason, and never "the session cannot be read".
+  const t3 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t3, n, `Seventh ${NAMES[n]}`);
+  const m1 = await candidate(t3, { startedAt: "2026-09-08T10:00:00Z" });
+  const m2 = await candidate(t3, { startedAt: "2026-09-09T10:00:00Z" });
+  for (const m of [m1, m2]) await mark(m.id, MATCH);
+  const none = await counted(() => boardOf(W.caA, t3));
+  const body = refused(none.res, 409, "no_usable_session");
+  assert.deepEqual(body.current, { reason: "unsupported_category", tried: 2 });
+  assert.deepEqual([none.lists, none.reads], [1, 2]);
+  assert.equal(body.message, "None of the sessions found so far can be used for mapping. Find a training session in Imports first.");
+  assert.equal(/cannot read|"Match"|Match\b/.test(none.res.text), false, "never 'cannot read', and nothing of the source's own words");
+  // Two different reasons are "mixed".
+  await mark(m1.id, `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false')`);
+  assert.deepEqual(refused(await boardOf(W.caA, t3), 409, "no_usable_session").current, { reason: "mixed", tried: 2 });
+
+  // Each reason is the one a named session would get: a session too large to read is "too large", not something else.
+  const t5 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t5, n, `Ninth ${NAMES[n]}`);
+  const big = await candidate(t5, { startedAt: "2026-09-08T10:00:00Z" });
+  await mark(big.id, `raw_bundle = raw_bundle || jsonb_build_object('padding', repeat('x', ${boardService.BOARD_MAX_BUNDLE_BYTES + 1}))`);
+  assert.deepEqual(refused(await boardOf(W.caA, t5), 409, "no_usable_session").current, { reason: "candidate_too_large", tried: 1 });
+  await mark(big.id, `raw_bundle = raw_bundle - 'padding'`);
+
+  // (e) The look-back is bounded: more unusable sessions than the bound in front of a usable one is "none usable", with the bound as tried.
+  const t4 = await gpexeTeam(W.clubA);
+  for (const n of [1, 2]) await link(t4, n, `Eighth ${NAMES[n]}`);
+  const deep = await candidate(t4, { startedAt: "2026-08-01T10:00:00Z" });
+  const N = boardService.BOARD_DEFAULT_SESSION_ATTEMPTS;
+  assert.equal(N, 10);
+  const matches = [];
+  for (let i = 0; i < N; i += 1) { const m = await candidate(t4, { startedAt: `2026-09-${String(10 + i).padStart(2, "0")}T10:00:00Z` }); await mark(m.id, MATCH); matches.push(m); }
+  const bounded = await counted(() => boardOf(W.caA, t4));
+  assert.deepEqual(refused(bounded.res, 409, "no_usable_session").current, { reason: "unsupported_category", tried: N });
+  assert.deepEqual([bounded.lists, bounded.reads], [1, N], "never more than the bound");
+  assert.equal(ok(await boardOf(W.caA, t4, { candidateId: deep.id })).board.session.candidateId, deep.id, "the older one is still there when named");
+  // One fewer in front and it is reached.
+  await mark(matches[0].id, `status = 'superseded', superseded_by_check_id = last_seen_check_id`);
+  assert.deepEqual(((x) => [x.candidateId, x.newerNotUsable])(ok(await boardOf(W.caA, t4)).board.session), [deep.id, N - 1]);
+
+  // The audience is unchanged: the identical 404 before anything of a session.
+  for (const who of [W.caB, W.coach]) assert.deepEqual(shape(await boardOf(who, t3)), NOT_FOUND);
 });
 
 test("7d. a team bound through a team-owned connection (v27 allows it) has no board: the identical 404 on the board and on a placement, for the club's admin and for a platform admin", async () => {

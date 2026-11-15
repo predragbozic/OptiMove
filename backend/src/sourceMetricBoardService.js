@@ -30,11 +30,15 @@ const { boundedRead, refusal, NOT_FOUND, UUID } = adminWriteKit;
 // The largest stored bundle the board reads (7e's bound, R7 of J11).
 export const BOARD_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 export const CONFIRMATIONS_PAGE = 50;
+// With no session named, the board opens on the newest stored session the import would take. It looks at most this
+// far back; each one is read and tried alone, never several bundles at once.
+export const BOARD_DEFAULT_SESSION_ATTEMPTS = 10;
 const SOURCE_CONNECTION_PATH = "source_connection";
 
 const BOARD_MESSAGES = {
   invalid_query: "The query carries a parameter this route does not take, or a value it cannot read.",
   no_stored_session: "No saved session yet. Run a search in Imports first.",
+  no_usable_session: "None of the sessions found so far can be used for mapping. Find a training session in Imports first.",
   snapshot_expired: "The saved session is no longer available. Run a new search in Imports.",
   candidate_too_large: "The saved session is too large to read.",
   candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
@@ -107,6 +111,20 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   )).rows[0];
   if (!team) throw NOT_FOUND();
 
+  const teamTimezone = await teamSessionTimezone(client, team.id);
+
+  // The source fields of the binding's family, each with its active revision.
+  const fields = (await client.query(
+    `select d.id, d.source_system, d.api_family, d.source_metric_key, d.source_label,
+            r.id as revision_id, r.value_shape, r.parameter_kind, r.supports_session, r.supports_drill,
+            r.source_unit, r.expected_source_unit, r.evidence_status
+       from training_load.source_metric_definitions d
+       join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id and r.state = 'active'
+      where d.source_system = $1 and d.api_family = $2 and d.state = 'active'
+      order by d.source_metric_key collate "C"`,
+    [GPEXE_SOURCE_SYSTEM, team.api_family],
+  )).rows;
+
   // The stored session. Never an undone import (v57) or a superseded one; its
   // last check succeeded through this binding (as the importer requires).
   const usable = `c.status <> 'superseded' and c.import_undone_at is null`;
@@ -128,17 +146,43 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       cross join lateral (select sz.bundle_bytes > $4::int as too_large offset 0) b`;
   const base = [team.id, team.binding_id, SOURCE_CONNECTION_PATH, BOARD_MAX_BUNDLE_BYTES];
   let candidate;
+  // How many newer stored sessions the default left behind because the import would not take them.
+  let defaultSkipped = 0;
   if (candidateId) {
     candidate = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, candidateId])).rows[0];
     // An id that is not a usable stored session of this team is the identical 404.
     if (!candidate) throw onCandidateMissing();
   } else {
-    candidate = (await client.query(candidateSql(
-      `c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
-       and k.status = 'succeeded' and k.source_path = $3::text and k.source_binding_id = $2::uuid`,
-      `order by c.session_started_at desc, c.id limit 1`,
-    ), base)).rows[0];
-    if (!candidate) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
+    // No session named: the newest stored session THE IMPORT WOULD TAKE, not merely the newest one. A session of a
+    // type OptiMove does not import (a match, for one) at the top of the list must not close the board for the team.
+    // One statement lists the newest few (ids only, no bundle); then each is read alone, within the size bound, and
+    // tried with the board's own plan, until one is taken. Sessions the import already blocked are tried last: a
+    // block may be only "no mapping yet", which is what the board is for, so it is never taken as the answer itself.
+    const listed = (await client.query(
+      `select c.id, c.status = 'blocked' as blocked
+         from training_load.gpexe_import_candidates c
+         join training_load.gpexe_import_checks k on k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id
+        where c.owner_team_id = $1::uuid and ${usable}
+          and c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
+          and k.status = 'succeeded' and k.source_path = $3::text and k.source_binding_id = $2::uuid
+        order by c.session_started_at desc, c.id limit ${BOARD_DEFAULT_SESSION_ATTEMPTS}`,
+      base.slice(0, 3),
+    )).rows;
+    if (listed.length === 0) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
+    const { extracts } = extractsOf(columnsOf({ fields }));
+    const reasons = [];
+    const order = [...listed.map((row, index) => ({ ...row, index })).filter((row) => !row.blocked), ...listed.map((row, index) => ({ ...row, index })).filter((row) => row.blocked)];
+    for (const row of order) {
+      const read = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, row.id])).rows[0];
+      const why = !read ? "gone" : defaultSessionRefusal(read, team, extracts, teamTimezone);
+      if (why === null) { candidate = read; defaultSkipped = listed.filter((_, index) => index < row.index).length; break; }
+      reasons[row.index] = why;
+    }
+    if (!candidate) {
+      // One reason when every session tried has the same one (said in the sentence); otherwise "mixed".
+      const distinct = [...new Set(reasons.filter(Boolean))];
+      throw refusal(409, "no_usable_session", BOARD_MESSAGES.no_usable_session, { current: { reason: distinct.length === 1 ? distinct[0] : "mixed", tried: listed.length } });
+    }
   }
   // The session's own refusal is carried, not thrown here: a placement first
   // answers the identical 404 for a column or a variable outside the
@@ -151,20 +195,6 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     sessionRefusal = refusal(409, "candidate_source_mismatch", BOARD_MESSAGES.candidate_source_mismatch);
   } else if (candidate.session_started_at === null) sessionRefusal = refusal(409, "session_start_unknown", BOARD_MESSAGES.session_start_unknown);
   else if (candidate.raw_bundle === null || typeof candidate.raw_bundle !== "object") throw new Error("board bundle missing");
-
-  const teamTimezone = await teamSessionTimezone(client, team.id);
-
-  // The source fields of the binding's family, each with its active revision.
-  const fields = (await client.query(
-    `select d.id, d.source_system, d.api_family, d.source_metric_key, d.source_label,
-            r.id as revision_id, r.value_shape, r.parameter_kind, r.supports_session, r.supports_drill,
-            r.source_unit, r.expected_source_unit, r.evidence_status
-       from training_load.source_metric_definitions d
-       join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id and r.state = 'active'
-      where d.source_system = $1 and d.api_family = $2 and d.state = 'active'
-      order by d.source_metric_key collate "C"`,
-    [GPEXE_SOURCE_SYSTEM, team.api_family],
-  )).rows;
 
   // The variables: the club's own, then OptiMove's (section 3.3).
   const variables = (await client.query(
@@ -247,7 +277,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId: ctx.owner.clubId, team, candidate, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
+  return { clubId: ctx.owner.clubId, team, candidate, defaultSkipped, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -276,8 +306,8 @@ function columnsOf(world) {
 // never read in part.
 export const BOARD_MAX_CELLS = 60_000;
 
-function sessionValues(world, columns) {
-  // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
+// The readable columns' extractors, in the columns' order, with their field ids.
+function extractsOf(columns) {
   const ids = [];
   const extracts = [];
   for (const col of columns) {
@@ -288,8 +318,27 @@ function sessionValues(world, columns) {
     ids.push(col.field.id);
     extracts.push((input) => extractor.extract(input, {}));
   }
-  const rowCount = Array.isArray(world.candidate.raw_bundle?.athleteSessions) ? world.candidate.raw_bundle.athleteSessions.length : 0;
-  if (extracts.length * rowCount > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
+  return { ids, extracts };
+}
+const cellsOf = (bundle, extracts) => extracts.length * (Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0);
+
+// Why the default must pass a stored session by, or null when the board can open on it: the same checks, in the same
+// order, a named session is refused by (its size, its check and binding, its start, the board's size cap), and then
+// the board's own plan - the import's gates - so a session passed here is one sessionValues() reads.
+function defaultSessionRefusal(row, team, extracts, teamTimezone) {
+  if (row.purged || row.expired) return "snapshot_expired";
+  if (row.too_large === true) return "candidate_too_large";
+  if (row.check_status !== "succeeded" || row.source_path !== SOURCE_CONNECTION_PATH || row.source_binding_id !== team.binding_id) return "candidate_source_mismatch";
+  if (row.session_started_at === null) return "session_start_unknown";
+  if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return "candidate_source_mismatch";
+  if (cellsOf(row.raw_bundle, extracts) > BOARD_MAX_CELLS) return "board_too_large";
+  return gpexeSessionValuesKeyed(row.raw_bundle, extracts, { teamTimezone }).code;
+}
+
+function sessionValues(world, columns) {
+  // Each athlete's session-level value per readable column, in ONE plan (the import's own gates).
+  const { ids, extracts } = extractsOf(columns);
+  if (cellsOf(world.candidate.raw_bundle, extracts) > BOARD_MAX_CELLS) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
   const out = gpexeSessionValuesKeyed(world.candidate.raw_bundle, extracts, { teamTimezone: world.teamTimezone });
   if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   return out.athletes.map((athlete) => {
@@ -388,7 +437,8 @@ function boardOf(world, pairIndex) {
     board: {
       displayRegistryVersion: DISPLAY_REGISTRY_VERSION,
       team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id },
-      session: { candidateId: world.candidate.id, label: world.candidate.session_label ?? null, startedAt: world.candidate.session_started_at },
+      // newerNotUsable: with no session named, how many newer stored sessions were passed by because the import would not take them.
+      session: { candidateId: world.candidate.id, label: world.candidate.session_label ?? null, startedAt: world.candidate.session_started_at, newerNotUsable: world.defaultSkipped },
       pair: { index: pair.index, count: pair.count, labels: pair.labels },
       columns: columns.map((c) => {
         const rawA = c.readable ? pair.a.values.get(c.field.id) ?? null : null;

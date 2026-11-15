@@ -1874,3 +1874,30 @@ Frontend only, stacked on 18-3; no migration, no backend change. English texts o
 - **Tests:** `frontend/tests/metric-board.actions.test.mjs` (the real handlers and markup against answers captured
   from the real routes) and `e2e/tests/metric-board.test.mjs` (1280 px drag, 390 px tap, a coach offered nothing), with
   the fake source's `board` scenario (three linked athletes with different values).
+
+### 15.11 The default session, after the production defect of 2026-11-15
+
+Section 3.1 says the default session is the newest one that "passes the import's gates". As built in 18-2, route 1 took
+the newest stored session of the team by its start and only then tried the plan, so one session of a type OptiMove
+does not import (a match) at the top of the list answered `409 candidate_not_importable` and closed the board for the
+whole team; the screen's sentence sent the admin to a search that could not help. Corrected (no migration):
+
+- **Route 1 without `candidateId`:** one statement lists the team's newest stored sessions (at most
+  `BOARD_DEFAULT_SESSION_ATTEMPTS` = 10; ids only, no bundle). Each is then read alone, within the size bound, and
+  tried with the board's own plan, newest first, until one is taken. Sessions the import already blocked are tried
+  after the others: a block may be only "no mapping yet", which is what the board is for, so the stored state never
+  decides by itself. `session.newerNotUsable` says how many newer sessions were passed by.
+- **None taken:** `409 no_usable_session` with `current: { reason, tried }`; `reason` is the one reason all of them
+  share (`unsupported_category`, for one) or `mixed`. With no stored session at all it is `409 no_stored_session`, as
+  before. The look-back is bounded: an older usable session behind ten unusable ones is not reached by default.
+- **A named session** (`candidateId`, and every placement and save) keeps its own refusal, `candidate_not_importable`
+  with the import's reason. Nothing about the audience or the order of 404 before 409 changed.
+- **The screen:** the header says which session is shown (its date and label) and how many newer ones cannot be used;
+  when none can, one sentence by reason with *Open Imports to search*, and never "cannot read".
+- **Athletes with several recordings:** the board's plan takes no track choice (MT-B). Such an athlete is left out of
+  the athletes the board can compare, as before MT-B; the session itself is not refused. Passing the team's saved
+  choices to the board is a follow-up, with the session chooser.
+- **The Mappings preview** (`sourceMetricPreviewService.js`) always reads the session the request names, so it has no
+  default to correct; a named session the import would not take answers `candidate_not_importable` there too.
+- **Tests:** `source-metric-board-18-2.test.mjs` test 7e (through the real route, with the reads counted) and
+  `metric-board.actions.test.mjs` test 28.

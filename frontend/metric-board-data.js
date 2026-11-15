@@ -245,7 +245,10 @@ export const BOARD_ERROR = {
   snapshot_expired: "The saved session is no longer available. Run a new search in Imports.",
   candidate_too_large: "The saved session is too large to read here. Run a search for a smaller session in Imports.",
   candidate_source_mismatch: "The newest saved session was not read through this team's current GPEXE link. Run a new search in Imports.",
-  candidate_not_importable: "OptiMove cannot read the saved session. Run a new search in Imports.",
+  // A session named by the request that the import itself would not take (a match, for one).
+  candidate_not_importable: "This session cannot be used for mapping. Find a training session in Imports first.",
+  // No session named, and none of the newest stored sessions is one the import would take.
+  no_usable_session: "None of the sessions found so far can be used for mapping. Find a training session in Imports first.",
   session_start_unknown: "The saved session has no start time. Run a new search in Imports.",
   not_enough_athletes: "OptiMove needs two athletes it can name. Link the team's athletes in Imports (Link athletes) so OptiMove can name two of them.",
   pair_out_of_range: "No other athletes have values for all your columns.",
@@ -258,7 +261,24 @@ export const BOARD_ERROR = {
   request_key_reused: "Nothing was saved. Compare the columns again, then save.",
   invalid_body: "The board could not be saved as it is. Nothing was saved. Read the board again.",
 };
-export const boardErrorText = (info) => BOARD_ERROR[info?.code] || (info?.status === 404 ? BOARD_ERROR.notFound : "Something went wrong. Nothing was changed.");
+// Why none could be used, in words, for the one reason an admin can act on; any other reason keeps the plain sentence.
+const NO_USABLE_SESSION_BY_REASON = {
+  unsupported_category: "None of the sessions found so far can be used for mapping: the latest ones are of a type OptiMove does not import. Find a training session in Imports first.",
+};
+export const boardErrorText = (info) => {
+  if (info?.code === "no_usable_session") {
+    const reason = info?.current?.reason;
+    return (typeof reason === "string" && Object.hasOwn(NO_USABLE_SESSION_BY_REASON, reason) ? NO_USABLE_SESSION_BY_REASON[reason] : null) || BOARD_ERROR.no_usable_session;
+  }
+  return BOARD_ERROR[info?.code] || (info?.status === 404 ? BOARD_ERROR.notFound : "Something went wrong. Nothing was changed.");
+};
+// The session the board shows, in words: its date, its label when it has one, and - when the board opened by itself
+// on an older session - how many newer ones it passed by because they cannot be used for mapping.
+export function sessionWords(session, dateTime) {
+  const label = cleanName(session?.label);
+  const skipped = Number.isInteger(session?.newerNotUsable) && session.newerNotUsable > 0 ? session.newerNotUsable : 0;
+  return `From the session of ${dateTime(session?.startedAt)}${label ? ` (${label})` : ""}.${skipped ? ` ${skipped === 1 ? "1 newer session" : `${skipped} newer sessions`} cannot be used for mapping.` : ""}`;
+}
 
 // A name written by another person or by the source, safe to put in a
 // sentence: control and direction characters removed, at most 80 characters.
