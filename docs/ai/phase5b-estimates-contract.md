@@ -311,15 +311,25 @@ not frontend-only. It is split: C1 (this section) and C2 (the imported session's
   method `minutes` and `sessionCount` (proportional), `athleteCount` (team average), `recordedMinutes` and `targetMinutes`
   (scale recording), `sourceAthleteName` (copy). Never a user id, an athlete id, the rate or the raw basis.
 - **The copy source's name** is given only when the same answer already names that athlete: on the Roster read, an athlete of
-  the roster or of *recorded outside the roster*; on the Activities read, an athlete of the facts the caller may see. So an
-  athlete reading their own results gets the method, the author and the date, never whose values were copied. A source who
+  the roster or of *recorded outside the roster*; on the Activities read, an athlete of the facts the caller may see. A source who
   left the team after the session is named as the roster names them for that day.
+- **An athlete reading their own results** (the Activities read, athlete-self) gets exactly `method`, `estimatedBy` and
+  `estimatedAt` for every method: no basis number (a team average's athlete count is team information) and never the copy
+  source. The screen then reads in plain words ("Estimate · team average · …", "own average", "scaled from a shorter
+  recording", "copied from another athlete"). The Independent's M1 on #537; tests 17 (6b-B suite) and 3 (MT-D suite).
 - A replaced estimate has no label: the reads show only effective values (rule 7).
 - **Known, accepted (the security review of C1):** a copied value equals a teammate's measured value of the same session. An
   athlete reading their own results sees the number as their estimate, labelled "copied from another athlete", never whose
   it is. This follows from the coach's choice of the copy method (6b-B) and is not changed here.
 - Every other value, and an answer with no estimate, is exactly as before. The Roster read's `viewer` carries
   `estimates: true` only while `ESTIMATES_ENABLED` is on.
+- **Recorded, no change (the Independent on #537):**
+  - the author is named whether or not their account is still active;
+  - an author cannot be deleted while an estimate names them: `metric_value_estimates.estimated_by_user_id` references
+    `public.users` with `on delete restrict` (v63), so the inner join that reads the name never drops a label;
+  - the author may be a platform admin, whose name then reaches the team's coaches and the athlete, as any author's does;
+  - the labels are not gated by the flag: an estimate saved while `ESTIMATES_ENABLED` was on keeps its label after it is
+    turned off (only the action and `viewer.estimates` follow the flag).
 
 **The Roster tab** (`frontend/activity-estimate.js` with `activity-roster-*.js`):
 - **The action:** "Estimate values…" ("Change the estimate…" once one exists), only on a row whose state is *Participated · no
