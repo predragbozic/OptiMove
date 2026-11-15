@@ -20,7 +20,7 @@ import { guideSteps } from "./gpexe-guide-steps.js";
 import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
-import { renderEstimateTargetsHtml } from "./gpexe-estimate-link.js";
+import { importedActivityOf, renderEstimateTargetsHtml } from "./gpexe-estimate-link.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
@@ -2065,7 +2065,8 @@ function renderReplacedEstimatesHtml(preview, c) {
   const lines = replacedEstimateLines(preview, c);
   if (!lines.length) return "";
   const count = preview.supersededEstimates.length;
-  const done = c?.status === "imported";
+  // Imported: the session says so, or this review's import is confirmed (before the session is read again).
+  const done = c?.status === "imported" || Boolean(importedActivityOf(state.trainingLoad.gpexe.detail));
   const heading = done
     ? (count === 1 ? "An estimate was replaced by a measured value" : `Estimates replaced by measured values (${count})`)
     : (count === 1 ? "An estimate is replaced by a measured value" : `Estimates replaced by measured values (${count})`);

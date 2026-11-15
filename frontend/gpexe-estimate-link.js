@@ -80,7 +80,8 @@ export function renderEstimateTargetsHtml(detail) {
       <ul>
         ${t.athletes.map((a) => {
     const label = a.estimated ? "Change the estimate in Activities" : "Estimate values in Activities";
-    const aria = a.estimated ? `Change the estimate for ${a.name} in Activities` : `Estimate values for ${a.name} in Activities`;
+    // The visible text stays whole at the start of the name (WCAG 2.5.3, label in name), then the athlete.
+    const aria = `${label}, ${a.name}`;
     return `<li><span>${escapeHtml(a.name)}${a.estimated ? ` <small class="muted">· Estimated</small>` : ""}</span> <button type="button" class="plain-button gpexe-button" data-action="training-load-estimate-in-activities" data-athlete-id="${escapeAttr(a.athleteId)}" aria-label="${escapeAttr(aria)}" ${busy ? "disabled" : ""}>${label}</button></li>`;
   }).join("")}
       </ul>

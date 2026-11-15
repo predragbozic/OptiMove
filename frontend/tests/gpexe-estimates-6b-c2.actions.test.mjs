@@ -337,7 +337,9 @@ test("11. after the import the replacement line is in the past tense; an athlete
   assert.doesNotMatch(replacedText, /when you import/);
   const sec = targetsSection();
   assert.match(sec, />Change the estimate in Activities</);
-  assert.match(sec, /aria-label="Change the estimate for Ana Example in Activities"/);
+  // Label in name: the visible text whole at the start of the accessible name.
+  for (const m of sec.matchAll(/aria-label="([^"]+)"[^>]*>([^<]+)<\/button>/g)) assert.ok(m[1].startsWith(m[2]), `${m[1]} starts with ${m[2]}`);
+  assert.match(sec, /aria-label="Change the estimate in Activities, Ana Example"/);
   assert.match(sec, /Estimated/);
   // An undone import says nothing about the replaced estimates.
   await openImportedReview({ extra: { importUndoneAt: "2026-10-07T10:00:00Z" }, preview: { supersededEstimates: [{ athleteId: "ath-1", metricDefinitionId: "def-distance" }] } });
@@ -354,4 +356,12 @@ test("8b. each undo signal alone removes the link: the undo done in this review 
   gx().detail.outcome = { kind: "imported", result: { import: { activityId: ACT } } };
   gx().detail.candidate = { ...gx().detail.candidate, importUndoneAt: "2026-10-07T10:00:00Z" };
   assert.equal(targetsSection(), "", "the session's undone mark is enough, even with the import's outcome on screen");
+});
+
+test("12. right after an import made in this review (the session not read again yet), the replacement line is already in the past tense", async () => {
+  await openReview({ supersededEstimates: [{ athleteId: "ath-1", metricDefinitionId: "def-distance" }] });
+  assert.match(replacedSection(), /when you import/, "pending: the future");
+  gx().detail.outcome = { kind: "imported", result: { approval: { id: "appr-1" }, import: { activityId: "act-1" } } };
+  assert.match(replacedSection(), /replaced them in this import/);
+  assert.doesNotMatch(replacedSection(), /when you import/);
 });
