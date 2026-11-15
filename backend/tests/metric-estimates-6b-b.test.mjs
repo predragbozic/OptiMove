@@ -1006,7 +1006,9 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   const anaUser = await athleteUser(ana, "ana athlete");
   const source = await tapi(`/${s.activityId}`, { cookie: anaUser.cookie });
   assert.equal(source.status, 200, source.text);
-  assert.ok(source.body.facts.length > 0 && source.body.facts.every((f) => String(f.athleteId) === String(ana)), "only Ana's own facts");
+  // Every athlete fact is Ana's; session-level facts (no athleteId) belong to no athlete.
+  assert.ok(source.body.facts.some((f) => String(f.athleteId) === String(ana)), "Ana's own facts are there");
+  assert.ok(source.body.facts.every((f) => f.athleteId == null || String(f.athleteId) === String(ana)), "no other athlete's fact");
   assert.ok(source.body.facts.every((f) => !("estimate" in f) && f.detail?.entryMethod !== "estimate"), "no estimate in the source's answer");
   const evaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [eva])).rows[0].n;
   assert.ok(!source.text.includes(evaName) && !source.text.includes(String(eva)), "the source never learns who copied from them");
