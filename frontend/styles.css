@@ -26619,3 +26619,50 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   }
 }
 /* End of Imports P4. */
+
+/* Imports P4b: "Later" on a Ready row, beside the row's own button (never inside it); a 44 px target. */
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-later-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-later-row > .gpexe-candidate {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.imports-later {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+}
+.imports-later-aside {
+  display: grid;
+  gap: 6px;
+}
+.imports-later-aside > p {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.imports-later-aside .gpexe-button,
+.imports-later-notice .gpexe-button {
+  min-height: 44px;
+}
+.imports-later-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.imports-later-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+/* End of Imports P4b. */

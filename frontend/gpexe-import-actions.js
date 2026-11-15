@@ -58,6 +58,7 @@ import {
 } from "./gpexe-import-data.js";
 import { clearPeriod, periodOf, pickDay, setPeriodOpen, turnMonth } from "./gpexe-period-data.js";
 import { takePeriodDragClick } from "./gpexe-period-drag.js";
+import { bringBack, clearLaterNotice, isLater, laterOpen, putLater, setLaterOpen } from "./gpexe-later-data.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -127,6 +128,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-open") {
+    clearLaterNotice(gx);
     // U6a-2: a session opened from an attention group (its button or one of its rows) steps through that group.
     // The group's sessions are kept as they are now, so a link that moves the others to "Review out of date" does not end it.
     const group = action.dataset.group || "";
@@ -513,7 +515,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-batch-select") {
     if (gx.batch.sending) return true;
-    selectBatchVisible(batchSelectableList(gx));
+    // P4b: never a session put aside for later on this device.
+    selectBatchVisible(batchSelectableList(gx).filter((c) => !isLater(c, gx)));
     renderTrainingLoad();
     return true;
   }
@@ -524,11 +527,12 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-import-ready") {
-    // J19 U1: "Import N ready" = select the clean Ready sessions (the date
-    // filter is not applied: this is the day's whole list) and open the one
+    // J19 U1: "Import N ready" = select the clean Ready sessions (the whole
+    // list, P4b: but none put aside for later) and open the one
     // review and confirmation; nothing is sent before the confirmation.
     if (gx.batch.sending) return true;
-    selectBatchVisible(batchSelectableList(gx));
+    // P4b: never a session put aside for later on this device.
+    selectBatchVisible(batchSelectableList(gx).filter((c) => !isLater(c, gx)));
     if (openBatchReview()) renderTrainingLoad();
     return true;
   }
@@ -562,6 +566,23 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-batch-open") {
     // The result stays; the review opens over it and it is back on close.
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
+    return true;
+  }
+  // P4b, "Later": local only, no request for any of these.
+  if (type === "training-load-gpexe-later") {
+    if (putLater(action.dataset.candidateId || "")) {
+      renderTrainingLoad();
+      globalThis.document?.querySelector?.(".imports-later-notice button")?.focus?.({ preventScroll: true });
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-later-back") {
+    if (bringBack(action.dataset.candidateId || "")) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-later-show") {
+    setLaterOpen(!laterOpen(gx));
+    renderTrainingLoad();
     return true;
   }
   // P4, the period chooser: local only, no request for any of these.

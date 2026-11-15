@@ -8,6 +8,7 @@
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
 import { emptyPeriod, localDay } from "./gpexe-period-data.js";
+import { pruneLater } from "./gpexe-later-data.js";
 import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { emptyTeamSwitchState, loadTeamImportSwitch } from "./team-import-switch-data.js";
@@ -173,6 +174,7 @@ export async function loadGpexeTeam(render) {
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.candidatesCheckId = status.lastCheck && status.lastCheck.status !== "running" ? status.lastCheck.id : null;
+    pruneLaterToReady(gx);
     gx.links = links.links;
     // The inbox is painted as soon as the mandatory data is here: a slow
     // helper read must not hold it back either.
@@ -242,6 +244,12 @@ function forgetConfirmedImports() {
   if (linked && !reviewMadeBeforeLinkChange(linked, gx)) gx.lastLink = null;
 }
 
+// P4b: a session put aside for later is forgotten once it is gone or no longer Ready (imported, changed, withdrawn).
+function pruneLaterToReady(gx) {
+  const ready = new Set((gx.candidates || []).filter((c) => inboxBucket(c, gx) === "ready").map((c) => c.id));
+  pruneLater((id) => ready.has(id), gx);
+}
+
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
@@ -252,6 +260,7 @@ export async function reloadGpexeCandidates(render) {
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
     gx.candidatesCheckId = afterCheck;
+    pruneLaterToReady(gx);
     forgetConfirmedImports();
     pruneBatchSelection(gx);
   } catch (error) {
