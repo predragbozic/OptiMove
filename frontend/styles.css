@@ -6361,7 +6361,7 @@ body.specific-program-open {
   align-items: center;
   gap: 0 8px;
   min-width: 0;
-  color: var(--om-warning, #8a5300);
+  color: var(--warning-text, #8a5300);
   font-size: 13px;
   line-height: 1.3;
 }
@@ -6376,6 +6376,8 @@ body.specific-program-open {
   font-size: 13px;
 }
 :is(.exercise-card-actions, .exercise-view-actions, .builder-exercise-mini-actions):has(> .exercise-favorite-failed) { flex-wrap: wrap; }
+/* The Builder's phone layouts set the row to one line further down; with the message it wraps there too. */
+.builder-exercise-view .builder-exercise-mini-actions:has(> .exercise-favorite-failed) { flex-wrap: wrap; }
 .exercise-tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
 .exercise-tag-list span, .exercise-tag-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 3px 7px; border-radius: 999px; background: #eef2f4; color: var(--muted); font-size: 11px; font-weight: 800; }
 /* z-index: the overlay ladder, see .media-modal. */
