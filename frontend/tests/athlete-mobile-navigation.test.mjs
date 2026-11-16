@@ -238,7 +238,8 @@ test("styles.css: .week-nav-panel sticks at the same offset as the Settings iden
 test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (not left in normal flow, which rendered it near the top of the page - disconnected from wherever the nav row was actually pinned once scrolled) - found live: opening the calendar while scrolled down left the athlete unsure it had opened at all", () => {
   const block = cssBlock(cssSource, ".athlete-mode .week-calendar-picker {");
   assert.match(block, /position:\s*sticky;/);
-  assert.match(block, /top:\s*calc\(118px \+ env\(safe-area-inset-top, 0px\)\);/);
+  // Under the topbar and the week controls (8 + 44 + 8 + 1 = 61 px since the controls are 44 px; owner, 2026-11-16, item 4).
+  assert.match(block, /top:\s*calc\(var\(--athlete-topbar-height, 61px\) \+ 61px \+ env\(safe-area-inset-top, 0px\)\);/);
 });
 
 // Programs overhaul item 2: the Specific Program detail is now a real

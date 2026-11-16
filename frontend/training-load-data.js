@@ -70,7 +70,7 @@ const TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE = "training-load-weekly";
 // this one also catches "this exact nav slot moved on to a different
 // request entirely" even when dedupeRequest itself would have collapsed
 // two truly-identical concurrent calls into one anyway.
-const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0, overview: 0 };
+const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0, athleteHome: 0, overview: 0 };
 
 function clampSelectedDateToWeek(selectedDate, data) {
   if (data.days.some((d) => d.date === selectedDate)) return selectedDate;
@@ -304,6 +304,17 @@ export async function loadTrainingLoadWeekly(section, onPainted) {
 // caller (see trainingLoad.js), so no filter query is ever sent here.
 export async function loadTrainingLoadAthleteWeekly(onPainted) {
   return loadTrainingLoadWeeklyInto(state.trainingLoad.athleteWeekly, "athlete", "", onPainted);
+}
+
+// Athlete Home's "This week" row (owner, 2026-11-16, item 2): the same self-scoped weekly read, always for the current
+// week (the overlay keeps its own week), so Home can count the sessions still waiting for her rating.
+export async function loadTrainingLoadAthleteHomeWeek(onPainted) {
+  const nav = state.trainingLoad.athleteHomeWeek;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const today = localDateIsoInTimeZone(timezone);
+  nav.weekStart = weekMondayIso(today);
+  nav.selectedDate = today;
+  return loadTrainingLoadWeeklyInto(nav, "athleteHome", "", onPainted);
 }
 
 // Correction: called on a workspace switch, BEFORE any new fetch is
