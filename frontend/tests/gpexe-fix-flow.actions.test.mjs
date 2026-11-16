@@ -897,3 +897,55 @@ test("Link pick: choosing nothing again clears the pick; a pick that is no longe
   await act("training-load-gpexe-close");
   assert.deepEqual(state.trainingLoad.gpexe.linkPicks, {}, "closing the review forgets the picks");
 });
+
+test("Link pick (code review): a kept pick that is no longer a choice is not used by Link...; it asks to choose", async () => {
+  resetState();
+  await open(world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } }));
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  state.trainingLoad.gpexe.linkPicks["101"] = "ath-gone";
+  selectValues["101"] = "";
+  await act("training-load-gpexe-link", { gpexeAthleteId: "101" });
+  assert.equal(state.trainingLoad.gpexe.linkConfirm, null, "no confirmation for a pick the screen does not show");
+  assert.equal(state.trainingLoad.gpexe.linkError?.code, "choose_athlete");
+  assert.equal(state.trainingLoad.gpexe.linkPicks["101"], undefined, "the stale pick is dropped");
+  // A pick linked to another GPEXE athlete meanwhile leaves the choices the same way.
+  resetState();
+  await open(world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101", "102"] } }));
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  const pick = (g, value) => handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: g }, value, matches: () => true }, { renderTrainingLoad: render });
+  await pick("101", "ath-1");
+  await pick("102", "ath-1");
+  await act("training-load-gpexe-link", { gpexeAthleteId: "102" });
+  await act("training-load-gpexe-link-confirm");
+  selectValues["101"] = "";
+  await act("training-load-gpexe-link", { gpexeAthleteId: "101" });
+  assert.equal(state.trainingLoad.gpexe.linkConfirm, null, "ath-1 is linked to 102 now: never offered for 101");
+  assert.equal(state.trainingLoad.gpexe.linkError?.code, "choose_athlete");
+});
+
+test("Link pick (code review): opening the chooser (a click with the same value) changes nothing and never repaints", async () => {
+  resetState();
+  await open(world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } }));
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  selectValues["101"] = "";
+  await act("training-load-gpexe-link", { gpexeAthleteId: "101" });
+  assert.equal(state.trainingLoad.gpexe.linkError?.code, "choose_athlete");
+  let renders = 0;
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value: "", matches: () => true }, { renderTrainingLoad: () => { renders += 1; } });
+  assert.equal(renders, 0, "no repaint");
+  assert.equal(state.trainingLoad.gpexe.linkError?.code, "choose_athlete", "the hint stays until something is picked");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value: "ath-1", matches: () => true }, { renderTrainingLoad: () => { renders += 1; } });
+  assert.equal(state.trainingLoad.gpexe.linkError, null, "a pick answers the hint");
+  const before = renders;
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value: "ath-1", matches: () => true }, { renderTrainingLoad: () => { renders += 1; } });
+  assert.equal(renders, before, "the same pick again: no repaint");
+});
+
+test("Link pick (code review): Skip for now in the Fix sheet forgets that athlete's pick", async () => {
+  resetState();
+  await open(world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101", "102"] } }));
+  await fixFirst();
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value: "ath-1", matches: () => true }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-skip", { gpexeAthleteId: "101" });
+  assert.equal(state.trainingLoad.gpexe.linkPicks["101"], undefined);
+});

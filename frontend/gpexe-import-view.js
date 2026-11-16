@@ -2346,12 +2346,26 @@ function linkOptionHtml(o, picked = "") {
   return `<option value="${escapeAttr(o.id)}"${o.duplicate ? " disabled" : ""}${!o.duplicate && String(o.id) === picked ? " selected" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`;
 }
 
-// A link chooser, drawn from the pick kept in state (gx.linkPicks), so a repaint while a read answers never drops it. A pick
-// that is no longer one of the choices (linked elsewhere meanwhile) is not shown: the chooser starts again from nothing.
-function linkSelectHtml(id, choices, sg) {
+// The pick kept for a GPEXE athlete if it is still one of the chooser's choices (the suggested athlete or a team athlete
+// without a GPEXE record, not linked, whose name no other team athlete shares), else "". The chooser draws it and "Link..."
+// uses it by the same rule, so a pick that left the choices (linked to another GPEXE athlete meanwhile) is neither shown
+// nor sent to the confirmation (code review).
+function offeredPick(id, choices, sg) {
   const kept = String(state.trainingLoad.gpexe.linkPicks?.[id] || "");
   const offered = new Set([...(sg ? [String(sg.id)] : []), ...choices.filter((o) => !o.duplicate).map((o) => String(o.id))]);
-  const picked = offered.has(kept) ? kept : "";
+  return offered.has(kept) ? kept : "";
+}
+export function keptLinkPick(id) {
+  const c = state.trainingLoad.gpexe.detail?.candidate;
+  if (!c?.preview) return "";
+  const choices = linkChoicesOf(c.preview, c);
+  return offeredPick(id, choices, suggestedChoice(id, choices));
+}
+
+// A link chooser, drawn from the pick kept in state (gx.linkPicks), so a repaint while a read answers never drops it. A pick
+// that is no longer one of the choices is not shown: the chooser starts again from nothing.
+function linkSelectHtml(id, choices, sg) {
+  const picked = offeredPick(id, choices, sg);
   return `<select class="gpexe-select" data-action="training-load-gpexe-link-pick" data-gpexe-link-select="${escapeAttr(id)}" data-gpexe-athlete-id="${escapeAttr(id)}">
             <option value=""${picked ? "" : " selected"}>Choose an athlete of the team</option>
             ${sg ? `<option value="${escapeAttr(sg.id)}"${String(sg.id) === picked ? " selected" : ""}>Suggested: ${escapeHtml(sg.name)}</option>` : ""}

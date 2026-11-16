@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
+import { importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
@@ -243,6 +243,8 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
       gx.linkConfirm = null;
       gx.linkError = null;
       gx.linkOpen = "";
+      // "Not now" for this athlete: its pick is not kept for later (code review).
+      if (gx.linkPicks) delete gx.linkPicks[id];
       if (detail.fix.trackWrite?.sending || detail.fix.trackWrite?.unknown) return true;
       detail.fix.trackPick = null;
       detail.fix.trackError = null;
@@ -486,8 +488,11 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-link") {
     if (gx.detail?.updating) return true;
     const gpexeAthleteId = action.dataset.gpexeAthleteId;
-    // The pick kept in state (it survives a repaint); the select itself only when no pick is kept.
-    const athleteId = gx.linkPicks?.[gpexeAthleteId] || fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
+    // The pick kept in state (it survives a repaint) while it is still one of the choices; a pick that left them is dropped.
+    // The select itself only when no pick is kept.
+    const kept = keptLinkPick(gpexeAthleteId);
+    if (!kept && gx.linkPicks?.[gpexeAthleteId]) delete gx.linkPicks[gpexeAthleteId];
+    const athleteId = kept || fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
     gx.linkOpen = gpexeAthleteId;
     gx.linkError = null;
     if (!athleteId) {
@@ -533,10 +538,14 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // The chooser's pick, kept by GPEXE athlete id so a repaint never drops it. Nothing is sent.
     const id = action.dataset.gpexeAthleteId;
     if (!id) return true;
-    gx.linkPicks = { ...(gx.linkPicks || {}), [id]: String(action.value || "") };
-    if (!gx.linkPicks[id]) delete gx.linkPicks[id];
-    // "Choose the team athlete first" is answered by the pick itself.
-    if (gx.linkError?.code === "choose_athlete" && String(gx.linkOpen) === String(id)) {
+    // The select is reached by a click too (opening it): an unchanged value changes nothing and never repaints, or the repaint
+    // would close the list it opens (code review).
+    const value = String(action.value || "");
+    if ((gx.linkPicks?.[id] || "") === value) return true;
+    gx.linkPicks = { ...(gx.linkPicks || {}), [id]: value };
+    if (!value) delete gx.linkPicks[id];
+    // "Choose the team athlete first" is answered by a pick itself.
+    if (value && gx.linkError?.code === "choose_athlete" && String(gx.linkOpen) === String(id)) {
       gx.linkError = null;
       renderTrainingLoad();
     }
