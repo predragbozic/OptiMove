@@ -81,8 +81,9 @@ export async function loadInventory(render, { more = false } = {}) {
   const s = sourceFieldsState();
   if (!sourceFieldsContext()) return;
   const inv = s.inventory;
-  // One read at a time: Load more never runs while the list is read again from the start (code review, LOW).
-  if (inv.loading || (more && (!inv.nextCursor || inv.loadingMore))) return;
+  // One read at a time, both ways: neither Load more nor a read from the start runs while the other is in flight (code
+  // review, LOW; its re-review's L1).
+  if (inv.loading || inv.loadingMore || (more && !inv.nextCursor)) return;
   const generation = s.generation;
   const filter = `${inv.endpoint}|${inv.showSupported}`;
   if (more) inv.loadingMore = true; else { inv.loading = true; inv.error = null; inv.nextCursor = null; }

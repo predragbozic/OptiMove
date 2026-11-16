@@ -89,6 +89,12 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
     assert.equal(await pa.page.locator(".source-fields-inventory-thresholds").evaluate((d) => d.open), true, "the fold stays open after its rows load");
     const shown = pa.page.locator(".source-fields-inventory-thresholds [data-sf-threshold-row], .source-fields-inventory-thresholds .empty").first();
     assert.ok(await shown.isVisible(), "its rows (or its empty line) are visible");
+    // Folded by the admin, it stays folded across a repaint: the app's "toggle" listener records it (the re-review's L2).
+    await pa.page.click(".source-fields-inventory-thresholds summary");
+    await pa.page.click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
+    await pa.page.waitForFunction(() => document.querySelector('[data-endpoint="athlete_session"]')?.getAttribute("aria-pressed") === "true");
+    await pa.page.waitForFunction(() => !document.querySelector(".source-fields-inventory [role=status]"));
+    assert.equal(await pa.page.locator(".source-fields-inventory-thresholds").evaluate((d) => d.open), false, "a folded fold stays folded after a repaint");
   } finally {
     await pa.context.close();
   }

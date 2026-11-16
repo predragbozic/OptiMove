@@ -228,6 +228,26 @@ test("4b. Load more is not sent while Try again reads the list from the start; t
   assert.deepEqual(shownNames(), ["fresh"]);
 });
 
+test("4c. a read from the start is not sent while Load more is in flight; the page it loads is appended once", async () => {
+  pages.default = ok([item({ name: "first" })], "C1");
+  pages[`${INV}?cursor=C1`] = { status: 409, body: { error: "try_again" } };
+  await loadSourceFieldsSection(render);
+  await click('[data-action="source-fields-inv-more"]');
+  assert.match(text(), /The server was busy/);
+  let release;
+  delay = (url) => (url === `${INV}?cursor=C1` ? new Promise((resolve) => { release = resolve; }) : Promise.resolve());
+  pages[`${INV}?cursor=C1`] = ok([item({ name: "second" })]);
+  const more = handleSourceFieldsAction($('[data-action="source-fields-inv-more"]'), { render });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const before = inventoryGets().length;
+  const reload = $('[data-action="source-fields-inv-reload"]');
+  if (reload) await handleSourceFieldsAction(reload, { render });
+  assert.equal(inventoryGets().length, before, "no read from the start while Load more runs");
+  release();
+  await more;
+  assert.deepEqual(shownNames(), ["first", "second"]);
+});
+
 test("7b. the team zone limits fold keeps the state the admin left it in across repaints", async () => {
   const { sourceFieldsThresholdsToggled } = await import("../source-fields-actions.js");
   pages.default = ok([item()]);

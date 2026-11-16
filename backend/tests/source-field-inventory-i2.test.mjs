@@ -340,9 +340,9 @@ test("11. an admin of club A only, whose workspace preference names club B, read
   assert.ok(!names(r).some((n) => /club_b_only|foreign_team_b_only/.test(n)), "never club B's names");
 });
 
-test("12. the order is the \"C\" collation's even when the column collates otherwise (the Independent's L2): names whose ICU order differs keep C order", async () => {
+test("12. the order is the \"C\" collation's even when the column collates otherwise (the Independent's L2): names whose ICU order differs keep C order", async (t) => {
   const icu = await one(`select count(*)::int n from pg_collation where collname = 'und-x-icu'`);
-  if (!icu.n) return; // a cluster without ICU cannot show the difference
+  if (!icu.n) { t.skip("no ICU collation on this cluster: the order difference cannot be shown"); return; }
   const clubE = await club("Club E");
   const conn = await connection({ clubId: clubE, by: W.pa.id });
   const order = ["Zeta_count", "_b", "a_b", "ab", "alpha_count"];
