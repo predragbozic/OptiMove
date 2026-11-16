@@ -1466,3 +1466,83 @@ test("35b. manual_values and estimated decisions are refused until 5b, by the de
     await client.end();
   }
 });
+
+// ---------------------------------------------------------------------------
+// An athlete's own read (athlete-own-results.test.mjs) over this suite's fixtures: a real GPEXE import, and two alias
+// sessions that disagree about her (the Independent's LOW-2 and LOW-3 on #578).
+// ---------------------------------------------------------------------------
+async function athleteLogin(athleteId, label = "athlete login") {
+  const userId = await makeUser(label);
+  await q(`update public.athletes set user_id = $2 where id = $1`, [athleteId, userId]);
+  await setWorkspace(userId, "athlete", null);
+  return withCookie(userId);
+}
+const ownDetail = (activityId, who) => api(`/api/training-activity/${activityId}`, { cookie: who.cookie });
+
+test("athlete-own: a value written by a real import reads 'device' in her detail, list and calendar, and she has a recorded session", async () => {
+  const team = await gpexeTeam("Own import");
+  const summary = await importDirect(team, bundleFor(6901));
+  const me = await athleteLogin(team.ids[101]);
+  // What the import wrote for her: effective occasions of a source identity (not a hand entry turned into one).
+  const written = await q(
+    `select o.entry_method, o.source_identity_id is not null as has_identity
+       from training.activity_participants ap
+       join training.activity_participant_metric_participant_links l on l.activity_participant_id = ap.id and l.link_status = 'confirmed'
+       join training_load.metric_measurement_occasions o on o.event_participant_id = l.metric_event_participant_id
+      where ap.activity_id = $1 and ap.athlete_id = $2 and o.superseded_by_occasion_id is null`,
+    [summary.activityId, team.ids[101]],
+  );
+  assert.ok(written.length > 0 && written.every((w) => w.entry_method === "api_import" && w.has_identity), "the fixture is a real import with source identities");
+
+  const detail = await ownDetail(summary.activityId, me);
+  assert.equal(detail.status, 200, detail.text);
+  assert.equal(detail.body.recordedBy, "device");
+  assert.equal(detail.body.myAttendance, "participated");
+  const values = detail.body.facts.filter((f) => f.factKind === "metric_value");
+  assert.ok(values.length > 0, "her imported values");
+  assert.ok(values.every((f) => !("entryMethod" in f.detail)), "how a value was entered is not hers unless it is an estimate");
+  for (const hidden of ["api_import", "sourceIdentityId", "occasionId", team.ids[102], team.ids[103], team.names[102], team.names[103]]) assert.ok(!detail.text.includes(hidden), hidden);
+  assert.deepEqual(Object.keys(detail.body.variableNamesById).sort(), [...new Set(values.map((f) => f.detail.metricDefinitionId))].sort());
+
+  const day = (await q(`select to_char(occurred_local_date, 'YYYY-MM-DD') as d from training.activities where id = $1`, [summary.activityId]))[0].d;
+  const list = await api(`/api/training-activity?dateFrom=${day}&dateTo=${day}`, { cookie: me.cookie });
+  assert.deepEqual(list.body.rows.map((r) => [r.activityId, r.recordedBy]), [[summary.activityId, "device"]]);
+  const calendar = await api(`/api/training-load/calendar?dateFrom=${day}&dateTo=${day}`, { cookie: me.cookie });
+  assert.deepEqual(calendar.body.days.flatMap((d) => d.items).filter((i) => i.kind === "activity").map((i) => [i.activityId, i.recordedBy]), [[summary.activityId, "device"]]);
+  assert.deepEqual((await api("/api/training-activity/self", { cookie: me.cookie })).body, { hasRecordedSessions: true });
+
+  // The athlete whose record needs a manual check (two tracks) has no effective value: nothing is said to be recorded
+  // for her, and the others' values are not hers.
+  const pending = await athleteLogin(team.ids[103], "pending athlete");
+  const hers = await ownDetail(summary.activityId, pending);
+  if (hers.status === 200) {
+    assert.deepEqual([hers.body.recordedBy, hers.body.facts.filter((f) => f.factKind === "metric_value")], [null, []]);
+    for (const hidden of [team.ids[101], team.names[101]]) assert.ok(!hers.text.includes(hidden), hidden);
+  } else {
+    assert.equal(hers.status, 404);
+  }
+});
+
+test("athlete-own: two alias sessions that disagree about her say nothing; when they agree, that one word", async () => {
+  const { clubId, teamId } = await makeTeam("Own alias");
+  const coach = await coachOf(teamId);
+  const athleteId = await makeAthlete("Alias Example");
+  await addMembership({ athleteId, clubId, teamId });
+  const survivor = await makeActivity({ teamId });
+  // She is a participant of the session with no value of her own (she only took part).
+  await q(`insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status, merge_status)
+     select a.id, $2, a.occurred_local_date, a.timezone_snapshot, 'participated', 'canonical' from training.activities a where a.id = $1`, [survivor, athleteId]);
+  const me = await athleteLogin(athleteId);
+  const attendance = async () => { const res = await ownDetail(survivor, me); assert.equal(res.status, 200, res.text); return res.body.myAttendance; };
+  assert.equal(await attendance(), null, "no decision about her");
+  await insertDecision({ activityId: survivor, athleteId, teamId, userId: coach.id, kind: "did_not_participate" });
+  assert.equal(await attendance(), "did_not_participate");
+  // A session merged into this one carried the SAME decision about her: still that one word.
+  await supersededInto(survivor, teamId, { beforeMerge: (aliasId) => insertDecision({ activityId: aliasId, athleteId, teamId, userId: coach.id, kind: "did_not_participate" }) });
+  assert.equal(await attendance(), "did_not_participate");
+  // Another merged session says she took part: the two disagree, the coach has not settled it, nothing is said to her.
+  await supersededInto(survivor, teamId, { beforeMerge: (aliasId) => insertDecision({ activityId: aliasId, athleteId, teamId, userId: coach.id, kind: "participated_no_values", reasonKey: null }) });
+  assert.equal(await attendance(), null);
+  const res = await ownDetail(survivor, me);
+  for (const hidden of ["illness", "decision", coach.id]) assert.ok(!res.text.includes(hidden), hidden);
+});
