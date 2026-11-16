@@ -367,6 +367,27 @@ Frontend only, in `frontend/source-fields-{view,data,actions}.js`. Reviewers: `c
 - **Team thresholds:** a platform admin's fold, read only when opened.
 - **Read-only:** nothing on the list writes.
 
+### 7.3a Structural keys are not fields (the *Rukovodilac*'s decision (b), 2026-11-16)
+
+An identifier, a reference to another record or a timestamp is never a value GPEXE measured, so nobody could map it. One
+frozen list, `STRUCTURAL_FIELDS` in `backend/src/sourceFieldInventory.js`, is used in two places:
+- the collector does not record those names;
+- the read (`sourceFieldInventoryRead.js`) hides the same pairs under every state and filter. This is a backstop for any
+  row written before the rule; production has none yet.
+
+No migration, and no change to who sees what.
+
+| Endpoint | Left out | Kept, though unsure |
+|---|---|---|
+| `athlete_session` | `id`, `athlete`, `teamsession`, `track`, `drill`, `team`, `start_timestamp`, `end_timestamp`, `created_on`, `updated_on` | `is_stats_valid` (a flag, not an identity) |
+| `team_thresholds` | `id`, `team`, `validity_start`, `validity_end` | `is_heart_rate_thresholds_in_percent`, `use_hr_min` and the `are_*_visible` flags (display settings of the thresholds, not measured values) |
+| `details.session`, `details.drill`, `more.events`, `more.complementary_data` | nothing: the names there are measured values (a players' map is keyed by athlete, and /more/'s identifiers sit beside `events` and `complementary_data`, never inside them) | — |
+
+The athlete_session list comes from the projection's identity and time fields and the request. The full key set of a real
+server3 row is not in the repository: the probes returned field names to the owner only, and the fixtures are synthetic.
+So a real row may carry another identifier, for example a name-like text. If one shows up in Source fields, it is added
+here.
+
 ### 7.4 Open point: a wish list (not a slice)
 
 "I want this" (a guarded, append-only wish per name) is **not built now** (the *Rukovodilac*, 2026-11-15). Its only user

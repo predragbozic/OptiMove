@@ -2686,6 +2686,8 @@ test("I1: a succeeded check records the names of every field its answers carried
   assert.equal(has("details.session", "tot_burst_events").answers_seen, 1, "one whole-session answer");
   assert.ok(rows.every((r) => r.first_seen_check_id === check.id && r.last_seen_check_id === check.id));
   assert.ok(!rows.some((r) => r.field_name === "bad-name"), "a malformed name is never recorded");
+  for (const name of ["id", "athlete", "teamsession", "track", "drill"]) assert.ok(!has("athlete_session", name), `the structural key ${name} is never recorded`);
+  assert.ok(has("athlete_session", "is_stats_valid"), "a flag beside them is kept");
   const all = JSON.stringify((await admin.query(`select * from training_load.source_field_observations`)).rows);
   assert.doesNotMatch(all, /99999|secret-value-777/, "no value");
   for (const id of ["7601", ...Object.values(team.ids)]) assert.ok(!all.includes(`"${id}"`), `no session or athlete id (${id})`);
