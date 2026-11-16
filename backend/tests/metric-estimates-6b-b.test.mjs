@@ -1000,6 +1000,11 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   for (const f of ownEst) {
     assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
     assert.equal(f.estimate.method, "copy_athlete");
+    // The author is a coach's display name, never an id; the date is a timestamp.
+    assert.ok(typeof f.estimate.estimatedBy === "string" && f.estimate.estimatedBy.length > 0 && !/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(f.estimate.estimatedBy), `estimatedBy: ${f.estimate.estimatedBy}`);
+    assert.ok(!Number.isNaN(Date.parse(f.estimate.estimatedAt)));
+    assert.deepEqual(Object.keys(f.detail).sort(), ["componentId", "drillOrdinal", "entryMethod", "level", "metricDefinitionId", "unitAtCapture", "valueBoolean", "valueKey", "valueNumeric", "valueText"]);
+    assert.equal(f.detail.entryMethod, "estimate");
   }
   // The Independent's M1: every method reads as method, author and date only for its own athlete - no basis number (a team
   // average's athlete count is team information).

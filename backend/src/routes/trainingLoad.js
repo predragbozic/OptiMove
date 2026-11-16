@@ -16,6 +16,7 @@ import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAth
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "../trainingActivityAccess.js";
+import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 
 const router = Router();
@@ -1494,9 +1495,7 @@ router.get("/calendar", async (req, res, next) => {
     if (isAthlete) {
       const athleteId = req.authz.athleteId;
       activityParams = [dateFrom, dateTo, athleteId];
-      // Her own activities, except on an archived team (hidden from her as from everyone else).
-      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')
-        and not exists (select 1 from public.teams t0 where t0.id = a.owner_team_id and a.owner_scope = 'team' and t0.is_active = false)`;
+      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')`;
       planParams = [dateFrom, dateTo, athleteId];
       plannedScopeSql = `and p.athlete_id = $3`;
       externalParams = [dateFrom, dateTo, athleteId];
@@ -1557,8 +1556,10 @@ router.get("/calendar", async (req, res, next) => {
          coalesce(rc.requested, 0) as rpe_requested, coalesce(rc.rated, 0) as rpe_rated,
          coalesce(mc.total, 0) as metrics_total, coalesce(mc.with_data, 0) as metrics_with_data,
          coalesce(cc.conflict_count, 0) as conflict_count,
-         coalesce(sc.open_suggestions, 0) as open_suggestion_count
+         coalesce(sc.open_suggestions, 0) as open_suggestion_count${isAthlete ? ", rb.device as recorded_device, rb.any as recorded_any" : ""}
        from training.activities a
+       ${isAthlete ? `left join lateral (select bool_or(x.device) as device, bool_or(x.any) as any from training.activity_participants apr
+           cross join lateral ${recordedBySql("apr.id")} x where apr.activity_id = a.id and apr.athlete_id = $3 and apr.merge_status = 'canonical') rb on true` : ""}
        left join lateral (
          select count(*) as participant_count from training.activity_participants ap where ap.activity_id = a.id and ap.merge_status = 'canonical'
        ) pc on true
@@ -1666,7 +1667,7 @@ router.get("/calendar", async (req, res, next) => {
       if (isAthlete) {
         bucket.items.push({
           kind: "activity", activityId: row.activity_id, name: row.name, activityTypeKey: row.activity_type_key, occurredLocalDate: row.occurred_local_date,
-          startedAt: row.started_at, timezoneSnapshot: row.timezone_snapshot, rpe,
+          startedAt: row.started_at, timezoneSnapshot: row.timezone_snapshot, recordedBy: recordedByOf({ device: row.recorded_device, any: row.recorded_any }), rpe,
           sortTime: row.started_at || `${row.occurred_local_date}T00:00:00Z`,
         });
         continue;
