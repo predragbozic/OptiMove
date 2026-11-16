@@ -17,13 +17,18 @@ after(async () => {
 });
 
 const G = "/api/training-load/gpexe";
+// Fix flow (slice 1): a coach's row in a Fix group opens the step sheet; every other row opens the review.
+const OPEN = '[data-action="training-load-gpexe-open"], [data-action="training-load-gpexe-fix"]';
 const importsTab = async (page) => {
   await openTrainingLoad(page);
   await page.click('[data-action="training-load-section"][data-section="imports"]');
-  await page.waitForSelector('[data-action="training-load-gpexe-open"]', { timeout: 20_000 });
+  await page.waitForSelector(OPEN, { timeout: 20_000 });
 };
 const openSession = async (page, day) => {
-  await page.locator('[data-action="training-load-gpexe-open"]', { hasText: day }).first().click();
+  await page.locator(OPEN, { hasText: day }).first().click();
+  // From the Fix sheet the full review is one quiet link away (Fix flow, slice 1).
+  await page.waitForSelector(".gpexe-detail .gpexe-review-table, .imports-fix.is-open .imports-fix-full-link", { timeout: 20_000 });
+  if (await page.locator(".imports-fix.is-open").count()) await page.click(".imports-fix.is-open .imports-fix-full-link");
   await page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
 };
 const importButtonText = (page) => page.locator('[data-action="training-load-gpexe-approve"]').first().textContent().then((t) => t.trim());
