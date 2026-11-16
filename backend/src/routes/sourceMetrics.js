@@ -28,6 +28,7 @@ import * as conversions from "../unitConversionService.js";
 import * as activations from "../sourceMetricActivationService.js";
 import * as previews from "../sourceMetricPreviewService.js";
 import * as instances from "../sourceInstanceEndService.js";
+import * as fieldInventory from "../sourceFieldInventoryRead.js";
 import * as board from "../sourceMetricBoardService.js";
 import * as boardSave from "../sourceMetricBoardSaveService.js";
 import * as confirmationAdmin from "../sourceMetricConfirmationAdminService.js";
@@ -169,6 +170,15 @@ router.get("/fields", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   res.json({ fields: await service.listFields({ ctx, query: req.query }) });
+}));
+
+// I2 (docs/ai/gpexe-field-inventory-plan.md, section 7.2): the names GPEXE sent that the source fields may not cover
+// yet, read-only. The admins of /fields, scoped to the workspace's own club in a club workspace; everyone else the
+// identical 404. { fields, nextCursor }.
+router.get("/field-inventory", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await fieldInventory.listFieldInventory({ ctx, query: req.query }));
 }));
 
 router.get("/targets", handle(async (req, res) => {

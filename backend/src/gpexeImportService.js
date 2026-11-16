@@ -2289,6 +2289,8 @@ const isFinalizeBusy = (error) => ["55P03", "40P01", "57014"].includes(error?.co
 // publish. Only a lost connection (no answer within the bound) still ends the finalization, as for every statement.
 // A database without v72 records nothing; the probe runs once per process and is reset when the table goes missing.
 const FIELD_INVENTORY_LOCK_TIMEOUT = "300ms";
+// The finalization's own lock_timeout, restored after the inventory's savepoint (one value, L2).
+const FINALIZE_LOCK_TIMEOUT = "2s";
 let fieldInventoryTable = null;
 async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {
   const rows = fieldInventory?.collector?.rows?.() ?? [];
@@ -2319,7 +2321,7 @@ async function writeFieldInventory(run, checkId, fieldInventory, isDestroyed) {
     await run(`select set_config('optimove.field_inventory_check', '', true)`);
     // Back to the finalization's own bound before the release (a SET LOCAL inside a released savepoint stays in force), so
     // every statement of this try can still roll back to the savepoint.
-    await run("set local lock_timeout = '2s'");
+    await run(`set local lock_timeout = '${FINALIZE_LOCK_TIMEOUT}'`);
     await run("release savepoint field_inventory");
   } catch (error) {
     if (isDestroyed()) throw error;
@@ -2355,7 +2357,7 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
   };
   try {
     await run("begin isolation level read committed");
-    await run("set local lock_timeout = '2s'");
+    await run(`set local lock_timeout = '${FINALIZE_LOCK_TIMEOUT}'`);
     await run("set local statement_timeout = '10s'");
     await run("select set_config('idle_in_transaction_session_timeout', $1, true)", [`${finalizeIdleTimeoutMs}ms`]);
     if (finalizeBeforeLocks) await finalizeBeforeLocks();
