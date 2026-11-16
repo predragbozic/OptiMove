@@ -211,7 +211,7 @@ export function displayNumber(value) {
   if (value === null || value === undefined || value === "") return value;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return String(value);
-  if (Number.isInteger(n)) return Math.abs(n) < 1e21 ? n.toFixed(0).replace(/^-0$/, "0") : String(value);
+  if (Number.isInteger(n)) return Math.abs(n) < 1e21 ? n.toFixed(0).replace(/^-0$/, "0") : BigInt(n).toString();
   const r = Math.round(n * 100) / 100;
   if (r === 0) return n > 0 ? "<0.01" : ">-0.01";
   return r.toFixed(2).replace(/\.?0+$/, "").replace(/^-0$/, "0");
@@ -220,7 +220,7 @@ export function displayNumber(value) {
 // Why a column cannot be placed (section 3.3). A platform admin is the one who confirms a column: he gets the step
 // that exists today instead of "ask support" (manager, 2026-11-15; wording only).
 export function columnReasonText(code, { platformAdmin = false } = {}) {
-  if (code === "field_not_confirmed" && platformAdmin) return "This column's unit is not confirmed yet. Confirm it in Data configuration › Source fields (platform workspace).";
+  if (code === "field_not_confirmed" && platformAdmin) return "This column's unit is not confirmed yet. Switch to the platform workspace, then confirm it in Data configuration > Source fields.";
   return COLUMN_REASON[code] || "This column cannot be placed.";
 }
 export const COLUMN_REASON = {

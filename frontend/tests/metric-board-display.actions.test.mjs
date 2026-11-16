@@ -103,6 +103,7 @@ test("display 1: a number is rounded for reading only - whole numbers stay, at m
     [0.004, "<0.01"], ["1e-7", "<0.01"], [-0.004, ">-0.01"], [-0, "0"], ["-0.001", ">-0.01"], [0, "0"], ["-3.456", "-3.46"],
     [123456789.987, "123456789.99"], ["abc", "abc"],
   ]) assert.equal(d(v), want, String(v));
+  for (const v of [1e21, "1e21", -1e22]) assert.doesNotMatch(String(d(v)), /e/i, `no scientific notation for ${v}`);
   assert.equal(d(null), null);
   assert.equal(d(undefined), undefined);
 });
@@ -132,6 +133,6 @@ test("display 3: a column whose unit is not confirmed - a coach or club admin is
   withColumns(unconfirmed);
   state.currentUser = { ...state.currentUser, availableWorkspaces: [{ type: "platform" }, { type: "club", scopeId: CLUB }] };
   await open();
-  assert.match(text(), /This column's unit is not confirmed yet\. Confirm it in Data configuration › Source fields \(platform workspace\)\./);
+  assert.match(text(), /This column's unit is not confirmed yet\. Switch to the platform workspace, then confirm it in Data configuration > Source fields\./);
   assert.doesNotMatch(text(), /Ask OptiMove support/);
 });
