@@ -178,8 +178,9 @@ function rangeListHtml(range, byDay, nameOf, timeOf, older = null) {
 // name on every width). It starts on the last day the last search read, which the bar names.
 function missingText(missing, now) {
   if (!missing) return "The last 14 days.";
+  if (missing.clipped) return `The latest ${PERIOD_MAX_DAYS} days; tap earlier days below to search them too.`;
   if (missing.from === missing.to) return "Today.";
-  return `Since the last search: ${periodText(missing.from, missing.from, now)} – today.`;
+  return `From ${periodText(missing.from, missing.from, now)} to today.`;
 }
 
 // The period chooser. On a computer it is always on the page under the banner; on a phone "Find new sessions" opens it
@@ -200,7 +201,7 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
   const days = missing ? `data-from="${escapeAttr(missing.from)}" data-to="${escapeAttr(missing.to)}"` : "";
   const first = `<button type="button" class="${lead} gpexe-button period-missing" data-action="training-load-gpexe-check" ${days} aria-describedby="period-missing-days" ${off}>Find new sessions</button>`
     + `<p class="muted period-days" id="period-missing-days">${escapeHtml(missingText(missing, now))}</p>`
-    + (missing?.clipped ? `<p class="muted period-hint">The latest ${PERIOD_MAX_DAYS} days; tap earlier days below to search them too.</p>` : "");
+;
   const why = suggestedRange
     ? (suggested.clipped ? "The latest 31 days of the sessions that need finding again; search the earlier ones afterwards." : "These days hold the sessions that need finding again.")
     : "";

@@ -1007,11 +1007,15 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
     const dated = datesNeededFor(gx.candidates || [], gx);
     const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
     const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
-    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
+    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find new sessions for ${range}` : "Find new sessions")}</button>`;
   } else {
     // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the
     // full review and gets "Fix" beside it.
-    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
+    // Two words for two places (manager, item 4 A): "Link athletes" names only the team-wide screen (the Athletes tab);
+    // this group's button fixes its sessions one step at a time, or opens the session for the platform admin.
+    const label = grp.key !== "unlinked" ? grp.button
+      : fixOpens(grp.key) ? (grp.count === 1 ? "Fix this session" : "Fix these sessions") : "Open the session";
+    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(label)}</button>`;
   }
   if (platformViewer() && FIX_GROUPS.has(grp.key)) button += `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">Fix</button>`;
   const sessions = grp.count > 1
@@ -1109,7 +1113,8 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   const counts = c.counts || {};
   const facts = [];
   if (kind === "ready" || kind === "attention") {
-    if (counts.created) facts.push(plural(counts.created, "new result", "new results"));
+    // What will happen: "9 results to import" (a result is one athlete's values for the session or one drill; the help says so).
+    if (counts.created) facts.push(plural(counts.created, "result to import", "results to import"));
     if (kind === "ready" && counts.unchanged) facts.push(plural(counts.unchanged, "result unchanged", "results unchanged"));
     // D32: values left out are named before an approval, never imported silently.
     if (kind === "ready" && Number(counts.skippedValues) > 0) facts.push(plural(counts.skippedValues, "value left out", "values left out"));
@@ -1324,7 +1329,7 @@ function batchSummaryText(summary) {
 // silently.
 function batchFacts(c) {
   const facts = [];
-  if (c?.counts?.created) facts.push(plural(c.counts.created, "new result", "new results"));
+  if (c?.counts?.created) facts.push(plural(c.counts.created, "result to import", "results to import"));
   if (Number(c?.counts?.skippedValues) > 0) facts.push(plural(c.counts.skippedValues, "value left out", "values left out"));
   return facts.join(" · ");
 }
@@ -2044,7 +2049,7 @@ function renderApprovalRecordHtml(c) {
   if (!c.approval) return "";
   const a = c.approval;
   const counts = countsText(a.import?.counts);
-  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))} ${platformViewer() ? ` (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})` : ""}${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
+  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))}${platformViewer() ? ` (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})` : ""}${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
 // The coach's reason and step for a blocked session, from the list's neutral

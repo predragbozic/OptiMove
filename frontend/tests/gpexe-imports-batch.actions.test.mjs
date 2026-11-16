@@ -278,17 +278,17 @@ test("D32: a Ready session that leaves values out says how many on its row and i
   await openImports();
   const page = html();
   const row = (id) => page.slice(page.indexOf(`data-candidate-id="${id}"`), page.indexOf("</button>", page.indexOf(`data-candidate-id="${id}"`)));
-  assert.match(row("cand-1"), /<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
-  assert.match(row("cand-2"), /<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
+  assert.match(row("cand-1"), /<span class="gpexe-candidate-facts">4 results to import · 3 values left out<\/span>/);
+  assert.match(row("cand-2"), /<span class="gpexe-candidate-facts">2 results to import · 1 value left out<\/span>/);
   assert.ok(!/left out/.test(row("cand-3")), "nothing left out: nothing said");
   await pick("cand-1");
   await pick("cand-2");
   await pick("cand-3");
   await act("training-load-gpexe-batch-review");
   const d = dialog();
-  assert.match(d, /<strong>Full training 1<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results · 3 values left out<\/span>/);
-  assert.match(d, /<strong>Full training 2<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">2 new results · 1 value left out<\/span>/);
-  assert.match(d, /<strong>Full training 3<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 new results<\/span>/);
+  assert.match(d, /<strong>Full training 1<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 results to import · 3 values left out<\/span>/);
+  assert.match(d, /<strong>Full training 2<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">2 results to import · 1 value left out<\/span>/);
+  assert.match(d, /<strong>Full training 3<\/strong>[\s\S]*?<span class="gpexe-candidate-facts">4 results to import<\/span>/);
   assert.equal(importPosts().length, 0, "the confirmation sends nothing");
 });
 

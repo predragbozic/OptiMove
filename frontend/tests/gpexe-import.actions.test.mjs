@@ -2005,7 +2005,7 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   assert.equal(step("a-other"), "Ask a platform admin to look at it (give them the Technical details).");
   assert.equal(step("a-setup"), "Ask a club or platform administrator to finish the data setup of this team, then find new sessions.");
   assert.equal(step("a-exp"), undefined);
-  assert.match(html, />Find again for 20\.08\.2026</, "the group's button names the dates");
+  assert.match(html, />Find new sessions for 20\.08\.2026</, "the group's button names the dates");
   assert.ok(!/gpexe-candidate-next/.test(row("r-clean")), "a ready row carries no step");
   const mainScreen = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   for (const code of ["thresholds_missing", "identities_missing_from_source", "something_new", "unsupported_category", "source_thresholds_unavailable", "earlier_import_left_behind", "athletes_not_linked", "no_changes", "data_setup_incomplete"]) {
@@ -3177,5 +3177,21 @@ test("P2 2: no setup step tells a coach or a club admin to give anyone Technical
       assert.equal(/Technical details/.test(text.step), has, `${who} ${code}: ${text.step}`);
       assert.match(text.step, /\.$/, `${who} ${code}: one sentence end`);
     }
+  }
+});
+
+test("Imports (code review): the imported line names the approval basis only to a platform admin, with no stray space", async () => {
+  for (const [as, re] of [[null, /Imported \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}: [^<]*\.<\/p>/], [platformView, /Imported \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} \(approver grant\): [^<]*\.<\/p>/]]) {
+    resetState();
+    if (as) as();
+    installFetchMock(gpexeServer({
+      teamStatus: { [TEAM_A]: { enabled: true } },
+      onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({ summary: { status: "imported", approvalBlockers: ["already_imported"] }, approval: { id: "appr-4", approvedAt: "2026-09-19T10:00:00Z", basis: "team_grant", import: { counts: { created: 4 } } } }) } }),
+    }));
+    await openImports();
+    await openCandidate();
+    const html = renderTrainingLoadCoachHtml();
+    assert.match(html, re, as ? "platform admin" : "coach");
+    if (!as) assert.ok(!/approver grant| :|\s\.<\/p>/.test(html.match(/Imported \d{2}\.[^<]*<\/p>/)[0]), "coach: no basis, no stray space");
   }
 });

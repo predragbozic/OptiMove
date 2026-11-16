@@ -205,6 +205,26 @@ test("P4 5: the first tap offers its day and asks for the last; two taps make th
   assert.ok(!/imports-period is-open/.test(panel()), "the phone's sheet closes once the search starts");
 });
 
+test("P4 6b (code review): a failed latest search and a long gap never make the chooser's days contradict the bar", async () => {
+  // The latest search failed: the bar names that search; the line beside the button names only days, never "the last search".
+  resetState();
+  const ok = { id: "chk-0", status: "succeeded", window: { from: daysAgo(18), to: daysAgo(5) }, finishedAt: new Date(Date.now() - 3600e3).toISOString() };
+  installFetchMock(gpexeServer({ teamStatus: { lastSucceededCheck: ok, lastCheck: { id: "chk-1", status: "failed", window: { from: daysAgo(5), to: TODAY }, finishedAt: new Date().toISOString() } } }));
+  await openImports();
+  await act("training-load-gpexe-period-toggle");
+  const line = (panel().match(/id="period-missing-days">([^<]*)</) || [])[1];
+  assert.match(line, /^From \d{2}\.\d{2}\.(\d{4})? to today\.$/);
+  assert.doesNotMatch(html(), /[Ss]ince the last search/);
+  // More than 31 days since the last successful search: the line says the latest 31 days, once, not "from" a day it never ended on.
+  resetState();
+  const old = { id: "chk-0", status: "succeeded", window: { from: daysAgo(70), to: daysAgo(60) }, finishedAt: new Date().toISOString() };
+  installFetchMock(gpexeServer({ teamStatus: { lastSucceededCheck: old, lastCheck: old } }));
+  await openImports();
+  await act("training-load-gpexe-period-toggle");
+  assert.match(panel(), /id="period-missing-days">The latest 31 days; tap earlier days below to search them too\.</);
+  assert.equal((panel().match(/The latest 31 days/g) || []).length, 1, "said once");
+});
+
 test("P4 6: 'Find new sessions' carries the end of the last successful search and today; without one it searches the server's 14 days", async () => {
   resetState();
   const last = daysAgo(5);
@@ -217,7 +237,7 @@ test("P4 6: 'Find new sessions' carries the end of the last successful search an
   assert.match(html(), new RegExp(`Last search [^<]*, for ${fmt(daysAgo(18)).replace(/\./g, "\\.")} – ${fmt(last).replace(/\./g, "\\.")}`));
   await act("training-load-gpexe-period-toggle");
   assert.match(panel(), new RegExp(`class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${last}" data-to="${TODAY}" aria-describedby="period-missing-days" >Find new sessions<`));
-  assert.match(panel(), new RegExp(`id="period-missing-days">Since the last search: ${fmt(last).replace(/\./g, "\\.")} – today\\.<`));
+  assert.match(panel(), new RegExp(`id="period-missing-days">From ${fmt(last).replace(/\./g, "\\.")} to today\\.<`));
   await act("training-load-gpexe-check", { from: last, to: TODAY });
   assert.deepEqual(posts()[0].body, { from: last, to: TODAY });
 

@@ -119,7 +119,7 @@ export function renderFixSheetHtml(gx, status, h) {
         ? (err.code === "check_failed" ? "The search did not finish. Try again in a moment."
           : err.code === "poll_stopped" ? "We could not follow the search; it may still be running. Close this and look at the list in a moment."
             : h.checkErrorText(err))
-        : `Search GPEXE again${day ? ` for ${day}` : ""} to read this session before importing.`)}</p>${err ? h.errorTech(err) : ""}`;
+        : `Find new sessions${day ? ` for ${day}` : " for this day"} to read this session again before importing.`)}</p>${err ? h.errorTech(err) : ""}`;
       const running = Boolean(gx.checkStarting || gx.check?.status === "running");
       actions = skip() + button("primary-button", "training-load-gpexe-fix-search", err ? "Find new sessions again" : day ? `Find new sessions for ${day}` : "Find new sessions for this day", { disabled: running || !h.day });
     }

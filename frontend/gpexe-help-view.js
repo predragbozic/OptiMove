@@ -30,11 +30,12 @@ export function renderImportsHelpHtml({ ask = "", findBy = "the values of the la
       </ul>
       <p class="imports-help-fine">A day without a mark may not have been searched yet.</p>
       <ul class="imports-help-list">
+        ${item("Fix or Link athletes", "Fix takes one session's missing steps one at a time. Link athletes, in the Athletes tab, links all of your team's GPEXE athletes at once.")}
         ${item("Linking athletes", `tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session. It is never guessed: ${findBy} only help you find them.`)}
         ${item("Later", "puts a Ready session aside on this device only. It stays Ready for everyone else; Show brings it back.")}
         ${item("A result", "is one athlete's values for the whole session or for one drill; a session with two drills gives each athlete three.")}
         ${item("After importing", "a session shows with ✓ in the calendar here, and its results are in Training Load → Activities.")}
-        ${item("Import off", "importing is not turned on for this team yet. You can still find and review sessions.")}
+        ${item("Import off", "importing is not turned on yet. You can still find and review sessions.")}
       </ul>
       ${ask ? `<p class="imports-help-ask">${escapeHtml(ask)}</p>` : ""}
       <div class="imports-help-foot"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-help">Close</button></div>

@@ -75,8 +75,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         // One name for the action; the days are said beside it.
         assert.equal(look.missing, "Find new sessions");
         const days = (await page.textContent(".imports-period #period-missing-days")).trim();
-        assert.match(days, /^Since the last search: \d{2}\.\d{2}\.(\d{4})? – today\.$/);
-        if (expectedFrom === "2026-11-08") assert.equal(days, "Since the last search: 08.11. – today.");
+        assert.match(days, /^From \d{2}\.\d{2}\.(\d{4})? to today\.$/);
+        if (expectedFrom === "2026-11-08") assert.equal(days, "From 08.11. to today.");
         assert.equal(look.overflow, 0, "no horizontal page scroll");
         // Two taps, the later day first: the period runs from the earlier one.
         await page.click(DAY("2026-11-05"));
