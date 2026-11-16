@@ -462,3 +462,14 @@ test("Fix 15: a lost link answer for one athlete is not shown on the next athlet
   assert.match(s, /data-gpexe-athlete-id="102"/, "the link was made: the next athlete");
   assert.ok(!/We can(?:'|&#039;)t tell/.test(s), "the uncertainty about 101 is not shown on 102");
 });
+
+test("Fix 13b: a session reason other than a missing link (the preview clean) also ends on See why, never ready", async () => {
+  resetState();
+  const w = world({ sessions: [row(5, { reasons: [{ code: "athletes_not_in_team", count: 1 }] })], unlinkedBy: { "cand-5": ["101"] } });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-1");
+  const s = sheet();
+  assert.match(s, /This session needs a look in its full review\./);
+  assert.ok(!/training-load-gpexe-approve/.test(s));
+});
