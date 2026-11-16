@@ -13,6 +13,8 @@ const { state } = await import("../state.js");
 const { renderTemplateFiltersHtml, renderTemplateLibraryResultsHtml } = await import("../program-library.js");
 const { CONTENT_LANGUAGE_SCOPE_ATHLETE, renderContentLanguageSectionHtml } = await import("../account-language.js");
 const { templateScopeMeta } = await import("../navigation.js");
+const { athleteLibraryFilters } = await import("../program-library-view.js");
+const { applyTemplateClientFilters } = await import("../program-library.js");
 
 function week(offsetDays) {
   const start = new Date(); start.setDate(start.getDate() + offsetDays - ((start.getDay() + 6) % 7));
@@ -48,7 +50,7 @@ test("2. an athlete's Programs offers only search and group: no status, tag or p
 });
 
 test("3. an empty list says one plain sentence to an athlete; a coach keeps the filter sentence", () => {
-  assert.match(renderTemplateLibraryResultsHtml([], null, null, { athlete: true, searching: false }), />No programs have been shared with you here yet\.</);
+  assert.match(renderTemplateLibraryResultsHtml([], null, null, { athlete: true, searching: false }), />No programs have been shared with you yet\.</);
   assert.match(renderTemplateLibraryResultsHtml([], null, null, { athlete: true, searching: true }), />No programs match your search\.</);
   assert.match(renderTemplateLibraryResultsHtml([], null, null), />No programs match these filters\.</);
 });
@@ -78,4 +80,15 @@ test("6. a hidden count stays hidden in the open phone menu, and the measured at
   for (const sel of [".training-load-week-link", ".training-load-athlete-weekly-panel .icon-button", ".tests-section-tabs .tab", ".athlete-simple-view button", '[data-action="notifications-read-all"]', ".brand-mark"]) {
     assert.ok(block.includes(sel), sel);
   }
+});
+
+test("7 (code review): a filter an athlete can't see never narrows her list - Free only from Marketplace, a tag, a status", () => {
+  const programs = [{ plan_id: "p1", plan_name: "Paid", is_free: false, lifecycle: "assigned", tags: [] }, { plan_id: "p2", plan_name: "Free", is_free: true, tags: [] }];
+  const set = { search: "", category: "", tag: "speed", lifecycle: "draft", pricing: "free" };
+  for (const scope of ["my_programs", "optimove"]) {
+    const shown = applyTemplateClientFilters(programs, athleteLibraryFilters(set, scope)).map((p) => p.plan_id);
+    assert.deepEqual(shown, ["p1", "p2"], scope);
+  }
+  // On Marketplace, where she sees it, Free only applies.
+  assert.deepEqual(applyTemplateClientFilters(programs, athleteLibraryFilters({ ...set, tag: "", lifecycle: "all" }, "marketplace")).map((p) => p.plan_id), ["p2"]);
 });

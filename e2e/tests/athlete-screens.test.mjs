@@ -52,7 +52,7 @@ for (const width of [360, 390]) {
       await a.menu("athlete-library");
       const empty = a.page.locator(".program-library-page .empty-state");
       await empty.waitFor({ timeout: 20_000 });
-      assert.equal((await empty.innerText()).trim(), "No programs have been shared with you here yet.");
+      assert.equal((await empty.innerText()).trim(), "No programs have been shared with you yet.");
       assert.equal(await a.page.locator('[data-template-filter="lifecycle"], [data-template-filter="tag"], [data-template-filter="freeOnly"]').count(), 0, "no coach filters");
       assert.equal((await a.page.locator("[data-template-count]").innerText()).trim(), "", "no '0 programs'");
 

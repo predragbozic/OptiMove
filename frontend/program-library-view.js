@@ -112,6 +112,12 @@ export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplate
   return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser, libraryEmptyOf(isAthleteUser(currentUser) || isAthleteMode(), filters));
 }
 
+// The filters an athlete's list applies: only the ones she can see (code review). A value set where a filter is shown (Free
+// only on Marketplace) never narrows a tab where it is hidden, and a tag or status she can't see never applies.
+export function athleteLibraryFilters(filters = {}, scope = "my_programs") {
+  return { ...filters, tag: "", lifecycle: "all", pricing: scope === "marketplace" ? filters.pricing : "all" };
+}
+
 // What an empty list says to an athlete: her search or group found nothing, or nothing is shared with her on this tab.
 export function libraryEmptyOf(athlete, filters = {}) {
   const set = (v) => Boolean(clean(v)) && clean(v).toLowerCase() !== "all";

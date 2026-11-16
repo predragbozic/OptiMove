@@ -159,7 +159,7 @@ export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId, 
   const shelves = groupTemplatesByCategory(templates);
   if (!templates.length) {
     const text = !empty.athlete ? "No programs match these filters."
-      : empty.searching ? "No programs match your search." : "No programs have been shared with you here yet.";
+      : empty.searching ? "No programs match your search." : "No programs have been shared with you yet.";
     return `<div class="empty-state">${text}</div>`;
   }
   return shelves.map((shelf) => `

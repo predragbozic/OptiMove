@@ -219,6 +219,7 @@ import {
   templateFilterSuggestions,
 } from "./program-library.js";
 import {
+  athleteLibraryFilters,
   renderTemplateDetailHtml,
   renderTemplateFiltersViewHtml,
   renderTemplateLibraryPageHtml,
@@ -3954,9 +3955,10 @@ function renderTemplateLibraryResults() {
 }
 
 function visibleTemplateLibraryRows(templates) {
-  const filters = state.templateScope === "my_programs"
+  const base = state.templateScope === "my_programs"
     ? state.templateFilters
     : { ...state.templateFilters, lifecycle: "all" };
+  const filters = isAthleteMode() ? athleteLibraryFilters(base, state.templateScope) : base;
   const filtered = applyTemplateClientFilters(templates, filters);
   return applyTemplateAccessScope(filtered, state.templateScope, state.currentUser);
 }
