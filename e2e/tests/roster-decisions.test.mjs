@@ -31,10 +31,24 @@ async function importedActivity(world) {
   } finally { await db.end(); }
 }
 
+// The calendar opens on today's week (a month on some widths): step back or forward until the session's own day is shown,
+// whatever the date of the run. Each step waits until the calendar shows other days.
+async function showDay(page, day) {
+  const dayButton = `[data-action="training-load-calendar-select-day"][data-date="${day}"]`;
+  const firstShown = () => page.locator('[data-action="training-load-calendar-select-day"]').first().getAttribute("data-date");
+  for (let i = 0; i < 60; i += 1) {
+    if (await page.locator(dayButton).count()) return;
+    const before = await firstShown();
+    await page.click(`[data-action="training-load-calendar-${day < before ? "prev" : "next"}"]`);
+    await page.waitForFunction((b) => document.querySelector('[data-action="training-load-calendar-select-day"]')?.getAttribute("data-date") !== b, before, { timeout: 10_000 });
+  }
+  throw new Error(`the calendar never showed ${day}`);
+}
+
 async function openRoster(page) {
   await openTrainingLoad(page);
-  // The session is of the week before today: go one week back, pick the day, the session, then the Roster tab.
-  await page.click('[data-action="training-load-calendar-prev"]');
+  // The session's own week, then its day, the session and the Roster tab.
+  await showDay(page, DAY);
   await page.click(`[data-action="training-load-calendar-select-day"][data-date="${DAY}"]`);
   await page.locator('[data-action="training-load-calendar-select-activity"]').first().click();
   await page.locator(".tl-activity-detail-tab", { hasText: "Roster" }).click();

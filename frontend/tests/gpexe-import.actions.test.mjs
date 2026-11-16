@@ -958,7 +958,8 @@ function setupServer(sourceCode, message) {
   });
 }
 // U6a: a row is found by its own open button (U6a-2 adds group buttons with the same id).
-const rowIdx = (h, id) => h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${id}"`);
+// Fix flow (slice 1): a coach's row in a Fix group opens the step sheet, every other row the review.
+const rowIdx = (h, id) => Math.max(h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${id}"`), h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-fix" data-candidate-id="${id}"`));
 const setupRowStep = (h) => {
   const at = rowIdx(h, "c-setup");
   return h.slice(at, h.indexOf("</button>", at)).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
@@ -1494,7 +1495,10 @@ test("link: two team athletes with the same name can't be confirmed without tell
   }));
   await openImports();
   await openCandidate();
-  assert.match(renderTrainingLoadCoachHtml(), /<option value="ath-3">Dario \(same name as another athlete\)<\/option>/);
+  // The option says so before it is pressed: disabled, with one line under the chooser (#562 follow-up).
+  assert.match(renderTrainingLoadCoachHtml(), /<option value="ath-3" disabled>Dario \(same name as another athlete\)<\/option>/);
+  assert.match(renderTrainingLoadCoachHtml(), /An athlete whose name another team athlete shares can(?:'|&#039;)t be chosen\. Give them different names in Settings > Athletes, then link\./);
+  // The confirmation still refuses it (a stale or scripted choice).
   queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
   const html = renderTrainingLoadCoachHtml();

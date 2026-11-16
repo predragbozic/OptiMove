@@ -7,14 +7,15 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, openAs, openTrainingLoad, showPeriodMonth, WIDTHS } from "../lib/browser.mjs";
 
 let browser;
 before(async () => { browser = await launch(); });
 after(async () => { await browser?.close(); });
 
 const G = "/api/training-load/gpexe";
-const OPEN = '[data-action="training-load-gpexe-open"]';
+// Fix flow (slice 1): a coach's row in a Fix group opens the step sheet; every other row opens the review.
+const OPEN = '[data-action="training-load-gpexe-open"], [data-action="training-load-gpexe-fix"]';
 
 async function findThroughUi(page) {
   await openTrainingLoad(page);
@@ -23,14 +24,21 @@ async function findThroughUi(page) {
   assert.equal(await page.locator(OPEN).count(), 0, "nothing has been found yet");
   // P4: on a computer the period chooser is on the page; on a phone "Find new sessions" opens it as a sheet.
   if (await page.locator('[data-action="training-load-gpexe-period-toggle"].imports-find-phone').isVisible()) await page.click('[data-action="training-load-gpexe-period-toggle"]');
-  // With no search yet the chooser's first button searches the last 14 days.
-  await page.click(".imports-period .period-missing");
+  // The fixture's sessions are on 04.11. and 05.11.2026: the chooser is paged to their month and those two days are
+  // searched (its "last 14 days" button would miss them once the run date is two weeks later).
+  await showPeriodMonth(page, "November 2026");
+  await page.click('.imports-period [data-action="training-load-gpexe-period-day"][data-day="2026-11-04"]');
+  await page.click('.imports-period [data-action="training-load-gpexe-period-day"][data-day="2026-11-05"]');
+  await page.click('.imports-period .period-range [data-action="training-load-gpexe-check"]');
   // The sessions appear when the check ends (the screen polls the check).
   await page.waitForSelector(OPEN, { timeout: 60_000 });
 }
 
 async function openSession(page, day) {
   await page.locator(OPEN, { hasText: day }).first().click();
+  // From the Fix sheet the full review is one quiet link away (Fix flow, slice 1).
+  await page.waitForSelector(".gpexe-detail .gpexe-review-table, .imports-fix.is-open .imports-fix-full-link", { timeout: 20_000 });
+  if (await page.locator(".imports-fix.is-open").count()) await page.click(".imports-fix.is-open .imports-fix-full-link");
   await page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
 }
 

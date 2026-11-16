@@ -26,6 +26,8 @@ import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
 import { renderImportsHelpHtml } from "./gpexe-help-view.js";
+import { renderFixSheetHtml } from "./gpexe-fix-view.js";
+import { FIX_GROUPS } from "./gpexe-fix-data.js";
 import { isLater, laterNotice, laterOpen } from "./gpexe-later-data.js";
 import {
   BATCH_MAX,
@@ -514,7 +516,7 @@ export function renderGpexeImportsHtml() {
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
       ${status ? renderImportsTabsHtml(gx, status) : ""}
-      ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
+      ${gx.detail ? (gx.detail.fix ? renderFixHtml(gx, status) : renderCandidateDetailHtml(gx, status)) : ""}
       ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
       ${!gx.detail && !gx.mapping?.open ? renderBatchOverlayHtml(gx) : ""}
     </div>
@@ -993,8 +995,11 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
     const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
     button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
   } else {
-    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
+    // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the
+    // full review and gets "Fix" beside it.
+    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
   }
+  if (platformViewer() && FIX_GROUPS.has(grp.key)) button += `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">Fix</button>`;
   const sessions = grp.count > 1
     ? `<details class="imports-attn-sessions"><summary>Show the ${escapeHtml(plural(grp.count, "session", "sessions"))}</summary>${rows(grp.items, "attention", grp.key)}</details>`
     : rows(grp.items, "attention", grp.key);
@@ -1010,6 +1015,69 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
 // U6a-2: with nothing ready to import, the first group's button is the screen's one main action when it is a step the
 // person can take now (check a result, link athletes, update a review); a new search would not fix those. Otherwise the
 // state bar's button stays the main one.
+// Fix flow (slice 1): which openings go to the step-by-step sheet. Not for the platform admin, who keeps the review.
+function fixOpens(group) {
+  return FIX_GROUPS.has(group) && !platformViewer();
+}
+
+// The Fix sheet with this screen's own wording per viewer, link chooser and counts (gpexe-fix-view.js).
+function renderFixHtml(gx, status) {
+  const detail = gx.detail;
+  const c = detail.candidate;
+  const sw = status?.importSwitch || {};
+  const viewer = status?.viewer || {};
+  const switchOff = sw.enabled !== true || (status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).some((b) => b === "import_switch_off" || b === "team_import_switch_off");
+  const linkHtml = (id) => {
+    const preview = c?.preview || {};
+    const a = (preview.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
+    return a ? renderLinkHtml(a, c, linkChoicesOf(preview, c), { fix: true }) : "";
+  };
+  return renderFixSheetHtml(gx, status, {
+    title: c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session",
+    day: c ? isoDay(c.sessionStartedAt) : "",
+    linkHtml,
+    AskWho,
+    importCount: c ? importableAthleteCount(c.preview) : 0,
+    canImport: viewer.canApprove === true,
+    switchOff,
+    next: Boolean(detail.group && nextInGroup(detail, gx.candidates || [], gx)),
+    errorTech: (error) => (platformViewer() ? errorTech(error) : ""),
+    checkErrorText,
+    linkErrorText: errorText(gx.linkError, "The link could not be changed."),
+    // Slice 2: an athlete by the team's own name (a recording choice is made for a linked athlete), else the GPEXE label.
+    athleteName: (id) => {
+      const a = (c?.preview?.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
+      return (a?.athleteId && c?.athletes?.[a.athleteId]?.name) || gpexeAthleteLabel(id);
+    },
+    changeCount: c?.changesToImported || 0,
+    // Per athlete and kind, in words that say what happens to the result (the server's CHANGE_TO_IMPORTED): two kinds replace
+    // or add values, two keep the current values and save GPEXE's version aside - never "changed" for those (#570 follow-up).
+    changeLines: (() => {
+      const KIND = {
+        corrected: (one) => `${one ? "is" : "are"} replaced with newer GPEXE values`,
+        supplemented: (one) => `${one ? "gets" : "get"} more values from GPEXE`,
+        needs_review: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's different values are saved for review`,
+        // "Older or manual" (the writer flags a manual correction this way even when GPEXE's report is newer): never "older".
+        stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's values are saved aside`,
+      };
+      const m = new Map();
+      for (const ch of c?.preview?.changesToImported || []) {
+        const who = ch.athleteId ? (c?.athletes?.[ch.athleteId]?.name || "An athlete") : gpexeAthleteLabel(ch.gpexeAthleteId);
+        const key = `${who}\u0000${KIND[ch.kind] ? ch.kind : "other"}`;
+        m.set(key, (m.get(key) || 0) + 1);
+      }
+      return [...m.entries()].map(([key, n]) => {
+        const [who, kind] = key.split("\u0000");
+        const words = KIND[kind] ? KIND[kind](n === 1) : (n === 1 ? "is affected" : "are affected");
+        return `${who}: ${n === 1 ? "1 result" : `${n} results`} ${words}`;
+      });
+    })(),
+    // A refused import is said as the review says it: nothing was imported.
+    refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",
+    teamSwitchOff: Boolean(status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).includes("team_import_switch_off"),
+  });
+}
+
 const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
 const STEP_IN_GROUP = new Set(["unknown", "unlinked", "stale", "fresh"]);
 function groupLeads(gx, status) {
@@ -1062,7 +1130,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   return `
     <li class="${[box ? "imports-pick-row" : "", later ? "imports-later-row" : ""].filter(Boolean).join(" ")}">
       ${box}
-      <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
+      <button type="button" class="gpexe-candidate" data-action="${kind === "attention" && fixOpens(group) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
           <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · "))}</strong>
           <span class="muted">${escapeHtml([sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt), ...sessionSizeFacts(c)].filter(Boolean).join(" · "))}</span>
@@ -2159,18 +2227,24 @@ function renderVariableTableHtml(values, withPrevious) {
   `;
 }
 
+// Only team athletes without a GPEXE record here AND without a link yet can be chosen: an athlete who is already linked
+// would be refused anyway. Two team athletes with the same name can't be told apart here.
+function linkChoicesOf(preview, c) {
+  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
+  const choices = (preview.teamAthletesWithoutGpexeRecord || [])
+    .filter((a) => !linked.has(String(a.athleteId)))
+    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
+  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
+  for (const o of choices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  return choices;
+}
+
 function renderAthletesHtml(preview, c) {
   const athletes = preview.athletes || [];
   if (!athletes.length) return "";
   // Only team athletes without a GPEXE record here AND without a link yet can
   // be chosen: an athlete who is already linked would be refused anyway.
-  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
-  const unlinkedChoices = (preview.teamAthletesWithoutGpexeRecord || [])
-    .filter((a) => !linked.has(String(a.athleteId)))
-    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
-  // Two team athletes with the same name can't be told apart here.
-  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
-  for (const o of unlinkedChoices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  const unlinkedChoices = linkChoicesOf(preview, c);
   if (!platformViewer()) {
     // P1 (owner 2026-11-13, O3): the coach and the club admin don't get a second list of the table's athletes. What only this
     // list holds - each athlete's values and the values left out with their reasons (D32) - stays, folded, for the athletes
@@ -2199,14 +2273,14 @@ function renderAthletesHtml(preview, c) {
 // mappings are.
 const LINK_CONTEXT_KEYS = ["gpexe_total_distance", "gpexe_max_speed", "gpexe_time_min"];
 
-function renderLinkContextHtml(a, c) {
-  if (isV3(c?.preview)) return renderHelperContextHtml(a, c);
+function renderLinkContextHtml(a, c, { bare = false } = {}) {
+  if (isV3(c?.preview)) return renderHelperContextHtml(a, c, { bare });
   const whole = (a.results || []).find((r) => r.level !== "drill");
   const values = LINK_CONTEXT_KEYS.map((key) => whole?.values?.find((v) => v.metricKey === key)).filter((v) => v && v.value !== null && v.value !== undefined);
   const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    ${bare ? "" : `<p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>`}
     <ul class="gpexe-link-context">
       ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2218,13 +2292,13 @@ function renderLinkContextHtml(a, c) {
 // snapshot for this GPEXE athlete (duration in min, distance in m, top speed
 // in km/h, and its drill rows), never the mapped values. A value the source
 // did not give is null and is not shown.
-function renderHelperContextHtml(a, c) {
+function renderHelperContextHtml(a, c, { bare = false } = {}) {
   const h = c?.helperValues?.[a.gpexeAthleteId] || {};
   const values = MAP_VALUE_LABELS.filter(([key]) => h[key] !== null && h[key] !== undefined);
   const drills = Number.isInteger(h.drillRows) && h.drillRows > 0 ? h.drillRows : 0;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    ${bare ? "" : `<p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>`}
     <ul class="gpexe-link-context">
       ${values.map(([key, label, unit]) => `<li><span>${escapeHtml(label)}</span> <strong>${escapeHtml(fmtValue(h[key], unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2249,7 +2323,16 @@ function compactHasValues(a, c) {
   return ["duration", "distance", "maxSpeed"].some((k) => h[k] !== null && h[k] !== undefined);
 }
 
-function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
+// A team athlete whose name another team athlete shares can't be linked here (the confirmation would refuse it): the
+// option says so before it is pressed, disabled, as on Link athletes (code review of #562).
+function linkOptionHtml(o) {
+  return `<option value="${escapeAttr(o.id)}"${o.duplicate ? " disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`;
+}
+function sharedNameNote(choices) {
+  return choices.some((o) => o.duplicate) ? `<p class="muted gpexe-link-shared">An athlete whose name another team athlete shares can't be chosen. Give them different names in Settings > Athletes, then link.</p>` : "";
+}
+
+function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
   const pending = gx.linkConfirm && gx.linkConfirm.gpexeAthleteId === id ? gx.linkConfirm : null;
@@ -2259,7 +2342,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
         <p class="gpexe-link-pair"><strong>${escapeHtml(gpexeAthleteLabel(id))}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
         <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When this session is imported, ${escapeHtml("this GPEXE athlete")}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
-        ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
+        ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact || fix ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
@@ -2268,7 +2351,34 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml("this GPEXE athlete")} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
+    return fix
+      ? `<p class="imports-fix-sentence">Every athlete of the team is already linked. Close this and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`
+      : `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml("this GPEXE athlete")} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
+  }
+  // Fix flow: one sentence, the values that help, the chooser and ONE main button; the notes are folded.
+  if (fix) {
+    const sg = suggestedChoice(id, unlinkedChoices);
+    const numberNote = !identityOf(id)?.name ? `<details class="gpexe-fine"><summary>What does the number mean?</summary><p>${escapeHtml(`"GPEXE athlete ${gpexeAthleteOrdinal(id)}" is this athlete's place in OptiMove's list, not the GPEXE id.`)}</p></details>` : "";
+    return `
+    <div class="gpexe-link imports-fix-link">
+      <p class="imports-fix-sentence">${escapeHtml(`Who is ${gpexeAthleteLabel(id)} in your team? Compare the values with GPEXE and link only if you are sure.`)}</p>
+      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
+      ${renderLinkContextHtml(a, c, { bare: true })}
+      ${numberNote}
+      <div class="gpexe-link-row">
+        <label><span>Team athlete</span>
+          <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
+            <option value="" selected>Choose an athlete of the team</option>
+            ${sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map(linkOptionHtml).join("")}
+          </select>
+        </label>
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
+      </div>
+      ${sharedNameNote(unlinkedChoices)}
+      ${idTechHtml(id)}
+    </div>
+  `;
   }
   return `
     <div class="gpexe-link">
@@ -2281,11 +2391,12 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${(() => { const sg = suggestedChoice(id, unlinkedChoices); return sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""; })()}
-            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map(linkOptionHtml).join("")}
           </select>
         </label>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
+      ${sharedNameNote(unlinkedChoices)}
       ${idTechHtml(id)}
     </div>
   `;

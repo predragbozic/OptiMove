@@ -7,6 +7,8 @@ import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAth
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
+import { fixMustStay, fixWriteInFlight, newFix, noteFixSteps, skipFixAthlete } from "./gpexe-fix-data.js";
+import { chooseFixTrack, loadFixTracks, savedChoiceNotShown, sendFixTrack, tracksNeedReading } from "./gpexe-fix-tracks-data.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import { ensurePeriodData,
   reloadGpexeCandidates,
@@ -42,6 +44,7 @@ import { ensurePeriodData,
   selectGpexeTeam,
   sendTeamMapping,
   startGpexeCheck,
+  inboxBucket,
   unlinkGpexeAthlete,
   verifyGpexeApproval,
   cancelIdentityConfirm,
@@ -89,7 +92,74 @@ function fieldValue(selector) {
   return globalThis.document?.querySelector?.(selector)?.value || "";
 }
 
-export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
+// Fix flow: while the sheet is open, the focus stays in it after any of its actions (a repaint replaces its buttons).
+export async function handleGpexeImportAction(action, ctx) {
+  const handled = await handleGpexeImportActionInner(action, ctx);
+  const gx = state.trainingLoad.gpexe;
+  if (gx?.detail?.fix) {
+    // A link's recompute or a search can bring an athlete on more than one track: the recordings are read for them.
+    if (tracksNeedReading(gx.detail, gx)) await loadFixTracks(gx.detail, ctx.renderTrainingLoad);
+    if (gx.detail?.fix) noteFixSteps(gx.detail, gx);
+    keepFocusInFix();
+  }
+  return handled;
+}
+
+function keepFocusInFix() {
+  const doc = globalThis.document;
+  const sheet = doc?.querySelector?.(".imports-fix.is-open");
+  if (!sheet || sheet.contains?.(doc.activeElement)) return;
+  const target = sheet.querySelector?.(".imports-fix-actions .primary-button:not(:disabled)")
+    || sheet.querySelector?.(".imports-fix-body select:not(:disabled)")
+    || sheet.querySelector?.(".imports-fix-body .primary-button:not(:disabled)")
+    || sheet.querySelector?.(".imports-fix-close");
+  target?.focus?.({ preventScroll: true });
+}
+
+// The Fix sheet closes; the focus goes back to what opened it (its row, else its group's button, else the Needs you tab).
+function closeFixSheet(renderTrainingLoad) {
+  const gx = state.trainingLoad.gpexe;
+  const opener = gx.detail?.fix?.opener || {};
+  const refresh = closeGpexeCandidate();
+  renderTrainingLoad();
+  if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
+  const doc = globalThis.document;
+  const esc = (v) => (globalThis.CSS?.escape ? CSS.escape(String(v)) : String(v));
+  const target = (opener.candidateId && doc?.querySelector?.(`[data-action="training-load-gpexe-fix"][data-candidate-id="${esc(opener.candidateId)}"]`))
+    || (opener.group && doc?.querySelector?.(`[data-attention-group="${esc(opener.group)}"] .gpexe-button`))
+    || doc?.querySelector?.('[data-action="training-load-gpexe-tab"][data-import-tab="attention"]');
+  target?.focus?.({ preventScroll: true });
+}
+
+// Escape and the phone's Back (app.js): the sheet closes like ×; true when it was open (handled, also when it stays).
+export function closeFixFromKey(renderTrainingLoad) {
+  const gx = state.trainingLoad.gpexe;
+  if (!gx?.detail?.fix) return false;
+  if (fixMustStay(gx)) return true;
+  if (fixWriteInFlight(gx) && !globalThis.window?.confirm?.(FIX_LEAVE_QUESTION)) return true;
+  closeFixSheet(renderTrainingLoad);
+  return true;
+}
+
+const FIX_LEAVE_QUESTION = "A change is still on its way. Close anyway? Its result shows in the list when it arrives.";
+
+async function openFix(candidateId, group, groupIds, opener, renderTrainingLoad) {
+  const gx = state.trainingLoad.gpexe;
+  setPeriodOpen(false);
+  gx.helpOpen = false;
+  await openGpexeCandidate(candidateId, renderTrainingLoad, { group, groupIds, fix: newFix(opener) });
+  const detail = gx.detail;
+  if (detail?.id !== candidateId || !detail.fix) return;
+  noteFixSteps(detail, gx);
+  renderTrainingLoad();
+  // Slice 2: an approver reads the recordings of athletes GPEXE recorded on more than one track (the step needs them).
+  await loadFixTracks(detail, renderTrainingLoad);
+  if (gx.detail === detail) noteFixSteps(detail, gx);
+  // The coach reads the GPEXE names of the athletes to link (no GPEXE request): the stored names, as on Link athletes.
+  if (identityNameViewer(gx)) void loadGpexeIdentities(renderTrainingLoad);
+}
+
+async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   const type = action.dataset.action;
   const gx = state.trainingLoad.gpexe;
   if (type.startsWith("training-load-gpexe-switch-")) return handleTeamImportSwitchAction(action, { renderTrainingLoad });
@@ -142,6 +212,129 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // P4: a session opened from the phone's sheet opens over the screen, not under the sheet.
     setPeriodOpen(false);
     await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad, { group, groupIds });
+    return true;
+  }
+  // Fix flow (slice 1): one problem per screen, through the review's own actions.
+  if (type === "training-load-gpexe-fix") {
+    clearLaterNotice(gx);
+    const group = action.dataset.group || "";
+    const groupIds = group ? groupItems(group, gx.candidates || [], gx).map((c) => c.id) : [];
+    await openFix(action.dataset.candidateId, group, groupIds, { candidateId: action.dataset.candidateId, group }, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-close") {
+    closeFixFromKey(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-full") {
+    // "See why": the same review, in full.
+    if (!gx.detail?.fix || fixMustStay(gx)) return true;
+    gx.detail.fix = null;
+    renderTrainingLoad();
+    globalThis.document?.querySelector?.(".gpexe-detail .builder-athlete-picker-cancel")?.focus?.({ preventScroll: true });
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-skip") {
+    const detail = gx.detail;
+    if (!detail?.fix || fixMustStay(gx) || gx.linkBusy) return true;
+    // On a link step only that GPEXE athlete is skipped; on any other step the session is left for now.
+    const id = action.dataset.gpexeAthleteId;
+    if (id) {
+      gx.linkConfirm = null;
+      gx.linkError = null;
+      gx.linkOpen = "";
+      if (detail.fix.trackWrite?.sending || detail.fix.trackWrite?.unknown) return true;
+      detail.fix.trackPick = null;
+      detail.fix.trackError = null;
+      skipFixAthlete(detail, id);
+      renderTrainingLoad();
+      return true;
+    }
+    if (fixWriteInFlight(gx) && !globalThis.window?.confirm?.(FIX_LEAVE_QUESTION)) return true;
+    const next = detail.group ? nextInGroup(detail, gx.candidates || [], gx) : null;
+    if (!next) {
+      closeFixSheet(renderTrainingLoad);
+      return true;
+    }
+    const refresh = closeGpexeCandidate();
+    await openFix(next.id, detail.group, detail.groupIds, detail.fix.opener, renderTrainingLoad);
+    if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-next") {
+    const detail = gx.detail;
+    if (!detail?.fix || fixMustStay(gx)) return true;
+    const next = detail.group ? nextInGroup(detail, gx.candidates || [], gx) : null;
+    if (!next || next.id === detail.id) return true;
+    const refresh = closeGpexeCandidate();
+    await openFix(next.id, detail.group, detail.groupIds, detail.fix.opener, renderTrainingLoad);
+    if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
+    return true;
+  }
+  // Slice 2: the recording of an athlete GPEXE recorded on more than one track - a local choice, then Save (one PUT).
+  if (type === "training-load-gpexe-fix-track-pick") {
+    if (chooseFixTrack(gx.detail, action.dataset.gpexeAthleteId, action.value)) {
+      renderTrainingLoad();
+      // The repaint replaces the radios: the focus goes back to the one chosen, so the arrow keys keep working (code review).
+      const id = `fix-track-${action.dataset.gpexeAthleteId}-${action.value}`;
+      globalThis.document?.getElementById?.(id)?.focus?.({ preventScroll: true });
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-track-save") {
+    if (!gx.detail?.fix || fixMustStay(gx)) return true;
+    await sendFixTrack(gx.detail, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-track-check") {
+    // The same request with the same key again: the server answers the saved choice, never a second one.
+    if (!gx.detail?.fix) return true;
+    await sendFixTrack(gx.detail, renderTrainingLoad, { again: true });
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-tracks-reload") {
+    if (!gx.detail?.fix) return true;
+    await loadFixTracks(gx.detail, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-accept") {
+    // Slice 2: the changes to imported results are accepted here (local); the import sends acceptChanges, as the review does.
+    if (!gx.detail?.fix || gx.detail.approving) return true;
+    gx.detail.acceptChanges = true;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-search") {
+    // d) the session's own day, through the screen's one search (the same request as "Find new sessions").
+    const detail = gx.detail;
+    const c = detail?.candidate;
+    if (!detail?.fix || !c?.sessionStartedAt || detail.fix.searching || gx.checkStarting || gx.check?.status === "running") return true;
+    const when = new Date(c.sessionStartedAt);
+    if (Number.isNaN(when.getTime())) return true;
+    const day = when.toISOString().slice(0, 10);
+    detail.fix.searching = true;
+    detail.fix.searchError = null;
+    gx.notice = "";
+    renderTrainingLoad();
+    await startGpexeCheck({ from: day, to: day }, renderTrainingLoad);
+    if (gx.detail !== detail) return true;
+    detail.fix.searching = false;
+    if (gx.checkError) {
+      detail.fix.searchError = gx.checkError;
+    } else if (gx.pollStopped) {
+      detail.fix.searchError = { code: "poll_stopped", status: 0, data: null };
+    } else if (gx.check?.status !== "succeeded") {
+      detail.fix.searchError = { code: "check_failed", status: 0, data: null, message: gx.check?.error?.message || "" };
+    } else {
+      // The search may have written a newer version of this session: the sheet goes on with it, in the same group.
+      const sid = String(c.gpexeTeamSessionId || "");
+      const now = (gx.candidates || []).find((x) => sid && String(x.gpexeTeamSessionId || "") === sid && inboxBucket(x, gx) !== "hidden") || null;
+      const nextId = now?.id || detail.id;
+      const groupIds = (detail.groupIds || []).map((x) => (x === detail.id ? nextId : x));
+      await openFix(nextId, detail.group, groupIds, detail.fix.opener, renderTrainingLoad);
+      return true;
+    }
+    renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-group-next") {
@@ -322,7 +515,12 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-review-update") {
     if (gx.detail?.updating || gx.linkBusy) return true;
+    const detail = gx.detail;
+    // Fix's "a recording is chosen but not shown": after the update the recordings are read again, so a choice cleared
+    // elsewhere meanwhile becomes a choice to make, not the same step again (#570 follow-up).
+    const applying = Boolean(detail?.fix && savedChoiceNotShown(detail));
     await recomputeGpexeReview(renderTrainingLoad);
+    if (applying && gx.detail === detail && !detail.updateError) await loadFixTracks(detail, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-review-filter") {

@@ -26,11 +26,11 @@ function g() {
   return state.trainingLoad.gpexe;
 }
 
-function teamPath(teamId, rest = "") {
+export function teamPath(teamId, rest = "") {
   return `${BASE}/${encodeURIComponent(teamId)}${rest}`;
 }
 
-function errorInfo(error) {
+export function errorInfo(error) {
   return { status: error?.status ?? 0, code: error?.data?.error || error?.message || "error", message: error?.data?.message || "", data: error?.data || null };
 }
 
@@ -511,7 +511,7 @@ export async function pollGpexeCheck(render) {
 // Candidate detail and approval
 // ---------------------------------------------------------------------------
 
-export async function openGpexeCandidate(candidateId, render, { group = "", groupIds = [] } = {}) {
+export async function openGpexeCandidate(candidateId, render, { group = "", groupIds = [], fix = null } = {}) {
   const gx = g();
   const generation = gx.generation;
   // An approval whose result is still not confirmed is shown again as such.
@@ -519,7 +519,7 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
   // J20-B: an unconfirmed subset approval keeps the set it was sent with; a reopened review restores it, so the whole session can never be
   // offered (and sent) in its place. The reviewed hash is not kept: the review is made again.
   const keptSet = Array.isArray(uncertain?.chosenExcluded) ? uncertain.chosenExcluded.map(String) : [];
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [] };
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.notice = "";
