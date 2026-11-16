@@ -1006,3 +1006,34 @@ test("8. no answer or log line of this suite carries an athlete id, a GPEXE athl
   assert.equal((removal.match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
   for (const forbidden of ["insert into", "update ", "delete from", "birth_date", "fetch("]) assert.equal(removal.includes(forbidden), false, `the removal module has no "${forbidden}"`);
 });
+
+// G1a (docs/ai/gpexe-field-inventory-plan.md, section 8.7; v74): the owner's first visible gain. Production holds
+// tot_burst_events and tot_brake_events verified by documents in `count` (2026-11-16); until G1 the board refused them
+// (display_rule_missing). Their real keys, their real extractors, the same proof: placeable through as_sent.
+test("13. G1a: the real tot_burst_events and tot_brake_events, verified in count as production holds them, are placeable through as_sent, showing GPEXE's own numbers", async () => {
+  const real = [];
+  for (const realKey of ["details.players.tot_burst_events", "details.players.tot_brake_events"]) {
+    const fieldId = (await one(`select id from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and source_metric_key = $1`, [realKey])).id;
+    const seeded = await one(`select id, revision_number, state, evidence_status from training_load.source_metric_definition_versions where source_metric_definition_id = $1 and state = 'active'`, [fieldId]);
+    // Retire the seeded, observed revision 1, as the lifecycle would, then revision 2 verified in count (the owner's acts).
+    await k.query("begin");
+    await k.query(CTX, [W.pa.id]);
+    await k.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = clock_timestamp(), retired_reason = 'Replaced by the proven revision.' where id = $1`, [seeded.id, W.pa.id]);
+    await k.query(`insert into ${T8} (action, source_metric_definition_id, source_metric_version_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id) values ('source_metric_revision_retire',$1,$2,'active','retired','Replaced by the proven revision.',$3,'platform_admin',$4)`, [fieldId, seeded.id, W.pa.id, crypto.randomUUID()]);
+    await k.query("commit");
+    const revId = await writeRevision(k, { fieldId, by: W.pa.id, revisionNumber: seeded.revision_number + 1, valueShape: "unit_value_object", evidenceRef: COMPAT, unit: "count",
+      unitRef: "docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit", meaning: true, meaningRef: "docs/ai/gpexe-c97-meaning-evidence.md#burst-events-meaning", state: "active" });
+    real.push({ key: realKey, fieldId, revId });
+  }
+  const { board } = ok(await boardOf(W.caA, W.tA));
+  for (const f of real) {
+    const col = board.columns.find((c) => c.key === f.key);
+    assert.ok(col, `${f.key} is a column`);
+    assert.deepEqual([col.placeable, col.reason, col.unitProven, col.unit, col.displayRule, col.displayUnits], [true, null, true, "count", "as_sent", ["count"]], f.key);
+    assert.ok(col.rawA !== null && col.rawB !== null && col.rawA !== col.rawB, `${f.key}: the pair's two different values`);
+  }
+  // GPEXE's own numbers, as sent: whole counts.
+  const burst = board.columns.find((c) => c.key === "details.players.tot_burst_events");
+  assert.match(String(burst.rawA), /^\d+$/);
+  assert.match(String(burst.rawB), /^\d+$/);
+});

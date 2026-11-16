@@ -2,6 +2,9 @@
 // key, shape and levels the server derives (8.1), and which evidence statuses prove a revision (8.4).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { deriveField, FieldCreateRefusal, parseCreateFieldBody } from "../src/sourceFieldCreate.js";
 import { PROVEN_STATUSES, revisionProven, statusProven } from "../src/sourceFieldEvidence.js";
 
@@ -45,4 +48,27 @@ test("proven is verified or source_stated, with a unit; nothing else opens a fie
   assert.equal(revisionProven({ evidence_status: "verified", source_unit: null }), false);
   assert.equal(revisionProven({ evidence_status: "observed", source_unit: "m" }), false);
   assert.equal(revisionProven(null), false);
+});
+
+// v74's T2a guard holds a write only when it carries an acting user (plan section 8.9, a recorded limit of C74's
+// class). This proves no application write can reach T2a without one: the only file of backend/src that inserts into
+// training_load.source_metric_definitions is route C's service, and its insert runs inside M2's runWrite, which sets
+// the transaction's acting user before the first protected write.
+
+test("architecture: route C's service is the only application writer of T2a, and it writes inside runWrite (the acting user set first)", () => {
+  const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
+  const files = [];
+  const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith(".js")) files.push(p); } };
+  walk(src);
+  const writesT2a = /\b(insert\s+into|update|delete\s+from)\s+training_load\.source_metric_definitions\b(?!_)/i;
+  const writers = files.filter((f) => writesT2a.test(fs.readFileSync(f, "utf8"))).map((f) => path.relative(src, f));
+  assert.deepEqual(writers, ["sourceFieldCreateService.js"]);
+  const text = fs.readFileSync(path.join(src, "sourceFieldCreateService.js"), "utf8");
+  const runAt = text.indexOf("return runWrite({");
+  const insertAt = text.search(/insert into training_load\.source_metric_definitions\b(?!_)/);
+  assert.ok(runAt > 0 && insertAt > runAt, "the insert is inside runWrite's body");
+  const kit = fs.readFileSync(path.join(src, "sourceMetricMappingService.js"), "utf8");
+  const body = kit.slice(kit.indexOf("async function runWrite("));
+  assert.ok(body.indexOf("ACTOR_CONTEXT_SQL") > 0 && body.indexOf("ACTOR_CONTEXT_SQL") < body.indexOf("await operation(client, operationId)"),
+    "runWrite sets the acting user before it runs the operation");
 });
