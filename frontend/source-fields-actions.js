@@ -81,10 +81,11 @@ export async function loadInventory(render, { more = false } = {}) {
   const s = sourceFieldsState();
   if (!sourceFieldsContext()) return;
   const inv = s.inventory;
-  if (more && (!inv.nextCursor || inv.loadingMore)) return;
+  // One read at a time: Load more never runs while the list is read again from the start (code review, LOW).
+  if (inv.loading || (more && (!inv.nextCursor || inv.loadingMore))) return;
   const generation = s.generation;
   const filter = `${inv.endpoint}|${inv.showSupported}`;
-  if (more) inv.loadingMore = true; else { inv.loading = true; inv.error = null; }
+  if (more) inv.loadingMore = true; else { inv.loading = true; inv.error = null; inv.nextCursor = null; }
   render();
   try {
     const data = await fetchInventory({ endpoint: inv.endpoint, showSupported: inv.showSupported, cursor: more ? inv.nextCursor : null });
@@ -112,6 +113,7 @@ export async function loadInventoryThresholds(render) {
   if (!ctx?.mayVerify) return;
   const t = s.inventory.thresholds;
   if (t.loading) return;
+  t.open = true;
   const generation = s.generation;
   t.loading = true;
   t.error = null;
@@ -128,6 +130,11 @@ export async function loadInventoryThresholds(render) {
     if (sourceFieldsState().generation === generation) t.loading = false;
   }
   render();
+}
+// The team thresholds fold's open state, from its own "toggle" (app.js), so a repaint keeps it as the admin left it.
+export function sourceFieldsThresholdsToggled(open) {
+  const s = state.trainingLoad.sourceFields;
+  if (s?.inventory?.thresholds) s.inventory.thresholds.open = Boolean(open);
 }
 // The search narrows the loaded names in place, so the field keeps its focus while typing.
 function applyInventorySearch(search) {

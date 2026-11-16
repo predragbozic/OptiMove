@@ -84,11 +84,11 @@ test("1. a platform admin: the second list in plain words - where the name comes
   await loadSourceFieldsSection(render);
   assert.deepEqual(inventoryGets(), [INV], "one read, the default filter (not supported)");
   assert.match(text(), /Available in GPEXE, not supported yet/);
-  assert.match(text(), /Names GPEXE sent in every club's sessions that OptiMove cannot map yet\./);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not use them yet, so they are not imported\. There is nothing to do here/);
   const facts = rows().map((r) => r.querySelector(".metric-variables-item-facts").textContent.replace(/\s+/g, " ").trim());
   assert.deepEqual(facts, [
-    "Session details · number with unit · unit W/kg · seen in 12 answers, last 10.11.2026 · 2 connections",
-    "Athlete row · number · seen in 1 answer, last 14.11.2026 · 1 connection",
+    "Whole session · number with unit in W/kg · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts",
+    "Per athlete · number · seen 1 time, last 14.11.2026 · in 1 GPEXE account",
   ]);
   assert.doesNotMatch(text(), /details\.session|athlete_session|unit_value_object|complementary_data/, "no endpoint or kind code in what is shown (codes live only in data- attributes)");
 });
@@ -98,10 +98,10 @@ test("2. a club admin: the club's own sentence, no connection count and no team 
   // A count in the answer is never shown to a club, even if the server sent one.
   pages.default = ok([item({ unitWord: null, connectionCount: 3 })]);
   await loadSourceFieldsSection(render);
-  assert.match(text(), /Names GPEXE sent in this club's sessions that OptiMove cannot map yet\./);
-  assert.doesNotMatch(text(), /connection/);
+  assert.match(text(), /GPEXE also sends these values in your sessions\./);
+  assert.doesNotMatch(text(), /GPEXE account/);
   assert.equal($(".source-fields-inventory-thresholds"), null, "the thresholds fold is the platform's");
-  assert.match(rows()[0].textContent, /Session details · number with unit · seen in 12 answers/);
+  assert.match(rows()[0].textContent, /Whole session · number with unit · seen 12 times/);
 });
 
 test("3. the endpoint chips and Show supported too become the read's query; the chosen chip is pressed; supported names carry a badge", async () => {
@@ -117,7 +117,7 @@ test("3. the endpoint chips and Show supported too become the read's query; the 
   await click('[data-action="source-fields-inv-supported"]');
   assert.equal(inventoryGets().at(-1), `${INV}?state=all&endpoint=athlete_session`);
   assert.ok($('[data-action="source-fields-inv-supported"]').checked);
-  assert.match(rows()[0].textContent, /total_distance\s*Supported/);
+  assert.match(rows()[0].textContent, /total_distance\s*Already used/);
   const before = inventoryGets().length;
   await click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
   assert.equal(inventoryGets().length, before, "the chip already chosen reads nothing again");
@@ -154,7 +154,7 @@ test("5. the search narrows the loaded names in place, ignoring case, keeps its 
 test("6. the empty list, a refusal with Try again, and a busy server each say so; Try again reads again", async () => {
   pages.default = ok([]);
   await loadSourceFieldsSection(render);
-  assert.match(text(), /No names yet\. The list fills in after the next successful search for sessions through a GPEXE connection\./);
+  assert.match(text(), /No names yet\. They appear after the next Find new sessions in Imports\./);
   resetSourceFields();
   pages.default = { status: 409, body: { error: "try_again" } };
   await loadSourceFieldsSection(render);
@@ -173,12 +173,13 @@ test("7. team thresholds: the platform's fold reads them only when asked, with e
   pages[`${INV}?endpoint=team_thresholds`] = ok([item({ endpoint: "team_thresholds", name: "max_speed", kind: "number", unitWord: "m/s", covered: null, connectionCount: 1 })]);
   await loadSourceFieldsSection(render);
   assert.deepEqual(inventoryGets(), [INV], "not read before it is asked for");
-  assert.match(text(), /Team thresholds \(used by zone fields\)/);
+  assert.match(text(), /Team zone limits \(from GPEXE\)/);
   await click('[data-action="source-fields-inv-thresholds"]');
   assert.equal(inventoryGets().at(-1), `${INV}?endpoint=team_thresholds`);
   const threshold = $("[data-sf-threshold-row]");
   assert.match(threshold.textContent, /max_speed/);
-  assert.match(threshold.textContent, /Team thresholds · number · unit m\/s/);
+  assert.match(threshold.textContent.replace(/\s+/g, " "), /max_speed number in m\/s · seen 12 times/);
+  assert.equal($(".source-fields-inventory-thresholds").open, true, "the fold stays open after its rows load (code review)");
   assert.equal(rows().length, 1, "the thresholds never join the not-supported list");
 });
 
@@ -205,4 +206,46 @@ test("9. the list only reads: no write is ever sent", async () => {
   await click('[data-action="source-fields-inv-thresholds"]');
   assert.equal(calls.filter((c) => c.method !== "GET").length, 0);
   assert.equal(sourceFieldsState().form, null);
+});
+
+test("4b. Load more is not sent while Try again reads the list from the start; the reload's answer is the list", async () => {
+  pages.default = ok([item({ name: "first" })], "C1");
+  pages[`${INV}?cursor=C1`] = { status: 409, body: { error: "try_again" } };
+  await loadSourceFieldsSection(render);
+  await click('[data-action="source-fields-inv-more"]');
+  assert.match(text(), /The server was busy/);
+  let release;
+  delay = (url) => (url === INV ? new Promise((resolve) => { release = resolve; }) : Promise.resolve());
+  pages.default = ok([item({ name: "fresh" })]);
+  const reload = handleSourceFieldsAction($('[data-action="source-fields-inv-reload"]'), { render });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const before = inventoryGets().length;
+  const more = $('[data-action="source-fields-inv-more"]');
+  if (more) await handleSourceFieldsAction(more, { render });
+  assert.equal(inventoryGets().length, before, "no Load more while the list is read again");
+  release();
+  await reload;
+  assert.deepEqual(shownNames(), ["fresh"]);
+});
+
+test("7b. the team zone limits fold keeps the state the admin left it in across repaints", async () => {
+  const { sourceFieldsThresholdsToggled } = await import("../source-fields-actions.js");
+  pages.default = ok([item()]);
+  await loadSourceFieldsSection(render);
+  assert.equal($(".source-fields-inventory-thresholds").open, false);
+  sourceFieldsThresholdsToggled(true);
+  render();
+  assert.equal($(".source-fields-inventory-thresholds").open, true);
+  sourceFieldsThresholdsToggled(false);
+  render();
+  assert.equal($(".source-fields-inventory-thresholds").open, false);
+});
+
+test("5b. with more names to load, a search without a match says to load more", async () => {
+  pages.default = ok([item({ name: "metabolic_power" })], "C9");
+  await loadSourceFieldsSection(render);
+  const input = $("[data-sf-inv-search]");
+  input.value = "speed";
+  input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.match($("#sf-inv-no-match").textContent, /No name matches among the names loaded so far\. Load more to search the rest\./);
 });

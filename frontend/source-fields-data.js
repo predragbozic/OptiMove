@@ -33,7 +33,7 @@ export function emptyInventory() {
     items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null,
     endpoint: "", showSupported: false, search: "",
     // Team thresholds (P1): the platform workspace only, read when their fold opens.
-    thresholds: { items: [], loaded: false, loading: false, error: null },
+    thresholds: { items: [], loaded: false, loading: false, error: null, open: false },
   };
 }
 export function emptySourceFieldsState() {
@@ -72,12 +72,12 @@ export function fetchInventory({ endpoint = "", showSupported = false, cursor = 
 // Where a name comes from and what it holds, in plain words (I3; never a key or a code).
 export const INVENTORY_ENDPOINTS = Object.freeze(["athlete_session", "details.session", "details.drill", "more.events", "more.complementary_data"]);
 export const ENDPOINT_LABEL = {
-  athlete_session: "Athlete row",
-  "details.session": "Session details",
-  "details.drill": "Drill details",
+  athlete_session: "Per athlete",
+  "details.session": "Whole session",
+  "details.drill": "Per drill",
   "more.events": "Events",
-  "more.complementary_data": "Zone data",
-  team_thresholds: "Team thresholds",
+  "more.complementary_data": "Zones",
+  team_thresholds: "Team zone limits",
 };
 export const KIND_LABEL = {
   number: "number",

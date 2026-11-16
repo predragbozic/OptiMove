@@ -290,6 +290,9 @@ Everyone else gets the identical 404 of the other metrics routes.
   - in a club workspace (the club's admin, or a platform admin there): only the rows whose connection belongs to that
     club. **P2:** that is a club-owned connection of the club, and a team-owned connection of one of the club's own
     teams. A team of another club is never included;
+  - **A team-owned connection follows the team's current club** (the *Rukovodilac*'s L3, 2026-11-16). No route moves a
+    team between clubs today (D43), and only names are shown. If a team-move route is ever built, it must first decide
+    what happens to the names that team's connection recorded;
   - a coach, an athlete, a team workspace: the identical 404 (the route never answers them, as for `/fields`).
 - **One row per (endpoint, name)**, grouped over the visible connections:
   - the endpoint in plain words (no key, code or id for a club admin);

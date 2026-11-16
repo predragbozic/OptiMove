@@ -41,6 +41,7 @@ async function layout(page) {
       searchFont: search ? getComputedStyle(search).fontSize : "",
       rows: document.querySelectorAll("[data-sf-inv-row]").length,
       text: document.querySelector(".source-fields-inventory")?.innerText.replace(/\s+/g, " ") || "",
+      checkbox: Math.round(document.querySelector('[data-action="source-fields-inv-supported"]')?.getBoundingClientRect().width || 0),
     };
   });
 }
@@ -54,9 +55,10 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await openSourceFields(page);
       const l = await layout(page);
       assert.ok(l.rows > 0, "the check recorded names that no field covers");
-      assert.match(l.text, /Names GPEXE sent in this club's sessions that OptiMove cannot map yet\./);
-      assert.match(l.text, /seen in \d+ answers?, last \d{2}\.\d{2}\.\d{4}/);
-      assert.doesNotMatch(l.text, /athlete_session|details\.session|more\.events|unit_value_object|connection/, "plain words; no connection count for a club");
+      assert.match(l.text, /GPEXE also sends these values in your sessions\./);
+      assert.match(l.text, /seen \d+ times?, last \d{2}\.\d{2}\.\d{4}/);
+      assert.doesNotMatch(l.text, /athlete_session|details\.session|more\.events|unit_value_object|GPEXE account/, "plain words; no account count for a club");
+      assert.ok(l.checkbox > 0 && l.checkbox <= 24, `the checkbox keeps its own size (${l.checkbox})`);
       assert.ok(l.overflow <= 0, `nothing wider than the screen (overflow ${l.overflow})`);
       assert.ok(l.chips.length >= 6 && l.chips.every((h) => h >= 44), `chips are 44 px (${l.chips})`);
       assert.ok(l.toggle.every((h) => h >= 44), `the toggle is 44 px (${l.toggle})`);
@@ -66,7 +68,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.waitForFunction(() => document.querySelector('[data-endpoint="athlete_session"]')?.getAttribute("aria-pressed") === "true");
       await page.waitForFunction(() => !document.querySelector(".source-fields-inventory [role=status]"));
       const facts = await page.locator("[data-sf-inv-row] .metric-variables-item-facts").allInnerTexts();
-      assert.ok(facts.length > 0 && facts.every((f) => f.startsWith("Athlete row")), "only athlete-row names");
+      assert.ok(facts.length > 0 && facts.every((f) => f.startsWith("Per athlete")), "only per-athlete names");
       await page.fill("[data-sf-inv-search]", "zzz-no-such-name");
       await page.waitForSelector("#sf-inv-no-match:not([hidden])");
       assert.equal(writes.length, 0, "the list only reads");
@@ -80,10 +82,13 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
   const pa = await openAs(browser, world, "platform_admin", WIDTHS.desktop);
   try {
     await openSourceFields(pa.page);
-    assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /every club's sessions/);
+    assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /in the clubs' sessions/);
     await pa.page.click(".source-fields-inventory-thresholds summary");
     await pa.page.click('[data-action="source-fields-inv-thresholds"]');
-    await pa.page.waitForFunction(() => document.querySelector("[data-sf-threshold-row]") || /No team thresholds yet/.test(document.querySelector(".source-fields-inventory-thresholds")?.innerText || ""), null, { timeout: 20_000 });
+    await pa.page.waitForFunction(() => document.querySelector("[data-sf-threshold-row]") || /No team zone limits yet/.test(document.querySelector(".source-fields-inventory-thresholds")?.innerText || ""), null, { timeout: 20_000 });
+    assert.equal(await pa.page.locator(".source-fields-inventory-thresholds").evaluate((d) => d.open), true, "the fold stays open after its rows load");
+    const shown = pa.page.locator(".source-fields-inventory-thresholds [data-sf-threshold-row], .source-fields-inventory-thresholds .empty").first();
+    assert.ok(await shown.isVisible(), "its rows (or its empty line) are visible");
   } finally {
     await pa.context.close();
   }
