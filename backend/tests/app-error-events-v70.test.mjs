@@ -13,6 +13,8 @@ const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const V58 = "migrations_v2/202611091000_app_error_events.sql";
 const V70_FILE = "202611131400_app_error_events_v70_device_and_keyed_hash.sql";
 const V70 = `migrations_v2/${V70_FILE}`;
+// v73 sits on v70 (the code writes its columns): the database holds it, and the rehearsal of v70's own rollback takes it off first.
+const V73_FILE = "202611151500_app_error_events_v73_request_and_restart.sql";
 const RUNBOOKS = new URL("../../docs/runbooks/", import.meta.url);
 const KEY_A = crypto.randomBytes(32).toString("base64");
 const KEY_B = crypto.randomBytes(32).toString("base64");
@@ -46,7 +48,7 @@ const rawInsert = (over = {}) => {
 };
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "ah1v70", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1), V70_FILE] });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "ah1v70", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1), V70_FILE, V73_FILE] });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
@@ -113,7 +115,7 @@ test("2. the device of a report: exactly the six keys, each a word of its list; 
 
 test("3. the table: the lists, a server error without a device, the seven columns final, existing rows are version 1", async () => {
   await clear();
-  assert.equal(await guardMd5(), "13009f97dbedc04be84380baa037ce88");
+  assert.equal(await guardMd5(), "05cd59a40237bf6b443d268961409d93", "v73's body, which keeps v70's seven columns final (the updates below)");
   const id = (await rawInsert()).rows[0].id;
   const row = (await k.query(`select * from public.app_error_events where id = $1`, [id])).rows[0];
   assert.equal(row.user_hash_version, 1, "a writer that does not know v70 writes version 1");
@@ -419,6 +421,12 @@ test("9. the preflight and the post-check read what they claim; the rollback ref
   setKeys(`2:${KEY_A}`);
   const coach = await user("Coach Example");
   await call("/api/app-errors", { method: "POST", body: { ...GOOD, device: PHONE }, cookie: coach.cookie });
+  // v73 sits on v70 here. It comes off first (its own rehearsal is app-error-events-v73.test.mjs): from this line the
+  // database is v70's, and a row is planted by hand, since the server's writer fills v73's columns.
+  await assert.rejects(k.query(await sql("app-error-events-v70-rollback.sql")), /later migrations are applied/, "v70's rollback refuses under v73");
+  await k.query("rollback");
+  await k.query(await sql("app-error-events-v73-rollback.sql"));
+  assert.equal(await guardMd5(), "13009f97dbedc04be84380baa037ce88", "v70's body again");
   assert.deepEqual(Object.values((await k.query(post[0])).rows[0]), [true, true]);
   assert.deepEqual(Object.values((await k.query(post[1])).rows[0]), [true, true, true, true]);
   assert.deepEqual(Object.values((await k.query(post[2])).rows[0]), [true, true, true, true, true, true]);
@@ -437,9 +445,7 @@ test("9. the preflight and the post-check read what they claim; the rollback ref
   const refused = async (pattern) => { await assert.rejects(k.query(rollback), pattern); await k.query("rollback"); };
   await refused(/a keyed user hash is stored/);
   await clear();
-  setKeys(null);
-  await call("/api/app-errors", { method: "POST", body: { ...GOOD, device: PHONE }, cookie: coach.cookie }); // a row without a hash does not hold the rollback
-  setKeys(`2:${KEY_A}`);
+  await rawInsert({ user_hash_version: 2, device_class: "phone" }); // a row without a hash (the key was missing) does not hold the rollback
   await refused(/a lookup is recorded/);
   await k.query(`alter table public.app_error_person_lookups disable trigger app_error_person_lookups_guard_delete`);
   await k.query(`delete from public.app_error_person_lookups`);

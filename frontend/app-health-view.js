@@ -82,6 +82,34 @@ export function deviceParts(g) {
   return parts;
 }
 
+// Which request failed (v73), as "POST /api/media/access": the method one of five words and the path a route pattern.
+// Anything else the answer carries is not shown.
+const REQUEST_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+export function requestWords(g) {
+  const r = g?.request;
+  if (!r || typeof r.method !== "string" || !REQUEST_METHODS.has(r.method)) return "";
+  if (typeof r.route !== "string" || r.route.length > 120 || !/^\/[A-Za-z0-9_/:.-]*$/.test(r.route)) return "";
+  return `${r.method} ${r.route}`;
+}
+// What is known about when the errors of a kind happened, one phrase each, with a glyph and a count:
+//   * around a server restart - stored within two minutes of the server's start;
+//   * delivered late - the report itself could not get through when the error happened (the server, or the
+//     person's own connection) and arrived with a later call;
+//   * from a page older than the server - loaded before a deploy.
+export function timingParts(g) {
+  const count = (n) => (Number.isInteger(n) && n > 0 ? n : 0);
+  // Out of the occurrences these facts were recorded for: a row from before v73 says nothing either way.
+  const total = count(g?.timedOccurrences);
+  const of = (n) => (total > n ? `${n} of ${timesLabel(total)}` : timesLabel(n));
+  const parts = [];
+  const restart = count(g?.aroundRestart);
+  if (restart) parts.push(`↻ Around a server restart · ${of(restart)}`);
+  const late = count(g?.deliveredLate);
+  if (late) parts.push(`⏱ Delivered late · ${of(late)}`);
+  const behind = count(g?.pageBehindServer);
+  if (behind) parts.push(`⇅ Page older than the server · ${of(behind)}`);
+  return parts;
+}
 // "Where in the code" of a kind of error. A failed request the browser reports (no answer, an answer it could not
 // read, an HTTP error status) has no place in the page's code by its nature: "not applicable", never "not recorded",
 // which reads as something that went missing. Any other kind without a signature really has none recorded.
@@ -97,14 +125,17 @@ function groupCard(g, selected) {
   const where = placeLabel(g);
   const kind = g.source === "client" ? "Browser" : "Server";
   const devices = deviceParts(g);
+  const request = requestWords(g);
+  const timing = timingParts(g);
   return `
     <article class="app-health-group ${open ? "is-open" : ""}">
       <button type="button" class="app-health-row" data-action="app-health-open" data-fingerprint="${escapeAttr(g.fingerprint)}" aria-expanded="${open ? "true" : "false"}">
         <span class="app-health-where"><span class="app-health-kind">${kind}</span> ${escapeHtml(where)}</span>
-        <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}<small class="app-health-code">${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</small></span>
+        <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}<small class="app-health-code">${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}${request ? ` · ${request}` : ""}`)}</small></span>
         <span class="app-health-count">${escapeHtml(timesLabel(g.occurrences))} · ${escapeHtml(String(g.users))} ${g.users === 1 ? "person" : "people"}</span>
         <span class="app-health-seen">Since ${escapeHtml(formatSeen(g.firstSeenAt))} · last ${escapeHtml(formatSeen(g.lastSeenAt))}</span>
         ${devices.length ? `<span class="app-health-devices">${devices.map((part) => `<span class="app-health-device">${escapeHtml(part)}</span>`).join("")}</span>` : ""}
+        ${timing.length ? `<span class="app-health-devices app-health-timing">${timing.map((part) => `<span class="app-health-device">${escapeHtml(part)}</span>`).join("")}</span>` : ""}
       </button>
       ${open ? `
         <dl class="app-health-detail">
@@ -112,6 +143,7 @@ function groupCard(g, selected) {
           <div><dt>Last seen</dt><dd>${escapeHtml(formatSeen(g.lastSeenAt))}</dd></div>
           <div><dt>Roles</dt><dd>${escapeHtml((g.roles || []).map((r) => ROLE_LABEL[r] || r).join(", ") || "—")}</dd></div>
           ${g.action ? `<div><dt>Last button pressed</dt><dd>${escapeHtml(g.action)}</dd></div>` : ""}
+          ${request ? `<div><dt>Request</dt><dd>${escapeHtml(request)}</dd></div>` : ""}
           <div><dt>Release</dt><dd>${escapeHtml(g.release ? g.release.slice(0, 8) : "unknown")}</dd></div>
           <div><dt>Where in the code</dt><dd>${escapeHtml(whereInCodeWords(g))}</dd></div>
           <div><dt>Group</dt><dd>${escapeHtml(String(g.fingerprint).slice(0, 12))}</dd></div>

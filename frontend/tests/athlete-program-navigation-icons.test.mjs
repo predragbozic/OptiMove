@@ -42,7 +42,7 @@ test("athlete-view.js imports ICON_CALENDAR and ICON_SPECIFIC_PROGRAMS from athl
 
 test("renderAthleteHeaderToolbarHtml's Weekly plans tab embeds the ${ICON_CALENDAR} template placeholder, not inline SVG markup", () => {
   const body = athleteModeHeaderSource();
-  assert.match(body, /data-tab="weekly">\s*\$\{ICON_CALENDAR\}\s*<span>Weekly plans<\/span>/);
+  assert.match(body, /data-tab="weekly">\s*\$\{ICON_CALENDAR\}\s*<span>Weekly plan<\/span>/);
 });
 
 test("renderAthleteHeaderToolbarHtml's Specific programs tab embeds the ${ICON_SPECIFIC_PROGRAMS} template placeholder", () => {

@@ -73,12 +73,13 @@ test("country and city are plain trimmed text fields capped at the real 100-char
   assert.match(body, /name="city"[^>]*maxlength="100"/);
 });
 
-test("the imageUrl field is labeled 'Profile photo URL' and presented as a URL input, never as 'Upload photo' or disguised as a real upload widget", () => {
+test("the imageUrl field is labeled 'Profile photo' and presented as a URL input, never as 'Upload photo' or disguised as a real upload widget", () => {
   const body = sliceFunction("renderPersonalDataFormHtml");
   assert.match(body, /name="imageUrl"[^>]*type="url"/);
-  assert.ok(body.includes("Profile photo URL"));
+  assert.ok(body.includes("<span>Profile photo</span>"));
   assert.ok(!/>\s*Upload photo\s*</.test(body), "must never claim to be a real upload");
-  assert.ok(body.toLowerCase().includes("no photo upload"), "must disclose that this is a temporary URL-only workaround");
+  // Plain words (manager, 2026-11-16): it asks for a link, so it never reads as an upload.
+  assert.ok(body.includes("Paste a link to an image."), "must say it takes a link");
 });
 
 test("the form submits via data-account-form='personal-data', the exact hook app.js's handleContentSubmit listens for", () => {

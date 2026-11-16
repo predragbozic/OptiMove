@@ -12,7 +12,8 @@ export function templateScopeMeta(scope = state.templateScope, user = state.curr
   const isPlatform = access === "platform";
   const scopes = {
     my_programs: {
-      label: "My Programs",
+      // An athlete's place is "Programs" (menu, Home); this tab is what is shared with her (manager, item 6).
+      label: isAthlete ? "Shared with you" : "My Programs",
       eyebrow: isAthlete ? "Allowed programs" : "Program workspace",
       note: isAthlete ? "Programs assigned to you and programs your coach or organization made available." : "Your drafts, coach programs, and shared team or club programs in one working library.",
     },

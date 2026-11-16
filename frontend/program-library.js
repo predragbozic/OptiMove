@@ -153,10 +153,15 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   `;
 }
 
-export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser = null) {
+// `empty`: { athlete, searching } - an athlete reads one plain sentence (nothing shared yet, or nothing matches her search).
+export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser = null, empty = {}) {
   const duplicateNames = duplicateTemplateNames(templates);
   const shelves = groupTemplatesByCategory(templates);
-  if (!templates.length) return `<div class="empty-state">No programs match these filters.</div>`;
+  if (!templates.length) {
+    const text = !empty.athlete ? "No programs match these filters."
+      : empty.searching ? "No programs match your search." : "No programs have been shared with you yet.";
+    return `<div class="empty-state">${text}</div>`;
+  }
   return shelves.map((shelf) => `
     <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
       <div class="program-library-shelf-head">
@@ -252,8 +257,11 @@ export function renderTemplateFiltersHtml(data) {
     visibleCreators,
     clubOptions,
     visibleClubs,
+    athlete = false,
   } = data;
-  const showLifecycleFilter = activeScope === "my_programs";
+  // An athlete sees only what she can use (manager, 2026-11-16): the server already lists only the programs she may see and
+  // keeps free-only for her, so no status, tag or price filter is offered - "Free only" stays only on the Marketplace tab.
+  const showLifecycleFilter = activeScope === "my_programs" && !athlete;
   return `
     ${renderProgramScopeTabsHtml({ scopes, activeScope, scopeLabel, activeSection, requestCount, showRequests })}
     <section class="program-filter-panel" aria-label="Program filters">
@@ -269,14 +277,14 @@ export function renderTemplateFiltersHtml(data) {
           ${visibleCategories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
         </datalist>
       </label>
-      <label class="search-field">
+      ${athlete ? "" : `<label class="search-field">
         <span>Tag</span>
         <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All" : "No assigned tags"}">
         <datalist id="program-tag-filter-options">
           <option value="All"></option>
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
-      </label>
+      </label>`}
       ${showLifecycleFilter ? `
         <label class="search-field">
           <span>Program status</span>
@@ -324,10 +332,10 @@ export function renderTemplateFiltersHtml(data) {
           </select>
         </label>
       ` : ""}
-      <label class="program-paid-filter">
+      ${athlete && activeScope !== "marketplace" ? "" : `<label class="program-paid-filter">
         <input data-template-filter="freeOnly" type="checkbox" ${filters.pricing === "free" ? "checked" : ""}>
         <span>Free only</span>
-      </label>
+      </label>`}
     </section>
   `;
 }

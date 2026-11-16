@@ -773,6 +773,9 @@ export const emptyGpexeImportState = () => ({
   linkConfirm: null,
   lastLink: null,
   linkOpen: "",
+  // The team athlete picked in a link chooser, by GPEXE athlete id, until "Link..." asks to confirm it. Kept here, not in the
+  // select: a repaint (a read answering) redraws the select, and the pick must survive it.
+  linkPicks: {},
   // Link changes made here (linkSeq); checkLinkSeq is linkSeq when the
   // running check started; linkCheckStartedAt is the server start time of the
   // first check that succeeded after the last link change. A session's review
