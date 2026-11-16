@@ -160,6 +160,41 @@ test("Fix (platform admin, 1280 px): Fix beside the review, through the link to 
   }
 });
 
+// The chooser keeps its pick across a repaint (2026-11-16): the GPEXE names are read late here, so their answer repaints the
+// sheet after the pick and before "Link..." - the pick must still be there, and "Link..." must ask to confirm it.
+test("Fix (platform admin, 1280 px): a repaint between the pick and Link... keeps the pick", async () => {
+  const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "imports" } });
+  try {
+    await prepareImports(world);
+    const admin = await openAs(browser, world, "platform_admin", 1280);
+    try {
+      admin.page.on("dialog", (d) => d.accept());
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      await admin.page.route(/\/athlete-identities(\?|$)/, async (r) => { await held; await r.continue(); });
+      await openNeedsYou(admin.page);
+      await admin.page.click('[data-attention-group="unlinked"] [data-action="training-load-gpexe-fix"]');
+      const select = admin.page.locator(".imports-fix.is-open .gpexe-link select");
+      await select.waitFor({ timeout: 20_000 });
+      await select.selectOption(world.ids.athleteIds[3]);
+      // The names answer now: the sheet repaints between the pick and "Link...".
+      const answered = admin.page.waitForResponse(/\/athlete-identities(\?|$)/, { timeout: 20_000 });
+      release();
+      await answered;
+      await admin.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await select.inputValue(), String(world.ids.athleteIds[3]), "the pick survived the repaint");
+      await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link"]');
+      await admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-link-confirm"]').waitFor({ timeout: 10_000 });
+      assert.equal(await admin.page.getByText("Choose the team athlete first.").count(), 0, "never asked to choose again");
+      assert.equal(admin.pageErrors.length, 0, admin.pageErrors.join("\n"));
+    } finally {
+      await admin.context.close();
+    }
+  } finally {
+    await world.stop();
+  }
+});
+
 // Slice 2: an athlete GPEXE recorded on more than one track. Whoever imports chooses the recording in the sheet; anyone else
 // is told who does.
 for (const width of [1280, 390, 360]) {

@@ -856,3 +856,44 @@ test("MT-C 4 (code review): while the review's answer is on its way the button w
   }
   assert.doesNotMatch(reviewRow("Blake Sample"), /gpexe-choose-recording"[^>]* disabled/);
 });
+
+// The pick of a link chooser is kept in state: a repaint between the pick and "Link..." (a read answering) never drops it.
+test("Link pick: a repaint between the pick and Link... keeps the pick - in the Fix sheet and in the full review; it is drawn as chosen", async () => {
+  for (const where of ["fix", "review"]) {
+    resetState();
+    const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } });
+    await open(w);
+    if (where === "fix") await fixFirst();
+    else await act("training-load-gpexe-open", { candidateId: "cand-5" });
+    // The pick: the select's change, as the browser sends it.
+    await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value: "ath-1", matches: () => true }, { renderTrainingLoad: render });
+    // A repaint draws the select from the pick (the page's select starts again from what the HTML says).
+    const drawn = html();
+    assert.match(drawn, /data-gpexe-link-select="101"[^>]*>[\s\S]*?<option value="ath-1" selected>/, `${where}: drawn as chosen`);
+    assert.doesNotMatch(drawn, /data-gpexe-link-select="101"[^>]*>\s*<option value="" selected>/, `${where}: not drawn empty`);
+    // The page's select is empty after a repaint that forgot it; Link... still asks to confirm the pick.
+    selectValues["101"] = "";
+    await act("training-load-gpexe-link", { gpexeAthleteId: "101" });
+    assert.deepEqual(state.trainingLoad.gpexe.linkConfirm && { g: state.trainingLoad.gpexe.linkConfirm.gpexeAthleteId, a: state.trainingLoad.gpexe.linkConfirm.athleteId }, { g: "101", a: "ath-1" }, `${where}: Link... confirms the kept pick`);
+    assert.ok(!/Choose the team athlete first/.test(html()), `${where}: never asked to choose again`);
+    // Linked: the pick is done with.
+    await act("training-load-gpexe-link-confirm");
+    assert.equal(state.trainingLoad.gpexe.linkPicks["101"], undefined, `${where}: the pick is cleared once linked`);
+  }
+});
+
+test("Link pick: choosing nothing again clears the pick; a pick that is no longer a choice is not drawn; closing the review forgets it", async () => {
+  resetState();
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } });
+  await open(w);
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  const pick = (value) => handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-link-pick", gpexeAthleteId: "101" }, value, matches: () => true }, { renderTrainingLoad: render });
+  await pick("ath-1");
+  await pick("");
+  assert.equal(state.trainingLoad.gpexe.linkPicks["101"], undefined);
+  state.trainingLoad.gpexe.linkPicks["101"] = "ath-gone";
+  assert.match(html(), /data-gpexe-link-select="101"[^>]*>\s*<option value="" selected>/, "an unknown pick is not drawn");
+  await pick("ath-2");
+  await act("training-load-gpexe-close");
+  assert.deepEqual(state.trainingLoad.gpexe.linkPicks, {}, "closing the review forgets the picks");
+});

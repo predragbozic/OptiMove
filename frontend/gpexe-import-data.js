@@ -130,6 +130,7 @@ function resetGpexeTeamState(teamId) {
   gx.linkConfirm = null;
   gx.lastLink = null;
   gx.linkOpen = "";
+  gx.linkPicks = {};
   gx.linkSeq = 0;
   gx.recomputedAtLinkSeq = {};
   gx.checkLinkSeq = null;
@@ -522,6 +523,7 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
   gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
   gx.linkConfirm = null;
   gx.linkOpen = "";
+  gx.linkPicks = {};
   gx.notice = "";
   render();
   try {
@@ -568,6 +570,7 @@ export function closeGpexeCandidate() {
   gx.detail = null;
   gx.linkConfirm = null;
   gx.linkOpen = "";
+  gx.linkPicks = {};
   return refresh;
 }
 
@@ -1081,6 +1084,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
     // Every review on screen was made with the old links from here on.
     linksChanged();
     gx.linkConfirm = null;
+    if (gx.linkPicks) delete gx.linkPicks[gpexeAthleteId];
     gx.notice = "";
     gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, gpexeSentence, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
     // The change is made; a failed re-read of the list only leaves it stale.

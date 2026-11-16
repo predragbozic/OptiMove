@@ -486,7 +486,8 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-link") {
     if (gx.detail?.updating) return true;
     const gpexeAthleteId = action.dataset.gpexeAthleteId;
-    const athleteId = fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
+    // The pick kept in state (it survives a repaint); the select itself only when no pick is kept.
+    const athleteId = gx.linkPicks?.[gpexeAthleteId] || fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
     gx.linkOpen = gpexeAthleteId;
     gx.linkError = null;
     if (!athleteId) {
@@ -526,6 +527,19 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-review-filter") {
     gx.reviewFilter = action.dataset.filter || "";
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-link-pick") {
+    // The chooser's pick, kept by GPEXE athlete id so a repaint never drops it. Nothing is sent.
+    const id = action.dataset.gpexeAthleteId;
+    if (!id) return true;
+    gx.linkPicks = { ...(gx.linkPicks || {}), [id]: String(action.value || "") };
+    if (!gx.linkPicks[id]) delete gx.linkPicks[id];
+    // "Choose the team athlete first" is answered by the pick itself.
+    if (gx.linkError?.code === "choose_athlete" && String(gx.linkOpen) === String(id)) {
+      gx.linkError = null;
+      renderTrainingLoad();
+    }
     return true;
   }
   if (type === "training-load-gpexe-link-cancel") {
