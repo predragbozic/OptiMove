@@ -26,6 +26,8 @@ import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
 import { periodOf } from "./gpexe-period-data.js";
 import { renderImportsHelpHtml } from "./gpexe-help-view.js";
+import { renderFixSheetHtml } from "./gpexe-fix-view.js";
+import { FIX_GROUPS } from "./gpexe-fix-data.js";
 import { isLater, laterNotice, laterOpen } from "./gpexe-later-data.js";
 import {
   BATCH_MAX,
@@ -514,7 +516,7 @@ export function renderGpexeImportsHtml() {
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
       ${status ? renderImportsTabsHtml(gx, status) : ""}
-      ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
+      ${gx.detail ? (gx.detail.fix ? renderFixHtml(gx, status) : renderCandidateDetailHtml(gx, status)) : ""}
       ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
       ${!gx.detail && !gx.mapping?.open ? renderBatchOverlayHtml(gx) : ""}
     </div>
@@ -993,8 +995,11 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
     const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
     button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
   } else {
-    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
+    // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the
+    // full review and gets "Fix" beside it.
+    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
   }
+  if (platformViewer() && FIX_GROUPS.has(grp.key)) button += `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">Fix</button>`;
   const sessions = grp.count > 1
     ? `<details class="imports-attn-sessions"><summary>Show the ${escapeHtml(plural(grp.count, "session", "sessions"))}</summary>${rows(grp.items, "attention", grp.key)}</details>`
     : rows(grp.items, "attention", grp.key);
@@ -1010,6 +1015,38 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
 // U6a-2: with nothing ready to import, the first group's button is the screen's one main action when it is a step the
 // person can take now (check a result, link athletes, update a review); a new search would not fix those. Otherwise the
 // state bar's button stays the main one.
+// Fix flow (slice 1): which openings go to the step-by-step sheet. Not for the platform admin, who keeps the review.
+function fixOpens(group) {
+  return FIX_GROUPS.has(group) && !platformViewer();
+}
+
+// The Fix sheet with this screen's own wording per viewer, link chooser and counts (gpexe-fix-view.js).
+function renderFixHtml(gx, status) {
+  const detail = gx.detail;
+  const c = detail.candidate;
+  const sw = status?.importSwitch || {};
+  const viewer = status?.viewer || {};
+  const switchOff = sw.enabled !== true || (status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).some((b) => b === "import_switch_off" || b === "team_import_switch_off");
+  const linkHtml = (id) => {
+    const preview = c?.preview || {};
+    const a = (preview.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
+    return a ? renderLinkHtml(a, c, linkChoicesOf(preview, c)) : "";
+  };
+  return renderFixSheetHtml(gx, status, {
+    title: c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session",
+    day: c ? isoDay(c.sessionStartedAt) : "",
+    linkHtml,
+    AskWho,
+    importCount: c ? importableAthleteCount(c.preview) : 0,
+    canImport: viewer.canApprove === true,
+    switchOff,
+    next: Boolean(detail.group && nextInGroup(detail, gx.candidates || [], gx)),
+    errorTech: (error) => (platformViewer() ? errorTech(error) : ""),
+    checkErrorText,
+    linkErrorText: errorText(gx.linkError, "The link could not be changed."),
+  });
+}
+
 const LEADING_GROUPS = new Set(["unknown", "unlinked", "stale"]);
 const STEP_IN_GROUP = new Set(["unknown", "unlinked", "stale", "fresh"]);
 function groupLeads(gx, status) {
@@ -1062,7 +1099,7 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   return `
     <li class="${[box ? "imports-pick-row" : "", later ? "imports-later-row" : ""].filter(Boolean).join(" ")}">
       ${box}
-      <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
+      <button type="button" class="gpexe-candidate" data-action="${kind === "attention" && fixOpens(group) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(c.id)}"${group ? ` data-group="${escapeAttr(group)}"` : ""}>
         <span class="gpexe-candidate-main">
           <strong>${escapeHtml([sessionDayText(c.sessionStartedAt), niceSessionName(c)].filter(Boolean).join(" · "))}</strong>
           <span class="muted">${escapeHtml([sessionTimeText(c.sessionStartedAt) || fmtDateTime(c.sessionStartedAt), ...sessionSizeFacts(c)].filter(Boolean).join(" · "))}</span>
@@ -2159,18 +2196,24 @@ function renderVariableTableHtml(values, withPrevious) {
   `;
 }
 
+// Only team athletes without a GPEXE record here AND without a link yet can be chosen: an athlete who is already linked
+// would be refused anyway. Two team athletes with the same name can't be told apart here.
+function linkChoicesOf(preview, c) {
+  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
+  const choices = (preview.teamAthletesWithoutGpexeRecord || [])
+    .filter((a) => !linked.has(String(a.athleteId)))
+    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
+  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
+  for (const o of choices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  return choices;
+}
+
 function renderAthletesHtml(preview, c) {
   const athletes = preview.athletes || [];
   if (!athletes.length) return "";
   // Only team athletes without a GPEXE record here AND without a link yet can
   // be chosen: an athlete who is already linked would be refused anyway.
-  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
-  const unlinkedChoices = (preview.teamAthletesWithoutGpexeRecord || [])
-    .filter((a) => !linked.has(String(a.athleteId)))
-    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
-  // Two team athletes with the same name can't be told apart here.
-  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
-  for (const o of unlinkedChoices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
+  const unlinkedChoices = linkChoicesOf(preview, c);
   if (!platformViewer()) {
     // P1 (owner 2026-11-13, O3): the coach and the club admin don't get a second list of the table's athletes. What only this
     // list holds - each athlete's values and the values left out with their reasons (D32) - stays, folded, for the athletes

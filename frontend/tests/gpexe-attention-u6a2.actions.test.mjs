@@ -161,7 +161,8 @@ test("1. the sessions that need a person are grouped by what is in the way, in a
   // P3: one problem is said once - the group gives the step, its rows only their facts.
   assert.ok(!/gpexe-candidate-next/.test(u), "no row repeats the group's step");
   assert.equal((u.match(/<div class="imports-attn-actions">[\s\S]*?<\/div>/)[0].match(/<button/g) || []).length, 1, "one button");
-  assert.match(u, /data-action="training-load-gpexe-open" data-candidate-id="cand-4" data-group="unlinked">Link athletes</);
+  // Fix flow (slice 1): for a coach the group's button opens the step-by-step sheet (the platform admin keeps the review).
+  assert.match(u, /data-action="training-load-gpexe-fix" data-candidate-id="cand-4" data-group="unlinked">Link athletes</);
   assert.match(u, /<details class="imports-attn-sessions"><summary>Show the 2 sessions<\/summary>/, "several sessions are folded");
   assert.match(u, /data-candidate-id="cand-6" data-group="unlinked"/, "a row inside the group opens the review in the group");
   const f = groupHtml("fresh", page);
