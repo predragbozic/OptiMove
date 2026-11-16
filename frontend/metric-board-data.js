@@ -204,7 +204,25 @@ export function conversionWords(conversion, sourceUnit, targetUnit) {
 }
 const trim = (n) => String(Number(n.toFixed(6)));
 
-// Why a column cannot be placed (section 3.3).
+// A number as the board shows it (manager, 2026-11-15): whole numbers as they are, others to at most 2 decimals with
+// trailing zeros dropped; never "-0" or scientific notation; a non-zero value that would read 0 shows "<0.01"
+// (or ">-0.01"). Display only: the comparison, the checks and what is saved keep the exact value.
+export function displayNumber(value) {
+  if (value === null || value === undefined || value === "") return value;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  if (Number.isInteger(n)) return Math.abs(n) < 1e21 ? n.toFixed(0).replace(/^-0$/, "0") : String(value);
+  const r = Math.round(n * 100) / 100;
+  if (r === 0) return n > 0 ? "<0.01" : ">-0.01";
+  return r.toFixed(2).replace(/\.?0+$/, "").replace(/^-0$/, "0");
+}
+
+// Why a column cannot be placed (section 3.3). A platform admin is the one who confirms a column: he gets the step
+// that exists today instead of "ask support" (manager, 2026-11-15; wording only).
+export function columnReasonText(code, { platformAdmin = false } = {}) {
+  if (code === "field_not_confirmed" && platformAdmin) return "This column's unit is not confirmed yet. Confirm it in Data configuration › Source fields (platform workspace).";
+  return COLUMN_REASON[code] || "This column cannot be placed.";
+}
 export const COLUMN_REASON = {
   field_not_confirmed: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it.",
   field_has_parameters: "Map zones and thresholds in Mappings.",
