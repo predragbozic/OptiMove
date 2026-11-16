@@ -1,13 +1,13 @@
-# C97 meaning evidence: the three pilot fields of `server3` / `rest_v1`
+# C97 meaning evidence: the pilot fields of `server3` / `rest_v1`
 
 | | |
 |---|---|
 | Status | **Proposed.** It is evidence for the meaning act only once it is merged, and it is merged only on the owner's word. |
-| Covers | The **meaning** of `athlete_session.total_time`, `athlete_session.total_distance` and `athlete_session.max_v` on `server3` / `rest_v1`. |
-| Companion | The unit evidence of the same three fields: `docs/ai/gpexe-c97-unit-evidence.md` (merged, PR #316). |
-| Source | GPEXE's REST handbook, `gpexe-v.6-api-rest-handbook.pdf`, pages 11, 37–38 and 52; the owner holds the file. |
+| Covers | The **meaning** of `athlete_session.total_time`, `athlete_session.total_distance` and `athlete_session.max_v` (sections 3.1–3.3, from the handbook), and of `details.players.tot_burst_events` and `details.players.tot_brake_events` (sections 3.4–3.5, from the owner's own statement), on `server3` / `rest_v1`. |
+| Companion | The unit evidence of the same fields: `docs/ai/gpexe-c97-unit-evidence.md` (merged: PR #316 for the three athlete-row fields, PR #560 for burst and brake). |
+| Source | Sections 3.1–3.3: GPEXE's REST handbook, `gpexe-v.6-api-rest-handbook.pdf`, pages 11, 37–38 and 52; the owner holds the file. Sections 3.4–3.5: the owner's own statement of GPEXE's definition (section 1.1). |
 | Cited by | The meaning act of M2b (`POST /fields/:fieldId/revisions/:revisionId/meaning-verification`, discovery document J4) through the anchors of section 3. |
-| Recorded | 2026-11-01, from the pages the *Rukovodilac* read in the handbook the owner sent, and the owner's decision O7. |
+| Recorded | 2026-11-01, from the pages the *Rukovodilac* read in the handbook the owner sent, and the owner's decision O7; 2026-11-16 (sections 1.1 and 3.4–3.5), from the owner's statement as the *Rukovodilac* relays it. |
 
 The anchors of section 3 are stable. A meaning act stores its anchor for good (v34's `meaning_evidence_ref`), so an
 anchor is never renamed or removed. A correction is a new section with a new anchor.
@@ -25,6 +25,30 @@ for GPEXE 6, and `server3` reports 9.11.x. The owner decided that it counts for 
 > The owner, in the *Rukovodilac*'s session, event `9b1f4a69`, 2026-11-01 20:10:49 UTC.
 
 It covers these three fields and these pages only. It does not make the handbook evidence for any other field.
+
+<a id="owner-statement-burst-brake"></a>
+
+### 1.1 Burst and brake: the owner's own statement (2026-11-16)
+
+C97 asks for the meaning from official GPEXE documentation or GPEXE support's written answer. For
+`details.players.tot_burst_events` and `details.players.tot_brake_events` there is neither: the handbook pages read for
+section 3.0 do not define them, and no written support answer has been received. The owner, as the product owner and a
+GPEXE user, stated GPEXE's definition himself in his chat of 2026-11-16, as the *Rukovodilac* relays it:
+
+> A burst event and a brake event are events above 80% of the athlete's capability on the acceleration / velocity
+> profile (GPEXE's individual acceleration–speed profile): bursts on the accelerating side, brakes on the decelerating
+> side. The fields are counts of such events.
+
+**What kind of evidence this is.** It is the owner's own statement of GPEXE's definition, relayed by the *Rukovodilac*.
+It is **not** the handbook and **not** a written answer from GPEXE support. Using it for the meaning act is a departure
+from C97, taken on the owner's word and recorded here as such. The main session did not see the owner's words
+first-hand, read no GPEXE document for it and sent no GPEXE request.
+
+**It may be replaced.** A written confirmation from GPEXE support (or a GPEXE document) that defines these two events
+is stronger. When one exists, it is recorded as a new section with a new anchor. The anchors below are not changed,
+because a meaning act stores its anchor for good.
+
+It covers these two fields only. It does not lower the standard for any other field.
 
 <a id="source"></a>
 
@@ -102,6 +126,28 @@ distance travelled over that interval at that average speed.
 `max_values_speed` for that athlete, proven equal to the row's own `max_v` on one row of each session by the check's
 canary (`docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`).
 
+<a id="burst-events-meaning"></a>
+
+### 3.4 `details.players.tot_burst_events`
+
+**Meaning:** the number of the athlete's burst events in the session: events above 80% of the athlete's capability on
+the acceleration / velocity profile, on the accelerating side (section 1.1).
+
+**Evidence:** the owner's statement of section 1.1 only. Nothing more is recorded: no threshold duration, no formula
+and no profile parameters, because the statement gave none. The unit `count` is in
+`docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit`.
+
+<a id="brake-events-meaning"></a>
+
+### 3.5 `details.players.tot_brake_events`
+
+**Meaning:** the number of the athlete's brake events in the session: events above 80% of the athlete's capability on
+the acceleration / velocity profile, on the decelerating side (section 1.1).
+
+**Evidence:** as section 3.4. The unit `count` is in `docs/ai/gpexe-c97-unit-evidence.md#brake-events-unit`.
+
+Both fields are plain fields (`parameter_kind` `none`), so the meaning act takes no operator.
+
 <a id="strength"></a>
 
 ## 4. How strong this evidence is
@@ -117,6 +163,9 @@ canary (`docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`).
   section 1). A written confirmation by GPEXE support would be stronger, and is not needed for these fields.
 - **The units agree with the independent unit evidence** (PR #316: m, m/s, s from 13 athletes against the GPEXE
   screen), and with the handbook's own example.
+- **Burst and brake (sections 3.4–3.5) are weaker.** Their meaning rests on the owner's statement alone, with no
+  vendor document or written support answer behind it, and the statement gives no detail beyond the 80% and the side of
+  the profile. A GPEXE support confirmation would replace it (section 1.1).
 
 <a id="acts"></a>
 
@@ -154,11 +203,32 @@ from GPEXE documentation; here that definition is the inference of section 3, wh
 *Evidence: Verified*; its *Confirmations* list shows the two confirmations on revision 1 with the evidence of the table.
 If an answer is lost ("Result not confirmed"), use **Check result**, never a second act.
 
+<a id="acts-burst-brake"></a>
+
+### 5.1 The two meaning acts for burst and brake (prepared for the owner, not done)
+
+Before these acts, the unit acts of `docs/ai/gpexe-c97-unit-evidence.md` section 4 (`count`) are done or are done the
+same way; a field becomes *Verified* only with both. These are plain fields: the meaning form asks for the evidence
+only, with no operator.
+
+| # | Field (seeded label · key) | Button | What to type | Evidence (copy exactly) |
+|---|---|---|---|---|
+| 7 | Burst events · `details.players.tot_burst_events` | Confirm the meaning | (nothing else) | `docs/ai/gpexe-c97-meaning-evidence.md#burst-events-meaning` |
+| 8 | Brake events · `details.players.tot_brake_events` | Confirm the meaning | (nothing else) | `docs/ai/gpexe-c97-meaning-evidence.md#brake-events-meaning` |
+
+The form says to confirm only when the document holds the field's definition from GPEXE documentation or written
+support. Here the definition is the owner's own statement (section 1.1), accepted on the owner's word as a departure
+from C97. The same steps as above apply: copy the evidence from the table, compare the form's question with the row,
+and use **Check result** after a lost answer.
+
 <a id="limits"></a>
 
 ## 6. What this evidence is not
 
-- **Not the other seven fields** (zones, event counts, burst / brake): none is covered, and the handbook pages here
-  say nothing about their operators or bounds.
+- **Not the other fields** (the zones and the acceleration / deceleration event counts): none is covered, and the
+  handbook pages here say nothing about their operators or bounds. Burst and brake are covered by sections 3.4–3.5, on
+  the owner's statement only.
+- **Not GPEXE's documentation for burst and brake:** sections 3.4–3.5 are the owner's statement, not a vendor document
+  or a written support answer (section 1.1).
 - **Not another server or family:** `server3` / `rest_v1` only.
 - **Not an act:** nothing here is confirmed until the owner does the acts of section 5.

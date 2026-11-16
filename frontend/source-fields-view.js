@@ -7,7 +7,8 @@
 import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
-  currentRevision, hasBound, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
+  ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
+  currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
@@ -129,7 +130,76 @@ function renderListHtml(s, ctx) {
           }).join("")}
         </ul>
       </section>`).join("")}
+    ${renderInventoryHtml(s, ctx)}
   `;
+}
+
+// ---------------------------------------------------------------------------
+// I3: "Available in GPEXE, not supported yet" (read-only, plan section 7.3)
+// ---------------------------------------------------------------------------
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const fmtDay = (day) => (/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}` : "");
+function inventoryFacts(item, ctx, { withEndpoint = true } = {}) {
+  const kind = KIND_LABEL[item.kind] || "";
+  return [
+    withEndpoint ? ENDPOINT_LABEL[item.endpoint] || "" : "",
+    item.unitWord ? `${kind} in ${item.unitWord}` : kind,
+    `seen ${plural(Number(item.answersSeen) || 0, "time", "times")}${item.lastSeenOn ? `, last ${fmtDay(item.lastSeenOn)}` : ""}`,
+    ctx.mayVerify && Number.isInteger(item.connectionCount) ? `in ${plural(item.connectionCount, "GPEXE account", "GPEXE accounts")}` : "",
+  ].filter(Boolean).map(escapeHtml).join(" · ");
+}
+function inventoryRowHtml(item, index, ctx, search) {
+  return `
+    <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
+      <div class="source-fields-inventory-item">
+        <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code>${item.covered ? ` <span class="item-badge">Already used</span>` : ""}</span>
+        <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx)}</span>
+      </div>
+    </li>`;
+}
+function renderThresholdsHtml(inv, ctx) {
+  if (!ctx.mayVerify) return "";
+  const t = inv.thresholds;
+  return `
+    <details class="source-fields-inventory-thresholds"${t.open ? " open" : ""}>
+      <summary>Team zone limits (from GPEXE)</summary>
+      <p class="muted">The speed and power limits each team set in GPEXE. OptiMove uses them to split values into zones; they are not values on their own.</p>
+      ${t.error ? `<p class="error" role="alert">${escapeHtml(t.error)}</p>` : ""}
+      ${!t.loaded ? `<button class="plain-button" type="button" data-action="source-fields-inv-thresholds" ${t.loading ? "disabled" : ""}>${t.loading ? "Loading..." : "Show the team zone limits"}</button>`
+        : !t.items.length ? `<p class="empty">No team zone limits yet.</p>`
+        : `<ul class="metric-variables-list">${t.items.map((item, i) => `
+            <li data-sf-threshold-row="${i}"><div class="source-fields-inventory-item">
+              <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code></span>
+              <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx, { withEndpoint: false })}</span>
+            </div></li>`).join("")}</ul>`}
+    </details>`;
+}
+function renderInventoryHtml(s, ctx) {
+  const inv = s.inventory;
+  if (!inv) return "";
+  const chips = [["", "All"], ...INVENTORY_ENDPOINTS.map((e) => [e, ENDPOINT_LABEL[e]])];
+  const matching = inv.items.filter((item) => inventoryMatches(item, inv.search)).length;
+  return `
+    <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
+      <h3 id="sf-inventory-title">Available in GPEXE, not supported yet</h3>
+      <p class="muted">${ctx.mayVerify ? "GPEXE also sends these values in the clubs' sessions." : "GPEXE also sends these values in your sessions."} OptiMove does not use them yet, so they are not imported. There is nothing to do here: this list shows what could be added later.</p>
+      <div class="source-fields-inventory-tools">
+        <label class="source-fields-inventory-search"><span class="visually-hidden">Search the GPEXE names</span>
+          <input type="search" data-sf-inv-search placeholder="Search the GPEXE names" value="${escapeAttr(inv.search)}" autocomplete="off">
+        </label>
+        <div class="source-fields-inventory-chips" role="group" aria-label="Where the value comes from">
+          ${chips.map(([endpoint, label]) => `<button type="button" class="chip${inv.endpoint === endpoint ? " is-active" : ""}" data-action="source-fields-inv-endpoint" data-endpoint="${escapeAttr(endpoint)}" aria-pressed="${inv.endpoint === endpoint ? "true" : "false"}">${escapeHtml(label)}</button>`).join("")}
+        </div>
+        <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-inv-supported" ${inv.showSupported ? "checked" : ""}><span>Also show the ones OptiMove already uses</span></label>
+      </div>
+      ${inv.loading ? `<p class="muted" role="status">Loading names...</p>` : ""}
+      ${inv.error ? `<div class="error" role="alert"><p>${escapeHtml(inv.error)}</p><button class="plain-button" type="button" data-action="source-fields-inv-reload">Try again</button></div>` : ""}
+      ${inv.loaded && !inv.items.length && !inv.error ? `<p class="empty">No names yet. They appear after the next Find new sessions in Imports.</p>` : ""}
+      ${inv.items.length ? `<p class="empty" id="sf-inv-no-match"${matching ? " hidden" : ""}>${inv.nextCursor ? "No name matches among the names loaded so far. Load more to search the rest." : "No name matches the search."}</p>` : ""}
+      ${inv.items.length ? `<ul class="metric-variables-list" aria-labelledby="sf-inventory-title">${inv.items.map((item, i) => inventoryRowHtml(item, i, ctx, inv.search)).join("")}</ul>` : ""}
+      ${inv.nextCursor ? `<button class="plain-button" type="button" data-action="source-fields-inv-more" ${inv.loadingMore ? "disabled" : ""}>${inv.loadingMore ? "Loading..." : "Load more"}</button>` : ""}
+      ${renderThresholdsHtml(inv, ctx)}
+    </section>`;
 }
 
 // ---------------------------------------------------------------------------

@@ -6351,6 +6351,33 @@ body.specific-program-open {
 
 .exercise-card-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 2px; }
 .exercise-card-actions .text-action { font-size: 12px; }
+/* An exercise's favorite that could not be saved: one line under the actions it belongs to, in all three
+   renderings (library card, library icon row, Builder result). It takes a line of its own inside the actions and
+   never widens them; "Try again" is a 44 px target. */
+.exercise-favorite-failed {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  min-width: 0;
+  color: var(--warning-text, #8a5300);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.exercise-favorite-failed .text-action,
+.builder-exercise-view .builder-exercise-mini-actions .exercise-favorite-failed .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 13px;
+}
+:is(.exercise-card-actions, .exercise-view-actions, .builder-exercise-mini-actions):has(> .exercise-favorite-failed) { flex-wrap: wrap; }
+/* The Builder's phone layouts set the row to one line further down; with the message it wraps there too. */
+.builder-exercise-view .builder-exercise-mini-actions:has(> .exercise-favorite-failed) { flex-wrap: wrap; }
 .exercise-tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
 .exercise-tag-list span, .exercise-tag-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 3px 7px; border-radius: 999px; background: #eef2f4; color: var(--muted); font-size: 11px; font-weight: 800; }
 /* z-index: the overlay ladder, see .media-modal. */
@@ -27185,6 +27212,77 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 
 /* End of Imports P5. */
 
+/* I3: Source fields - "Available in GPEXE, not supported yet" (read-only). */
+.source-fields-inventory-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+.source-fields-inventory-search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.source-fields-inventory-search input {
+  width: 100%;
+  min-height: 44px;
+  font-size: 16px;
+}
+.source-fields-inventory-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-fields-inventory-chips .chip {
+  min-height: 44px;
+}
+.source-fields-inventory-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.source-fields-inventory-thresholds {
+  margin-top: 12px;
+}
+.source-fields-inventory-thresholds summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+/* I3 reviews: the section reads as a separate, secondary list; the checkbox keeps its own size (mobile-qa); the
+   thresholds fold shows that it opens. */
+.source-fields-inventory {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.source-fields-choice input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.source-fields-inventory-thresholds summary::after {
+  content: "▸";
+  margin-left: 8px;
+}
+.source-fields-inventory-thresholds[open] summary::after {
+  content: "▾";
+}
+@media (max-width: 560px) {
+  .source-fields-inventory-tools .source-fields-choice {
+    width: 100%;
+  }
+}
 /* Imports Fix flow, slice 1: one problem per screen. A 560 px centred dialog over a real backdrop on a computer, a
    full-screen sheet on a phone (the P5 help's frame). "Step x of y", one sentence, Skip for now and ONE main button. */
 body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-fix {

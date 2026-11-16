@@ -290,6 +290,9 @@ Everyone else gets the identical 404 of the other metrics routes.
   - in a club workspace (the club's admin, or a platform admin there): only the rows whose connection belongs to that
     club. **P2:** that is a club-owned connection of the club, and a team-owned connection of one of the club's own
     teams. A team of another club is never included;
+  - **A team-owned connection follows the team's current club** (the *Rukovodilac*'s L3, 2026-11-16). No route moves a
+    team between clubs today (D43), and only names are shown. If a team-move route is ever built, it must first decide
+    what happens to the names that team's connection recorded;
   - a coach, an athlete, a team workspace: the identical 404 (the route never answers them, as for `/fields`).
 - **One row per (endpoint, name)**, grouped over the visible connections:
   - the endpoint in plain words (no key, code or id for a club admin);
@@ -324,7 +327,10 @@ then the *Rukovodilac* and the *Nezavisni revizor* on the frozen head.
   - a club admin, in their own club's workspace, sees their club's names, including those from a team-owned connection
     of their own team;
   - a foreign club's team-owned connection is never included;
-  - the same club admin in another club's workspace, a coach and a team workspace get the identical 404;
+  - a coach, a team workspace and an archived club's workspace get the identical 404. A club admin whose saved workspace
+    names a club they do not administer is not refused: the workspace resolver falls back to a workspace of their own
+    (`pickFallbackWorkspace`), so they read their own club's names and never the other club's (corrected after I2's review;
+    I2's test 11 proves it);
 - covered names are hidden by default;
 - `team_thresholds` reaches the platform admin only;
 - the unit word: a club admin sees it only when it is a known unit;
@@ -351,6 +357,37 @@ Frontend only, in `frontend/source-fields-{view,data,actions}.js`. Reviewers: `c
   connection gets "This club has no GPEXE connection."
 - *Load more* pages the list.
 
+**As built (I3):**
+- **The list:** "Available in GPEXE, not supported yet", under the supported fields, is read when Source fields opens. The
+  Data configuration start screen's card does not read it.
+- **Each row:** the name; where it comes from, its kind, the unit word, the answers and the last day, all in plain words;
+  for a platform admin, the connection count.
+- **Filters:** the endpoint chips and "Show supported too" become the read's query. The search narrows the loaded names
+  in place, so its field keeps the focus. "Load more" reads the next page.
+- **Team thresholds:** a platform admin's fold, read only when opened.
+- **Read-only:** nothing on the list writes.
+
+### 7.3a Structural keys are not fields (the *Rukovodilac*'s decision (b), 2026-11-16)
+
+An identifier, a reference to another record or a timestamp is never a value GPEXE measured, so nobody could map it. One
+frozen list, `STRUCTURAL_FIELDS` in `backend/src/sourceFieldInventory.js`, is used in two places:
+- the collector does not record those names;
+- the read (`sourceFieldInventoryRead.js`) hides the same pairs under every state and filter. This is a backstop for any
+  row written before the rule; production has none yet.
+
+No migration, and no change to who sees what.
+
+| Endpoint | Left out | Kept, though unsure |
+|---|---|---|
+| `athlete_session` | `id`, `athlete`, `teamsession`, `track`, `drill`, `team`, `start_timestamp`, `end_timestamp`, `created_on`, `updated_on` | `is_stats_valid` (a flag, not an identity) |
+| `team_thresholds` | `id`, `team`, `validity_start`, `validity_end` | `is_heart_rate_thresholds_in_percent`, `use_hr_min` and the `are_*_visible` flags (display settings of the thresholds, not measured values) |
+| `details.session`, `details.drill`, `more.events`, `more.complementary_data` | nothing: the names there are measured values (a players' map is keyed by athlete, and /more/'s identifiers sit beside `events` and `complementary_data`, never inside them) | — |
+
+The athlete_session list comes from the projection's identity and time fields and the request. The full key set of a real
+server3 row is not in the repository: the probes returned field names to the owner only, and the fixtures are synthetic.
+So a real row may carry another identifier, for example a name-like text. If one shows up in Source fields, it is added
+here.
+
 ### 7.4 Open point: a wish list (not a slice)
 
 "I want this" (a guarded, append-only wish per name) is **not built now** (the *Rukovodilac*, 2026-11-15). Its only user
@@ -361,4 +398,210 @@ After G2, if names remain that only code can support (zones, events), a wish lis
 
 ### 7.5 The order
 
-I2 (the read route, ★★ without a migration) → I3 (the screen) → the G1 contract.
+I2 (the read route, ★★ without a migration) → I3 (the screen) → the G1 contract (section 8).
+
+## 8. G1: creating a generic field and its `source_stated` evidence (contract, 2026-11-16)
+
+**Status: Proposed.** Accepted only by the *Rukovodilac*'s GO on this section.
+
+**PENDING (8.0):** decision (a), the meaning, waits for the owner's explicit word. The *Rukovodilac* is asking him. The
+migration file is not started before the *Rukovodilac* relays that word.
+
+G1 is J18's reserved slice 18-P (`docs/ai/c112-drag-mapping-contract.md`, sections 5.1 note, 5.7, 15.2 and C114),
+reshaped by D-INV-2 (section 6.1).
+- It builds the shapes v65 reserved: T9 kind `field_observation`, its T9s session, the T9i kind `field_unit`, and T2b's
+  observation columns. There is no parallel record.
+- G1 and G2 ship as a pair, as two pull requests. G1 comes first: the migration, ★★ plus the *Nezavisni revizor*.
+- G2 follows on top of it: the generic extractors and the pinned set, also ★★ plus the *Nezavisni revizor*.
+- **G1 alone makes nothing importable.** A created field has no extractor until G2, so a T4 create on it still answers
+  `409 source_metric_unsupported` (J12).
+
+### 8.0 The *Rukovodilac*'s decisions (2026-11-16)
+
+| | Decision |
+|---|---|
+| (a) | **The meaning.** For generic fields only, the board's tick is also the meaning act. The screen reads "Meaning: GPEXE's own label, checked on the board". **PENDING the owner's word**, because C97 asks for official documentation or a written support answer. If the owner says no, the act confirms the unit only and the meaning stays an M2b document act. |
+| (b) | **One session, two athletes.** This is D-INV-2's wording and the owner's standing C97 decision ("one session instead of two", `docs/ai/gpexe-c97-unit-evidence.md#owner-decision`). It departs from C116 (J18: two sessions for a global confirmation) on the owner's decisions. The act stores which session, so a later, stricter rule can re-check it. |
+| (c) | **Only a platform admin** raises a field to `source_stated`, and only in the platform workspace. A club admin's tick stays what it is today: one per save (C112). **Open point** for the day a second club exists: the owner wants clubs to map what they want, so a per-club path will be asked for then. |
+| (d) | **`number → count`** is a seed row of `unit_conversions` (scale 1, divisor 1, offset 0) in G1's migration. Its note points to section 6.1 of this plan. It asserts that GPEXE's word `number` is a count for **every** `{unit: "number"}` field; the two-athlete tick is what checks it, field by field. The rollback removes the row only while it is unchanged and unused. |
+| (e) | **Capitalised GPEXE names** are refused with `409 name_not_supported`, because T2a's key CHECK is lower case only. I3 lists them as they are. This is revisited when the production inventory shows whether any exist; the executor reports the count after the owner's first search on the deployed build. |
+| (f) | **Typed foreign-key columns** hold the proof. `training_load.source_metric_evidence_ref_ok` stays docs-only. |
+
+Also accepted:
+- creation only of what the inventory observed, with a server-derived key;
+- the unit word read from the stored answer, never typed;
+- `athlete_session` plain numbers stay M2b-only, because GPEXE sends no unit word with them, and the screen says so in
+  plain words;
+- the revisions already verified by documents stay byte for byte as they are (five today, as the *Rukovodilac* counts
+  them, and seven once the owner's burst and brake acts of 2026-11-16 are done);
+- `source_stated → verified` only through a new revision R+1 and the M2b acts, and `verified` is never replaced by
+  `source_stated`.
+
+### 8.1 Route C: creating a field
+
+`POST /api/training-load/sources/metrics/fields`
+
+- **Who:** an active platform admin in the platform workspace. Everyone else gets the identical 404 (ADR-006), as the
+  M2b acts do.
+- **Body:** `{ requestKey, endpoint, name, label, supportsSession, supportsDrill }`. Any other key is a `400`.
+- **The key is derived by the server and never typed:**
+
+  | `endpoint` | Key | `value_shape` |
+  |---|---|---|
+  | `athlete_session` | `athlete_session.<name>` | `number` |
+  | `details.session`, `details.drill` | `details.players.<name>` | `unit_value_object` |
+  | any other | — | `409 shape_not_generic` |
+
+  Zones and events stay code (Q4).
+- **The name:**
+  - it must exist in `source_field_observations` for that endpoint on some `rest_v1` connection, otherwise
+    `409 name_not_observed`;
+  - it must not be a structural key (`STRUCTURAL_FIELDS`), otherwise `409 name_not_observed`;
+  - it must match T2a's key CHECK, otherwise `409 name_not_supported` (decision (e));
+  - if an active or retired T2a row already has the key, the answer is `409 field_exists`, carrying the existing id.
+- **The label:** `source_metric_text_ok(label, 80)`, the same rule as M2b's free text (Q10). The levels need at least
+  one of the two, and for `details.drill` `supportsDrill` must be true.
+- **One write:**
+  - a T2a row with `created_by_user_id`;
+  - T2b revision 1: `state = 'active'`, `evidence_status = 'unproven'`, `parameter_kind = 'none'`;
+  - `expected_source_unit` = the latest unit word the inventory saw, if it passes the unit-token rule, otherwise null.
+    It is a hypothesis, never `source_unit`;
+  - its T8 row `source_field_created`.
+- **Replay:** idempotent by `requestKey` (the M2 request record), with the bounded COMMIT and the
+  `verified_after_commit_error` / `outcome_unknown` discipline.
+
+### 8.2 Route O: the observed confirmation (J18's route 9)
+
+`POST /api/training-load/sources/metrics/fields/:fieldId/revisions/:revisionId/observed-confirmation`
+
+and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&pairs=i,j`.
+
+- **Who:** the same as route C.
+- **Body:** `{ requestKey, session: { candidateId, pairs: [i, j], placementHash }, attested: true }`. That is one
+  session (decision (b)) and two athletes, given by their positions in the session's GPEXE list, never an id.
+- **Which revisions:**
+  - only a revision with `parameter_kind = 'none'`, `state = 'active'` and `evidence_status = 'unproven'`;
+  - a revision with parameters gets `409 field_has_parameters`;
+  - once its unit is proven, a revision gets `409 unit_already_verified` (M2b's code).
+- **The candidate:**
+  - it is read under the candidate's own team, through a binding of a `rest_v1` connection;
+  - its last check must have succeeded;
+  - `placementHash` must still match, otherwise `409 board_changed`.
+- **The unit word:**
+  - it is read from the stored answer (`details.players[athlete].<name>.unit`) for both athletes;
+  - the two must agree, otherwise `409 unit_not_stated`;
+  - it must pass the unit-token rule, otherwise `409 unit_not_stated`;
+  - it must be the `from_unit` of an active `unit_conversions` row, otherwise `409 unit_not_stated`;
+  - an `athlete_session` field always answers `409 unit_not_stated` with the sentence "GPEXE sends no unit with this
+    value. A platform administrator confirms it with a document (Confirm the unit)."
+- **One write,** in this order:
+  - the T9 row: kind `field_observation`, `owner_scope = 'system'`, no club;
+    - the binding, team and connection the session came from;
+    - `source_metric_version_id` = the revision;
+  - its one T9s session row, which records the check, the candidate's hash, the GPEXE session id and its start, so a
+    stricter rule can re-check it later;
+  - two T9i `field_unit` items, each with the athlete's raw value, the stated unit word, a salt and a digest. The values
+    expire under v65's purge (C118), and no athlete id is stored;
+  - T2b:
+    - `source_unit` = the word, with `unit_verified_by_user_id`, `unit_verified_at` and
+      `unit_observation_id` = the T9 row;
+    - and, under (a), the same for the meaning (`meaning_observation_id`);
+    - `evidence_status = 'source_stated'`;
+  - two T8 rows, `source_metric_unit_observed` and `source_metric_meaning_observed`, linked by `confirmation_id`.
+    Without (a), only the unit row is written, and the status stays `unproven` until the M2b meaning act.
+- **Who sees the values:** platform admins only, in the platform workspace, through J18's route 10
+  (`GET /fields/:fieldId/observations`; C119 (c)). A club admin sees "Unit stated by GPEXE, checked on the board" on the
+  field, never the values.
+
+### 8.3 The schema (migration v74; its prefix is later than `202611151500`, confirmed with the *Rukovodilac* on the day)
+
+- **T2b:**
+  - `evidence_status` gains `source_stated`;
+  - two columns: `unit_observation_id` and `meaning_observation_id`. Each references T9 `on delete restrict`, and a
+    BEFORE trigger checks that the T9 row is of kind `field_observation` and names the same revision;
+  - `unit_proof_together` and `meaning_proof_together` become: the user and the time are set together, together with
+    exactly one of the document reference and the observation id;
+  - `verified_iff_proven` becomes:
+    - "proven ⇔ `evidence_status in ('verified', 'source_stated')`";
+    - "`source_stated` ⇔ the unit's proof is an observation";
+  - `evidence_ref_iff_proven` treats `source_stated` like `verified`. Its `evidence_ref` is null and the proof is the
+    observation id.
+- **T9:**
+  - `kind` admits `field_observation` and `owner_scope` admits `system` (`field_observation` ⇔ `system`, with no club);
+  - a nullable `source_metric_version_id` is set exactly for `field_observation`;
+  - T9i's `kind` admits `field_unit`.
+  - These are the widenings J18 section 5.1 reserved. v65's deferred checks gain: `field_observation` has exactly one
+    session and exactly two `field_unit` items, and T2b names it in the same transaction.
+- **T8:**
+  - the actions `source_field_created`, `source_metric_unit_observed` and `source_metric_meaning_observed`, their shapes,
+    and one row per operation;
+  - v37's C90 refusal ("every other T2a / T2b write") gains these two built chains.
+- **Seed:** the `unit_conversions` row `number → count (1, 1, 0)`, decision (d).
+- **Replaced bodies,** each behind an md5 check of the body in force:
+  - v37's T2b and T8 guards and v42's actor guard admit the new acts;
+  - v52's activation guard and v65's T9i guard accept `evidence_status in ('verified', 'source_stated')`;
+  - v34's write-once guard lists the two new columns.
+- **Lock order:** v65's T4 → T2b → T9 → T8, and the acting user's rows users first (v54). T8 is taken `NOWAIT`, as v65
+  does. Preflight block: a quiet moment.
+- **Preflight, post-check and rollback:**
+  - v73 (App health's) may or may not be recorded, in either order, and every block allows both;
+  - the post-check asserts that the already-verified revisions are unchanged byte for byte, by a digest of their rows
+    taken in the preflight;
+  - the rollback refuses once any T2a row was created by route C, any `field_observation` row exists, or the seeded
+    conversion was changed or used. Otherwise it restores every body by md5 and the CHECK texts, and removes the seed.
+
+### 8.4 Code that changes with G1 (no extractor)
+
+- **The board gates** read `evidence_status in ('verified', 'source_stated')`:
+  - `sourceMetricBoardService.js` around lines 325 and 500–501;
+  - `sourceMetricMappingService.js` around line 1488;
+  - and the database guards of 8.3.
+- **The platform workspace's board:**
+  - it offers the unproven generic fields of any bound session;
+  - the admin compares two athletes with the GPEXE screen and ticks; no tick, no save;
+  - the save is route O.
+- **The club workspace's board:** unchanged in rights. A `source_stated` field is placeable like a verified one, and
+  its tick per save (C112) stays.
+- **Source fields:**
+  - "Create field" on an inventory row (route C), and the status words "Unit stated by GPEXE, checked on the board";
+  - under (a), "Meaning: GPEXE's own label, checked on the board". It is never "Verified".
+  - For an `athlete_session` row: "GPEXE sends no unit with this value, so a platform administrator confirms it with a
+    document."
+- **The revision lifecycle** (`sourceRevisionLifecycleService.js` around line 509): replacing `source_stated` with
+  `verified` is allowed (R+1 with the two M2b acts, then L2), and replacing `verified` with `source_stated` is refused.
+
+### 8.5 Tests (G1)
+
+- **The migration:**
+  - apply, the md5 gates (each refuses a changed body), and the rehearsed rollback with each refusal;
+  - preflight and post-check with v73 recorded and not recorded;
+  - the already-verified revisions unchanged byte for byte.
+- **Route C:**
+  - access and the identical 404 (a club admin, a club workspace, a coach, no session);
+  - each refusal (`shape_not_generic`, `name_not_observed`, a structural key, `name_not_supported`, `field_exists`);
+  - the derived key and shape, `expected_source_unit` from the inventory;
+  - idempotency and the COMMIT outcomes;
+  - a raw T2a insert without the chain is refused by the database.
+- **Route O:**
+  - access;
+  - each refusal (`field_has_parameters`, `unit_already_verified`, `unit_not_stated` for each reason and for
+    `athlete_session`, `board_changed`, a failed check, another family);
+  - one write with every row of 8.2;
+  - no athlete id anywhere, and the values only in T9i;
+  - the deferred checks (a second session, a missing item, T2b not naming the row);
+  - with and without (a).
+- **The gates:** a `source_stated` revision activates a T4 version and is placeable on the club's board; a club admin
+  never reads `field_observation` values (route 10 is 404 for a club admin).
+- **The lifecycle:** `source_stated → verified` through R+1, and `verified → source_stated` refused.
+- **Concurrency:**
+  - route O against an M2b act on the same revision, in both orders;
+  - route O against an Unbind of the session's binding, in v65's order;
+  - the recorded SQL order of route O's locks (`.claude/rules/migrations.md`).
+- **Mutations** for every new guard.
+
+### 8.6 What G1 does not do
+
+- No extractor, and no change to the projection or the stored snapshot (G2).
+- No zone or event field (Z0 / Z1).
+- No club-scoped raising of a field (decision (c), an open point).
+- The revisions already verified by documents are not touched.

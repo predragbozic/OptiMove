@@ -14,6 +14,19 @@ export const FIELD_ENDPOINTS = Object.freeze(["athlete_session", "more.events", 
 export const VALUE_KINDS = Object.freeze(["number", "text", "boolean", "null", "unit_value_object", "zone_list", "object", "list"]);
 export const MAX_PER_ENDPOINT = 300;
 
+// Structural keys (the Rukovodilac's decision (b), 2026-11-16): an identifier, a reference to another record or a
+// timestamp is never a value GPEXE measured, so it is not a field anyone could map. The collector does not record them and
+// the read (sourceFieldInventoryRead.js) hides the same list, for any row written before this rule. When in doubt a name is
+// kept (D-INV-1: show everything GPEXE offers). Only endpoints whose answers carry such keys have a list: the details
+// players' maps and /more/'s events and zones carry measured values only (their identifiers, athletesession_id and
+// track_id, sit beside them and are never read as names).
+export const STRUCTURAL_FIELDS = Object.freeze({
+  athlete_session: Object.freeze(["id", "athlete", "teamsession", "track", "drill", "team", "start_timestamp", "end_timestamp", "created_on", "updated_on"]),
+  team_thresholds: Object.freeze(["id", "team", "validity_start", "validity_end"]),
+});
+const STRUCTURAL = new Set(Object.entries(STRUCTURAL_FIELDS).flatMap(([endpoint, names]) => names.map((n) => `${endpoint}\u0000${n}`)));
+export const isStructuralField = (endpoint, name) => STRUCTURAL.has(`${endpoint}\u0000${name}`);
+
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
 
@@ -43,6 +56,7 @@ export function createFieldCollector() {
   function note(endpoint, name, value, seen) {
     if (typeof name !== "string" || !NAME.test(name) || PROTOTYPE_KEYS.has(name)) { rejected += 1; return; }
     const key = `${endpoint}\u0000${name}`;
+    if (STRUCTURAL.has(key)) return; // an identifier, reference or timestamp: never a field (STRUCTURAL_FIELDS)
     if (seen.has(key)) return; // once per answer
     seen.add(key);
     let entry = fields.get(key);

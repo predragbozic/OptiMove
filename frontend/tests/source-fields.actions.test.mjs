@@ -168,7 +168,8 @@ test("a workspace without the screen reads nothing and says where it is", async 
 test("the list groups the fields by source, shows the unit (expected units marked not proven) and the evidence; names are escaped", async () => {
   fields[0].revisions = [revision({ sourceUnit: "s<b>", unitVerifiedAt: "2026-10-20T08:00:00.000Z", evidenceStatus: "observed" })];
   await loadSourceFieldsSection(render);
-  assert.deepEqual(gets(), [FB]);
+  // I3: the section also reads the names GPEXE sent that no field covers yet.
+  assert.deepEqual(gets(), [FB, "/api/training-load/sources/metrics/field-inventory"]);
   // The language pass: the group is the source by its name; its data family
   // stays under Technical details while the source has only one.
   assert.equal($(".metric-classification-section h3").textContent, "GPEXE");
@@ -276,7 +277,7 @@ test("club admin: reads the fields and revisions, is offered no act, and a forge
 test("a source with two data families names the family in each group's heading", async () => {
   fields = [...allFields(), field({ id: "ffffffff-0000-4000-8000-000000000009", apiFamily: "api", key: "legacy.total_time", label: "Total time (legacy)" })];
   await loadSourceFieldsSection(render);
-  assert.deepEqual([...content.querySelectorAll(".metric-classification-section h3")].map((h) => h.textContent), ["GPEXE · REST v1", "GPEXE · API"]);
+  assert.deepEqual([...content.querySelectorAll(".metric-classification-section:not(.source-fields-inventory) h3")].map((h) => h.textContent), ["GPEXE · REST v1", "GPEXE · API"]);
   // Two fields of one label: the detail and the form of each name its family
   // before a confirmation that is saved once.
   await click('[data-action="source-fields-open"][data-field-id="ffffffff-0000-4000-8000-000000000009"]');
